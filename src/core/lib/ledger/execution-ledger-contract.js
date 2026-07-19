@@ -19,7 +19,7 @@ import {
   assertLedgerOpaqueId,
 } from './record-key.js';
 
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 9;
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 10;
 // Destination operation identity outlives the ledger records that authorize
 // it. Change this version only when the logical destination identity contract
 // changes, never merely because the execution-ledger storage schema changes.

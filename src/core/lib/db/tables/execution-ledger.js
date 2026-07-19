@@ -75,6 +75,14 @@ import {
   parseExecutionLedgerRunDirectorySortKey,
 } from '../../ledger/run-directory.js';
 import {
+  EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX,
+  ExecutionLedgerReadyWorkKind,
+  createExecutionLedgerReadyWorkRecord,
+  createExecutionLedgerReadyWorkScope,
+  normalizeExecutionLedgerReadyWorkRecord,
+  parseExecutionLedgerReadyWorkSortKey,
+} from '../../ledger/ready-work.js';
+import {
   MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID,
   assertInitialManagedEffectSuccessorRetryEligible,
   assertManagedEffectSuccessorAuthorizationDerived,
@@ -106,25 +114,30 @@ export {
 };
 
 /**
- * The V9 ledger covers one single-activity invocation plus its explicitly
- * managed effects. A run is either manual authored work or one causally linked
- * host-managed effect successor. It is the only writable durable run
- * boundary. Its table write authority is a trusted control-plane boundary:
+ * The V10 ledger carries forward the proven single-activity and managed-effect
+ * state machines while adding a transactionally maintained ready-work
+ * projection. The projection is only a locator: the append-only event stream,
+ * rebuilt projections, and ordinary fenced transitions remain execution
+ * authority. Its table write authority is a trusted control-plane boundary:
  * content IDs and request digests detect inconsistent records, but are not
  * signatures against a writer that can replace an entire semantically valid
  * history.
  */
-// V9 intentionally does not read v1-v8 records. Older durable records remain
+// V10 intentionally does not read v1-v9 records. Older durable records remain
 // isolated under their original sort-key and run-directory namespaces.
 
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
 const RUN_DIRECTORY_RUN_KINDS = new Set(['manual', 'effect-successor']);
-const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 7;
+const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 8;
 const RUN_DIRECTORY_DEFAULT_PAGE_SIZE = 50;
 const RUN_DIRECTORY_MAX_PAGE_SIZE = 100;
 const RUN_DIRECTORY_MAX_PAGE_RETRIES = 3;
+const READY_WORK_DEFAULT_PAGE_SIZE = 50;
+const READY_WORK_MAX_PAGE_SIZE = 100;
+const READY_WORK_CURSOR_SCHEMA_VERSION = 1;
+const READY_WORK_CURSOR_MAX_BYTES = 4096;
 const SUCCESSOR_IDENTITY_SORT_KEY_PREFIX = 'successor-identity/v1/';
 const EVENT_TYPES = new Set([
   'manual-run-created',
@@ -463,7 +476,7 @@ function normalizeTerminalSummary(value, label) {
 
 /**
  * Normalize the immutable evidence-backed decision that resolves one retained
- * uncertain attempt. The verifier is deliberately fixed in V9: accepting a
+ * uncertain attempt. The verifier is deliberately fixed in V10: accepting a
  * caller-selected verifier would make the durable event claim semantics that
  * this ledger does not actually implement.
  * @param {unknown} value - Candidate reconciliation event payload.
@@ -1071,6 +1084,190 @@ function createRunDirectoryPageItem(directory) {
 }
 
 /**
+ * @param {unknown} options - Candidate ready-work query.
+ * @param {number} defaultObservedAt - Store caller's current observation.
+ * @returns {{appId: string, revisionId: string, limit: number, observedAt: number, cursor?: string}} - Exact bounded query.
+ */
+function normalizeReadyWorkPageOptions(options, defaultObservedAt) {
+  const value = cloneBoundedJsonObject(
+    options,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'listReadyWork',
+  );
+  assertSnapshotKeys(
+    value,
+    ['appId', 'revisionId'],
+    ['limit', 'observedAt', 'cursor'],
+    'listReadyWork',
+  );
+  assertLogicalId(value.appId, 'listReadyWork.appId');
+  assertApplicationRevisionId(value.revisionId, 'listReadyWork.revisionId');
+  const limit = Object.prototype.hasOwnProperty.call(value, 'limit')
+    ? value.limit
+    : READY_WORK_DEFAULT_PAGE_SIZE;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > READY_WORK_MAX_PAGE_SIZE
+  ) {
+    throw new TypeError(
+      `listReadyWork.limit must be a safe integer from 1 through ${READY_WORK_MAX_PAGE_SIZE}.`,
+    );
+  }
+  const observedAt = assertNonnegativeSafeInteger(
+    Object.prototype.hasOwnProperty.call(value, 'observedAt')
+      ? value.observedAt
+      : defaultObservedAt,
+    'listReadyWork.observedAt',
+  );
+  if (
+    Object.prototype.hasOwnProperty.call(value, 'cursor') &&
+    (typeof value.cursor !== 'string' || value.cursor.length === 0)
+  ) {
+    throw new TypeError(
+      'listReadyWork.cursor must be a nonempty opaque string.',
+    );
+  }
+  return {
+    appId: value.appId,
+    revisionId: value.revisionId,
+    limit,
+    observedAt,
+    ...(Object.prototype.hasOwnProperty.call(value, 'cursor')
+      ? { cursor: value.cursor }
+      : {}),
+  };
+}
+
+/**
+ * Create a scope-bound opaque continuation for one provider page boundary.
+ * The boundary may name a malformed locator row: carrying its exact key lets
+ * the resident page past corruption without treating that row as authority.
+ * @param {{appId: string, revisionId: string, serviceId: string, readyWorkId: string}} scope - Exact query scope.
+ * @param {string} startAfter - Exclusive raw sort-key boundary.
+ * @returns {string} - Canonical opaque cursor.
+ */
+function createReadyWorkCursor(scope, startAfter) {
+  if (
+    typeof startAfter !== 'string' ||
+    !startAfter.startsWith(EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX)
+  ) {
+    throw new TypeError('listReadyWork cursor boundary is invalid.');
+  }
+  const value = {
+    schemaVersion: READY_WORK_CURSOR_SCHEMA_VERSION,
+    appId: scope.appId,
+    revisionId: scope.revisionId,
+    serviceId: scope.serviceId,
+    readyWorkId: scope.readyWorkId,
+    startAfter,
+  };
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+/**
+ * Decode only this revision partition's canonical cursor representation.
+ * @param {string | undefined} cursor - Candidate opaque cursor.
+ * @param {{appId: string, revisionId: string, serviceId: string, readyWorkId: string}} scope - Exact query scope.
+ * @returns {string | undefined} - Exclusive raw sort key.
+ */
+function parseReadyWorkCursor(cursor, scope) {
+  if (cursor === undefined) return undefined;
+  if (Buffer.byteLength(cursor, 'utf8') > READY_WORK_CURSOR_MAX_BYTES) {
+    throw new TypeError('listReadyWork.cursor is too large.');
+  }
+  let text;
+  let parsed;
+  try {
+    const bytes = Buffer.from(cursor, 'base64url');
+    if (bytes.toString('base64url') !== cursor) {
+      throw new Error('noncanonical base64url');
+    }
+    text = bytes.toString('utf8');
+    if (!Buffer.from(text, 'utf8').equals(bytes)) {
+      throw new Error('invalid utf8');
+    }
+    parsed = JSON.parse(text);
+  } catch {
+    throw new TypeError('listReadyWork.cursor is not a valid opaque cursor.');
+  }
+  const value = cloneBoundedJsonObject(
+    parsed,
+    READY_WORK_CURSOR_MAX_BYTES,
+    'listReadyWork.cursor',
+  );
+  assertExactKeys(
+    value,
+    [
+      'schemaVersion',
+      'appId',
+      'revisionId',
+      'serviceId',
+      'readyWorkId',
+      'startAfter',
+    ],
+    'listReadyWork.cursor',
+  );
+  if (
+    value.schemaVersion !== READY_WORK_CURSOR_SCHEMA_VERSION ||
+    value.appId !== scope.appId ||
+    value.revisionId !== scope.revisionId ||
+    value.serviceId !== scope.serviceId ||
+    value.readyWorkId !== scope.readyWorkId ||
+    typeof value.startAfter !== 'string' ||
+    !value.startAfter.startsWith(EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX) ||
+    text !== JSON.stringify(value)
+  ) {
+    throw new TypeError(
+      'listReadyWork.cursor does not match the requested scope.',
+    );
+  }
+  return value.startAfter;
+}
+
+/**
+ * Expose only scheduling coordinates. Raw table keys and service partition
+ * identities stay inside the ledger implementation.
+ * @param {Record<string, any>} record - Strict ready-work storage record.
+ * @returns {Record<string, any>} - Camel-cased locator item.
+ */
+function createReadyWorkPageItem(record) {
+  const common = {
+    appId: record.app_id,
+    revisionId: record.revision_id,
+    runId: record.ledger_run_id,
+    kind: record.kind,
+    availableAt: record.available_at,
+    runVersion: record.run_version,
+    lastSequence: record.sequence,
+  };
+  if (record.kind === ExecutionLedgerReadyWorkKind.ACTIVITY) {
+    return {
+      ...common,
+      invocationId: record.invocation_id,
+      generation: record.generation,
+    };
+  }
+  if (record.kind === ExecutionLedgerReadyWorkKind.RECOVERY) {
+    return {
+      ...common,
+      invocationId: record.invocation_id,
+      attemptId: record.attempt_id,
+      generation: record.generation,
+    };
+  }
+  const continuation = {
+    ...common,
+    continuationId: record.continuation_id,
+    stepId: record.step_id,
+    stepIndex: record.step_index,
+  };
+  return record.kind === ExecutionLedgerReadyWorkKind.TIMER
+    ? { ...continuation, timerId: record.timer_id }
+    : continuation;
+}
+
+/**
  * @param {string} runId - Run identity.
  * @param {Record<string, any>} data - Invocation projection.
  * @returns {Record<string, any>} - Invocation projection record.
@@ -1153,7 +1350,7 @@ function createEventId({
   payload,
 }) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v9',
+    domain: 'wharfie:execution-ledger-event:v10',
     prefix: 'wle',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -4980,9 +5177,9 @@ async function readRunRecords(db, tableName, runId) {
   return await db.query({
     tableName,
     consistentRead: true,
-    // A custom V9 table may deliberately retain older or lifecycle rows in the
-    // same physical partition. Only the fresh V9 record namespace participates
-    // in replay; no old history is accidentally treated as a malformed V9 run.
+    // A custom V10 table may deliberately retain older or lifecycle rows in the
+    // same physical partition. Only the fresh V10 record namespace participates
+    // in replay; no old history is accidentally treated as a malformed V10 run.
     keyConditions: [
       pkEq(KEY_NAME, runId),
       skBegins(SORT_KEY_NAME, EXECUTION_LEDGER_SORT_KEY_PREFIX),
@@ -5478,7 +5675,7 @@ async function startedTransitionResult(result, runId, payloadStore) {
  */
 function createTransitionRequestDigest(type, value) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-transition:v9',
+    domain: 'wharfie:execution-ledger-transition:v10',
     prefix: 'wlt',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -6170,7 +6367,7 @@ function createManagedEffectSuccessorTerminalEvidence(input) {
  */
 function createAttemptId(runId, invocationId, generation) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-attempt:v9',
+    domain: 'wharfie:execution-ledger-attempt:v10',
     prefix: 'wla',
     value: { runId, invocationId, generation },
     valuePath: 'execution ledger attempt identity',
@@ -6381,9 +6578,115 @@ export function createExecutionLedger({
   }
 
   /**
+   * Locate the one physical attempt that keeps a RUNNING invocation
+   * discoverable after a coordinator process dies. The ready-work projection
+   * never creates authority; it names this already-folded attempt so a new
+   * resident can enter the ordinary conservative recovery transition.
+   * @param {Record<string, any> | null} state - Verified current fold.
+   * @param {Record<string, any>} invocation - Exact invocation projection.
+   * @returns {Record<string, any> | undefined} - Current recoverable attempt.
+   */
+  function getReadyWorkAttempt(state, invocation) {
+    if (!state || invocation.status !== InvocationStatus.RUNNING) {
+      return undefined;
+    }
+    const candidates = [...state.attempts.values()].filter(
+      (candidate) =>
+        candidate.invocationId === invocation.invocationId &&
+        candidate.generation === invocation.generation &&
+        [AttemptStatus.CLAIMED, AttemptStatus.STARTED].includes(
+          candidate.status,
+        ),
+    );
+    if (candidates.length !== 1) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'running invocation lacks one ready-work attempt',
+      );
+    }
+    return candidates[0];
+  }
+
+  /**
+   * Derive the locator row implied by one authoritative lifecycle snapshot.
+   * V10 initially mounts the index for ordinary manual work; managed-effect
+   * successors retain their dedicated finite operator lifecycle. Workflow
+   * continuations will use the same codec when their state machine lands.
+   * @param {Record<string, any>} run - Run snapshot.
+   * @param {Record<string, any>} invocation - Current invocation snapshot.
+   * @param {Record<string, any> | undefined} attempt - Current physical attempt.
+   * @returns {Record<string, any> | undefined} - Canonical storage row.
+   */
+  function createLifecycleReadyWorkRecord(run, invocation, attempt) {
+    if (run.trigger?.kind !== 'manual' || run.status !== RunStatus.RUNNING) {
+      return undefined;
+    }
+    if (
+      invocation.runId !== run.runId ||
+      invocation.appId !== run.appId ||
+      invocation.revisionId !== run.revisionId
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        run.runId,
+        'ready-work invocation scope mismatch',
+      );
+    }
+    const common = {
+      appId: run.appId,
+      revisionId: run.revisionId,
+      runId: run.runId,
+      runVersion: run.version,
+      lastSequence: run.lastSequence,
+    };
+    if (invocation.status === InvocationStatus.RUNNABLE) {
+      return createExecutionLedgerReadyWorkRecord({
+        ...common,
+        kind: ExecutionLedgerReadyWorkKind.ACTIVITY,
+        availableAt: invocation.updatedAt,
+        invocationId: invocation.invocationId,
+        generation: invocation.generation,
+      });
+    }
+    if (invocation.status !== InvocationStatus.RUNNING) return undefined;
+    if (
+      !attempt ||
+      attempt.invocationId !== invocation.invocationId ||
+      attempt.generation !== invocation.generation ||
+      ![AttemptStatus.CLAIMED, AttemptStatus.STARTED].includes(attempt.status)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        run.runId,
+        'ready-work recovery attempt mismatch',
+      );
+    }
+    return createExecutionLedgerReadyWorkRecord({
+      ...common,
+      kind: ExecutionLedgerReadyWorkKind.RECOVERY,
+      availableAt: attempt.updatedAt,
+      invocationId: invocation.invocationId,
+      attemptId: attempt.attemptId,
+      generation: attempt.generation,
+    });
+  }
+
+  /**
+   * Match the exact prior locator before replacing or deleting it. Conditions
+   * deliberately cover both lifecycle coordinates and storage scope so a
+   * forged or stale row makes the authoritative transition fail closed.
+   * @param {Record<string, any>} record - Prior canonical ready-work row.
+   * @returns {import('../base.js').KeyCondition[]} - Replacement conditions.
+   */
+  function readyWorkReplacementConditions(record) {
+    return Object.entries(record)
+      .filter(([property]) => ![KEY_NAME, SORT_KEY_NAME].includes(property))
+      .map(([property, value]) => eq(property, value));
+  }
+
+  /**
    * Atomically append exactly one event, its receipt, the next run head, and
-   * the affected projections. The caller supplies already-folded snapshots so
-   * the event remains sufficient to reconstruct every projection.
+   * the affected projections, including the current ready-work locator. The
+   * caller supplies already-folded snapshots so the event remains sufficient
+   * to reconstruct every authoritative projection.
    * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
    * @returns {Promise<void>} - Resolves only after the durable transaction commits.
    */
@@ -6442,6 +6745,25 @@ export function createExecutionLedger({
     }
     const persistedInvocation = /** @type {Record<string, any>} */ (
       currentInvocation
+    );
+    const currentReadyWork = input.state
+      ? createLifecycleReadyWorkRecord(
+          input.state.run,
+          persistedInvocation,
+          getReadyWorkAttempt(input.state, persistedInvocation),
+        )
+      : undefined;
+    const nextReadyAttempt =
+      input.nextInvocation.status === InvocationStatus.RUNNING
+        ? input.nextAttempt ||
+          (input.state
+            ? getReadyWorkAttempt(input.state, persistedInvocation)
+            : undefined)
+        : undefined;
+    const nextReadyWork = createLifecycleReadyWorkRecord(
+      input.nextRun,
+      input.nextInvocation,
+      nextReadyAttempt,
     );
 
     /** @type {import('../base.js').TransactionPutRequest[]} */
@@ -6539,9 +6861,55 @@ export function createExecutionLedger({
       });
     }
 
+    /** @type {import('../base.js').TransactionDeleteRequest[]} */
+    const deleteRequests = [];
+    if (currentReadyWork && nextReadyWork) {
+      const sameReadyWorkKey =
+        currentReadyWork[KEY_NAME] === nextReadyWork[KEY_NAME] &&
+        currentReadyWork[SORT_KEY_NAME] === nextReadyWork[SORT_KEY_NAME];
+      if (sameReadyWorkKey) {
+        putRequests.push({
+          keyName: KEY_NAME,
+          sortKeyName: SORT_KEY_NAME,
+          record: nextReadyWork,
+          conditions: readyWorkReplacementConditions(currentReadyWork),
+        });
+      } else {
+        deleteRequests.push({
+          keyName: KEY_NAME,
+          keyValue: currentReadyWork[KEY_NAME],
+          sortKeyName: SORT_KEY_NAME,
+          sortKeyValue: currentReadyWork[SORT_KEY_NAME],
+          conditions: readyWorkReplacementConditions(currentReadyWork),
+        });
+        putRequests.push({
+          keyName: KEY_NAME,
+          sortKeyName: SORT_KEY_NAME,
+          record: nextReadyWork,
+          conditions: [notExists(SORT_KEY_NAME)],
+        });
+      }
+    } else if (nextReadyWork) {
+      putRequests.push({
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: nextReadyWork,
+        conditions: [notExists(SORT_KEY_NAME)],
+      });
+    } else if (currentReadyWork) {
+      deleteRequests.push({
+        keyName: KEY_NAME,
+        keyValue: currentReadyWork[KEY_NAME],
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: currentReadyWork[SORT_KEY_NAME],
+        conditions: readyWorkReplacementConditions(currentReadyWork),
+      });
+    }
+
     await db.transactionWrite({
       tableName: resolvedTableName,
       putRequests,
+      ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
     });
   }
 
@@ -6794,6 +7162,11 @@ export function createExecutionLedger({
       if (receipt && receipt.request_digest !== requestDigest) {
         throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
       }
+      try {
+        await repairReadyWork({ appId, revisionId, runId });
+      } catch (error) {
+        if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+      }
       return {
         applied: false,
         ...(receipt ? { receipt: cloneJsonObject(receipt, 'receipt') } : {}),
@@ -6909,6 +7282,11 @@ export function createExecutionLedger({
       );
       if (receipt && receipt.request_digest !== racedRequestDigest) {
         throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
+      }
+      try {
+        await repairReadyWork({ appId, revisionId, runId });
+      } catch (error) {
+        if (!(error instanceof ExecutionLedgerConflictError)) throw error;
       }
       return {
         applied: false,
@@ -12156,6 +12534,264 @@ export function createExecutionLedger({
   }
 
   /**
+   * Reconcile one known manual run's replaceable ready-work locator from its
+   * authoritative event fold. This is a liveness repair only: the run head is
+   * condition-checked and the repaired row still grants no execution
+   * authority. Supplying an observed stale row also removes that exact extra
+   * locator in the same transaction.
+   * @param {{appId: string, revisionId: string, runId: string, observed?: Record<string, any>}} options - Exact run and optional stale locator.
+   * @returns {Promise<{applied: boolean, runId: string, expected?: Record<string, any>}>} - Repair result.
+   */
+  async function repairReadyWork(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+      'repairReadyWork',
+    );
+    assertSupportedKeys(
+      value,
+      ['appId', 'revisionId', 'runId', 'observed'],
+      'repairReadyWork',
+    );
+    assertLogicalId(value.appId, 'repairReadyWork.appId');
+    assertApplicationRevisionId(value.revisionId, 'repairReadyWork.revisionId');
+    const runId = assertOpaqueId(value.runId, 'repairReadyWork.runId');
+    const state = await readVerifiedRun(runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(runId);
+    if (
+      state.run.appId !== value.appId ||
+      state.run.revisionId !== value.revisionId
+    ) {
+      throw new ExecutionLedgerConflictError(
+        runId,
+        'ready-work repair scope mismatch',
+      );
+    }
+    const invocations = [...state.invocations.values()];
+    if (invocations.length !== 1) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'ready-work repair requires one current invocation',
+      );
+    }
+    const invocation = invocations[0];
+    const expected = createLifecycleReadyWorkRecord(
+      state.run,
+      invocation,
+      getReadyWorkAttempt(state, invocation),
+    );
+    const observed = Object.prototype.hasOwnProperty.call(value, 'observed')
+      ? createExecutionLedgerReadyWorkRecord(value.observed)
+      : undefined;
+    if (
+      observed &&
+      (observed.app_id !== value.appId ||
+        observed.revision_id !== value.revisionId ||
+        observed.ledger_run_id !== runId)
+    ) {
+      throw new TypeError(
+        'repairReadyWork.observed must name the exact requested run scope.',
+      );
+    }
+    const expectedStored = expected
+      ? await db.get({
+          tableName: resolvedTableName,
+          keyName: KEY_NAME,
+          keyValue: expected[KEY_NAME],
+          sortKeyName: SORT_KEY_NAME,
+          sortKeyValue: expected[SORT_KEY_NAME],
+          consistentRead: true,
+        })
+      : undefined;
+    const expectedIsExact = Boolean(
+      expectedStored && hasSameCanonicalJson(expectedStored, expected),
+    );
+    const observedNamesExpected = Boolean(
+      observed &&
+      expected &&
+      observed[KEY_NAME] === expected[KEY_NAME] &&
+      observed[SORT_KEY_NAME] === expected[SORT_KEY_NAME],
+    );
+    if (expected && expectedIsExact && (!observed || observedNamesExpected)) {
+      return {
+        applied: false,
+        runId,
+        expected: createReadyWorkPageItem(expected),
+      };
+    }
+    if (!expected && !observed) return { applied: false, runId };
+
+    /** @type {import('../base.js').TransactionConditionCheck[]} */
+    const conditionChecks = [
+      {
+        keyName: KEY_NAME,
+        keyValue: runId,
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: getRunHeadSortKey(),
+        conditions: [
+          eq('version', state.head.version),
+          eq('sequence', state.head.sequence),
+          eq('revision_id', state.head.revision_id),
+        ],
+      },
+    ];
+    /** @type {import('../base.js').TransactionPutRequest[]} */
+    const putRequests = [];
+    /** @type {import('../base.js').TransactionDeleteRequest[]} */
+    const deleteRequests = [];
+    // The event-folded head is the only repair CAS. Projection bytes are
+    // deliberately not conditions: they may be malformed, and every normal
+    // lifecycle mutation advances this head while maintaining the row in the
+    // same transaction. Concurrent repairs against one unchanged head are
+    // therefore safely convergent writes of the same canonical locator.
+    if (expected && !expectedIsExact) {
+      putRequests.push({
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: expected,
+      });
+    }
+    if (observed && !observedNamesExpected) {
+      deleteRequests.push({
+        keyName: KEY_NAME,
+        keyValue: observed[KEY_NAME],
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: observed[SORT_KEY_NAME],
+      });
+    }
+
+    try {
+      await db.transactionWrite({
+        tableName: resolvedTableName,
+        conditionChecks,
+        ...(putRequests.length === 0 ? {} : { putRequests }),
+        ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
+      });
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) {
+        throw new ExecutionLedgerConflictError(
+          runId,
+          'ready-work repair raced another transition',
+        );
+      }
+      throw error;
+    }
+    return {
+      applied: true,
+      runId,
+      ...(expected === undefined
+        ? {}
+        : { expected: createReadyWorkPageItem(expected) }),
+    };
+  }
+
+  /**
+   * Read the earliest bounded set of currently eligible work for one exact
+   * embedded application revision. Rows are strict locators only: callers
+   * must rebuild the named run and win its ordinary fenced transition before
+   * dispatch, recovery, timer firing, or continuation work.
+   * @param {{appId: string, revisionId: string, limit?: number, observedAt?: number, cursor?: string}} options - Exact revision-scoped query.
+   * @returns {Promise<{items: Record<string, any>[], nextCursor?: string}>} - Eligible locators in canonical order.
+   */
+  async function listReadyWork(options) {
+    if (typeof db.queryPage !== 'function') {
+      throw new Error(
+        'createExecutionLedger requires a DB client with queryPage for ready work.',
+      );
+    }
+    const request = normalizeReadyWorkPageOptions(options, now());
+    const scope = createExecutionLedgerReadyWorkScope({
+      appId: request.appId,
+      revisionId: request.revisionId,
+    });
+    const startAfter = parseReadyWorkCursor(request.cursor, scope);
+    const page = await db.queryPage({
+      tableName: resolvedTableName,
+      consistentRead: true,
+      keyConditions: [
+        pkEq(KEY_NAME, scope.readyWorkId),
+        skBegins(SORT_KEY_NAME, EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX),
+      ],
+      limit: request.limit,
+      ...(startAfter === undefined ? {} : { startAfter }),
+    });
+    if (
+      !page ||
+      typeof page !== 'object' ||
+      !Array.isArray(page.items) ||
+      page.items.length > request.limit
+    ) {
+      throw new Error('DB queryPage returned an invalid ready-work page.');
+    }
+
+    /** @type {Record<string, any>[]} */
+    const records = [];
+    let previousSortKey = startAfter;
+    let sawFutureBoundary = false;
+    for (const raw of page.items) {
+      if (
+        !raw ||
+        typeof raw !== 'object' ||
+        Array.isArray(raw) ||
+        typeof raw[SORT_KEY_NAME] !== 'string' ||
+        !raw[SORT_KEY_NAME].startsWith(
+          EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX,
+        )
+      ) {
+        throw new Error('DB queryPage returned an invalid ready-work key.');
+      }
+      const sortKey = raw[SORT_KEY_NAME];
+      if (
+        previousSortKey !== undefined &&
+        comparePortablePageKeys(sortKey, previousSortKey) <= 0
+      ) {
+        throw new Error('DB queryPage returned invalid ready-work order.');
+      }
+      previousSortKey = sortKey;
+      try {
+        if (
+          parseExecutionLedgerReadyWorkSortKey(sortKey).availableAt >
+          request.observedAt
+        ) {
+          sawFutureBoundary = true;
+        }
+      } catch {
+        // A malformed locator is never returned as authority. Keeping its raw
+        // key as the page boundary still lets the next page and healthy work
+        // progress; a known run can be repaired from its event stream.
+      }
+      try {
+        records.push(
+          normalizeExecutionLedgerReadyWorkRecord(raw, {
+            appId: request.appId,
+            revisionId: request.revisionId,
+          }),
+        );
+      } catch {
+        // The index is a replaceable liveness projection. Corrupt rows are
+        // skipped, never dispatched, and do not prevent cursor progress.
+      }
+    }
+    const nextStartAfter = page.nextStartAfter;
+    if (
+      nextStartAfter !== undefined &&
+      (typeof nextStartAfter !== 'string' ||
+        page.items.length === 0 ||
+        nextStartAfter !== page.items[page.items.length - 1][SORT_KEY_NAME])
+    ) {
+      throw new Error('DB queryPage returned an invalid ready-work cursor.');
+    }
+    return {
+      items: records
+        .filter((record) => record.available_at <= request.observedAt)
+        .map(createReadyWorkPageItem),
+      ...(nextStartAfter === undefined || sawFutureBoundary
+        ? {}
+        : { nextCursor: createReadyWorkCursor(scope, nextStartAfter) }),
+    };
+  }
+
+  /**
    * Read a bounded, redacted page of one application's durable run history.
    * The directory is only a locator: every row is matched to a fully rebuilt
    * run projection before it is returned. This is deliberately not a ready
@@ -12559,6 +13195,7 @@ export function createExecutionLedger({
     getEvents,
     getInvocation,
     getRun,
+    listReadyWork,
     listRuns,
     markAttemptStarted,
     markAttemptUncertain,
@@ -12571,6 +13208,7 @@ export function createExecutionLedger({
     reconcileUncertainManagedEffect,
     reconcileUncertainManualAttempt,
     reconcileManagedEffectSuccessor,
+    repairReadyWork,
     rebuildRun,
     requestManualRunCancellation,
     settleStoppedAttemptManagedEffects,
@@ -12606,6 +13244,8 @@ export function createExecutionLedger({
  * @property {(runId: string, invocationId: string) => Promise<{run: Record<string, any>, invocation: Record<string, any>, request: {input: any, callerMetadata: Record<string, any>}, actor: {kind: string, id: string}} | null>} readManualRunRequest - Rehashes one manual request and returns its verified creation actor for identical durable replay.
  * @property {(runId: string, invocationId: string, effectId: string) => Promise<Record<string, any> | null>} readManagedEffectDelivery - Rehashes a logical request and re-verifies any terminal result for safe redelivery.
  * @property {(runId: string) => Promise<Record<string, any>[]>} getEvents - Reads a verified event stream.
+ * @property {(options: {appId: string, revisionId: string, limit?: number, observedAt?: number, cursor?: string}) => Promise<{items: Record<string, any>[], nextCursor?: string}>} listReadyWork - Reads an exact-revision page of current-work locators; each must be rebuilt before use.
+ * @property {(options: {appId: string, revisionId: string, runId: string, observed?: Record<string, any>}) => Promise<{applied: boolean, runId: string, expected?: Record<string, any>}>} repairReadyWork - Rebuilds one known manual run's replaceable ready-work locator under an exact head condition.
  * @property {(options: {appId: string, limit?: number, cursor?: string}) => Promise<{items: Record<string, any>[], nextCursor?: string}>} listRuns - Reads a verified bounded run-history page.
  * @property {(runId: string) => Promise<Record<string, any> | null>} rebuildRun - Rebuilds and verifies a whole run.
  */

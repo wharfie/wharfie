@@ -15,6 +15,7 @@ const SOURCE_TOP_LEVEL_KEYS = new Set([
   'cli',
   'targets',
   'activities',
+  'workflows',
 ]);
 const SOURCE_APP_KEYS = new Set(['id']);
 const SOURCE_CLI_KEYS = new Set(['entrypoint']);
@@ -249,6 +250,9 @@ export async function compileAppManifest(sourceValue, options) {
       }
       manifest.activities[activityId] = compiledActivity;
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'workflows')) {
+    manifest.workflows = source.workflows;
   }
 
   return validateAppManifest(manifest);

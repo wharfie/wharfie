@@ -34,6 +34,32 @@ const app = defineApp({
       externalPackages: [{ name: 'example-package', version: '1.2.3' }],
     },
   },
+  workflows: {
+    'greet-later': {
+      steps: [
+        {
+          id: 'greet',
+          kind: 'activity',
+          activity: 'greet',
+          input: { kind: 'workflow-input' },
+        },
+        { id: 'pause', kind: 'timer', delayMs: 1_000 },
+        { id: 'approved', kind: 'signal' },
+        {
+          id: 'greet-again',
+          kind: 'activity',
+          activity: 'greet',
+          input: { kind: 'step-output', step: 'approved' },
+        },
+        {
+          id: 'greet-literal',
+          kind: 'activity',
+          activity: 'greet',
+          input: { kind: 'literal', value: { name: 'typed-workflow' } },
+        },
+      ],
+    },
+  },
 });
 
 const schemaVersion: 2 = app.schemaVersion;
@@ -43,12 +69,17 @@ const cliPath: './src/cli.ts' = app.cli.entrypoint.path;
 const activityExport: 'greet' = app.activities.greet.entrypoint.export;
 const externalPackageName: 'example-package' =
   app.activities.greet.externalPackages[0].name;
+const workflowStepKind: 'timer' = app.workflows['greet-later'].steps[1].kind;
+const workflowLiteral: 'typed-workflow' =
+  app.workflows['greet-later'].steps[4].input.value.name;
 void schemaVersion;
 void appId;
 void entrypointKind;
 void cliPath;
 void activityExport;
 void externalPackageName;
+void workflowStepKind;
+void workflowLiteral;
 
 const legacyApp = {
   schemaVersion: 2,
@@ -60,9 +91,13 @@ const legacyApp = {
       export: 'main',
     },
   },
-  workflows: {},
+  workflows: {
+    legacy: {
+      entrypoint: './src/workflow.ts',
+    },
+  },
 } as const;
-// @ts-expect-error Workflows are not in the strict v2 authoring boundary.
+// @ts-expect-error Workflows are strict data definitions, not code entrypoints.
 defineApp(legacyApp);
 
 const minimalApp = {
@@ -193,6 +228,74 @@ const appWithExtraExternalPackageKey = {
 } as const;
 // @ts-expect-error External package records accept only exact name and version.
 defineApp(appWithExtraExternalPackageKey);
+
+const appWithEmptyWorkflow = {
+  ...minimalApp,
+  workflows: {
+    empty: { steps: [] },
+  },
+} as const;
+// @ts-expect-error Workflow definitions require at least one step.
+defineApp(appWithEmptyWorkflow);
+
+const appWithExtraWorkflowKey = {
+  ...minimalApp,
+  workflows: {
+    greet: {
+      steps: [{ id: 'done', kind: 'signal' }],
+      retry: { attempts: 2 },
+    },
+  },
+} as const;
+// @ts-expect-error Workflow definitions reject undeclared fields.
+defineApp(appWithExtraWorkflowKey);
+
+const appWithExtraWorkflowStepKey = {
+  ...minimalApp,
+  workflows: {
+    greet: {
+      steps: [{ id: 'done', kind: 'signal', name: 'done' }],
+    },
+  },
+} as const;
+// @ts-expect-error Workflow steps use exact discriminated shapes.
+defineApp(appWithExtraWorkflowStepKey);
+
+const appWithInvalidWorkflowInput = {
+  ...minimalApp,
+  workflows: {
+    greet: {
+      steps: [
+        {
+          id: 'greet',
+          kind: 'activity',
+          activity: 'greet',
+          input: { kind: 'workflow-input', value: {} },
+        },
+      ],
+    },
+  },
+} as const;
+// @ts-expect-error Workflow input bindings reject undeclared fields.
+defineApp(appWithInvalidWorkflowInput);
+
+const appWithNonJsonWorkflowLiteral = {
+  ...minimalApp,
+  workflows: {
+    greet: {
+      steps: [
+        {
+          id: 'greet',
+          kind: 'activity',
+          activity: 'greet',
+          input: { kind: 'literal', value: new Date() },
+        },
+      ],
+    },
+  },
+} as const;
+// @ts-expect-error Workflow literal inputs must be JSON values.
+defineApp(appWithNonJsonWorkflowLiteral);
 
 interface GreetResult extends JsonObject {
   message: string;

@@ -3,7 +3,10 @@
 **Status:** Accepted in part · **Date:** 2026-07-16
 
 The resource-declaration portion of this decision is superseded by
-[0012](0012-no-manifest-resource-injection.md). The rest remains accepted.
+[0012](0012-no-manifest-resource-injection.md). Its temporary rejection of
+workflow declarations is superseded by the finite plain-data contract in
+[0019](0019-persisted-linear-workflow-continuations.md). The rest remains
+accepted.
 
 ## Context
 
@@ -22,7 +25,7 @@ The version 2 manifest has these boundaries:
 - Targets are optional but exact when declared: an exact Node semantic version, `darwin`, `linux`, or `win32`, `arm64` or `x64`, and explicit `libc: 'glibc'` for Linux. Wharfie does not silently select target defaults in the manifest compiler.
 - Portable resource declarations are limited to the exact versioned adapter shapes currently understood by Wharfie: `db` with `vanilla` or `dynamodb`, `queue` with `vanilla` or `sqs`, and `objectStorage` with `vanilla` or `s3`. Adapter options are exact data fields, not arbitrary provider configuration. This bullet is superseded by [0012](0012-no-manifest-resource-injection.md).
 - Target-specific external activity packages use exact, canonically ordered `{ name, version }` records. Version ranges and package-manager tags are not manifest inputs.
-- The public manifest does not accept `ActorSystem` graphs, workflow definitions, scheduler configuration, provider infrastructure graphs, credentials, secrets, or compatibility names such as `name`, `functions`, and `capabilities`. Actor systems may remain private implementation machinery, but are not an application-authoring model.
+- The public manifest does not accept `ActorSystem` graphs, scheduler configuration, provider infrastructure graphs, credentials, secrets, or compatibility names such as `name`, `functions`, and `capabilities`. Actor systems may remain private implementation machinery, but are not an application-authoring model. This bullet's original rejection of workflow definitions is superseded by [0019](0019-persisted-linear-workflow-continuations.md).
 - Signing, additional packaged assets, and other build-host settings are packaging inputs, separate from the runtime application manifest.
 
 TypeScript/Node remains the only application-authoring model for this schema. Node-API packages can supply target-specific native hot paths now. Future versions can add WASI/WASM or subprocess-backed activity entrypoint kinds behind the versioned activity protocol described in [0005](0005-typescript-and-component-boundary.md), without making version 2 a general multi-language build format.
@@ -32,5 +35,5 @@ TypeScript/Node remains the only application-authoring model for this schema. No
 - A manifest printed for inspection is the same application contract embedded in an artifact and consumed by the runtime.
 - Packaging and runtime consumers can fail at one validation boundary instead of carrying compatibility branches and partially normalized shapes.
 - Application source stays approachable and ordinary while remaining deterministic enough to serialize, inspect, and bind to future immutable revisions.
-- Workflows, schedules, revisions, deployment profiles, and provider fulfillment must gain explicit versioned contracts before becoming public authoring surface.
+- Workflows, schedules, revisions, deployment profiles, and provider fulfillment must gain explicit versioned contracts before becoming public authoring surface. [0019](0019-persisted-linear-workflow-continuations.md) now supplies that contract for finite linear workflows only.
 - Adding a field or entrypoint kind is a schema decision. Unsupported inputs fail loudly; there is no v1 fallback or backward-compatibility promise during the reset.

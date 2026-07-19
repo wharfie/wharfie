@@ -34,10 +34,14 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V9 manual run → invocation → attempt → effect
+manifest and the append-only V10 manual run → invocation → attempt → effect
 ledger are now defined; the superseded mutable Operation/Action snapshot store
-is gone. Its redacted per-service history directory is transactionally bound to
-each run transition, while revision-backed source and SEA activities consume
+is gone. The manifest can now declare a bounded plain-data linear workflow,
+although durable workflow execution is the next implementation slice. The
+ledger's redacted per-service history directory is transactionally bound to
+every run transition. Its exact-revision ready-work projection is bound to each
+relevant manual lifecycle transition, while
+revision-backed source and SEA activities consume
 one frozen target dependency closure instead of ambient `node_modules` or a
 newly resolved npm tree. Exact-run inspection, confirmed recovery, and
 authenticated current-owner cancellation use one shared source/SEA operator
@@ -57,8 +61,9 @@ command endpoint; otherwise a short-lived exclusive owner appends the same
 `<app> wharfie worker` run the first single-node resident activity worker, and
 the hidden packaged service runtime delegates to that same implementation. The
 worker accepts only its exact app and revision, executes one physical attempt
-at a time, and treats run history only as a locator before rebuilding and
-claiming from authoritative ledger state. On restart it can release and
+at a time, and consumes the bounded ready-work projection only as a locator
+before rebuilding and claiming from authoritative ledger state. On restart it
+can release and
 reschedule a stale `CLAIMED` attempt that never started; a stale `STARTED`
 attempt becomes blocked `UNCERTAIN` work and is never silently redispatched.
 If that stopped attempt retains unresolved managed effects, the resident uses
@@ -79,7 +84,7 @@ can now be resolved only through an explicit, evidence-backed reconciliation
 event: a complete bounded Activity Protocol
 transcript proves one retained abandoned attempt's terminal outcome, while the
 physical attempt itself stays `ABANDONED`. The local command transport is not
-yet supported on Windows. V9 carries forward verifier-backed managed effects
+yet supported on Windows. V10 carries forward verifier-backed managed effects
 through the framed source/SEA worker boundary and exposes one finite public
 operation: `application-state` / `put-if-absent`. Its LMDB destination
 atomically commits the business value with a permanent effect receipt.
@@ -102,7 +107,7 @@ abandoned authored activity. The source stays `BLOCKED` / `UNCERTAIN`.
 The public packaged command's Node-absent relocated-SEA crash/recovery matrix
 passes across every successor publication and transaction boundary, including
 redaction and response-loss replay. Generic handler retries, compensation,
-persistent scheduling, and wider exactly-once claims remain unfinished.
+workflow scheduling, and wider exactly-once claims remain unfinished.
 Earlier V8 real-child coverage exercises seven source/core durable-run
 `SIGKILL` boundaries and three mixed-set recovery
 boundaries. A relocated SEA with Node absent from `PATH` proves the complete
@@ -111,11 +116,11 @@ and four-disposition effect-reconciliation matrix, including exact orphan-
 payload reuse and LMDB owner recovery. Those paths never dispatch authored
 app/CLI/activity code or the normal adapter. The resident activity vertical now
 persists offline submissions, executes serially, recovers conservative restart
-states, and drains gracefully. Durable workflow continuations, timers and
-schedules, an indexed ready-work projection, OS service installation/startup,
-multi-host leases and heartbeats, and public run history/listing remain next
-work. The npm package remains deliberately private. It is not ready for
-production use.
+states, and drains gracefully through the new transactional ready-work index.
+Durable workflow continuations, timers and schedules, OS service
+installation/startup, multi-host leases and heartbeats, and public run
+history/listing remain next work. The npm package remains deliberately private.
+It is not ready for production use.
 
 ## Start here
 
@@ -123,7 +128,8 @@ production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Resident activity worker checkpoint](llm/checkpoints/2026-07-19-v3-resident-activity-worker.md) — the current fully validated implementation handoff for offline submission, serial resident execution, and conservative restart recovery.
+- [V10 ready-work checkpoint](llm/checkpoints/2026-07-19-v4-v10-ready-work.md) — the current implementation handoff for the exact-revision transactional scheduler locator and strict workflow authoring contract.
+- [Resident activity worker checkpoint](llm/checkpoints/2026-07-19-v3-resident-activity-worker.md) — the preceding fully validated handoff for offline submission, serial resident execution, and conservative restart recovery.
 - [V2 foundation stabilization checkpoint](llm/checkpoints/2026-07-19-v2-foundation-stabilized.md) — the preceding clean-install restart point after repository cleanup, the portable module gate, and the public V9 successor proof.
 - [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) — the historical pre-mount restart point for the first causally linked fresh-identity retry policy and its internal relocated-SEA proof.
 - [V8 destination-effect reconciliation checkpoint](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md) — the preceding restart point after destination-finalized uncertain-effect reconciliation and its relocated-SEA crash matrix.
@@ -181,23 +187,39 @@ export default defineApp({
       },
     },
   },
+  workflows: {
+    greet: {
+      steps: [
+        {
+          id: 'greet',
+          kind: 'activity',
+          activity: 'greet',
+          input: { kind: 'workflow-input' },
+        },
+      ],
+    },
+  },
 });
 ```
 
 Application and activity IDs are lowercase kebab identifiers matching
 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with a maximum of 63 ASCII bytes. Wharfie
 does not trim or rewrite them. The CLI is required; activities and package
-targets are optional. Application- and activity-level `resources` are not part
+targets and workflows are optional. A workflow is one to 64 ordered plain-data
+activity, timer, or signal steps; activity inputs explicitly select the
+workflow input, a JSON literal, or one earlier step's persisted output. The
+manifest compiler and packager bind that definition to the revision, but the
+durable workflow execution commands are not implemented yet. Application- and
+activity-level `resources` are not part
 of the schema and are rejected as unknown fields. A caller-metadata object may
 contain a property named `resources`, but it is ordinary inert JSON—not an
 injection request. Managed effects are a separate finite API on
 `runtime.effects`; the first exact request is `application-state` /
 `put-if-absent` with `['idempotent', 'transactional']` replay properties.
 Durable `ops run` fulfills that request, while ephemeral invocation rejects it
-with `effect-handler-unavailable`. Workflows and schedules are intentionally not
-in this schema until their durable semantics are ready. Build credentials,
-signing material, and extra asset configuration are also outside the public
-manifest.
+with `effect-handler-unavailable`. Schedules remain outside this schema. Build
+credentials, signing material, and extra asset configuration are also outside
+the public manifest.
 
 See the [quickstart](docs/guides/quickstart.md) and [application
 structure](docs/guides/application-structure.md) for the complete
@@ -234,7 +256,7 @@ attempt and admitted command handlers settle.
 
 This is a foreground resident runtime, not service installation. Wharfie does
 not yet install startup-on-boot units or provide schedules, workflow
-continuations, multi-host reassignment, or a public ready-work/history index.
+continuations, multi-host reassignment, or public run-history/listing commands.
 
 ## Reconcile one uncertain managed effect
 

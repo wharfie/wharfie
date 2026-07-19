@@ -41,7 +41,7 @@ function requireSuccessorLedger(value) {
     typeof ledger.interruptManagedEffectSuccessor !== 'function'
   ) {
     throw new TypeError(
-      'Managed-effect successor execution requires the dedicated V9 ledger lifecycle.',
+      'Managed-effect successor execution requires the dedicated V10 ledger lifecycle.',
     );
   }
   return /** @type {import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */ (

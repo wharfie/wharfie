@@ -30,8 +30,8 @@ describe('execution ledger contract facade', () => {
     }
   });
 
-  test('preserves destination identity across the V9 ledger namespace', () => {
-    expect(ledgerContract.EXECUTION_LEDGER_SCHEMA_VERSION).toBe(9);
+  test('preserves destination identity across the V10 ledger namespace', () => {
+    expect(ledgerContract.EXECUTION_LEDGER_SCHEMA_VERSION).toBe(10);
     expect(ledgerContract.MANAGED_EFFECT_DESTINATION_IDENTITY_VERSION).toBe(8);
     expect(
       ledgerFacade.createManagedEffectDestinationId({

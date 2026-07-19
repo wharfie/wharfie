@@ -130,7 +130,7 @@ function createConfigurations() {
     configuration: Object.freeze({
       adapterName: /** @type {const} */ ('lmdb'),
       controlPath,
-      tableName: 'wharfie-execution-ledger-v9',
+      tableName: 'wharfie-execution-ledger-v10',
       payloadPath,
       payloadStoreId: resolveExecutionPayloadStoreId(payloadPath),
       sessionPath: join(root, 'sessions'),

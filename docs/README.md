@@ -28,13 +28,15 @@ process restart. A stale unstarted claim can be rescheduled, while work that
 crossed `STARTED` becomes blocked `UNCERTAIN` rather than being redispatched.
 Any unresolved managed-effect siblings settle atomically through receipt-only
 recovery before that block. The public worker command and hidden packaged
-service runtime share this implementation.
+service runtime share this implementation and consume an exact-revision
+transactional ready-work locator rather than scanning run history. The strict
+manifest also accepts the bounded linear workflow definition from ADR 0019,
+but does not execute it yet.
 
 This is not yet a durable workflow engine or an installed operating-system
-service. Workflow continuations, timers and schedules, a purpose-built ready
-index, startup-on-boot installation, provider-backed deployment, multi-host
-leases/heartbeats, and the trusted-node mesh remain roadmap work; Wharfie is
-not production ready.
+service. Workflow continuations, timers and schedules, startup-on-boot
+installation, provider-backed deployment, multi-host leases/heartbeats, and
+the trusted-node mesh remain roadmap work; Wharfie is not production ready.
 
 ## Start locally
 

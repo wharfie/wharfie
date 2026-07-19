@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import {
   AttemptStatus,
   EffectStatus,
+  ExecutionLedgerConflictError,
   InvocationStatus,
   RunStatus,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
@@ -33,7 +34,7 @@ import {
   LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS,
 } from '../../../src/core/runtime/operator/local-owner-command.js';
 import {
-  RESIDENT_ACTIVITY_SCAN_PAGE_SIZE,
+  RESIDENT_ACTIVITY_READY_WORK_LIMIT,
   RESIDENT_ACTIVITY_SUBMIT_COMMAND,
   runResidentActivityWorker,
 } from '../../../src/core/runtime/services/resident-activity-worker.js';
@@ -172,23 +173,36 @@ function makeHarness(execution) {
 }
 
 /**
- * @param {{appId: string, revisionId: string, runId: string, version?: number, lastSequence?: number}} options
+ * @param {{appId: string, revisionId: string, runId: string, kind?: 'ACTIVITY'|'RECOVERY', generation?: number, attemptId?: string, availableAt?: number, version?: number, lastSequence?: number}} options
  * @returns {Record<string, any>}
  */
-function makeRow({ appId, revisionId, runId, version = 1, lastSequence = 1 }) {
+function makeRow({
+  appId,
+  revisionId,
+  runId,
+  kind = 'ACTIVITY',
+  generation = kind === 'RECOVERY' ? 1 : 0,
+  attemptId = 'resident-attempt-1',
+  availableAt = 0,
+  version = 1,
+  lastSequence = 1,
+}) {
   return {
-    kind: 'manual',
+    kind,
     appId,
     revisionId,
     runId,
-    status: RunStatus.RUNNING,
-    version,
+    availableAt,
+    runVersion: version,
     lastSequence,
+    invocationId: MANUAL_LEDGER_INVOCATION_ID,
+    generation,
+    ...(kind === 'RECOVERY' ? { attemptId } : {}),
   };
 }
 
 /**
- * @param {{appId: string, revisionId: string, runId: string, runStatus?: RunStatusValue, invocationStatus?: InvocationStatusValue, attemptStatus?: AttemptStatusValue, generation?: number, version?: number, lastSequence?: number, effects?: Record<string, any>[]}} options
+ * @param {{appId: string, revisionId: string, runId: string, runStatus?: RunStatusValue, invocationStatus?: InvocationStatusValue, attemptStatus?: AttemptStatusValue, generation?: number, version?: number, lastSequence?: number, availableAt?: number, effects?: Record<string, any>[]}} options
  * @returns {Record<string, any>}
  */
 function makeView({
@@ -201,6 +215,7 @@ function makeView({
   generation = attemptStatus ? 1 : 0,
   version = 1,
   lastSequence = 1,
+  availableAt = 0,
   effects = [],
 }) {
   return {
@@ -220,6 +235,7 @@ function makeView({
         revisionId,
         status: invocationStatus,
         generation,
+        updatedAt: availableAt,
       },
     ],
     attempts:
@@ -232,6 +248,7 @@ function makeView({
               fencingToken: 'resident-fence-1',
               generation,
               status: attemptStatus,
+              updatedAt: availableAt,
             },
           ],
     effects,
@@ -314,9 +331,9 @@ describe('resident activity worker', () => {
     let firstView = makeView({ ...harness, runId: firstRunId });
     const secondView = makeView({ ...harness, runId: secondRunId });
     const ledger = {
-      listRuns: jest.fn(
+      listReadyWork: jest.fn(
         async (
-          /** @type {{appId: string, limit: number, cursor?: string}} */ _options,
+          /** @type {{appId: string, revisionId: string, limit: number}} */ _options,
         ) => ({ items: rows }),
       ),
       rebuildRun: jest.fn(async (runId) =>
@@ -377,43 +394,47 @@ describe('resident activity worker', () => {
       firstRunId,
       secondRunId,
     ]);
-    expect(ledger.listRuns).toHaveBeenCalledWith({
+    expect(ledger.listReadyWork).toHaveBeenCalledWith({
       appId: harness.appId,
-      limit: RESIDENT_ACTIVITY_SCAN_PAGE_SIZE,
+      revisionId: harness.revisionId,
+      limit: RESIDENT_ACTIVITY_READY_WORK_LIMIT,
     });
   });
 
-  it('continues to a later locator page to find runnable work', async () => {
+  it('skips a stale locator before dispatching later exact ready work', async () => {
     const execution = makeEmbeddedExecution();
     const harness = makeHarness(execution);
     const controller = new AbortController();
     const terminalRunId = createManualLedgerRunId({
       appId: harness.appId,
-      idempotencyKey: 'terminal-page-one',
+      idempotencyKey: 'stale-ready-row',
     });
     const runnableRunId = createManualLedgerRunId({
       appId: harness.appId,
-      idempotencyKey: 'runnable-page-two',
+      idempotencyKey: 'later-ready-row',
     });
-    const nextCursor = 'resident-worker-page-two';
     const ledger = {
-      listRuns: jest.fn(async (/** @type {{cursor?: string}} */ { cursor }) =>
-        cursor === undefined
-          ? {
-              items: [
-                {
-                  ...makeRow({ ...harness, runId: terminalRunId }),
-                  status: RunStatus.COMPLETED,
-                },
-              ],
-              nextCursor,
-            }
-          : {
-              items: [makeRow({ ...harness, runId: runnableRunId })],
-            },
+      listReadyWork: jest.fn(
+        async (
+          /** @type {{appId: string, revisionId: string, limit: number}} */ _options,
+        ) => ({
+          items: [
+            makeRow({ ...harness, runId: terminalRunId }),
+            makeRow({ ...harness, runId: runnableRunId }),
+          ],
+        }),
       ),
-      rebuildRun: jest.fn(async () =>
-        makeView({ ...harness, runId: runnableRunId }),
+      rebuildRun: jest.fn(async (/** @type {string} */ runId) =>
+        makeView({
+          ...harness,
+          runId,
+          ...(runId === terminalRunId
+            ? {
+                runStatus: RunStatus.COMPLETED,
+                invocationStatus: InvocationStatus.COMPLETED,
+              }
+            : {}),
+        }),
       ),
     };
     const runActivity = jest.fn(
@@ -435,17 +456,256 @@ describe('resident activity worker', () => {
       }),
     ).resolves.toEqual({ processed: 1 });
 
-    expect(ledger.listRuns.mock.calls.map(([request]) => request)).toEqual([
-      { appId: harness.appId, limit: RESIDENT_ACTIVITY_SCAN_PAGE_SIZE },
-      {
-        appId: harness.appId,
-        limit: RESIDENT_ACTIVITY_SCAN_PAGE_SIZE,
-        cursor: nextCursor,
-      },
-    ]);
-    expect(ledger.rebuildRun).toHaveBeenCalledTimes(1);
+    expect(ledger.listReadyWork.mock.calls.map(([request]) => request)).toEqual(
+      [
+        {
+          appId: harness.appId,
+          revisionId: harness.revisionId,
+          limit: RESIDENT_ACTIVITY_READY_WORK_LIMIT,
+        },
+      ],
+    );
+    expect(ledger.rebuildRun).toHaveBeenCalledTimes(2);
     expect(runActivity).toHaveBeenCalledWith(
       expect.objectContaining({ runId: runnableRunId }),
+    );
+  });
+
+  it('repairs an exact stale locator without losing a concurrent repair race', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const staleRunId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'repair-stale-ready-row',
+    });
+    const runnableRunId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'ready-after-repair-race',
+    });
+    const staleRow = makeRow({ ...harness, runId: staleRunId });
+    const runnableRow = makeRow({ ...harness, runId: runnableRunId });
+    const repairReadyWork = jest.fn(
+      async (/** @type {Record<string, any>} */ _options) => {
+        throw new ExecutionLedgerConflictError(staleRunId, 'repair race');
+      },
+    );
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [staleRow, runnableRow],
+      })),
+      rebuildRun: jest.fn(async (/** @type {string} */ runId) =>
+        makeView({
+          ...harness,
+          runId,
+          ...(runId === staleRunId
+            ? {
+                runStatus: RunStatus.COMPLETED,
+                invocationStatus: InvocationStatus.COMPLETED,
+              }
+            : {}),
+        }),
+      ),
+      repairReadyWork,
+    };
+    const runActivity = jest.fn(
+      async (/** @type {RunActivityOptions} */ _options) => controller.abort(),
+    );
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        recoverActivity: asRecoverActivity(jest.fn()),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 1 });
+
+    expect(repairReadyWork).toHaveBeenCalledTimes(1);
+    expect(repairReadyWork).toHaveBeenCalledWith({
+      appId: harness.appId,
+      revisionId: harness.revisionId,
+      runId: staleRunId,
+      observed: staleRow,
+    });
+    expect(runActivity).toHaveBeenCalledTimes(1);
+    expect(runActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: runnableRunId }),
+    );
+    expect(runActivity).not.toHaveBeenCalledWith(
+      expect.objectContaining({ runId: staleRunId }),
+    );
+  });
+
+  it('continues through a full stale page to exact work on the next cursor', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const stale = Array.from(
+      { length: RESIDENT_ACTIVITY_READY_WORK_LIMIT },
+      (_, index) => {
+        const runId = createManualLedgerRunId({
+          appId: harness.appId,
+          idempotencyKey: `stale-page-one-${index}`,
+        });
+        const availableAt = 100 + index;
+        return {
+          row: makeRow({ ...harness, runId, availableAt }),
+          view: makeView({
+            ...harness,
+            runId,
+            availableAt,
+            runStatus: RunStatus.COMPLETED,
+            invocationStatus: InvocationStatus.COMPLETED,
+          }),
+        };
+      },
+    );
+    const runnableRunId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'ready-page-two',
+    });
+    const runnableAvailableAt = 1_000;
+    const nextCursor = 'opaque-ready-work-page-two';
+    const ledger = {
+      listReadyWork: jest.fn(
+        async (
+          /** @type {{appId: string, revisionId: string, limit: number, cursor?: string}} */ options,
+        ) =>
+          options.cursor === undefined
+            ? { items: stale.map(({ row }) => row), nextCursor }
+            : {
+                items: [
+                  makeRow({
+                    ...harness,
+                    runId: runnableRunId,
+                    availableAt: runnableAvailableAt,
+                  }),
+                ],
+              },
+      ),
+      rebuildRun: jest.fn(async (/** @type {string} */ runId) => {
+        const staleEntry = stale.find(({ row }) => row.runId === runId);
+        return (
+          staleEntry?.view ||
+          makeView({
+            ...harness,
+            runId: runnableRunId,
+            availableAt: runnableAvailableAt,
+          })
+        );
+      }),
+    };
+    const runActivity = jest.fn(
+      async (/** @type {RunActivityOptions} */ _options) => controller.abort(),
+    );
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        recoverActivity: asRecoverActivity(jest.fn()),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 1 });
+
+    expect(ledger.listReadyWork.mock.calls.map(([request]) => request)).toEqual(
+      [
+        {
+          appId: harness.appId,
+          revisionId: harness.revisionId,
+          limit: RESIDENT_ACTIVITY_READY_WORK_LIMIT,
+        },
+        {
+          appId: harness.appId,
+          revisionId: harness.revisionId,
+          limit: RESIDENT_ACTIVITY_READY_WORK_LIMIT,
+          cursor: nextCursor,
+        },
+      ],
+    );
+    expect(ledger.rebuildRun).toHaveBeenCalledTimes(
+      RESIDENT_ACTIVITY_READY_WORK_LIMIT + 1,
+    );
+    expect(runActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: runnableRunId }),
+    );
+  });
+
+  it('rejects ready-work rows that do not match exact execution authority', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    /** @param {string} idempotencyKey */
+    const runId = (idempotencyKey) =>
+      createManualLedgerRunId({ appId: harness.appId, idempotencyKey });
+    const wrongVersionRunId = runId('wrong-ready-version');
+    const nonManualRunId = runId('non-manual-ready-trigger');
+    const wrongGenerationRunId = runId('wrong-ready-generation');
+    const wrongAttemptRunId = runId('wrong-ready-attempt');
+    const exactRunId = runId('exact-ready-authority');
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [
+          makeRow({ ...harness, runId: wrongVersionRunId, version: 2 }),
+          makeRow({ ...harness, runId: nonManualRunId }),
+          makeRow({ ...harness, runId: wrongGenerationRunId, generation: 1 }),
+          makeRow({
+            ...harness,
+            runId: wrongAttemptRunId,
+            kind: 'RECOVERY',
+            attemptId: 'different-attempt',
+          }),
+          makeRow({ ...harness, runId: exactRunId }),
+        ],
+      })),
+      rebuildRun: jest.fn(async (/** @type {string} */ candidateRunId) => {
+        const view = makeView({
+          ...harness,
+          runId: candidateRunId,
+          ...(candidateRunId === wrongAttemptRunId
+            ? {
+                invocationStatus: InvocationStatus.RUNNING,
+                attemptStatus: AttemptStatus.CLAIMED,
+              }
+            : {}),
+        });
+        if (candidateRunId === nonManualRunId) {
+          view.run.trigger = { kind: 'workflow', workflowId: 'not-manual' };
+        }
+        return view;
+      }),
+    };
+    const recoverActivity = jest.fn();
+    const runActivity = jest.fn(
+      async (/** @type {RunActivityOptions} */ _options) => controller.abort(),
+    );
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        recoverActivity: asRecoverActivity(recoverActivity),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 1 });
+
+    expect(recoverActivity).not.toHaveBeenCalled();
+    expect(runActivity).toHaveBeenCalledTimes(1);
+    expect(runActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: exactRunId }),
     );
   });
 
@@ -455,12 +715,12 @@ describe('resident activity worker', () => {
     const controller = new AbortController();
     const runId = createManualLedgerRunId({
       appId: harness.appId,
-      idempotencyKey: 'shutdown-during-scan',
+      idempotencyKey: 'shutdown-during-ready-work-read',
     });
-    /** @type {Deferred<{items: Record<string, any>[], nextCursor?: string}>} */
+    /** @type {Deferred<{items: Record<string, any>[]}>} */
     const pendingPage = deferred();
     const ledger = {
-      listRuns: jest.fn(async () => await pendingPage.promise),
+      listReadyWork: jest.fn(async () => await pendingPage.promise),
       rebuildRun: jest.fn(async () => makeView({ ...harness, runId })),
     };
     const runActivity = jest.fn();
@@ -474,7 +734,7 @@ describe('resident activity worker', () => {
       recoverActivity: asRecoverActivity(jest.fn()),
       createCommandServer: harness.createCommandServer,
     });
-    await waitUntil(() => ledger.listRuns.mock.calls.length === 1);
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 1);
 
     controller.abort();
     pendingPage.resolve({
@@ -496,8 +756,8 @@ describe('resident activity worker', () => {
     /** @type {Deferred<Record<string, any>>} */
     const pendingView = deferred();
     const ledger = {
-      listRuns: jest.fn(async () => ({
-        items: [makeRow({ ...harness, runId })],
+      listReadyWork: jest.fn(async () => ({
+        items: [makeRow({ ...harness, runId, kind: 'RECOVERY' })],
       })),
       rebuildRun: jest.fn(async () => await pendingView.promise),
     };
@@ -535,7 +795,7 @@ describe('resident activity worker', () => {
     const harness = makeHarness(execution);
     const controller = new AbortController();
     const ledger = {
-      listRuns: jest.fn(async () => ({ items: [] })),
+      listReadyWork: jest.fn(async () => ({ items: [] })),
       rebuildRun: jest.fn(),
     };
     const onReady = jest.fn(async () => {
@@ -581,8 +841,8 @@ describe('resident activity worker', () => {
       attemptStatus: AttemptStatus.CLAIMED,
     });
     const ledger = {
-      listRuns: jest.fn(async () => ({
-        items: [makeRow({ ...harness, runId })],
+      listReadyWork: jest.fn(async () => ({
+        items: [makeRow({ ...harness, runId, kind: 'RECOVERY' })],
       })),
       rebuildRun: jest.fn(async () => view),
     };
@@ -642,8 +902,8 @@ describe('resident activity worker', () => {
       attemptStatus: AttemptStatus.STARTED,
     });
     const ledger = {
-      listRuns: jest.fn(async () => ({
-        items: [makeRow({ ...harness, runId })],
+      listReadyWork: jest.fn(async () => ({
+        items: [makeRow({ ...harness, runId, kind: 'RECOVERY' })],
       })),
       rebuildRun: jest.fn(async () => view),
     };
@@ -701,8 +961,8 @@ describe('resident activity worker', () => {
       effects,
     });
     const ledger = {
-      listRuns: jest.fn(async () => ({
-        items: [makeRow({ ...harness, runId })],
+      listReadyWork: jest.fn(async () => ({
+        items: [makeRow({ ...harness, runId, kind: 'RECOVERY' })],
       })),
       rebuildRun: jest.fn(async () => view),
     };
@@ -749,6 +1009,7 @@ describe('resident activity worker', () => {
         fencingToken: 'resident-fence-1',
         generation: 1,
         status: AttemptStatus.STARTED,
+        updatedAt: 0,
       },
       effects,
       actor: { kind: 'resident-recovery', id: harness.appId },
@@ -765,7 +1026,7 @@ describe('resident activity worker', () => {
     const harness = makeHarness(execution);
     const controller = new AbortController();
     const ledger = {
-      listRuns: jest.fn(async () => ({ items: [] })),
+      listReadyWork: jest.fn(async () => ({ items: [] })),
       rebuildRun: jest.fn(),
     };
     const submitActivity = jest.fn();
@@ -830,7 +1091,7 @@ describe('resident activity worker', () => {
       idempotencyKey: 'bounded-drain',
     });
     const ledger = {
-      listRuns: jest.fn(async () => ({
+      listReadyWork: jest.fn(async () => ({
         items: [makeRow({ ...harness, runId })],
       })),
       rebuildRun: jest.fn(async () => makeView({ ...harness, runId })),

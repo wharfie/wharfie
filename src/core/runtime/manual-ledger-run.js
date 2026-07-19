@@ -128,7 +128,7 @@ export function createManualLedgerRunId(options) {
     'idempotencyKey',
   );
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:manual-ledger-run:v9',
+    domain: 'wharfie:manual-ledger-run:v10',
     prefix: 'wlm',
     value: { appId: options.appId, idempotencyKey },
     valuePath: 'manual ledger run identity',

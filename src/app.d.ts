@@ -123,6 +123,59 @@ export interface ActivityDefinition {
   externalPackages?: readonly ExternalPackage[];
 }
 
+/** Pass the workflow run's immutable JSON input to an activity step. */
+export interface WorkflowInputBinding {
+  kind: 'workflow-input';
+}
+
+/** Pass one earlier step's persisted JSON output to an activity step. */
+export interface WorkflowStepOutputBinding {
+  kind: 'step-output';
+  step: LogicalId;
+}
+
+/** Pass revision-bound literal JSON to an activity step. */
+export interface WorkflowLiteralInputBinding {
+  kind: 'literal';
+  value: JsonValue;
+}
+
+export type WorkflowActivityInput =
+  | WorkflowInputBinding
+  | WorkflowStepOutputBinding
+  | WorkflowLiteralInputBinding;
+
+/** Invoke one declared activity with an explicit durable input binding. */
+export interface WorkflowActivityStep {
+  id: LogicalId;
+  kind: 'activity';
+  activity: LogicalId;
+  input: WorkflowActivityInput;
+}
+
+/** Wait for a revision-bound duration measured from its persisted schedule. */
+export interface WorkflowTimerStep {
+  id: LogicalId;
+  kind: 'timer';
+  delayMs: number;
+}
+
+/** Wait for a durable signal whose public name is this stable step ID. */
+export interface WorkflowSignalStep {
+  id: LogicalId;
+  kind: 'signal';
+}
+
+export type WorkflowStep =
+  | WorkflowActivityStep
+  | WorkflowTimerStep
+  | WorkflowSignalStep;
+
+/** A finite serial workflow; array order is its complete continuation graph. */
+export interface WorkflowDefinition {
+  steps: readonly [WorkflowStep, ...WorkflowStep[]];
+}
+
 interface AppTargetBase {
   /** Exact canonical semantic version in x.y.z form. */
   nodeVersion: string;
@@ -149,6 +202,7 @@ export interface WharfieAppDefinition {
   cli: AppCliDefinition;
   targets?: readonly AppTarget[];
   activities?: Readonly<Record<LogicalId, ActivityDefinition>>;
+  workflows?: Readonly<Record<LogicalId, WorkflowDefinition>>;
 }
 
 type StrictShape<Actual, Shape> = Shape extends unknown

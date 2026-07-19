@@ -108,7 +108,7 @@ async function createHarness(label) {
 /** @param {Record<string, any>} event */
 function successorEventId(event) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v9',
+    domain: 'wharfie:execution-ledger-event:v10',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,

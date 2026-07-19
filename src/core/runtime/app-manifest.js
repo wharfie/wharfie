@@ -11,6 +11,7 @@ import {
 import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
+import { validateWorkflowDefinitions } from './workflow-definition.js';
 
 export const APP_MANIFEST_SCHEMA_VERSION = 2;
 
@@ -20,6 +21,7 @@ const TOP_LEVEL_KEYS = new Set([
   'cli',
   'targets',
   'activities',
+  'workflows',
 ]);
 const APP_KEYS = new Set(['id']);
 const CLI_KEYS = new Set(['entrypoint']);
@@ -290,6 +292,22 @@ export function validateAppManifest(value, valuePath = 'manifest') {
           activity.externalPackages,
           `${activityPath}.externalPackages`,
         );
+      }
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(manifest, 'workflows')) {
+    manifest.workflows = validateWorkflowDefinitions(
+      manifest.workflows,
+      `${valuePath}.workflows`,
+    );
+    const activityIds = new Set(Object.keys(manifest.activities || {}));
+    for (const [workflowId, workflow] of Object.entries(manifest.workflows)) {
+      for (const [index, step] of workflow.steps.entries()) {
+        if (step.kind === 'activity' && !activityIds.has(step.activity)) {
+          throw new TypeError(
+            `${valuePath}.workflows.${workflowId}.steps[${index}].activity must reference an activity declared by this manifest.`,
+          );
+        }
       }
     }
   }

@@ -9,7 +9,7 @@ These records capture product-level decisions that should survive implementation
 | [0003 — Capability fulfillment, not general IaC](0003-capability-fulfillment.md)                                           | Accepted                                     |
 | [0004 — One authoritative terminal outcome and explicit effects](0004-logical-outcomes-and-effects.md)                     | Accepted                                     |
 | [0005 — TypeScript control plane with a component boundary](0005-typescript-and-component-boundary.md)                     | Accepted                                     |
-| [0006 — One strict version 2 application manifest](0006-strict-v2-app-manifest.md)                                         | Accepted; resources superseded by 0012       |
+| [0006 — One strict version 2 application manifest](0006-strict-v2-app-manifest.md)                                         | Accepted; amended by 0012 and 0019           |
 | [0007 — Atomic, fenced operation snapshots](0007-atomic-operation-snapshots.md)                                            | Superseded by 0011                           |
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md)                 | Accepted                                     |
 | [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                                      | Accepted                                     |
@@ -22,5 +22,6 @@ These records capture product-level decisions that should survive implementation
 | [0016 — Atomic stopped-attempt managed-effect settlement](0016-atomic-stopped-attempt-effect-settlement.md)                | Accepted; V7 namespace superseded by 0017    |
 | [0017 — Destination-finalized uncertain-effect reconciliation](0017-destination-finalized-effect-reconciliation.md)        | Accepted; V8 reconciliation boundary         |
 | [0018 — Causally linked managed-effect successor work](0018-causally-linked-managed-effect-successors.md)                  | Accepted; finite V9 retry policy             |
+| [0019 — Persisted linear workflow continuations](0019-persisted-linear-workflow-continuations.md)                          | Accepted; first V10 workflow model           |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

@@ -61,6 +61,13 @@ export default defineApp({
 });
 ```
 
+The optional `workflows` map accepts the finite revision-bound contract from
+ADR 0019: one to 64 ordered `activity`, `timer`, or `signal` steps. Activity
+input is exactly the workflow input, a JSON literal, or one named earlier
+step's output. The manifest compiler and packager preserve this data now; the
+durable workflow start and signal commands are not implemented yet. See
+[Application Structure](./application-structure.md) for the exact shape.
+
 The application ID, activity keys, and other logical IDs use lowercase kebab
 case: `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with at most 63 ASCII bytes. Wharfie
 rejects whitespace, uppercase letters, underscores, dots, and leading digits;
@@ -181,8 +188,9 @@ wharfie ops worker --dir ./path/to/app
 
 The first worker processes one physical attempt at a time. It accepts and
 executes only runs pinned to its exact application and immutable revision. Its
-paginated run-history scan is only a locator: the worker rebuilds each candidate
-and the ordinary ledger claim remains the authority to execute. On restart a
+transactional exact-revision ready-work index is only a locator: the worker
+rebuilds each named run/version/invocation or recovery attempt, and the ordinary
+ledger claim remains the authority to execute. On restart a
 stale `CLAIMED` attempt that never crossed the handler-start boundary is
 released and rescheduled. A stale `STARTED` attempt becomes blocked
 `UNCERTAIN`; Wharfie does not silently redispatch code that may already have
@@ -206,7 +214,8 @@ The private environment-selected packaged service runtime starts the same
 resident activity implementation. Wharfie does not yet install it as an OS
 service or arrange startup on boot. The current worker is not a workflow or
 scheduler: it has no continuations, timers, schedules, multi-host leases, or
-heartbeats, and run history is not an ideal ready-work index.
+heartbeats. `ACTIVITY` and `RECOVERY` rows are implemented; `TIMER` and
+framework-only `CONTINUATION` rows are reserved for the next workflow slice.
 
 Inspection is read-only. Recovery is an explicit durable mutation to use only
 after every prior runner has stopped; it does not load an app manifest, parse
@@ -300,7 +309,7 @@ state. Recovery is deliberately explicit: use it only after confirming every
 prior runner is gone. For an ordinary manual run, it can release a generic
 claim that never started; a begun attempt becomes visibly blocked as
 `UNCERTAIN` instead of replaying code. The successor lifecycle instead uses the
-dedicated behavior above and has no generic claim. V9 retains V8's recovery of
+dedicated behavior above and has no generic claim. V10 retains V9's recovery of
 the complete active-effect set, bounded to 16 unresolved effects, for an
 ordinary stopped attempt under the held local owner. Every `PENDING` request
 becomes `CANCELLED` without a destination probe because its durable start
@@ -331,7 +340,7 @@ never rewritten, and the transcript, result, reason, and fence are never echoed
 in the operator response. A `cancelled` result still requires the matching
 earlier durable cancellation request and host cancellation frame.
 
-The V9 ledger carries forward cancellation by the active local owner. During
+The V10 ledger carries forward cancellation by the active local owner. During
 `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
 before the owner signals the physical attempt. An LMDB-backed foreground run
 or resident worker that owns the exact `STARTED` attempt can also receive
@@ -351,7 +360,7 @@ cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
 `UNCERTAIN` work; later reconciliation needs evidence rather than another
 cancel request. There is still no public run-history/list: the verified bounded
-V7 run directory paired with the V9 ledger is internal rather than the retired
+V8 run directory paired with the V10 ledger is internal rather than the retired
 `ops list` surface. The resident now submits, claims, and executes exact-revision
 manual activities serially, but it does not run workflow continuations or
 schedules. The bounded recovery and reconciliation paths have prior real
@@ -361,9 +370,9 @@ boundaries. The resident dispatch and shutdown surface now has a complete
 source, package, and moved-SEA validation receipt, including exact-revision
 dispatch, graceful drain tests, current-revision managed-effect recovery, and
 service crash/restart with Node unavailable on `PATH`. It remains a
-single-process activity worker rather than a production workflow service: the
-ready-work index, workflow continuations, OS installation/reboot proof, and
-multi-host coordination are still intentionally absent.
+single-process activity worker rather than a production workflow service:
+workflow continuations, OS installation/reboot proof, and multi-host
+coordination are still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.
@@ -399,8 +408,9 @@ wharfie app package ./path/to/app
 Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
 
-The v2 manifest does not expose workflows, schedules, arbitrary packaging
-assets, signing credentials, or other build secrets. External activity packages
+The v2 manifest exposes only the bounded plain-data workflow definitions above;
+it does not yet expose durable workflow execution, schedules, arbitrary
+packaging assets, signing credentials, or other build secrets. External activity packages
 must be pinned as exact descriptors such as
 `externalPackages: [{ name: 'sharp', version: '0.34.4' }]`; ranges, tags, URLs,
 and ambient dependency resolution are not accepted. Multiple entries must use

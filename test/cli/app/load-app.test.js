@@ -45,6 +45,26 @@ function makeValidSource() {
         ],
       },
     },
+    workflows: {
+      'greet-later': {
+        steps: [
+          {
+            id: 'greet',
+            kind: 'activity',
+            activity: 'greet',
+            input: { kind: 'workflow-input' },
+          },
+          { id: 'pause', kind: 'timer', delayMs: 1_000 },
+          { id: 'approved', kind: 'signal' },
+          {
+            id: 'greet-again',
+            kind: 'activity',
+            activity: 'greet',
+            input: { kind: 'step-output', step: 'approved' },
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -124,6 +144,26 @@ describe('Wharfie app loader', () => {
             externalPackages: [
               { name: 'alpha-package', version: '1.2.3' },
               { name: 'zeta-package', version: '2.0.0' },
+            ],
+          },
+        },
+        workflows: {
+          'greet-later': {
+            steps: [
+              {
+                id: 'greet',
+                kind: 'activity',
+                activity: 'greet',
+                input: { kind: 'workflow-input' },
+              },
+              { id: 'pause', kind: 'timer', delayMs: 1_000 },
+              { id: 'approved', kind: 'signal' },
+              {
+                id: 'greet-again',
+                kind: 'activity',
+                activity: 'greet',
+                input: { kind: 'step-output', step: 'approved' },
+              },
             ],
           },
         },
@@ -226,11 +266,42 @@ describe('Wharfie app loader', () => {
       /app\.activities\.greet\.resources is not supported/i,
     ],
     [
-      'workflows before a reviewed durable contract exists',
+      'an empty workflow map',
       (source) => {
         source.workflows = {};
       },
-      /app\.workflows is not supported/i,
+      /manifest\.workflows must not be empty/i,
+    ],
+    [
+      'an unknown workflow field',
+      (source) => {
+        source.workflows['greet-later'].retry = { attempts: 2 };
+      },
+      /workflows\.greet-later must contain exactly steps/i,
+    ],
+    [
+      'a workflow activity that is not declared',
+      (source) => {
+        source.workflows['greet-later'].steps[0].activity = 'missing';
+      },
+      /steps\[0\]\.activity must reference an activity declared by this manifest/i,
+    ],
+    [
+      'a forward workflow output reference',
+      (source) => {
+        source.workflows['greet-later'].steps[0].input = {
+          kind: 'step-output',
+          step: 'approved',
+        };
+      },
+      /steps\[0\]\.input\.step must reference an earlier step/i,
+    ],
+    [
+      'a duplicate workflow step ID',
+      (source) => {
+        source.workflows['greet-later'].steps[1].id = 'greet';
+      },
+      /steps\[1\]\.id duplicates an earlier workflow step/i,
     ],
     [
       'a scheduler before a reviewed durable contract exists',

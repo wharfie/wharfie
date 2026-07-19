@@ -337,7 +337,7 @@ describe('packageLocalApp', () => {
     }
   });
 
-  it('packages a plain-object app through the v2 packaging path', async () => {
+  it('packages a plain-object v2 app with workflows into embedded assets', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-plain-object-package-'),
     );
@@ -346,6 +346,26 @@ describe('packageLocalApp', () => {
     let temporaryManifestPath;
     /** @type {string[]} */
     const temporaryRevisionRuntimePaths = [];
+    const expectedWorkflows = {
+      'greet-later': {
+        steps: [
+          {
+            id: 'greet',
+            kind: 'activity',
+            activity: 'hello',
+            input: { kind: 'workflow-input' },
+          },
+          { id: 'pause', kind: 'timer', delayMs: 1_000 },
+          { id: 'approved', kind: 'signal' },
+          {
+            id: 'greet-again',
+            kind: 'activity',
+            activity: 'hello',
+            input: { kind: 'step-output', step: 'approved' },
+          },
+        ],
+      },
+    };
 
     try {
       await fsp.mkdir(path.join(dir, 'src', 'activities'), { recursive: true });
@@ -398,6 +418,7 @@ describe('packageLocalApp', () => {
       },
     },
   },
+  workflows: ${JSON.stringify(expectedWorkflows, null, 2)},
 };
 `,
           'utf8',
@@ -509,6 +530,7 @@ describe('packageLocalApp', () => {
                 path: 'src/activities/hello.js',
                 export: 'hello',
               });
+              expect(embeddedManifest.workflows).toEqual(expectedWorkflows);
               const embeddedManifestJson = JSON.stringify(embeddedManifest);
               expect(embeddedManifestJson).not.toContain(
                 path.join(dir, 'src', 'cli.js'),
@@ -540,6 +562,9 @@ describe('packageLocalApp', () => {
               expect(
                 embeddedRevisionRuntime.revision.contract,
               ).not.toHaveProperty('targets');
+              expect(
+                embeddedRevisionRuntime.revision.contract.workflows,
+              ).toEqual(expectedWorkflows);
               expect(embeddedRevisionRuntime.runtime.target).toEqual(target);
 
               await fsp.writeFile(
@@ -568,6 +593,7 @@ describe('packageLocalApp', () => {
       });
 
       expect(result.app).toEqual({ id: 'plain-object-package-demo' });
+      expect(result.revision.contract.workflows).toEqual(expectedWorkflows);
       expect(result.targets).toEqual([currentTarget]);
       expect(result.artifacts).toHaveLength(1);
       const artifactContents = `#!/bin/sh\necho ${getTargetSelector(currentTarget)}\n`;
@@ -1414,7 +1440,7 @@ try {
     }
   });
 
-  it('rejects workflows before embedding arbitrary inputs', async () => {
+  it('rejects obsolete non-object workflow shapes before embedding inputs', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-unreviewed-workflow-package-'),
     );
@@ -1460,7 +1486,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /app\.workflows is not supported by schemaVersion 2/i,
+        /manifest\.workflows must be a JSON object/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {

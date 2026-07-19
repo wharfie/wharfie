@@ -413,6 +413,46 @@ export function greet(input) {
     expect(changed.revisionId).not.toBe(first.revisionId);
   });
 
+  it('binds static workflow definitions into the immutable revision contract', async () => {
+    const appDir = await makeAppFixture();
+    const runtimeRoot = await makeRuntimeFixture();
+    const first = await compileApplicationRevision({
+      appDir,
+      manifest: makeManifest(),
+      runtimeRoot,
+    });
+    const workflowManifest = makeManifest();
+    workflowManifest.workflows = {
+      'greet-later': {
+        steps: [
+          {
+            id: 'greet',
+            kind: 'activity',
+            activity: 'greet',
+            input: { kind: 'workflow-input' },
+          },
+          { id: 'pause', kind: 'timer', delayMs: 1_000 },
+          { id: 'approved', kind: 'signal' },
+          {
+            id: 'greet-again',
+            kind: 'activity',
+            activity: 'greet',
+            input: { kind: 'step-output', step: 'approved' },
+          },
+        ],
+      },
+    };
+
+    const changed = await compileApplicationRevision({
+      appDir,
+      manifest: workflowManifest,
+      runtimeRoot,
+    });
+
+    expect(changed.revisionId).not.toBe(first.revisionId);
+    expect(changed.contract.workflows).toEqual(workflowManifest.workflows);
+  });
+
   it('locks dependency, runtime, and named behavior-asset bytes', async () => {
     const appDir = await makeAppFixture();
     const runtimeRoot = await makeRuntimeFixture();

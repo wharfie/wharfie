@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** resident activity worker vertical implemented; durable workflows and service installation next · **Last updated:** 2026-07-19
+**Status:** V10 ready-work foundation and workflow authoring contract implemented; durable workflow execution and service installation next · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -72,7 +72,7 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 - [x] Define the strict application/activity logical-ID contract plus exact target and external-package descriptors.
 - [x] Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
 - [x] Compile one target-independent revision from the strict contract, dependency lock, Wharfie runtime, source, and behavior assets; consume a sealed application snapshot and audit the static bundled-module graph.
-- [x] Keep build-only settings outside the runtime manifest and reject ActorSystem, workflow, and scheduler public authoring until their contracts are designed.
+- [x] Keep build-only settings outside the runtime manifest and reject ActorSystem and scheduler public authoring until their contracts are designed. The strict v2 manifest now accepts only the bounded plain-data linear workflow contract from ADR 0019.
 - [x] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution; the real relocated-SEA verifier compares difficult argv, raw stdin, independent stdout/stderr, and an application-selected nonzero exit code against source execution.
 - [x] Content-address each final SEA executable, pair it with an immutable artifact-record sidecar, record exact Node/toolchain/target-closure/signing provenance, and expose embedded revision/runtime metadata through the operator CLI.
 - [x] Make target packaging and revision-backed source execution consume and fail-check one frozen complete transitive external dependency closure, with semantic, archive, SEA-asset, and revision receipts that cannot drift independently.
@@ -95,6 +95,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 **Goal:** let the packaged application remain resident and recover work after process or machine restart.
 
 - [x] Decide and record that durable workflows use explicitly persisted state machines and continuations rather than replaying arbitrary application code, including timers, signals, cancellation, side effects, and revision changes.
+- [x] Define the first finite workflow authoring contract in ADR 0019 and the
+      strict v2 manifest: at most 64 ordered activity, timer, or signal steps;
+      explicit workflow-input, earlier-step-output, or literal activity input;
+      exact declared activity references; and no executable decider.
 - [x] Define the append-only run → invocation → attempt → effect ledger, rebuildable projections, and state machines in ADR 0011.
 - [x] Bind persisted manual runs, invocations, attempts, and terminal commits
       to one immutable revision; persist stable caller metadata separately from
@@ -143,9 +147,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 - [x] Add the first single-node resident activity worker behind source
       `wharfie ops worker --dir ...`, packaged `<app> wharfie worker`, and the
       hidden packaged service runtime. It executes one attempt at a time,
-      accepts only its exact app and immutable revision, and treats the
-      run-history directory only as a paginated locator: rebuilt ledger state
-      plus the ordinary fenced claim remains execution authority. Restart
+      accepts only its exact app and immutable revision, and consumes the
+      exact-revision ready-work projection only as a bounded locator: rebuilt
+      ledger state plus the ordinary fenced claim remains execution authority.
+      Restart
       recovery releases and reschedules a retained `CLAIMED` attempt that never
       started; a retained `STARTED` attempt becomes `UNCERTAIN` and is never
       redispatched automatically. When that attempt has unresolved managed
@@ -165,13 +170,18 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       submission also raises only that authenticated endpoint's request bound
       to the ledger's 16 MiB payload ceiling while other commands retain the
       64 KiB default.
-- [ ] Replace the bounded run-history scan with a transactionally maintained
-      ready-work index before treating the worker as a general scheduler.
+- [x] Replace the bounded run-history scan with a transactionally maintained
+      exact app/revision ready-work index. V10 atomically creates, replaces, or
+      removes `ACTIVITY` and `RECOVERY` rows with the ledger event, head, run,
+      invocation, attempt, and directory projections. The resident rebuilds
+      and verifies the named version/sequence/invocation/generation/attempt;
+      the row never grants execution authority. The codec reserves `TIMER` and
+      framework-only `CONTINUATION` rows for the workflow state machine.
 - [x] Delete the superseded mutable Operation/Action graph, operation table,
       queue-run bridge, and second writable run model. Manual durable execution
       established the distinction between a caller idempotency key and the
       derived manual-run identity while writing only the then-current
-      append-only V7 ledger. The current V9 authority retains that single
+      append-only V7 ledger. The current V10 authority retains that single
       append-only model in its fresh namespace.
 - [x] Delete the disconnected pre-reset NodeAgent, state-command, systemd
       release, and private DB/queue/Lambda gRPC runtime island. Packaged apps
@@ -304,7 +314,7 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       command `<app> wharfie run` binds only its embedded manifest/revision/
       runtime identity and proved parity through the then-current V7 ledger,
       ownership, cancellation, application-state, managed-effect, and
-      framed-worker path. The current source and packaged commands share the V9
+      framed-worker path. The current source and packaged commands share the V10
       authority. A moved SEA with Node absent from `PATH` completed one managed
       effect, proved worker/user continuation after delivery, and replayed the
       exact key without changing its run, effect, or permanent receipt.
@@ -369,14 +379,16 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 
 Completed foundation: offline revision-pinned activity submission, a serial
 resident worker, authenticated submit/cancel routing, conservative
-`CLAIMED`/`STARTED` restart recovery, and bounded graceful drain now share one
-source, packaged, and hidden-service runtime. This is not yet a durable workflow
-engine or an installed operating-system service.
+`CLAIMED`/`STARTED` restart recovery, bounded graceful drain, and a
+transactional exact-revision ready-work locator now share one source, packaged,
+and hidden-service runtime. The public manifest also accepts the bounded linear
+workflow definition from ADR 0019. This is not yet a durable workflow engine or
+an installed operating-system service.
 
 1. Define and implement one minimal durable workflow state machine: explicit
    continuations, persisted outputs, timers/signals, and revision-pinned resume.
-2. Run that workflow through the resident worker, add a real ready-work index,
-   and install it startup-on-boot with health and reboot recovery.
+2. Run that workflow through the resident worker's existing ready-work path,
+   then install it startup-on-boot with health and reboot recovery.
 3. Route manual and scheduled starts through the workflow execution path, then
    expose resident status, run history, logs, cancellation, and recovery through
    the reserved human/JSON operator surface.
@@ -386,4 +398,4 @@ engine or an installed operating-system service.
 5. Add the smallest provider-backed deployment path that can create, inspect,
    update, and remove one durable node using the operator's credential chain.
 
-The current restart point is the fully validated [resident activity worker checkpoint](llm/checkpoints/2026-07-19-v3-resident-activity-worker.md). The preceding clean-install baseline is the [v2 foundation stabilization checkpoint](llm/checkpoints/2026-07-19-v2-foundation-stabilized.md). Accepted ADR [0018](docs/architecture/decisions/0018-causally-linked-managed-effect-successors.md) is the authority for the now-public V9 causally linked managed-effect successor. The [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) remains the historical pre-mount restart point. The preceding handoff is [V8 destination-finalized effect reconciliation](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md). Its parent [relocated-SEA mixed-settlement SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) records the complete V7 packaged settlement crash surface; the [relocated-SEA managed-effect SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) records the preceding eight packaged single-effect boundaries; the [shared packaged durable-run host checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) records packaged activity origination; the [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged parity; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the historical compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The current restart point is the [V10 ready-work checkpoint](llm/checkpoints/2026-07-19-v4-v10-ready-work.md). The preceding fully validated handoff is the [resident activity worker checkpoint](llm/checkpoints/2026-07-19-v3-resident-activity-worker.md). The preceding clean-install baseline is the [v2 foundation stabilization checkpoint](llm/checkpoints/2026-07-19-v2-foundation-stabilized.md). Accepted ADR [0018](docs/architecture/decisions/0018-causally-linked-managed-effect-successors.md) is the authority for the now-public V9 causally linked managed-effect successor. The [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) remains the historical pre-mount restart point. The preceding handoff is [V8 destination-finalized effect reconciliation](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md). Its parent [relocated-SEA mixed-settlement SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) records the complete V7 packaged settlement crash surface; the [relocated-SEA managed-effect SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) records the preceding eight packaged single-effect boundaries; the [shared packaged durable-run host checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) records packaged activity origination; the [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged parity; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the historical compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

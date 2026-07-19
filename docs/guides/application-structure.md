@@ -37,6 +37,19 @@ export default {
       },
     },
   },
+  workflows: {
+    'sync-on-approval': {
+      steps: [
+        { id: 'approval', kind: 'signal' },
+        {
+          id: 'sync',
+          kind: 'activity',
+          activity: 'sync',
+          input: { kind: 'step-output', step: 'approval' },
+        },
+      ],
+    },
+  },
   targets: [
     {
       nodeVersion: '24.13.1',
@@ -48,15 +61,26 @@ export default {
 };
 ```
 
-`schemaVersion`, `app`, and `cli` are required. `activities` and `targets` are
-optional, although packaging requires a nonempty target list. All entrypoints
-currently use `{ kind: 'node', path, export }`; both `path` and the named
-`export` are required.
+`schemaVersion`, `app`, and `cli` are required. `activities`, `workflows`, and
+`targets` are optional, although packaging requires a nonempty target list. All
+entrypoints currently use `{ kind: 'node', path, export }`; both `path` and the
+named `export` are required.
 
 Logical IDs match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and contain at most 63
 ASCII bytes. The compiler rejects aliases and unknown fields instead of
 normalizing them. The v2 schema has no `ActorSystem`, `functions`,
-`capabilities`, workflows, scheduler, or public packaging/signing section.
+`capabilities`, scheduler, or public packaging/signing section.
+
+A workflow is plain revision-bound data: one to 64 uniquely named ordered
+`activity`, `timer`, or `signal` steps. An activity names a declared activity
+and selects its entire input from `{ kind: 'workflow-input' }`, a JSON
+`literal`, or the output of one named earlier step. Timer delays are positive
+integer milliseconds; a signal's name is its step ID. Branches, executable
+deciders, loops, parallel steps, and early-signal buffering are not part of
+this contract. The complete `workflows` map is limited to 1 MiB of exact UTF-8
+JSON. The compiler and packager preserve these definitions now; the
+durable workflow start/signal execution commands are the next runtime slice and
+are not yet public.
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains

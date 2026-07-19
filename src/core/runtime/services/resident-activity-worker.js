@@ -1,6 +1,7 @@
 import {
   AttemptStatus,
   EffectStatus,
+  ExecutionLedgerConflictError,
   InvocationStatus,
   RunStatus,
 } from '../../lib/db/tables/execution-ledger.js';
@@ -48,7 +49,7 @@ import { createLedgerService } from './ledger-service.js';
 export const RESIDENT_ACTIVITY_SUBMIT_COMMAND = 'execution-ledger-submit';
 export const RESIDENT_ACTIVITY_DEFAULT_POLL_INTERVAL_MS = 1_000;
 export const RESIDENT_ACTIVITY_DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
-export const RESIDENT_ACTIVITY_SCAN_PAGE_SIZE = 50;
+export const RESIDENT_ACTIVITY_READY_WORK_LIMIT = 50;
 
 /** @typedef {{requestCancellation: (request: {requestId: string}) => Promise<Record<string, any>>}} ActiveCancellationPort */
 
@@ -182,9 +183,9 @@ function normalizeSubmitRequest(value) {
  * begins. An active attempt receives its own cooperative cancellation only if
  * the bounded natural-drain allowance expires.
  * @param {{signal?: AbortSignal, pollIntervalMs: number, subscribeWake: (listener: () => void) => () => void}} options - Wait controls.
- * @returns {Promise<void>} - Next scan boundary.
+ * @returns {Promise<void>} - Next ready-work poll boundary.
  */
-async function waitForNextScan(options) {
+async function waitForNextReadyWorkPoll(options) {
   if (options.signal?.aborted) return;
   await new Promise((resolve) => {
     let settled = false;
@@ -218,6 +219,28 @@ function getUnresolvedAttemptEffects(view, invocation, attempt) {
       effect.requestedBy?.attemptId === attempt.attemptId &&
       [EffectStatus.PENDING, EffectStatus.STARTED].includes(effect.status),
   );
+}
+
+/**
+ * Converge one valid but stale locator toward the authoritative event fold.
+ * A concurrent lifecycle transition wins through the run-head CAS and has
+ * already maintained its own locator, so that specific repair conflict is a
+ * successful liveness race rather than a worker failure.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, row: Record<string, any>}} options - Exact stale locator.
+ * @returns {Promise<void>} - Resolves after repair or a winning transition.
+ */
+async function repairStaleReadyWorkLocator(options) {
+  if (typeof options.ledger.repairReadyWork !== 'function') return;
+  try {
+    await options.ledger.repairReadyWork({
+      appId: options.appId,
+      revisionId: options.revisionId,
+      runId: options.row.runId,
+      observed: options.row,
+    });
+  } catch (error) {
+    if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+  }
 }
 
 /**
@@ -290,8 +313,8 @@ export async function recoverResidentManagedEffects(options) {
 }
 
 /**
- * Rebuild a locator result and return only an exact runnable manual request.
- * A retained stale CLAIMED or STARTED attempt is first recovered under the
+ * Rebuild a ready-work locator and return only an exact runnable manual
+ * request. A retained CLAIMED or STARTED attempt is first recovered under the
  * successor resident owner; STARTED becomes blocked uncertainty and is never
  * returned for dispatch.
  * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, row: Record<string, any>, recoverActivity: typeof recoverManualLedgerActivity, recoverManagedEffects: typeof recoverResidentManagedEffects, controlContext: {adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, signal?: AbortSignal}} options - Candidate and recovery authority.
@@ -300,10 +323,10 @@ export async function recoverResidentManagedEffects(options) {
 async function resolveRunnableLocator(options) {
   if (options.signal?.aborted) return null;
   if (
-    options.row.kind !== 'manual' ||
+    !['ACTIVITY', 'RECOVERY'].includes(options.row.kind) ||
     options.row.appId !== options.appId ||
     options.row.revisionId !== options.revisionId ||
-    options.row.status !== RunStatus.RUNNING
+    options.row.invocationId !== MANUAL_LEDGER_INVOCATION_ID
   ) {
     return null;
   }
@@ -314,89 +337,121 @@ async function resolveRunnableLocator(options) {
     view.run.runId !== options.row.runId ||
     view.run.appId !== options.appId ||
     view.run.revisionId !== options.revisionId ||
-    view.run.trigger?.kind !== 'manual' ||
+    view.run.trigger?.kind !== 'manual'
+  ) {
+    return null;
+  }
+  if (
     view.run.status !== RunStatus.RUNNING ||
-    view.run.version !== options.row.version ||
+    view.run.version !== options.row.runVersion ||
     view.run.lastSequence !== options.row.lastSequence
   ) {
+    await repairStaleReadyWorkLocator(options);
     return null;
   }
   let invocation = view.invocations.find(
     (/** @type {Record<string, any>} */ candidate) =>
       candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
   );
-  if (!invocation || invocation.revisionId !== options.revisionId) return null;
-
-  if (invocation.status === InvocationStatus.RUNNING) {
-    const attempts = view.attempts.filter(
-      (/** @type {Record<string, any>} */ attempt) =>
-        attempt.invocationId === invocation.invocationId &&
-        attempt.generation === invocation.generation,
-    );
-    if (
-      attempts.length !== 1 ||
-      ![AttemptStatus.CLAIMED, AttemptStatus.STARTED].includes(
-        attempts[0].status,
-      )
-    ) {
-      return null;
-    }
-    if (options.signal?.aborted) return null;
-    const attempt = attempts[0];
-    const actor = { kind: 'resident-recovery', id: options.appId };
-    const unresolvedEffects = getUnresolvedAttemptEffects(
-      view,
-      invocation,
-      attempt,
-    );
-    if (
-      attempt.status === AttemptStatus.STARTED &&
-      unresolvedEffects.length > 0
-    ) {
-      await options.recoverManagedEffects({
-        ledger: options.ledger,
-        appId: options.appId,
-        runId: view.run.runId,
-        invocationId: invocation.invocationId,
-        attemptId: attempt.attemptId,
-        attempt,
-        effects: unresolvedEffects,
-        actor,
-        controlContext: options.controlContext,
-        ...(options.applicationStateConfiguration === undefined
-          ? {}
-          : {
-              applicationStateConfiguration:
-                options.applicationStateConfiguration,
-            }),
-      });
-    } else {
-      await options.recoverActivity({
-        ledger: options.ledger,
-        runId: view.run.runId,
-        invocationId: invocation.invocationId,
-        actor,
-      });
-    }
-    view = await options.ledger.rebuildRun(view.run.runId);
-    if (options.signal?.aborted) return null;
-    invocation = view?.invocations.find(
-      (/** @type {Record<string, any>} */ candidate) =>
-        candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
-    );
+  if (
+    !invocation ||
+    invocation.revisionId !== options.revisionId ||
+    invocation.generation !== options.row.generation
+  ) {
+    await repairStaleReadyWorkLocator(options);
+    return null;
   }
 
-  return view?.run.status === RunStatus.RUNNING &&
-    invocation?.status === InvocationStatus.RUNNABLE
+  if (options.row.kind === 'ACTIVITY') {
+    if (
+      invocation.status === InvocationStatus.RUNNABLE &&
+      invocation.updatedAt === options.row.availableAt
+    ) {
+      return view.run.runId;
+    }
+    await repairStaleReadyWorkLocator(options);
+    return null;
+  }
+
+  if (invocation.status !== InvocationStatus.RUNNING) {
+    await repairStaleReadyWorkLocator(options);
+    return null;
+  }
+  const attempts = view.attempts.filter(
+    (/** @type {Record<string, any>} */ attempt) =>
+      attempt.invocationId === invocation.invocationId &&
+      attempt.generation === invocation.generation,
+  );
+  if (
+    attempts.length !== 1 ||
+    attempts[0].attemptId !== options.row.attemptId ||
+    attempts[0].updatedAt !== options.row.availableAt ||
+    ![AttemptStatus.CLAIMED, AttemptStatus.STARTED].includes(attempts[0].status)
+  ) {
+    await repairStaleReadyWorkLocator(options);
+    return null;
+  }
+  if (options.signal?.aborted) return null;
+  const attempt = attempts[0];
+  const actor = { kind: 'resident-recovery', id: options.appId };
+  const unresolvedEffects = getUnresolvedAttemptEffects(
+    view,
+    invocation,
+    attempt,
+  );
+  if (
+    attempt.status === AttemptStatus.STARTED &&
+    unresolvedEffects.length > 0
+  ) {
+    await options.recoverManagedEffects({
+      ledger: options.ledger,
+      appId: options.appId,
+      runId: view.run.runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt.attemptId,
+      attempt,
+      effects: unresolvedEffects,
+      actor,
+      controlContext: options.controlContext,
+      ...(options.applicationStateConfiguration === undefined
+        ? {}
+        : {
+            applicationStateConfiguration:
+              options.applicationStateConfiguration,
+          }),
+    });
+  } else {
+    await options.recoverActivity({
+      ledger: options.ledger,
+      runId: view.run.runId,
+      invocationId: invocation.invocationId,
+      actor,
+    });
+  }
+  view = await options.ledger.rebuildRun(view.run.runId);
+  if (options.signal?.aborted) return null;
+  if (!view) return null;
+  invocation = view.invocations.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === options.row.invocationId,
+  );
+
+  return view.run.runId === options.row.runId &&
+    view.run.appId === options.appId &&
+    view.run.revisionId === options.revisionId &&
+    view.run.trigger?.kind === 'manual' &&
+    view.run.status === RunStatus.RUNNING &&
+    invocation?.revisionId === options.revisionId &&
+    invocation.status === InvocationStatus.RUNNABLE
     ? view.run.runId
     : null;
 }
 
 /**
- * Find the first exact runnable request. Run history is used only as a bounded
- * locator; every candidate is rebuilt and all execution authority comes from
- * the ordinary ledger claim inside the persisted activity runner.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, recoverActivity: typeof recoverManualLedgerActivity, recoverManagedEffects: typeof recoverResidentManagedEffects, controlContext: {adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, signal?: AbortSignal}} options - Scan inputs.
+ * Find the first exact runnable request. Ready work is only a bounded locator;
+ * every candidate is rebuilt and all execution authority comes from the
+ * ordinary ledger claim inside the persisted activity runner.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, recoverActivity: typeof recoverManualLedgerActivity, recoverManagedEffects: typeof recoverResidentManagedEffects, controlContext: {adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, signal?: AbortSignal}} options - Ready-work inputs.
  * @returns {Promise<string | null>} - Next runnable run ID.
  */
 async function findRunnableRun(options) {
@@ -404,13 +459,14 @@ async function findRunnableRun(options) {
   let cursor;
   do {
     if (options.signal?.aborted) return null;
-    const page = await options.ledger.listRuns({
+    const ready = await options.ledger.listReadyWork({
       appId: options.appId,
-      limit: RESIDENT_ACTIVITY_SCAN_PAGE_SIZE,
+      revisionId: options.revisionId,
+      limit: RESIDENT_ACTIVITY_READY_WORK_LIMIT,
       ...(cursor === undefined ? {} : { cursor }),
     });
     if (options.signal?.aborted) return null;
-    for (const row of page.items) {
+    for (const row of ready.items) {
       if (options.signal?.aborted) return null;
       // Deliberately serial: one held local owner performs at most one physical
       // attempt at a time in this first persistent-worker vertical.
@@ -418,7 +474,7 @@ async function findRunnableRun(options) {
       const runId = await resolveRunnableLocator({ ...options, row });
       if (runId) return runId;
     }
-    cursor = page.nextCursor;
+    cursor = ready.nextCursor;
   } while (cursor !== undefined);
   return null;
 }
@@ -426,18 +482,19 @@ async function findRunnableRun(options) {
 /**
  * Run the first persistent single-node activity worker under an already-held
  * resident owner. It hosts the authenticated submission/cancellation endpoint,
- * scans serially, and drains an active attempt during graceful shutdown.
+ * consumes exact ready work serially, and drains an active attempt during
+ * graceful shutdown.
  * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, submitActivity?: typeof submitDurableManifestActivity, recoverActivity?: typeof recoverManualLedgerActivity, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
 export async function runResidentActivityWorker(options) {
   if (
     !options?.ledger ||
-    typeof options.ledger.listRuns !== 'function' ||
+    typeof options.ledger.listReadyWork !== 'function' ||
     typeof options.ledger.rebuildRun !== 'function'
   ) {
     throw new TypeError(
-      'runResidentActivityWorker requires a ledger with listRuns and rebuildRun.',
+      'runResidentActivityWorker requires a ledger with listReadyWork and rebuildRun.',
     );
   }
   if (!options.controlContext?.db) {
@@ -706,7 +763,11 @@ export async function runResidentActivityWorker(options) {
         continue;
       }
       if (wakePending) continue;
-      await waitForNextScan({ signal, pollIntervalMs, subscribeWake });
+      await waitForNextReadyWorkPoll({
+        signal,
+        pollIntervalMs,
+        subscribeWake,
+      });
     }
   } catch (error) {
     workerError = error;
