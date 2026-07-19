@@ -103,7 +103,10 @@ import {
   WorkflowCursorDisposition,
   assertWorkflowRunId,
   materializeFirstWorkflowActivity,
+  materializeUncertainWorkflowActivitySuccess,
+  materializeWorkflowActivityClaimRelease,
   materializeWorkflowActivitySuccess,
+  materializeWorkflowActivityUncertainty,
   materializeWorkflowCursorActivity,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
@@ -170,6 +173,9 @@ const EVENT_TYPES = new Set([
   'workflow-activity-claimed',
   'workflow-activity-started',
   'workflow-activity-succeeded',
+  'workflow-activity-abandoned-before-start',
+  'workflow-activity-became-uncertain',
+  'workflow-activity-uncertainty-reconciled',
   'effect-successor-authorized',
   'effect-successor-run-created',
   'effect-successor-started',
@@ -2803,7 +2809,9 @@ function eventSnapshots(event, runId) {
     );
   } else if (
     event.type === 'workflow-activity-claimed' ||
-    event.type === 'workflow-activity-started'
+    event.type === 'workflow-activity-started' ||
+    event.type === 'workflow-activity-abandoned-before-start' ||
+    event.type === 'workflow-activity-became-uncertain'
   ) {
     assertExactKeys(
       payload,
@@ -2814,6 +2822,13 @@ function eventSnapshots(event, runId) {
     assertSnapshotKeys(
       payload,
       ['run', 'invocation', 'workflowCursor', 'attempt'],
+      ['nextInvocation'],
+      'event payload',
+    );
+  } else if (event.type === 'workflow-activity-uncertainty-reconciled') {
+    assertSnapshotKeys(
+      payload,
+      ['run', 'invocation', 'workflowCursor', 'reconciliation'],
       ['nextInvocation'],
       'event payload',
     );
@@ -3007,6 +3022,70 @@ function hasExactUncertaintyEventLink(input) {
     run.version - snapshots.run.version === runAdvance &&
     invocation.version - snapshots.invocation.version === runAdvance &&
     sameSnapshot(uncertaintyAttempt, attempt)
+  );
+}
+
+/**
+ * Prove that a workflow reconciliation addresses the exact cursor-bound
+ * uncertainty boundary which retained its stopped physical attempt. Workflow
+ * history cannot advance while this cursor is blocked, so every authoritative
+ * snapshot must still be byte-identical to the cited event.
+ * @param {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor: Record<string, any>, attempt: Record<string, any>, reconciliation: Record<string, any>, uncertaintyEvent?: Record<string, any>, runId: string}} input - Current workflow state and claimed uncertainty evidence.
+ * @returns {boolean} - Whether the retained workflow uncertainty event is exact.
+ */
+function hasExactWorkflowActivityUncertaintyEventLink(input) {
+  const {
+    run,
+    invocation,
+    workflowCursor,
+    attempt,
+    reconciliation,
+    uncertaintyEvent,
+    runId,
+  } = input;
+  if (
+    !uncertaintyEvent ||
+    uncertaintyEvent.type !== 'workflow-activity-became-uncertain' ||
+    uncertaintyEvent.sequence !== reconciliation.uncertaintySequence ||
+    uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
+    uncertaintyEvent.fence.coordinatorEpoch !==
+      reconciliation.coordinatorEpoch ||
+    uncertaintyEvent.fence.invocationGeneration !== reconciliation.generation
+  ) {
+    return false;
+  }
+  const snapshots = eventSnapshots(uncertaintyEvent, runId);
+  const uncertaintyCursor = snapshots.workflowCursor;
+  const uncertaintyAttempt = snapshots.attempt;
+  return Boolean(
+    uncertaintyCursor &&
+    uncertaintyAttempt &&
+    run.status === RunStatus.BLOCKED &&
+    invocation.status === InvocationStatus.UNCERTAIN &&
+    workflowCursor.disposition ===
+      WorkflowCursorDisposition.ACTIVITY_UNCERTAIN &&
+    attempt.status === AttemptStatus.ABANDONED &&
+    snapshots.run.status === RunStatus.BLOCKED &&
+    snapshots.invocation.status === InvocationStatus.UNCERTAIN &&
+    uncertaintyCursor.disposition ===
+      WorkflowCursorDisposition.ACTIVITY_UNCERTAIN &&
+    uncertaintyAttempt.status === AttemptStatus.ABANDONED &&
+    snapshots.invocation.invocationId === reconciliation.invocationId &&
+    uncertaintyCursor.invocationId === reconciliation.invocationId &&
+    uncertaintyAttempt.invocationId === reconciliation.invocationId &&
+    uncertaintyAttempt.attemptId === reconciliation.attemptId &&
+    uncertaintyAttempt.generation === reconciliation.generation &&
+    uncertaintyAttempt.coordinatorEpoch === reconciliation.coordinatorEpoch &&
+    uncertaintyAttempt.fencingToken === reconciliation.fencingToken &&
+    hasSameCanonicalJson(
+      snapshots.invocation.uncertainty,
+      uncertaintyAttempt.abandonment,
+    ) &&
+    hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) &&
+    sameSnapshot(snapshots.run, run) &&
+    sameSnapshot(snapshots.invocation, invocation) &&
+    sameSnapshot(uncertaintyCursor, workflowCursor) &&
+    sameSnapshot(uncertaintyAttempt, attempt),
   );
 }
 
@@ -3298,6 +3377,25 @@ function assertEventRequestDigest(
       actor: event.actor,
       coordinatorEpoch: attempt?.coordinatorEpoch,
     };
+  } else if (
+    event.type === 'workflow-activity-abandoned-before-start' ||
+    event.type === 'workflow-activity-became-uncertain'
+  ) {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      cursor: workflowCursorGuard(
+        /** @type {Record<string, any>} */ (currentWorkflowCursor),
+      ),
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      reason: attempt?.abandonment,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
   } else if (event.type === 'workflow-activity-succeeded') {
     const output = /** @type {Record<string, any>} */ (
       nextWorkflowCursor
@@ -3329,6 +3427,43 @@ function assertEventRequestDigest(
         : null,
       actor: event.actor,
       coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'workflow-activity-uncertainty-reconciled') {
+    const output = /** @type {Record<string, any>} */ (
+      nextWorkflowCursor
+    ).outputs.at(-1);
+    const nextInvocation = workflowContext?.nextInvocation;
+    value = {
+      runId,
+      invocationId: reconciliation?.invocationId,
+      cursor: workflowCursorGuard(
+        /** @type {Record<string, any>} */ (currentWorkflowCursor),
+      ),
+      attemptId: reconciliation?.attemptId,
+      fencingToken: reconciliation?.fencingToken,
+      generation: reconciliation?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      reconciliationId: reconciliation?.reconciliationId,
+      uncertaintyEventId: reconciliation?.uncertaintyEventId,
+      uncertaintySequence: reconciliation?.uncertaintySequence,
+      verifier: reconciliation?.verifier,
+      evidenceRef: reconciliation?.evidenceRef,
+      terminal: reconciliation?.terminal,
+      outputRef: output?.outputRef,
+      successor: nextInvocation
+        ? {
+            continuationId: nextInvocation.workflow?.continuationId,
+            stepId: nextInvocation.workflow?.stepId,
+            stepIndex: nextInvocation.workflow?.stepIndex,
+            invocationId: nextInvocation.invocationId,
+            activityId: nextInvocation.activityId,
+            requestRef: nextInvocation.requestRef,
+          }
+        : null,
+      reason: reconciliation?.reason,
+      actor: event.actor,
+      coordinatorEpoch: reconciliation?.coordinatorEpoch,
     };
   } else if (event.type === 'effect-successor-run-created') {
     value = {
@@ -4177,20 +4312,28 @@ async function applyEvent(
       'workflow-activity-claimed',
       'workflow-activity-started',
       'workflow-activity-succeeded',
+      'workflow-activity-abandoned-before-start',
+      'workflow-activity-became-uncertain',
+      'workflow-activity-uncertainty-reconciled',
     ].includes(event.type)
   ) {
     const currentCursor = state.workflowCursor;
+    const isReconciliation =
+      event.type === 'workflow-activity-uncertainty-reconciled';
     if (
       currentRun.trigger?.kind !== 'workflow' ||
       !currentCursor ||
       !workflowCursor ||
-      !attempt ||
+      (isReconciliation
+        ? Boolean(attempt) || !reconciliation || !currentAttempt
+        : !attempt || Boolean(reconciliation)) ||
       effect ||
       effects ||
-      reconciliation ||
-      (event.type === 'workflow-activity-succeeded'
-        ? false
-        : Boolean(nextInvocation)) ||
+      (![
+        'workflow-activity-succeeded',
+        'workflow-activity-uncertainty-reconciled',
+      ].includes(event.type) &&
+        Boolean(nextInvocation)) ||
       currentCursor.invocationId !== currentInvocation.invocationId ||
       run.updatedAt !== event.observed_at ||
       invocation.updatedAt !== event.observed_at ||
@@ -4210,7 +4353,12 @@ async function applyEvent(
       runId,
     );
     assertWorkflowCursorAdvance(currentCursor, workflowCursor, event, runId);
-    assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+    assertAttemptBelongsToInvocation(
+      /** @type {Record<string, any>} */ (attempt || currentAttempt),
+      run,
+      invocation,
+      runId,
+    );
 
     const planPayload = await payloadReader.readWorkflowPlan(
       currentCursor.planRef,
@@ -4290,6 +4438,12 @@ async function applyEvent(
     };
 
     if (event.type === 'workflow-activity-claimed') {
+      if (!attempt) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow activity claim lacks its attempt',
+        );
+      }
       const expectedAttempt = {
         schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
         runId,
@@ -4335,7 +4489,7 @@ async function applyEvent(
         );
       }
     } else if (event.type === 'workflow-activity-started') {
-      if (!currentAttempt) {
+      if (!currentAttempt || !attempt) {
         throw new ExecutionLedgerProjectionError(
           runId,
           'workflow activity start lacks its claimed attempt',
@@ -4364,8 +4518,118 @@ async function applyEvent(
           'invalid workflow activity start',
         );
       }
-    } else {
-      if (!currentAttempt) {
+    } else if (event.type === 'workflow-activity-abandoned-before-start') {
+      if (!currentAttempt || !attempt) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow claim release lacks its claimed attempt',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+      let materializedRelease;
+      try {
+        materializedRelease = materializeWorkflowActivityClaimRelease({
+          currentCursor,
+          sequence,
+          observedAt: event.observed_at,
+        });
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow claim release cursor mismatch',
+        );
+      }
+      const attemptEffects = [...state.effects.values()].filter(
+        (candidate) =>
+          candidate.invocationId === currentAttempt.invocationId &&
+          candidate.requestedBy.attemptId === currentAttempt.attemptId,
+      );
+      if (
+        currentRun.status !== RunStatus.RUNNING ||
+        currentCursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        currentAttempt.status !== AttemptStatus.CLAIMED ||
+        attemptEffects.length !== 0 ||
+        !hasSameCanonicalJson(run, expectedRunBase) ||
+        !hasSameCanonicalJson(invocation, {
+          ...expectedInvocationBase,
+          status: InvocationStatus.RUNNABLE,
+        }) ||
+        !hasSameCanonicalJson(workflowCursor, materializedRelease) ||
+        !hasSameCanonicalJson(attempt, {
+          ...cloneJsonObject(currentAttempt, 'prior workflow attempt'),
+          status: AttemptStatus.ABANDONED,
+          version: currentAttempt.version + 1,
+          lastSequence: sequence,
+          updatedAt: event.observed_at,
+          abandonment: attempt.abandonment,
+        })
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid workflow claim release',
+        );
+      }
+    } else if (event.type === 'workflow-activity-became-uncertain') {
+      if (!currentAttempt || !attempt) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow uncertainty lacks its started attempt',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+      let materializedUncertainty;
+      try {
+        materializedUncertainty = materializeWorkflowActivityUncertainty({
+          currentCursor,
+          sequence,
+          observedAt: event.observed_at,
+        });
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow uncertainty cursor mismatch',
+        );
+      }
+      const attemptEffects = [...state.effects.values()].filter(
+        (candidate) =>
+          candidate.invocationId === currentAttempt.invocationId &&
+          candidate.requestedBy.attemptId === currentAttempt.attemptId,
+      );
+      if (
+        currentRun.status !== RunStatus.RUNNING ||
+        currentCursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        currentAttempt.status !== AttemptStatus.STARTED ||
+        attemptEffects.length !== 0 ||
+        !hasSameCanonicalJson(run, {
+          ...expectedRunBase,
+          status: RunStatus.BLOCKED,
+        }) ||
+        !hasSameCanonicalJson(invocation, {
+          ...expectedInvocationBase,
+          status: InvocationStatus.UNCERTAIN,
+          uncertainty: attempt.abandonment,
+        }) ||
+        !hasSameCanonicalJson(workflowCursor, materializedUncertainty) ||
+        !hasSameCanonicalJson(attempt, {
+          ...cloneJsonObject(currentAttempt, 'prior workflow attempt'),
+          status: AttemptStatus.ABANDONED,
+          version: currentAttempt.version + 1,
+          lastSequence: sequence,
+          updatedAt: event.observed_at,
+          abandonment: attempt.abandonment,
+        })
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid workflow activity uncertainty',
+        );
+      }
+    } else if (event.type === 'workflow-activity-succeeded') {
+      if (!currentAttempt || !attempt) {
         throw new ExecutionLedgerProjectionError(
           runId,
           'workflow activity success lacks its started attempt',
@@ -4382,6 +4646,17 @@ async function applyEvent(
         ),
         'persisted workflow activity evidence',
       );
+      try {
+        assertSupportedWorkflowActivityCompletionEvidence(
+          verifiedEvidence.evidence,
+          'persisted workflow activity evidence',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow activity evidence lacks durable cancellation authority',
+        );
+      }
       await assertAttemptEvidenceMatchesManagedEffects(
         verifiedEvidence.evidence,
         currentAttempt,
@@ -4522,6 +4797,200 @@ async function applyEvent(
           );
         }
       }
+    } else {
+      if (!reconciliation || !currentAttempt) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow reconciliation lacks its retained uncertain attempt',
+        );
+      }
+      const uncertaintyBySequence = state.eventsBySequence.get(
+        reconciliation.uncertaintySequence,
+      );
+      const uncertaintyById = state.eventsById.get(
+        reconciliation.uncertaintyEventId,
+      );
+      const verifiedEvidence = validateLedgerAttemptEvidence(
+        await payloadReader.readEvidence(reconciliation.evidenceRef),
+        await createLedgerAttemptStart(
+          currentRun,
+          currentInvocation,
+          currentAttempt,
+          payloadReader,
+        ),
+        'persisted uncertain workflow activity evidence',
+      );
+      try {
+        assertSupportedWorkflowActivityCompletionEvidence(
+          verifiedEvidence.evidence,
+          'persisted uncertain workflow activity evidence',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'uncertain workflow evidence lacks durable cancellation authority',
+        );
+      }
+      await assertAttemptEvidenceMatchesManagedEffects(
+        verifiedEvidence.evidence,
+        currentAttempt,
+        state,
+        payloadReader,
+        effectVerifierRegistry,
+        runId,
+      );
+      const terminal = verifiedEvidence.terminal;
+      const terminalSummary = createTerminalSummary(terminal);
+      const outputBinding = workflowCursor.outputs.at(-1);
+      if (!outputBinding) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow reconciliation lacks its output binding',
+        );
+      }
+      const outputPayload = await payloadReader.readWorkflowOutput(
+        outputBinding.outputRef,
+      );
+      const nextStep =
+        planPayload.definition.steps[currentCursor.stepIndex + 1];
+      let nextSelectedOutput;
+      let materializedSuccess;
+      try {
+        nextSelectedOutput = nextStep
+          ? selectWorkflowStepOutput(
+              nextStep,
+              [
+                ...resolvedOutputs,
+                { binding: outputBinding, payload: outputPayload },
+              ],
+              'persisted uncertain workflow successor',
+            )
+          : undefined;
+        materializedSuccess = materializeUncertainWorkflowActivitySuccess({
+          currentCursor,
+          planPayload,
+          planRef: currentCursor.planRef,
+          startPayload,
+          startRef: currentCursor.startRef,
+          outputPayload,
+          outputRef: outputBinding.outputRef,
+          ...(nextSelectedOutput ? { selectedOutput: nextSelectedOutput } : {}),
+          sequence,
+          observedAt: event.observed_at,
+        });
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'uncertain workflow activity successor derivation mismatch',
+        );
+      }
+      const attemptEffects = [...state.effects.values()].filter(
+        (candidate) =>
+          candidate.invocationId === currentAttempt.invocationId &&
+          candidate.requestedBy.attemptId === currentAttempt.attemptId,
+      );
+      const expectedReconciledInvocation = cloneJsonObject(
+        expectedInvocationBase,
+        'expected reconciled workflow invocation',
+      );
+      delete expectedReconciledInvocation.uncertainty;
+      expectedReconciledInvocation.status = InvocationStatus.COMPLETED;
+      expectedReconciledInvocation.terminal = terminalSummary;
+      if (
+        !uncertaintyBySequence ||
+        uncertaintyBySequence !== uncertaintyById ||
+        currentRun.status !== RunStatus.BLOCKED ||
+        currentCursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_UNCERTAIN ||
+        currentInvocation.status !== InvocationStatus.UNCERTAIN ||
+        currentAttempt.status !== AttemptStatus.ABANDONED ||
+        attemptEffects.length !== 0 ||
+        reconciliation.invocationId !== currentInvocation.invocationId ||
+        reconciliation.attemptId !== currentAttempt.attemptId ||
+        reconciliation.generation !== currentAttempt.generation ||
+        reconciliation.coordinatorEpoch !== currentAttempt.coordinatorEpoch ||
+        reconciliation.fencingToken !== currentAttempt.fencingToken ||
+        event.fence.coordinatorEpoch !== reconciliation.coordinatorEpoch ||
+        event.fence.invocationGeneration !== reconciliation.generation ||
+        terminal.type !== 'completed' ||
+        terminal.attemptId !== currentAttempt.attemptId ||
+        !hasSameCanonicalJson(reconciliation.terminal, terminalSummary) ||
+        !hasSameCanonicalJson(outputPayload.value, terminal.result) ||
+        !hasExactWorkflowActivityUncertaintyEventLink({
+          run: currentRun,
+          invocation: currentInvocation,
+          workflowCursor: currentCursor,
+          attempt: currentAttempt,
+          reconciliation,
+          uncertaintyEvent: uncertaintyBySequence,
+          runId,
+        }) ||
+        !hasSameCanonicalJson(workflowCursor, materializedSuccess.cursor) ||
+        !hasSameCanonicalJson(invocation, expectedReconciledInvocation) ||
+        !hasSameCanonicalJson(run, {
+          ...expectedRunBase,
+          status: materializedSuccess.completed
+            ? RunStatus.COMPLETED
+            : RunStatus.RUNNING,
+        })
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid uncertain workflow activity reconciliation',
+        );
+      }
+      if (materializedSuccess.completed) {
+        if (nextInvocation) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'completed reconciled workflow retains a successor invocation',
+          );
+        }
+      } else {
+        const nextActivity = materializedSuccess.nextActivity;
+        if (!nextActivity || !nextInvocation) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'reconciled workflow successor invocation is unavailable',
+          );
+        }
+        const nextRequest = normalizeWorkflowActivityRequest(
+          await payloadReader.readActivityRequest(nextInvocation.requestRef),
+          'persisted reconciled workflow successor request',
+        );
+        const expectedNextInvocation = {
+          schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+          runId,
+          invocationId: nextActivity.invocationId,
+          appId: currentRun.appId,
+          revisionId: currentRun.revisionId,
+          activityId: nextActivity.activityId,
+          requestRef: nextInvocation.requestRef,
+          status: InvocationStatus.RUNNABLE,
+          generation: 0,
+          version: 1,
+          lastSequence: sequence,
+          createdAt: event.observed_at,
+          updatedAt: event.observed_at,
+          workflow: {
+            workflowId: currentCursor.workflowId,
+            planId: currentCursor.planId,
+            continuationId: nextActivity.continuationId,
+            stepId: nextActivity.stepId,
+            stepIndex: nextActivity.stepIndex,
+          },
+        };
+        if (
+          state.invocations.has(nextInvocation.invocationId) ||
+          !hasSameCanonicalJson(nextRequest, nextActivity.activityRequest) ||
+          !hasSameCanonicalJson(nextInvocation, expectedNextInvocation)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'reconciled workflow successor invocation mismatch',
+          );
+        }
+      }
     }
 
     assertEventRequestDigest(
@@ -4536,7 +5005,7 @@ async function applyEvent(
       attempt,
       undefined,
       undefined,
-      undefined,
+      reconciliation,
       {
         currentCursor,
         nextCursor: workflowCursor,
@@ -4547,10 +5016,12 @@ async function applyEvent(
     state.run = run;
     state.workflowCursor = workflowCursor;
     state.invocations.set(invocation.invocationId, invocation);
-    state.attempts.set(
-      attemptMapKey(attempt.invocationId, attempt.attemptId),
-      attempt,
-    );
+    if (attempt) {
+      state.attempts.set(
+        attemptMapKey(attempt.invocationId, attempt.attemptId),
+        attempt,
+      );
+    }
     if (nextInvocation) {
       state.invocations.set(nextInvocation.invocationId, nextInvocation);
     }
@@ -6573,7 +7044,10 @@ function transitionResult(
         'workflow successor invocation result',
       );
     }
-    if (receipt.type === 'workflow-activity-succeeded') {
+    if (
+      receipt.type === 'workflow-activity-succeeded' ||
+      receipt.type === 'workflow-activity-uncertainty-reconciled'
+    ) {
       const output = snapshots.workflowCursor.outputs.at(-1);
       if (!output) {
         throw new ExecutionLedgerProjectionError(
@@ -6956,6 +7430,27 @@ function assertSupportedManualTerminal(
   if (!hasAuthorizedCancelFrame) {
     throw new TypeError(
       `${label}.type 'cancelled' requires a prior durable cancellation request with the exact accepted host cancel reason.`,
+    );
+  }
+}
+
+/**
+ * Workflow cancellation has no durable cursor-aware authority yet. A complete
+ * transcript may be structurally valid after a host cancel frame, but it must
+ * not become a workflow output until a persisted cancellation decision can
+ * authorize that frame.
+ * @param {Record<string, any>} evidence - Fully verified attempt evidence.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {void}
+ */
+function assertSupportedWorkflowActivityCompletionEvidence(evidence, label) {
+  if (
+    evidence.frames.some(
+      (/** @type {Record<string, any>} */ frame) => frame.type === 'cancel',
+    )
+  ) {
+    throw new TypeError(
+      `${label} contains a host cancel frame, but workflow cancellation authority is not implemented.`,
     );
   }
 }
@@ -7655,6 +8150,83 @@ export function createExecutionLedger({
       );
     }
     return { cursor, invocation };
+  }
+
+  /**
+   * Resolve the exact blocked workflow activation that may be reconciled from
+   * independent evidence. This authority is deliberately separate from the
+   * runnable/running path so an uncertain cursor can never authorize another
+   * physical dispatch.
+   * @param {Record<string, any>} state - Fresh verified durable state.
+   * @param {string} invocationId - Expected uncertain invocation.
+   * @param {{version: number, continuationId: string, stepId: string, stepIndex: number}} guard - Exact caller-observed cursor.
+   * @param {string} operation - Calling mutation name for diagnostics.
+   * @returns {{cursor: Record<string, any>, invocation: Record<string, any>}} - Exact uncertain workflow authority.
+   */
+  function getUncertainWorkflowActivityAuthority(
+    state,
+    invocationId,
+    guard,
+    operation,
+  ) {
+    if (state.run.trigger?.kind !== 'workflow' || !state.workflowCursor) {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        `${operation} requires a workflow activity run`,
+      );
+    }
+    const cursor = state.workflowCursor;
+    const invocation = state.invocations.get(invocationId);
+    if (
+      !invocation ||
+      state.run.status !== RunStatus.BLOCKED ||
+      cursor.disposition !== WorkflowCursorDisposition.ACTIVITY_UNCERTAIN ||
+      invocation.status !== InvocationStatus.UNCERTAIN ||
+      cursor.invocationId !== invocationId ||
+      !hasSameCanonicalJson(workflowCursorGuard(cursor), guard) ||
+      !invocation.workflow ||
+      !hasSameCanonicalJson(invocation.workflow, {
+        workflowId: cursor.workflowId,
+        planId: cursor.planId,
+        continuationId: cursor.continuationId,
+        stepId: cursor.stepId,
+        stepIndex: cursor.stepIndex,
+      })
+    ) {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        `${operation} cursor is not the retained uncertain workflow activity`,
+      );
+    }
+    return { cursor, invocation };
+  }
+
+  /**
+   * Workflow recovery currently supports only activities with no logical
+   * managed effects. Effect uncertainty has its own reconciliation authority;
+   * silently combining the two would make a completed transcript ambiguous.
+   * @param {Record<string, any>} state - Fresh verified durable state.
+   * @param {Record<string, any>} attempt - Exact physical attempt.
+   * @param {string} operation - Calling mutation name for diagnostics.
+   * @returns {void}
+   */
+  function assertWorkflowRecoveryHasNoManagedEffects(
+    state,
+    attempt,
+    operation,
+  ) {
+    if (
+      [...state.effects.values()].some(
+        (effect) =>
+          effect.invocationId === attempt.invocationId &&
+          effect.requestedBy.attemptId === attempt.attemptId,
+      )
+    ) {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        `${operation} does not support workflow activities with managed effects`,
+      );
+    }
   }
 
   /**
@@ -11649,6 +12221,440 @@ export function createExecutionLedger({
   }
 
   /**
+   * Release one cursor-bound workflow claim which demonstrably never crossed
+   * the durable STARTED boundary. The abandoned physical generation remains
+   * retained while the same logical activation becomes runnable again.
+   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, attemptId: string, fencingToken: string, generation: number, expectedVersion: number, transitionId: string, reason: Record<string, any>, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded claim release.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>}>} - Accepted or exactly replayed release.
+   */
+  async function abandonUnstartedWorkflowActivityAttempt(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'abandonUnstartedWorkflowActivityAttempt',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'cursor',
+        'attemptId',
+        'fencingToken',
+        'generation',
+        'expectedVersion',
+        'transitionId',
+        'reason',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'abandonUnstartedWorkflowActivityAttempt',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'abandonUnstartedWorkflowActivityAttempt.invocationId',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'abandonUnstartedWorkflowActivityAttempt.cursor',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'abandonUnstartedWorkflowActivityAttempt.attemptId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'abandonUnstartedWorkflowActivityAttempt.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'abandonUnstartedWorkflowActivityAttempt.generation',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'abandonUnstartedWorkflowActivityAttempt.reason',
+    );
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-activity-abandoned-before-start',
+      {
+        runId: common.runId,
+        invocationId,
+        cursor: guard,
+        attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'workflow-activity-abandoned-before-start' ||
+        existing.invocation_id !== invocationId ||
+        existing.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return /** @type {any} */ (
+        await existingTransitionResult(state, existing)
+      );
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const authority = getWorkflowActivityAuthority(
+      state,
+      invocationId,
+      guard,
+      'abandonUnstartedWorkflowActivityAttempt',
+    );
+    const verified = await verifyWorkflowCursorActivity(
+      state,
+      authority.cursor,
+      authority.invocation,
+      'abandonUnstartedWorkflowActivityAttempt',
+    );
+    assertWorkflowActivityDispatchSupported(
+      state,
+      authority.cursor,
+      verified.planPayload,
+      'abandonUnstartedWorkflowActivityAttempt',
+    );
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    if (
+      authority.cursor.disposition !==
+        WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+      authority.invocation.status !== InvocationStatus.RUNNING ||
+      authority.invocation.generation !== generation ||
+      !attempt ||
+      attempt.status !== AttemptStatus.CLAIMED
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow attempt cannot be safely released',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    assertWorkflowRecoveryHasNoManagedEffects(
+      state,
+      attempt,
+      'abandonUnstartedWorkflowActivityAttempt',
+    );
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < authority.cursor.updatedAt ||
+      common.observedAt < attempt.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow claim release observation precedes durable state',
+      );
+    }
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(authority.invocation, 'current workflow invocation'),
+      status: InvocationStatus.RUNNABLE,
+      version: authority.invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextWorkflowCursor = materializeWorkflowActivityClaimRelease({
+      currentCursor: authority.cursor,
+      sequence,
+      observedAt: common.observedAt,
+    });
+    const nextAttempt = {
+      ...cloneJsonObject(attempt, 'current workflow attempt'),
+      status: AttemptStatus.ABANDONED,
+      version: attempt.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      abandonment: reason,
+    };
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-activity-abandoned-before-start',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: nextWorkflowCursor,
+        attempt: nextAttempt,
+      },
+    );
+    return /** @type {any} */ (
+      await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        nextWorkflowCursor,
+        nextAttempt,
+        currentAttempt: attempt,
+      })
+    );
+  }
+
+  /**
+   * Conservatively block one cursor-bound workflow attempt which crossed the
+   * durable STARTED boundary but no longer has a trusted live reporter. The
+   * logical activation remains selected and no retry is made authoritative.
+   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, attemptId: string, fencingToken: string, generation: number, expectedVersion: number, transitionId: string, reason: Record<string, any>, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded uncertainty transition.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>}>} - Accepted or exactly replayed uncertainty.
+   */
+  async function markWorkflowActivityAttemptUncertain(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'markWorkflowActivityAttemptUncertain',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'cursor',
+        'attemptId',
+        'fencingToken',
+        'generation',
+        'expectedVersion',
+        'transitionId',
+        'reason',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'markWorkflowActivityAttemptUncertain',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'markWorkflowActivityAttemptUncertain.invocationId',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'markWorkflowActivityAttemptUncertain.cursor',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'markWorkflowActivityAttemptUncertain.attemptId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'markWorkflowActivityAttemptUncertain.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'markWorkflowActivityAttemptUncertain.generation',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'markWorkflowActivityAttemptUncertain.reason',
+    );
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-activity-became-uncertain',
+      {
+        runId: common.runId,
+        invocationId,
+        cursor: guard,
+        attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'workflow-activity-became-uncertain' ||
+        existing.invocation_id !== invocationId ||
+        existing.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return /** @type {any} */ (
+        await existingTransitionResult(state, existing)
+      );
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const authority = getWorkflowActivityAuthority(
+      state,
+      invocationId,
+      guard,
+      'markWorkflowActivityAttemptUncertain',
+    );
+    const verified = await verifyWorkflowCursorActivity(
+      state,
+      authority.cursor,
+      authority.invocation,
+      'markWorkflowActivityAttemptUncertain',
+    );
+    assertWorkflowActivityDispatchSupported(
+      state,
+      authority.cursor,
+      verified.planPayload,
+      'markWorkflowActivityAttemptUncertain',
+    );
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    if (
+      authority.cursor.disposition !==
+        WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+      authority.invocation.status !== InvocationStatus.RUNNING ||
+      authority.invocation.generation !== generation ||
+      !attempt ||
+      attempt.status !== AttemptStatus.STARTED
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow attempt cannot become uncertain',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    assertWorkflowRecoveryHasNoManagedEffects(
+      state,
+      attempt,
+      'markWorkflowActivityAttemptUncertain',
+    );
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < authority.cursor.updatedAt ||
+      common.observedAt < attempt.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow uncertainty observation precedes durable state',
+      );
+    }
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      status: RunStatus.BLOCKED,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(authority.invocation, 'current workflow invocation'),
+      status: InvocationStatus.UNCERTAIN,
+      version: authority.invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      uncertainty: reason,
+    };
+    const nextWorkflowCursor = materializeWorkflowActivityUncertainty({
+      currentCursor: authority.cursor,
+      sequence,
+      observedAt: common.observedAt,
+    });
+    const nextAttempt = {
+      ...cloneJsonObject(attempt, 'current workflow attempt'),
+      status: AttemptStatus.ABANDONED,
+      version: attempt.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      abandonment: reason,
+    };
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-activity-became-uncertain',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: nextWorkflowCursor,
+        attempt: nextAttempt,
+      },
+    );
+    return /** @type {any} */ (
+      await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        nextWorkflowCursor,
+        nextAttempt,
+        currentAttempt: attempt,
+      })
+    );
+  }
+
+  /**
    * Commit a verified completed Activity Protocol transcript as one logical
    * workflow step. The transaction terminalizes the physical attempt and its
    * invocation while atomically installing either the next runnable activity
@@ -11760,6 +12766,10 @@ export function createExecutionLedger({
           persistedAttempt,
           payloadReader,
         ),
+        'commitVerifiedWorkflowActivitySuccess.evidence',
+      );
+      assertSupportedWorkflowActivityCompletionEvidence(
+        verifiedEvidence.evidence,
         'commitVerifiedWorkflowActivitySuccess.evidence',
       );
       await assertAttemptEvidenceMatchesManagedEffects(
@@ -11906,6 +12916,10 @@ export function createExecutionLedger({
         attempt,
         payloadReader,
       ),
+      'commitVerifiedWorkflowActivitySuccess.evidence',
+    );
+    assertSupportedWorkflowActivityCompletionEvidence(
+      verifiedEvidence.evidence,
       'commitVerifiedWorkflowActivitySuccess.evidence',
     );
     await assertAttemptEvidenceMatchesManagedEffects(
@@ -12086,6 +13100,531 @@ export function createExecutionLedger({
         nextWorkflowCursor: materialized.cursor,
         nextAttempt,
         currentAttempt: attempt,
+      })
+    );
+  }
+
+  /**
+   * Resolve one retained uncertain workflow activity from a complete verified
+   * success transcript. The abandoned physical attempt is never rewritten;
+   * this event adds reconciliation authority and atomically advances only the
+   * logical invocation, cursor, output, successor, and ready-work state.
+   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, attemptId: string, fencingToken: string, generation: number, coordinatorEpoch?: number, expectedVersion: number, uncertaintyEventId: string, uncertaintySequence: number, transitionId: string, reconciliationId: string, reason: Record<string, any>, evidence: Record<string, any>, actor?: {kind: string, id: string}, observedAt?: number}} options - Evidence-backed uncertain workflow resolution.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, outputRef: Record<string, any>, nextInvocation?: Record<string, any>}>} - Compound reconciliation outcome.
+   */
+  async function reconcileUncertainWorkflowActivityAttempt(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'reconcileUncertainWorkflowActivityAttempt',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'cursor',
+        'attemptId',
+        'fencingToken',
+        'generation',
+        'coordinatorEpoch',
+        'expectedVersion',
+        'uncertaintyEventId',
+        'uncertaintySequence',
+        'transitionId',
+        'reconciliationId',
+        'reason',
+        'evidence',
+        'actor',
+        'observedAt',
+      ],
+      'reconcileUncertainWorkflowActivityAttempt',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'reconcileUncertainWorkflowActivityAttempt.invocationId',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'reconcileUncertainWorkflowActivityAttempt.cursor',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'reconcileUncertainWorkflowActivityAttempt.attemptId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'reconcileUncertainWorkflowActivityAttempt.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'reconcileUncertainWorkflowActivityAttempt.generation',
+    );
+    const reconciliationId = assertOpaqueId(
+      value.reconciliationId,
+      'reconcileUncertainWorkflowActivityAttempt.reconciliationId',
+    );
+    const uncertaintyEventId = assertOpaqueId(
+      value.uncertaintyEventId,
+      'reconcileUncertainWorkflowActivityAttempt.uncertaintyEventId',
+    );
+    const uncertaintySequence = assertPositiveSafeInteger(
+      value.uncertaintySequence,
+      'reconcileUncertainWorkflowActivityAttempt.uncertaintySequence',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'reconcileUncertainWorkflowActivityAttempt.reason',
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const existingReceipt = await getTransitionReceipt(
+      db,
+      resolvedTableName,
+      common.runId,
+      common.transitionId,
+    );
+    if (existingReceipt) {
+      const receiptState = await stateContainingTransitionReceipt(
+        state,
+        existingReceipt,
+      );
+      if (
+        existingReceipt.type !== 'workflow-activity-uncertainty-reconciled' ||
+        existingReceipt.invocation_id !== invocationId ||
+        existingReceipt.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingEvent = receiptState.events[existingReceipt.sequence - 1];
+      const snapshots = existingEvent
+        ? eventSnapshots(existingEvent, common.runId)
+        : undefined;
+      const persistedReconciliation = snapshots?.reconciliation;
+      const persistedCursor = snapshots?.workflowCursor;
+      const persistedAttempt = receiptState.attempts.get(
+        attemptMapKey(invocationId, attemptId),
+      );
+      const uncertaintyEvent = persistedReconciliation
+        ? receiptState.events[persistedReconciliation.uncertaintySequence - 1]
+        : undefined;
+      const uncertaintySnapshots = uncertaintyEvent
+        ? eventSnapshots(uncertaintyEvent, common.runId)
+        : undefined;
+      const priorCursor = uncertaintySnapshots?.workflowCursor;
+      if (
+        !existingEvent ||
+        existingEvent.event_id !== existingReceipt.event_id ||
+        !snapshots ||
+        !persistedReconciliation ||
+        !persistedCursor ||
+        !persistedAttempt ||
+        !uncertaintyEvent ||
+        uncertaintyEvent.type !== 'workflow-activity-became-uncertain' ||
+        uncertaintyEvent.event_id !==
+          persistedReconciliation.uncertaintyEventId ||
+        !uncertaintySnapshots ||
+        !priorCursor ||
+        !hasSameCanonicalJson(workflowCursorGuard(priorCursor), guard)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'workflow reconciliation receipt snapshots are unavailable',
+        );
+      }
+      const payloadReader = createLedgerPayloadReader(
+        payloadStore,
+        common.runId,
+      );
+      const verifiedEvidence = validateLedgerAttemptEvidence(
+        value.evidence,
+        await createLedgerAttemptStart(
+          uncertaintySnapshots.run,
+          uncertaintySnapshots.invocation,
+          persistedAttempt,
+          payloadReader,
+        ),
+        'reconcileUncertainWorkflowActivityAttempt.evidence',
+      );
+      assertSupportedWorkflowActivityCompletionEvidence(
+        verifiedEvidence.evidence,
+        'reconcileUncertainWorkflowActivityAttempt.evidence',
+      );
+      await assertAttemptEvidenceMatchesManagedEffects(
+        verifiedEvidence.evidence,
+        persistedAttempt,
+        /** @type {{effects: Map<string, Record<string, any>>}} */ (
+          receiptState
+        ),
+        payloadReader,
+        effectVerifierRegistry,
+        common.runId,
+      );
+      assertWorkflowRecoveryHasNoManagedEffects(
+        receiptState,
+        persistedAttempt,
+        'reconcileUncertainWorkflowActivityAttempt',
+      );
+      if (
+        verifiedEvidence.terminal.type !== 'completed' ||
+        verifiedEvidence.terminal.attemptId !== attemptId ||
+        !hasSameCanonicalJson(
+          await payloadReader.readEvidence(persistedReconciliation.evidenceRef),
+          verifiedEvidence.evidence,
+        )
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const outputBinding = persistedCursor.outputs.at(-1);
+      if (!outputBinding) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'workflow reconciliation receipt output is unavailable',
+        );
+      }
+      const outputPayload = await payloadReader.readWorkflowOutput(
+        outputBinding.outputRef,
+      );
+      if (
+        !hasSameCanonicalJson(
+          outputPayload.value,
+          verifiedEvidence.terminal.result,
+        )
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const successor = snapshots.nextInvocation
+        ? {
+            continuationId: snapshots.nextInvocation.workflow?.continuationId,
+            stepId: snapshots.nextInvocation.workflow?.stepId,
+            stepIndex: snapshots.nextInvocation.workflow?.stepIndex,
+            invocationId: snapshots.nextInvocation.invocationId,
+            activityId: snapshots.nextInvocation.activityId,
+            requestRef: snapshots.nextInvocation.requestRef,
+          }
+        : null;
+      const requestDigest = createTransitionRequestDigest(
+        'workflow-activity-uncertainty-reconciled',
+        {
+          runId: common.runId,
+          invocationId,
+          cursor: guard,
+          attemptId,
+          fencingToken,
+          generation,
+          expectedVersion: common.expectedVersion,
+          transitionId: common.transitionId,
+          reconciliationId,
+          uncertaintyEventId,
+          uncertaintySequence,
+          verifier: persistedReconciliation.verifier,
+          evidenceRef: persistedReconciliation.evidenceRef,
+          terminal: createTerminalSummary(verifiedEvidence.terminal),
+          outputRef: outputBinding.outputRef,
+          successor,
+          reason,
+          actor: common.actor,
+          coordinatorEpoch: common.coordinatorEpoch,
+        },
+      );
+      const existing = assertMatchingReceipt(
+        receiptState,
+        existingReceipt,
+        requestDigest,
+      );
+      return /** @type {any} */ (
+        await existingTransitionResult(
+          receiptState,
+          /** @type {Record<string, any>} */ (existing),
+        )
+      );
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const authority = getUncertainWorkflowActivityAuthority(
+      state,
+      invocationId,
+      guard,
+      'reconcileUncertainWorkflowActivityAttempt',
+    );
+    const verified = await verifyWorkflowCursorActivity(
+      state,
+      authority.cursor,
+      authority.invocation,
+      'reconcileUncertainWorkflowActivityAttempt',
+    );
+    assertWorkflowActivityDispatchSupported(
+      state,
+      authority.cursor,
+      verified.planPayload,
+      'reconcileUncertainWorkflowActivityAttempt',
+    );
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    const uncertaintyEvent = state.events[uncertaintySequence - 1];
+    if (
+      !attempt ||
+      authority.invocation.generation !== generation ||
+      attempt.status !== AttemptStatus.ABANDONED ||
+      !hasExactWorkflowActivityUncertaintyEventLink({
+        run: state.run,
+        invocation: authority.invocation,
+        workflowCursor: authority.cursor,
+        attempt,
+        reconciliation: {
+          invocationId,
+          attemptId,
+          generation,
+          coordinatorEpoch: common.coordinatorEpoch,
+          fencingToken,
+          uncertaintyEventId,
+          uncertaintySequence,
+        },
+        uncertaintyEvent,
+        runId: common.runId,
+      })
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow attempt is not the retained uncertain activity attempt',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    assertWorkflowRecoveryHasNoManagedEffects(
+      state,
+      attempt,
+      'reconcileUncertainWorkflowActivityAttempt',
+    );
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < authority.cursor.updatedAt ||
+      common.observedAt < attempt.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow reconciliation observation precedes durable state',
+      );
+    }
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
+    const verifiedEvidence = validateLedgerAttemptEvidence(
+      value.evidence,
+      await createLedgerAttemptStart(
+        state.run,
+        authority.invocation,
+        attempt,
+        payloadReader,
+      ),
+      'reconcileUncertainWorkflowActivityAttempt.evidence',
+    );
+    assertSupportedWorkflowActivityCompletionEvidence(
+      verifiedEvidence.evidence,
+      'reconcileUncertainWorkflowActivityAttempt.evidence',
+    );
+    await assertAttemptEvidenceMatchesManagedEffects(
+      verifiedEvidence.evidence,
+      attempt,
+      state,
+      payloadReader,
+      effectVerifierRegistry,
+      common.runId,
+    );
+    const terminal = verifiedEvidence.terminal;
+    if (terminal.type !== 'completed' || terminal.attemptId !== attemptId) {
+      throw new TypeError(
+        'reconcileUncertainWorkflowActivityAttempt.evidence must end with completed for the exact retained attempt.',
+      );
+    }
+    const outputPayload = normalizeWorkflowOutputPayload(
+      {
+        schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+        kind: WORKFLOW_OUTPUT_PAYLOAD_KIND,
+        value: terminal.result,
+      },
+      'reconcileUncertainWorkflowActivityAttempt.output',
+    );
+    const evidenceRef = await putVerifiedPayload(payloadStore, {
+      value: verifiedEvidence.evidence,
+      payloadSchema: ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+      label: 'reconcileUncertainWorkflowActivityAttempt.evidenceRef',
+    });
+    const outputRef = await putVerifiedPayload(payloadStore, {
+      value: outputPayload,
+      payloadSchema: WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      label: 'reconcileUncertainWorkflowActivityAttempt.outputRef',
+    });
+    const sequence = state.head.sequence + 1;
+    const nextStep =
+      verified.planPayload.definition.steps[authority.cursor.stepIndex + 1];
+    let selectedOutput;
+    if (
+      nextStep?.kind === 'activity' &&
+      nextStep.input.kind === 'step-output' &&
+      nextStep.input.step !== authority.cursor.stepId
+    ) {
+      selectedOutput = selectWorkflowStepOutput(
+        nextStep,
+        verified.outputs,
+        'reconcileUncertainWorkflowActivityAttempt successor',
+      );
+    }
+    const materialized = materializeUncertainWorkflowActivitySuccess({
+      currentCursor: authority.cursor,
+      planPayload: verified.planPayload,
+      planRef: authority.cursor.planRef,
+      startPayload: verified.startPayload,
+      startRef: authority.cursor.startRef,
+      outputPayload,
+      outputRef,
+      ...(selectedOutput ? { selectedOutput } : {}),
+      sequence,
+      observedAt: common.observedAt,
+    });
+    let nextAdditionalInvocation;
+    if (materialized.nextActivity) {
+      const nextRequestRef = await putVerifiedPayload(payloadStore, {
+        value: materialized.nextActivity.activityRequest,
+        payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
+        label: 'reconcileUncertainWorkflowActivityAttempt.nextRequestRef',
+      });
+      nextAdditionalInvocation = {
+        schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+        runId: common.runId,
+        invocationId: materialized.nextActivity.invocationId,
+        appId: state.run.appId,
+        revisionId: state.run.revisionId,
+        activityId: materialized.nextActivity.activityId,
+        requestRef: nextRequestRef,
+        status: InvocationStatus.RUNNABLE,
+        generation: 0,
+        version: 1,
+        lastSequence: sequence,
+        createdAt: common.observedAt,
+        updatedAt: common.observedAt,
+        workflow: {
+          workflowId: authority.cursor.workflowId,
+          planId: authority.cursor.planId,
+          continuationId: materialized.nextActivity.continuationId,
+          stepId: materialized.nextActivity.stepId,
+          stepIndex: materialized.nextActivity.stepIndex,
+        },
+      };
+    }
+    const terminalSummary = createTerminalSummary(terminal);
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      status: materialized.completed ? RunStatus.COMPLETED : RunStatus.RUNNING,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = cloneJsonObject(
+      authority.invocation,
+      'current uncertain workflow invocation',
+    );
+    delete nextInvocation.uncertainty;
+    nextInvocation.status = InvocationStatus.COMPLETED;
+    nextInvocation.version = authority.invocation.version + 1;
+    nextInvocation.lastSequence = sequence;
+    nextInvocation.updatedAt = common.observedAt;
+    nextInvocation.terminal = terminalSummary;
+    const reconciliation = normalizeUncertainAttemptReconciliation(
+      {
+        reconciliationId,
+        invocationId,
+        attemptId,
+        generation,
+        coordinatorEpoch: common.coordinatorEpoch,
+        fencingToken,
+        uncertaintyEventId,
+        uncertaintySequence,
+        verifier: UNCERTAIN_ATTEMPT_RECONCILIATION_VERIFIER,
+        evidenceRef,
+        terminal: terminalSummary,
+        reason,
+      },
+      'reconcileUncertainWorkflowActivityAttempt.reconciliation',
+    );
+    const successor = nextAdditionalInvocation
+      ? {
+          continuationId: nextAdditionalInvocation.workflow.continuationId,
+          stepId: nextAdditionalInvocation.workflow.stepId,
+          stepIndex: nextAdditionalInvocation.workflow.stepIndex,
+          invocationId: nextAdditionalInvocation.invocationId,
+          activityId: nextAdditionalInvocation.activityId,
+          requestRef: nextAdditionalInvocation.requestRef,
+        }
+      : null;
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-activity-uncertainty-reconciled',
+      {
+        runId: common.runId,
+        invocationId,
+        cursor: guard,
+        attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        reconciliationId,
+        uncertaintyEventId,
+        uncertaintySequence,
+        verifier: reconciliation.verifier,
+        evidenceRef,
+        terminal: terminalSummary,
+        outputRef,
+        successor,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-activity-uncertainty-reconciled',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: materialized.cursor,
+        reconciliation,
+        ...(nextAdditionalInvocation
+          ? { nextInvocation: nextAdditionalInvocation }
+          : {}),
+      },
+    );
+    return /** @type {any} */ (
+      await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        nextAdditionalInvocation,
+        nextWorkflowCursor: materialized.cursor,
       })
     );
   }
@@ -15827,6 +17366,7 @@ export function createExecutionLedger({
 
   return {
     abandonUnstartedAttempt,
+    abandonUnstartedWorkflowActivityAttempt,
     authorizeManagedEffectSuccessorRetry,
     claimInvocation,
     claimWorkflowActivity,
@@ -15844,6 +17384,7 @@ export function createExecutionLedger({
     listReadyWork,
     listRuns,
     markAttemptStarted,
+    markWorkflowActivityAttemptUncertain,
     markWorkflowActivityStarted,
     markAttemptUncertain,
     markManagedEffectStarted,
@@ -15854,6 +17395,7 @@ export function createExecutionLedger({
     readManagedEffectDelivery,
     reconcileUncertainManagedEffect,
     reconcileUncertainManualAttempt,
+    reconcileUncertainWorkflowActivityAttempt,
     reconcileManagedEffectSuccessor,
     repairReadyWork,
     rebuildRun,
@@ -15870,6 +17412,9 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} claimWorkflowActivity - Claims one exact cursor-bound workflow activity generation.
  * @property {(...args: any[]) => Promise<any>} markWorkflowActivityStarted - Persists the dispatch boundary for one exact workflow activity attempt.
  * @property {(...args: any[]) => Promise<any>} commitVerifiedWorkflowActivitySuccess - Atomically commits verified workflow output and its successor or terminal cursor.
+ * @property {(...args: any[]) => Promise<any>} abandonUnstartedWorkflowActivityAttempt - Safely releases one cursor-bound workflow claim that never started.
+ * @property {(...args: any[]) => Promise<any>} markWorkflowActivityAttemptUncertain - Blocks one cursor-bound begun workflow attempt without retrying it.
+ * @property {(...args: any[]) => Promise<any>} reconcileUncertainWorkflowActivityAttempt - Advances one blocked workflow activity from exact completed evidence while retaining its abandoned attempt.
  * @property {(...args: any[]) => Promise<any>} authorizeManagedEffectSuccessorRetry - Atomically appends source authorization and creates one fresh effect-only retry run.
  * @property {(...args: any[]) => Promise<any>} startManagedEffectSuccessor - Atomically starts a successor's sole retained effect and authorizes one physical dispatch.
  * @property {(...args: any[]) => Promise<any>} commitManagedEffectSuccessorOutcome - Atomically closes a successor's sole started effect and aggregate terminal state.

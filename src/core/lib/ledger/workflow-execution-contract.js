@@ -74,6 +74,7 @@ export const WORKFLOW_SIGNAL_WAIT_ID_PREFIX = 'wfs';
 export const WorkflowCursorDisposition = Object.freeze({
   ACTIVITY_RUNNABLE: 'ACTIVITY_RUNNABLE',
   ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
+  ACTIVITY_UNCERTAIN: 'ACTIVITY_UNCERTAIN',
   COMPLETED: 'COMPLETED',
 });
 
@@ -622,10 +623,10 @@ export function createWorkflowSignalWaitId(value) {
 }
 
 /**
- * Normalize one persisted activity-or-terminal orchestration cursor. Outputs
- * are a canonical contiguous prefix of the immutable plan: active cursors
- * retain every prior output, while a terminal cursor also retains the final
- * activity output.
+ * Normalize one persisted activity-or-successful-terminal orchestration
+ * cursor. Outputs are a canonical contiguous prefix of the immutable plan:
+ * every nonterminal activity cursor retains only prior outputs, while a
+ * successfully completed cursor also retains the final activity output.
  * @param {unknown} value - Candidate workflow cursor.
  * @param {string} [label] - Human-readable boundary label.
  * @returns {Record<string, any>} - Strict cursor projection.
@@ -708,20 +709,34 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
     outputStepIds.add(binding.stepId);
     return binding;
   });
-  const completed = cursor.disposition === WorkflowCursorDisposition.COMPLETED;
-  const expectedOutputCount = stepIndex + (completed ? 1 : 0);
+  let expectedOutputCount;
+  let includesCurrentStepOutput;
+  switch (cursor.disposition) {
+    case WorkflowCursorDisposition.ACTIVITY_RUNNABLE:
+    case WorkflowCursorDisposition.ACTIVITY_RUNNING:
+    case WorkflowCursorDisposition.ACTIVITY_UNCERTAIN:
+      expectedOutputCount = stepIndex;
+      includesCurrentStepOutput = false;
+      break;
+    case WorkflowCursorDisposition.COMPLETED:
+      expectedOutputCount = stepIndex + 1;
+      includesCurrentStepOutput = true;
+      break;
+    default:
+      throw new TypeError(`${label}.disposition is not supported.`);
+  }
   if (outputs.length !== expectedOutputCount) {
     throw new TypeError(
       `${label}.outputs must contain exactly ${expectedOutputCount} contiguous step outputs for disposition ${cursor.disposition}.`,
     );
   }
   if (
-    completed
+    includesCurrentStepOutput
       ? outputs[stepIndex]?.stepId !== cursor.stepId
       : outputStepIds.has(cursor.stepId)
   ) {
     throw new TypeError(
-      completed
+      includesCurrentStepOutput
         ? `${label}.outputs final binding must match the completed cursor step.`
         : `${label}.outputs cannot contain the active cursor step.`,
     );
@@ -929,7 +944,7 @@ function selectWorkflowActivityRequest(value) {
 /**
  * Materialize one activity from an already-normalized cursor and payload
  * context. This is shared by public cursor validation and initial creation.
- * @param {{context: ReturnType<typeof normalizeWorkflowPayloadContext>, cursor: Record<string, any>, selectedOutput?: ReturnType<typeof normalizeSelectedWorkflowOutput>, label: string}} value - Verified activity context.
+ * @param {{context: ReturnType<typeof normalizeWorkflowPayloadContext>, cursor: Record<string, any>, selectedOutput?: ReturnType<typeof normalizeSelectedWorkflowOutput>, label: string}} value - Verified current activity context.
  * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, stepId: string, stepIndex: number, continuationId: string, invocationId: string, activityId: string, activityRequest: {input: any, callerMetadata: Record<string, any>}, cursor: Record<string, any>}} - Exact cursor activity.
  */
 function materializeNormalizedWorkflowActivityAtCursor(value) {
@@ -937,9 +952,10 @@ function materializeNormalizedWorkflowActivityAtCursor(value) {
     ![
       WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
       WorkflowCursorDisposition.ACTIVITY_RUNNING,
+      WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
     ].includes(value.cursor.disposition)
   ) {
-    throw new TypeError(`${value.label}.cursor is not an active activity.`);
+    throw new TypeError(`${value.label}.cursor is not a current activity.`);
   }
   const step = assertWorkflowCursorContext(
     value.cursor,
@@ -986,8 +1002,9 @@ function materializeNormalizedWorkflowActivityAtCursor(value) {
 }
 
 /**
- * Validate and materialize the activity selected by one exact active cursor.
- * A step-output selector must carry the exact cursor binding and rehashed
+ * Validate and materialize the activity selected by one exact current cursor,
+ * including a blocked uncertain cursor that cannot authorize dispatch. A
+ * step-output selector must carry the exact cursor binding and rehashed
  * workflow-output payload; other selectors reject that extra input.
  * @param {{planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, cursor: unknown, selectedOutput?: {binding: unknown, payload: unknown}}} value - Cursor activity materialization.
  * @returns {ReturnType<typeof materializeNormalizedWorkflowActivityAtCursor>} - Exact cursor activity.
@@ -1038,15 +1055,103 @@ export function materializeWorkflowCursorActivity(value) {
 }
 
 /**
- * Materialize the logical success of the current running activity. The helper
- * appends exactly one immutable output binding and either selects the next
- * activity or returns a terminal cursor. Payload publication and ledger
- * mutation remain the caller's separate atomicity boundary.
+ * Materialize one cursor-only workflow activity lifecycle decision. The
+ * caller still proves the physical attempt state and fence; this pure boundary
+ * proves that recovery cannot change the logical activation, output prefix,
+ * or immutable plan/start scope while advancing the cursor exactly once.
+ * @param {unknown} value - Candidate cursor transition inputs.
+ * @param {{label: string, currentDisposition: string, nextDisposition: string}} options - Exact supported lifecycle edge.
+ * @returns {Record<string, any>} - Strict next cursor.
+ */
+function materializeWorkflowActivityCursorTransition(value, options) {
+  const transition = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 2,
+    options.label,
+  );
+  assertExactKeys(
+    transition,
+    ['currentCursor', 'sequence', 'observedAt'],
+    options.label,
+  );
+  const currentCursor = normalizeWorkflowCursor(
+    transition.currentCursor,
+    `${options.label}.currentCursor`,
+  );
+  if (currentCursor.disposition !== options.currentDisposition) {
+    throw new TypeError(
+      `${options.label}.currentCursor must have disposition ${options.currentDisposition}.`,
+    );
+  }
+  const sequence = assertPositiveSafeInteger(
+    transition.sequence,
+    `${options.label}.sequence`,
+  );
+  if (sequence !== currentCursor.lastSequence + 1) {
+    throw new TypeError(
+      `${options.label}.sequence must immediately follow currentCursor.lastSequence.`,
+    );
+  }
+  const observedAt = assertPositiveSafeInteger(
+    transition.observedAt,
+    `${options.label}.observedAt`,
+  );
+  if (observedAt < currentCursor.updatedAt) {
+    throw new TypeError(
+      `${options.label}.observedAt must not precede currentCursor.updatedAt.`,
+    );
+  }
+  return normalizeWorkflowCursor(
+    {
+      ...currentCursor,
+      disposition: options.nextDisposition,
+      version: currentCursor.version + 1,
+      lastSequence: sequence,
+      updatedAt: observedAt,
+    },
+    `${options.label}.cursor`,
+  );
+}
+
+/**
+ * Release one workflow activity claim that provably never crossed the durable
+ * handler-start boundary. Physical attempt validation remains a ledger
+ * concern; the logical cursor returns to the same runnable activation.
+ * @param {{currentCursor: unknown, sequence: number, observedAt: number}} value - Exact claim-release materialization.
+ * @returns {Record<string, any>} - Same activity restored to runnable.
+ */
+export function materializeWorkflowActivityClaimRelease(value) {
+  return materializeWorkflowActivityCursorTransition(value, {
+    label: 'workflow activity claim release',
+    currentDisposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+    nextDisposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+  });
+}
+
+/**
+ * Block one workflow activity whose begun physical attempt can no longer be
+ * trusted to report an outcome. No output or successor is created here.
+ * @param {{currentCursor: unknown, sequence: number, observedAt: number}} value - Exact uncertainty materialization.
+ * @returns {Record<string, any>} - Same activity retained as uncertain.
+ */
+export function materializeWorkflowActivityUncertainty(value) {
+  return materializeWorkflowActivityCursorTransition(value, {
+    label: 'workflow activity uncertainty',
+    currentDisposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+    nextDisposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+  });
+}
+
+/**
+ * Materialize the logical completion of one activity from an exact supported
+ * source disposition. Exported wrappers keep ordinary success and uncertain
+ * reconciliation as distinct authority boundaries.
  * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outputPayload: unknown, outputRef: unknown, selectedOutput?: {binding: unknown, payload: unknown}, sequence: number, observedAt: number}} value - Completed activity materialization.
+ * @param {{label: string, currentDisposition: string}} options - Exact supported completion source.
  * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, outputPayload: ReturnType<typeof normalizeWorkflowOutputPayload>, outputRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, outputBinding: ReturnType<typeof normalizeWorkflowOutputBinding>, completed: boolean, cursor: Record<string, any>, nextActivity?: {stepId: string, stepIndex: number, continuationId: string, invocationId: string, activityId: string, activityRequest: {input: any, callerMetadata: Record<string, any>}}}} - Exact successor or terminal materialization.
  */
-export function materializeWorkflowActivitySuccess(value) {
-  const label = 'completed workflow activity materialization';
+function materializeWorkflowActivityCompletion(value, options) {
+  const { label } = options;
   const materialization = cloneBoundedJsonObject(
     value,
     WORKFLOW_PLAN_PAYLOAD_MAX_BYTES +
@@ -1080,11 +1185,9 @@ export function materializeWorkflowActivitySuccess(value) {
     materialization.currentCursor,
     `${label}.currentCursor`,
   );
-  if (
-    currentCursor.disposition !== WorkflowCursorDisposition.ACTIVITY_RUNNING
-  ) {
+  if (currentCursor.disposition !== options.currentDisposition) {
     throw new TypeError(
-      `${label}.currentCursor must have disposition ${WorkflowCursorDisposition.ACTIVITY_RUNNING}.`,
+      `${label}.currentCursor must have disposition ${options.currentDisposition}.`,
     );
   }
   const currentStep = assertWorkflowCursorContext(
@@ -1235,6 +1338,36 @@ export function materializeWorkflowActivitySuccess(value) {
 }
 
 /**
+ * Materialize the logical success of the current running activity. The helper
+ * appends exactly one immutable output binding and either selects the next
+ * activity or returns a terminal cursor. Payload publication and ledger
+ * mutation remain the caller's separate atomicity boundary.
+ * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outputPayload: unknown, outputRef: unknown, selectedOutput?: {binding: unknown, payload: unknown}, sequence: number, observedAt: number}} value - Completed running activity materialization.
+ * @returns {ReturnType<typeof materializeWorkflowActivityCompletion>} - Exact successor or terminal materialization.
+ */
+export function materializeWorkflowActivitySuccess(value) {
+  return materializeWorkflowActivityCompletion(value, {
+    label: 'completed workflow activity materialization',
+    currentDisposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+  });
+}
+
+/**
+ * Resolve one blocked uncertain workflow activity from an independently
+ * verified successful transcript. The abandoned physical attempt remains a
+ * ledger concern; this helper derives the same logical output and atomic
+ * continuation shape as an ordinary success without weakening that API.
+ * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outputPayload: unknown, outputRef: unknown, selectedOutput?: {binding: unknown, payload: unknown}, sequence: number, observedAt: number}} value - Completed uncertain activity materialization.
+ * @returns {ReturnType<typeof materializeWorkflowActivityCompletion>} - Exact successor or terminal materialization.
+ */
+export function materializeUncertainWorkflowActivitySuccess(value) {
+  return materializeWorkflowActivityCompletion(value, {
+    label: 'resolved uncertain workflow activity materialization',
+    currentDisposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+  });
+}
+
+/**
  * Select the first activity from verified immutable plan/start payloads and
  * construct every pure identity and cursor field needed by the atomic start
  * transition. Timer- and signal-headed workflows fail before a caller needs
@@ -1367,7 +1500,10 @@ export default {
   createWorkflowSignalWaitId,
   createWorkflowTimerId,
   materializeFirstWorkflowActivity,
+  materializeUncertainWorkflowActivitySuccess,
+  materializeWorkflowActivityClaimRelease,
   materializeWorkflowActivitySuccess,
+  materializeWorkflowActivityUncertainty,
   materializeWorkflowCursorActivity,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,

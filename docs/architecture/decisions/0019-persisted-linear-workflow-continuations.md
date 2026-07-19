@@ -3,13 +3,17 @@
 **Status:** Accepted · **Date:** 2026-07-19
 
 **Implementation status (2026-07-19):** the V10 ledger implements the initial
-activity-headed materialization plus cursor-guarded activity claim/start and a
-compound verified-success transition. It persists Activity Protocol results as
-immutable workflow outputs and atomically advances to one ordinary activity
-successor or terminal workflow state while maintaining ready-work V2. Timers,
-signals, workflow cancellation/recovery, managed effects in workflow attempts,
-resident dispatch, and public commands remain prospective parts of this
-decision.
+activity-headed materialization, cursor-guarded activity claim/start, compound
+verified success, and the first conservative recovery boundary. It releases an
+unstarted `CLAIMED` generation back to `ACTIVITY_RUNNABLE`, blocks a lost
+`STARTED` generation at `ACTIVITY_UNCERTAIN`, and accepts exact completed
+evidence to atomically continue or complete the workflow without rewriting the
+retained `ABANDONED` attempt. Ready-work V2 changes in the same transactions.
+Adapter matrices cover replay, races, injected payload and transaction
+failures, projection and payload tampering, and native LMDB close/reopen.
+Resident workflow dispatch, cursor-aware cancellation, timers, signals, public
+workflow commands, managed effects in workflow attempts, and reconciliation of
+failed, cancelled, or protocol-failed evidence remain prospective.
 
 ## Context
 
@@ -114,11 +118,12 @@ per-step output references available to later selectors. Activity, timer, and
 signal identities derive from the run and the exact step activation. They are
 stable across response loss and distinct from physical attempt identities.
 
-The cursor disposition distinguishes an activity that is runnable or running,
-a timer that is waiting, a signal that is waiting, blocked uncertainty, and a
-terminal workflow. Every cursor change is represented by an event snapshot and
-committed with the run head and all affected projections. A projection that
-cannot be reproduced from the event stream fails closed.
+The cursor disposition distinguishes an activity that is runnable
+(`ACTIVITY_RUNNABLE`), running (`ACTIVITY_RUNNING`), or blocked on uncertain
+delivery (`ACTIVITY_UNCERTAIN`), a timer that is waiting, a signal that is
+waiting, and a terminal workflow. Every cursor change is represented by an
+event snapshot and committed with the run head and all affected projections. A
+projection that cannot be reproduced from the event stream fails closed.
 
 ### Successful activity output and its continuation commit atomically
 
@@ -141,9 +146,10 @@ authoritative activity-terminal transition atomically:
 6. replaces or removes the corresponding work-index row.
 
 A crash after payload publication but before this transaction can leave an
-unreachable content-addressed object. The attempt remains `STARTED` and normal
-recovery makes it visibly `UNCERTAIN`; no successor exists. A crash after the
-transaction sees the prior invocation terminal, its output reachable, and
+unreachable content-addressed object. The attempt remains `STARTED` and no
+successor exists; after its reporter is confirmed stopped, the conservative
+uncertainty transition moves the cursor to `ACTIVITY_UNCERTAIN`. A crash after
+the transaction sees the prior invocation terminal, its output reachable, and
 exactly one retained successor. Replaying the transition returns its receipt
 and cannot create another continuation.
 
@@ -151,6 +157,44 @@ A failed activity fails the workflow and creates no successor. A cancelled
 activity follows the durable cancellation policy below. An uncertain activity
 blocks the workflow and has no ready successor; it is never silently
 redispatched.
+
+### Recovery distinguishes an unstarted claim from begun work
+
+Recovery conditions on the exact run head, cursor version and continuation,
+invocation generation, attempt identity, and fence. A `CLAIMED` attempt may be
+released only while the ledger proves that it never crossed the durable
+`STARTED` boundary. One transaction retains that physical generation as
+`ABANDONED`, returns the same logical invocation and cursor to runnable state,
+and replaces its `RECOVERY` row with an `ACTIVITY` row. It does not erase the
+old generation or create another activation.
+
+A `STARTED` attempt whose trusted reporter has stopped is not safe to release.
+One uncertainty event changes its attempt to `ABANDONED`, its invocation to
+`UNCERTAIN`, its run to `BLOCKED`, and its cursor to `ACTIVITY_UNCERTAIN`, while
+removing the `RECOVERY` row. No ready row, retry, or successor remains
+authoritative. If no trustworthy terminal evidence is ever recovered, this is
+an honest stopping condition for automation: a crash after `STARTED` but before
+terminal delivery may leave the run `BLOCKED` until a future explicit policy or
+operator decision exists.
+
+The first reconciliation transition accepts only a complete verified Activity
+Protocol transcript ending in `completed` for that exact abandoned attempt and
+anchored to the exact uncertainty event. It leaves the physical attempt
+byte-identical, persists the verified logical output, completes the uncertain
+invocation, and atomically either installs the next activity invocation and
+`ACTIVITY` row or completes the workflow with no ready row. Failed, cancelled,
+and protocol-failed reconciliation are deliberately unsupported rather than
+being interpreted as success or a retry instruction. A transcript containing a
+host cancel frame is also rejected on write, replay, and rebuild until a
+cursor-aware durable workflow-cancellation decision can authorize it.
+
+Response-loss replay is decision-oriented. It verifies the request against the
+original receipt event and returns the current run and invocation authority
+together with the event-anchored cursor, output, successor, and affected
+attempt. Exact cursor and run-head guards prevent callers from combining those
+historical decision fields into current execution authority. Content-addressed
+payload publication may leave unreachable objects when the ledger transaction
+loses; garbage collection for those payloads is deferred.
 
 ### The transactional work index is a locator, including restart work
 
@@ -165,8 +209,11 @@ the event, run head, cursor, invocation, attempt, timer, and other projections
 that change its meaning. A current activity row remains discoverable as it
 moves from `RUNNABLE` through `CLAIMED` and `STARTED`; deleting it at claim time
 would make a killed worker's stale attempt undiscoverable. The row disappears
-only when the work becomes a signal-only wait, blocked, or terminal, or it is
-atomically replaced by a successor row.
+only when the work becomes a signal-only wait, `ACTIVITY_UNCERTAIN`, or
+terminal, or it is atomically replaced by a successor row. Releasing an
+unstarted claim replaces `RECOVERY` with `ACTIVITY`; marking a started attempt
+uncertain removes `RECOVERY`; completed-evidence reconciliation creates exactly
+one successor `ACTIVITY` row or no row for terminal completion.
 
 The initial dispatched row kinds are runnable activity, activity recovery, and
 timer. A schema-level continuation row is reserved for fail-closed,
@@ -311,8 +358,9 @@ The implementation is incomplete until tests establish at least:
 - cancellation races against activity terminal, timer fire, and signal
   consumption, with no continuation after retained cancellation;
 - exact-revision filtering, stale `CLAIMED` release, conservative `STARTED`
-  uncertainty, managed-effect blocking, and no workflow advance while an
-  invocation is uncertain;
+  uncertainty, completed-evidence reconciliation that preserves the abandoned
+  attempt, managed-effect blocking, and no workflow advance while an invocation
+  is uncertain;
 - true LMDB close/reopen and real process `SIGKILL` recovery with locking
   enabled; and
 - one source end-to-end path plus one installed, relocated SEA path through

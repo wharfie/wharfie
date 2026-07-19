@@ -38,7 +38,10 @@ import {
   createWorkflowSignalWaitId,
   createWorkflowTimerId,
   materializeFirstWorkflowActivity,
+  materializeUncertainWorkflowActivitySuccess,
+  materializeWorkflowActivityClaimRelease,
   materializeWorkflowActivitySuccess,
+  materializeWorkflowActivityUncertainty,
   materializeWorkflowCursorActivity,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
@@ -262,6 +265,7 @@ describe('workflow execution contract', () => {
     expect(WorkflowCursorDisposition).toEqual({
       ACTIVITY_RUNNABLE: 'ACTIVITY_RUNNABLE',
       ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
+      ACTIVITY_UNCERTAIN: 'ACTIVITY_UNCERTAIN',
       COMPLETED: 'COMPLETED',
     });
     expect(Object.isFrozen(WorkflowCursorDisposition)).toBe(true);
@@ -713,8 +717,16 @@ describe('workflow execution contract', () => {
       lastSequence: 3,
       updatedAt: input.observedAt + 2,
     });
+    const uncertain = normalizeWorkflowCursor({
+      ...active,
+      disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+      version: 3,
+      lastSequence: 3,
+      updatedAt: input.observedAt + 2,
+    });
 
     expect(active.outputs).toEqual([firstOutput.binding]);
+    expect(uncertain.outputs).toEqual([firstOutput.binding]);
     expect(completed.outputs).toEqual([
       firstOutput.binding,
       secondOutput.binding,
@@ -751,6 +763,11 @@ describe('workflow execution contract', () => {
           firstOutput.binding,
           { ...secondOutput.binding, stepId: 'x' },
         ],
+      },
+      { ...uncertain, outputs: [] },
+      {
+        ...uncertain,
+        outputs: [firstOutput.binding, secondOutput.binding],
       },
       {
         ...active,
@@ -869,6 +886,210 @@ describe('workflow execution contract', () => {
         },
       }),
     ).toThrow(/reference does not match its exact bytes/i);
+  });
+
+  it('materializes exact claim release and uncertainty cursors without changing the logical activity', () => {
+    const steps = [
+      activityStep(),
+      {
+        id: 'next',
+        kind: 'activity',
+        activity: 'next',
+        input: { kind: 'literal', value: { next: true } },
+      },
+    ];
+    const { input, first } = firstForSteps(steps);
+    const firstOutput = output({ greeting: 'hello' });
+    const firstSuccess = materializeWorkflowActivitySuccess({
+      currentCursor: runningCursor(first.cursor),
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: firstOutput.payload,
+      outputRef: firstOutput.ref,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+    const running = runningCursor(firstSuccess.cursor, 4, input.observedAt + 3);
+    const transition = {
+      currentCursor: running,
+      sequence: 5,
+      observedAt: input.observedAt + 4,
+    };
+
+    const released = materializeWorkflowActivityClaimRelease(transition);
+    const uncertain = materializeWorkflowActivityUncertainty(transition);
+
+    expect(released).toEqual({
+      ...running,
+      disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+      version: running.version + 1,
+      lastSequence: 5,
+      updatedAt: input.observedAt + 4,
+    });
+    expect(uncertain).toEqual({
+      ...running,
+      disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+      version: running.version + 1,
+      lastSequence: 5,
+      updatedAt: input.observedAt + 4,
+    });
+    expect(released.outputs).toEqual(running.outputs);
+    expect(released.outputs).not.toBe(running.outputs);
+    expect(uncertain.outputs).toEqual(running.outputs);
+    expect(uncertain.outputs).not.toBe(running.outputs);
+    expect(
+      materializeWorkflowCursorActivity({
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        cursor: uncertain,
+      }),
+    ).toMatchObject({
+      invocationId: running.invocationId,
+      continuationId: running.continuationId,
+      activityId: 'next',
+      activityRequest: {
+        input: { next: true },
+        callerMetadata: { request: 'request-1' },
+      },
+      cursor: uncertain,
+    });
+  });
+
+  it.each([
+    ['claim release', materializeWorkflowActivityClaimRelease],
+    ['uncertainty', materializeWorkflowActivityUncertainty],
+  ])(
+    'rejects stale or malformed workflow activity %s materialization',
+    (_name, materialize) => {
+      const { input, first } = firstForSteps([activityStep()]);
+      const running = runningCursor(first.cursor);
+      const valid = {
+        currentCursor: running,
+        sequence: running.lastSequence + 1,
+        observedAt: running.updatedAt + 1,
+      };
+
+      expect(() =>
+        materialize({ ...valid, currentCursor: first.cursor }),
+      ).toThrow(/must have disposition ACTIVITY_RUNNING/i);
+      expect(() =>
+        materialize({ ...valid, sequence: running.lastSequence }),
+      ).toThrow(/must immediately follow/i);
+      expect(() =>
+        materialize({ ...valid, observedAt: running.updatedAt - 1 }),
+      ).toThrow(/must not precede/i);
+      expect(() =>
+        materialize(/** @type {any} */ ({ ...valid, retry: false })),
+      ).toThrow(/must contain exactly/i);
+      expect(input.observedAt).toBeLessThan(valid.observedAt);
+    },
+  );
+
+  it('materializes an evidence-resolved uncertain success without weakening ordinary success', () => {
+    const steps = [
+      activityStep(),
+      {
+        id: 'consume',
+        kind: 'activity',
+        activity: 'consume',
+        input: { kind: 'step-output', step: 'greet' },
+      },
+    ];
+    const { input, first } = firstForSteps(steps);
+    const running = runningCursor(first.cursor);
+    const uncertain = materializeWorkflowActivityUncertainty({
+      currentCursor: running,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+    const persistedOutput = output({ greeting: 'recovered' });
+    const request = {
+      currentCursor: uncertain,
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: persistedOutput.payload,
+      outputRef: persistedOutput.ref,
+      sequence: 4,
+      observedAt: input.observedAt + 3,
+    };
+
+    const resolved = materializeUncertainWorkflowActivitySuccess(request);
+
+    expect(resolved.completed).toBe(false);
+    expect(resolved.outputBinding).toEqual({
+      stepId: 'greet',
+      stepIndex: 0,
+      outputRef: persistedOutput.ref,
+    });
+    expect(resolved.cursor).toMatchObject({
+      stepId: 'consume',
+      stepIndex: 1,
+      disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+      outputs: [resolved.outputBinding],
+      version: uncertain.version + 1,
+      lastSequence: 4,
+      updatedAt: input.observedAt + 3,
+    });
+    expect(resolved.nextActivity?.activityRequest).toEqual({
+      input: { greeting: 'recovered' },
+      callerMetadata: { request: 'request-1' },
+    });
+    expect(() => materializeWorkflowActivitySuccess(request)).toThrow(
+      /must have disposition ACTIVITY_RUNNING/i,
+    );
+    expect(() =>
+      materializeUncertainWorkflowActivitySuccess({
+        ...request,
+        currentCursor: running,
+        sequence: 3,
+        observedAt: input.observedAt + 2,
+      }),
+    ).toThrow(/must have disposition ACTIVITY_UNCERTAIN/i);
+    expect(() =>
+      materializeUncertainWorkflowActivitySuccess({
+        ...request,
+        outputRef: output({ greeting: 'changed' }).ref,
+      }),
+    ).toThrow(/reference does not match its exact bytes/i);
+  });
+
+  it('materializes an evidence-resolved final uncertain activity as a completed output-bearing cursor', () => {
+    const { input, first } = firstForSteps([activityStep()]);
+    const uncertain = materializeWorkflowActivityUncertainty({
+      currentCursor: runningCursor(first.cursor),
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+    const persistedOutput = output({ done: true });
+
+    const resolved = materializeUncertainWorkflowActivitySuccess({
+      currentCursor: uncertain,
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: persistedOutput.payload,
+      outputRef: persistedOutput.ref,
+      sequence: 4,
+      observedAt: input.observedAt + 3,
+    });
+
+    expect(resolved.completed).toBe(true);
+    expect(resolved.nextActivity).toBeUndefined();
+    expect(resolved.cursor).toEqual({
+      ...uncertain,
+      disposition: WorkflowCursorDisposition.COMPLETED,
+      outputs: [resolved.outputBinding],
+      version: uncertain.version + 1,
+      lastSequence: 4,
+      updatedAt: input.observedAt + 3,
+    });
   });
 
   it.each([
