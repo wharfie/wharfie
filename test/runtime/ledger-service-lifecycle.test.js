@@ -378,6 +378,36 @@ describe('ledger service lifecycle', () => {
     ).resolves.toMatchObject({ artifactId: ARTIFACT_A });
   });
 
+  test('admits only the selected source while a forward change drains', async () => {
+    const { db, store } = createStore();
+    const { activation, transitionId } = await installThroughActivating(db);
+    await activation.completeActivation({ appId: APP_ID, transitionId });
+    await activation.beginChange({
+      appId: APP_ID,
+      action: 'update',
+      source: { artifactId: ARTIFACT_A, revisionId: REVISION_A },
+      target: { artifactId: ARTIFACT_B, revisionId: REVISION_B },
+    });
+
+    await expect(
+      store.start(createStartInput({ artifactId: ARTIFACT_A })),
+    ).resolves.toMatchObject({
+      applied: true,
+      lifecycle: {
+        artifactId: ARTIFACT_A,
+        status: LedgerServiceLifecycleStatus.STARTING,
+      },
+    });
+    await expect(
+      store.start(
+        createStartInput({
+          artifactId: ARTIFACT_B,
+          revisionId: REVISION_B,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+  });
+
   test('replays an exact starting session before consulting a newly closed admission fence', async () => {
     const { db, store } = createStore();
     const input = createStartInput();

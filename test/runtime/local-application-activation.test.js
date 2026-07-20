@@ -364,6 +364,24 @@ for (const adapter of getAdapterMatrix()) {
           desired: RELEASE_B,
         });
         await expect(
+          getLocalApplicationServiceStartFence({
+            db,
+            tableName: TABLE_NAME,
+            appId: APP_ID,
+            artifactId: RELEASE_A.artifactId,
+            revisionId: RELEASE_A.revisionId,
+          }),
+        ).resolves.toBeDefined();
+        await expect(
+          getLocalApplicationServiceStartFence({
+            db,
+            tableName: TABLE_NAME,
+            appId: APP_ID,
+            artifactId: RELEASE_B.artifactId,
+            revisionId: RELEASE_B.revisionId,
+          }),
+        ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+        await expect(
           activation.beginChange({
             appId: APP_ID,
             action: LocalApplicationActivationAction.UPDATE,
@@ -560,6 +578,32 @@ for (const adapter of getAdapterMatrix()) {
           observedAt: 1,
         });
         expect(result.activation.updatedAt).toBe(123);
+        const refusedTransitionId = result.activation.transition.transitionId;
+        result = await activation.abortChange({
+          appId: APP_ID,
+          transitionId: refusedTransitionId,
+          observedAt: 0,
+        });
+        expect(result.activation).toMatchObject({
+          phase: LocalApplicationActivationPhase.ACTIVE,
+          recordVersion: 26,
+          selectionGeneration: 5,
+          selected: RELEASE_A,
+          desired: RELEASE_A,
+          rollbackCandidate: RELEASE_B,
+          transition: null,
+          lastTransition: {
+            transitionId: refusedTransitionId,
+            outcome: LocalApplicationActivationOutcome.SOURCE_RETAINED,
+          },
+          updatedAt: 123,
+        });
+        await expect(
+          activation.abortChange({
+            appId: APP_ID,
+            transitionId: refusedTransitionId,
+          }),
+        ).resolves.toMatchObject({ applied: false });
       } finally {
         await cleanup();
       }
@@ -731,6 +775,17 @@ for (const adapter of getAdapterMatrix()) {
         expect(result.activation.transition.transitionId).not.toBe(
           abandonedChangeId,
         );
+        const newChangeId = result.activation.transition.transitionId;
+        await activation.markQuiescent({
+          appId: APP_ID,
+          transitionId: newChangeId,
+        });
+        await expect(
+          activation.abortChange({
+            appId: APP_ID,
+            transitionId: newChangeId,
+          }),
+        ).rejects.toBeInstanceOf(LocalApplicationActivationConflictError);
       } finally {
         await cleanup();
       }

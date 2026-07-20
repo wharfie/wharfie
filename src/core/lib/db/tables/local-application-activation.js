@@ -47,6 +47,7 @@ export const LocalApplicationActivationDestination = Object.freeze({
 
 export const LocalApplicationActivationOutcome = Object.freeze({
   TARGET_ACTIVE: 'target-active',
+  SOURCE_RETAINED: 'source-retained',
   SOURCE_RESTORED: 'source-restored',
 });
 
@@ -1144,6 +1145,65 @@ export function createLocalApplicationActivation({
     return await write(context.options.appId, context.current, record);
   }
 
+  /** @param {{appId: string, transitionId: string, observedAt?: number}} input - Forward change refused before the selected source was stopped. @returns {Promise<Record<string, any>>} - Activation result. */
+  async function abortChange(input) {
+    const context = await currentTransition(input, 'abortChange');
+    if (
+      context.snapshot.phase === LocalApplicationActivationPhase.ACTIVE &&
+      context.snapshot.lastTransition?.transitionId ===
+        context.options.transitionId &&
+      context.snapshot.lastTransition.outcome ===
+        LocalApplicationActivationOutcome.SOURCE_RETAINED
+    ) {
+      return { applied: false, activation: context.snapshot };
+    }
+    if (
+      context.snapshot.transition?.transitionId !== context.options.transitionId
+    ) {
+      throw new LocalApplicationActivationConflictError(
+        context.options.appId,
+        'stale transition',
+      );
+    }
+    const transition = context.snapshot.transition;
+    if (
+      transition.action === LocalApplicationActivationAction.INSTALL ||
+      transition.source === null ||
+      context.snapshot.phase !== LocalApplicationActivationPhase.QUIESCING ||
+      !sameRelease(context.snapshot.selected, transition.source) ||
+      !sameRelease(context.snapshot.desired, transition.target) ||
+      context.snapshot.selectionGeneration !==
+        transition.sourceSelectionGeneration
+    ) {
+      throw new LocalApplicationActivationConflictError(
+        context.options.appId,
+        'change can be aborted only before source quiescence or selection changes',
+      );
+    }
+    const record = replaceRecord(
+      context.current,
+      {
+        phase: LocalApplicationActivationPhase.ACTIVE,
+        desired_artifact_id: transition.source.artifactId,
+        desired_revision_id: transition.source.revisionId,
+        transition_id: null,
+        transition_action: null,
+        transition_source_record_version: null,
+        transition_source_selection_generation: null,
+        transition_source_artifact_id: null,
+        transition_source_revision_id: null,
+        transition_target_artifact_id: null,
+        transition_target_revision_id: null,
+        transition_started_at: null,
+        last_transition_id: context.options.transitionId,
+        last_transition_outcome:
+          LocalApplicationActivationOutcome.SOURCE_RETAINED,
+      },
+      context.timestamp,
+    );
+    return await write(context.options.appId, context.current, record);
+  }
+
   /** @param {{appId: string, transitionId: string, observedAt?: number}} input - Healthy selected release. @returns {Promise<Record<string, any>>} - Activation result. */
   async function completeActivation(input) {
     const context = await currentTransition(input, 'completeActivation');
@@ -1225,6 +1285,7 @@ export function createLocalApplicationActivation({
     markSelected,
     markActivating,
     beginSourceRestore,
+    abortChange,
     completeActivation,
   });
 }
@@ -1314,9 +1375,30 @@ export async function getLocalApplicationServiceStartFence(input) {
   );
   if (!record) return createAdmissionFence(input.appId, null);
   const selected = readStoredRelease(record, 'selected', 'selected', true);
+  const desired = readStoredRelease(record, 'desired', 'desired', false);
+  const source = readStoredRelease(
+    record,
+    'transition_source',
+    'transition.source',
+    true,
+  );
+  const target = readStoredRelease(
+    record,
+    'transition_target',
+    'transition.target',
+    true,
+  );
+  const drainingSource =
+    record.phase === LocalApplicationActivationPhase.QUIESCING &&
+    record.transition_action !== LocalApplicationActivationAction.INSTALL &&
+    source !== null &&
+    target !== null &&
+    sameRelease(selected, source) &&
+    sameRelease(desired, target);
   const phaseAdmits =
     record.phase === LocalApplicationActivationPhase.ACTIVE ||
-    record.phase === LocalApplicationActivationPhase.ACTIVATING;
+    record.phase === LocalApplicationActivationPhase.ACTIVATING ||
+    drainingSource;
   if (
     !phaseAdmits ||
     selected === null ||
