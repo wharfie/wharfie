@@ -257,7 +257,7 @@ while (Date.now() < deadline) {
   const status = observation.parsed;
   if (
     observation.result.status === 0 &&
-    status?.schemaVersion === 1 &&
+    status?.schemaVersion === 2 &&
     status.kind === 'wharfie.service.status' &&
     status.appId === config.appId &&
     status.health === 'healthy' &&

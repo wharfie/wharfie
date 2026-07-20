@@ -57,6 +57,8 @@ const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
 const MAX_PROCESS_DURATION_MS = 60_000;
 const MAX_SERVICE_RECORD_BYTES = 64 * 1024;
 const ATOMIC_PUBLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const ACTIVATION_RECOVERY_REMEDIATION =
+  'Run service recover before retrying activation.';
 const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
   'appId',
   'dataRoot',
@@ -150,6 +152,30 @@ function hasCode(error, code) {
     'code' in error &&
     String(error.code) === code
   );
+}
+
+/**
+ * Preserve the original failure while marking only errors that left a durable
+ * activation transition in flight as recoverable operator work.
+ * @param {unknown} error - Transition failure.
+ * @returns {Error} - Recovery-tagged failure.
+ */
+function createActivationRecoveryRequiredError(error) {
+  if (hasCode(error, 'systemd-user-service-activation-recovery-required')) {
+    return /** @type {Error} */ (error);
+  }
+  const failure = new Error(
+    error instanceof Error
+      ? error.message
+      : 'Systemd user-service activation was interrupted.',
+  );
+  failure.name = 'SystemdUserServiceActivationRecoveryRequiredError';
+  Object.assign(failure, {
+    code: 'systemd-user-service-activation-recovery-required',
+    remediation: ACTIVATION_RECOVERY_REMEDIATION,
+    cause: error,
+  });
+  return failure;
 }
 
 /**
@@ -389,6 +415,25 @@ async function ensureManagedDirectory(fsOps, directory, label, uid) {
 }
 
 /**
+ * Create or validate one account-owned shared directory without changing the
+ * permissions of an existing path. Wharfie owns its unit file, not the
+ * account's shared XDG/systemd directory policy.
+ * @param {typeof fsp} fsOps - Filesystem implementation.
+ * @param {string} directory - Shared directory to create or reuse.
+ * @param {string} label - Boundary label.
+ * @param {number} uid - Required owner.
+ * @returns {Promise<void>} - Resolves for a real, non-writable shared directory.
+ */
+async function ensureSharedDirectory(fsOps, directory, label, uid) {
+  try {
+    await fsOps.mkdir(directory, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    if (!hasCode(error, 'EEXIST')) throw error;
+  }
+  await assertRealPath(fsOps, directory, 'directory', label, uid);
+}
+
+/**
  * Establish the exact app-owned data tree component by component so a managed
  * ancestor cannot redirect later reads or writes through a symbolic link.
  * @param {typeof fsp} fsOps - Filesystem implementation.
@@ -456,20 +501,20 @@ async function hasManagedServiceRoot(fsOps, layout, uid) {
  * @returns {Promise<void>} - Resolves after the unit parent is safe.
  */
 async function ensureManagedUnitDirectory(fsOps, layout, uid) {
-  await ensureManagedDirectory(
+  await ensureSharedDirectory(
     fsOps,
     layout.configRoot,
     'Wharfie config root',
     uid,
   );
   const systemdRoot = path.join(layout.configRoot, 'systemd');
-  await ensureManagedDirectory(
+  await ensureSharedDirectory(
     fsOps,
     systemdRoot,
     'Systemd user config root',
     uid,
   );
-  await ensureManagedDirectory(
+  await ensureSharedDirectory(
     fsOps,
     path.dirname(layout.unitPath),
     'Systemd user unit directory',
@@ -1826,9 +1871,16 @@ export function createSystemdUserServiceOperator(options = {}) {
    * @param {number} uid - Expected principal.
    * @param {number} filesystemUid - Expected managed-file owner.
    * @param {unknown} target - Exact packaged build target.
+   * @param {{allowUninstalledTargetMismatch?: boolean}} [readOptions] - Narrow legacy tombstone policy.
    * @returns {Promise<Readonly<Record<string, any>> | null>} - Installation or null.
    */
-  async function readInstallation(layout, uid, filesystemUid, target) {
+  async function readInstallation(
+    layout,
+    uid,
+    filesystemUid,
+    target,
+    readOptions = {},
+  ) {
     if (!(await hasManagedServiceRoot(fsOps, layout, filesystemUid))) {
       return null;
     }
@@ -1854,10 +1906,16 @@ export function createSystemdUserServiceOperator(options = {}) {
       );
     }
     const targetId = getBuildTargetId(target);
-    if (
+    const targetMismatch =
       getBuildTargetId(installation.current.target) !== targetId ||
       (installation.previous &&
-        getBuildTargetId(installation.previous.target) !== targetId)
+        getBuildTargetId(installation.previous.target) !== targetId);
+    if (
+      targetMismatch &&
+      !(
+        readOptions.allowUninstalledTargetMismatch === true &&
+        installation.state === 'uninstalled'
+      )
     ) {
       throw new Error(
         'Installed systemd user service belongs to a different build target.',
@@ -2568,8 +2626,12 @@ export function createSystemdUserServiceOperator(options = {}) {
       context.uid,
       context.filesystemUid,
       context.pair.runtime.target,
+      { allowUninstalledTargetMismatch: true },
     );
-    if (existing && !isAuthorized(existing.current)) {
+    if (
+      existing?.state === 'installed' &&
+      (!isAuthorized(existing.current) || !isAuthorized(existing.previous))
+    ) {
       throw new Error(
         'Systemd installation receipt names a release outside durable activation authority.',
       );
@@ -2686,8 +2748,9 @@ export function createSystemdUserServiceOperator(options = {}) {
       context.uid,
       context.filesystemUid,
       context.pair.runtime.target,
+      { allowUninstalledTargetMismatch: true },
     );
-    if (installation) {
+    if (installation && installation.state !== 'uninstalled') {
       throw new Error(
         'Systemd activation is missing while an installation receipt exists.',
       );
@@ -2753,7 +2816,8 @@ export function createSystemdUserServiceOperator(options = {}) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       last = await observeInstallation(installation, { integrity, deadline });
       if (last.health === 'healthy') return 'healthy';
-      if (last.health === 'failed') return 'failed';
+      if (last.health === 'failed' || last.health === 'stopped')
+        return 'failed';
       const remaining = deadline - monotonicNow();
       if (remaining <= 0) break;
       if (attempt + 1 < attempts) {
@@ -2969,6 +3033,20 @@ export function createSystemdUserServiceOperator(options = {}) {
       /** @param {Readonly<Record<string, any>>} input - Health verification request. @returns {Promise<void>} - Resolves for exact health. */
       async verifyActiveRelease(input) {
         assertApp(input);
+        const durable = await activation.get({ appId });
+        const previous = durable
+          ? getActivationPhysicalPrevious(durable)
+          : undefined;
+        if (
+          !durable ||
+          !durable.selected ||
+          previous === undefined ||
+          !hasSameReleaseReference(durable.selected, input.release)
+        ) {
+          throw new Error(
+            'Systemd active release has no exact durable activation projection.',
+          );
+        }
         const installation = await readInstallation(
           context.layout,
           context.uid,
@@ -2987,12 +3065,7 @@ export function createSystemdUserServiceOperator(options = {}) {
         const projection = Object.freeze({
           appId,
           current: input.release,
-          previous: installation.previous
-            ? Object.freeze({
-                artifactId: installation.previous.artifactId,
-                revisionId: installation.previous.revisionId,
-              })
-            : null,
+          previous,
         });
         const verified = await verifyPhysicalSelection(context, projection);
         const observed = await observeInstallation(verified.installation, {
@@ -3094,7 +3167,25 @@ export function createSystemdUserServiceOperator(options = {}) {
           acquireOperationLock: async () => async () => undefined,
           ...driver,
         });
-        return await handler({ activation, coordinator, driver });
+        try {
+          return await handler({ activation, coordinator, driver });
+        } catch (error) {
+          let current;
+          try {
+            current = await activation.get({
+              appId: context.pair.runtime.appId,
+            });
+          } catch {
+            throw error;
+          }
+          if (
+            current &&
+            current.phase !== LocalApplicationActivationPhase.ACTIVE
+          ) {
+            throw createActivationRecoveryRequiredError(error);
+          }
+          throw error;
+        }
       });
     } finally {
       await releaseLock();
@@ -3164,15 +3255,106 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
+   * Prove that any existing receipt, selector, and manager wiring is either
+   * absent or an authorized projection of the durable ACTIVE selection. This
+   * check is deliberately read-only and must complete before reinstall stops
+   * a running service.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
+   * @param {Readonly<Record<string, any>>} projection - Exact durable projection.
+   * @returns {Promise<Readonly<{needsRepair: boolean}>>} Repair classification after authority proof.
+   */
+  async function inspectPhysicalSelectionRepair(context, projection) {
+    const releases = await readProjectionReleases(context, projection);
+    const installation = await readInstallation(
+      context.layout,
+      context.uid,
+      context.filesystemUid,
+      context.pair.runtime.target,
+    );
+    if (
+      installation &&
+      (!hasSameReleaseReference(installation.current, projection.current) ||
+        !hasSameReleaseReference(installation.previous, projection.previous) ||
+        JSON.stringify(installation.current) !==
+          JSON.stringify(releases.current) ||
+        (releases.previous
+          ? JSON.stringify(installation.previous) !==
+            JSON.stringify(releases.previous)
+          : installation.previous !== null))
+    ) {
+      throw new Error(
+        'Systemd installation receipt is outside durable activation repair authority.',
+      );
+    }
+    if (await readUninstallMarker(context, installation)) {
+      throw new Error(
+        'Systemd user-service uninstall is incomplete; finish uninstall before reinstalling.',
+      );
+    }
+    const selected = await readSelectedRelease({
+      fsOps,
+      layout: context.layout,
+      inspectBytes,
+      uid: context.filesystemUid,
+      target: context.pair.runtime.target,
+    });
+    if (selected && !hasSameReleaseReference(selected, projection.current)) {
+      throw new Error(
+        'Systemd selector is outside durable activation repair authority.',
+      );
+    }
+    const unitFile = await inspectFixedUnitFile({
+      fsOps,
+      layout: context.layout,
+      uid: context.filesystemUid,
+    });
+    if (unitFile.state === 'conflicting') {
+      throw new Error(
+        'Systemd user unit path contains unverified or different content.',
+      );
+    }
+    const unitPaths = await readManagerUnitPaths();
+    if (!unitPaths.includes(path.dirname(context.layout.unitPath))) {
+      throw new Error(
+        "Systemd user manager no longer searches Wharfie's fixed unit directory.",
+      );
+    }
+    await assertNoOtherUnitClaims(context.layout, unitPaths);
+    const systemd = await readSystemd(context.layout);
+    if (
+      systemd.loadState !== 'not-found' &&
+      !hasExpectedUnitSource(systemd, context.layout)
+    ) {
+      throw new Error(
+        'Systemd user-service unit name is claimed by different effective wiring.',
+      );
+    }
+    return Object.freeze({
+      needsRepair:
+        installation?.state !== 'installed' ||
+        selected === null ||
+        unitFile.state !== 'managed' ||
+        !hasExpectedEffectiveUnit(systemd, context.layout) ||
+        systemd.unitFileState !== 'enabled',
+    });
+  }
+
+  /**
    * Reproject an intentionally uninstalled ACTIVE selection without changing
    * activation record version or selection generation. The retained release
    * is the only target accepted; switching artifacts is `update`.
    * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
    * @param {{activation: ReturnType<typeof createLocalApplicationActivation>, driver: Readonly<Record<string, Function>>}} runtime - Locked activation runtime.
    * @param {Readonly<Record<string, any>>} current - Exact ACTIVE state.
+   * @param {{requireInvokingRelease?: boolean}} [options] - Reprojection authority.
    * @returns {Promise<Readonly<Record<string, any>>>} - Synthetic activation result.
    */
-  async function reinstallActiveSelection(context, runtime, current) {
+  async function reinstallActiveSelection(
+    context,
+    runtime,
+    current,
+    options = {},
+  ) {
     if (
       current.phase !== LocalApplicationActivationPhase.ACTIVE ||
       !current.selected
@@ -3181,37 +3363,51 @@ export function createSystemdUserServiceOperator(options = {}) {
         'Systemd service reinstall requires one exact ACTIVE activation selection.',
       );
     }
-    const artifact = await inspectBytes(artifactPath);
-    const target = Object.freeze({
-      artifactId: artifact.artifactId,
-      revisionId: context.pair.runtime.revisionId,
-    });
-    if (!hasSameReleaseReference(current.selected, target)) {
-      throw new Error(
-        'A different activation release is selected; use service update.',
-      );
-    }
-    await readActivationRelease(context, current.selected);
-    if (current.rollbackCandidate) {
-      await readActivationRelease(context, current.rollbackCandidate);
-    }
-    try {
-      await runtime.driver.verifyActiveRelease({
-        appId: context.pair.runtime.appId,
-        release: current.selected,
+    if (options.requireInvokingRelease !== false) {
+      const artifact = await inspectBytes(artifactPath);
+      const target = Object.freeze({
+        artifactId: artifact.artifactId,
+        revisionId: context.pair.runtime.revisionId,
       });
-    } catch {
+      if (!hasSameReleaseReference(current.selected, target)) {
+        throw new Error(
+          'A different activation release is selected; use service update.',
+        );
+      }
+    }
+    const projection = Object.freeze({
+      appId: context.pair.runtime.appId,
+      current: current.selected,
+      previous: current.rollbackCandidate,
+      destination: 'target',
+      action: 'install',
+      transitionId: null,
+    });
+    const physical = await inspectPhysicalSelectionRepair(context, projection);
+    let needsRepair = physical.needsRepair;
+    if (!needsRepair) {
+      const verified = await verifyPhysicalSelection(context, projection);
+      const observed = await observeInstallation(verified.installation, {
+        integrity: verified.integrity,
+      });
+      if (observed.health === 'stopped') {
+        needsRepair = true;
+      } else if (observed.health !== 'healthy') {
+        const error = new Error(
+          `Systemd active release is not independently healthy (${observed.health}).`,
+        );
+        error.name = 'SystemdUserServiceActivationHealthError';
+        Object.assign(error, {
+          code: 'systemd-user-service-activation-unhealthy',
+          status: observed,
+        });
+        throw error;
+      }
+    }
+    if (needsRepair) {
       await runtime.driver.stopService({ appId: context.pair.runtime.appId });
       await runtime.driver.proveServiceInactive({
         appId: context.pair.runtime.appId,
-      });
-      const projection = Object.freeze({
-        appId: context.pair.runtime.appId,
-        current: current.selected,
-        previous: current.rollbackCandidate,
-        destination: 'target',
-        action: 'install',
-        transitionId: null,
       });
       await runtime.driver.selectRelease(projection);
       await runtime.driver.verifySelection(projection);
@@ -3310,6 +3506,15 @@ export function createSystemdUserServiceOperator(options = {}) {
     requireActive,
   ) {
     const activation = await readActivationSnapshot(context);
+    if (
+      requireActive &&
+      activation &&
+      activation.phase !== LocalApplicationActivationPhase.ACTIVE
+    ) {
+      throw createActivationRecoveryRequiredError(
+        new Error('Systemd user-service activation is in flight.'),
+      );
+    }
     const expectedPrevious = activation
       ? getActivationPhysicalPrevious(activation)
       : undefined;
@@ -3339,16 +3544,42 @@ export function createSystemdUserServiceOperator(options = {}) {
         const current = await runtime.activation.get({
           appId: context.pair.runtime.appId,
         });
-        const result =
-          current?.phase === LocalApplicationActivationPhase.ACTIVE
-            ? await reinstallActiveSelection(context, runtime, current)
-            : await runtime.coordinator.install({
-                appId: context.pair.runtime.appId,
-                target: {
-                  artifactId: (await inspectBytes(artifactPath)).artifactId,
-                  revisionId: context.pair.runtime.revisionId,
-                },
-              });
+        const artifact = await inspectBytes(artifactPath);
+        const target = Object.freeze({
+          artifactId: artifact.artifactId,
+          revisionId: context.pair.runtime.revisionId,
+        });
+        let result;
+        if (current?.phase === LocalApplicationActivationPhase.ACTIVE) {
+          if (hasSameReleaseReference(current.selected, target)) {
+            result = await reinstallActiveSelection(context, runtime, current);
+          } else {
+            const installation = await readInstallation(
+              context.layout,
+              context.uid,
+              context.filesystemUid,
+              context.pair.runtime.target,
+              { allowUninstalledTargetMismatch: true },
+            );
+            if (installation?.state !== 'uninstalled') {
+              throw new Error(
+                'A different activation release is selected; use service update.',
+              );
+            }
+            await reinstallActiveSelection(context, runtime, current, {
+              requireInvokingRelease: false,
+            });
+            result = await runtime.coordinator.update({
+              appId: context.pair.runtime.appId,
+              target,
+            });
+          }
+        } else {
+          result = await runtime.coordinator.install({
+            appId: context.pair.runtime.appId,
+            target,
+          });
+        }
         return await createActivationReceipt(context, result, 'install');
       },
       { preflightFirstInstall: true },
@@ -3359,9 +3590,26 @@ export function createSystemdUserServiceOperator(options = {}) {
   async function update() {
     const context = await resolveContext();
     await assertLinger(context.uid);
-    return await withLockedActivation(context, async ({ coordinator }) => {
+    return await withLockedActivation(context, async (runtime) => {
       const artifact = await inspectBytes(artifactPath);
-      const result = await coordinator.update({
+      const current = await runtime.activation.get({
+        appId: context.pair.runtime.appId,
+      });
+      if (current?.phase === LocalApplicationActivationPhase.ACTIVE) {
+        const installation = await readInstallation(
+          context.layout,
+          context.uid,
+          context.filesystemUid,
+          context.pair.runtime.target,
+          { allowUninstalledTargetMismatch: true },
+        );
+        if (installation?.state === 'uninstalled') {
+          await reinstallActiveSelection(context, runtime, current, {
+            requireInvokingRelease: false,
+          });
+        }
+      }
+      const result = await runtime.coordinator.update({
         appId: context.pair.runtime.appId,
         target: {
           artifactId: artifact.artifactId,
@@ -3413,21 +3661,9 @@ export function createSystemdUserServiceOperator(options = {}) {
           result = await coordinator.rollback({
             appId: context.pair.runtime.appId,
           });
-        } else if (
-          current?.phase === LocalApplicationActivationPhase.ACTIVE &&
-          current.selected &&
-          current.rollbackCandidate &&
-          hasSameReleaseReference(current.rollbackCandidate, invokingRelease)
-        ) {
-          // The same packaged source retried after its rollback became durable.
-          // Recover strictly verifies the settled projection without beginning
-          // a new rollback in the opposite direction.
-          result = await coordinator.recover({
-            appId: context.pair.runtime.appId,
-          });
         } else {
           throw new Error(
-            'Systemd rollback must be invoked by its exact selected or just-rolled-back source release.',
+            'Systemd rollback must be invoked by the exact currently selected release; use service recover after an ambiguous rollback response.',
           );
         }
         return await createActivationReceipt(context, result, 'rollback');
@@ -3450,50 +3686,66 @@ export function createSystemdUserServiceOperator(options = {}) {
   /** @returns {Promise<Record<string, any>>} - Current service status. */
   async function status() {
     const context = await resolveContext();
-    const activation = await readActivationSnapshot(context);
-    const installation = await readInstallation(
-      context.layout,
-      context.uid,
-      context.filesystemUid,
-      context.pair.runtime.target,
-    );
-    const marker = await readUninstallMarker(context, installation);
-    let observed;
-    if (
-      !installation ||
-      installation.state === 'uninstalled' ||
-      marker !== null
-    ) {
-      observed = await observeDetachedInstallation(
-        context,
-        installation,
-        marker,
+    const releaseLock = await acquireLock({
+      serviceRoot: context.layout.serviceRoot,
+      uid: context.uid,
+    });
+    try {
+      const activation = await readActivationSnapshot(context);
+      const installation = await readInstallation(
+        context.layout,
+        context.uid,
+        context.filesystemUid,
+        context.pair.runtime.target,
+        { allowUninstalledTargetMismatch: activation === null },
       );
-    } else {
-      observed = await observeInstallation(installation, {
-        tolerateSystemdFailure: true,
-      });
+      const marker = await readUninstallMarker(context, installation);
+      const observed =
+        !installation || installation.state === 'uninstalled' || marker !== null
+          ? await observeDetachedInstallation(context, installation, marker)
+          : await observeInstallation(installation, {
+              tolerateSystemdFailure: true,
+            });
+      const expectedPrevious = activation
+        ? getActivationPhysicalPrevious(activation)
+        : undefined;
+      const hasActivationProjection =
+        activation !== null &&
+        activation.selected !== null &&
+        expectedPrevious !== undefined;
+      const inertLegacyTombstone =
+        activation === null &&
+        installation?.state === 'uninstalled' &&
+        marker === null &&
+        observed.health === 'absent';
+      const activationMismatch = installation
+        ? inertLegacyTombstone || hasActivationProjection
+          ? !inertLegacyTombstone &&
+            (!hasSameReleaseReference(
+              installation.current,
+              activation?.selected,
+            ) ||
+              !hasSameReleaseReference(installation.previous, expectedPrevious))
+          : true
+        : activation !== null;
+      const activationUnsettled =
+        activation !== null &&
+        activation.phase !== LocalApplicationActivationPhase.ACTIVE;
+      return {
+        ...observed,
+        activation: createActivationStatusView(activation),
+        ...(activationMismatch
+          ? {
+              integrity: { status: 'invalid' },
+            }
+          : {}),
+        ...(activationMismatch || activationUnsettled
+          ? { health: 'degraded' }
+          : {}),
+      };
+    } finally {
+      await releaseLock();
     }
-    const expectedPrevious = activation
-      ? getActivationPhysicalPrevious(activation)
-      : undefined;
-    const activationMismatch =
-      installation !== null &&
-      (!activation ||
-        !activation.selected ||
-        expectedPrevious === undefined ||
-        !hasSameReleaseReference(installation.current, activation.selected) ||
-        !hasSameReleaseReference(installation.previous, expectedPrevious));
-    return {
-      ...observed,
-      activation: createActivationStatusView(activation),
-      ...(activationMismatch
-        ? {
-            integrity: { status: 'invalid' },
-            health: 'degraded',
-          }
-        : {}),
-    };
   }
 
   /** @returns {Promise<Record<string, any>>} - Start receipt. */
@@ -3528,7 +3780,7 @@ export function createSystemdUserServiceOperator(options = {}) {
     const context = await resolveContext();
     const locked = await lockInstalled(context);
     try {
-      await requireManagedActivation(context, locked.installation, false);
+      await requireManagedActivation(context, locked.installation, true);
       await assertExpectedEffectiveUnit(locked.installation);
       await systemctl(['stop', context.layout.unitName]);
       await waitForSystemdInactive(locked.installation, stopTimeoutMs);

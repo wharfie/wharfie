@@ -633,7 +633,7 @@ function removeBootObserver() {
  */
 function assertHealthy(status) {
   const storage = proofStorageLayout();
-  assert.equal(status.schemaVersion, 1);
+  assert.equal(status.schemaVersion, 2);
   assert.equal(status.kind, 'wharfie.service.status');
   assert.equal(status.appId, APP_ID);
   assert.equal(status.health, 'healthy');
@@ -848,7 +848,7 @@ async function prepare(repoRoot) {
     throw error;
   }
   assert.equal(install.action, 'install');
-  assert.equal(install.outcome, 'installed');
+  assert.equal(install.outcome, 'target-active');
   assert.equal(install.health, 'healthy');
   const installed = readServiceStatus(packaged.artifactPath);
   assertHealthy(installed);

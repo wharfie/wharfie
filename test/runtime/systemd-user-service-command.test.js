@@ -258,6 +258,36 @@ describe('packaged systemd user service command', () => {
     );
   });
 
+  it('makes an in-flight activation actionable in human status output', async () => {
+    const operator = makeOperator();
+    operator.status.mockResolvedValue({
+      schemaVersion: 2,
+      kind: 'wharfie.service.status',
+      appId: 'service-demo',
+      health: 'degraded',
+      activation: { phase: 'QUIESCING', action: 'update' },
+      wiring: {
+        state: 'managed',
+        unitFile: 'managed',
+        selection: 'managed',
+        effectiveUnit: 'managed',
+        cleanupPending: false,
+      },
+    });
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'status']);
+
+    expect(line).toHaveBeenCalledWith(
+      'status: degraded; wiring: managed; activation: QUIESCING; run service recover (service-demo)',
+    );
+  });
+
   it.each(HUMAN_ACTIVATION_CASES)(
     'writes an actionable human %s result for %s activation',
     async (action, requestStatus, outcome, message) => {
@@ -279,6 +309,53 @@ describe('packaged systemd user service command', () => {
       expect(processRef.exitCode).toBe(1);
     },
   );
+
+  it('does not suggest recovery alone for incompatible first-install work', async () => {
+    const operator = makeOperator();
+    operator.install.mockResolvedValue(
+      makeResult('install', {
+        requestStatus: 'pending',
+        outcome: 'in-flight',
+        reason: 'incompatible-durable-work',
+        health: 'degraded',
+        activeArtifactId: null,
+        activeRevisionId: null,
+      }),
+    );
+    const line = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install']);
+
+    expect(line).toHaveBeenCalledWith(
+      'install: in-flight; request pending; settle incompatible durable work or install its matching revision (service-demo)',
+    );
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('accepts a transient starting health in an activation receipt', async () => {
+    const operator = makeOperator();
+    operator.update.mockResolvedValue(
+      makeResult('update', { health: 'starting' }),
+    );
+    const line = jest.fn();
+    const failure = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line, failure },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'update']);
+
+    expect(line).toHaveBeenCalledWith('update: target-active (service-demo)');
+    expect(failure).not.toHaveBeenCalled();
+  });
 
   it.each([
     ['source-retained', 'recover: source retained (service-demo)'],
@@ -430,7 +507,7 @@ describe('packaged systemd user service command', () => {
     expect(processRef.exitCode).toBe(1);
   });
 
-  it('prints one safe activation JSON error with recovery guidance', async () => {
+  it('prints recovery guidance only for a tagged in-flight activation JSON error', async () => {
     const failure = jest.fn();
     const json = jest.fn();
     const line = jest.fn();
@@ -438,7 +515,8 @@ describe('packaged systemd user service command', () => {
     const activationError = Object.assign(
       new Error('systemd user manager is unavailable\nretry required'),
       {
-        code: 'activation-unavailable',
+        code: 'systemd-user-service-activation-recovery-required',
+        remediation: 'Run service recover before retrying activation.',
         secret: 'must-not-appear',
       },
     );
@@ -460,7 +538,7 @@ describe('packaged systemd user service command', () => {
       schemaVersion: 1,
       kind: 'wharfie.service.error',
       action: 'install',
-      code: 'activation-unavailable',
+      code: 'systemd-user-service-activation-recovery-required',
       message: 'systemd user manager is unavailable retry required',
       remediation: 'Run service recover before retrying activation.',
     });
@@ -472,7 +550,7 @@ describe('packaged systemd user service command', () => {
     expect(processRef.exitCode).toBe(1);
   });
 
-  it('prints a safe human activation error with recovery guidance', async () => {
+  it('prints a safe tagged human activation error with recovery guidance', async () => {
     const failure = jest.fn();
     const processRef = { exitCode: undefined };
     const command = createSystemdUserServiceCommand({
@@ -480,6 +558,8 @@ describe('packaged systemd user service command', () => {
         ...makeOperator(),
         update: async () => {
           throw Object.assign(new Error('activation interrupted\nmid-flight'), {
+            code: 'systemd-user-service-activation-recovery-required',
+            remediation: 'Run service recover before retrying activation.',
             secret: 'must-not-appear',
           });
         },
@@ -496,6 +576,35 @@ describe('packaged systemd user service command', () => {
         'activation interrupted mid-flight Run service recover before retrying activation.',
     });
     expect(failure.mock.calls[0][0]).not.toHaveProperty('secret');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('does not recommend recovery for an activation preflight failure', async () => {
+    const failure = jest.fn();
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('lingering is required'), {
+            code: 'systemd-user-service-preflight-failed',
+          });
+        },
+      }),
+      output: { failure, json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'install',
+      code: 'systemd-user-service-preflight-failed',
+      message: 'lingering is required',
+    });
     expect(processRef.exitCode).toBe(1);
   });
 

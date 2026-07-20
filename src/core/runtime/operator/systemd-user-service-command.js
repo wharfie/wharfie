@@ -47,6 +47,8 @@ const ACTIVATION_ACTIONS = new Set([
 ]);
 const ACTIVATION_RECOVERY_REMEDIATION =
   'Run service recover before retrying activation.';
+const ACTIVATION_RECOVERY_ERROR_CODE =
+  'systemd-user-service-activation-recovery-required';
 const SERVICE_REQUEST_STATUSES = new Set([
   'fulfilled',
   'refused',
@@ -79,6 +81,7 @@ const LIFECYCLE_OUTCOMES = Object.freeze({
 });
 const SERVICE_HEALTH_STATES = new Set([
   'healthy',
+  'starting',
   'degraded',
   'stopped',
   'failed',
@@ -292,15 +295,21 @@ function createJsonError(error, action) {
   const code = /^[a-z0-9][a-z0-9-]{0,127}$/.test(rawCode)
     ? rawCode
     : 'systemd-user-service-operation-failed';
+  const remediation =
+    code === ACTIVATION_RECOVERY_ERROR_CODE &&
+    error &&
+    typeof error === 'object' &&
+    'remediation' in error &&
+    error.remediation === ACTIVATION_RECOVERY_REMEDIATION
+      ? ACTIVATION_RECOVERY_REMEDIATION
+      : null;
   return Object.freeze({
     schemaVersion: 1,
     kind: 'wharfie.service.error',
     action,
     code,
     message: message || `Systemd user service ${action} failed.`,
-    ...(ACTIVATION_ACTIONS.has(action)
-      ? { remediation: ACTIVATION_RECOVERY_REMEDIATION }
-      : {}),
+    ...(remediation ? { remediation } : {}),
   });
 }
 
@@ -312,8 +321,8 @@ function createJsonError(error, action) {
  * @returns {unknown} - Original lifecycle failure or safe activation error.
  */
 function createHumanFailure(error, action) {
-  if (!ACTIVATION_ACTIONS.has(action)) return error;
   const safe = createJsonError(error, action);
+  if (!safe.remediation) return error;
   const failure = new Error(`${safe.message} ${safe.remediation}`);
   Object.assign(failure, { code: safe.code });
   return failure;
@@ -338,10 +347,19 @@ function formatHumanResult(action, result) {
       : '';
   if (action.name === 'status') {
     const wiring = result.wiring.state;
-    const remediation = wiring === 'orphaned' ? '; run service uninstall' : '';
-    return `${action.name}: ${outcome}; wiring: ${wiring}${remediation}${app}`;
+    const wiringRemediation =
+      wiring === 'orphaned' ? '; run service uninstall' : '';
+    const activationPhase = result.activation?.phase;
+    const activationRemediation =
+      typeof activationPhase === 'string' && activationPhase !== 'ACTIVE'
+        ? `; activation: ${activationPhase}; run service recover`
+        : '';
+    return `${action.name}: ${outcome}; wiring: ${wiring}${wiringRemediation}${activationRemediation}${app}`;
   }
   if (result.requestStatus === 'pending') {
+    if (result.reason === 'incompatible-durable-work') {
+      return `${action.name}: ${outcome}; request pending; settle incompatible durable work or install its matching revision${app}`;
+    }
     return `${action.name}: ${outcome}; request pending; run service recover${app}`;
   }
   if (result.outcome === 'source-retained') {
