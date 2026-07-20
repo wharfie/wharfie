@@ -104,7 +104,7 @@ describe('systemd user service contract', () => {
       'ExecStart="/srv/wharfie data%%$$/applications/example-app/current/app"',
     );
     expect(unit).toContain(
-      'WorkingDirectory="/srv/wharfie data%%$/applications/example-app/state"',
+      'WorkingDirectory=/srv/wharfie data%%$/applications/example-app/state',
     );
     expect(unit).toContain(
       'Environment="WHARFIE_RUNTIME_COMMAND=ledger-service"',

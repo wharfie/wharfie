@@ -216,6 +216,17 @@ function quoteSystemdExecWord(value) {
 }
 
 /**
+ * Path-valued service settings consume their entire right-hand side rather
+ * than a shell-like word. Quotes would become part of the path, so preserve
+ * only unit-file escapes and literal specifiers here.
+ * @param {string} value - Absolute service path.
+ * @returns {string} - Escaped path-valued setting.
+ */
+function systemdPathSetting(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/%/g, '%%');
+}
+
+/**
  * @param {string} name - Environment name.
  * @param {string} value - Environment value.
  * @returns {string} - Fixed Environment directive.
@@ -241,7 +252,7 @@ export function createSystemdUserServiceUnit(input) {
     '[Service]',
     'Type=exec',
     `ExecStart=${quoteSystemdExecWord(layout.currentArtifact)}`,
-    `WorkingDirectory=${quoteSystemdSettingWord(layout.stateRoot)}`,
+    `WorkingDirectory=${systemdPathSetting(layout.stateRoot)}`,
     environmentDirective('WHARFIE_RUNTIME_COMMAND', 'ledger-service'),
     environmentDirective('WHARFIE_RUNTIME_ARGS', '[]'),
     environmentDirective('WHARFIE_CONTROL_ADAPTER', 'lmdb'),
