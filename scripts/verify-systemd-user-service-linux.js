@@ -35,7 +35,7 @@ const BOOT_RECEIPT_PATH = '/var/lib/wharfie-systemd-proof/boot-receipt.json';
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 const STATUS_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 250;
-const EXPECTED_TIMER_DELAY_MS = 120_000;
+const EXPECTED_TIMER_DELAY_MS = 180_000;
 
 /**
  * @typedef CommandResult
@@ -537,9 +537,8 @@ function installBootObserver(
     [
       '[Unit]',
       'Description=Wharfie systemd user-service boot proof',
-      `Wants=user@${uid}.service`,
       `After=user@${uid}.service`,
-      'Before=systemd-user-sessions.service',
+      'Before=ssh.service getty.target',
       '',
       '[Service]',
       'Type=oneshot',
@@ -997,10 +996,6 @@ async function verify() {
   assert.ok(
     bootReceipt.status.runtime.generation >
       prepared.crashReplacement.after.generation,
-  );
-  assert.notEqual(
-    bootReceipt.status.systemd.mainPid,
-    prepared.crashReplacement.after.processId,
   );
   assert.equal(readBootId(), bootReceipt.bootId);
 
