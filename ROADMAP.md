@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Public activity-only workflow start plus workflow-aware inspection, recovery, and reconciliation implemented; real crash proof, cancellation, timers, and signals next · **Last updated:** 2026-07-19
+**Status:** Public activity-only workflows now have source and relocated-SEA crash/restart proof; cursor-aware cancellation, timers, and signals next · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -218,6 +218,18 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       recovery, and evidence reconciliation to workflow trigger/cursor state;
       preserve response-loss replay against the original uncertainty event and
       reject workflow cancellation until it has cursor-aware authority.
+- [x] Prove the public workflow path across real process death. Five source
+      `SIGKILL` cases cover offline start-response loss, a committed `CLAIMED`
+      attempt, `STARTED` before authored dispatch, the compound first-step
+      terminal/successor commit, recovery-response loss, and
+      reconciliation-response loss. The relocated SEA repeats the required
+      claim/start/terminal/recovery/reconciliation boundaries through public
+      packaged commands with Node absent from `PATH`, and additionally proves
+      that a source-created workflow is byte-identically replayed and completed
+      by the moved artifact. Only the logical activation recovered from an
+      unstarted claim may be redispatched in a fresh generation; started work
+      blocks, and the completed evidence in this matrix advances one successor
+      without rewriting or redispatching the abandoned attempt.
 - [x] Delete the superseded mutable Operation/Action graph, operation table,
       queue-run bridge, and second writable run model. Manual durable execution
       established the distinction between a caller idempotency key and the
@@ -437,24 +449,29 @@ serially. Shared source and packaged `start` commands now persist only plans
 that are executable end to end as ordinary activities. Generic `inspect`,
 confirmed `recover`, and evidence-backed `reconcile` expose or mutate the exact
 workflow cursor without leaking payloads; generic `cancel` rejects workflows.
+Real source-process and relocated-SEA crash matrices now prove that the public
+workflow path preserves those rules across process death, lost command
+responses, resident generation takeover, and evidence-backed continuation. The
+moved artifact completes the two-step proof with Node unavailable on `PATH`.
 
-1. Prove the public workflow start and recovery path across real process-kill
-   boundaries through a relocated SEA with Node absent from `PATH`. A crash
-   after `STARTED` but before terminal delivery may remain visibly `BLOCKED`
-   when no trustworthy terminal evidence can be recovered.
-2. Add run-level cursor-aware workflow cancellation, including races with
+1. Add run-level cursor-aware workflow cancellation, including races with
    activity success and blocked recovery; broaden reconciliation only when each
    cancelled or deadline outcome has an explicit policy. `cancelled` and
    `deadline-exceeded` remain unsupported until then.
-3. Add persisted timers and current-wait signals on the same cursor and
+2. Add persisted timers and current-wait signals on the same cursor and
    run-head boundary, followed by their shared source/packaged commands.
-4. Install the SEA as an OS-managed service, then add the smallest
+3. Install the SEA as an OS-managed service, then add the smallest
    provider-backed path that can create, inspect, update, and remove one durable
    node through the operator's credential chain.
+4. Begin provider-backed coordinator recovery only after the single-node
+   service lifecycle and control-store fencing are proven outside a developer
+   session.
 
-The current restart point is the [public workflow operator
-checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md).
-Its parent is the [resident workflow activity dispatch
+The current restart point is the [workflow crash-recovery
+checkpoint](llm/checkpoints/2026-07-19-v11-workflow-crash-recovery.md). Its
+parent is the [public workflow operator
+checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md),
+whose parent is the [resident workflow activity dispatch
 checkpoint](llm/checkpoints/2026-07-19-v9-resident-workflow-activities.md), whose
 parent is the [workflow activity failure
 checkpoint](llm/checkpoints/2026-07-19-v8-workflow-activity-failures.md), whose
