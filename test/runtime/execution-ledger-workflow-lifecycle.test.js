@@ -323,11 +323,11 @@ for (const adapter of getAdapterMatrix()) {
           observedAt: CREATED_AT + 3,
         };
         const firstSuccess =
-          await ledger.commitVerifiedWorkflowActivitySuccess(
+          await ledger.commitVerifiedWorkflowActivityTerminal(
             firstSuccessRequest,
           );
         const firstSuccessReplay =
-          await ledger.commitVerifiedWorkflowActivitySuccess(
+          await ledger.commitVerifiedWorkflowActivityTerminal(
             firstSuccessRequest,
           );
 
@@ -418,7 +418,7 @@ for (const adapter of getAdapterMatrix()) {
           observedAt: CREATED_AT + 4,
         });
         const lateFirstSuccessReplay =
-          await ledger.commitVerifiedWorkflowActivitySuccess(
+          await ledger.commitVerifiedWorkflowActivityTerminal(
             firstSuccessRequest,
           );
         expect(lateFirstSuccessReplay).toMatchObject({
@@ -444,8 +444,8 @@ for (const adapter of getAdapterMatrix()) {
           actor: ACTOR,
           observedAt: CREATED_AT + 5,
         });
-        const finalSuccess = await ledger.commitVerifiedWorkflowActivitySuccess(
-          {
+        const finalSuccess =
+          await ledger.commitVerifiedWorkflowActivityTerminal({
             runId,
             invocationId: firstSuccess.nextInvocation.invocationId,
             cursor: cursorGuard(secondStart.workflowCursor),
@@ -459,8 +459,7 @@ for (const adapter of getAdapterMatrix()) {
             }),
             actor: ACTOR,
             observedAt: CREATED_AT + 6,
-          },
-        );
+          });
 
         expect(finalSuccess).toMatchObject({
           applied: true,
@@ -612,21 +611,21 @@ for (const adapter of getAdapterMatrix()) {
           observedAt: CREATED_AT + 3,
         };
         await expect(
-          ledger.commitVerifiedWorkflowActivitySuccess({
+          ledger.commitVerifiedWorkflowActivityTerminal({
             ...successBase,
             cursor: cursorGuard(claimed.workflowCursor),
             transitionId: 'stale-cursor-success',
           }),
         ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
         await expect(
-          ledger.commitVerifiedWorkflowActivitySuccess({
+          ledger.commitVerifiedWorkflowActivityTerminal({
             ...successBase,
             fencingToken: 'wrong-fence',
             transitionId: 'wrong-fence-success',
           }),
         ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
         await expect(
-          ledger.commitVerifiedWorkflowActivitySuccess({
+          ledger.commitVerifiedWorkflowActivityTerminal({
             ...successBase,
             expectedVersion: 4,
             transitionId: 'stale-head-success',
@@ -645,7 +644,7 @@ for (const adapter of getAdapterMatrix()) {
           ],
         });
         await expect(
-          ledger.commitVerifiedWorkflowActivitySuccess(successBase),
+          ledger.commitVerifiedWorkflowActivityTerminal(successBase),
         ).resolves.toMatchObject({
           applied: true,
           run: { status: RunStatus.COMPLETED },

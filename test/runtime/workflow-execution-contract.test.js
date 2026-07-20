@@ -38,8 +38,10 @@ import {
   createWorkflowSignalWaitId,
   createWorkflowTimerId,
   materializeFirstWorkflowActivity,
+  materializeUncertainWorkflowActivityFailure,
   materializeUncertainWorkflowActivitySuccess,
   materializeWorkflowActivityClaimRelease,
+  materializeWorkflowActivityFailure,
   materializeWorkflowActivitySuccess,
   materializeWorkflowActivityUncertainty,
   materializeWorkflowCursorActivity,
@@ -267,6 +269,8 @@ describe('workflow execution contract', () => {
       ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
       ACTIVITY_UNCERTAIN: 'ACTIVITY_UNCERTAIN',
       COMPLETED: 'COMPLETED',
+      FAILED: 'FAILED',
+      PROTOCOL_FAILED: 'PROTOCOL_FAILED',
     });
     expect(Object.isFrozen(WorkflowCursorDisposition)).toBe(true);
   });
@@ -1090,6 +1094,178 @@ describe('workflow execution contract', () => {
       lastSequence: 4,
       updatedAt: input.observedAt + 3,
     });
+  });
+
+  it.each([
+    [
+      'running',
+      'failed',
+      WorkflowCursorDisposition.FAILED,
+      materializeWorkflowActivityFailure,
+    ],
+    [
+      'running',
+      'protocol-failed',
+      WorkflowCursorDisposition.PROTOCOL_FAILED,
+      materializeWorkflowActivityFailure,
+    ],
+    [
+      'uncertain',
+      'failed',
+      WorkflowCursorDisposition.FAILED,
+      materializeUncertainWorkflowActivityFailure,
+    ],
+    [
+      'uncertain',
+      'protocol-failed',
+      WorkflowCursorDisposition.PROTOCOL_FAILED,
+      materializeUncertainWorkflowActivityFailure,
+    ],
+  ])(
+    'materializes a %s activity with %s evidence as an output-free terminal cursor',
+    (origin, outcome, disposition, materialize) => {
+      const { input, first } = firstForSteps([
+        activityStep(),
+        {
+          id: 'next',
+          kind: 'activity',
+          activity: 'next',
+          input: { kind: 'literal', value: { next: true } },
+        },
+      ]);
+      const firstOutput = output({ greeting: 'hello' });
+      const firstSuccess = materializeWorkflowActivitySuccess({
+        currentCursor: runningCursor(first.cursor),
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        outputPayload: firstOutput.payload,
+        outputRef: firstOutput.ref,
+        sequence: 3,
+        observedAt: input.observedAt + 2,
+      });
+      const running = runningCursor(
+        firstSuccess.cursor,
+        4,
+        input.observedAt + 3,
+      );
+      const currentCursor =
+        origin === 'uncertain'
+          ? materializeWorkflowActivityUncertainty({
+              currentCursor: running,
+              sequence: 5,
+              observedAt: input.observedAt + 4,
+            })
+          : running;
+      const sequence = currentCursor.lastSequence + 1;
+      const observedAt = currentCursor.updatedAt + 1;
+      const terminalOutcome = /** @type {'failed'|'protocol-failed'} */ (
+        outcome
+      );
+
+      const terminal = materialize({
+        currentCursor,
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        outcome: terminalOutcome,
+        sequence,
+        observedAt,
+      });
+
+      expect(terminal).toEqual({
+        runId: first.runId,
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        planId: first.planId,
+        outcome: terminalOutcome,
+        cursor: {
+          ...currentCursor,
+          disposition,
+          version: currentCursor.version + 1,
+          lastSequence: sequence,
+          updatedAt: observedAt,
+        },
+      });
+      expect(terminal).not.toHaveProperty('outputPayload');
+      expect(terminal).not.toHaveProperty('outputRef');
+      expect(terminal).not.toHaveProperty('outputBinding');
+      expect(terminal).not.toHaveProperty('nextActivity');
+      expect(terminal.cursor.outputs).toEqual(currentCursor.outputs);
+      expect(terminal.cursor.outputs).not.toBe(currentCursor.outputs);
+      expect(normalizeWorkflowCursor(terminal.cursor)).toEqual(terminal.cursor);
+      expect(() =>
+        materializeWorkflowCursorActivity({
+          planPayload: input.planPayload,
+          planRef: input.planRef,
+          startPayload: input.startPayload,
+          startRef: input.startRef,
+          cursor: terminal.cursor,
+        }),
+      ).toThrow(/not a current activity/i);
+    },
+  );
+
+  it('keeps running and uncertain failure authority distinct and rejects unsupported outcomes', () => {
+    const { input, first } = firstForSteps([activityStep()]);
+    const running = runningCursor(first.cursor);
+    const uncertain = materializeWorkflowActivityUncertainty({
+      currentCursor: running,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+    const request = {
+      currentCursor: running,
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outcome: /** @type {'failed'} */ ('failed'),
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    };
+
+    expect(() =>
+      materializeWorkflowActivityFailure({
+        ...request,
+        currentCursor: first.cursor,
+        sequence: 2,
+        observedAt: input.observedAt + 1,
+      }),
+    ).toThrow(/must have disposition ACTIVITY_RUNNING/i);
+    expect(() =>
+      materializeWorkflowActivityFailure({
+        ...request,
+        currentCursor: uncertain,
+        sequence: 4,
+        observedAt: input.observedAt + 3,
+      }),
+    ).toThrow(/must have disposition ACTIVITY_RUNNING/i);
+    expect(() => materializeUncertainWorkflowActivityFailure(request)).toThrow(
+      /must have disposition ACTIVITY_UNCERTAIN/i,
+    );
+
+    for (const outcome of [
+      'completed',
+      'cancelled',
+      'deadline-exceeded',
+      'FAILED',
+    ]) {
+      expect(() =>
+        materializeWorkflowActivityFailure(
+          /** @type {any} */ ({ ...request, outcome }),
+        ),
+      ).toThrow(/outcome must be either failed or protocol-failed/i);
+    }
+    expect(() =>
+      materializeWorkflowActivityFailure(
+        /** @type {any} */ ({ ...request, retry: false }),
+      ),
+    ).toThrow(/must contain exactly/i);
   });
 
   it.each([

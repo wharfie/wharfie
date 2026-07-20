@@ -76,6 +76,8 @@ export const WorkflowCursorDisposition = Object.freeze({
   ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
   ACTIVITY_UNCERTAIN: 'ACTIVITY_UNCERTAIN',
   COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  PROTOCOL_FAILED: 'PROTOCOL_FAILED',
 });
 
 const WORKFLOW_CURSOR_DISPOSITIONS = new Set(
@@ -623,10 +625,10 @@ export function createWorkflowSignalWaitId(value) {
 }
 
 /**
- * Normalize one persisted activity-or-successful-terminal orchestration
- * cursor. Outputs are a canonical contiguous prefix of the immutable plan:
- * every nonterminal activity cursor retains only prior outputs, while a
- * successfully completed cursor also retains the final activity output.
+ * Normalize one persisted activity-or-terminal orchestration cursor. Outputs
+ * are a canonical contiguous prefix of the immutable plan: every current or
+ * failed activity cursor retains only prior outputs, while a successfully
+ * completed cursor also retains the final activity output.
  * @param {unknown} value - Candidate workflow cursor.
  * @param {string} [label] - Human-readable boundary label.
  * @returns {Record<string, any>} - Strict cursor projection.
@@ -715,6 +717,8 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
     case WorkflowCursorDisposition.ACTIVITY_RUNNABLE:
     case WorkflowCursorDisposition.ACTIVITY_RUNNING:
     case WorkflowCursorDisposition.ACTIVITY_UNCERTAIN:
+    case WorkflowCursorDisposition.FAILED:
+    case WorkflowCursorDisposition.PROTOCOL_FAILED:
       expectedOutputCount = stepIndex;
       includesCurrentStepOutput = false;
       break;
@@ -1368,6 +1372,140 @@ export function materializeUncertainWorkflowActivitySuccess(value) {
 }
 
 /**
+ * Materialize one verified failed activity as a terminal workflow cursor. The
+ * explicit Activity Protocol outcome is retained as a distinct canonical
+ * disposition. A failure never appends an output or creates a successor.
+ * Exported wrappers keep ordinary completion and uncertainty reconciliation
+ * as separate authority boundaries.
+ * @param {unknown} value - Candidate failed activity materialization.
+ * @param {{label: string, currentDisposition: string}} options - Exact supported failure source.
+ * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, outcome: 'failed'|'protocol-failed', cursor: Record<string, any>}} - Exact terminal failure materialization.
+ */
+function materializeWorkflowActivityTerminalFailure(value, options) {
+  const { label } = options;
+  const materialization = cloneBoundedJsonObject(
+    value,
+    WORKFLOW_PLAN_PAYLOAD_MAX_BYTES +
+      WORKFLOW_START_PAYLOAD_MAX_BYTES +
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 2,
+    label,
+  );
+  assertExactKeys(
+    materialization,
+    [
+      'currentCursor',
+      'planPayload',
+      'planRef',
+      'startPayload',
+      'startRef',
+      'outcome',
+      'sequence',
+      'observedAt',
+    ],
+    label,
+  );
+  const context = normalizeWorkflowPayloadContext(materialization, label);
+  const currentCursor = normalizeWorkflowCursor(
+    materialization.currentCursor,
+    `${label}.currentCursor`,
+  );
+  if (currentCursor.disposition !== options.currentDisposition) {
+    throw new TypeError(
+      `${label}.currentCursor must have disposition ${options.currentDisposition}.`,
+    );
+  }
+  const currentStep = assertWorkflowCursorContext(
+    currentCursor,
+    context,
+    `${label}.currentCursor`,
+  );
+  if (currentStep.kind !== 'activity') {
+    throw new TypeError(`${label}.currentCursor must name an activity step.`);
+  }
+  const expectedInvocationId = createWorkflowInvocationId({
+    runId: currentCursor.runId,
+    continuationId: currentCursor.continuationId,
+    stepId: currentCursor.stepId,
+    stepIndex: currentCursor.stepIndex,
+    activityId: currentStep.activity,
+  });
+  if (currentCursor.invocationId !== expectedInvocationId) {
+    throw new TypeError(
+      `${label}.currentCursor invocationId does not match its exact activity activation.`,
+    );
+  }
+  let disposition;
+  if (materialization.outcome === 'failed') {
+    disposition = WorkflowCursorDisposition.FAILED;
+  } else if (materialization.outcome === 'protocol-failed') {
+    disposition = WorkflowCursorDisposition.PROTOCOL_FAILED;
+  } else {
+    throw new TypeError(
+      `${label}.outcome must be either failed or protocol-failed.`,
+    );
+  }
+  const sequence = assertPositiveSafeInteger(
+    materialization.sequence,
+    `${label}.sequence`,
+  );
+  if (sequence !== currentCursor.lastSequence + 1) {
+    throw new TypeError(
+      `${label}.sequence must immediately follow currentCursor.lastSequence.`,
+    );
+  }
+  const observedAt = assertPositiveSafeInteger(
+    materialization.observedAt,
+    `${label}.observedAt`,
+  );
+  if (observedAt < currentCursor.updatedAt) {
+    throw new TypeError(
+      `${label}.observedAt must not precede currentCursor.updatedAt.`,
+    );
+  }
+  const cursor = normalizeWorkflowCursor(
+    {
+      ...currentCursor,
+      disposition,
+      version: currentCursor.version + 1,
+      lastSequence: sequence,
+      updatedAt: observedAt,
+    },
+    `${label}.cursor`,
+  );
+  return {
+    runId: currentCursor.runId,
+    ...context,
+    outcome: materialization.outcome,
+    cursor,
+  };
+}
+
+/**
+ * Materialize a verified failed terminal for the current running activity.
+ * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outcome: 'failed'|'protocol-failed', sequence: number, observedAt: number}} value - Failed running activity materialization.
+ * @returns {ReturnType<typeof materializeWorkflowActivityTerminalFailure>} - Exact terminal failure materialization.
+ */
+export function materializeWorkflowActivityFailure(value) {
+  return materializeWorkflowActivityTerminalFailure(value, {
+    label: 'failed workflow activity materialization',
+    currentDisposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+  });
+}
+
+/**
+ * Resolve one blocked uncertain workflow activity from independently verified
+ * failed or protocol-failed evidence without rewriting its physical attempt.
+ * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outcome: 'failed'|'protocol-failed', sequence: number, observedAt: number}} value - Failed uncertain activity materialization.
+ * @returns {ReturnType<typeof materializeWorkflowActivityTerminalFailure>} - Exact terminal failure materialization.
+ */
+export function materializeUncertainWorkflowActivityFailure(value) {
+  return materializeWorkflowActivityTerminalFailure(value, {
+    label: 'resolved uncertain workflow activity failure materialization',
+    currentDisposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+  });
+}
+
+/**
  * Select the first activity from verified immutable plan/start payloads and
  * construct every pure identity and cursor field needed by the atomic start
  * transition. Timer- and signal-headed workflows fail before a caller needs
@@ -1500,8 +1638,10 @@ export default {
   createWorkflowSignalWaitId,
   createWorkflowTimerId,
   materializeFirstWorkflowActivity,
+  materializeUncertainWorkflowActivityFailure,
   materializeUncertainWorkflowActivitySuccess,
   materializeWorkflowActivityClaimRelease,
+  materializeWorkflowActivityFailure,
   materializeWorkflowActivitySuccess,
   materializeWorkflowActivityUncertainty,
   materializeWorkflowCursorActivity,

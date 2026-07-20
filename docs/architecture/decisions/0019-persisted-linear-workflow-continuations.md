@@ -4,16 +4,18 @@
 
 **Implementation status (2026-07-19):** the V10 ledger implements the initial
 activity-headed materialization, cursor-guarded activity claim/start, compound
-verified success, and the first conservative recovery boundary. It releases an
-unstarted `CLAIMED` generation back to `ACTIVITY_RUNNABLE`, blocks a lost
-`STARTED` generation at `ACTIVITY_UNCERTAIN`, and accepts exact completed
-evidence to atomically continue or complete the workflow without rewriting the
-retained `ABANDONED` attempt. Ready-work V2 changes in the same transactions.
+verified terminal settlement, and the first conservative recovery boundary. It
+releases an unstarted `CLAIMED` generation back to `ACTIVITY_RUNNABLE`, blocks a lost
+`STARTED` generation at `ACTIVITY_UNCERTAIN`, accepts exact completed evidence
+to atomically continue or complete the workflow, and terminalizes direct or
+reconciled `failed` and `protocol-failed` evidence without an output or
+successor. Reconciliation never rewrites the retained `ABANDONED` attempt.
+Ready-work V2 changes in the same transactions.
 Adapter matrices cover replay, races, injected payload and transaction
 failures, projection and payload tampering, and native LMDB close/reopen.
 Resident workflow dispatch, cursor-aware cancellation, timers, signals, public
 workflow commands, managed effects in workflow attempts, and reconciliation of
-failed, cancelled, or protocol-failed evidence remain prospective.
+cancelled or deadline-exceeded evidence remain prospective.
 
 ## Context
 
@@ -139,7 +141,7 @@ authoritative activity-terminal transition atomically:
    generation, fence, complete Activity Protocol evidence, managed effects,
    and cancellation state;
 2. terminalizes the attempt and logical activity invocation;
-3. binds the verified workflow-output reference;
+3. for completion only, binds the verified workflow-output reference;
 4. consumes the current continuation and advances the persisted cursor;
 5. creates the exact next activity request, timer, or signal wait, or
    terminalizes the workflow run; and
@@ -153,7 +155,10 @@ the transaction sees the prior invocation terminal, its output reachable, and
 exactly one retained successor. Replaying the transition returns its receipt
 and cannot create another continuation.
 
-A failed activity fails the workflow and creates no successor. A cancelled
+An Activity Protocol `failed` or `protocol-failed` terminal changes the attempt,
+invocation, and run to `FAILED`, leaves the cursor on the failed activation with
+the matching `FAILED` or `PROTOCOL_FAILED` disposition, retains the exact prior
+output prefix, and creates no output, successor, or ready row. A cancelled
 activity follows the durable cancellation policy below. An uncertain activity
 blocks the workflow and has no ready successor; it is never silently
 redispatched.
@@ -177,24 +182,25 @@ an honest stopping condition for automation: a crash after `STARTED` but before
 terminal delivery may leave the run `BLOCKED` until a future explicit policy or
 operator decision exists.
 
-The first reconciliation transition accepts only a complete verified Activity
-Protocol transcript ending in `completed` for that exact abandoned attempt and
-anchored to the exact uncertainty event. It leaves the physical attempt
-byte-identical, persists the verified logical output, completes the uncertain
-invocation, and atomically either installs the next activity invocation and
-`ACTIVITY` row or completes the workflow with no ready row. Failed, cancelled,
-and protocol-failed reconciliation are deliberately unsupported rather than
-being interpreted as success or a retry instruction. A transcript containing a
-host cancel frame is also rejected on write, replay, and rebuild until a
-cursor-aware durable workflow-cancellation decision can authorize it.
+Reconciliation accepts a complete verified Activity Protocol transcript ending
+in `completed`, `failed`, or `protocol-failed` for that exact abandoned attempt
+and anchored to the exact uncertainty event. It leaves the physical attempt
+byte-identical. Completed evidence persists the logical output and atomically
+installs the next activity and `ACTIVITY` row or completes the workflow.
+Failure evidence changes the logical invocation and run to `FAILED`, advances
+the cursor to the matching failure disposition, retains the prior output
+prefix, and creates no output, successor, or ready row. Cancelled and
+deadline-exceeded reconciliation remain deliberately unsupported. A transcript
+containing any host cancel frame is rejected on write, replay, and rebuild
+until a cursor-aware durable workflow-cancellation decision can authorize it.
 
 Response-loss replay is decision-oriented. It verifies the request against the
 original receipt event and returns the current run and invocation authority
-together with the event-anchored cursor, output, successor, and affected
-attempt. Exact cursor and run-head guards prevent callers from combining those
-historical decision fields into current execution authority. Content-addressed
-payload publication may leave unreachable objects when the ledger transaction
-loses; garbage collection for those payloads is deferred.
+together with the event-anchored cursor, optional output and successor, and
+affected attempt. Exact cursor and run-head guards prevent callers from
+combining those historical decision fields into current execution authority.
+Content-addressed payload publication may leave unreachable objects when the
+ledger transaction loses; garbage collection for those payloads is deferred.
 
 ### The transactional work index is a locator, including restart work
 
@@ -213,7 +219,8 @@ only when the work becomes a signal-only wait, `ACTIVITY_UNCERTAIN`, or
 terminal, or it is atomically replaced by a successor row. Releasing an
 unstarted claim replaces `RECOVERY` with `ACTIVITY`; marking a started attempt
 uncertain removes `RECOVERY`; completed-evidence reconciliation creates exactly
-one successor `ACTIVITY` row or no row for terminal completion.
+one successor `ACTIVITY` row or no row for terminal completion; direct and
+reconciled failures leave no row.
 
 The initial dispatched row kinds are runnable activity, activity recovery, and
 timer. A schema-level continuation row is reserved for fail-closed,
@@ -358,9 +365,9 @@ The implementation is incomplete until tests establish at least:
 - cancellation races against activity terminal, timer fire, and signal
   consumption, with no continuation after retained cancellation;
 - exact-revision filtering, stale `CLAIMED` release, conservative `STARTED`
-  uncertainty, completed-evidence reconciliation that preserves the abandoned
-  attempt, managed-effect blocking, and no workflow advance while an invocation
-  is uncertain;
+  uncertainty, supported-terminal reconciliation that preserves the abandoned
+  attempt, output-free direct and reconciled failure, managed-effect blocking,
+  and no workflow advance while an invocation is uncertain;
 - true LMDB close/reopen and real process `SIGKILL` recovery with locking
   enabled; and
 - one source end-to-end path plus one installed, relocated SEA path through

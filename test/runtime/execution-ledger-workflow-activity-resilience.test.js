@@ -577,7 +577,7 @@ for (const adapter of getAdapterMatrix()) {
               { accepted: true },
             );
             mutation = (/** @type {Record<string, any>} */ request) =>
-              ledger.commitVerifiedWorkflowActivitySuccess(request);
+              ledger.commitVerifiedWorkflowActivityTerminal(request);
           } else {
             const { started, uncertain } = await createUncertainWorkflow(
               ledger,
@@ -1193,7 +1193,7 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
         await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
         await expect(
-          ledger.commitVerifiedWorkflowActivitySuccess(
+          ledger.commitVerifiedWorkflowActivityTerminal(
             workflowSuccessRequest(
               runId,
               started,
@@ -1272,7 +1272,7 @@ for (const adapter of getAdapterMatrix()) {
                 injectWinner = false;
                 winner =
                   winnerKind === 'success'
-                    ? await directLedger.commitVerifiedWorkflowActivitySuccess(
+                    ? await directLedger.commitVerifiedWorkflowActivityTerminal(
                         successRequest,
                       )
                     : await directLedger.markWorkflowActivityAttemptUncertain(
@@ -1293,7 +1293,7 @@ for (const adapter of getAdapterMatrix()) {
               ? racingLedger.markWorkflowActivityAttemptUncertain(
                   uncertaintyRequest,
                 )
-              : racingLedger.commitVerifiedWorkflowActivitySuccess(
+              : racingLedger.commitVerifiedWorkflowActivityTerminal(
                   successRequest,
                 ),
           ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
@@ -1897,7 +1897,7 @@ for (const adapter of getAdapterMatrix()) {
               failingPayloadStore,
             );
             await expect(
-              failingLedger.commitVerifiedWorkflowActivitySuccess(request),
+              failingLedger.commitVerifiedWorkflowActivityTerminal(request),
             ).rejects.toThrow('injected workflow output publication failure');
           } else {
             const failingDb = {
@@ -1919,14 +1919,14 @@ for (const adapter of getAdapterMatrix()) {
               harness.payloadStore,
             );
             await expect(
-              failingLedger.commitVerifiedWorkflowActivitySuccess(request),
+              failingLedger.commitVerifiedWorkflowActivityTerminal(request),
             ).rejects.toThrow('injected workflow success transaction failure');
           }
 
           expect(failureObserved).toBe(true);
           await expectStartedAuthority(directLedger, runId, started);
           const retried =
-            await directLedger.commitVerifiedWorkflowActivitySuccess(request);
+            await directLedger.commitVerifiedWorkflowActivityTerminal(request);
           expect(retried).toMatchObject({
             applied: true,
             run: { status: RunStatus.RUNNING, version: 4 },
@@ -2003,7 +2003,7 @@ for (const adapter of getAdapterMatrix()) {
               { marker: 'ready-corruption' },
             );
             mutation = () =>
-              ledger.commitVerifiedWorkflowActivitySuccess(request);
+              ledger.commitVerifiedWorkflowActivityTerminal(request);
           }
 
           const ready = await listReadyWork(ledger);
@@ -2065,7 +2065,7 @@ for (const adapter of getAdapterMatrix()) {
               if (injectWinner) {
                 injectWinner = false;
                 winner =
-                  await directLedger.commitVerifiedWorkflowActivitySuccess(
+                  await directLedger.commitVerifiedWorkflowActivityTerminal(
                     winnerRequest,
                   );
               }
@@ -2080,7 +2080,7 @@ for (const adapter of getAdapterMatrix()) {
 
           if (raceKind === 'exact') {
             const loser =
-              await racingLedger.commitVerifiedWorkflowActivitySuccess(
+              await racingLedger.commitVerifiedWorkflowActivityTerminal(
                 loserRequest,
               );
             expect(loser).toMatchObject({
@@ -2095,7 +2095,7 @@ for (const adapter of getAdapterMatrix()) {
             });
           } else {
             await expect(
-              racingLedger.commitVerifiedWorkflowActivitySuccess(loserRequest),
+              racingLedger.commitVerifiedWorkflowActivityTerminal(loserRequest),
             ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
           }
 
@@ -2147,7 +2147,7 @@ for (const adapter of getAdapterMatrix()) {
           { marker: 'winner' },
         );
         const succeeded =
-          await ledger.commitVerifiedWorkflowActivitySuccess(request);
+          await ledger.commitVerifiedWorkflowActivityTerminal(request);
         expect(succeeded.nextInvocation).toBeDefined();
 
         const outputPath = harness.payloadStore.getPath(succeeded.outputRef);
@@ -2161,7 +2161,7 @@ for (const adapter of getAdapterMatrix()) {
           ExecutionLedgerProjectionError,
         );
         await expect(
-          ledger.commitVerifiedWorkflowActivitySuccess(request),
+          ledger.commitVerifiedWorkflowActivityTerminal(request),
         ).rejects.toBeInstanceOf(ExecutionLedgerProjectionError);
         await expect(
           ledger.claimWorkflowActivity({

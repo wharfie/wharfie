@@ -83,6 +83,124 @@ function completedEvidence(startFrame, result) {
 }
 
 /**
+ * @param {Readonly<Record<string, any>>} startFrame - Durable host start frame.
+ * @param {'failed'|'protocol-failed'} type - Supported workflow failure terminal.
+ * @returns {Record<string, any>} Complete verified failure evidence.
+ */
+function failedEvidence(startFrame, type) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(startFrame);
+  const terminal = transcript.acceptComponentFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type,
+    attemptId: acceptedStart.attemptId,
+    sequence: 1,
+    error: {
+      code:
+        type === 'failed'
+          ? 'second-step-failed'
+          : 'second-step-protocol-failed',
+      name: type === 'failed' ? 'SecondStepError' : 'ActivityProtocolFailure',
+      message:
+        type === 'failed'
+          ? 'The second workflow activity failed.'
+          : 'The second workflow activity violated its protocol.',
+      details: { stepId: SECOND_STEP_ID },
+    },
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/**
+ * Advance a two-step workflow through one durable output and the second
+ * activity's STARTED boundary.
+ * @param {ReturnType<typeof createExecutionLedger>} ledger - Open ledger.
+ * @param {string} runId - Workflow run ID.
+ * @param {string} label - Stable transition identity prefix.
+ * @param {string} name - Logical workflow input.
+ * @returns {Promise<{firstCompleted: Record<string, any>, secondStarted: Record<string, any>}>} Second-step authority.
+ */
+async function startSecondWorkflowActivity(ledger, runId, label, name) {
+  const created = await ledger.createWorkflowRun({
+    runId,
+    appId: APP_ID,
+    revisionId: REVISION_ID,
+    workflowId: WORKFLOW_ID,
+    definition: workflowDefinition(),
+    input: { name },
+    callerMetadata: { source: `${label}-test` },
+    transitionId: `${label}-create`,
+    actor: { kind: 'submitter', id: `${label}-test` },
+    observedAt: OBSERVED_AT,
+  });
+  const firstClaimed = await ledger.claimWorkflowActivity({
+    runId,
+    invocationId: created.invocation.invocationId,
+    cursor: cursorGuard(created.workflowCursor),
+    fencingToken: `${label}-first-fence`,
+    expectedGeneration: 0,
+    expectedVersion: created.run.version,
+    transitionId: `${label}-claim-first`,
+    observedAt: OBSERVED_AT + 1,
+  });
+  const firstStarted = await ledger.markWorkflowActivityStarted({
+    runId,
+    invocationId: firstClaimed.invocation.invocationId,
+    cursor: cursorGuard(firstClaimed.workflowCursor),
+    attemptId: firstClaimed.attempt.attemptId,
+    fencingToken: firstClaimed.attempt.fencingToken,
+    generation: firstClaimed.attempt.generation,
+    expectedVersion: firstClaimed.run.version,
+    transitionId: `${label}-start-first`,
+    observedAt: OBSERVED_AT + 2,
+  });
+  const firstCompleted = await ledger.commitVerifiedWorkflowActivityTerminal({
+    runId,
+    invocationId: firstStarted.invocation.invocationId,
+    cursor: cursorGuard(firstStarted.workflowCursor),
+    attemptId: firstStarted.attempt.attemptId,
+    fencingToken: firstStarted.attempt.fencingToken,
+    generation: firstStarted.attempt.generation,
+    expectedVersion: firstStarted.run.version,
+    transitionId: `${label}-complete-first`,
+    evidence: completedEvidence(firstStarted.startFrame, {
+      prepared: true,
+      name,
+    }),
+    observedAt: OBSERVED_AT + 3,
+  });
+  const secondClaimed = await ledger.claimWorkflowActivity({
+    runId,
+    invocationId: firstCompleted.nextInvocation.invocationId,
+    cursor: cursorGuard(firstCompleted.workflowCursor),
+    fencingToken: `${label}-second-fence`,
+    expectedGeneration: 0,
+    expectedVersion: firstCompleted.run.version,
+    transitionId: `${label}-claim-second`,
+    observedAt: OBSERVED_AT + 4,
+  });
+  const secondStarted = await ledger.markWorkflowActivityStarted({
+    runId,
+    invocationId: secondClaimed.invocation.invocationId,
+    cursor: cursorGuard(secondClaimed.workflowCursor),
+    attemptId: secondClaimed.attempt.attemptId,
+    fencingToken: secondClaimed.attempt.fencingToken,
+    generation: secondClaimed.attempt.generation,
+    expectedVersion: secondClaimed.run.version,
+    transitionId: `${label}-start-second`,
+    observedAt: OBSERVED_AT + 5,
+  });
+  return { firstCompleted, secondStarted };
+}
+
+/**
  * @param {ReturnType<typeof createExecutionLedger>} ledger - Open ledger.
  * @returns {Promise<Record<string, any>>} All currently eligible work.
  */
@@ -177,7 +295,7 @@ describe('LMDB workflow activity persistence', () => {
         ],
       });
       const firstResult = { prepared: true, name: 'Ada' };
-      const succeeded = await ledger.commitVerifiedWorkflowActivitySuccess({
+      const succeeded = await ledger.commitVerifiedWorkflowActivityTerminal({
         runId,
         invocationId: started.workflowCursor.invocationId,
         cursor: cursorGuard(started.workflowCursor),
@@ -646,6 +764,397 @@ describe('LMDB workflow activity persistence', () => {
         },
       });
       await expect(ledger.getEvents(runId)).resolves.toHaveLength(8);
+    } finally {
+      if (!closed) await db.close();
+      rmSync(databaseDirectory, { recursive: true, force: true });
+      rmSync(payloadDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test('persists a direct second-step failed terminal without extending its output prefix', async () => {
+    const databaseDirectory = mkdtempSync(
+      join(tmpdir(), 'wharfie-workflow-failed-lmdb-'),
+    );
+    const payloadDirectory = mkdtempSync(
+      join(tmpdir(), 'wharfie-workflow-failed-payload-'),
+    );
+    const tableName = 'execution-ledger-workflow-failed-lmdb';
+    const runId = createWorkflowRunId({
+      appId: APP_ID,
+      idempotencyKey: 'workflow-failed-lmdb-reopen',
+    });
+    const payloadStore = createLocalExecutionPayloadStore({
+      path: payloadDirectory,
+      storeId: 'workflow-failed-lmdb',
+    });
+    let db = await createLMDBDB(databaseDirectory);
+    let closed = false;
+    try {
+      let ledger = createExecutionLedger({ db, tableName, payloadStore });
+      const { firstCompleted, secondStarted } =
+        await startSecondWorkflowActivity(
+          ledger,
+          runId,
+          'workflow-failed-lmdb',
+          'Margaret',
+        );
+      const priorOutputs = structuredClone(
+        firstCompleted.workflowCursor.outputs,
+      );
+      expect(priorOutputs).toHaveLength(1);
+      expect(secondStarted).toMatchObject({
+        run: { status: 'RUNNING' },
+        invocation: {
+          invocationId: firstCompleted.nextInvocation.invocationId,
+          status: 'RUNNING',
+        },
+        attempt: { status: 'STARTED' },
+        workflowCursor: {
+          stepId: SECOND_STEP_ID,
+          stepIndex: 1,
+          disposition: 'ACTIVITY_RUNNING',
+          outputs: priorOutputs,
+        },
+      });
+
+      await db.close();
+      closed = true;
+      db = await createLMDBDB(databaseDirectory);
+      closed = false;
+      ledger = createExecutionLedger({ db, tableName, payloadStore });
+      await expect(ledger.rebuildRun(runId)).resolves.toMatchObject({
+        run: secondStarted.run,
+        workflowCursor: secondStarted.workflowCursor,
+        attempts: expect.arrayContaining([secondStarted.attempt]),
+      });
+
+      const evidence = failedEvidence(secondStarted.startFrame, 'failed');
+      const failureRequest = {
+        runId,
+        invocationId: secondStarted.invocation.invocationId,
+        cursor: cursorGuard(secondStarted.workflowCursor),
+        attemptId: secondStarted.attempt.attemptId,
+        fencingToken: secondStarted.attempt.fencingToken,
+        generation: secondStarted.attempt.generation,
+        expectedVersion: secondStarted.run.version,
+        transitionId: 'workflow-failed-lmdb-fail-second',
+        evidence,
+        observedAt: OBSERVED_AT + 6,
+      };
+      const failed =
+        await ledger.commitVerifiedWorkflowActivityTerminal(failureRequest);
+      expect(failed).toMatchObject({
+        applied: true,
+        receipt: { type: 'workflow-activity-failed' },
+        run: { status: 'FAILED' },
+        invocation: {
+          invocationId: secondStarted.invocation.invocationId,
+          status: 'FAILED',
+          terminal: {
+            type: 'failed',
+            attemptId: secondStarted.attempt.attemptId,
+          },
+        },
+        attempt: {
+          attemptId: secondStarted.attempt.attemptId,
+          status: 'FAILED',
+          terminal: {
+            type: 'failed',
+            attemptId: secondStarted.attempt.attemptId,
+          },
+          evidenceRef: {
+            payloadSchema: 'wharfie.execution.activity-evidence.v1',
+          },
+        },
+        workflowCursor: {
+          stepId: SECOND_STEP_ID,
+          stepIndex: 1,
+          disposition: 'FAILED',
+          outputs: priorOutputs,
+        },
+      });
+      expect(failed.workflowCursor.outputs).toEqual(priorOutputs);
+      expect(failed).not.toHaveProperty('outputRef');
+      expect(failed).not.toHaveProperty('nextInvocation');
+      await expect(
+        payloadStore.readJson(failed.attempt.evidenceRef),
+      ).resolves.toEqual(evidence);
+      await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
+
+      await db.close();
+      closed = true;
+      db = await createLMDBDB(databaseDirectory);
+      closed = false;
+      ledger = createExecutionLedger({ db, tableName, payloadStore });
+      const rebuilt = await ledger.rebuildRun(runId);
+      expect(rebuilt).not.toBeNull();
+      if (!rebuilt) throw new Error('Expected the failed workflow to rebuild.');
+      expect(rebuilt.run).toEqual(failed.run);
+      expect(rebuilt.workflowCursor).toEqual(failed.workflowCursor);
+      expect(rebuilt.workflowCursor).toMatchObject({
+        disposition: 'FAILED',
+        outputs: priorOutputs,
+      });
+      expect(rebuilt.invocations).toHaveLength(2);
+      const rebuiltInvocations = /** @type {Record<string, any>[]} */ (
+        rebuilt.invocations
+      );
+      const rebuiltAttempts = /** @type {Record<string, any>[]} */ (
+        rebuilt.attempts
+      );
+      expect(
+        rebuiltInvocations.find(
+          ({ invocationId }) =>
+            invocationId === secondStarted.invocation.invocationId,
+        ),
+      ).toEqual(failed.invocation);
+      expect(
+        rebuiltAttempts.find(
+          ({ attemptId }) => attemptId === secondStarted.attempt.attemptId,
+        ),
+      ).toEqual(failed.attempt);
+      await expect(
+        ledger.getAttempt(
+          runId,
+          secondStarted.invocation.invocationId,
+          secondStarted.attempt.attemptId,
+        ),
+      ).resolves.toEqual(failed.attempt);
+      await expect(
+        payloadStore.readJson(failed.attempt.evidenceRef),
+      ).resolves.toEqual(evidence);
+      await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
+
+      const replayed =
+        await ledger.commitVerifiedWorkflowActivityTerminal(failureRequest);
+      expect(replayed).toEqual({ ...failed, applied: false });
+      expect(replayed).not.toHaveProperty('outputRef');
+      expect(replayed).not.toHaveProperty('nextInvocation');
+    } finally {
+      if (!closed) await db.close();
+      rmSync(databaseDirectory, { recursive: true, force: true });
+      rmSync(payloadDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test('persists reconciled second-step protocol failure without rewriting its abandoned attempt', async () => {
+    const databaseDirectory = mkdtempSync(
+      join(tmpdir(), 'wharfie-workflow-protocol-failed-lmdb-'),
+    );
+    const payloadDirectory = mkdtempSync(
+      join(tmpdir(), 'wharfie-workflow-protocol-failed-payload-'),
+    );
+    const tableName = 'execution-ledger-workflow-protocol-failed-lmdb';
+    const runId = createWorkflowRunId({
+      appId: APP_ID,
+      idempotencyKey: 'workflow-protocol-failed-lmdb-reopen',
+    });
+    const payloadStore = createLocalExecutionPayloadStore({
+      path: payloadDirectory,
+      storeId: 'workflow-protocol-failed-lmdb',
+    });
+    let db = await createLMDBDB(databaseDirectory);
+    let closed = false;
+    try {
+      let ledger = createExecutionLedger({ db, tableName, payloadStore });
+      const { firstCompleted, secondStarted } =
+        await startSecondWorkflowActivity(
+          ledger,
+          runId,
+          'workflow-protocol-failed-lmdb',
+          'Frances',
+        );
+      const priorOutputs = structuredClone(
+        firstCompleted.workflowCursor.outputs,
+      );
+      expect(priorOutputs).toHaveLength(1);
+      const uncertain = await ledger.markWorkflowActivityAttemptUncertain({
+        runId,
+        invocationId: secondStarted.invocation.invocationId,
+        cursor: cursorGuard(secondStarted.workflowCursor),
+        attemptId: secondStarted.attempt.attemptId,
+        fencingToken: secondStarted.attempt.fencingToken,
+        generation: secondStarted.attempt.generation,
+        expectedVersion: secondStarted.run.version,
+        transitionId: 'workflow-protocol-failed-lmdb-uncertain-second',
+        reason: { code: 'second-step-runner-outcome-lost' },
+        observedAt: OBSERVED_AT + 6,
+      });
+      const retainedAttempt = structuredClone(uncertain.attempt);
+      expect(retainedAttempt).toMatchObject({ status: 'ABANDONED' });
+      expect(retainedAttempt).not.toHaveProperty('terminal');
+      expect(retainedAttempt).not.toHaveProperty('evidenceRef');
+      expect(uncertain).toMatchObject({
+        run: { status: 'BLOCKED' },
+        invocation: { status: 'UNCERTAIN' },
+        workflowCursor: {
+          stepId: SECOND_STEP_ID,
+          stepIndex: 1,
+          disposition: 'ACTIVITY_UNCERTAIN',
+          outputs: priorOutputs,
+        },
+      });
+      const uncertaintyEvent = (await ledger.getEvents(runId)).find(
+        ({ type }) => type === 'workflow-activity-became-uncertain',
+      );
+      expect(uncertaintyEvent).toBeDefined();
+      if (!uncertaintyEvent) {
+        throw new Error('Expected the second-step uncertainty event.');
+      }
+
+      await db.close();
+      closed = true;
+      db = await createLMDBDB(databaseDirectory);
+      closed = false;
+      ledger = createExecutionLedger({ db, tableName, payloadStore });
+      await expect(ledger.rebuildRun(runId)).resolves.toMatchObject({
+        run: uncertain.run,
+        workflowCursor: uncertain.workflowCursor,
+        attempts: expect.arrayContaining([retainedAttempt]),
+      });
+      await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
+
+      const evidence = failedEvidence(
+        secondStarted.startFrame,
+        'protocol-failed',
+      );
+      const reconciliationRequest = {
+        runId,
+        invocationId: secondStarted.invocation.invocationId,
+        cursor: cursorGuard(uncertain.workflowCursor),
+        attemptId: secondStarted.attempt.attemptId,
+        fencingToken: secondStarted.attempt.fencingToken,
+        generation: secondStarted.attempt.generation,
+        coordinatorEpoch: secondStarted.attempt.coordinatorEpoch,
+        expectedVersion: uncertain.run.version,
+        uncertaintyEventId: uncertaintyEvent.event_id,
+        uncertaintySequence: uncertaintyEvent.sequence,
+        transitionId: 'workflow-protocol-failed-lmdb-reconcile-second',
+        reconciliationId:
+          'workflow-protocol-failed-lmdb-reconciliation-decision',
+        reason: { code: 'protocol-failure-transcript-recovered' },
+        evidence,
+        observedAt: OBSERVED_AT + 7,
+      };
+      const reconciled = await ledger.reconcileUncertainWorkflowActivityAttempt(
+        reconciliationRequest,
+      );
+      expect(reconciled).toMatchObject({
+        applied: true,
+        receipt: { type: 'workflow-activity-uncertainty-reconciled' },
+        run: { status: 'FAILED' },
+        invocation: {
+          invocationId: secondStarted.invocation.invocationId,
+          status: 'FAILED',
+          terminal: {
+            type: 'protocol-failed',
+            attemptId: secondStarted.attempt.attemptId,
+          },
+        },
+        attempt: retainedAttempt,
+        workflowCursor: {
+          stepId: SECOND_STEP_ID,
+          stepIndex: 1,
+          disposition: 'PROTOCOL_FAILED',
+          outputs: priorOutputs,
+        },
+      });
+      expect(reconciled.invocation).not.toHaveProperty('uncertainty');
+      expect(reconciled.attempt).toEqual(retainedAttempt);
+      expect(reconciled.workflowCursor.outputs).toEqual(priorOutputs);
+      expect(reconciled).not.toHaveProperty('outputRef');
+      expect(reconciled).not.toHaveProperty('nextInvocation');
+      await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
+      const reconciliationEvent = (await ledger.getEvents(runId)).at(-1);
+      expect(reconciliationEvent).toMatchObject({
+        type: 'workflow-activity-uncertainty-reconciled',
+        payload: {
+          reconciliation: {
+            reconciliationId: reconciliationRequest.reconciliationId,
+            invocationId: secondStarted.invocation.invocationId,
+            attemptId: secondStarted.attempt.attemptId,
+            uncertaintyEventId: uncertaintyEvent.event_id,
+            uncertaintySequence: uncertaintyEvent.sequence,
+            verifier: {
+              kind: 'wharfie.activity-protocol',
+              protocol: 'wharfie.activity',
+              protocolVersion: 1,
+            },
+            evidenceRef: {
+              payloadSchema: 'wharfie.execution.activity-evidence.v1',
+            },
+            terminal: {
+              type: 'protocol-failed',
+              attemptId: secondStarted.attempt.attemptId,
+            },
+          },
+        },
+      });
+      const reconciliationEvidenceRef =
+        reconciliationEvent?.payload?.reconciliation?.evidenceRef;
+      expect(reconciliationEvidenceRef).toBeDefined();
+      if (!reconciliationEvidenceRef) {
+        throw new Error('Expected durable reconciliation evidence authority.');
+      }
+      await expect(
+        payloadStore.readJson(reconciliationEvidenceRef),
+      ).resolves.toEqual(evidence);
+
+      await db.close();
+      closed = true;
+      db = await createLMDBDB(databaseDirectory);
+      closed = false;
+      ledger = createExecutionLedger({ db, tableName, payloadStore });
+      const rebuilt = await ledger.rebuildRun(runId);
+      expect(rebuilt).not.toBeNull();
+      if (!rebuilt) {
+        throw new Error('Expected the protocol-failed workflow to rebuild.');
+      }
+      expect(rebuilt.run).toEqual(reconciled.run);
+      expect(rebuilt.workflowCursor).toEqual(reconciled.workflowCursor);
+      expect(rebuilt.workflowCursor).toMatchObject({
+        disposition: 'PROTOCOL_FAILED',
+        outputs: priorOutputs,
+      });
+      expect(rebuilt.invocations).toHaveLength(2);
+      const rebuiltInvocations = /** @type {Record<string, any>[]} */ (
+        rebuilt.invocations
+      );
+      const rebuiltAttempts = /** @type {Record<string, any>[]} */ (
+        rebuilt.attempts
+      );
+      expect(
+        rebuiltInvocations.find(
+          ({ invocationId }) =>
+            invocationId === secondStarted.invocation.invocationId,
+        ),
+      ).toEqual(reconciled.invocation);
+      expect(
+        rebuiltAttempts.find(
+          ({ attemptId }) => attemptId === secondStarted.attempt.attemptId,
+        ),
+      ).toEqual(retainedAttempt);
+      await expect(
+        ledger.getAttempt(
+          runId,
+          secondStarted.invocation.invocationId,
+          secondStarted.attempt.attemptId,
+        ),
+      ).resolves.toEqual(retainedAttempt);
+      const rebuiltReconciliationEvent = (await ledger.getEvents(runId)).at(-1);
+      expect(rebuiltReconciliationEvent).toEqual(reconciliationEvent);
+      await expect(
+        payloadStore.readJson(reconciliationEvidenceRef),
+      ).resolves.toEqual(evidence);
+      await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
+
+      const replayed = await ledger.reconcileUncertainWorkflowActivityAttempt(
+        reconciliationRequest,
+      );
+      expect(replayed).toEqual({ ...reconciled, applied: false });
+      expect(replayed.attempt).toEqual(retainedAttempt);
+      expect(replayed).not.toHaveProperty('outputRef');
+      expect(replayed).not.toHaveProperty('nextInvocation');
     } finally {
       if (!closed) await db.close();
       rmSync(databaseDirectory, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Cursor-guarded workflow activity recovery and completed-evidence reconciliation implemented; failure outcomes, resident dispatch, timers, signals, and cursor-aware cancellation next · **Last updated:** 2026-07-19
+**Status:** Cursor-guarded workflow activity recovery and supported terminal reconciliation implemented; resident dispatch, public commands, timers, signals, and cursor-aware cancellation next · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -247,9 +247,9 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       or invent effect state. V4 records and its V2 directory remain inert.
 - [ ] Extend the workflow ledger from activity-only continuations to persisted
       timer/signal decisions, cursor-aware cancellation, resident dispatch,
-      failed/protocol-failed activity outcomes and reconciliation, cancelled
-      reconciliation under durable cancellation authority, and the remaining
-      operator actions.
+      cancelled reconciliation under durable cancellation authority, and the
+      remaining operator actions. Direct and reconciled `failed` and
+      `protocol-failed` activity terminals are complete.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
@@ -409,28 +409,28 @@ serial resident worker, authenticated submit/cancel routing, conservative
 `CLAIMED`/`STARTED` restart recovery, bounded graceful drain, and a
 transactional exact-revision ready-work locator share one source, packaged, and
 hidden-service runtime. The public manifest accepts ADR 0019's bounded linear
-workflow. The core ledger now materializes, claims, starts, completes, releases,
-blocks, and reconciles activity activations while atomically maintaining the
-workflow cursor and ready-work row. No resident workflow dispatcher or public
-workflow operator surface is mounted yet.
+workflow. The core ledger now materializes, claims, starts, completes, fails,
+releases, blocks, and reconciles activity activations while atomically
+maintaining the workflow cursor and ready-work row. Direct and reconciled
+`failed` and `protocol-failed` terminals preserve the prior output prefix and
+create no output, successor, or ready row. No resident workflow dispatcher or
+public workflow operator surface is mounted yet.
 
-1. Add direct and reconciled `failed`/`protocol-failed` workflow outcomes with
-   an honest terminal cursor and no output or successor. Keep `cancelled` and
-   `deadline-exceeded` unsupported until their durable decisions exist.
-2. Route workflow `ACTIVITY` and `RECOVERY` rows through the resident worker,
+1. Route workflow `ACTIVITY` and `RECOVERY` rows through the resident worker,
    using the existing cursor guards to dispatch runnable work, release only
    unstarted claims, commit supported terminals, and block lost started
    attempts without redispatch.
-3. Mount shared source/packaged workflow start, inspect, and evidence
+2. Mount shared source/packaged workflow start, inspect, and evidence
    reconciliation, then prove real process-kill recovery through the relocated
    SEA. A crash after `STARTED` but before terminal delivery may remain visibly
    `BLOCKED` when no trustworthy terminal evidence can be recovered.
-4. Add run-level cursor-aware workflow cancellation, including races with
+3. Add run-level cursor-aware workflow cancellation, including races with
    activity success and blocked recovery; broaden reconciliation only when each
-   cancelled or deadline outcome has an explicit policy.
-5. Add persisted timers and current-wait signals on the same cursor and
+   cancelled or deadline outcome has an explicit policy. `cancelled` and
+   `deadline-exceeded` remain unsupported until then.
+4. Add persisted timers and current-wait signals on the same cursor and
    run-head boundary, followed by their shared source/packaged commands.
-6. Install the SEA as an OS-managed service, then add the smallest
+5. Install the SEA as an OS-managed service, then add the smallest
    provider-backed path that can create, inspect, update, and remove one durable
    node through the operator's credential chain.
 
