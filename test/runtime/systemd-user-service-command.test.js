@@ -7,8 +7,14 @@ import { createProgram } from '../../src/core/resources/builds/actor-system-cli/
 import sourceOpsCommand from '../../src/cli/cmds/ops.js';
 import { createSystemdUserServiceCommand } from '../../src/core/runtime/operator/systemd-user-service-command.js';
 
+/** @typedef {'install'|'update'|'rollback'|'recover'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
+
+/** @type {ReadonlyArray<ServiceResultAction|'status'>} */
 const ACTIONS = Object.freeze([
   'install',
+  'update',
+  'rollback',
+  'recover',
   'start',
   'stop',
   'restart',
@@ -16,32 +22,121 @@ const ACTIONS = Object.freeze([
   'uninstall',
 ]);
 
+const OUTCOMES = Object.freeze({
+  install: 'target-active',
+  update: 'target-active',
+  rollback: 'target-active',
+  recover: 'target-active',
+  start: 'started',
+  stop: 'stopped',
+  restart: 'restarted',
+  uninstall: 'uninstalled',
+});
+
+/** @type {Array<[ServiceResultAction, string, string, string]>} */
+const HUMAN_ACTIVATION_CASES = [
+  [
+    'update',
+    'refused',
+    'source-retained',
+    'update: source retained; request refused (service-demo)',
+  ],
+  [
+    'rollback',
+    'failed',
+    'source-restored',
+    'rollback: source restored; request failed (service-demo)',
+  ],
+  [
+    'recover',
+    'pending',
+    'in-flight',
+    'recover: in-flight; request pending; run service recover (service-demo)',
+  ],
+];
+
+/** @type {Array<[ServiceResultAction, string, string, Record<string, any>]>} */
+const JSON_NONFULFILLED_CASES = [
+  ['update', 'refused', 'source-retained', {}],
+  ['rollback', 'failed', 'source-restored', {}],
+  [
+    'install',
+    'pending',
+    'in-flight',
+    {
+      health: 'degraded',
+      activeArtifactId: null,
+      activeRevisionId: null,
+      rollbackArtifactId: null,
+      rollbackRevisionId: null,
+    },
+  ],
+];
+
+/**
+ * @param {ServiceResultAction} action - Result action.
+ * @param {Record<string, any>} [overrides] - Receipt overrides.
+ * @returns {Record<string, any>} - Complete service result.
+ */
+function makeResult(action, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.result',
+    appId: 'service-demo',
+    action,
+    requestStatus: 'fulfilled',
+    outcome: OUTCOMES[action],
+    health:
+      action === 'stop'
+        ? 'stopped'
+        : action === 'uninstall'
+          ? 'absent'
+          : 'healthy',
+    activeArtifactId: action === 'uninstall' ? null : 'artifact-current',
+    activeRevisionId: action === 'uninstall' ? null : 'revision-current',
+    rollbackArtifactId: ['update', 'rollback', 'recover'].includes(action)
+      ? 'artifact-previous'
+      : null,
+    rollbackRevisionId: ['update', 'rollback', 'recover'].includes(action)
+      ? 'revision-previous'
+      : null,
+    ...overrides,
+  };
+}
+
+/**
+ * @param {Record<string, any>} value - Receipt to copy.
+ * @param {string} field - Field to omit.
+ * @returns {Record<string, any>} - Copied receipt without the field.
+ */
+function withoutField(value, field) {
+  const copy = { ...value };
+  delete copy[field];
+  return copy;
+}
+
 function makeOperator() {
   return Object.fromEntries(
     ACTIONS.map((action) => [
       action,
-      jest.fn(async () => ({
-        schemaVersion: action === 'status' ? 2 : 1,
-        kind:
-          action === 'status'
-            ? 'wharfie.service.status'
-            : 'wharfie.service.result',
-        appId: 'service-demo',
-        ...(action === 'status'
-          ? {
-              health: 'healthy',
-              installation: { state: 'installed' },
-              systemd: { activeState: 'active' },
-              wiring: {
-                state: 'managed',
-                unitFile: 'managed',
-                selection: 'managed',
-                effectiveUnit: 'managed',
-                cleanupPending: false,
-              },
-            }
-          : { action, outcome: 'completed' }),
-      })),
+      jest.fn(async () => {
+        if (action !== 'status') return makeResult(action);
+        return {
+          schemaVersion: 2,
+          kind: 'wharfie.service.status',
+          appId: 'service-demo',
+          health: 'healthy',
+          installation: { state: 'installed' },
+          systemd: { activeState: 'active' },
+          wiring: {
+            state: 'managed',
+            unitFile: 'managed',
+            selection: 'managed',
+            effectiveUnit: 'managed',
+            cleanupPending: false,
+          },
+        };
+      }),
     ]),
   );
 }
@@ -58,9 +153,6 @@ describe('packaged systemd user service command', () => {
 
     expect(service).toBeDefined();
     expect(service?.commands.map((command) => command.name())).toEqual(ACTIONS);
-    expect(service?.commands.map((command) => command.name())).not.toEqual(
-      expect.arrayContaining(['update', 'rollback']),
-    );
     expect(
       service?.commands.every((command) =>
         command.options.some((option) => option.long === '--json'),
@@ -71,6 +163,9 @@ describe('packaged systemd user service command', () => {
     ).not.toContain('service');
     expect(packaged.helpInformation()).toContain('service');
     expect(service?.helpInformation()).toContain('install');
+    expect(service?.helpInformation()).toContain('update');
+    expect(service?.helpInformation()).toContain('rollback');
+    expect(service?.helpInformation()).toContain('recover');
     expect(service?.helpInformation()).toContain('uninstall');
     expect(loadOperator).not.toHaveBeenCalled();
   });
@@ -163,6 +258,90 @@ describe('packaged systemd user service command', () => {
     );
   });
 
+  it.each(HUMAN_ACTIVATION_CASES)(
+    'writes an actionable human %s result for %s activation',
+    async (action, requestStatus, outcome, message) => {
+      const operator = makeOperator();
+      operator[action].mockResolvedValue(
+        makeResult(action, { requestStatus, outcome }),
+      );
+      const line = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => operator,
+        output: { line },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', action]);
+
+      expect(line).toHaveBeenCalledWith(message);
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
+
+  it.each([
+    ['source-retained', 'recover: source retained (service-demo)'],
+    ['source-restored', 'recover: source restored (service-demo)'],
+    ['absent', 'recover: absent (service-demo)'],
+  ])('accepts fulfilled recovery settlement %s', async (outcome, message) => {
+    const operator = makeOperator();
+    operator.recover.mockResolvedValue(
+      makeResult('recover', {
+        outcome,
+        ...(outcome === 'absent'
+          ? {
+              health: 'absent',
+              activeArtifactId: null,
+              activeRevisionId: null,
+              rollbackArtifactId: null,
+              rollbackRevisionId: null,
+            }
+          : {}),
+      }),
+    );
+    const line = jest.fn();
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line, failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'recover']);
+
+    expect(line).toHaveBeenCalledWith(message);
+    expect(failure).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBeUndefined();
+  });
+
+  it.each(JSON_NONFULFILLED_CASES)(
+    'emits a safe %s %s receipt as JSON and marks the request unsuccessful',
+    async (action, requestStatus, outcome, overrides) => {
+      const operator = makeOperator();
+      operator[action].mockResolvedValue(
+        makeResult(action, { requestStatus, outcome, ...overrides }),
+      );
+      const json = jest.fn();
+      const failure = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => operator,
+        output: { json, failure },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', action, '--json']);
+
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({ action, requestStatus, outcome }),
+      );
+      expect(failure).not.toHaveBeenCalled();
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
+
   it.each([
     ['status', { schemaVersion: 1, kind: 'wharfie.service.result' }],
     [
@@ -181,16 +360,55 @@ describe('packaged systemd user service command', () => {
         },
       },
     ],
+    ['start', makeResult('stop')],
+    ['update', withoutField(makeResult('update'), 'requestStatus')],
+    ['update', makeResult('update', { requestStatus: 'waiting' })],
+    ['update', withoutField(makeResult('update'), 'health')],
+    ['update', makeResult('update', { health: 'unknown' })],
+    ['update', makeResult('update', { outcome: 'installed' })],
+    ['update', makeResult('update', { settledOutcome: 'target-active' })],
+    [
+      'update',
+      makeResult('update', {
+        requestStatus: 'pending',
+        outcome: 'target-active',
+      }),
+    ],
+    [
+      'update',
+      makeResult('update', {
+        requestStatus: 'refused',
+        outcome: 'source-restored',
+      }),
+    ],
+    [
+      'rollback',
+      makeResult('rollback', {
+        requestStatus: 'failed',
+        outcome: 'source-retained',
+      }),
+    ],
+    [
+      'recover',
+      makeResult('recover', {
+        requestStatus: 'fulfilled',
+        outcome: 'in-flight',
+      }),
+    ],
     [
       'start',
-      {
-        schemaVersion: 1,
-        kind: 'wharfie.service.result',
-        action: 'stop',
-        appId: 'service-demo',
-        outcome: 'stopped',
-      },
+      makeResult('start', {
+        requestStatus: 'pending',
+        outcome: 'started',
+      }),
     ],
+    ['start', makeResult('start', { outcome: 'stopped' })],
+    ['update', withoutField(makeResult('update'), 'activeArtifactId')],
+    ['update', makeResult('update', { activeArtifactId: null })],
+    ['update', makeResult('update', { activeArtifactId: 42 })],
+    ['rollback', makeResult('rollback', { rollbackRevisionId: null })],
+    ['rollback', makeResult('rollback', { rollbackArtifactId: null })],
+    ['rollback', makeResult('rollback', { rollbackArtifactId: '' })],
   ])('fails closed on a malformed %s receipt', async (action, receipt) => {
     const failure = jest.fn();
     const processRef = { exitCode: undefined };
@@ -212,16 +430,23 @@ describe('packaged systemd user service command', () => {
     expect(processRef.exitCode).toBe(1);
   });
 
-  it('prints one safe JSON error and marks command failure', async () => {
+  it('prints one safe activation JSON error with recovery guidance', async () => {
     const failure = jest.fn();
     const json = jest.fn();
     const line = jest.fn();
     const processRef = { exitCode: undefined };
+    const activationError = Object.assign(
+      new Error('systemd user manager is unavailable\nretry required'),
+      {
+        code: 'activation-unavailable',
+        secret: 'must-not-appear',
+      },
+    );
     const command = createSystemdUserServiceCommand({
       loadOperator: async () => ({
         ...makeOperator(),
         install: async () => {
-          throw new Error('systemd user manager is unavailable');
+          throw activationError;
         },
       }),
       output: { failure, json, line },
@@ -235,11 +460,42 @@ describe('packaged systemd user service command', () => {
       schemaVersion: 1,
       kind: 'wharfie.service.error',
       action: 'install',
-      code: 'systemd-user-service-operation-failed',
-      message: 'systemd user manager is unavailable',
+      code: 'activation-unavailable',
+      message: 'systemd user manager is unavailable retry required',
+      remediation: 'Run service recover before retrying activation.',
     });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(
+      'must-not-appear',
+    );
     expect(failure).not.toHaveBeenCalled();
     expect(line).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('prints a safe human activation error with recovery guidance', async () => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        update: async () => {
+          throw Object.assign(new Error('activation interrupted\nmid-flight'), {
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'update']);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      message:
+        'activation interrupted mid-flight Run service recover before retrying activation.',
+    });
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('secret');
     expect(processRef.exitCode).toBe(1);
   });
 

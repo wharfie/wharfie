@@ -6,6 +6,18 @@ const SERVICE_ACTIONS = Object.freeze([
     description: 'Install and enable this artifact as a systemd user service',
   }),
   Object.freeze({
+    name: 'update',
+    description: 'Quiesce and activate this artifact as the next release',
+  }),
+  Object.freeze({
+    name: 'rollback',
+    description: 'Quiesce and reactivate the retained prior release',
+  }),
+  Object.freeze({
+    name: 'recover',
+    description: 'Resume an interrupted service activation',
+  }),
+  Object.freeze({
     name: 'start',
     description: 'Start the installed systemd user service',
   }),
@@ -25,6 +37,56 @@ const SERVICE_ACTIONS = Object.freeze([
     name: 'uninstall',
     description: 'Stop, disable, and uninstall the systemd user service',
   }),
+]);
+
+const ACTIVATION_ACTIONS = new Set([
+  'install',
+  'update',
+  'rollback',
+  'recover',
+]);
+const ACTIVATION_RECOVERY_REMEDIATION =
+  'Run service recover before retrying activation.';
+const SERVICE_REQUEST_STATUSES = new Set([
+  'fulfilled',
+  'refused',
+  'failed',
+  'pending',
+]);
+const ACTIVATION_OUTCOMES = new Set([
+  'absent',
+  'target-active',
+  'source-retained',
+  'source-restored',
+  'in-flight',
+]);
+const FULFILLED_ACTIVATION_OUTCOMES = new Set([
+  'absent',
+  'target-active',
+  'source-retained',
+  'source-restored',
+]);
+/** @type {Readonly<Record<string, Set<string>>>} */
+const LIFECYCLE_OUTCOMES = Object.freeze({
+  start: new Set(['started']),
+  stop: new Set(['stopped']),
+  restart: new Set(['restarted']),
+  uninstall: new Set([
+    'uninstalled',
+    'already-uninstalled',
+    'orphan-reconciled',
+  ]),
+});
+const SERVICE_HEALTH_STATES = new Set([
+  'healthy',
+  'degraded',
+  'stopped',
+  'failed',
+  'absent',
+]);
+const SERVICE_RELEASE_REFERENCE_PAIRS = Object.freeze([
+  Object.freeze(['activeArtifactId', 'activeRevisionId']),
+  Object.freeze(['rollbackArtifactId', 'rollbackRevisionId']),
 ]);
 
 /**
@@ -72,6 +134,59 @@ function resolveOutput(provided) {
         console.error(error instanceof Error ? error.message : String(error));
       }),
   };
+}
+
+/**
+ * @param {Record<string, any>} result - Candidate service result.
+ * @returns {boolean} - Whether every exact release reference is finite and paired.
+ */
+function hasValidReleaseReferences(result) {
+  return SERVICE_RELEASE_REFERENCE_PAIRS.every(([artifactKey, revisionKey]) => {
+    const artifact = result[artifactKey];
+    const revision = result[revisionKey];
+    const artifactValid =
+      artifact === null ||
+      (typeof artifact === 'string' && artifact.length > 0);
+    const revisionValid =
+      revision === null ||
+      (typeof revision === 'string' && revision.length > 0);
+    return (
+      Object.prototype.hasOwnProperty.call(result, artifactKey) &&
+      Object.prototype.hasOwnProperty.call(result, revisionKey) &&
+      artifactValid &&
+      revisionValid &&
+      (artifact === null) === (revision === null)
+    );
+  });
+}
+
+/**
+ * @param {Record<string, any>} result - Candidate schema-V1 receipt.
+ * @param {string} action - Requested public action.
+ * @returns {boolean} - Whether request status and outcome form a supported settlement.
+ */
+function hasValidResultSettlement(result, action) {
+  if (!SERVICE_REQUEST_STATUSES.has(result.requestStatus)) return false;
+  if (Object.prototype.hasOwnProperty.call(result, 'settledOutcome')) {
+    return false;
+  }
+  if (ACTIVATION_ACTIONS.has(action)) {
+    if (!ACTIVATION_OUTCOMES.has(result.outcome)) return false;
+    if (result.requestStatus === 'pending') {
+      return result.outcome === 'in-flight';
+    }
+    if (result.requestStatus === 'refused') {
+      return result.outcome === 'source-retained';
+    }
+    if (result.requestStatus === 'failed') {
+      return result.outcome === 'source-restored';
+    }
+    return FULFILLED_ACTIVATION_OUTCOMES.has(result.outcome);
+  }
+  return (
+    result.requestStatus === 'fulfilled' &&
+    LIFECYCLE_OUTCOMES[action]?.has(result.outcome) === true
+  );
 }
 
 /**
@@ -133,6 +248,12 @@ function normalizeResult(value, action) {
         normalized.wiring.effectiveUnit,
       ) &&
       typeof normalized.wiring.cleanupPending === 'boolean');
+  const validResult =
+    action === 'status' ||
+    (normalized.action === action &&
+      SERVICE_HEALTH_STATES.has(normalized.health) &&
+      hasValidResultSettlement(normalized, action) &&
+      hasValidReleaseReferences(normalized));
   if (
     normalized.schemaVersion !== expectedSchemaVersion ||
     normalized.kind !== expectedKind ||
@@ -141,9 +262,7 @@ function normalizeResult(value, action) {
     !validWiring ||
     (action === 'status'
       ? typeof normalized.health !== 'string' || normalized.health.length === 0
-      : normalized.action !== action ||
-        typeof normalized.outcome !== 'string' ||
-        normalized.outcome.length === 0)
+      : !validResult)
   ) {
     throw new TypeError(
       `Systemd user service ${action} returned an invalid receipt.`,
@@ -179,7 +298,25 @@ function createJsonError(error, action) {
     action,
     code,
     message: message || `Systemd user service ${action} failed.`,
+    ...(ACTIVATION_ACTIONS.has(action)
+      ? { remediation: ACTIVATION_RECOVERY_REMEDIATION }
+      : {}),
   });
+}
+
+/**
+ * Add static recovery guidance to activation failures without exposing host
+ * error objects, stacks, or control characters to the human output boundary.
+ * @param {unknown} error - Operation failure.
+ * @param {string} action - Requested operation.
+ * @returns {unknown} - Original lifecycle failure or safe activation error.
+ */
+function createHumanFailure(error, action) {
+  if (!ACTIVATION_ACTIONS.has(action)) return error;
+  const safe = createJsonError(error, action);
+  const failure = new Error(`${safe.message} ${safe.remediation}`);
+  Object.assign(failure, { code: safe.code });
+  return failure;
 }
 
 /**
@@ -203,6 +340,26 @@ function formatHumanResult(action, result) {
     const wiring = result.wiring.state;
     const remediation = wiring === 'orphaned' ? '; run service uninstall' : '';
     return `${action.name}: ${outcome}; wiring: ${wiring}${remediation}${app}`;
+  }
+  if (result.requestStatus === 'pending') {
+    return `${action.name}: ${outcome}; request pending; run service recover${app}`;
+  }
+  if (result.outcome === 'source-retained') {
+    const request =
+      result.requestStatus === 'fulfilled'
+        ? ''
+        : `; request ${result.requestStatus}`;
+    return `${action.name}: source retained${request}${app}`;
+  }
+  if (result.outcome === 'source-restored') {
+    const request =
+      result.requestStatus === 'fulfilled'
+        ? ''
+        : `; request ${result.requestStatus}`;
+    return `${action.name}: source restored${request}${app}`;
+  }
+  if (result.requestStatus !== 'fulfilled') {
+    return `${action.name}: ${outcome}; request ${result.requestStatus}${app}`;
   }
   return `${action.name}: ${outcome}${app}`;
 }
@@ -249,11 +406,17 @@ export function createSystemdUserServiceCommand(options = {}) {
             );
             if (commandOptions.json === true) output.json(result);
             else output.line(formatHumanResult(action, result));
+            if (
+              action.name !== 'status' &&
+              result.requestStatus !== 'fulfilled'
+            ) {
+              processRef.exitCode = 1;
+            }
           } catch (error) {
             if (commandOptions.json === true) {
               output.json(createJsonError(error, action.name));
             } else {
-              output.failure(error);
+              output.failure(createHumanFailure(error, action.name));
             }
             processRef.exitCode = 1;
           }
