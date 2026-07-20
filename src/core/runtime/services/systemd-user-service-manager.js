@@ -15,6 +15,8 @@ import {
   createLedgerServiceLifecycle,
   createLedgerServiceOwnership,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
+import { assertApplicationRevisionId } from '../application-revision.js';
+import { assertArtifactId } from '../artifact-record.js';
 import { resolveStableLocalAppDataRoot } from '../local-app-storage.js';
 import {
   getRunningExecutablePath,
@@ -572,6 +574,106 @@ function hasSameArtifactBytes(left, right) {
 }
 
 /**
+ * Read and verify one immutable release directory by content identity. The
+ * optional revision fence lets the selected-link reader discover its own
+ * revision while activation recovery requires an exact stored reference.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes: typeof inspectArtifactBytes, uid: number, target: unknown, artifactId: string, revisionId?: string}} options - Immutable release boundary.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Verified release.
+ */
+async function readImmutableRelease(options) {
+  assertArtifactId(options.artifactId, 'systemd release artifactId');
+  if (options.revisionId !== undefined) {
+    assertApplicationRevisionId(
+      options.revisionId,
+      'systemd release revisionId',
+    );
+  }
+  const releaseDirectory = path.join(
+    options.layout.releasesRoot,
+    options.artifactId,
+  );
+  const releasePath = path.join(releaseDirectory, 'release.json');
+  const releaseArtifactPath = path.join(releaseDirectory, 'app');
+  await assertRealPath(
+    options.fsOps,
+    options.layout.releasesRoot,
+    'directory',
+    'Systemd user-service releases root',
+    options.uid,
+  );
+  await assertRealPath(
+    options.fsOps,
+    releaseDirectory,
+    'directory',
+    'Systemd user-service release directory',
+    options.uid,
+  );
+  const release = validateSystemdUserServiceRelease(
+    JSON.parse(
+      await readManagedTextFile({
+        fsOps: options.fsOps,
+        filePath: releasePath,
+        label: 'Systemd user-service release receipt',
+        uid: options.uid,
+      }),
+    ),
+  );
+  if (
+    release.appId !== options.layout.appId ||
+    release.artifactId !== options.artifactId ||
+    (options.revisionId !== undefined &&
+      release.revisionId !== options.revisionId) ||
+    release.artifactPath !== releaseArtifactPath ||
+    getBuildTargetId(release.target) !== getBuildTargetId(options.target)
+  ) {
+    throw new Error(
+      'Systemd user-service immutable release disagrees with its reference.',
+    );
+  }
+  await assertRealPath(
+    options.fsOps,
+    releaseArtifactPath,
+    'file',
+    'Systemd user-service release artifact',
+    options.uid,
+  );
+  const observed = await options.inspectBytes(releaseArtifactPath);
+  if (!hasSameArtifactBytes(observed, release)) {
+    throw new Error(
+      'Systemd user-service immutable release bytes failed verification.',
+    );
+  }
+  return release;
+}
+
+/**
+ * Resolve an exact durable activation reference to verified immutable bytes.
+ * @param {{fsOps?: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes?: typeof inspectArtifactBytes, uid: number, target: unknown, reference: Readonly<{artifactId: string, revisionId: string}>}} options - Exact release lookup.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Verified release.
+ */
+async function readReleaseByReference(options) {
+  if (
+    !options.reference ||
+    typeof options.reference !== 'object' ||
+    Array.isArray(options.reference) ||
+    Object.keys(options.reference).length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(options.reference, 'artifactId') ||
+    !Object.prototype.hasOwnProperty.call(options.reference, 'revisionId')
+  ) {
+    throw new TypeError(
+      'Systemd user-service release reference must contain only artifactId and revisionId.',
+    );
+  }
+  return await readImmutableRelease({
+    ...options,
+    fsOps: options.fsOps || fsp,
+    inspectBytes: options.inspectBytes || inspectArtifactBytes,
+    artifactId: options.reference.artifactId,
+    revisionId: options.reference.revisionId,
+  });
+}
+
+/**
  * Read and verify the optional immutable release selected by `current` without
  * relying on an installation receipt. This is the only authority that lets an
  * orphan cleanup remove the selector or retain an identity tombstone.
@@ -629,56 +731,10 @@ async function readSelectedRelease(options) {
   ) {
     throw new Error('Systemd user-service current selection is invalid.');
   }
-  const releasePath = path.join(releaseDirectory, 'release.json');
-  const releaseArtifactPath = path.join(releaseDirectory, 'app');
-  await assertRealPath(
-    options.fsOps,
-    options.layout.releasesRoot,
-    'directory',
-    'Systemd user-service releases root',
-    options.uid,
-  );
-  await assertRealPath(
-    options.fsOps,
-    releaseDirectory,
-    'directory',
-    'Systemd user-service selected release directory',
-    options.uid,
-  );
-  const release = validateSystemdUserServiceRelease(
-    JSON.parse(
-      await readManagedTextFile({
-        fsOps: options.fsOps,
-        filePath: releasePath,
-        label: 'Systemd user-service selected release receipt',
-        uid: options.uid,
-      }),
-    ),
-  );
-  if (
-    release.appId !== options.layout.appId ||
-    release.artifactId !== artifactId ||
-    release.artifactPath !== releaseArtifactPath ||
-    getBuildTargetId(release.target) !== getBuildTargetId(options.target)
-  ) {
-    throw new Error(
-      'Systemd user-service current selection disagrees with its release.',
-    );
-  }
-  await assertRealPath(
-    options.fsOps,
-    releaseArtifactPath,
-    'file',
-    'Systemd user-service selected release artifact',
-    options.uid,
-  );
-  const observed = await options.inspectBytes(releaseArtifactPath);
-  if (!hasSameArtifactBytes(observed, release)) {
-    throw new Error(
-      'Systemd user-service selected release bytes failed verification.',
-    );
-  }
-  return release;
+  return await readImmutableRelease({
+    ...options,
+    artifactId,
+  });
 }
 
 /**
@@ -2863,5 +2919,6 @@ export default createSystemdUserServiceOperator;
 
 export {
   acquireOperationLock as acquireSystemdUserServiceOperationLock,
+  readReleaseByReference as readSystemdUserServiceReleaseByReference,
   readRuntimeState as readSystemdUserServiceRuntimeState,
 };

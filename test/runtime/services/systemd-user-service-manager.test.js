@@ -18,6 +18,7 @@ import {
   acquireSystemdUserServiceOperationLock,
   createSystemdUserServiceOperator,
   parseSystemdUserManagerUnitPath,
+  readSystemdUserServiceReleaseByReference,
   readSystemdUserServiceRuntimeState,
 } from '../../../src/core/runtime/services/systemd-user-service-manager.js';
 import {
@@ -522,6 +523,33 @@ describe('systemd user service manager', () => {
       principal: { uid: 1000, linger: true },
       current: { artifactId: source.artifactId, revisionId: REVISION_ID },
     });
+    await expect(
+      readSystemdUserServiceReleaseByReference({
+        layout: harness.layout,
+        uid: process.getuid?.() ?? 1000,
+        target: TARGET,
+        reference: {
+          artifactId: source.artifactId,
+          revisionId: REVISION_ID,
+        },
+      }),
+    ).resolves.toMatchObject({
+      appId: APP_ID,
+      artifactId: source.artifactId,
+      revisionId: REVISION_ID,
+      artifactPath: installedArtifact,
+    });
+    await expect(
+      readSystemdUserServiceReleaseByReference({
+        layout: harness.layout,
+        uid: process.getuid?.() ?? 1000,
+        target: TARGET,
+        reference: {
+          artifactId: source.artifactId,
+          revisionId: `wrv1_${Buffer.alloc(32, 9).toString('base64url')}`,
+        },
+      }),
+    ).rejects.toThrow(/immutable release disagrees with its reference/);
     expect(harness.calls).toEqual(
       expect.arrayContaining([
         {
@@ -823,7 +851,7 @@ describe('systemd user service manager', () => {
     await fsp.unlink(harness.layout.installationPath);
 
     await expect(harness.operator.install()).rejects.toThrow(
-      /current selection disagrees with its release/,
+      /immutable release disagrees with its reference/,
     );
   });
 
