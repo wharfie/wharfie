@@ -250,22 +250,6 @@ async function readManagedTextFile(options) {
  */
 async function ensureManagedDirectory(fsOps, directory, label, uid) {
   await fsOps.mkdir(directory, { recursive: true, mode: 0o700 });
-  await assertRealPath(fsOps, directory, 'directory', label, uid);
-}
-
-/**
- * Create or tighten one user-owned Wharfie root. A normal host umask may have
- * created the shared data/config root before service installation; install can
- * safely remove group/other access from that same-UID concrete directory, but
- * it still refuses symlinks and foreign ownership.
- * @param {typeof fsp} fsOps - Filesystem implementation.
- * @param {string} directory - Root directory.
- * @param {string} label - Boundary label.
- * @param {number} uid - Required owner.
- * @returns {Promise<void>} - Resolves after exact private permissions.
- */
-async function ensurePrivateManagedRoot(fsOps, directory, label, uid) {
-  await fsOps.mkdir(directory, { recursive: true, mode: 0o700 });
   const stats = await fsOps.lstat(directory);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new Error(`${label} must be a real directory.`);
@@ -288,7 +272,7 @@ async function ensurePrivateManagedRoot(fsOps, directory, label, uid) {
  * @returns {Promise<void>} - Resolves after the service root is safe.
  */
 async function ensureManagedServiceRoot(fsOps, layout, uid) {
-  await ensurePrivateManagedRoot(
+  await ensureManagedDirectory(
     fsOps,
     layout.dataRoot,
     'Wharfie data root',
@@ -347,7 +331,7 @@ async function hasManagedServiceRoot(fsOps, layout, uid) {
  * @returns {Promise<void>} - Resolves after the unit parent is safe.
  */
 async function ensureManagedUnitDirectory(fsOps, layout, uid) {
-  await ensurePrivateManagedRoot(
+  await ensureManagedDirectory(
     fsOps,
     layout.configRoot,
     'Wharfie config root',

@@ -511,12 +511,28 @@ describe('systemd user service manager', () => {
       health: 'absent',
       installation: { state: 'absent' },
     });
+
+    const managedDirectories = [
+      harness.dataRoot,
+      path.dirname(harness.layout.serviceRoot),
+      harness.layout.serviceRoot,
+      harness.layout.stateRoot,
+      harness.layout.controlPath,
+      harness.layout.applicationStatePath,
+      harness.configRoot,
+      path.join(harness.configRoot, 'systemd'),
+      path.dirname(harness.layout.unitPath),
+    ];
+    for (const directory of managedDirectories) {
+      await fsp.mkdir(directory, { recursive: true, mode: 0o775 });
+      await fsp.chmod(directory, 0o775);
+    }
     await expect(harness.operator.install()).resolves.toMatchObject({
       outcome: 'installed',
       health: 'healthy',
     });
-    for (const root of [harness.dataRoot, harness.configRoot]) {
-      expect((await fsp.stat(root)).mode & 0o777).toBe(0o700);
+    for (const directory of managedDirectories) {
+      expect((await fsp.stat(directory)).mode & 0o777).toBe(0o700);
     }
   });
 
