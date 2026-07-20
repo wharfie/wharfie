@@ -76,6 +76,8 @@ const SYSTEMD_STATUS_PROPERTIES = Object.freeze({
   Result: 'result',
   MainPID: 'mainPid',
   ExecMainStatus: 'execMainStatus',
+  FragmentPath: 'fragmentPath',
+  DropInPaths: 'dropInPaths',
 });
 
 /**
@@ -463,7 +465,7 @@ export function createSystemdUserServiceInstallation(input) {
  * Parse the exact property subset requested from `systemctl --user show`.
  * Unknown, duplicate, missing, or multiline fields fail closed.
  * @param {string} text - Raw systemctl output.
- * @returns {Readonly<{loadState: string, unitFileState: string, activeState: string, subState: string, result: string, mainPid: number, execMainStatus: number}>} - Parsed manager status.
+ * @returns {Readonly<{loadState: string, unitFileState: string, activeState: string, subState: string, result: string, mainPid: number, execMainStatus: number, fragmentPath: string, dropInPaths: string}>} - Parsed manager status.
  */
 export function parseSystemdUserServiceStatus(text) {
   if (typeof text !== 'string') {
@@ -500,6 +502,13 @@ export function parseSystemdUserServiceStatus(text) {
         );
       }
       parsed[outputName] = nonnegativeInteger(Number(value), property);
+    } else if (property === 'DropInPaths') {
+      if (value.trim() !== value) {
+        throw new TypeError(
+          'systemd user service status DropInPaths is invalid.',
+        );
+      }
+      parsed[outputName] = value;
     } else {
       if (!value || value.trim() !== value) {
         throw new TypeError(

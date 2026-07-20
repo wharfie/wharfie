@@ -60,6 +60,8 @@ const SYSTEMD_SHOW_PROPERTIES = Object.freeze([
   'Result',
   'MainPID',
   'ExecMainStatus',
+  'FragmentPath',
+  'DropInPaths',
 ]);
 
 /**
@@ -1261,6 +1263,19 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
+   * Require systemd to have loaded Wharfie's exact immutable unit source with
+   * no administrator or generator drop-ins changing its effective behavior.
+   * @param {Readonly<Record<string, any>>} systemd - Parsed manager state.
+   * @param {Readonly<Record<string, string>>} layout - Expected unit layout.
+   * @returns {boolean} - Whether effective unit selection is exact.
+   */
+  function hasExpectedEffectiveUnit(systemd, layout) {
+    return (
+      systemd.fragmentPath === layout.unitPath && systemd.dropInPaths === ''
+    );
+  }
+
+  /**
    * @param {Readonly<Record<string, string>>} layout - Expected layout.
    * @param {number} uid - Expected principal.
    * @param {number} filesystemUid - Expected managed-file owner.
@@ -1360,7 +1375,15 @@ export function createSystemdUserServiceOperator(options = {}) {
         result: 'unknown',
         mainPid: 0,
         execMainStatus: 0,
+        fragmentPath: '',
+        dropInPaths: '',
       });
+    }
+    if (
+      integrity.status === 'verified' &&
+      !hasExpectedEffectiveUnit(systemd, installation.layout)
+    ) {
+      integrity = Object.freeze({ status: 'invalid' });
     }
     let runtime;
     if (integrity.status !== 'verified') {
@@ -1497,6 +1520,11 @@ export function createSystemdUserServiceOperator(options = {}) {
    */
   async function assertUnitEnabled(installation) {
     const systemd = await readSystemd(installation.layout);
+    if (!hasExpectedEffectiveUnit(systemd, installation.layout)) {
+      throw new Error(
+        'Systemd loaded a different unit or additional drop-ins; rerun service install after removing the override.',
+      );
+    }
     if (systemd.unitFileState !== 'enabled') {
       throw new Error(
         'Installed systemd user service is no longer enabled; rerun service install to repair it.',

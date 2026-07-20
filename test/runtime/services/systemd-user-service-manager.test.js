@@ -72,6 +72,8 @@ async function createHarness(options = {}) {
     systemdMode: options.systemdMode || 'normal',
     failDaemonReloadOnce: false,
     failShowEnvironment: false,
+    fragmentPath: layout.unitPath,
+    dropInPaths: '',
     now: 100,
   };
   /** @type {Array<{command: string, args: string[]}>} */
@@ -115,6 +117,8 @@ async function createHarness(options = {}) {
             `Result=${failed ? 'failed' : 'success'}`,
             `MainPID=${failed ? '0' : state.active ? '4321' : '0'}`,
             'ExecMainStatus=0',
+            `FragmentPath=${state.fragmentPath}`,
+            `DropInPaths=${state.dropInPaths}`,
             '',
           ].join('\n'),
           stderr: '',
@@ -693,6 +697,32 @@ describe('systemd user service manager', () => {
       integrity: { status: 'invalid' },
     });
     await expect(harness.operator.start()).rejects.toThrow(/unit was changed/);
+  });
+
+  it('rejects a different effective unit or any systemd drop-in', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await harness.operator.stop();
+    harness.state.fragmentPath = '/etc/systemd/user/wharfie-service-demo.service';
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'degraded',
+      integrity: { status: 'invalid' },
+    });
+    await expect(harness.operator.start()).rejects.toThrow(
+      /different unit or additional drop-ins/,
+    );
+
+    harness.state.fragmentPath = harness.layout.unitPath;
+    harness.state.dropInPaths =
+      '/etc/systemd/user/wharfie-service-demo.service.d/override.conf';
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'degraded',
+      integrity: { status: 'invalid' },
+    });
+    await expect(harness.operator.start()).rejects.toThrow(
+      /different unit or additional drop-ins/,
+    );
   });
 
   it('uninstalls manager wiring while preserving immutable releases and durable state', async () => {

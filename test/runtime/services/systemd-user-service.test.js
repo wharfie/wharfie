@@ -225,6 +225,8 @@ describe('systemd user service contract', () => {
         'Result=success',
         'MainPID=123',
         'ExecMainStatus=0',
+        'FragmentPath=/home/example/.config/systemd/user/wharfie-demo.service',
+        'DropInPaths=',
         '',
       ].join('\n'),
     );
@@ -237,6 +239,9 @@ describe('systemd user service contract', () => {
       result: 'success',
       mainPid: 123,
       execMainStatus: 0,
+      fragmentPath:
+        '/home/example/.config/systemd/user/wharfie-demo.service',
+      dropInPaths: '',
     });
     expect(() =>
       parseSystemdUserServiceStatus(
