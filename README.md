@@ -146,7 +146,8 @@ private. It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Workflow timers and signals checkpoint](llm/checkpoints/2026-07-20-v13-workflow-timers-signals.md) — the current implementation handoff for persisted timers, current-wait signals, exact replay, and source/SEA crash proof.
+- [Systemd user-service checkpoint](llm/checkpoints/2026-07-20-v14-systemd-user-service-foundation.md) — the current implementation handoff for packaged Linux service lifecycle, immutable releases, PID-bound health, and the remaining disposable reboot proof.
+- [Workflow timers and signals checkpoint](llm/checkpoints/2026-07-20-v13-workflow-timers-signals.md) — the preceding handoff for persisted timers, current-wait signals, exact replay, and source/SEA crash proof.
 - [Workflow cancellation checkpoint](llm/checkpoints/2026-07-19-v12-workflow-cancellation.md) — the preceding handoff for durable run-level cancellation, active delivery, replay, and cancelled-evidence reconciliation.
 - [Workflow crash-recovery checkpoint](llm/checkpoints/2026-07-19-v11-workflow-crash-recovery.md) — the preceding handoff for public source and relocated-SEA process-death recovery.
 - [Public workflow operator checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md) — the earlier handoff for shared source/package start, schema-v6 inspection, confirmed recovery, and event-anchored evidence reconciliation.
