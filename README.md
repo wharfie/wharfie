@@ -135,7 +135,17 @@ owner boundary. The shared exact-run inspection, recovery, cancellation, and
 evidence-reconciliation commands understand the activation-aware cursor and
 schema-v7 redacted timer/signal lifecycle state. Managed-effect workflow
 successors and schedules remain unfinished. Packaged Linux artifacts now have
-a systemd user-service install/start/stop/restart/status/uninstall lifecycle.
+a recoverable systemd user-service
+install/update/rollback/recover/start/stop/restart/status/uninstall lifecycle.
+A single local coordinator serializes release changes, closes durable work
+admission, requires every existing source run to be terminal during update or
+rollback, and retains one exact rollback candidate before it changes the
+executable selection. First install separately admits already queued work for
+the exact target revision. Interrupted activation is resumed explicitly from
+durable phase state. The activation
+coordinator and packaged service manager are covered by focused repository
+tests; the disposable-host proof described below predates update/rollback and
+does not yet prove their crash boundaries on a real systemd host.
 A checksummed Ubuntu proof covers exact-unit startup, resident `SIGKILL`
 replacement, abrupt VM power loss, pre-login recovery, durable workflow
 continuation, lifecycle operations, and state-preserving uninstall. Multi-host
@@ -148,7 +158,8 @@ npm package remains deliberately private. It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Systemd reboot-proof checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md) — the current handoff for checksummed real-VM crash, boot, workflow-continuation, lifecycle, and uninstall evidence.
+- [Recoverable systemd activation checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md) — the current handoff for durable single-node release activation and the manager/CLI integration being finalized.
+- [Systemd reboot-proof checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md) — the preceding handoff for checksummed real-VM crash, boot, workflow-continuation, lifecycle, and uninstall evidence.
 - [Shared packaged-storage checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md) — the preceding handoff that unified foreground and resident durable state.
 - [Systemd user-service checkpoint](llm/checkpoints/2026-07-20-v14-systemd-user-service-foundation.md) — the implementation foundation for packaged Linux service lifecycle, immutable releases, and PID-bound health.
 - [Workflow timers and signals checkpoint](llm/checkpoints/2026-07-20-v13-workflow-timers-signals.md) — the preceding handoff for persisted timers, current-wait signals, exact replay, and source/SEA crash proof.
@@ -325,21 +336,55 @@ service:
 ```bash
 <app> wharfie service install
 <app> wharfie service status --json
+<next-app> wharfie service update
+<next-app> wharfie service rollback
+<next-app> wharfie service recover
 <app> wharfie service stop
 <app> wharfie service start
 <app> wharfie service restart
 <app> wharfie service uninstall
 ```
 
-These commands reject root, never invoke `sudo`, preserve durable state and
-immutable releases on uninstall, and do not yet expose update or rollback. The
-unit location is fixed to the service account's `~/.config/systemd/user`;
-custom `XDG_CONFIG_HOME` topology is rejected, installation verifies the live
-manager's search path, and unit-name mutations require an exact, non-stale
-effective fragment without drop-ins. Status schema V2 reports disk/manager
-wiring explicitly; inactive exact interrupted installs can return
-`reconciled`, while `service uninstall` removes verified orphan wiring with
-`orphan-reconciled` and preserves durable application data.
+These commands reject root, never invoke `sudo`, and preserve durable state and
+immutable releases on uninstall. `service update` is invoked through the new
+artifact and activates it only after closing run admission and proving every
+durable run terminal. A fresh `service rollback` must be invoked through the
+currently selected artifact—`<next-app>` immediately after an update—and
+selects the one retained prior release. If its response is ambiguous, run
+`service recover`; do not issue a new rollback and risk requesting the reverse
+transition. A rollback request from the prior/candidate SEA is rejected because
+it cannot be distinguished from a false fresh request.
+
+The coordinator persists every activation phase. It enables the exact unit
+without starting it, then permits `systemctl start` only after the durable
+state reaches `ACTIVATING`. A first install has no source: queued work for the
+target revision is admitted, while nonterminal work for another revision
+leaves the request `pending` and fenced. During update or rollback, the exact
+selected source has a narrow `QUIESCING` start exception so it can finish
+draining or be retained safely. Results separate request status
+(`fulfilled`, `refused`, `failed`, or `pending`) from outcome
+(`target-active`, `source-retained`, `source-restored`, `in-flight`, or
+`absent`).
+
+Durable activation state is the authority for repairing a missing receipt,
+selector, or fixed unit. Physical wiring without that authority is reported
+as degraded and is never adopted by install, start, update, rollback, or
+recovery; the existing exact orphan checks remain available only for cleanup
+through `service uninstall`.
+Uninstall preserves immutable releases and durable state, retains the `ACTIVE`
+selection and same-revision run admission, and writes an installation
+tombstone while removing physical wiring. Running `service install` from that
+same selected release rehydrates the service without changing activation
+record version or selection generation. That tombstone also gives a new
+artifact narrow authority to reproject the exact retained source, prove it
+healthy, and then perform the ordinary durable update under the same operation
+lock; `service install` from the new artifact is treated as that update. If
+retained-source repair is interrupted before an activation transition begins,
+run `service install` from the exact selected SEA to resume it. The unit
+location is fixed to the service account's
+`~/.config/systemd/user`; custom `XDG_CONFIG_HOME` topology is rejected, and
+unit-name mutations require an exact, non-stale effective fragment without
+drop-ins.
 The repository's disposable Ubuntu proof builds the app from the installed npm
 tarball, removes Node from the packaged command `PATH`, force-cycles the VM,
 requires automatic healthy startup before a login session, and completes the

@@ -22,8 +22,16 @@ framework is no longer part of the product, and breaking changes are expected.
 
 The current implementation proves the first four steps on Linux, including a
 packaged single-node systemd service that recovers after process death and an
-abrupt machine reboot in a disposable Ubuntu environment. A source or packaged
-command can durably submit one
+abrupt machine reboot in a disposable Ubuntu environment. That packaged
+service also supports serialized, crash-recoverable update and rollback:
+Wharfie closes admission, refuses while any durable run remains nonterminal,
+retains one exact prior release, and resumes interrupted activation through
+`service recover`. Update runs from the new target SEA and a fresh rollback
+runs from the currently selected SEA. After an ambiguous rollback response,
+recovery verifies or finishes the durable transition without toggling releases.
+These activation semantics have focused unit and packaged-manager evidence;
+the earlier disposable-host proof did not exercise update or rollback. A
+source or packaged command can durably submit one
 revision-pinned activity while the worker is offline; the matching single-node
 resident later executes requests serially and recovers conservatively after a
 process restart. A stale unstarted claim can be rescheduled, while work that
@@ -44,9 +52,18 @@ cancellation, and evidence-reconciliation commands understand the redacted
 activation-aware workflow cursor.
 
 This is not yet a complete durable workflow engine. Packaged Linux artifacts
-implement a systemd user-service lifecycle with real reboot evidence and
-explicit orphan-wiring reconciliation. Workflow cancellation has durable
-cursor authority and active-owner delivery. Branches,
+implement a systemd user-service lifecycle with real reboot evidence,
+recoverable local activation, and explicit orphan-wiring reconciliation.
+Durable activation state is the only authority for reconstructing missing
+service projections; physical wiring without it is never adopted. First
+install admits already queued work only when it matches the target revision,
+and uninstall deliberately retains the `ACTIVE` selection and same-revision
+admission so the service can later be rehydrated. An intentional-uninstall
+tombstone lets a new target SEA automatically reproject and prove the retained
+source before it requests the normal durable update; unexplained missing
+projection state still requires the exact selected SEA. Workflow cancellation
+has durable cursor authority and
+active-owner delivery. Branches,
 an early-signal inbox, managed-effect workflow successors, schedules,
 provider-backed deployment, multi-host leases/heartbeats, and the trusted-node
 mesh remain roadmap work; Wharfie is not production ready.
@@ -83,3 +100,6 @@ decisions](./architecture/decisions/README.md), and [project-reset
 record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritative
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
+
+The current restart handoff is the [recoverable systemd activation
+checkpoint](../llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md).

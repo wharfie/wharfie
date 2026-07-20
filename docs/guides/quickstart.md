@@ -287,6 +287,9 @@ lingering:
 ```bash
 <app> wharfie service install
 <app> wharfie service status --json
+<next-app> wharfie service update
+<next-app> wharfie service rollback
+<next-app> wharfie service recover
 <app> wharfie service stop
 <app> wharfie service start
 <app> wharfie service restart
@@ -301,21 +304,56 @@ effective fragment without drop-ins. Packaged durable state is likewise fixed
 to the operating-system account's data root rather than ambient
 `XDG_DATA_HOME` or `HOME`. Uninstall disables the unit and removes the
 executable selector while preserving immutable releases, ledger data, payloads,
-and application state. It retains an installation identity tombstone whenever
-a receipt or verified release exists.
+and application state. It retains both an installation identity tombstone and
+the durable `ACTIVE` selection, rollback candidate, and same-revision run
+admission. Run `service install` again from that same selected SEA to rehydrate
+the service without changing activation record version or selection generation.
+When the tombstone proves an intentional uninstall, `service install` or
+`service update` from a new target SEA automatically reprojects and proves the
+exact retained source before entering the ordinary durable update. If the
+receipt disappears without that tombstone, the operation fails closed and the
+exact selected SEA must run `service install` to repair it.
 
 Status schema V2 reports `wiring.state` as `managed`, `absent`, `orphaned`,
 `conflicting`, or `unknown`; `wiring.selection` separately reports the redacted
 immutable-selector state. If wiring is `orphaned`, run `service uninstall`:
 that existing command is the explicit cleanup path and returns
-`outcome: orphan-reconciled`. Do not retry `service install` against an active
-orphan. Install can safely reconstruct only a missing receipt for an inactive,
-rehashed exact `current` release, returning `outcome: reconciled`. There is no
-separate `service reconcile` command.
-Update and rollback remain unavailable until Wharfie has a race-free
-maintenance/handoff protocol. The repository's
-disposable Ubuntu proof covers crash replacement, abrupt reboot, pre-login
-recovery, workflow continuation, and state-preserving uninstall.
+`outcome: orphan-reconciled`. There is no separate `service reconcile`
+command. A missing receipt, selector, or unit is repairable only when the
+durable activation record names the exact projection. Physical wiring with no
+activation record is degraded and is not adopted by install, start, update,
+rollback, or recovery; uninstall's exact orphan checks are cleanup authority,
+not activation authority.
+
+First install requires physical absence and records a transition with no
+source. Existing queued work is compatible when every nonterminal run has the
+target revision; the new resident may start and process it. Foreign-revision
+nonterminal work leaves install `pending` in `QUIESCING`, with no selected
+service and admission fenced. Wharfie enables the exact fixed unit without
+starting it, records `ACTIVATING`, and only then admits the separate systemd
+start. During an update or rollback, the selected source alone has a narrow
+`QUIESCING` start exception so it can drain or be retained safely.
+
+Run `service update` from the new packaged artifact. One local coordinator
+serializes the change, closes both durable-run and service-start admission,
+and scans the verified run directory before and after stopping the resident.
+Every existing run must be terminal; otherwise the request is refused and the
+source release is kept healthy. A successful switch retains exactly one prior
+release. Invoke a fresh rollback from the currently selected SEA—`<next-app>`
+immediately after the example update. If its response is ambiguous, run
+`service recover`; do not send a new rollback that could request the reverse
+transition. A rollback invocation from the prior/candidate SEA is rejected
+because it cannot be distinguished from a stale retry. If target activation
+definitively fails, Wharfie restores the source.
+
+Activation receipts separate `requestStatus` (`fulfilled`, `refused`,
+`failed`, or `pending`) from `outcome` (`target-active`, `source-retained`,
+`source-restored`, `in-flight`, or `absent`). Non-fulfilled receipts use a
+nonzero exit code even in `--json` mode. The repository's disposable Ubuntu
+proof covers crash replacement, abrupt reboot, pre-login recovery, workflow
+continuation, and state-preserving uninstall, but predates update/rollback;
+their phase recovery currently has focused unit and manager evidence rather
+than a disposable-host two-release proof.
 
 The current worker executes exact workflow
 `ACTIVITY` rows, conservatively handles `RECOVERY` rows, and fires due `TIMER`

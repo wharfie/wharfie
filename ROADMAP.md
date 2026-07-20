@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Linux SEA systemd user-service crash/reboot recovery is proven; race-free update/rollback and provider-backed self-deployment are next · **Last updated:** 2026-07-20
+**Status:** Linux SEA systemd user-service crash/reboot recovery is proven; recoverable quiescent activation is implemented and repository-tested, with a real-host activation crash matrix, stale-runtime cleanup, and provider-backed self-deployment next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -375,7 +375,7 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       source effect as `COMPENSATED`.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
 - [ ] Support manual, cron, and workflow-triggered runs through one execution path.
-- [x] Implement packaged Linux systemd user-service install/start/stop/restart/status/uninstall with fixed-unit rendering, immutable releases, PID-bound durable health, graceful drain, retry-safe uninstall, and preserved state.
+- [x] Implement packaged Linux systemd user-service install/update/rollback/recover/start/stop/restart/status/uninstall with fixed-unit rendering, immutable releases, PID-bound durable health, graceful drain, retry-safe uninstall, and preserved state.
 - [x] Give every packaged application one immutable app-scoped local-storage
       layout under `<wharfie-data>/applications/<appId>` before any developer,
       operator, or hidden-runtime entrypoint runs. Foreground commands and the
@@ -388,10 +388,38 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       verify the live manager's `UnitPath` plus exact effective fragment before
       enable, stop, or uninstall can act on a unit name.
 - [x] Reconcile exact orphaned systemd wiring explicitly: status joins receipt
-      intent with verified disk and live-manager state, install reconstructs
-      only an inactive exact selected release, and uninstall safely converges
-      missing receipts, tombstones, and interrupted cleanup while refusing
+      intent with verified disk and live-manager state. A missing receipt,
+      selector, or fixed unit is repaired only from exact durable activation
+      authority; physical wiring without that authority is degraded and never
+      adopted for execution. Uninstall remains the narrow cleanup path for
+      exact orphans, tombstones, and interrupted cleanup while refusing
       cached-only, conflicting, foreign, or lower-priority unit claims.
+- [x] Add one crash-recoverable local activation coordinator. Update and
+      rollback close admission transactionally, prove every durable run
+      terminal on both sides of the resident stop, switch only exact immutable
+      releases, retain one rollback candidate, restore a failed target's
+      source, and resume interrupted durable phases with `service recover`.
+      First install has no source: queued target-revision work is
+      admitted, while foreign-revision nonterminal work leaves activation
+      pending and fenced. The fixed unit is enabled without starting, and only
+      the durable `ACTIVATING` target—or the narrow draining-source exception
+      in `QUIESCING`—may cross the service-start fence.
+- [x] Integrate activation with the packaged manager and operator receipts.
+      Update runs from the new target SEA; a fresh rollback runs from the
+      currently selected SEA. An ambiguous rollback is resolved with
+      `service recover`, not a new reverse transition. Results separate
+      fulfilled/refused/failed/pending request status from target-active,
+      source-retained, source-restored, in-flight, and absent outcomes.
+- [x] Preserve the durable `ACTIVE` selection, rollback reference, and
+      same-revision run admission across state-preserving uninstall. The
+      installation tombstone and immutable releases remain; installing the
+      same selected release rehydrates physical service wiring without
+      changing activation record version or selection generation. The
+      intentional-uninstall tombstone also authorizes a new artifact to
+      reproject and prove the exact retained source before performing the
+      normal durable update under the same operation lock. Unexplained missing
+      projection state remains fail-closed and requires repair from the exact
+      selected SEA.
 - [x] Prove enabled startup, crash replacement, and durable recovery across a
       real machine reboot in a disposable Linux systemd environment. The
       checksummed [V16 proof receipts](llm_artifacts/systemd-proof/0d92746384acae1aa111a271ff144f9bcf53d265/final.json)
@@ -400,6 +428,8 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       observe a new kernel boot ID and generation before any login session,
       complete the same persisted timer/signal workflow, exercise graceful
       restart and stop/start, and prove uninstall preserves inspectable state.
+      These receipts predate public update/rollback and do not prove activation
+      crash recovery on a real systemd host.
 - [x] Make service status available as human-readable and JSON operations in the reserved packaged operator namespace.
 - [ ] Add logs, run history/listing, and any remaining operator surfaces that are still deliberately absent.
 - [x] Build one shared source/packaged foreground durable-run host. Source
@@ -435,7 +465,9 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 - [ ] Use provider credential chains without embedding operator credentials.
 - [ ] Record managed/external ownership, resource receipts, and narrowly scoped node identities.
 - [ ] Make reconciliation and destroy idempotent and ownership-safe.
-- [ ] Expose plan, deploy, inspect, destroy, and a quiescent single-node upgrade/rollback that refuses in-flight work in the reserved operator namespace; prove them in a clean account. In-flight and staged evolution remains Milestone 6 work.
+- [ ] Expose provider-backed plan, deploy, inspect, and destroy in the reserved
+      operator namespace and prove them in a clean account. In-flight and
+      staged multi-node evolution remains Milestone 6 work.
 
 **Exit:** one executable previews and creates a single-node durable service, survives the end of the authoring session, and later removes only what it owns.
 
@@ -458,7 +490,8 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 
 **Goal:** make unattended software straightforward to understand and change across many coding sessions.
 
-- [ ] Pin every run to an immutable revision and define explicit behavior for in-flight work during upgrades.
+- [x] Pin every run to an immutable revision and refuse local release changes
+      while any run is nonterminal; in-flight evolution remains future work.
 - [x] Make build-input and dependency-lock digests, target matrices, embedded revision/runtime metadata, and exact artifact provenance inspectable through package results, the operator metadata command, and canonical sidecars.
 - [ ] Make builds reproducible where the selected packaging toolchain supports it, while always content-addressing the produced artifacts.
 - [ ] Support staged rollout, health gates, rollback, and garbage collection of unreferenced revisions.
@@ -507,18 +540,23 @@ persisted workflow work before service installation, verified the exact
 effective unit and immutable executable, recovered from both resident
 `SIGKILL` and an abrupt VM power cycle, then preserved the completed ledger
 through uninstall. The successful receipts are bound to commit `0d927463`.
+That proof covers install/start/stop/restart/status/uninstall, resident process
+replacement, and reboot recovery; update, rollback, and recovery through each
+activation phase currently have focused unit and manager evidence only.
 
-1. Close the remaining single-node service hardening: race-free
-   content-addressed update/rollback and bounded stale native-runtime
-   extraction after abrupt termination.
+1. Close the remaining single-node service hardening: bounded stale
+   native-runtime extraction after abrupt termination and a disposable-host
+   crash matrix for each activation phase.
 2. Add the smallest provider-backed path that can create, inspect, update, and
    remove one durable node through the operator's credential chain.
 3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [systemd reboot-proof
-checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md). Its parent
+The current restart point is the [recoverable systemd activation
+checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md).
+Its parent is the [systemd reboot-proof
+checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md), whose parent
 is the [shared packaged-storage
 checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md), whose
 parent is the [systemd user-service foundation

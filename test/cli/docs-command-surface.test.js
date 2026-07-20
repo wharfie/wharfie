@@ -152,8 +152,11 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('<app> wharfie service install');
     expect(quickstart).toContain('<app> wharfie service status --json');
+    expect(quickstart).toContain('<next-app> wharfie service update');
+    expect(quickstart).toContain('<next-app> wharfie service rollback');
+    expect(quickstart).toContain('<next-app> wharfie service recover');
     expect(quickstart).toContain('<app> wharfie service uninstall');
-    expect(quickstart).toContain('Update and rollback remain unavailable');
+    expect(quickstart).not.toContain('Update and rollback remain unavailable');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
     expect(quickstart).not.toContain('--operation-id');
     expect(quickstart).toContain('append-only run → invocation → attempt');
@@ -211,7 +214,7 @@ describe('docs command surface', () => {
         /workflow-aware|workflow cursor|activation-aware cursor/,
       );
       expect(document).toMatch(
-        /workflow cancellation|workflow `cancel`|run-level `cancel`/i,
+        /workflow\s+cancellation|workflow `cancel`|run-level `cancel`/i,
       );
       expect(document).toContain('stable-delivery-id');
       expect(document).toContain('early-signal');
