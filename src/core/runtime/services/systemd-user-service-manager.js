@@ -252,6 +252,32 @@ async function ensureManagedDirectory(fsOps, directory, label, uid) {
 }
 
 /**
+ * Create or tighten one user-owned Wharfie root. A normal host umask may have
+ * created the shared data/config root before service installation; install can
+ * safely remove group/other access from that same-UID concrete directory, but
+ * it still refuses symlinks and foreign ownership.
+ * @param {typeof fsp} fsOps - Filesystem implementation.
+ * @param {string} directory - Root directory.
+ * @param {string} label - Boundary label.
+ * @param {number} uid - Required owner.
+ * @returns {Promise<void>} - Resolves after exact private permissions.
+ */
+async function ensurePrivateManagedRoot(fsOps, directory, label, uid) {
+  await fsOps.mkdir(directory, { recursive: true, mode: 0o700 });
+  const stats = await fsOps.lstat(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`${label} must be a real directory.`);
+  }
+  if (typeof stats.uid === 'number' && stats.uid !== uid) {
+    throw new Error(`${label} must be owned by the service user.`);
+  }
+  if ((stats.mode & 0o077) !== 0) {
+    await fsOps.chmod(directory, 0o700);
+  }
+  await assertRealPath(fsOps, directory, 'directory', label, uid);
+}
+
+/**
  * Establish the exact app-owned data tree component by component so a managed
  * ancestor cannot redirect later reads or writes through a symbolic link.
  * @param {typeof fsp} fsOps - Filesystem implementation.
@@ -260,11 +286,9 @@ async function ensureManagedDirectory(fsOps, directory, label, uid) {
  * @returns {Promise<void>} - Resolves after the service root is safe.
  */
 async function ensureManagedServiceRoot(fsOps, layout, uid) {
-  await fsOps.mkdir(layout.dataRoot, { recursive: true, mode: 0o700 });
-  await assertRealPath(
+  await ensurePrivateManagedRoot(
     fsOps,
     layout.dataRoot,
-    'directory',
     'Wharfie data root',
     uid,
   );
@@ -291,6 +315,12 @@ async function ensureManagedServiceRoot(fsOps, layout, uid) {
  * @returns {Promise<boolean>} - Whether the complete service root exists.
  */
 async function hasManagedServiceRoot(fsOps, layout, uid) {
+  try {
+    await fsOps.lstat(layout.serviceRoot);
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return false;
+    throw error;
+  }
   const directories = [
     [layout.dataRoot, 'Wharfie data root'],
     [path.dirname(layout.serviceRoot), 'Wharfie applications root'],
@@ -315,11 +345,9 @@ async function hasManagedServiceRoot(fsOps, layout, uid) {
  * @returns {Promise<void>} - Resolves after the unit parent is safe.
  */
 async function ensureManagedUnitDirectory(fsOps, layout, uid) {
-  await fsOps.mkdir(layout.configRoot, { recursive: true, mode: 0o700 });
-  await assertRealPath(
+  await ensurePrivateManagedRoot(
     fsOps,
     layout.configRoot,
-    'directory',
     'Wharfie config root',
     uid,
   );

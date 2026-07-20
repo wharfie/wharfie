@@ -496,6 +496,26 @@ describe('systemd user service manager', () => {
     );
   });
 
+  it('tightens same-user roots created under a collaborative umask', async () => {
+    const harness = await createHarness();
+    for (const root of [harness.dataRoot, harness.configRoot]) {
+      await fsp.mkdir(root, { recursive: true, mode: 0o775 });
+      await fsp.chmod(root, 0o775);
+    }
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'absent',
+      installation: { state: 'absent' },
+    });
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      outcome: 'installed',
+      health: 'healthy',
+    });
+    for (const root of [harness.dataRoot, harness.configRoot]) {
+      expect((await fsp.stat(root)).mode & 0o777).toBe(0o700);
+    }
+  });
+
   it('refuses non-Linux service management before reading embedded state', async () => {
     const harness = await createHarness({ platform: 'darwin' });
 
