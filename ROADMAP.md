@@ -493,8 +493,8 @@ completes the linear workflow proof with Node unavailable on `PATH`.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [systemd user-service
-checkpoint](llm/checkpoints/2026-07-20-v14-systemd-user-service-foundation.md).
+The current restart point is the [shared packaged-storage
+checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md).
 Its parent is the [workflow timers and signals
 checkpoint](llm/checkpoints/2026-07-20-v13-workflow-timers-signals.md), whose
 parent is the [workflow cancellation
