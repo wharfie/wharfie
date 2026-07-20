@@ -493,7 +493,9 @@ export function createLocalApplicationSystemdActivation(options) {
     return createResult(
       operation,
       appId,
-      LocalApplicationSystemdActivationRequestStatus.REFUSED,
+      operation === 'recover'
+        ? LocalApplicationSystemdActivationRequestStatus.FULFILLED
+        : LocalApplicationSystemdActivationRequestStatus.REFUSED,
       LocalApplicationSystemdActivationSettledOutcome.SOURCE_RETAINED,
       aborted.activation,
       'durable-work',
@@ -725,8 +727,13 @@ export function createLocalApplicationSystemdActivation(options) {
   async function install(input) {
     const request = normalizeTargetOperationInput(input, 'systemd install');
     return await withOperationLock('install', request.appId, async () => {
-      await prepareRelease(request.appId, request.target);
       const current = await activationStore.get({ appId: request.appId });
+      if (!current) {
+        // Immutable staged releases are allowed by this proof; selector,
+        // receipt, unit, and runtime state are not.
+        await options.verifyAbsent(Object.freeze({ appId: request.appId }));
+      }
+      await prepareRelease(request.appId, request.target);
       const replaceFailedInstall =
         current &&
         current.phase !== LocalApplicationActivationPhase.ACTIVE &&
@@ -761,6 +768,18 @@ export function createLocalApplicationSystemdActivation(options) {
     return await withOperationLock('update', request.appId, async () => {
       await prepareRelease(request.appId, request.target);
       const current = await activationStore.get({ appId: request.appId });
+      if (
+        current?.transition?.action ===
+          LocalApplicationActivationAction.UPDATE &&
+        current.transition.source !== null &&
+        sameRelease(current.transition.target, request.target)
+      ) {
+        return await converge(
+          request.appId,
+          'update',
+          current.transition.transitionId,
+        );
+      }
       if (
         !current ||
         current.phase !== LocalApplicationActivationPhase.ACTIVE ||
@@ -799,6 +818,16 @@ export function createLocalApplicationSystemdActivation(options) {
     return await withOperationLock('rollback', request.appId, async () => {
       const current = await activationStore.get({ appId: request.appId });
       if (
+        current?.transition?.action ===
+        LocalApplicationActivationAction.ROLLBACK
+      ) {
+        return await converge(
+          request.appId,
+          'rollback',
+          current.transition.transitionId,
+        );
+      }
+      if (
         !current ||
         current.phase !== LocalApplicationActivationPhase.ACTIVE ||
         !current.selected ||
@@ -806,7 +835,7 @@ export function createLocalApplicationSystemdActivation(options) {
       ) {
         throw new LocalApplicationSystemdActivationStateError(
           request.appId,
-          'rollback requires an ACTIVE release with one retained candidate',
+          'rollback requires one ACTIVE source release with an exact retained candidate',
         );
       }
       await verifyRelease(request.appId, current.rollbackCandidate);

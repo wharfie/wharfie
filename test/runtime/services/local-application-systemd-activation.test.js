@@ -260,6 +260,27 @@ function crashAfter(activation, method) {
   });
 }
 
+/**
+ * @param {Record<string, Function>} activation - Activation store.
+ * @param {string} method - Method before which to fail once.
+ * @returns {Readonly<Record<string, Function>>}
+ */
+function crashBefore(activation, method) {
+  let crashPending = true;
+  /** @param {...any} args */
+  async function failBefore(...args) {
+    if (crashPending) {
+      crashPending = false;
+      throw new Error(`simulated crash before ${method}`);
+    }
+    return await activation[method](...args);
+  }
+  return Object.freeze({
+    ...activation,
+    [method]: failBefore,
+  });
+}
+
 /** @param {Record<string, any>} harness @param {Release} [release] */
 async function install(harness, release = RELEASE_A) {
   return await harness
@@ -300,6 +321,139 @@ describe('local application systemd activation convergence', () => {
     expect(harness.state.selected).toEqual(RELEASE_A);
     expect(harness.state.active).toEqual(RELEASE_A);
     expect(harness.state.held).toBe(false);
+  });
+
+  it('recovers when stop took effect before the inactive proof failed', async () => {
+    const harness = await createHarness();
+    await install(harness);
+    harness.driver.proveServiceInactive.mockRejectedValueOnce(
+      new Error('simulated inactive-proof interruption'),
+    );
+
+    await expect(
+      harness.createService().update({ appId: APP_ID, target: RELEASE_B }),
+    ).rejects.toThrow('simulated inactive-proof interruption');
+    await expect(
+      harness.activation.get({ appId: APP_ID }),
+    ).resolves.toMatchObject({
+      phase: LocalApplicationActivationPhase.QUIESCING,
+      selected: RELEASE_A,
+      desired: RELEASE_B,
+    });
+    expect(harness.state.active).toBeNull();
+    expect(harness.state.selected).toEqual(RELEASE_A);
+    expect(harness.state.held).toBe(false);
+
+    const recovered = await harness.createService().recover({ appId: APP_ID });
+    expect(recovered).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+      activation: { selected: RELEASE_B },
+    });
+    expect(harness.state.active).toEqual(RELEASE_B);
+  });
+
+  it('repeats quiescence after crashing between the second scan and its durable marker', async () => {
+    const harness = await createHarness();
+    await install(harness);
+    harness.ledger.listRuns.mockClear();
+    const crashing = harness.createService(
+      crashBefore(harness.activation, 'markQuiescent'),
+    );
+
+    await expect(
+      crashing.update({ appId: APP_ID, target: RELEASE_B }),
+    ).rejects.toThrow('simulated crash before markQuiescent');
+    expect(harness.ledger.listRuns).toHaveBeenCalledTimes(2);
+    await expect(
+      harness.activation.get({ appId: APP_ID }),
+    ).resolves.toMatchObject({
+      phase: LocalApplicationActivationPhase.QUIESCING,
+      selected: RELEASE_A,
+      desired: RELEASE_B,
+    });
+    expect(harness.state.active).toBeNull();
+
+    const recovered = await harness.createService().recover({ appId: APP_ID });
+    expect(recovered.settledOutcome).toBe(
+      LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+    );
+    expect(harness.ledger.listRuns).toHaveBeenCalledTimes(4);
+    expect(harness.state.selected).toEqual(RELEASE_B);
+    expect(harness.state.active).toEqual(RELEASE_B);
+  });
+
+  it('repairs a partial selector projection before marking it selected', async () => {
+    const harness = await createHarness();
+    await install(harness);
+    harness.driver.selectRelease.mockClear();
+    harness.driver.selectRelease.mockImplementationOnce(
+      async (/** @type {Record<string, any>} */ projection) => {
+        if (!harness.state.held) {
+          throw new Error('driver effect escaped operation lock');
+        }
+        harness.state.calls.push(
+          `select-partial:${projection.current.artifactId}:${projection.destination}`,
+        );
+        harness.state.selected = projection.current;
+        throw new Error('simulated crash after selector replacement');
+      },
+    );
+
+    await expect(
+      harness.createService().update({ appId: APP_ID, target: RELEASE_B }),
+    ).rejects.toThrow('simulated crash after selector replacement');
+    await expect(
+      harness.activation.get({ appId: APP_ID }),
+    ).resolves.toMatchObject({
+      phase: LocalApplicationActivationPhase.QUIESCENT,
+      selected: RELEASE_A,
+      desired: RELEASE_B,
+    });
+    expect(harness.state.selected).toEqual(RELEASE_B);
+    expect(harness.state.previous).toBeNull();
+    expect(harness.state.active).toBeNull();
+
+    const recovered = await harness.createService().recover({ appId: APP_ID });
+    expect(recovered.settledOutcome).toBe(
+      LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+    );
+    expect(harness.driver.selectRelease).toHaveBeenCalledTimes(2);
+    expect(harness.state.selected).toEqual(RELEASE_B);
+    expect(harness.state.previous).toEqual(RELEASE_A);
+    expect(harness.state.active).toEqual(RELEASE_B);
+  });
+
+  it('recovers when exact active health was proven before completion crashed', async () => {
+    const harness = await createHarness();
+    const crashing = harness.createService(
+      crashBefore(harness.activation, 'completeActivation'),
+    );
+
+    await expect(
+      crashing.install({ appId: APP_ID, target: RELEASE_A }),
+    ).rejects.toThrow('simulated crash before completeActivation');
+    expect(harness.driver.verifyActiveRelease).toHaveBeenCalledWith({
+      appId: APP_ID,
+      release: RELEASE_A,
+    });
+    await expect(
+      harness.activation.get({ appId: APP_ID }),
+    ).resolves.toMatchObject({
+      phase: LocalApplicationActivationPhase.ACTIVATING,
+      selected: RELEASE_A,
+    });
+    expect(harness.state.active).toEqual(RELEASE_A);
+
+    const recovered = await harness.createService().recover({ appId: APP_ID });
+    expect(recovered).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+      activation: { selected: RELEASE_A },
+    });
+    expect(harness.state.active).toEqual(RELEASE_A);
   });
 
   it('stops a source start that races the durable QUIESCENT barrier', async () => {
@@ -450,6 +604,43 @@ describe('local application systemd activation convergence', () => {
     expect(harness.state.held).toBe(false);
   });
 
+  it('recovers source-retained settlement after abort committed before the caller crashed', async () => {
+    const harness = await createHarness();
+    await install(harness);
+    harness.state.quiescencePages.push([blocker()]);
+    const crashing = harness.createService(
+      crashAfter(harness.activation, 'abortChange'),
+    );
+
+    await expect(
+      crashing.update({ appId: APP_ID, target: RELEASE_B }),
+    ).rejects.toThrow('simulated crash after abortChange');
+    await expect(
+      harness.activation.get({ appId: APP_ID }),
+    ).resolves.toMatchObject({
+      phase: LocalApplicationActivationPhase.ACTIVE,
+      selected: RELEASE_A,
+      desired: RELEASE_A,
+      lastTransition: {
+        outcome: LocalApplicationActivationOutcome.SOURCE_RETAINED,
+      },
+    });
+    expect(harness.state.selected).toEqual(RELEASE_A);
+    expect(harness.state.active).toEqual(RELEASE_A);
+
+    const recovered = await harness.createService().recover({ appId: APP_ID });
+    expect(recovered).toMatchObject({
+      operation: 'recover',
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.SOURCE_RETAINED,
+      activation: {
+        phase: LocalApplicationActivationPhase.ACTIVE,
+        selected: RELEASE_A,
+      },
+    });
+  });
+
   it('reactivates and retains the source if the post-stop proof finds work', async () => {
     const harness = await createHarness();
     await install(harness);
@@ -507,6 +698,61 @@ describe('local application systemd activation convergence', () => {
     expect(harness.state.selected).toEqual(RELEASE_A);
     expect(harness.state.active).toEqual(RELEASE_A);
   });
+
+  it.each([
+    {
+      label: 'throws',
+      fail: async () => {
+        throw new Error('simulated indeterminate activation');
+      },
+      message: 'simulated indeterminate activation',
+    },
+    {
+      label: 'returns an unknown status',
+      fail: async () => ({ status: 'unknown' }),
+      message: "must be 'healthy' or 'failed'",
+    },
+  ])(
+    'leaves the target ACTIVATING without source restoration when activateRelease $label',
+    async ({ fail, message }) => {
+      const harness = await createHarness();
+      await install(harness);
+      const beginSourceRestore = jest.fn(harness.activation.beginSourceRestore);
+      const activationStore = Object.freeze({
+        ...harness.activation,
+        beginSourceRestore,
+      });
+      harness.driver.activateRelease.mockImplementationOnce(fail);
+
+      await expect(
+        harness
+          .createService(activationStore)
+          .update({ appId: APP_ID, target: RELEASE_B }),
+      ).rejects.toThrow(message);
+      expect(beginSourceRestore).not.toHaveBeenCalled();
+      await expect(
+        harness.activation.get({ appId: APP_ID }),
+      ).resolves.toMatchObject({
+        phase: LocalApplicationActivationPhase.ACTIVATING,
+        selected: RELEASE_B,
+        desired: RELEASE_B,
+        transition: { source: RELEASE_A, target: RELEASE_B },
+      });
+      expect(harness.state.active).toBeNull();
+      expect(harness.state.held).toBe(false);
+
+      const recovered = await harness
+        .createService()
+        .recover({ appId: APP_ID });
+      expect(recovered).toMatchObject({
+        requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+        settledOutcome:
+          LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+        activation: { selected: RELEASE_B },
+      });
+      expect(harness.state.active).toEqual(RELEASE_B);
+    },
+  );
 
   it('recovers a crash immediately after source restoration becomes durable', async () => {
     const harness = await createHarness();
