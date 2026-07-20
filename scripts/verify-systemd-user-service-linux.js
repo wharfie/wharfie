@@ -299,6 +299,13 @@ function captureServiceFailure(artifactPath, phase, error) {
         allowFailure: true,
       }),
     ),
+    unitVerification: commandReceipt(
+      run(
+        '/usr/bin/systemd-analyze',
+        ['--user', 'verify', proofStorageLayout().unitPath],
+        { env: packagedEnvironment(), allowFailure: true },
+      ),
+    ),
     userJournal: commandReceipt(
       run(
         '/usr/bin/journalctl',
