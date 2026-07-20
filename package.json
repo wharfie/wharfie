@@ -68,7 +68,8 @@
     "lint": "npm run lint:js",
     "lint:fix": "eslint --max-warnings=0 --fix . && prettier --write \"{*,**/*}.{js,json}\"",
     "verify:package": "node ./scripts/verify-package-contents.js",
-    "verify:package:sea": "node ./scripts/verify-package-sea.js"
+    "verify:package:sea": "node ./scripts/verify-package-sea.js",
+    "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh"
   },
   "prettier": {
     "singleQuote": true,

@@ -5,6 +5,10 @@
     "strictNullChecks": false,
     "skipLibCheck": true
   },
-  "files": ["scripts/verify-package-sea.js"],
+  "files": [
+    "scripts/verify-package-sea.js",
+    "scripts/verify-systemd-user-service-linux.js",
+    "test/systemd/boot-check.js"
+  ],
   "include": []
 }
