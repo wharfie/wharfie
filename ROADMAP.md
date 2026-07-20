@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Public activity-only workflows now have source and relocated-SEA crash/restart proof; cursor-aware cancellation, timers, and signals next · **Last updated:** 2026-07-19
+**Status:** Durable run-level workflow cancellation is implemented; persisted timers and signals are next · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -274,11 +274,18 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       verifiers run synchronously during every fold, response-loss retries never
       redispatch a retained `STARTED` effect, and attempt terminals cannot omit
       or invent effect state. V4 records and its V2 directory remain inert.
+- [x] Add cursor-aware run-level workflow cancellation. Runnable and claimed
+      activations terminalize without authored dispatch; a started activation
+      persists intent before exact-owner delivery; uncertain work retains a
+      no-continuation fence without claiming a physical outcome. Verified
+      `cancelled` evidence requires that exact prior authority, while success and
+      failure races preserve their proven terminal evidence and never create a
+      successor after cancellation wins.
 - [ ] Extend the workflow ledger from ordinary activity continuations to
-      persisted timer/signal decisions, cursor-aware cancellation, and cancelled
-      reconciliation under durable cancellation authority. Activity-only start,
-      workflow-aware inspection/recovery/reconciliation, resident dispatch, and
-      direct or reconciled `failed` and `protocol-failed` terminals are complete.
+      persisted timer and current-wait signal decisions. Activity-only start,
+      workflow-aware inspection/recovery/reconciliation, resident dispatch,
+      cursor-aware cancellation, and direct or reconciled activity terminals
+      are complete.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
@@ -448,27 +455,31 @@ redispatching lost started work, and runs supported activity-to-activity chains
 serially. Shared source and packaged `start` commands now persist only plans
 that are executable end to end as ordinary activities. Generic `inspect`,
 confirmed `recover`, and evidence-backed `reconcile` expose or mutate the exact
-workflow cursor without leaking payloads; generic `cancel` rejects workflows.
+workflow cursor without leaking payloads. Generic `cancel` now accepts workflow
+runs with a stable request identity: it terminalizes unstarted work, records
+intent before signaling an exact active attempt, or fences blocked uncertainty
+against later continuation. Matching cancelled evidence can reconcile only
+when the retained attempt itself carries that prior request; deadline evidence
+remains unsupported.
+
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
 responses, resident generation takeover, and evidence-backed continuation. The
 moved artifact completes the two-step proof with Node unavailable on `PATH`.
 
-1. Add run-level cursor-aware workflow cancellation, including races with
-   activity success and blocked recovery; broaden reconciliation only when each
-   cancelled or deadline outcome has an explicit policy. `cancelled` and
-   `deadline-exceeded` remain unsupported until then.
-2. Add persisted timers and current-wait signals on the same cursor and
+1. Add persisted timers and current-wait signals on the same cursor and
    run-head boundary, followed by their shared source/packaged commands.
-3. Install the SEA as an OS-managed service, then add the smallest
+2. Install the SEA as an OS-managed service, then add the smallest
    provider-backed path that can create, inspect, update, and remove one durable
    node through the operator's credential chain.
-4. Begin provider-backed coordinator recovery only after the single-node
+3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [workflow crash-recovery
-checkpoint](llm/checkpoints/2026-07-19-v11-workflow-crash-recovery.md). Its
+The current restart point is the [workflow cancellation
+checkpoint](llm/checkpoints/2026-07-19-v12-workflow-cancellation.md). Its parent
+is the [workflow crash-recovery
+checkpoint](llm/checkpoints/2026-07-19-v11-workflow-crash-recovery.md), whose
 parent is the [public workflow operator
 checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md),
 whose parent is the [resident workflow activity dispatch

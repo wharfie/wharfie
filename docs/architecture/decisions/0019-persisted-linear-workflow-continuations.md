@@ -2,15 +2,20 @@
 
 **Status:** Accepted · **Date:** 2026-07-19
 
-**Implementation status (2026-07-19):** the V10 ledger implements the initial
+**Implementation status (2026-07-19):** the V10 ledger implements
 activity-headed materialization, cursor-guarded activity claim/start, compound
-verified terminal settlement, and the first conservative recovery boundary. It
-releases an unstarted `CLAIMED` generation back to `ACTIVITY_RUNNABLE`, blocks a lost
-`STARTED` generation at `ACTIVITY_UNCERTAIN`, accepts exact completed evidence
-to atomically continue or complete the workflow, and terminalizes direct or
-reconciled `failed` and `protocol-failed` evidence without an output or
-successor. Reconciliation never rewrites the retained `ABANDONED` attempt.
-Ready-work V2 changes in the same transactions.
+verified terminal settlement, conservative recovery, and run-level
+cancellation. It releases an unstarted `CLAIMED` generation back to
+`ACTIVITY_RUNNABLE`, blocks a lost `STARTED` generation at
+`ACTIVITY_UNCERTAIN`, accepts exact completed evidence to atomically continue
+or complete the workflow, and terminalizes direct or reconciled failures
+without an output or successor. Runnable and claimed cancellation removes
+ready authority without authored dispatch; started cancellation persists
+before exact-owner delivery; uncertain cancellation prevents continuation
+without claiming a physical outcome. Matching verified `cancelled` evidence is
+accepted only under the exact prior cancellation authority. Reconciliation
+never rewrites the retained `ABANDONED` attempt. Ready-work V2 changes in the
+same transactions.
 Adapter matrices cover replay, races, injected payload and transaction
 failures, projection and payload tampering, and native LMDB close/reopen.
 The resident now consumes exact manifest-bound workflow `ACTIVITY` and
@@ -19,10 +24,11 @@ continues ordinary activity chains serially, releases only unstarted claims,
 and turns lost started work into non-runnable uncertainty. Shared source and
 packaged `start` commands now persist plans composed entirely of ordinary
 activity steps, and generic exact-run inspection, confirmed recovery, and
-evidence reconciliation understand the workflow trigger and cursor. Cursor-aware
-cancellation, timers, signals, managed-effect successor steps, managed effects
-in workflow attempts, and reconciliation of cancelled or deadline-exceeded
-evidence remain prospective.
+evidence reconciliation understand the workflow trigger and cursor. Generic
+source and packaged `cancel` commands now share the same cursor-aware workflow
+decision. Timers, signals, managed-effect successor steps, managed effects in
+workflow attempts, and reconciliation of `deadline-exceeded` evidence remain
+prospective.
 
 ## Context
 
@@ -192,16 +198,19 @@ terminal delivery may leave the run `BLOCKED` until a future explicit policy or
 operator decision exists.
 
 Reconciliation accepts a complete verified Activity Protocol transcript ending
-in `completed`, `failed`, or `protocol-failed` for that exact abandoned attempt
-and anchored to the exact uncertainty event. It leaves the physical attempt
-byte-identical. Completed evidence persists the logical output and atomically
-installs the next activity and `ACTIVITY` row or completes the workflow.
-Failure evidence changes the logical invocation and run to `FAILED`, advances
-the cursor to the matching failure disposition, retains the prior output
-prefix, and creates no output, successor, or ready row. Cancelled and
-deadline-exceeded reconciliation remain deliberately unsupported. A transcript
-containing any host cancel frame is rejected on write, replay, and rebuild
-until a cursor-aware durable workflow-cancellation decision can authorize it.
+in `completed`, `failed`, `protocol-failed`, or an authorized `cancelled` for
+that exact abandoned attempt and anchored to the exact uncertainty event. It
+leaves the physical attempt byte-identical. Completed evidence persists the
+logical output and atomically installs the next activity and `ACTIVITY` row or
+completes the workflow unless a prior cancellation request already forbids a
+successor. Failure evidence changes the logical invocation and run to `FAILED`,
+advances the cursor to the matching failure disposition, retains the prior
+output prefix, and creates no output, successor, or ready row. Cancelled
+evidence is valid only when that abandoned attempt itself retained the prior
+cancellation request and its transcript carries the exact host cancel reason.
+A request recorded after the attempt became uncertain may fence future
+continuation, but it cannot retroactively authorize a past cancel transcript.
+`deadline-exceeded` reconciliation remains deliberately unsupported.
 
 Response-loss replay is decision-oriented. It verifies the request against the
 original receipt event and returns the current run and invocation authority
@@ -304,12 +313,19 @@ transaction records cancellation, consumes the cursor, cancels unstarted work,
 removes its work-index row, and terminalizes the workflow without executing
 user code.
 
-For a `STARTED` activity, durable cancellation intent commits before the active
-owner sends the Activity Protocol cancellation frame. A cancellation request
-does not erase begun work or prove a physical outcome. Verified terminal
-evidence may still win; ambiguous termination becomes `UNCERTAIN`. Once a
-cancellation request is retained, an activity terminal transition cannot
-create a later workflow continuation.
+For a `STARTED` activity, durable cancellation intent commits before the exact
+active owner sends the Activity Protocol cancellation frame. A cancellation
+request does not erase begun work or prove a physical outcome. A matching
+verified `cancelled` terminal may then close the run; ambiguous termination
+becomes `UNCERTAIN`. Verified failure remains failure. Verified final success
+may complete the run, but a non-final success observed after cancellation does
+not create a later workflow continuation.
+
+For an already uncertain activity, cancellation records a durable
+no-continuation decision while retaining `BLOCKED`, `UNCERTAIN`, `ABANDONED`,
+and `ACTIVITY_UNCERTAIN`. It does not rewrite the abandoned attempt or claim
+that the old physical execution stopped. A later reconciliation must still
+provide exact terminal evidence under the rules above.
 
 Timer firing, signal consumption, activity terminal, and cancellation all
 condition on the same run head and exact cursor. If they race, one transaction

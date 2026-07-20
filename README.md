@@ -128,9 +128,8 @@ blocks lost started attempts without redispatch. Source `wharfie ops start` and
 packaged `<app> wharfie start` now persist an activity-only manifest workflow,
 and the shared exact-run inspection, recovery, and evidence-reconciliation
 commands understand its redacted cursor and recovery authority. Timers,
-signals, managed-effect successor steps, workflow cancellation, and schedules
-remain unfinished. OS service
-installation/startup, multi-host leases and heartbeats, and public run
+signals, managed-effect successor steps, and schedules remain unfinished. OS
+service installation/startup, multi-host leases and heartbeats, and public run
 history/listing are also later work. The npm package remains deliberately
 private. It is not ready for production use.
 
@@ -140,7 +139,9 @@ private. It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Public workflow operator checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md) — the current implementation handoff for shared source/package start, schema-v6 inspection, confirmed recovery, and event-anchored evidence reconciliation.
+- [Workflow cancellation checkpoint](llm/checkpoints/2026-07-19-v12-workflow-cancellation.md) — the current implementation handoff for durable run-level cancellation, active delivery, replay, and cancelled-evidence reconciliation.
+- [Workflow crash-recovery checkpoint](llm/checkpoints/2026-07-19-v11-workflow-crash-recovery.md) — the preceding handoff for public source and relocated-SEA process-death recovery.
+- [Public workflow operator checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md) — the earlier handoff for shared source/package start, schema-v6 inspection, confirmed recovery, and event-anchored evidence reconciliation.
 - [Resident workflow activity checkpoint](llm/checkpoints/2026-07-19-v9-resident-workflow-activities.md) — the preceding handoff for exact manifest-bound dispatch and conservative restart recovery.
 - [Activity-headed workflow-start checkpoint](llm/checkpoints/2026-07-19-v5-activity-headed-workflow-start.md) — the historical handoff for immutable workflow inputs, stable cursor identities, atomic initial materialization, and ready-work V2.
 - [V10 ready-work checkpoint](llm/checkpoints/2026-07-19-v4-v10-ready-work.md) — the preceding implementation handoff for the exact-revision transactional scheduler locator and strict workflow authoring contract.
@@ -229,8 +230,10 @@ entire plan is currently executable as ordinary activity steps; it rejects a
 timer, signal, or managed-effect successor before creating durable state. The
 resident executes those accepted activity chains and atomically advances their
 persisted cursor. Exact-run `inspect`, confirmed `recover`, and evidence-backed
-`reconcile` are workflow-aware. Cursor-aware workflow cancellation is not
-implemented, so the generic `cancel` command rejects workflow runs.
+`reconcile` are workflow-aware. Generic `cancel` is run-level for workflows:
+it terminalizes unstarted work, durably records intent before signaling an
+exact active attempt, and fences a blocked uncertain activation against later
+continuation. Stable request IDs make response-loss retries idempotent.
 Application- and activity-level `resources` are not part
 of the schema and are rejected as unknown fields. A caller-metadata object may
 contain a property named `resources`, but it is ordinary inert JSON—not an
@@ -285,13 +288,13 @@ deliberately serial. On
 then retains ownership until the attempt and admitted command handlers settle.
 A manual attempt receives cooperative durable cancellation; a workflow attempt
 receives physical drain cancellation and becomes durably uncertain unless it
-still returns a supported terminal.
+still returns a supported terminal. That shutdown path remains physical-only;
+an operator `cancel` request is the separate durable run-level decision.
 
 This is a foreground resident runtime, not service installation. Wharfie does
 not yet install startup-on-boot units or provide schedules, timer/signal
-workflow continuations, managed-effect workflow successors, cursor-aware
-workflow cancellation, multi-host reassignment, or public run-history/listing
-commands.
+workflow continuations, managed-effect workflow successors, multi-host
+reassignment, or public run-history/listing commands.
 
 ## Reconcile one uncertain managed effect
 

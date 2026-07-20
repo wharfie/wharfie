@@ -221,8 +221,9 @@ contains only safe run, revision, workflow, cursor, and invocation lifecycle
 fields. It does not echo inputs or internal payload references.
 
 Only a plan composed entirely of ordinary activity steps is accepted by this
-first public slice. Timer and signal continuations, managed-effect successors,
-and workflow cancellation remain unsupported.
+first public slice. Timer and signal continuations and managed-effect
+successors remain unsupported. Run-level cancellation is available after the
+workflow has been created.
 
 Run the matching source revision as a foreground resident in another terminal:
 
@@ -392,60 +393,74 @@ in the operator response. For a workflow, verified `completed` evidence
 atomically creates the next ordinary activity or completes the run; verified
 `failed` or `protocol-failed` evidence terminalizes it without a successor.
 Exact reconciliation replay remains bound to the original uncertainty event
-even after its cursor has advanced. For a manual run, a `cancelled` result still
-requires the matching earlier durable cancellation request and host
-cancellation frame. Workflow `cancelled` and `deadline-exceeded` evidence
-remain unsupported.
+even after its cursor has advanced. A `cancelled` result for either a manual or
+workflow attempt requires the matching earlier durable cancellation request
+on that exact attempt and the corresponding host cancellation frame and
+reason. A cancellation recorded only after a workflow attempt became uncertain
+prevents continuation but cannot authorize a historical cancelled transcript.
+`deadline-exceeded` evidence remains unsupported until a persisted deadline
+decision exists.
 
 The V10 ledger carries forward cancellation by the active local owner. During
 `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
 before the owner signals the physical attempt. An LMDB-backed foreground run
 or resident worker that owns the exact `STARTED` attempt can also receive
 source `wharfie ops cancel` or packaged `<app> wharfie cancel` through its
-bounded, authenticated same-principal local command endpoint. `--request-id`
-is required; reuse the same value after a lost response. The owner persists
-durable intent before it begins delivery. The command reports `delivery:
-"started"` only after that handoff begins; a timeout, stale/moved owner,
-unavailable endpoint, inactive or wrong run, idle resident, or resident that is
-executing another run reports no delivery and never falls back to a direct
-ledger write. The local transport is deliberately unsupported on Windows.
+bounded, authenticated same-principal local command endpoint:
 
-The external command intentionally cannot directly cancel `RUNNABLE`,
-`CLAIMED`, or otherwise unstarted work: only an active local owner's exact
-`STARTED` attempt can accept it. Once that attempt is started, only matching
-cancellation evidence can commit `CANCELLED`; a verified completion or failure
-may still win, while unconfirmed post-cancellation termination becomes blocked
-`UNCERTAIN` work; later reconciliation needs evidence rather than another
-cancel request. The generic `cancel` command rejects workflow runs until a
-cursor-aware run-level cancellation decision exists. There is still no public
-run-history/list: the verified bounded V8 run directory paired with the V10
+```bash
+wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>
+<app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>
+```
+
+Reuse the same request ID after a lost response. For a manual run, the owner
+persists durable intent before delivery and reports `delivery: "started"` only
+after that handoff begins. A timeout, stale or moved owner, unavailable
+endpoint, inactive or wrong run, idle resident, or resident executing another
+manual run reports no delivery and never falls back to a direct ledger write.
+The local transport is deliberately unsupported on Windows.
+
+That active-attempt-only restriction remains deliberate for manual runs. A
+workflow cancellation is instead a cursor-aware run decision. `RUNNABLE` or
+`CLAIMED` work becomes `CANCELLED` without authored dispatch. An exact live
+`STARTED` attempt records the request before receiving its protocol cancel
+frame. A blocked `ACTIVITY_UNCERTAIN` cursor retains its physical uncertainty
+but gains a durable no-continuation fence. The same request replays without a
+second transition or signal. Verified completion or failure evidence remains
+authoritative, but a non-final completion observed after cancellation cannot
+create a successor; unconfirmed termination remains blocked uncertainty.
+
+There is still no public run-history/list: the verified bounded V8 run
+directory paired with the V10
 ledger is internal rather than the retired `ops list` surface. The resident now
 submits, claims, and executes exact-revision manual activities serially and
 consumes exact manifest-bound workflow activity continuations created through
 public `start`. Public `inspect`, confirmed `recover`, and evidence-backed
 `reconcile` understand those workflow runs; timers, signals, managed-effect
-successors, cancellation, and schedules remain unsupported. The manual bounded
+successors, and schedules remain unsupported. The manual bounded
 recovery and reconciliation paths have prior real subprocess and relocated-SEA
 crash coverage across request, start, destination commit, payload publication,
 ledger settlement, and response-delivery boundaries. The manual resident
 dispatch and shutdown surface has a complete source, package, and moved-SEA
 validation receipt, including exact-revision dispatch, graceful drain tests,
 current-revision managed-effect recovery, and service crash/restart with Node
-unavailable on `PATH`. The workflow dispatcher currently has focused
-real-ledger and resident lifecycle coverage. Wharfie remains a single-process
-activity worker rather than a production workflow service: public workflow
-process-kill and relocated-SEA proofs, timers/signals, OS installation/reboot
-proof, and multi-host coordination are still intentionally absent.
+unavailable on `PATH`. Source-process and relocated-SEA matrices also prove
+public workflow start, recovery, reconciliation, offline cancellation, and
+active persist-before-signal response-loss behavior. Wharfie remains a
+single-process activity worker rather than a production workflow service:
+timers/signals, OS installation/reboot proof, and multi-host coordination are
+still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.
 An active attempt receives 30 seconds to finish naturally. After that, a manual
 attempt uses its existing cooperative durable-cancellation path; a workflow
 attempt receives only physical drain cancellation and becomes durably uncertain
-unless it still produces a supported terminal, because workflow cancellation
-authority is not implemented. The worker keeps local ownership until the
-attempt settles. Only then does graceful shutdown write `STOPPED` and release
-ownership. Lifecycle remains `STARTING` until the
+unless it still produces a supported terminal. Generic shutdown is not an
+operator cancellation request and deliberately creates no run-level workflow
+authority. The worker keeps local ownership until the attempt settles. Only
+then does graceful shutdown write `STOPPED` and release ownership. Lifecycle
+remains `STARTING` until the
 owner-command socket is bound, so durable `READY` means that authenticated
 submission/cancellation ingress is actually available. The resident endpoint
 accepts the ledger's bounded referenced-payload size; unrelated local-owner
@@ -476,9 +491,9 @@ need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
 
 The v2 manifest exposes only the bounded plain-data workflow definitions above;
 its public start and operator commands handle activity-only continuations, but
-timers/signals, managed-effect successors, cursor-aware cancellation, schedules,
-arbitrary packaging assets, signing credentials, and other build secrets remain
-unsupported. External activity packages must be pinned as exact descriptors such as
+timers/signals, managed-effect successors, schedules, arbitrary packaging
+assets, signing credentials, and other build secrets remain unsupported.
+External activity packages must be pinned as exact descriptors such as
 `externalPackages: [{ name: 'sharp', version: '0.34.4' }]`; ranges, tags, URLs,
 and ambient dependency resolution are not accepted. Multiple entries must use
 lowercase npm registry names, be unique, and be sorted by name.

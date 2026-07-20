@@ -38,11 +38,12 @@ persists their outputs, and conservatively releases `CLAIMED` or blocks lost
 exact-run inspection, confirmed recovery, and evidence-reconciliation commands
 understand their redacted workflow cursor.
 
-This is not yet a durable workflow engine or an installed operating-system
-service. Workflow cancellation, timer and signal continuations, managed-effect
-successor steps, schedules, startup-on-boot installation, provider-backed
-deployment, multi-host leases/heartbeats, and the trusted-node mesh remain
-roadmap work; Wharfie is not production ready.
+This is not yet a complete durable workflow engine or an installed
+operating-system service. Run-level workflow cancellation now has durable
+cursor authority and active-owner delivery; timer and signal continuations,
+managed-effect successor steps, schedules, startup-on-boot installation,
+provider-backed deployment, multi-host leases/heartbeats, and the trusted-node
+mesh remain roadmap work; Wharfie is not production ready.
 
 ## Start locally
 

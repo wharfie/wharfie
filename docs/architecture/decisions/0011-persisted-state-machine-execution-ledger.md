@@ -275,6 +275,13 @@ establishes its outcome; ambiguous post-cancellation termination becomes
 `UNCERTAIN`. Later reconciliation cannot rewrite the original abandoned
 attempt.
 
+[0019](0019-persisted-linear-workflow-continuations.md) applies the same truth
+boundary at the workflow cursor. Run-level cancellation can terminalize an
+unstarted activation, persist before signaling one exact active attempt, or
+fence an uncertain activation against continuation without relabelling its
+physical outcome. A matching cancelled transcript is authoritative only when
+the exact attempt already retained that cancellation request.
+
 ### Revision pinning and upgrades
 
 A run binds one exact immutable application `revisionId`. Its invocations and
@@ -403,19 +410,23 @@ uses a stable caller reconciliation ID, and lets the ledger verify the exact
 prior uncertainty event rather than accept an operator-selected outcome.
 Packaged recovery and reconciliation require the local LMDB protocol, while
 source forms retain their documented configured-adapter behavior. External
-cancellation requires LMDB: it reads the current owner read-only, then uses an
-authenticated per-session command endpoint only for that exact live
-same-principal foreground or resident `STARTED` attempt. It requires a stable
-request ID for retries and never falls back to a direct mutation. An idle
-resident or one executing another run does not count as the target attempt and
-reports no delivery.
+cancellation requires LMDB and a stable request ID. Manual runs retain the
+exact-live-attempt rule: the command reads the current owner and uses its
+authenticated per-session endpoint only for that same-principal foreground or
+resident `STARTED` attempt, with no direct-write fallback. Workflow
+cancellation is run-level instead. It routes to the resident even when the
+target is idle or a different run is active, or acquires short-lived local
+ownership when no resident exists. Only a newly retained request for the exact
+active workflow attempt authorizes physical delivery.
 
 Graceful resident shutdown stops owner-command admission and new claims, writes
 `STOPPING` while retaining ownership, and waits for admitted callbacks. One
 active attempt receives a 30-second natural drain allowance; expiry requests
-cooperative cancellation through the same durable cancellation path. The
-resident retains ownership until the attempt and command handlers settle, then
-writes `STOPPED` and releases its session. Startup keeps lifecycle at
+cooperative durable cancellation for a manual attempt. Workflow drain remains
+a physical shutdown signal rather than implicitly creating an operator
+run-cancellation decision. The resident retains ownership until the attempt
+and command handlers settle, then writes `STOPPED` and releases its session.
+Startup keeps lifecycle at
 `STARTING` until the separate owner-command socket is bound; shutdown that wins
 before binding moves directly to `STOPPING` without publishing false
 readiness. Resident submission explicitly enlarges that authenticated

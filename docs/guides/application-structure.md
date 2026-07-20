@@ -84,8 +84,10 @@ source `wharfie ops start --workflow <workflow-id>` and packaged
 composed entirely of ordinary activity steps. A timer, signal, or
 managed-effect successor step is rejected before durable run state is created.
 Exact-run inspection, confirmed recovery, and evidence-backed reconciliation
-are also workflow-aware. Workflow cancellation, timer/signal execution, and
-schedules remain later runtime slices.
+are also workflow-aware. Run-level workflow cancellation terminalizes
+unstarted work, persists before exact active-attempt delivery, and fences
+uncertain work against continuation. Timer/signal execution and schedules
+remain later runtime slices.
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains
