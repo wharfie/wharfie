@@ -59,6 +59,8 @@ const MAX_SERVICE_RECORD_BYTES = 64 * 1024;
 const ATOMIC_PUBLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const ACTIVATION_RECOVERY_REMEDIATION =
   'Run service recover before retrying activation.';
+const ACTIVE_REINSTALL_RECOVERY_REMEDIATION =
+  'Run service install again from the exact selected SEA to resume repair.';
 const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
   'appId',
   'dataRoot',
@@ -173,6 +175,33 @@ function createActivationRecoveryRequiredError(error) {
   Object.assign(failure, {
     code: 'systemd-user-service-activation-recovery-required',
     remediation: ACTIVATION_RECOVERY_REMEDIATION,
+    cause: error,
+  });
+  return failure;
+}
+
+/**
+ * Mark only failures after an authorized ACTIVE repair begins. Durable
+ * activation remains ACTIVE, so replay is `service install` from the selected
+ * SEA rather than activation `recover`.
+ * @param {unknown} error - Interrupted physical repair.
+ * @returns {Error} - Actionable replay error.
+ */
+function createActiveReinstallRecoveryRequiredError(error) {
+  if (
+    hasCode(error, 'systemd-user-service-active-reinstall-recovery-required')
+  ) {
+    return /** @type {Error} */ (error);
+  }
+  const causeMessage =
+    error instanceof Error
+      ? error.message
+      : 'Systemd user-service ACTIVE repair was interrupted.';
+  const failure = new Error(causeMessage);
+  failure.name = 'SystemdUserServiceActiveReinstallRecoveryRequiredError';
+  Object.assign(failure, {
+    code: 'systemd-user-service-active-reinstall-recovery-required',
+    remediation: ACTIVE_REINSTALL_RECOVERY_REMEDIATION,
     cause: error,
   });
   return failure;
@@ -3405,25 +3434,29 @@ export function createSystemdUserServiceOperator(options = {}) {
       }
     }
     if (needsRepair) {
-      await runtime.driver.stopService({ appId: context.pair.runtime.appId });
-      await runtime.driver.proveServiceInactive({
-        appId: context.pair.runtime.appId,
-      });
-      await runtime.driver.selectRelease(projection);
-      await runtime.driver.verifySelection(projection);
-      const activated = await runtime.driver.activateRelease({
-        appId: context.pair.runtime.appId,
-        release: current.selected,
-      });
-      if (activated.status !== 'healthy') {
-        throw new Error(
-          'Retained systemd activation release failed during reinstall.',
-        );
+      try {
+        await runtime.driver.stopService({ appId: context.pair.runtime.appId });
+        await runtime.driver.proveServiceInactive({
+          appId: context.pair.runtime.appId,
+        });
+        await runtime.driver.selectRelease(projection);
+        await runtime.driver.verifySelection(projection);
+        const activated = await runtime.driver.activateRelease({
+          appId: context.pair.runtime.appId,
+          release: current.selected,
+        });
+        if (activated.status !== 'healthy') {
+          throw new Error(
+            'Retained systemd activation release failed during reinstall.',
+          );
+        }
+        await runtime.driver.verifyActiveRelease({
+          appId: context.pair.runtime.appId,
+          release: current.selected,
+        });
+      } catch (error) {
+        throw createActiveReinstallRecoveryRequiredError(error);
       }
-      await runtime.driver.verifyActiveRelease({
-        appId: context.pair.runtime.appId,
-        release: current.selected,
-      });
     }
     return Object.freeze({
       operation: 'install',
@@ -3561,7 +3594,9 @@ export function createSystemdUserServiceOperator(options = {}) {
             );
             if (installation?.state !== 'uninstalled') {
               throw new Error(
-                'A different activation release is selected; use service update.',
+                installation?.state === 'installed'
+                  ? 'A different activation release is selected; use service update.'
+                  : 'The durable activation lacks its installed source projection; invoke its exact selected SEA and run service install before service update.',
               );
             }
             await reinstallActiveSelection(context, runtime, current, {
@@ -3596,6 +3631,11 @@ export function createSystemdUserServiceOperator(options = {}) {
         appId: context.pair.runtime.appId,
       });
       if (current?.phase === LocalApplicationActivationPhase.ACTIVE) {
+        if (!current.selected) {
+          throw new Error(
+            'Systemd update requires one exact ACTIVE source release.',
+          );
+        }
         const installation = await readInstallation(
           context.layout,
           context.uid,
@@ -3607,6 +3647,21 @@ export function createSystemdUserServiceOperator(options = {}) {
           await reinstallActiveSelection(context, runtime, current, {
             requireInvokingRelease: false,
           });
+        } else {
+          const projection = Object.freeze({
+            appId: context.pair.runtime.appId,
+            current: current.selected,
+            previous: current.rollbackCandidate,
+          });
+          const physical = await inspectPhysicalSelectionRepair(
+            context,
+            projection,
+          );
+          if (physical.needsRepair) {
+            throw new Error(
+              'The durable activation lacks its exact installed source projection; invoke its exact selected SEA and run service install before service update.',
+            );
+          }
         }
       }
       const result = await runtime.coordinator.update({

@@ -610,6 +610,75 @@ describe('packaged systemd user service command', () => {
     expect(processRef.exitCode).toBe(1);
   });
 
+  it('prints exact active-reinstall repair guidance as JSON', async () => {
+    const failure = jest.fn();
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('reinstall interrupted\nmid-repair'), {
+            code: 'systemd-user-service-active-reinstall-recovery-required',
+            remediation:
+              'Run service install again from the exact selected SEA to resume repair.',
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure, json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'install',
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      message: 'reinstall interrupted mid-repair',
+      remediation:
+        'Run service install again from the exact selected SEA to resume repair.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(
+      'must-not-appear',
+    );
+    expect(failure).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('prints safe active-reinstall repair guidance for humans', async () => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('reinstall interrupted\nmid-repair'), {
+            code: 'systemd-user-service-active-reinstall-recovery-required',
+            remediation:
+              'Run service install again from the exact selected SEA to resume repair.',
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install']);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      message:
+        'reinstall interrupted mid-repair Run service install again from the exact selected SEA to resume repair.',
+    });
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('secret');
+    expect(processRef.exitCode).toBe(1);
+  });
+
   it('does not recommend recovery for an activation preflight failure', async () => {
     const failure = jest.fn();
     const json = jest.fn();
@@ -669,11 +738,29 @@ describe('packaged systemd user service command', () => {
   });
 
   it.each([
-    ['missing', undefined],
-    ['wrong', 'Retry service install.'],
+    [
+      'missing activation',
+      'systemd-user-service-activation-recovery-required',
+      undefined,
+    ],
+    [
+      'wrong activation',
+      'systemd-user-service-activation-recovery-required',
+      'Run service install again from the exact selected SEA to resume repair.',
+    ],
+    [
+      'missing active-reinstall',
+      'systemd-user-service-active-reinstall-recovery-required',
+      undefined,
+    ],
+    [
+      'wrong active-reinstall',
+      'systemd-user-service-active-reinstall-recovery-required',
+      'Run service recover before retrying activation.',
+    ],
   ])(
     'does not trust %s remediation on a recovery-coded error',
-    async (_label, remediation) => {
+    async (_label, code, remediation) => {
       const json = jest.fn();
       const processRef = { exitCode: undefined };
       const command = createSystemdUserServiceCommand({
@@ -681,7 +768,7 @@ describe('packaged systemd user service command', () => {
           ...makeOperator(),
           update: async () => {
             const error = Object.assign(new Error('activation interrupted'), {
-              code: 'systemd-user-service-activation-recovery-required',
+              code,
             });
             if (remediation !== undefined) {
               Object.assign(error, { remediation });
@@ -699,7 +786,7 @@ describe('packaged systemd user service command', () => {
         schemaVersion: 1,
         kind: 'wharfie.service.error',
         action: 'update',
-        code: 'systemd-user-service-activation-recovery-required',
+        code,
         message: 'activation interrupted',
       });
       expect(processRef.exitCode).toBe(1);

@@ -45,10 +45,13 @@ const ACTIVATION_ACTIONS = new Set([
   'rollback',
   'recover',
 ]);
-const ACTIVATION_RECOVERY_REMEDIATION =
-  'Run service recover before retrying activation.';
-const ACTIVATION_RECOVERY_ERROR_CODE =
-  'systemd-user-service-activation-recovery-required';
+/** @type {Readonly<Record<string, string>>} */
+const SERVICE_ERROR_REMEDIATIONS = Object.freeze({
+  'systemd-user-service-activation-recovery-required':
+    'Run service recover before retrying activation.',
+  'systemd-user-service-active-reinstall-recovery-required':
+    'Run service install again from the exact selected SEA to resume repair.',
+});
 const SERVICE_REQUEST_STATUSES = new Set([
   'fulfilled',
   'refused',
@@ -296,13 +299,16 @@ function createJsonError(error, action) {
   const code = /^[a-z0-9][a-z0-9-]{0,127}$/.test(rawCode)
     ? rawCode
     : 'systemd-user-service-operation-failed';
+  const expectedRemediation = Object.hasOwn(SERVICE_ERROR_REMEDIATIONS, code)
+    ? SERVICE_ERROR_REMEDIATIONS[code]
+    : null;
   const remediation =
-    code === ACTIVATION_RECOVERY_ERROR_CODE &&
+    expectedRemediation !== null &&
     error &&
     typeof error === 'object' &&
     'remediation' in error &&
-    error.remediation === ACTIVATION_RECOVERY_REMEDIATION
-      ? ACTIVATION_RECOVERY_REMEDIATION
+    error.remediation === expectedRemediation
+      ? expectedRemediation
       : null;
   return Object.freeze({
     schemaVersion: 1,

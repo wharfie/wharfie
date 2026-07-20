@@ -744,6 +744,51 @@ describe('systemd user service manager', () => {
     });
   });
 
+  it.each(['current', 'previous'])(
+    'degrades status when the installed %s release disagrees with ACTIVE state',
+    async (mismatchedField) => {
+      const harness = await createHarness();
+      const source = await inspectArtifactBytes(harness.artifactPath);
+      await harness.operator.install();
+      await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+      const target = await inspectArtifactBytes(harness.artifactPath);
+      await harness.operator.update();
+      const installation = JSON.parse(
+        await fsp.readFile(harness.layout.installationPath, 'utf8'),
+      );
+      if (mismatchedField === 'current') {
+        [installation.current, installation.previous] = [
+          installation.previous,
+          installation.current,
+        ];
+      } else {
+        installation.previous = null;
+      }
+      await fsp.writeFile(
+        harness.layout.installationPath,
+        `${JSON.stringify(installation, null, 2)}\n`,
+      );
+
+      const status = await harness.operator.status();
+      expect(status).toMatchObject({
+        health: 'degraded',
+        integrity: { status: 'invalid' },
+        activation: {
+          phase: 'ACTIVE',
+          action: null,
+          selected: {
+            artifactId: target.artifactId,
+            revisionId: REVISION_ID,
+          },
+          rollback: {
+            artifactId: source.artifactId,
+            revisionId: REVISION_ID,
+          },
+        },
+      });
+    },
+  );
+
   it('rolls back through the durable activation projection', async () => {
     const harness = await createHarness();
     const source = await inspectArtifactBytes(harness.artifactPath);
@@ -2178,6 +2223,57 @@ describe('systemd user service manager', () => {
     });
   });
 
+  it('requires the selected SEA to repair an unexpectedly missing ACTIVE receipt before update', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    await fsp.unlink(harness.layout.installationPath);
+    const activationBefore = await readActivationRecord(harness);
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.calls.length = 0;
+
+    await expect(harness.operator.update()).rejects.toThrow(
+      /lacks its exact installed source projection.*exact selected SEA.*service install before service update/,
+    );
+    await expect(readActivationRecord(harness)).resolves.toEqual(
+      activationBefore,
+    );
+    expect(harness.state.active).toBe(false);
+    await expect(fsp.lstat(harness.layout.currentLink)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(
+      fsp.stat(path.join(harness.layout.releasesRoot, target.artifactId)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' &&
+          ['stop', 'daemon-reload', 'enable', 'start'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
+    await expect(harness.operator.install()).rejects.toThrow(
+      /exact selected SEA.*service install before service update/,
+    );
+
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v1');
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      activeArtifactId: source.artifactId,
+      health: 'healthy',
+    });
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    await expect(harness.operator.update()).resolves.toMatchObject({
+      action: 'update',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
+  });
+
   it('reprojects the retained source before an update after uninstall', async () => {
     const harness = await createHarness();
     const source = await inspectArtifactBytes(harness.artifactPath);
@@ -2212,6 +2308,33 @@ describe('systemd user service manager', () => {
       activeArtifactId: target.artifactId,
       rollbackArtifactId: source.artifactId,
     });
+  });
+
+  it('replays interrupted ACTIVE repair with service install from the selected SEA', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    const activationBefore = await readActivationRecord(harness);
+    harness.state.failDaemonReloadOnce = true;
+
+    await expect(harness.operator.install()).rejects.toMatchObject({
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      remediation:
+        'Run service install again from the exact selected SEA to resume repair.',
+    });
+    await expect(readActivationRecord(harness)).resolves.toEqual(
+      activationBefore,
+    );
+
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: source.artifactId,
+    });
+    await expect(readActivationRecord(harness)).resolves.toEqual(
+      activationBefore,
+    );
   });
 
   it('installs over an activation-less uninstalled tombstone', async () => {
