@@ -3,7 +3,7 @@
 - **Date:** 2026-07-20
 - **Status:** **DURABLE ACTIVATION, PACKAGED MANAGER, CLI, AND EDGE HARDENING LANDED — REAL-HOST TWO-RELEASE PROOF REMAINS**
 - **Branch:** `agent/strict-manifest`
-- **Current remote-backed implementation commit:** `cdf97c3`
+- **Validated implementation/test head:** `d1b937e`
 - **Coordinator receipts:** `04414e5` through `cef45c3`
 - **Manager integration receipt:** `510f7be`
 - **Public CLI receipt:** `bd55e99`
@@ -11,6 +11,8 @@
 - **Recovery UX refinement receipt:** `a4a35c6`
 - **ACTIVE repair hardening receipt:** `df2edb1`
 - **Stale-draft corrective receipt:** `cdf97c3`
+- **Documentation receipt:** `a17991d`
+- **Full-gate stability receipt:** `d1b937e`
 - **Parent checkpoint:** [real systemd crash and reboot proof](2026-07-20-v16-systemd-reboot-proof.md)
 - **Design authority:** [project charter](../../PROJECT.md),
   [roadmap](../../ROADMAP.md), and [ADR
@@ -178,9 +180,13 @@ intentional-uninstall rehydration automatic, and expands status and repair
 regressions. A delayed stale draft was accidentally committed as `53332b8` and
 immediately neutralized by `cdf97c3`; it does not define the product contract.
 The implementation and runtime-test files at `cdf97c3` are byte-for-byte the
-`df2edb1` versions. At checkpoint creation,
-`origin/agent/strict-manifest` points to `cdf97c3`, so the implementation state
-is remotely backed up.
+`df2edb1` versions. Commit `a17991d` records the aligned public documentation
+and this checkpoint. Commit `d1b937e` raises one transaction-heavy ledger
+contract's per-test budget from 5 to 15 seconds after it exceeded the default
+only under the full suite's parallel load; isolated adapter cases complete in
+roughly 1.6–1.9 seconds. At checkpoint finalization,
+`origin/agent/strict-manifest` points at or after `d1b937e`, so the complete
+repository state is remotely backed up.
 
 ## Validation and evidence boundary
 
@@ -192,7 +198,13 @@ Using the repository's pinned Node 24 toolchain:
   and two tests intentionally skipped;
 - all source, app, test, and SEA-verifier TypeScript checks pass;
 - repository-wide ESLint and Prettier checks pass; and
-- package contents verify across 147 tarball files.
+- package contents verify across 147 tarball files;
+- the native external/LMDB integration test passes;
+- the production dependency audit reports zero vulnerabilities; and
+- the installed-package/generated-SEA verifier passes with Node unavailable on
+  the packaged command path. Its final Darwin SEA is 146,854,992 bytes with
+  SHA-256
+  `ebe0074d188019bf07d00f8a84b4a6a511946bb876e59a32b329f105ec7d229c`.
 
 The checksummed V16 disposable Ubuntu proof remains valid for the lifecycle it
 actually ran: install, status, restart, stop/start, uninstall, resident
@@ -204,11 +216,10 @@ manager tests as that proof.
 
 ## Worktree handoff
 
-The implementation through corrective HEAD `cdf97c3` is committed and pushed.
-This checkpoint
-and its README/roadmap/ADR/quickstart alignment are the documentation handoff
-for that implementation; the commit containing this file is the final receipt
-for those prose changes.
+The implementation through `cdf97c3`, documentation at `a17991d`, and
+full-gate stability adjustment at validated head `d1b937e` are committed,
+pushed, and validated. This checkpoint-only finalization commit follows that
+head, and the worktree is clean at handoff.
 
 The next safe sequence is:
 
@@ -223,16 +234,15 @@ The next safe sequence is:
 
 > Continue Wharfie from
 > `llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md` on branch
-> `agent/strict-manifest` at or after `cdf97c3`. Use only the local git CLI; do
+> `agent/strict-manifest` at or after `d1b937e`. Use only the local git CLI; do
 > not spend time on PRs or issues. Breaking changes are fine and there are no
 > downstream users, so optimize for the ideal v2 state. The durable activation
 > coordinator through `cef45c3`, packaged manager integration at `510f7be`,
 > public CLI at `bd55e99`, edge hardening at `48a4e8f`, and recovery UX at
 > `a4a35c6`, plus ACTIVE repair hardening at `df2edb1` and its corrective HEAD
-> at `cdf97c3`, are remotely backed up.
-> First verify the documentation/checkpoint
-> commit and run the full validation. Then build a disposable-host two-release
-> crash matrix;
+> at `cdf97c3`, documentation at `a17991d`, and the fully validated branch head
+> at `d1b937e` are remotely backed up. Build the disposable-host two-release
+> crash matrix next;
 > V16 proves reboot recovery for the old lifecycle but does not prove update or
 > rollback. Preserve the trusted-node, one-recoverable-coordinator,
 > Node/TypeScript public-boundary, portable SEA, and evidence-backed
