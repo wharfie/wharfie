@@ -575,14 +575,12 @@ export function createLocalApplicationSystemdActivation(options) {
       if (current.phase === LocalApplicationActivationPhase.QUIESCING) {
         const isSourceRestore =
           destination === LocalApplicationActivationDestination.SOURCE;
-        if (!isSourceRestore) {
+        const requiresSourceQuiescence =
+          !isSourceRestore && current.transition.source !== null;
+        if (requiresSourceQuiescence) {
           // A recovery may have been delayed arbitrarily after beginChange.
           // Re-prove the retained rollback path before stopping its source.
-          if (current.transition.source !== null) {
-            await verifySelectionProjection(
-              createSourceProjectionInput(current),
-            );
-          }
+          await verifySelectionProjection(createSourceProjectionInput(current));
           const beforeStop = await inspectQuiescence(appId);
           if (!beforeStop.quiescent) {
             return await retainSource(appId, current, beforeStop, operation);
@@ -593,7 +591,7 @@ export function createLocalApplicationSystemdActivation(options) {
         await options.stopService(Object.freeze({ appId }));
         await options.proveServiceInactive(Object.freeze({ appId }));
 
-        if (!isSourceRestore) {
+        if (requiresSourceQuiescence) {
           const afterStop = await inspectQuiescence(appId);
           if (!afterStop.quiescent) {
             return await retainSource(appId, current, afterStop, operation);

@@ -323,6 +323,25 @@ describe('local application systemd activation convergence', () => {
     expect(harness.state.held).toBe(false);
   });
 
+  it('installs the first resident while durable work is already queued', async () => {
+    const harness = await createHarness();
+    harness.state.quiescencePages.push([blocker('offline-work')]);
+
+    const result = await harness
+      .createService()
+      .install({ appId: APP_ID, target: RELEASE_A });
+
+    expect(result).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+      activation: { selected: RELEASE_A },
+    });
+    expect(harness.ledger.listRuns).not.toHaveBeenCalled();
+    expect(harness.state.active).toEqual(RELEASE_A);
+    expect(harness.state.quiescencePages).toHaveLength(1);
+  });
+
   it('recovers when stop took effect before the inactive proof failed', async () => {
     const harness = await createHarness();
     await install(harness);
