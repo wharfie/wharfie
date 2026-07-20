@@ -438,10 +438,15 @@ export function createLocalApplicationSystemdActivation(options) {
 
   /**
    * @param {string} appId - Application.
+   * @param {string} [allowedNonterminalRevisionId] - One compatible queued revision for first install.
    * @returns {ReturnType<typeof inspectLocalApplicationQuiescence>} - Quiescence evidence.
    */
-  async function inspectQuiescence(appId) {
-    return await inspectLocalApplicationQuiescence({ ledger, appId });
+  async function inspectQuiescence(appId, allowedNonterminalRevisionId) {
+    return await inspectLocalApplicationQuiescence({
+      ledger,
+      appId,
+      ...(allowedNonterminalRevisionId ? { allowedNonterminalRevisionId } : {}),
+    });
   }
 
   /**
@@ -460,7 +465,9 @@ export function createLocalApplicationSystemdActivation(options) {
         LocalApplicationSystemdActivationRequestStatus.PENDING,
         LocalApplicationSystemdActivationSettledOutcome.IN_FLIGHT,
         current,
-        'durable-work',
+        report.allowedNonterminalRevisionId
+          ? 'incompatible-durable-work'
+          : 'durable-work',
         report,
       );
     }
@@ -575,8 +582,8 @@ export function createLocalApplicationSystemdActivation(options) {
       if (current.phase === LocalApplicationActivationPhase.QUIESCING) {
         const isSourceRestore =
           destination === LocalApplicationActivationDestination.SOURCE;
-        const requiresSourceQuiescence =
-          !isSourceRestore && current.transition.source !== null;
+        const isFirstInstall = current.transition.source === null;
+        const requiresSourceQuiescence = !isSourceRestore && !isFirstInstall;
         if (requiresSourceQuiescence) {
           // A recovery may have been delayed arbitrarily after beginChange.
           // Re-prove the retained rollback path before stopping its source.
@@ -591,8 +598,11 @@ export function createLocalApplicationSystemdActivation(options) {
         await options.stopService(Object.freeze({ appId }));
         await options.proveServiceInactive(Object.freeze({ appId }));
 
-        if (requiresSourceQuiescence) {
-          const afterStop = await inspectQuiescence(appId);
+        if (requiresSourceQuiescence || isFirstInstall) {
+          const afterStop = await inspectQuiescence(
+            appId,
+            isFirstInstall ? current.desired.revisionId : undefined,
+          );
           if (!afterStop.quiescent) {
             return await retainSource(appId, current, afterStop, operation);
           }
@@ -812,12 +822,13 @@ export function createLocalApplicationSystemdActivation(options) {
    * @returns {Promise<Readonly<Record<string, any>>>} - Finite result.
    */
   async function rollback(input) {
-    const request = normalizeOperationInput(input, 'systemd rollback', false);
+    const request = normalizeTargetOperationInput(input, 'systemd rollback');
     return await withOperationLock('rollback', request.appId, async () => {
       const current = await activationStore.get({ appId: request.appId });
       if (
         current?.transition?.action ===
-        LocalApplicationActivationAction.ROLLBACK
+          LocalApplicationActivationAction.ROLLBACK &&
+        sameRelease(current.transition.target, request.target)
       ) {
         return await converge(
           request.appId,
@@ -826,23 +837,32 @@ export function createLocalApplicationSystemdActivation(options) {
         );
       }
       if (
+        current?.phase === LocalApplicationActivationPhase.ACTIVE &&
+        current.selected &&
+        sameRelease(current.selected, request.target)
+      ) {
+        await verifyActive(current);
+        return await converge(request.appId, 'rollback', null);
+      }
+      if (
         !current ||
         current.phase !== LocalApplicationActivationPhase.ACTIVE ||
         !current.selected ||
-        !current.rollbackCandidate
+        !current.rollbackCandidate ||
+        !sameRelease(current.rollbackCandidate, request.target)
       ) {
         throw new LocalApplicationSystemdActivationStateError(
           request.appId,
-          'rollback requires one ACTIVE source release with an exact retained candidate',
+          'rollback requires its exact retained target from one ACTIVE source release',
         );
       }
-      await verifyRelease(request.appId, current.rollbackCandidate);
+      await verifyRelease(request.appId, request.target);
       await verifyActive(current);
       const begun = await activationStore.beginChange({
         appId: request.appId,
         action: LocalApplicationActivationAction.ROLLBACK,
         source: current.selected,
-        target: current.rollbackCandidate,
+        target: request.target,
       });
       return await converge(
         request.appId,

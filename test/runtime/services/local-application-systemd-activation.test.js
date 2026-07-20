@@ -58,11 +58,11 @@ function sameRelease(left, right) {
 }
 
 /** @returns {Record<string, any>} */
-function blocker(runId = 'running-work') {
+function blocker(runId = 'running-work', revisionId = RELEASE_A.revisionId) {
   return {
     runId,
     appId: APP_ID,
-    revisionId: RELEASE_A.revisionId,
+    revisionId,
     kind: 'workflow',
     status: 'RUNNING',
     version: 1,
@@ -337,9 +337,43 @@ describe('local application systemd activation convergence', () => {
         LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
       activation: { selected: RELEASE_A },
     });
-    expect(harness.ledger.listRuns).not.toHaveBeenCalled();
+    expect(harness.ledger.listRuns).toHaveBeenCalledWith({
+      appId: APP_ID,
+      limit: 100,
+    });
     expect(harness.state.active).toEqual(RELEASE_A);
-    expect(harness.state.quiescencePages).toHaveLength(1);
+    expect(harness.state.quiescencePages).toHaveLength(0);
+  });
+
+  it('keeps first install fenced when queued work belongs to another revision', async () => {
+    const harness = await createHarness();
+    harness.state.quiescencePages.push([
+      blocker('foreign-offline-work', RELEASE_B.revisionId),
+    ]);
+
+    const result = await harness
+      .createService()
+      .install({ appId: APP_ID, target: RELEASE_A });
+
+    expect(result).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.PENDING,
+      settledOutcome: LocalApplicationSystemdActivationSettledOutcome.IN_FLIGHT,
+      reason: 'incompatible-durable-work',
+      activation: {
+        phase: LocalApplicationActivationPhase.QUIESCING,
+        selected: null,
+        desired: RELEASE_A,
+      },
+      quiescence: {
+        allowedNonterminalRevisionId: RELEASE_A.revisionId,
+        nonterminalRunCount: 1,
+        blockerCount: 1,
+      },
+    });
+    expect(harness.state.selected).toBeNull();
+    expect(harness.state.active).toBeNull();
+    expect(harness.driver.selectRelease).not.toHaveBeenCalled();
+    expect(harness.driver.activateRelease).not.toHaveBeenCalled();
   });
 
   it('recovers when stop took effect before the inactive proof failed', async () => {
@@ -801,7 +835,10 @@ describe('local application systemd activation convergence', () => {
     await service.update({ appId: APP_ID, target: RELEASE_B });
     harness.driver.stageRelease.mockClear();
 
-    const result = await service.rollback({ appId: APP_ID });
+    const result = await service.rollback({
+      appId: APP_ID,
+      target: RELEASE_A,
+    });
 
     expect(result).toMatchObject({
       operation: 'rollback',

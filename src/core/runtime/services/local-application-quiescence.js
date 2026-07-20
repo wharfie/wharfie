@@ -8,7 +8,7 @@ import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
 export const LOCAL_APPLICATION_QUIESCENCE_PAGE_SIZE = 100;
 export const LOCAL_APPLICATION_QUIESCENCE_BLOCKER_SAMPLE_LIMIT = 20;
 
-const LOCAL_APPLICATION_QUIESCENCE_SCHEMA_VERSION = 1;
+const LOCAL_APPLICATION_QUIESCENCE_SCHEMA_VERSION = 2;
 const LOCAL_APPLICATION_QUIESCENCE_KIND =
   'wharfie.local-application-quiescence';
 const LOCAL_APPLICATION_QUIESCENCE_REFUSAL_CODE =
@@ -45,12 +45,14 @@ const TERMINAL_RUN_STATUSES = new Set([
 
 /**
  * @typedef LocalApplicationQuiescenceReport
- * @property {1} schemaVersion - Report schema.
+ * @property {2} schemaVersion - Report schema.
  * @property {'wharfie.local-application-quiescence'} kind - Report kind.
  * @property {string} appId - Application scope.
- * @property {boolean} quiescent - Whether every durable run is terminal.
+ * @property {string | null} allowedNonterminalRevisionId - One revision whose queued work is compatible with a first install.
+ * @property {boolean} quiescent - Whether no run blocks the requested release operation.
  * @property {number} scannedRunCount - Number of verified directory rows read.
- * @property {number} blockerCount - Number of nonterminal runs found.
+ * @property {number} nonterminalRunCount - Number of all nonterminal runs found.
+ * @property {number} blockerCount - Number of nonterminal runs that block the requested operation.
  * @property {Array<Readonly<LocalApplicationQuiescenceBlocker>>} blockers - Bounded redacted blocker sample.
  * @property {boolean} blockersTruncated - Whether blockers were omitted from the sample.
  */
@@ -200,18 +202,21 @@ function normalizeCursor(value, label) {
 /**
  * Fully inspect one application after durable run creation has been closed.
  * `listRuns` is authoritative rather than `listReadyWork`: blocked and waiting
- * runs also prevent a revision switch even when they are not dispatchable.
+ * runs also prevent a revision switch even when they are not dispatchable. A
+ * first install may admit queued work for its own exact revision because no
+ * resident revision is being replaced; nonterminal work for every other
+ * revision remains a blocker.
  *
  * The caller owns the admission barrier. This function proves only the run
  * set it reads; it does not close admission or stop a resident process.
- * @param {{ledger: {listRuns: Function}, appId: string}} options - Inspection dependencies.
+ * @param {{ledger: {listRuns: Function}, appId: string, allowedNonterminalRevisionId?: string}} options - Inspection dependencies.
  * @returns {Promise<Readonly<LocalApplicationQuiescenceReport>>} - Deeply frozen redacted report.
  */
 export async function inspectLocalApplicationQuiescence(options) {
   assertRecord(options, 'local application quiescence options');
   assertKeys(
     options,
-    new Set(['ledger', 'appId']),
+    new Set(['ledger', 'appId', 'allowedNonterminalRevisionId']),
     ['ledger', 'appId'],
     'local application quiescence options',
   );
@@ -221,9 +226,18 @@ export async function inspectLocalApplicationQuiescence(options) {
     );
   }
   assertLogicalId(options.appId, 'local application quiescence appId');
+  const allowedNonterminalRevisionId =
+    options.allowedNonterminalRevisionId ?? null;
+  if (allowedNonterminalRevisionId !== null) {
+    assertApplicationRevisionId(
+      allowedNonterminalRevisionId,
+      'local application quiescence allowedNonterminalRevisionId',
+    );
+  }
 
   let cursor;
   let scannedRunCount = 0;
+  let nonterminalRunCount = 0;
   let blockerCount = 0;
   /** @type {Readonly<LocalApplicationQuiescenceBlocker>[]} */
   const blockers = [];
@@ -257,7 +271,13 @@ export async function inspectLocalApplicationQuiescence(options) {
       }
       seenRunIds.add(item.runId);
       scannedRunCount += 1;
-      if (!TERMINAL_RUN_STATUSES.has(item.status)) {
+      const nonterminal = !TERMINAL_RUN_STATUSES.has(item.status);
+      if (nonterminal) nonterminalRunCount += 1;
+      if (
+        nonterminal &&
+        (allowedNonterminalRevisionId === null ||
+          item.revisionId !== allowedNonterminalRevisionId)
+      ) {
         blockerCount += 1;
         if (
           blockers.length < LOCAL_APPLICATION_QUIESCENCE_BLOCKER_SAMPLE_LIMIT
@@ -299,8 +319,10 @@ export async function inspectLocalApplicationQuiescence(options) {
     schemaVersion: LOCAL_APPLICATION_QUIESCENCE_SCHEMA_VERSION,
     kind: LOCAL_APPLICATION_QUIESCENCE_KIND,
     appId: options.appId,
+    allowedNonterminalRevisionId,
     quiescent: blockerCount === 0,
     scannedRunCount,
+    nonterminalRunCount,
     blockerCount,
     blockers,
     blockersTruncated: blockerCount > blockers.length,
@@ -321,11 +343,19 @@ export function assertLocalApplicationQuiescent(report) {
     report.schemaVersion !== LOCAL_APPLICATION_QUIESCENCE_SCHEMA_VERSION ||
     report.kind !== LOCAL_APPLICATION_QUIESCENCE_KIND ||
     typeof report.appId !== 'string' ||
+    (report.allowedNonterminalRevisionId !== null &&
+      typeof report.allowedNonterminalRevisionId !== 'string') ||
     typeof report.quiescent !== 'boolean' ||
     !Number.isSafeInteger(report.scannedRunCount) ||
     report.scannedRunCount < 0 ||
+    !Number.isSafeInteger(report.nonterminalRunCount) ||
+    report.nonterminalRunCount < 0 ||
     !Number.isSafeInteger(report.blockerCount) ||
     report.blockerCount < 0 ||
+    report.blockerCount > report.nonterminalRunCount ||
+    report.nonterminalRunCount > report.scannedRunCount ||
+    (report.allowedNonterminalRevisionId === null &&
+      report.blockerCount !== report.nonterminalRunCount) ||
     !Array.isArray(report.blockers) ||
     typeof report.blockersTruncated !== 'boolean' ||
     report.quiescent !== (report.blockerCount === 0) ||
@@ -341,6 +371,12 @@ export function assertLocalApplicationQuiescent(report) {
     );
   }
   assertLogicalId(report.appId, 'local application quiescence report.appId');
+  if (report.allowedNonterminalRevisionId !== null) {
+    assertApplicationRevisionId(
+      report.allowedNonterminalRevisionId,
+      'local application quiescence report.allowedNonterminalRevisionId',
+    );
+  }
   if (!report.quiescent) {
     throw new LocalApplicationQuiescenceRefusalError(report);
   }

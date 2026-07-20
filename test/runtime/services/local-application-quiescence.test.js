@@ -85,11 +85,14 @@ describe('local application quiescence', () => {
       cursor: 'page-two',
     });
     expect(report).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'wharfie.local-application-quiescence',
       appId: APP_ID,
+      allowedNonterminalRevisionId: null,
       quiescent: false,
       scannedRunCount: statuses.length,
+      nonterminalRunCount:
+        LOCAL_APPLICATION_QUIESCENCE_BLOCKER_SAMPLE_LIMIT + 3,
       blockerCount: LOCAL_APPLICATION_QUIESCENCE_BLOCKER_SAMPLE_LIMIT + 3,
       blockersTruncated: true,
     });
@@ -123,8 +126,10 @@ describe('local application quiescence', () => {
       appId: APP_ID,
     });
     expect(empty).toMatchObject({
+      allowedNonterminalRevisionId: null,
       quiescent: true,
       scannedRunCount: 0,
+      nonterminalRunCount: 0,
       blockerCount: 0,
       blockers: [],
       blockersTruncated: false,
@@ -146,9 +151,56 @@ describe('local application quiescence', () => {
     expect(terminal).toMatchObject({
       quiescent: true,
       scannedRunCount: 3,
+      nonterminalRunCount: 0,
       blockerCount: 0,
     });
     expect(assertLocalApplicationQuiescent(terminal)).toBe(terminal);
+  });
+
+  it('allows queued work only for one exact first-install revision', async () => {
+    const compatibleRuns = Array.from(
+      { length: LOCAL_APPLICATION_QUIESCENCE_BLOCKER_SAMPLE_LIMIT + 3 },
+      (_, index) => runItem(index, RunStatus.RUNNING),
+    );
+    const compatible = await inspectLocalApplicationQuiescence({
+      ledger: {
+        listRuns: jest.fn(async () => ({ items: compatibleRuns })),
+      },
+      appId: APP_ID,
+      allowedNonterminalRevisionId: REVISION_A,
+    });
+
+    expect(compatible).toMatchObject({
+      allowedNonterminalRevisionId: REVISION_A,
+      quiescent: true,
+      scannedRunCount: compatibleRuns.length,
+      nonterminalRunCount: compatibleRuns.length,
+      blockerCount: 0,
+      blockers: [],
+      blockersTruncated: false,
+    });
+    expect(assertLocalApplicationQuiescent(compatible)).toBe(compatible);
+
+    const incompatible = await inspectLocalApplicationQuiescence({
+      ledger: {
+        listRuns: jest.fn(async () => ({
+          items: [
+            runItem(0, RunStatus.RUNNING),
+            runItem(1, RunStatus.BLOCKED, { revisionId: REVISION_B }),
+          ],
+        })),
+      },
+      appId: APP_ID,
+      allowedNonterminalRevisionId: REVISION_A,
+    });
+    expect(incompatible).toMatchObject({
+      allowedNonterminalRevisionId: REVISION_A,
+      quiescent: false,
+      scannedRunCount: 2,
+      nonterminalRunCount: 2,
+      blockerCount: 1,
+      blockers: [expect.objectContaining({ revisionId: REVISION_B })],
+    });
   });
 
   it('throws a typed refusal carrying only the frozen redacted report', async () => {
@@ -317,11 +369,13 @@ describe('local application quiescence', () => {
     ).rejects.toThrow(/canonical logical ID/i);
     expect(() =>
       assertLocalApplicationQuiescent({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'wharfie.local-application-quiescence',
         appId: APP_ID,
+        allowedNonterminalRevisionId: null,
         quiescent: true,
         scannedRunCount: 0,
+        nonterminalRunCount: 0,
         blockerCount: 0,
         blockers: [],
         blockersTruncated: false,
