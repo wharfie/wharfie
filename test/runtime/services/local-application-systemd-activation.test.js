@@ -716,6 +716,85 @@ describe('local application systemd activation convergence', () => {
     );
   });
 
+  it('keeps admission closed when source reactivation fails and retries recovery', async () => {
+    const harness = await createHarness();
+    await install(harness);
+    harness.state.failedArtifacts.add(RELEASE_A.artifactId);
+    harness.state.quiescencePages.push([], [blocker('late-work')]);
+
+    const pending = await harness
+      .createService()
+      .update({ appId: APP_ID, target: RELEASE_B });
+
+    expect(pending).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.PENDING,
+      settledOutcome: LocalApplicationSystemdActivationSettledOutcome.IN_FLIGHT,
+      reason: 'source-reactivation-failed',
+      activation: {
+        phase: LocalApplicationActivationPhase.QUIESCING,
+        selected: RELEASE_A,
+        desired: RELEASE_B,
+      },
+    });
+    expect(harness.state.active).toBeNull();
+
+    harness.state.failedArtifacts.delete(RELEASE_A.artifactId);
+    harness.state.quiescencePages.push([blocker('late-work')]);
+    const recovered = await harness.createService().recover({ appId: APP_ID });
+
+    expect(recovered).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.SOURCE_RETAINED,
+      activation: {
+        phase: LocalApplicationActivationPhase.ACTIVE,
+        selected: RELEASE_A,
+      },
+    });
+    expect(harness.state.active).toEqual(RELEASE_A);
+  });
+
+  it('recovers a crash after source activation but before durable abort', async () => {
+    const harness = await createHarness();
+    await install(harness);
+    const activateRelease =
+      harness.driver.activateRelease.getMockImplementation();
+    if (!activateRelease) throw new Error('missing activation test driver');
+    harness.driver.activateRelease.mockImplementationOnce(
+      async (/** @type {Record<string, any>} */ input) => {
+        await activateRelease(input);
+        throw new Error('simulated crash after source activation');
+      },
+    );
+    harness.state.quiescencePages.push([], [blocker('late-work')]);
+
+    await expect(
+      harness.createService().update({ appId: APP_ID, target: RELEASE_B }),
+    ).rejects.toThrow('simulated crash after source activation');
+    await expect(
+      harness.activation.get({ appId: APP_ID }),
+    ).resolves.toMatchObject({
+      phase: LocalApplicationActivationPhase.QUIESCING,
+      selected: RELEASE_A,
+      desired: RELEASE_B,
+    });
+    expect(harness.state.active).toEqual(RELEASE_A);
+
+    harness.state.quiescencePages.push([blocker('late-work')]);
+    const recovered = await harness.createService().recover({ appId: APP_ID });
+
+    expect(recovered).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.SOURCE_RETAINED,
+      activation: {
+        phase: LocalApplicationActivationPhase.ACTIVE,
+        selected: RELEASE_A,
+      },
+    });
+    expect(harness.state.active).toEqual(RELEASE_A);
+  });
+
   it('restores the source after a target failure without blocking on old work', async () => {
     const harness = await createHarness();
     await install(harness);
@@ -835,10 +914,7 @@ describe('local application systemd activation convergence', () => {
     await service.update({ appId: APP_ID, target: RELEASE_B });
     harness.driver.stageRelease.mockClear();
 
-    const result = await service.rollback({
-      appId: APP_ID,
-      target: RELEASE_A,
-    });
+    const result = await service.rollback({ appId: APP_ID });
 
     expect(result).toMatchObject({
       operation: 'rollback',
@@ -854,6 +930,74 @@ describe('local application systemd activation convergence', () => {
     expect(harness.state.previous).toEqual(RELEASE_B);
     expect(harness.state.active).toEqual(RELEASE_A);
     expect(harness.driver.stageRelease).not.toHaveBeenCalled();
+  });
+
+  it('recovers an ambiguous rollback response after durable completion without toggling', async () => {
+    const harness = await createHarness();
+    const service = harness.createService();
+    await service.install({ appId: APP_ID, target: RELEASE_A });
+    await service.update({ appId: APP_ID, target: RELEASE_B });
+    const crashing = harness.createService(
+      crashAfter(harness.activation, 'completeActivation'),
+    );
+
+    await expect(crashing.rollback({ appId: APP_ID })).rejects.toThrow(
+      'simulated crash after completeActivation',
+    );
+    const completed = await harness.activation.get({ appId: APP_ID });
+    expect(completed).toMatchObject({
+      phase: LocalApplicationActivationPhase.ACTIVE,
+      selected: RELEASE_A,
+      rollbackCandidate: RELEASE_B,
+    });
+    harness.driver.selectRelease.mockClear();
+
+    const retried = await service.recover({ appId: APP_ID });
+
+    expect(retried).toMatchObject({
+      operation: 'recover',
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+      activation: {
+        recordVersion: completed.recordVersion,
+        selectionGeneration: completed.selectionGeneration,
+        selected: RELEASE_A,
+        rollbackCandidate: RELEASE_B,
+      },
+    });
+    expect(harness.driver.selectRelease).not.toHaveBeenCalled();
+    expect(harness.state.selected).toEqual(RELEASE_A);
+    expect(harness.state.active).toEqual(RELEASE_A);
+  });
+
+  it('reruns an exact update transition after crashing past beginChange', async () => {
+    const harness = await createHarness();
+    await install(harness);
+    const crashing = harness.createService(
+      crashAfter(harness.activation, 'beginChange'),
+    );
+
+    await expect(
+      crashing.update({ appId: APP_ID, target: RELEASE_B }),
+    ).rejects.toThrow('simulated crash after beginChange');
+    const inFlight = await harness.activation.get({ appId: APP_ID });
+
+    const retried = await harness
+      .createService()
+      .update({ appId: APP_ID, target: RELEASE_B });
+
+    expect(retried).toMatchObject({
+      requestStatus: LocalApplicationSystemdActivationRequestStatus.FULFILLED,
+      settledOutcome:
+        LocalApplicationSystemdActivationSettledOutcome.TARGET_ACTIVE,
+      activation: {
+        selected: RELEASE_B,
+        lastTransition: {
+          transitionId: inFlight.transition.transitionId,
+        },
+      },
+    });
   });
 
   it('leaves a failed first install resumable and completes it on recovery', async () => {

@@ -822,13 +822,12 @@ export function createLocalApplicationSystemdActivation(options) {
    * @returns {Promise<Readonly<Record<string, any>>>} - Finite result.
    */
   async function rollback(input) {
-    const request = normalizeTargetOperationInput(input, 'systemd rollback');
+    const request = normalizeOperationInput(input, 'systemd rollback', false);
     return await withOperationLock('rollback', request.appId, async () => {
       const current = await activationStore.get({ appId: request.appId });
       if (
         current?.transition?.action ===
-          LocalApplicationActivationAction.ROLLBACK &&
-        sameRelease(current.transition.target, request.target)
+        LocalApplicationActivationAction.ROLLBACK
       ) {
         return await converge(
           request.appId,
@@ -837,32 +836,23 @@ export function createLocalApplicationSystemdActivation(options) {
         );
       }
       if (
-        current?.phase === LocalApplicationActivationPhase.ACTIVE &&
-        current.selected &&
-        sameRelease(current.selected, request.target)
-      ) {
-        await verifyActive(current);
-        return await converge(request.appId, 'rollback', null);
-      }
-      if (
         !current ||
         current.phase !== LocalApplicationActivationPhase.ACTIVE ||
         !current.selected ||
-        !current.rollbackCandidate ||
-        !sameRelease(current.rollbackCandidate, request.target)
+        !current.rollbackCandidate
       ) {
         throw new LocalApplicationSystemdActivationStateError(
           request.appId,
-          'rollback requires its exact retained target from one ACTIVE source release',
+          'rollback requires one ACTIVE source release with an exact retained candidate',
         );
       }
-      await verifyRelease(request.appId, request.target);
+      await verifyRelease(request.appId, current.rollbackCandidate);
       await verifyActive(current);
       const begun = await activationStore.beginChange({
         appId: request.appId,
         action: LocalApplicationActivationAction.ROLLBACK,
         source: current.selected,
-        target: request.target,
+        target: current.rollbackCandidate,
       });
       return await converge(
         request.appId,
