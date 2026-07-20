@@ -107,21 +107,25 @@ default is below `$XDG_DATA_HOME/wharfie-nodejs`, or
     application-state/
 ```
 
-The unit is written below the invoking user's resolved XDG config directory:
+The unit is written below the service account's stable home directory, not an
+invocation-specific `XDG_CONFIG_HOME`:
 
 ```text
-<config>/systemd/user/wharfie-<appId>.service
+<account-home>/.config/systemd/user/wharfie-<appId>.service
 ```
 
-All paths are canonical absolute paths derived once during installation. The
-application ID already satisfies Wharfie's portable logical-ID grammar and is
-safe as the bounded unit-name component. Managed service roots, state paths,
-release paths, receipts, selectors, and unit entries must have their expected
-concrete file type; Wharfie refuses managed symlinks except for the exact
-`current` selector and refuses conflicting content at an existing artifact
-identity. The invoking user's parent home/XDG layout remains part of the
-trusted same-UID host boundary rather than an isolation boundary against that
-user.
+Before staging a release or durable state, Wharfie queries the running user
+manager's authoritative `UnitPath`, creates only that fixed private unit
+directory when necessary, reloads once, and refuses installation unless the
+manager actually searches it. All paths are canonical absolute paths derived
+once during installation. The application ID already satisfies Wharfie's
+portable logical-ID grammar and is safe as the bounded unit-name component.
+Managed service roots, state paths, release paths, receipts, selectors, and
+unit entries must have their expected concrete file type; Wharfie refuses
+managed symlinks except for the exact `current` selector and refuses
+conflicting content at an existing artifact identity. The invoking user's
+parent home layout remains part of the trusted same-UID host boundary rather
+than an isolation boundary against that user.
 
 The SEA's final-byte `artifactId` names an immutable release directory. On
 Linux, Wharfie reads `/proc/self/exe`, binding installation to the executable
@@ -273,6 +277,11 @@ or revision rules are incompatible.
 - Uninstall is intentionally not destroy. Durable data survives until an
   explicit future data-destruction contract or direct operator action removes
   it.
+- Install verifies the live manager's exact unit search path before staging
+  service state and verifies the loaded effective fragment, empty drop-ins,
+  and a non-stale manager cache before enablement. Stop and uninstall enforce
+  the same effective-unit boundary, so manager configuration cannot redirect a
+  destructive lifecycle command.
 - Update and rollback remain unavailable even though releases are immutable.
   Atomic byte selection is not sufficient without a race-free maintenance and
   quiescence protocol for revision-pinned durable work.
@@ -284,7 +293,7 @@ mutate the developer/CI host's user manager. The implementation separates
 filesystem planning, artifact verification, unit rendering, process execution,
 and systemd observation behind injected boundaries so tests can use:
 
-- a temporary synthetic home/XDG root for release, link, receipt, unit, and
+- a temporary synthetic account-home root for release, link, receipt, unit, and
   preserved-state behavior;
 - fake `loginctl` and `systemctl --user` runners that assert exact argv arrays,
   exit handling, bounded `show` properties, and the absence of shell use;

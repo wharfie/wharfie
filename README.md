@@ -332,7 +332,11 @@ service:
 ```
 
 These commands reject root, never invoke `sudo`, preserve durable state and
-immutable releases on uninstall, and do not yet expose update or rollback.
+immutable releases on uninstall, and do not yet expose update or rollback. The
+unit location is fixed to the service account's `~/.config/systemd/user`;
+custom `XDG_CONFIG_HOME` topology is rejected, installation verifies the live
+manager's search path, and unit-name mutations require an exact, non-stale
+effective fragment without drop-ins.
 The repository's disposable Ubuntu proof builds the app from the installed npm
 tarball, removes Node from the packaged command `PATH`, force-cycles the VM,
 requires automatic healthy startup before a login session, and completes the

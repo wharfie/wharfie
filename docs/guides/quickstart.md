@@ -294,11 +294,16 @@ lingering:
 ```
 
 The commands never invoke `sudo` or accept arbitrary unit/environment input.
-Uninstall disables the unit and removes the executable selector while
-preserving immutable releases, ledger data, payloads, application state, and
-the installation identity tombstone. Update and rollback remain unavailable
-until Wharfie has a race-free maintenance/handoff protocol. A real machine
-boot/reboot proof is still pending in a disposable Linux environment.
+The unit location is fixed to the account's `~/.config/systemd/user`; custom
+`XDG_CONFIG_HOME` topology is rejected, installation verifies the live
+manager's search path, and unit-name mutations require an exact, non-stale
+effective fragment without drop-ins. Uninstall disables the unit and removes
+the executable selector while preserving immutable releases, ledger data,
+payloads, application state, and the installation identity tombstone. Update
+and rollback remain unavailable until Wharfie has a race-free
+maintenance/handoff protocol. The repository's
+disposable Ubuntu proof covers crash replacement, abrupt reboot, pre-login
+recovery, workflow continuation, and state-preserving uninstall.
 
 The current worker executes exact workflow
 `ACTIVITY` rows, conservatively handles `RECOVERY` rows, and fires due `TIMER`

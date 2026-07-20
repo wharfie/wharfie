@@ -382,6 +382,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       systemd resident now share that exact ledger, payload, session, and
       application-state authority; service management rejects explicit
       overrides that would split them.
+- [x] Fix the systemd integration point to the service account's
+      `~/.config/systemd/user`, reject invocation-specific XDG topology, and
+      verify the live manager's `UnitPath` plus exact effective fragment before
+      enable, stop, or uninstall can act on a unit name.
 - [x] Prove enabled startup, crash replacement, and durable recovery across a
       real machine reboot in a disposable Linux systemd environment. The
       checksummed [V16 proof receipts](llm_artifacts/systemd-proof/0d92746384acae1aa111a271ff144f9bcf53d265/final.json)

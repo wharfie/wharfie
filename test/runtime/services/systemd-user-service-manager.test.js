@@ -17,6 +17,7 @@ import { inspectArtifactBytes } from '../../../src/core/runtime/packaged-artifac
 import {
   acquireSystemdUserServiceOperationLock,
   createSystemdUserServiceOperator,
+  parseSystemdUserManagerUnitPath,
   readSystemdUserServiceRuntimeState,
 } from '../../../src/core/runtime/services/systemd-user-service-manager.js';
 import { createSystemdUserServiceLayout } from '../../../src/core/runtime/services/systemd-user-service.js';
@@ -43,7 +44,7 @@ afterEach(async () => {
 });
 
 /**
- * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, useDefaultXdgConfigHome?: boolean}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -58,7 +59,10 @@ async function createHarness(options = {}) {
     { mode: 0o700 },
   );
   const dataRoot = path.join(root, 'data');
-  const configRoot = path.join(root, 'config');
+  const homeDirectory = path.join(root, 'account-home');
+  const configRoot = options.deriveConfigRoot
+    ? path.join(homeDirectory, '.config')
+    : path.join(root, 'config');
   const layout = createSystemdUserServiceLayout({
     appId: APP_ID,
     dataRoot,
@@ -71,9 +75,16 @@ async function createHarness(options = {}) {
     runtimeMode: options.runtimeMode || 'matching',
     systemdMode: options.systemdMode || 'normal',
     failDaemonReloadOnce: false,
-    failShowEnvironment: false,
-    fragmentPath: layout.unitPath,
+    failUnitPath: false,
+    fragmentPath: options.managerFragmentPath ?? layout.unitPath,
     dropInPaths: '',
+    needDaemonReload: false,
+    failUnitShow: false,
+    unitPaths: options.managerUnitPaths || [path.dirname(layout.unitPath)],
+    unitPathsAfterReload: options.managerDiscoversUnitPathAfterReload
+      ? [path.dirname(layout.unitPath)]
+      : null,
+    unknownUnitShows: options.unitInitiallyUnknown ? 1 : 0,
     now: 100,
   };
   /** @type {Array<{command: string, args: string[]}>} */
@@ -88,13 +99,22 @@ async function createHarness(options = {}) {
         throw new Error('unexpected process command');
       }
       const operation = args[1];
-      if (operation === 'show-environment' && state.failShowEnvironment) {
+      if (
+        operation === 'show' &&
+        args.includes('--property=UnitPath') &&
+        state.failUnitPath
+      ) {
         throw new Error('user manager unavailable');
       }
       if (operation === 'daemon-reload' && state.failDaemonReloadOnce) {
         state.failDaemonReloadOnce = false;
         throw new Error('daemon reload interrupted');
       }
+      if (operation === 'daemon-reload' && state.unitPathsAfterReload) {
+        state.unitPaths = state.unitPathsAfterReload;
+        state.unitPathsAfterReload = null;
+      }
+      if (operation === 'daemon-reload') state.needDaemonReload = false;
       if (operation === 'enable') {
         state.enabled = true;
         state.active = true;
@@ -106,7 +126,30 @@ async function createHarness(options = {}) {
         state.enabled = false;
         state.active = false;
       }
+      if (operation === 'show' && args.includes('--property=UnitPath')) {
+        return { stdout: `${state.unitPaths.join(' ')}\n`, stderr: '' };
+      }
       if (operation === 'show') {
+        if (state.failUnitShow) throw new Error('unit preflight unavailable');
+        if (state.unknownUnitShows > 0) {
+          state.unknownUnitShows -= 1;
+          return {
+            stdout: [
+              'LoadState=not-found',
+              'UnitFileState=',
+              'ActiveState=inactive',
+              'SubState=dead',
+              'Result=success',
+              'MainPID=0',
+              'ExecMainStatus=0',
+              'FragmentPath=',
+              'DropInPaths=',
+              'NeedDaemonReload=no',
+              '',
+            ].join('\n'),
+            stderr: '',
+          };
+        }
         const failed = state.systemdMode === 'failed';
         return {
           stdout: [
@@ -119,6 +162,7 @@ async function createHarness(options = {}) {
             'ExecMainStatus=0',
             `FragmentPath=${state.fragmentPath}`,
             `DropInPaths=${state.dropInPaths}`,
+            `NeedDaemonReload=${state.needDaemonReload ? 'yes' : 'no'}`,
             '',
           ].join('\n'),
           stderr: '',
@@ -174,8 +218,14 @@ async function createHarness(options = {}) {
     nodeVersion: '24.13.1',
     artifactPath,
     dataRoot,
-    configRoot,
-    environment: options.environment || {},
+    ...(options.deriveConfigRoot
+      ? { getHomeDirectory: () => homeDirectory }
+      : { configRoot }),
+    environment:
+      options.environment ||
+      (options.useDefaultXdgConfigHome
+        ? { XDG_CONFIG_HOME: `${configRoot}/` }
+        : {}),
     getLocalAppStorageLayout: () =>
       options.packagedStorage === false
         ? undefined
@@ -224,6 +274,35 @@ async function createHarness(options = {}) {
 }
 
 describe('systemd user service manager', () => {
+  it('parses the live manager UnitPath without confusing escaped paths', () => {
+    expect(
+      parseSystemdUserManagerUnitPath(
+        String.raw`"/home/example user/.config/systemd/user" "/run/\$cash/systemd/user" /run/systemd/user`,
+      ),
+    ).toEqual([
+      '/home/example user/.config/systemd/user',
+      '/run/$cash/systemd/user',
+      '/run/systemd/user',
+    ]);
+    expect(
+      parseSystemdUserManagerUnitPath(
+        String.raw`"/home/example\\user/systemd/user" "/run/example\"user/systemd/user"`,
+      ),
+    ).toEqual([
+      String.raw`/home/example\user/systemd/user`,
+      '/run/example"user/systemd/user',
+    ]);
+    expect(() => parseSystemdUserManagerUnitPath('relative/path')).toThrow(
+      /invalid UnitPath/,
+    );
+    expect(() =>
+      parseSystemdUserManagerUnitPath(String.raw`/home/example\q/user`),
+    ).toThrow(/invalid UnitPath/);
+    expect(() =>
+      parseSystemdUserManagerUnitPath('"/home/example user'),
+    ).toThrow(/invalid UnitPath/);
+  });
+
   itOnLinux(
     'uses a crash-releasing kernel lock rather than a stale PID file',
     async () => {
@@ -363,7 +442,13 @@ describe('systemd user service manager', () => {
       expect.arrayContaining([
         {
           command: 'systemctl',
-          args: ['--user', 'show-environment'],
+          args: [
+            '--user',
+            'show',
+            '--property=UnitPath',
+            '--value',
+            '--no-pager',
+          ],
         },
         {
           command: 'systemctl',
@@ -469,7 +554,7 @@ describe('systemd user service manager', () => {
 
   it('proves the user manager is reachable before materializing service state', async () => {
     const harness = await createHarness();
-    harness.state.failShowEnvironment = true;
+    harness.state.failUnitPath = true;
 
     await expect(harness.operator.install()).rejects.toThrow(
       /user manager unavailable/,
@@ -477,6 +562,118 @@ describe('systemd user service manager', () => {
     await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('rejects a shell XDG unit path the live user manager does not search', async () => {
+    const harness = await createHarness({
+      managerUnitPaths: ['/home/example/.config/systemd/user'],
+    });
+
+    await expect(harness.operator.install()).rejects.toThrow(
+      /does not search Wharfie's fixed unit directory/,
+    );
+    await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.stat(harness.layout.unitPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(harness.calls).not.toEqual(
+      expect.arrayContaining([
+        {
+          command: 'systemctl',
+          args: ['--user', 'enable', '--now', 'wharfie-service-demo.service'],
+        },
+      ]),
+    );
+  });
+
+  it('rechecks a fresh account-home unit directory after manager reload', async () => {
+    const harness = await createHarness({
+      managerUnitPaths: ['/run/systemd/user'],
+      managerDiscoversUnitPathAfterReload: true,
+    });
+
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      action: 'install',
+      health: 'healthy',
+    });
+    expect(
+      harness.calls.filter(
+        (/** @type {{args: string[]}} */ call) =>
+          call.args[1] === 'show' && call.args.includes('--property=UnitPath'),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('allows an unknown unit name before publishing the first unit', async () => {
+    const harness = await createHarness({ unitInitiallyUnknown: true });
+
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      action: 'install',
+      health: 'healthy',
+    });
+  });
+
+  it('fails closed when exact unit preflight loses the manager', async () => {
+    const harness = await createHarness();
+    harness.state.failUnitShow = true;
+
+    await expect(harness.operator.install()).rejects.toThrow(
+      /unit preflight unavailable/,
+    );
+    await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('rejects invocation-specific XDG config and accepts the fixed account root', async () => {
+    const harness = await createHarness({
+      deriveConfigRoot: true,
+      environment: { XDG_CONFIG_HOME: '/tmp/invocation-specific-config' },
+    });
+
+    await expect(harness.operator.install()).rejects.toMatchObject({
+      code: 'systemd-user-service-unstable-config-root',
+    });
+    expect(harness.calls).toEqual([]);
+
+    const fixed = await createHarness({
+      deriveConfigRoot: true,
+      useDefaultXdgConfigHome: true,
+    });
+    await expect(fixed.operator.install()).resolves.toMatchObject({
+      action: 'install',
+      health: 'healthy',
+    });
+    expect(fixed.layout.configRoot).toBe(
+      path.join(fixed.root, 'account-home', '.config'),
+    );
+  });
+
+  it('rejects a foreign effective unit before staging or enabling install', async () => {
+    const harness = await createHarness({
+      managerFragmentPath: '/etc/systemd/user/wharfie-service-demo.service',
+    });
+
+    await expect(harness.operator.install()).rejects.toThrow(
+      /unit name is already claimed/,
+    );
+    await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.stat(harness.layout.unitPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(harness.state.active).toBe(false);
+    expect(harness.calls).not.toEqual(
+      expect.arrayContaining([
+        {
+          command: 'systemctl',
+          args: ['--user', 'enable', '--now', 'wharfie-service-demo.service'],
+        },
+      ]),
+    );
   });
 
   it('refuses managed symlink redirection and foreign ownership', async () => {
@@ -740,6 +937,41 @@ describe('systemd user service manager', () => {
     await expect(harness.operator.start()).rejects.toThrow(
       /different unit or additional drop-ins/,
     );
+  });
+
+  it('never stops or uninstalls a foreign effective unit with the same name', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    harness.state.fragmentPath =
+      '/etc/systemd/user/wharfie-service-demo.service';
+
+    await expect(harness.operator.stop()).rejects.toThrow(
+      /different unit or additional drop-ins/,
+    );
+    await expect(harness.operator.uninstall()).rejects.toThrow(
+      /different unit or additional drop-ins/,
+    );
+    expect(harness.state.active).toBe(true);
+    await expect(fsp.stat(harness.layout.unitPath)).resolves.toMatchObject({
+      mode: expect.any(Number),
+    });
+    await expect(fsp.stat(harness.layout.uninstallPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('never stops or uninstalls while the manager unit cache is stale', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    harness.state.needDaemonReload = true;
+
+    await expect(harness.operator.stop()).rejects.toThrow(
+      /unit cache is stale/,
+    );
+    await expect(harness.operator.uninstall()).rejects.toThrow(
+      /unit cache is stale/,
+    );
+    expect(harness.state.active).toBe(true);
   });
 
   it('uninstalls manager wiring while preserving immutable releases and durable state', async () => {

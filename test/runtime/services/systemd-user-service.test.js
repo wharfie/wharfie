@@ -227,6 +227,7 @@ describe('systemd user service contract', () => {
         'ExecMainStatus=0',
         'FragmentPath=/home/example/.config/systemd/user/wharfie-demo.service',
         'DropInPaths=',
+        'NeedDaemonReload=no',
         '',
       ].join('\n'),
     );
@@ -241,7 +242,53 @@ describe('systemd user service contract', () => {
       execMainStatus: 0,
       fragmentPath: '/home/example/.config/systemd/user/wharfie-demo.service',
       dropInPaths: '',
+      needDaemonReload: false,
     });
+    expect(
+      parseSystemdUserServiceStatus(
+        [
+          'LoadState=not-found',
+          'UnitFileState=',
+          'ActiveState=inactive',
+          'SubState=dead',
+          'Result=success',
+          'MainPID=0',
+          'ExecMainStatus=0',
+          'FragmentPath=',
+          'DropInPaths=',
+          'NeedDaemonReload=no',
+          '',
+        ].join('\n'),
+      ),
+    ).toEqual({
+      loadState: 'not-found',
+      unitFileState: '',
+      activeState: 'inactive',
+      subState: 'dead',
+      result: 'success',
+      mainPid: 0,
+      execMainStatus: 0,
+      fragmentPath: '',
+      dropInPaths: '',
+      needDaemonReload: false,
+    });
+    expect(() =>
+      parseSystemdUserServiceStatus(
+        [
+          'LoadState=loaded',
+          'UnitFileState=',
+          'ActiveState=inactive',
+          'SubState=dead',
+          'Result=success',
+          'MainPID=0',
+          'ExecMainStatus=0',
+          'FragmentPath=',
+          'DropInPaths=',
+          'NeedDaemonReload=no',
+          '',
+        ].join('\n'),
+      ),
+    ).toThrow(/loaded status is incomplete/);
     expect(() =>
       parseSystemdUserServiceStatus(
         'LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nResult=success\nMainPID=1\nUnknown=value\n',

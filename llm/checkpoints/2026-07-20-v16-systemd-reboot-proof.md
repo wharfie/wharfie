@@ -113,11 +113,11 @@ service lifecycle finished or production-ready. Next work should:
 4. add the smallest provider-backed path that can create, inspect, update, and
    remove one durable node through a user's normal credential chain.
 
-Custom XDG configuration remains fail-closed through effective-unit
-verification, but an earlier user-manager/shell configuration diagnostic would
-improve failure messages. macOS launchd, Windows services, non-systemd Linux,
-multi-host coordination, and public logs/run listing remain explicitly later
-work.
+Post-proof hardening fixes unit topology to the service account's
+`~/.config/systemd/user`, checks the live manager's authoritative `UnitPath`
+before staging state, and refuses stop or uninstall against a foreign effective
+fragment. macOS launchd, Windows services, non-systemd Linux, multi-host
+coordination, and public logs/run listing remain explicitly later work.
 
 ## Copy-paste resume prompt
 

@@ -2,7 +2,7 @@ import { execFile as nodeExecFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants, promises as fsp } from 'node:fs';
 import net from 'node:net';
-import { homedir } from 'node:os';
+import { userInfo } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
@@ -62,6 +62,7 @@ const SYSTEMD_SHOW_PROPERTIES = Object.freeze([
   'ExecMainStatus',
   'FragmentPath',
   'DropInPaths',
+  'NeedDaemonReload',
 ]);
 
 /**
@@ -148,6 +149,115 @@ function positiveDuration(value, label, fallback) {
     throw new TypeError(`${label} must be a positive safe integer.`);
   }
   return Number(value);
+}
+
+/**
+ * Parse the live user manager's shell-quoted UnitPath array without invoking a
+ * shell. systemctl quotes individual entries when needed and uses C-style
+ * escapes inside those words.
+ * @param {unknown} value - `systemctl --user show --property=UnitPath --value` output.
+ * @returns {string[]} - Canonical absolute search directories.
+ */
+export function parseSystemdUserManagerUnitPath(value) {
+  const invalid = () =>
+    new Error('Systemd user manager returned an invalid UnitPath.');
+  if (typeof value !== 'string') {
+    throw invalid();
+  }
+  const text = value.trim();
+  if (
+    !text ||
+    text.includes('\0') ||
+    text.includes('\n') ||
+    text.includes('\r')
+  ) {
+    throw invalid();
+  }
+
+  /** @type {Readonly<Record<string, string>>} */
+  const simpleEscapes = Object.freeze({
+    a: '\x07',
+    b: '\b',
+    f: '\f',
+    n: '\n',
+    r: '\r',
+    s: ' ',
+    t: '\t',
+    v: '\v',
+    '\\': '\\',
+    '"': '"',
+    "'": "'",
+    $: '$',
+    '`': '`',
+    '!': '!',
+    ' ': ' ',
+  });
+  /** @type {string[]} */
+  const entries = [];
+  let entry = '';
+  let quoted = false;
+  let started = false;
+  for (let offset = 0; offset < text.length; offset += 1) {
+    const character = text[offset];
+    if (!quoted && /\s/.test(character)) {
+      if (started) entries.push(entry);
+      entry = '';
+      started = false;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      started = true;
+      continue;
+    }
+    if (character !== '\\') {
+      entry += character;
+      started = true;
+      continue;
+    }
+
+    const escape = text[offset + 1];
+    if (escape === undefined) throw invalid();
+    if (Object.prototype.hasOwnProperty.call(simpleEscapes, escape)) {
+      entry += simpleEscapes[escape];
+      started = true;
+      offset += 1;
+      continue;
+    }
+    if (escape === 'x') {
+      const hexadecimal = text.slice(offset + 2, offset + 4);
+      if (!/^[0-9a-fA-F]{2}$/.test(hexadecimal)) throw invalid();
+      entry += String.fromCharCode(Number.parseInt(hexadecimal, 16));
+      started = true;
+      offset += 3;
+      continue;
+    }
+    if (/[0-7]/.test(escape)) {
+      const octal = text.slice(offset + 1, offset + 4);
+      if (!/^[0-7]{3}$/.test(octal)) throw invalid();
+      entry += String.fromCharCode(Number.parseInt(octal, 8));
+      started = true;
+      offset += 3;
+      continue;
+    }
+    throw invalid();
+  }
+  if (quoted) throw invalid();
+  if (started) entries.push(entry);
+  if (
+    entries.length === 0 ||
+    entries.some(
+      (entry) =>
+        entry.includes('\0') ||
+        entry.includes('\n') ||
+        entry.includes('\r') ||
+        !path.isAbsolute(entry) ||
+        path.normalize(entry) !== entry,
+    )
+  ) {
+    throw invalid();
+  }
+  return entries;
 }
 
 /**
@@ -1074,13 +1184,10 @@ export function createSystemdUserServiceOperator(options = {}) {
     getRunningExecutablePath({ platform, execPath: process.execPath });
   const dataRoot = options.dataRoot || paths.data;
   const environment = options.environment || process.env;
-  const configuredConfigRoot =
-    options.configRoot ||
-    (typeof environment.XDG_CONFIG_HOME === 'string' &&
-    path.isAbsolute(environment.XDG_CONFIG_HOME)
-      ? path.normalize(environment.XDG_CONFIG_HOME)
-      : path.join(homedir(), '.config'));
-  const configRoot = configuredConfigRoot;
+  const getHomeDirectory =
+    options.getHomeDirectory || (() => userInfo().homedir);
+  const configRoot =
+    options.configRoot || path.join(getHomeDirectory(), '.config');
   const fsOps = options.fsOps || fsp;
   const readPackagedStorage =
     options.getLocalAppStorageLayout || getLocalAppStorageLayout;
@@ -1144,6 +1251,23 @@ export function createSystemdUserServiceOperator(options = {}) {
         'Systemd user-service management requires one non-root real/effective local user ID.',
       );
     }
+    const configuredXdgRoot = environment.XDG_CONFIG_HOME;
+    if (
+      configuredXdgRoot !== undefined &&
+      configuredXdgRoot !== '' &&
+      (typeof configuredXdgRoot !== 'string' ||
+        !path.isAbsolute(configuredXdgRoot) ||
+        path.resolve(configuredXdgRoot) !== configRoot)
+    ) {
+      const error = new Error(
+        `Systemd user-service management requires XDG_CONFIG_HOME to be unset or equal ${configRoot}.`,
+      );
+      error.name = 'SystemdUserServiceConfigurationError';
+      Object.assign(error, {
+        code: 'systemd-user-service-unstable-config-root',
+      });
+      throw error;
+    }
   }
 
   /** @returns {Promise<{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}>} - Embedded app context. */
@@ -1204,6 +1328,41 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
+   * @param {number} [timeoutMs] - Remaining operation time.
+   * @returns {Promise<string[]>} - Live manager unit search path.
+   */
+  async function readManagerUnitPaths(timeoutMs) {
+    const result = await systemctl(
+      ['show', '--property=UnitPath', '--value', '--no-pager'],
+      timeoutMs,
+    );
+    return parseSystemdUserManagerUnitPath(result.stdout);
+  }
+
+  /**
+   * Create and validate only the stable account-home unit directory, then
+   * require the live manager to include it in its actual lookup path. A fresh
+   * manager may omit a directory until it exists and daemon-reload recomputes
+   * UnitPath, so retry exactly once after that bounded preparation.
+   * @param {Readonly<Record<string, string>>} layout - Candidate service layout.
+   * @param {number} uid - Required filesystem owner.
+   * @returns {Promise<void>} - Resolves only for a reachable exact search path.
+   */
+  async function prepareManagerUnitDirectory(layout, uid) {
+    const unitDirectory = path.dirname(layout.unitPath);
+    let unitPaths = await readManagerUnitPaths();
+    await ensureManagedUnitDirectory(fsOps, layout, uid);
+    if (unitPaths.includes(unitDirectory)) return;
+    await systemctl(['daemon-reload']);
+    unitPaths = await readManagerUnitPaths();
+    if (!unitPaths.includes(unitDirectory)) {
+      throw new Error(
+        `Systemd user manager does not search Wharfie's fixed unit directory ${unitDirectory}; remove conflicting manager path overrides and restart the user manager before installing.`,
+      );
+    }
+  }
+
+  /**
    * @param {number} uid - Current user.
    * @param {number} [timeoutMs] - Remaining operation time.
    * @returns {Promise<boolean>} - Current linger state.
@@ -1255,8 +1414,27 @@ export function createSystemdUserServiceOperator(options = {}) {
    */
   function hasExpectedEffectiveUnit(systemd, layout) {
     return (
-      systemd.fragmentPath === layout.unitPath && systemd.dropInPaths === ''
+      systemd.loadState === 'loaded' &&
+      systemd.fragmentPath === layout.unitPath &&
+      systemd.dropInPaths === '' &&
+      systemd.needDaemonReload === false
     );
+  }
+
+  /**
+   * Refuse a unit name already resolved from another fragment or modified by
+   * drop-ins before Wharfie publishes release or durable state.
+   * @param {Readonly<Record<string, any>>} systemd - Parsed manager state.
+   * @param {Readonly<Record<string, string>>} layout - Candidate unit layout.
+   * @returns {void} - Returns when the name is absent or already exact.
+   */
+  function assertNoForeignEffectiveUnit(systemd, layout) {
+    if (systemd.loadState === 'not-found') return;
+    if (!hasExpectedEffectiveUnit(systemd, layout)) {
+      throw new Error(
+        'Systemd user-service unit name is already claimed by another or stale effective configuration.',
+      );
+    }
   }
 
   /**
@@ -1361,6 +1539,7 @@ export function createSystemdUserServiceOperator(options = {}) {
         execMainStatus: 0,
         fragmentPath: '',
         dropInPaths: '',
+        needDaemonReload: null,
       });
     }
     if (
@@ -1503,17 +1682,29 @@ export function createSystemdUserServiceOperator(options = {}) {
    * @returns {Promise<void>} - Resolves while persistent enablement is intact.
    */
   async function assertUnitEnabled(installation) {
-    const systemd = await readSystemd(installation.layout);
-    if (!hasExpectedEffectiveUnit(systemd, installation.layout)) {
-      throw new Error(
-        'Systemd loaded a different unit or additional drop-ins; rerun service install after removing the override.',
-      );
-    }
+    const systemd = await assertExpectedEffectiveUnit(installation);
     if (systemd.unitFileState !== 'enabled') {
       throw new Error(
         'Installed systemd user service is no longer enabled; rerun service install to repair it.',
       );
     }
+  }
+
+  /**
+   * Resolve the unit name before any lifecycle mutation and require it to be
+   * Wharfie's exact fragment without drop-ins. This prevents stop/uninstall
+   * from acting on a higher-precedence foreign unit with the same name.
+   * @param {Readonly<Record<string, any>>} installation - Installed state.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Exact manager state.
+   */
+  async function assertExpectedEffectiveUnit(installation) {
+    const systemd = await readSystemd(installation.layout);
+    if (!hasExpectedEffectiveUnit(systemd, installation.layout)) {
+      throw new Error(
+        'Systemd loaded a different unit or additional drop-ins, or its unit cache is stale; rerun service install after removing the override.',
+      );
+    }
+    return systemd;
   }
 
   /**
@@ -1593,14 +1784,20 @@ export function createSystemdUserServiceOperator(options = {}) {
   async function install() {
     const context = await resolveContext();
     await assertLinger(context.uid);
-    await systemctl(['show-environment']);
-    const artifact = await inspectBytes(artifactPath);
     const token = createToken();
     const releaseLock = await acquireLock({
       serviceRoot: context.layout.serviceRoot,
       uid: context.uid,
     });
     try {
+      await prepareManagerUnitDirectory(context.layout, context.filesystemUid);
+      let knownUnit = await readSystemd(context.layout);
+      if (knownUnit.needDaemonReload) {
+        await systemctl(['daemon-reload']);
+        knownUnit = await readSystemd(context.layout);
+      }
+      assertNoForeignEffectiveUnit(knownUnit, context.layout);
+      const artifact = await inspectBytes(artifactPath);
       await ensureManagedServiceRoot(
         fsOps,
         context.layout,
@@ -1672,11 +1869,6 @@ export function createSystemdUserServiceOperator(options = {}) {
         token,
       });
       const unit = createSystemdUserServiceUnit({ layout: context.layout });
-      await ensureManagedUnitDirectory(
-        fsOps,
-        context.layout,
-        context.filesystemUid,
-      );
       try {
         const currentUnit = await readManagedTextFile({
           fsOps,
@@ -1731,6 +1923,15 @@ export function createSystemdUserServiceOperator(options = {}) {
         uid: context.filesystemUid,
       });
       await systemctl(['daemon-reload']);
+      const loaded = await readSystemd(context.layout);
+      if (
+        loaded.loadState !== 'loaded' ||
+        !hasExpectedEffectiveUnit(loaded, context.layout)
+      ) {
+        throw new Error(
+          "Systemd did not load Wharfie's exact unit without drop-ins; installation was not enabled.",
+        );
+      }
       await systemctl(['enable', '--now', context.layout.unitName]);
       const status = await waitForHealth(
         installation,
@@ -1814,6 +2015,7 @@ export function createSystemdUserServiceOperator(options = {}) {
     const context = await resolveContext();
     const locked = await lockInstalled(context);
     try {
+      await assertExpectedEffectiveUnit(locked.installation);
       await systemctl(['stop', context.layout.unitName]);
       await waitForSystemdInactive(locked.installation, stopTimeoutMs);
       const observed = await observeInstallation(locked.installation, {
@@ -1913,6 +2115,7 @@ export function createSystemdUserServiceOperator(options = {}) {
         restoredUnit = true;
       }
       if (restoredUnit) await systemctl(['daemon-reload']);
+      await assertExpectedEffectiveUnit(installation);
       await systemctl(['disable', '--now', context.layout.unitName]);
       await waitForSystemdInactive(installation, stopTimeoutMs);
 

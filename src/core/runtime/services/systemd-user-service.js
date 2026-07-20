@@ -78,6 +78,7 @@ const SYSTEMD_STATUS_PROPERTIES = Object.freeze({
   ExecMainStatus: 'execMainStatus',
   FragmentPath: 'fragmentPath',
   DropInPaths: 'dropInPaths',
+  NeedDaemonReload: 'needDaemonReload',
 });
 
 /**
@@ -476,13 +477,13 @@ export function createSystemdUserServiceInstallation(input) {
  * Parse the exact property subset requested from `systemctl --user show`.
  * Unknown, duplicate, missing, or multiline fields fail closed.
  * @param {string} text - Raw systemctl output.
- * @returns {Readonly<{loadState: string, unitFileState: string, activeState: string, subState: string, result: string, mainPid: number, execMainStatus: number, fragmentPath: string, dropInPaths: string}>} - Parsed manager status.
+ * @returns {Readonly<{loadState: string, unitFileState: string, activeState: string, subState: string, result: string, mainPid: number, execMainStatus: number, fragmentPath: string, dropInPaths: string, needDaemonReload: boolean}>} - Parsed manager status.
  */
 export function parseSystemdUserServiceStatus(text) {
   if (typeof text !== 'string') {
     throw new TypeError('systemd user service status must be text.');
   }
-  /** @type {Record<string, string | number>} */
+  /** @type {Record<string, string | number | boolean>} */
   const parsed = {};
   const lines = text.endsWith('\n')
     ? text.slice(0, -1).split('\n')
@@ -513,10 +514,21 @@ export function parseSystemdUserServiceStatus(text) {
         );
       }
       parsed[outputName] = nonnegativeInteger(Number(value), property);
-    } else if (property === 'DropInPaths') {
+    } else if (property === 'NeedDaemonReload') {
+      if (value !== 'yes' && value !== 'no') {
+        throw new TypeError(
+          'systemd user service status NeedDaemonReload is invalid.',
+        );
+      }
+      parsed[outputName] = value === 'yes';
+    } else if (
+      property === 'DropInPaths' ||
+      property === 'FragmentPath' ||
+      property === 'UnitFileState'
+    ) {
       if (value.trim() !== value) {
         throw new TypeError(
-          'systemd user service status DropInPaths is invalid.',
+          `systemd user service status ${property} is invalid.`,
         );
       }
       parsed[outputName] = value;
@@ -533,6 +545,25 @@ export function parseSystemdUserServiceStatus(text) {
     Object.keys(parsed).length !== Object.keys(SYSTEMD_STATUS_PROPERTIES).length
   ) {
     throw new TypeError('systemd user service status is missing fields.');
+  }
+  if (parsed.loadState === 'not-found') {
+    if (
+      parsed.unitFileState !== '' ||
+      parsed.activeState !== 'inactive' ||
+      parsed.subState !== 'dead' ||
+      parsed.result !== 'success' ||
+      parsed.mainPid !== 0 ||
+      parsed.execMainStatus !== 0 ||
+      parsed.fragmentPath !== '' ||
+      parsed.dropInPaths !== '' ||
+      parsed.needDaemonReload !== false
+    ) {
+      throw new TypeError(
+        'systemd user service not-found status is inconsistent.',
+      );
+    }
+  } else if (parsed.unitFileState === '' || parsed.fragmentPath === '') {
+    throw new TypeError('systemd user service loaded status is incomplete.');
   }
   return /** @type {any} */ (Object.freeze(parsed));
 }
