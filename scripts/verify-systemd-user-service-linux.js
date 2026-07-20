@@ -59,8 +59,9 @@ function run(command, args, options = {}) {
     stderr: String(result.stderr || ''),
   };
   if (output.status !== 0 && options.allowFailure !== true) {
+    const detail = output.stderr.trim() || output.stdout.trim();
     throw new Error(
-      `${command} failed with exit ${output.status}: ${output.stderr.trim()}`,
+      `${command} failed with exit ${output.status}: ${detail.slice(0, 4096)}`,
     );
   }
   return output;
