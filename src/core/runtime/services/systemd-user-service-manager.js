@@ -15,7 +15,7 @@ import {
   createLedgerServiceLifecycle,
   createLedgerServiceOwnership,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
-import paths from '../../lib/paths.js';
+import { resolveStableLocalAppDataRoot } from '../local-app-storage.js';
 import {
   getRunningExecutablePath,
   inspectArtifactBytes,
@@ -1182,12 +1182,14 @@ export function createSystemdUserServiceOperator(options = {}) {
   const artifactPath =
     options.artifactPath ||
     getRunningExecutablePath({ platform, execPath: process.execPath });
-  const dataRoot = options.dataRoot || paths.data;
   const environment = options.environment || process.env;
   const getHomeDirectory =
     options.getHomeDirectory || (() => userInfo().homedir);
-  const configRoot =
-    options.configRoot || path.join(getHomeDirectory(), '.config');
+  const homeDirectory = getHomeDirectory();
+  const dataRoot =
+    options.dataRoot ??
+    resolveStableLocalAppDataRoot({ platform, homeDirectory });
+  const configRoot = options.configRoot ?? path.join(homeDirectory, '.config');
   const fsOps = options.fsOps || fsp;
   const readPackagedStorage =
     options.getLocalAppStorageLayout || getLocalAppStorageLayout;

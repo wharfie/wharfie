@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 /**
- * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, useDefaultXdgConfigHome?: boolean}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -58,8 +58,10 @@ async function createHarness(options = {}) {
     options.artifactBytes || Buffer.from('packaged-artifact-v1'),
     { mode: 0o700 },
   );
-  const dataRoot = path.join(root, 'data');
   const homeDirectory = path.join(root, 'account-home');
+  const dataRoot = options.deriveDataRoot
+    ? path.join(homeDirectory, '.local', 'share', 'wharfie-nodejs')
+    : path.join(root, 'data');
   const configRoot = options.deriveConfigRoot
     ? path.join(homeDirectory, '.config')
     : path.join(root, 'config');
@@ -217,10 +219,11 @@ async function createHarness(options = {}) {
     architecture: 'x64',
     nodeVersion: '24.13.1',
     artifactPath,
-    dataRoot,
-    ...(options.deriveConfigRoot
+    ...(options.deriveDataRoot ? {} : { dataRoot }),
+    ...(options.deriveConfigRoot ? {} : { configRoot }),
+    ...(options.deriveConfigRoot || options.deriveDataRoot
       ? { getHomeDirectory: () => homeDirectory }
-      : { configRoot }),
+      : {}),
     environment:
       options.environment ||
       (options.useDefaultXdgConfigHome
@@ -669,6 +672,27 @@ describe('systemd user service manager', () => {
     });
     expect(fixed.layout.configRoot).toBe(
       path.join(fixed.root, 'account-home', '.config'),
+    );
+  });
+
+  it('anchors packaged durable state to the account instead of ambient XDG data', async () => {
+    const harness = await createHarness({
+      deriveDataRoot: true,
+      environment: { XDG_DATA_HOME: '/tmp/invocation-specific-data' },
+    });
+
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      action: 'install',
+      health: 'healthy',
+    });
+    expect(harness.layout.dataRoot).toBe(
+      path.join(
+        harness.root,
+        'account-home',
+        '.local',
+        'share',
+        'wharfie-nodejs',
+      ),
     );
   });
 

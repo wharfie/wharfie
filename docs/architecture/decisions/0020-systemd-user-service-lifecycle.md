@@ -90,9 +90,10 @@ it does not move, copy, or select a second ledger. Explicit foreground storage
 overrides remain available, but service management refuses them unless every
 durable route exactly matches the fixed resident layout.
 
-The layout uses Wharfie's existing `env-paths` data root (the current Linux
-default is below `$XDG_DATA_HOME/wharfie-nodejs`, or
-`$HOME/.local/share/wharfie-nodejs` when that variable is absent):
+The packaged layout uses an account-stable data root that does not move with
+invocation-specific `XDG_DATA_HOME` or `HOME`. On Linux it is fixed below the
+service account's `~/.local/share/wharfie-nodejs`, using the home directory
+recorded for that operating-system account:
 
 ```text
 <wharfie-data>/applications/<appId>/

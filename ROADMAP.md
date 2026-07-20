@@ -380,8 +380,9 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       layout under `<wharfie-data>/applications/<appId>` before any developer,
       operator, or hidden-runtime entrypoint runs. Foreground commands and the
       systemd resident now share that exact ledger, payload, session, and
-      application-state authority; service management rejects explicit
-      overrides that would split them.
+      application-state authority. The packaged data root is anchored to the
+      operating-system account instead of ambient `XDG_DATA_HOME` or `HOME`,
+      and service management rejects explicit overrides that would split it.
 - [x] Fix the systemd integration point to the service account's
       `~/.config/systemd/user`, reject invocation-specific XDG topology, and
       verify the live manager's `UnitPath` plus exact effective fragment before

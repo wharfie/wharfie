@@ -1,6 +1,8 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-returns-description -- TypeScript assertion signatures are not understood by the current JSDoc lint parser. */
 
 import path from 'node:path';
+import { userInfo } from 'node:os';
+import process from 'node:process';
 
 import { assertLogicalId } from './logical-id.js';
 
@@ -24,6 +26,44 @@ function canonicalAbsolutePath(value, label) {
     throw new TypeError(`${label} must be a canonical absolute path.`);
   }
   return value;
+}
+
+/**
+ * Resolve the account-stable packaged data root without consulting ambient
+ * XDG or shell-home variables. A packaged executable must find the same
+ * durable app state when invoked interactively and by an OS service manager.
+ * @param {{platform?: string, homeDirectory?: string}} [options] - Testable account identity.
+ * @returns {string} - Canonical account-local Wharfie data root.
+ */
+export function resolveStableLocalAppDataRoot(options = {}) {
+  const platform = options.platform ?? process.platform;
+  if (typeof platform !== 'string' || !platform) {
+    throw new TypeError(
+      'local app storage platform must be a nonempty string.',
+    );
+  }
+  const homeDirectory = canonicalAbsolutePath(
+    options.homeDirectory ?? userInfo().homedir,
+    'local app storage homeDirectory',
+  );
+  if (platform === 'darwin') {
+    return path.join(
+      homeDirectory,
+      'Library',
+      'Application Support',
+      'wharfie-nodejs',
+    );
+  }
+  if (platform === 'win32') {
+    return path.join(
+      homeDirectory,
+      'AppData',
+      'Local',
+      'wharfie-nodejs',
+      'Data',
+    );
+  }
+  return path.join(homeDirectory, '.local', 'share', 'wharfie-nodejs');
 }
 
 /**

@@ -29,6 +29,8 @@ Packaged Linux artifacts additionally expose
 `<app> wharfie service install|start|stop|restart|status|uninstall`. This is a
 packaged-only systemd user-service boundary: it requires pre-enabled lingering,
 rejects root and custom `XDG_CONFIG_HOME` topology, never accepts unit or
-environment overrides, verifies the live manager's effective unit, and
-preserves state and immutable releases on uninstall. Update, rollback, and
-source-side service management are intentionally absent.
+environment overrides, anchors packaged durable state to the operating-system
+account instead of ambient `XDG_DATA_HOME` or `HOME`, verifies the live
+manager's effective unit, and preserves state and immutable releases on
+uninstall. Update, rollback, and source-side service management are
+intentionally absent.

@@ -297,9 +297,11 @@ The commands never invoke `sudo` or accept arbitrary unit/environment input.
 The unit location is fixed to the account's `~/.config/systemd/user`; custom
 `XDG_CONFIG_HOME` topology is rejected, installation verifies the live
 manager's search path, and unit-name mutations require an exact, non-stale
-effective fragment without drop-ins. Uninstall disables the unit and removes
-the executable selector while preserving immutable releases, ledger data,
-payloads, application state, and the installation identity tombstone.
+effective fragment without drop-ins. Packaged durable state is likewise fixed
+to the operating-system account's data root rather than ambient
+`XDG_DATA_HOME` or `HOME`. Uninstall disables the unit and removes the
+executable selector while preserving immutable releases, ledger data, payloads,
+application state, and the installation identity tombstone.
 Update and rollback remain unavailable until Wharfie has a race-free
 maintenance/handoff protocol. The repository's
 disposable Ubuntu proof covers crash replacement, abrupt reboot, pre-login

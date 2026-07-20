@@ -19,7 +19,10 @@ import {
 } from '../../src/core/lib/config/local-app-storage-context.js';
 import { resolveExecutionLedgerStoreConfiguration } from '../../src/core/runtime/operator/execution-ledger-store.js';
 import { resolveApplicationStateStoreConfiguration } from '../../src/core/runtime/application-state-store.js';
-import { createLocalAppStorageLayout } from '../../src/core/runtime/local-app-storage.js';
+import {
+  createLocalAppStorageLayout,
+  resolveStableLocalAppDataRoot,
+} from '../../src/core/runtime/local-app-storage.js';
 import { resolvePackagedAppStorage } from '../../src/core/runtime/packaged-app-storage.js';
 
 const DATA_ROOT = '/var/lib/wharfie-nodejs';
@@ -64,6 +67,35 @@ describe('local packaged app storage', () => {
 
     expect(layout.appRoot).toBe(`${DATA_ROOT}/applications/storage-demo`);
     expect(process.env).toEqual(environmentBefore);
+  });
+
+  it('anchors packaged storage to the account instead of ambient XDG or HOME values', async () => {
+    await withEnvironment(
+      {
+        HOME: '/tmp/invocation-home',
+        XDG_DATA_HOME: '/tmp/invocation-data',
+      },
+      async () => {
+        const accountHome = '/home/service-user';
+        const layout = await resolvePackagedAppStorage({
+          platform: 'linux',
+          getHomeDirectory: () => accountHome,
+          readEmbeddedRevisionRuntimePair: async () => ({
+            runtime: { appId: 'storage-demo' },
+          }),
+        });
+
+        expect(layout.dataRoot).toBe(
+          resolveStableLocalAppDataRoot({
+            platform: 'linux',
+            homeDirectory: accountHome,
+          }),
+        );
+        expect(layout.dataRoot).toBe(
+          '/home/service-user/.local/share/wharfie-nodejs',
+        );
+      },
+    );
   });
 
   it('routes every default durable store through one async packaged context', async () => {
