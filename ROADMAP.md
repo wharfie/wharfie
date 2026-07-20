@@ -484,9 +484,11 @@ completes the linear workflow proof with Node unavailable on `PATH`.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [workflow cancellation
-checkpoint](llm/checkpoints/2026-07-19-v12-workflow-cancellation.md). Its parent
-is the [workflow crash-recovery
+The current restart point is the [workflow timers and signals
+checkpoint](llm/checkpoints/2026-07-20-v13-workflow-timers-signals.md). Its
+parent is the [workflow cancellation
+checkpoint](llm/checkpoints/2026-07-19-v12-workflow-cancellation.md), whose
+parent is the [workflow crash-recovery
 checkpoint](llm/checkpoints/2026-07-19-v11-workflow-crash-recovery.md), whose
 parent is the [public workflow operator
 checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md),
