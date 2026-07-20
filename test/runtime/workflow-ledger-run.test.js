@@ -26,8 +26,10 @@ import {
   ActivityProtocolTranscriptValidator,
 } from '../../src/core/runtime/activity-protocol.js';
 import {
+  WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION,
   WorkflowLedgerRecoveryAction,
   recoverWorkflowLedgerActivity,
+  requestWorkflowLedgerRunCancellation,
   runWorkflowLedgerActivity,
 } from '../../src/core/runtime/workflow-ledger-run.js';
 
@@ -49,6 +51,18 @@ const ACTIVITY_ID = 'perform-work';
 const ACTOR = Object.freeze({
   kind: 'resident-workflow',
   id: 'workflow-ledger-run-test',
+});
+const OWNER_CANCELLATION = Object.freeze({
+  actor: Object.freeze({
+    kind: 'local-owner-command',
+    id: 'workflow-ledger-run-test',
+  }),
+  reason: Object.freeze({
+    code: 'operator-cancel-requested',
+    name: 'CancellationRequested',
+    message: 'The workflow runner test requested cancellation.',
+    details: Object.freeze({ source: 'workflow-ledger-run-test' }),
+  }),
 });
 const DEFINITION = /** @type {WorkflowDefinition} */ (
   Object.freeze({
@@ -135,6 +149,75 @@ function terminalEvidence(start, type, result = { accepted: true }) {
     frames: [acceptedStart, terminal],
     transcript: transcript.snapshot(),
   };
+}
+
+/** @param {ActivityStartFrame} start - Durable start frame. @param {Record<string, any>} reason - Retained cancellation reason. */
+function cancelledEvidence(start, reason) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const cancel = transcript.acceptHostFrame({
+    protocol: ACTIVITY_PROTOCOL_NAME,
+    protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+    type: 'cancel',
+    attemptId: acceptedStart.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame({
+    protocol: ACTIVITY_PROTOCOL_NAME,
+    protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+    type: 'cancelled',
+    attemptId: acceptedStart.attemptId,
+    sequence: 1,
+    error: reason,
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/** @param {ActivityStartFrame} start - Durable start frame. @param {Record<string, any>} reason - Retained cancellation reason. */
+function ambiguousCancellationEvidence(start, reason) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const cancel = transcript.acceptHostFrame({
+    protocol: ACTIVITY_PROTOCOL_NAME,
+    protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+    type: 'cancel',
+    attemptId: acceptedStart.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame({
+    protocol: ACTIVITY_PROTOCOL_NAME,
+    protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+    type: 'protocol-failed',
+    attemptId: acceptedStart.attemptId,
+    sequence: 1,
+    error: {
+      code: 'termination-unconfirmed',
+      name: 'ActivityAttemptProtocolError',
+      message: 'The test adapter could not confirm worker termination.',
+      details: {},
+    },
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/** @param {AbortSignal} signal - Physical attempt signal. */
+async function waitForAbort(signal) {
+  if (signal.aborted) return;
+  await new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
 }
 
 /** @param {string} label - Isolated scenario name. @param {(context: LedgerContext) => Promise<void>} body - Test body. @param {WorkflowDefinition} [definition] - Workflow definition. */
@@ -741,5 +824,537 @@ describe('workflow ledger activity runner', () => {
         'workflow-activity-became-uncertain',
       ]);
     });
+  });
+
+  test('cancels runnable work without requiring a live physical owner', async () => {
+    await withLedger('cancel-runnable', async ({ ledger, runId, created }) => {
+      const cancellation = await requestWorkflowLedgerRunCancellation({
+        ledger,
+        runId,
+        requestId: 'cancel-runnable-request',
+        actor: OWNER_CANCELLATION.actor,
+        reason: OWNER_CANCELLATION.reason,
+      });
+
+      expect(cancellation).toMatchObject({
+        applied: true,
+        outcome: 'cancellation-requested',
+        cancellationDeliveryRequired: false,
+        signalDelivered: false,
+        run: {
+          status: RunStatus.CANCELLED,
+          cancellationRequest: {
+            requestId: 'cancel-runnable-request',
+            actor: OWNER_CANCELLATION.actor,
+            reason: OWNER_CANCELLATION.reason,
+          },
+        },
+        workflowCursor: {
+          disposition: WorkflowCursorDisposition.CANCELLED,
+          outputs: [],
+        },
+        invocation: { status: InvocationStatus.CANCELLED },
+      });
+      expect(cancellation).not.toHaveProperty('attempt');
+      expect(created.invocation.generation).toBe(0);
+      expect((await listReadyWork(ledger)).items).toEqual([]);
+      expect(
+        (await ledger.getEvents(runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual(['workflow-run-created', 'workflow-cancellation-requested']);
+    });
+  });
+
+  test('refuses to persist fresh STARTED cancellation without its exact live port', async () => {
+    await withLedger(
+      'cancel-started-without-port',
+      async ({ ledger, runId, created }) => {
+        const claimed = await claimWorkflow(
+          ledger,
+          runId,
+          created,
+          'cancel-started-without-port-fence',
+        );
+        await ledger.markWorkflowActivityStarted({
+          runId,
+          invocationId: created.invocation.invocationId,
+          cursor: cursorGuard(claimed.workflowCursor),
+          attemptId: claimed.attempt.attemptId,
+          fencingToken: claimed.attempt.fencingToken,
+          generation: claimed.attempt.generation,
+          expectedVersion: claimed.run.version,
+          transitionId: `test-start:${claimed.attempt.attemptId}`,
+          actor: ACTOR,
+          coordinatorEpoch: claimed.attempt.coordinatorEpoch,
+        });
+
+        const cancellation = await requestWorkflowLedgerRunCancellation({
+          ledger,
+          runId,
+          requestId: 'cancel-started-without-port-request',
+        });
+
+        expect(cancellation).toMatchObject({
+          applied: false,
+          outcome: 'owner-not-ready',
+          cancellationDeliveryRequired: false,
+          signalDelivered: false,
+          run: { status: RunStatus.RUNNING },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+          },
+          invocation: { status: InvocationStatus.RUNNING },
+          attempt: { status: AttemptStatus.STARTED },
+        });
+        expect(cancellation.run).not.toHaveProperty('cancellationRequest');
+        expect(
+          (await ledger.getEvents(runId)).map(
+            (/** @type {Record<string, any>} */ event) => event.type,
+          ),
+        ).toEqual([
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+        ]);
+      },
+    );
+  });
+
+  test('persists through the exact live port before delivering cancelled evidence', async () => {
+    await withLedger(
+      'cancel-started-through-port',
+      async ({ ledger, runId, created }) => {
+        /** @type {import('../../src/core/runtime/workflow-ledger-run.js').WorkflowLedgerActiveCancellationPort | undefined} */
+        let port;
+        const executeAttempt = jest.fn(
+          async (
+            /** @type {ActivityStartFrame} */ start,
+            /** @type {{signal: AbortSignal}} */ { signal },
+          ) => {
+            expect(port).toMatchObject({
+              version: WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION,
+              runId,
+              invocationId: created.invocation.invocationId,
+              attemptId: start.attemptId,
+            });
+            const cancellation = await requestWorkflowLedgerRunCancellation({
+              ledger,
+              runId,
+              requestId: 'cancel-started-through-port-request',
+              activeCancellationPort: port,
+            });
+            expect(cancellation).toMatchObject({
+              applied: true,
+              outcome: 'cancellation-requested',
+              cancellationDeliveryRequired: true,
+              signalDelivered: true,
+              run: {
+                status: RunStatus.RUNNING,
+                cancellationRequest: {
+                  requestId: 'cancel-started-through-port-request',
+                  actor: OWNER_CANCELLATION.actor,
+                  reason: OWNER_CANCELLATION.reason,
+                },
+              },
+              attempt: { status: AttemptStatus.STARTED },
+            });
+            expect(signal.aborted).toBe(true);
+            const durableBeforeEvidence = await ledger.rebuildRun(runId);
+            expect(
+              durableBeforeEvidence?.run.cancellationRequest?.reason,
+            ).toEqual(signal.reason);
+            return cancelledEvidence(start, signal.reason);
+          },
+        );
+
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(ledger, created, runId, {
+            ownerCancellation: OWNER_CANCELLATION,
+            registerActiveWorkflowCancellationPort: (candidate) => {
+              port = candidate;
+              return () => {
+                if (port === candidate) port = undefined;
+              };
+            },
+            executeAttempt,
+          }),
+        );
+
+        expect(executeAttempt).toHaveBeenCalledTimes(1);
+        expect(port).toBeUndefined();
+        expect(outcome).toMatchObject({
+          disposition: 'cancelled',
+          dispatched: true,
+          run: { status: RunStatus.CANCELLED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.CANCELLED,
+          },
+          invocation: {
+            status: InvocationStatus.CANCELLED,
+            terminal: { type: 'cancelled' },
+          },
+          attempt: {
+            status: AttemptStatus.CANCELLED,
+            terminal: { type: 'cancelled' },
+          },
+        });
+        expect(
+          (await ledger.getEvents(runId)).map(
+            (/** @type {Record<string, any>} */ event) => event.type,
+          ),
+        ).toEqual([
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-cancellation-requested',
+          'workflow-activity-cancelled',
+        ]);
+      },
+    );
+  });
+
+  test('rebases a non-final completed terminal after cancellation without creating a successor', async () => {
+    await withLedger(
+      'cancel-nonfinal-completion',
+      async ({ ledger, runId, created }) => {
+        /** @type {import('../../src/core/runtime/workflow-ledger-run.js').WorkflowLedgerActiveCancellationPort | undefined} */
+        let port;
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(ledger, created, runId, {
+            ownerCancellation: OWNER_CANCELLATION,
+            registerActiveWorkflowCancellationPort: (candidate) => {
+              port = candidate;
+            },
+            executeAttempt: async (
+              /** @type {ActivityStartFrame} */ start,
+              /** @type {{signal: AbortSignal}} */ { signal },
+            ) => {
+              const cancellation = await requestWorkflowLedgerRunCancellation({
+                ledger,
+                runId,
+                requestId: 'cancel-nonfinal-completion-request',
+                activeCancellationPort: port,
+              });
+              expect(cancellation.signalDelivered).toBe(true);
+              expect(signal.aborted).toBe(true);
+              return terminalEvidence(start, 'completed', {
+                completedAfterCancellation: true,
+              });
+            },
+          }),
+        );
+
+        expect(outcome).toMatchObject({
+          disposition: 'cancelled',
+          run: { status: RunStatus.CANCELLED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.CANCELLED,
+            stepId: 'work',
+            stepIndex: 0,
+            outputs: [],
+          },
+          invocation: {
+            status: InvocationStatus.COMPLETED,
+            terminal: { type: 'completed' },
+          },
+          attempt: {
+            status: AttemptStatus.COMPLETED,
+            terminal: { type: 'completed' },
+          },
+        });
+        expect((await listReadyWork(ledger)).items).toEqual([]);
+        const view = await ledger.rebuildRun(runId);
+        expect(view?.invocations).toHaveLength(1);
+      },
+      TWO_STEP_DEFINITION,
+    );
+  });
+
+  test('allows final completion to remain authoritative after retained cancellation', async () => {
+    await withLedger(
+      'cancel-final-completion',
+      async ({ ledger, runId, created }) => {
+        /** @type {import('../../src/core/runtime/workflow-ledger-run.js').WorkflowLedgerActiveCancellationPort | undefined} */
+        let port;
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(ledger, created, runId, {
+            ownerCancellation: OWNER_CANCELLATION,
+            registerActiveWorkflowCancellationPort: (candidate) => {
+              port = candidate;
+            },
+            executeAttempt: async (/** @type {ActivityStartFrame} */ start) => {
+              await requestWorkflowLedgerRunCancellation({
+                ledger,
+                runId,
+                requestId: 'cancel-final-completion-request',
+                activeCancellationPort: port,
+              });
+              return terminalEvidence(start, 'completed', {
+                finalCompletionWon: true,
+              });
+            },
+          }),
+        );
+
+        expect(outcome).toMatchObject({
+          disposition: 'completed',
+          run: { status: RunStatus.COMPLETED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.COMPLETED,
+            outputs: [expect.objectContaining({ stepId: 'work' })],
+          },
+          invocation: { status: InvocationStatus.COMPLETED },
+          attempt: { status: AttemptStatus.COMPLETED },
+        });
+      },
+    );
+  });
+
+  test('a terminal success that wins first is preserved while cancellation consumes its successor', async () => {
+    await withLedger(
+      'success-before-run-cancellation',
+      async ({ ledger, runId, created }) => {
+        /** @type {import('../../src/core/runtime/workflow-ledger-run.js').WorkflowLedgerActiveCancellationPort | undefined} */
+        let port;
+        let cancellation;
+        const racingLedger = injectLedgerMethod(
+          ledger,
+          'commitVerifiedWorkflowActivityTerminal',
+          async (commit, request) => {
+            const terminal = await commit(request);
+            cancellation = await requestWorkflowLedgerRunCancellation({
+              ledger,
+              runId,
+              requestId: 'success-before-run-cancellation-request',
+              activeCancellationPort: port,
+              actor: OWNER_CANCELLATION.actor,
+              reason: OWNER_CANCELLATION.reason,
+            });
+            return terminal;
+          },
+        );
+
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(racingLedger, created, runId, {
+            registerActiveWorkflowCancellationPort: (candidate) => {
+              port = candidate;
+            },
+            executeAttempt: async (/** @type {ActivityStartFrame} */ start) =>
+              terminalEvidence(start, 'completed', { preserved: true }),
+          }),
+        );
+
+        expect(cancellation).toMatchObject({
+          applied: true,
+          outcome: 'cancellation-requested',
+          cancellationDeliveryRequired: false,
+          signalDelivered: false,
+          run: { status: RunStatus.CANCELLED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.CANCELLED,
+            stepId: 'finish',
+            stepIndex: 1,
+            outputs: [expect.objectContaining({ stepId: 'work' })],
+          },
+        });
+        expect(outcome).toMatchObject({
+          disposition: 'cancelled',
+          run: { status: RunStatus.CANCELLED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.CANCELLED,
+            stepId: 'finish',
+            outputs: [expect.objectContaining({ stepId: 'work' })],
+          },
+          invocation: {
+            status: InvocationStatus.CANCELLED,
+          },
+        });
+        const view = await ledger.rebuildRun(runId);
+        expect(view?.invocations).toHaveLength(2);
+        expect(view?.invocations).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              status: InvocationStatus.COMPLETED,
+              terminal: { type: 'completed', attemptId: expect.any(String) },
+            }),
+            expect.objectContaining({ status: InvocationStatus.CANCELLED }),
+          ]),
+        );
+      },
+      TWO_STEP_DEFINITION,
+    );
+  });
+
+  test('a lost cancellation response never sends the physical signal on replay', async () => {
+    await withLedger(
+      'cancel-response-loss-no-resignal',
+      async ({ ledger, runId, created }) => {
+        let cancellationCalls = 0;
+        const responseLostLedger = injectLedgerMethod(
+          ledger,
+          'requestWorkflowRunCancellation',
+          async (requestCancellation, request) => {
+            cancellationCalls += 1;
+            const result = await requestCancellation(request);
+            if (cancellationCalls === 1) {
+              throw new Error('workflow cancellation response was lost');
+            }
+            return result;
+          },
+        );
+        /** @type {import('../../src/core/runtime/workflow-ledger-run.js').WorkflowLedgerActiveCancellationPort | undefined} */
+        let port;
+        let aborts = 0;
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(responseLostLedger, created, runId, {
+            ownerCancellation: OWNER_CANCELLATION,
+            registerActiveWorkflowCancellationPort: (candidate) => {
+              port = candidate;
+            },
+            executeAttempt: async (
+              /** @type {ActivityStartFrame} */ start,
+              /** @type {{signal: AbortSignal}} */ { signal },
+            ) => {
+              signal.addEventListener('abort', () => {
+                aborts += 1;
+              });
+              const first = await requestWorkflowLedgerRunCancellation({
+                ledger: responseLostLedger,
+                runId,
+                requestId: 'cancel-response-loss-request',
+                activeCancellationPort: port,
+              });
+              const replay = await requestWorkflowLedgerRunCancellation({
+                ledger: responseLostLedger,
+                runId,
+                requestId: 'cancel-response-loss-request',
+                activeCancellationPort: port,
+              });
+              expect(first.signalDelivered).toBe(false);
+              expect(replay.signalDelivered).toBe(false);
+              expect(signal.aborted).toBe(false);
+              return terminalEvidence(start, 'completed');
+            },
+          }),
+        );
+
+        expect(cancellationCalls).toBe(1);
+        expect(aborts).toBe(0);
+        expect(outcome).toMatchObject({
+          disposition: 'completed',
+          run: { status: RunStatus.COMPLETED },
+        });
+      },
+    );
+  });
+
+  test('treats protocol failure after an authorized cancel frame as uncertainty', async () => {
+    await withLedger(
+      'cancel-protocol-failed-uncertain',
+      async ({ ledger, runId, created }) => {
+        /** @type {import('../../src/core/runtime/workflow-ledger-run.js').WorkflowLedgerActiveCancellationPort | undefined} */
+        let port;
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(ledger, created, runId, {
+            ownerCancellation: OWNER_CANCELLATION,
+            registerActiveWorkflowCancellationPort: (candidate) => {
+              port = candidate;
+            },
+            executeAttempt: async (
+              /** @type {ActivityStartFrame} */ start,
+              /** @type {{signal: AbortSignal}} */ { signal },
+            ) => {
+              await requestWorkflowLedgerRunCancellation({
+                ledger,
+                runId,
+                requestId: 'cancel-protocol-failed-request',
+                activeCancellationPort: port,
+              });
+              await waitForAbort(signal);
+              return ambiguousCancellationEvidence(start, signal.reason);
+            },
+          }),
+        );
+
+        expect(outcome).toMatchObject({
+          disposition: 'blocked',
+          run: {
+            status: RunStatus.BLOCKED,
+            cancellationRequest: {
+              requestId: 'cancel-protocol-failed-request',
+            },
+          },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+          },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+        });
+      },
+    );
+  });
+
+  test('records cancellation intent after uncertainty without signaling or rewriting the attempt', async () => {
+    await withLedger(
+      'cancel-after-uncertainty',
+      async ({ ledger, runId, created }) => {
+        const uncertain = await runWorkflowLedgerActivity(
+          runOptions(ledger, created, runId, {
+            executeAttempt: async () => {
+              throw new Error('physical outcome is unavailable');
+            },
+          }),
+        );
+        const retainedAttempt = structuredClone(uncertain.attempt);
+
+        const cancellation = await requestWorkflowLedgerRunCancellation({
+          ledger,
+          runId,
+          requestId: 'cancel-after-uncertainty-request',
+          actor: OWNER_CANCELLATION.actor,
+          reason: OWNER_CANCELLATION.reason,
+        });
+
+        expect(cancellation).toMatchObject({
+          applied: true,
+          outcome: 'cancellation-requested',
+          cancellationDeliveryRequired: false,
+          signalDelivered: false,
+          run: { status: RunStatus.BLOCKED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+          },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+        });
+        expect(cancellation.attempt).toEqual(retainedAttempt);
+        expect((await listReadyWork(ledger)).items).toEqual([]);
+      },
+    );
+  });
+
+  test('keeps deadline-exceeded unsupported and conservatively blocks the workflow', async () => {
+    await withLedger(
+      'deadline-exceeded-unsupported',
+      async ({ ledger, runId, created }) => {
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(ledger, created, runId, {
+            executeAttempt: async () =>
+              /** @type {any} */ ({ status: 'deadline-exceeded' }),
+          }),
+        );
+
+        expect(outcome).toMatchObject({
+          disposition: 'blocked',
+          run: { status: RunStatus.BLOCKED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+          },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+        });
+      },
+    );
   });
 });

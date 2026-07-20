@@ -73,7 +73,7 @@ const SEA_WORKFLOW_EVIDENCE_RETURNED_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/runtime/workflow-ledger-run.js',
   // A complete component transcript is in host memory, but the workflow
   // terminal transition has not published or referenced it yet.
-  anchor: 'const terminalRequest = {',
+  anchor: 'let terminalCursor = cursorGuard(started.workflowCursor);',
 });
 const SEA_WORKFLOW_TERMINAL_COMMITTED_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/runtime/workflow-ledger-run.js',
@@ -7065,6 +7065,17 @@ function parseFinalJsonLine(value) {
 }
 
 /**
+ * Parse a JSON receipt emitted before a human-readable success line.
+ * @param {unknown} value - Captured operator command output.
+ * @returns {Record<string, any>} - Parsed first JSON object.
+ */
+function parseFirstJsonLine(value) {
+  const line = String(value).trim().split('\n').find(Boolean);
+  if (!line) throw new Error('Expected one JSON command receipt.');
+  return JSON.parse(line);
+}
+
+/**
  * Return one compact exact-ready-work projection for workflow assertions.
  * @param {Record<string, any>[]} items - Durable ready-work records.
  * @returns {Record<string, any>[]} - Stable assertion projection.
@@ -7526,6 +7537,103 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
       await assertCompletedSeaWorkflow(options, cross, completed);
     } finally {
       rmSync(cross.caseRoot, { recursive: true, force: true });
+    }
+
+    // A moved executable can consume a runnable workflow cursor without ever
+    // loading or dispatching authored activity code. Losing and retrying the
+    // same public request must observe the one retained cancellation decision.
+    const cancelled = await createRelocatedSeaWorkflowCase(
+      options,
+      'offline-cancellation',
+    );
+    try {
+      const requestId = 'sea-workflow-offline-cancellation';
+      const cancelArgs = [
+        'wharfie',
+        'cancel',
+        '--run-id',
+        cancelled.runId,
+        '--request-id',
+        requestId,
+        '--json',
+      ];
+      const cancellationText = runCommand(options.artifactPath, cancelArgs, {
+        cwd: cancelled.caseRoot,
+        capture: true,
+        env: cancelled.environment,
+      }).stdout.trim();
+      assert.deepEqual(parseFirstJsonLine(cancellationText), {
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.cancel',
+        runId: cancelled.runId,
+        requestId,
+        outcome: 'cancellation-requested',
+        delivery: 'not-required',
+        runStatus: 'CANCELLED',
+        invocationStatus: 'CANCELLED',
+      });
+      const cancelledRun = await cancelled.fixture.readRun(cancelled.runId);
+      assert.ok(cancelledRun);
+      assert.equal(cancelledRun.run.status, 'CANCELLED');
+      assert.equal(cancelledRun.run.version, 2);
+      assert.equal(cancelledRun.run.lastSequence, 2);
+      assert.equal(cancelledRun.run.cancellationRequest.requestId, requestId);
+      assert.equal(cancelledRun.workflowCursor.disposition, 'CANCELLED');
+      assert.equal(cancelledRun.workflowCursor.stepId, 'first');
+      assert.equal(cancelledRun.workflowCursor.stepIndex, 0);
+      assert.deepEqual(cancelledRun.workflowCursor.outputs, []);
+      assert.equal(cancelledRun.invocations.length, 1);
+      assert.equal(cancelledRun.invocations[0].status, 'CANCELLED');
+      assert.equal(
+        cancelledRun.invocations[0].cancellationRequest.requestId,
+        requestId,
+      );
+      assert.deepEqual(cancelledRun.attempts, []);
+      assert.deepEqual(
+        cancelledRun.events.map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+        ['workflow-run-created', 'workflow-cancellation-requested'],
+      );
+      assert.deepEqual(
+        await cancelled.fixture.listReadyWork(
+          options.appId,
+          options.revisionId,
+        ),
+        [],
+      );
+      assert.deepEqual(readdirSync(cancelled.markerDirectory), []);
+      assert.equal(await cancelled.lifecycle.readOwnership(), null);
+      assert.equal(
+        readPayloadReachability(cancelled.payloadPath, cancelledRun).orphans
+          .length,
+        0,
+      );
+      for (const privateValue of [
+        cancelled.secret,
+        cancelled.callerSecret,
+        cancelled.markerDirectory,
+      ]) {
+        assert.equal(cancellationText.includes(privateValue), false);
+      }
+
+      const replayText = runCommand(options.artifactPath, cancelArgs, {
+        cwd: cancelled.caseRoot,
+        capture: true,
+        env: cancelled.environment,
+      }).stdout.trim();
+      assert.deepEqual(
+        parseFirstJsonLine(replayText),
+        parseFirstJsonLine(cancellationText),
+      );
+      assert.deepEqual(
+        await cancelled.fixture.readRun(cancelled.runId),
+        cancelledRun,
+      );
+      assert.deepEqual(readdirSync(cancelled.markerDirectory), []);
+      assert.equal(await cancelled.lifecycle.readOwnership(), null);
+    } finally {
+      rmSync(cancelled.caseRoot, { recursive: true, force: true });
     }
 
     const claim = await createRelocatedSeaWorkflowCase(
@@ -10029,7 +10137,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

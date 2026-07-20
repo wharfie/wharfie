@@ -27,7 +27,10 @@ import {
   RunStatus,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
-import { createWorkflowRunId } from '../../src/core/lib/ledger/workflow-execution-contract.js';
+import {
+  WorkflowCursorDisposition,
+  createWorkflowRunId,
+} from '../../src/core/lib/ledger/workflow-execution-contract.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import {
   APPLICATION_STATE_ADAPTER_DESCRIPTOR,
@@ -297,6 +300,16 @@ async function readLmdbRun(configuration, runId) {
   } finally {
     await db.close();
   }
+}
+
+/** @param {Record<string, any>} cursor */
+function workflowCursorGuard(cursor) {
+  return {
+    version: cursor.version,
+    continuationId: cursor.continuationId,
+    stepId: cursor.stepId,
+    stepIndex: cursor.stepIndex,
+  };
 }
 
 /**
@@ -682,7 +695,7 @@ describe('shared execution-ledger operator boundary', () => {
     }
   });
 
-  it('rejects workflow cancellation before owner routing or durable mutation', async () => {
+  it('cancels an offline runnable workflow and replays without duplicate authority', async () => {
     const root = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-operator-workflow-cancel-'),
     );
@@ -690,45 +703,325 @@ describe('shared execution-ledger operator boundary', () => {
       root,
       'operator-workflow-cancel',
     );
-    const { db, ledger } = createLmdbLedger(configuration);
     const appId = 'operator-workflow-cancel-app';
     const runId = createWorkflowRunId({
       appId,
-      idempotencyKey: 'unsupported-cancellation',
+      idempotencyKey: 'offline-cancellation',
     });
     try {
-      await ledger.createWorkflowRun({
+      const seeded = createLmdbLedger(configuration);
+      try {
+        await seeded.ledger.createWorkflowRun({
+          runId,
+          appId,
+          revisionId: RUN_REVISION_ID,
+          workflowId: 'cancel-workflow',
+          definition: {
+            steps: [
+              {
+                id: 'work',
+                kind: 'activity',
+                activity: 'work',
+                input: { kind: 'workflow-input' },
+              },
+            ],
+          },
+          input: {},
+          callerMetadata: {},
+          transitionId: 'create-workflow-cancel-test',
+        });
+      } finally {
+        await seeded.db.close();
+      }
+
+      const request = {
         runId,
-        appId,
-        revisionId: RUN_REVISION_ID,
-        workflowId: 'cancel-workflow',
-        definition: {
-          steps: [
-            {
-              id: 'work',
-              kind: 'activity',
-              activity: 'work',
-              input: { kind: 'workflow-input' },
-            },
-          ],
-        },
-        input: {},
-        callerMetadata: {},
-        transitionId: 'create-workflow-cancel-test',
+        requestId: 'workflow-cancel-request',
+        expectedAppId: appId,
+        configuration,
+      };
+      await expect(
+        cancelExecutionLedgerRun({
+          ...request,
+          expectedAppId: 'different-packaged-app',
+        }),
+      ).rejects.toBeInstanceOf(ExecutionLedgerOperatorScopeError);
+      await expect(readLmdbRun(configuration, runId)).resolves.toMatchObject({
+        run: { status: RunStatus.RUNNING },
       });
-      const before = await ledger.rebuildRun(runId);
+      const first = await cancelExecutionLedgerRun(request);
+      expect(first).toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.cancel',
+        runId,
+        requestId: request.requestId,
+        outcome: 'cancellation-requested',
+        delivery: 'not-required',
+        runStatus: RunStatus.CANCELLED,
+        invocationStatus: InvocationStatus.CANCELLED,
+      });
+      await expect(cancelExecutionLedgerRun(request)).resolves.toEqual(first);
+      await expect(
+        cancelExecutionLedgerRun({
+          ...request,
+          requestId: 'competing-workflow-cancel-request',
+        }),
+      ).resolves.toEqual({
+        ...first,
+        requestId: 'competing-workflow-cancel-request',
+      });
+
+      const after = await readLmdbRun(configuration, runId);
+      expect(after).toMatchObject({
+        run: {
+          status: RunStatus.CANCELLED,
+          cancellationRequest: { requestId: request.requestId },
+        },
+        workflowCursor: {
+          disposition: WorkflowCursorDisposition.CANCELLED,
+        },
+        invocations: [
+          expect.objectContaining({ status: InvocationStatus.CANCELLED }),
+        ],
+      });
+      expect(
+        after?.events.filter(
+          (/** @type {Record<string, any>} */ event) =>
+            event.type === 'workflow-cancellation-requested',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains cancellation on an uncertain workflow without relabelling its outcome', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-workflow-uncertain-cancel-'),
+    );
+    const configuration = createLmdbConfiguration(
+      root,
+      'operator-workflow-uncertain-cancel',
+    );
+    const appId = 'operator-workflow-uncertain-cancel-app';
+    const runId = createWorkflowRunId({
+      appId,
+      idempotencyKey: 'uncertain-cancellation',
+    });
+    let abandonedAttempt;
+    try {
+      const seeded = createLmdbLedger(configuration);
+      try {
+        const created = await seeded.ledger.createWorkflowRun({
+          runId,
+          appId,
+          revisionId: RUN_REVISION_ID,
+          workflowId: 'uncertain-workflow',
+          definition: {
+            steps: [
+              {
+                id: 'work',
+                kind: 'activity',
+                activity: 'work',
+                input: { kind: 'workflow-input' },
+              },
+            ],
+          },
+          input: {},
+          callerMetadata: {},
+          transitionId: 'create-uncertain-workflow-cancel-test',
+        });
+        const claimed = await seeded.ledger.claimWorkflowActivity({
+          runId,
+          invocationId: created.invocation.invocationId,
+          cursor: workflowCursorGuard(created.workflowCursor),
+          fencingToken: 'uncertain-workflow-fence',
+          expectedGeneration: 0,
+          expectedVersion: created.run.version,
+          transitionId: 'claim-uncertain-workflow-cancel-test',
+        });
+        const started = await seeded.ledger.markWorkflowActivityStarted({
+          runId,
+          invocationId: claimed.invocation.invocationId,
+          cursor: workflowCursorGuard(claimed.workflowCursor),
+          attemptId: claimed.attempt.attemptId,
+          fencingToken: claimed.attempt.fencingToken,
+          generation: claimed.attempt.generation,
+          expectedVersion: claimed.run.version,
+          transitionId: 'start-uncertain-workflow-cancel-test',
+        });
+        const uncertain =
+          await seeded.ledger.markWorkflowActivityAttemptUncertain({
+            runId,
+            invocationId: started.invocation.invocationId,
+            cursor: workflowCursorGuard(started.workflowCursor),
+            attemptId: started.attempt.attemptId,
+            fencingToken: started.attempt.fencingToken,
+            generation: started.attempt.generation,
+            expectedVersion: started.run.version,
+            transitionId: 'uncertain-workflow-cancel-test',
+            reason: { code: 'operator-test-outcome-lost' },
+          });
+        abandonedAttempt = structuredClone(uncertain.attempt);
+      } finally {
+        await seeded.db.close();
+      }
+
+      const request = {
+        runId,
+        requestId: 'uncertain-workflow-cancel-request',
+        expectedAppId: appId,
+        configuration,
+      };
+      const result = await cancelExecutionLedgerRun(request);
+      expect(result).toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.cancel',
+        runId,
+        requestId: request.requestId,
+        outcome: 'cancellation-requested',
+        delivery: 'not-required',
+        runStatus: RunStatus.BLOCKED,
+        invocationStatus: InvocationStatus.UNCERTAIN,
+      });
+      await expect(cancelExecutionLedgerRun(request)).resolves.toEqual(result);
+
+      const after = await readLmdbRun(configuration, runId);
+      expect(after).toMatchObject({
+        run: {
+          status: RunStatus.BLOCKED,
+          cancellationRequest: { requestId: request.requestId },
+        },
+        workflowCursor: {
+          disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+        },
+        invocations: [
+          expect.objectContaining({
+            status: InvocationStatus.UNCERTAIN,
+            cancellationRequest: expect.objectContaining({
+              requestId: request.requestId,
+            }),
+          }),
+        ],
+      });
+      expect(after?.attempts).toEqual([abandonedAttempt]);
+      expect(
+        after?.events.filter(
+          (/** @type {Record<string, any>} */ event) =>
+            event.type === 'workflow-cancellation-requested',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a terminal workflow without acquiring cancellation authority', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-workflow-terminal-cancel-'),
+    );
+    const configuration = createLmdbConfiguration(
+      root,
+      'operator-workflow-terminal-cancel',
+    );
+    const appId = 'operator-workflow-terminal-cancel-app';
+    const runId = createWorkflowRunId({
+      appId,
+      idempotencyKey: 'terminal-cancellation',
+    });
+    try {
+      const seeded = createLmdbLedger(configuration);
+      try {
+        const created = await seeded.ledger.createWorkflowRun({
+          runId,
+          appId,
+          revisionId: RUN_REVISION_ID,
+          workflowId: 'terminal-workflow',
+          definition: {
+            steps: [
+              {
+                id: 'work',
+                kind: 'activity',
+                activity: 'work',
+                input: { kind: 'workflow-input' },
+              },
+            ],
+          },
+          input: {},
+          callerMetadata: {},
+          transitionId: 'create-terminal-workflow-cancel-test',
+        });
+        const claimed = await seeded.ledger.claimWorkflowActivity({
+          runId,
+          invocationId: created.invocation.invocationId,
+          cursor: workflowCursorGuard(created.workflowCursor),
+          fencingToken: 'terminal-workflow-fence',
+          expectedGeneration: 0,
+          expectedVersion: created.run.version,
+          transitionId: 'claim-terminal-workflow-cancel-test',
+        });
+        const started = await seeded.ledger.markWorkflowActivityStarted({
+          runId,
+          invocationId: claimed.invocation.invocationId,
+          cursor: workflowCursorGuard(claimed.workflowCursor),
+          attemptId: claimed.attempt.attemptId,
+          fencingToken: claimed.attempt.fencingToken,
+          generation: claimed.attempt.generation,
+          expectedVersion: claimed.run.version,
+          transitionId: 'start-terminal-workflow-cancel-test',
+        });
+        const transcript = new ActivityProtocolTranscriptValidator();
+        const acceptedStart = transcript.acceptHostFrame(started.startFrame);
+        const terminal = transcript.acceptComponentFrame({
+          protocol: 'wharfie.activity',
+          protocolVersion: 1,
+          type: 'completed',
+          attemptId: started.attempt.attemptId,
+          sequence: 1,
+          result: { ok: true },
+        });
+        await seeded.ledger.commitVerifiedWorkflowActivityTerminal({
+          runId,
+          invocationId: started.invocation.invocationId,
+          cursor: workflowCursorGuard(started.workflowCursor),
+          attemptId: started.attempt.attemptId,
+          fencingToken: started.attempt.fencingToken,
+          generation: started.attempt.generation,
+          expectedVersion: started.run.version,
+          transitionId: 'complete-terminal-workflow-cancel-test',
+          evidence: {
+            status: terminal.type,
+            start: acceptedStart,
+            terminal,
+            frames: [acceptedStart, terminal],
+            transcript: transcript.snapshot(),
+          },
+        });
+      } finally {
+        await seeded.db.close();
+      }
 
       await expect(
         cancelExecutionLedgerRun({
           runId,
-          requestId: 'workflow-cancel-request',
+          requestId: 'terminal-workflow-cancel-request',
           expectedAppId: appId,
           configuration,
         }),
-      ).rejects.toThrow(/workflow cancellation is not implemented/i);
-      await expect(ledger.rebuildRun(runId)).resolves.toEqual(before);
+      ).resolves.toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.cancel',
+        runId,
+        requestId: 'terminal-workflow-cancel-request',
+        outcome: 'terminal-authoritative',
+        delivery: 'not-required',
+        runStatus: RunStatus.COMPLETED,
+        invocationStatus: InvocationStatus.COMPLETED,
+      });
+      const after = await readLmdbRun(configuration, runId);
+      expect(after?.run).not.toHaveProperty('cancellationRequest');
+      expect(after?.events).toHaveLength(4);
     } finally {
-      await db.close();
       rmSync(root, { recursive: true, force: true });
     }
   });

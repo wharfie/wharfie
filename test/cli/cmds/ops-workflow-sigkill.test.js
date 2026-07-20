@@ -122,6 +122,22 @@ function parseSuccessfulJson(result, label) {
   return JSON.parse(result.stdout);
 }
 
+/**
+ * Operator commands emit their JSON receipt before a human success line.
+ * @param {import('node:child_process').SpawnSyncReturns<string>} result
+ * @param {string} label
+ * @returns {Record<string, any>}
+ */
+function parseSuccessfulOperatorJson(result, label) {
+  if (result.status !== 0) {
+    throw new Error(
+      `${label} failed with ${result.status}: ${result.stderr || result.stdout}`,
+    );
+  }
+  expect(result.stderr).toBe('');
+  return JSON.parse(result.stdout.trim().split('\n')[0]);
+}
+
 /** @param {WorkflowFixture} fixture @returns {Record<string, any>} */
 function startWorkflow(fixture) {
   return parseSuccessfulJson(
@@ -153,6 +169,23 @@ function recoveryArgs(fixture) {
     '--run-id',
     fixture.runId,
     '--confirm-runner-stopped',
+    '--json',
+  ];
+}
+
+/**
+ * @param {WorkflowFixture} fixture
+ * @param {string} requestId
+ * @returns {string[]}
+ */
+function cancellationArgs(fixture, requestId) {
+  return [
+    'ops',
+    'cancel',
+    '--run-id',
+    fixture.runId,
+    '--request-id',
+    requestId,
     '--json',
   ];
 }
@@ -403,6 +436,35 @@ async function waitForCompleted(fixture, revisionId, worker) {
 /**
  * @param {WorkflowFixture} fixture
  * @param {string} revisionId
+ * @param {LiveWorker} worker
+ * @param {(state: Record<string, any>) => boolean} predicate
+ * @param {string} label
+ */
+async function waitForWorkflowState(
+  fixture,
+  revisionId,
+  worker,
+  predicate,
+  label,
+) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (worker.child.exitCode !== null || worker.child.signalCode !== null) {
+      const output = worker.output();
+      throw new Error(
+        `Workflow worker exited before ${label}: ${output.stderr || output.stdout}`,
+      );
+    }
+    const state = await readState(fixture, revisionId).catch(() => null);
+    if (state?.view && predicate(state)) return state;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for ${label}: ${fixture.runId}.`);
+}
+
+/**
+ * @param {WorkflowFixture} fixture
+ * @param {string} revisionId
  */
 async function finishWithWorker(fixture, revisionId) {
   const worker = startLiveWorker(fixture);
@@ -435,6 +497,256 @@ function expectKilledAt(crashed, boundary) {
 }
 
 describe('source workflow real-process SIGKILL recovery', () => {
+  itOnUnix(
+    'persists active workflow cancellation before delivery and does not redeliver after response loss',
+    async () => {
+      const fixture = createFixture('active-cancel-response');
+      const requestId = 'source-kill-active-workflow-cancellation';
+      /** @type {LiveWorker | undefined} */
+      let worker;
+      try {
+        const started = parseSuccessfulJson(
+          runCli(
+            [
+              'ops',
+              'start',
+              '--workflow',
+              WORKFLOW_ID,
+              '--idempotency-key',
+              fixture.idempotencyKey,
+              '--dir',
+              appDir,
+              '--input',
+              JSON.stringify({
+                markerPath: fixture.markerPath,
+                waitForCancellation: true,
+              }),
+              '--json',
+            ],
+            fixture.env,
+          ),
+          'ops start cancellation fixture',
+        );
+        worker = startLiveWorker(fixture);
+        await waitForWorkflowState(
+          fixture,
+          started.revision,
+          worker,
+          (state) =>
+            state.view.run.status === RunStatus.RUNNING &&
+            state.view.workflowCursor.disposition ===
+              WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+            state.view.attempts[0]?.status === AttemptStatus.STARTED &&
+            markerEntries(fixture).includes('enter:0'),
+          'started workflow cancellation fixture',
+        );
+
+        const crashed = await crashChild(
+          fixture,
+          {
+            mode: 'cancel-response',
+            runId: fixture.runId,
+            requestId,
+          },
+          'cancellation-response-ready',
+        );
+        expectKilledAt(crashed, 'cancellation-response-ready');
+        expect(crashed.message.detail.response).toMatchObject({
+          schemaVersion: 1,
+          kind: 'wharfie.execution-ledger.cancel',
+          runId: fixture.runId,
+          requestId,
+          outcome: 'cancellation-requested',
+          delivery: 'started',
+          runStatus: RunStatus.RUNNING,
+          invocationStatus: InvocationStatus.RUNNING,
+        });
+
+        const cancelled = await waitForWorkflowState(
+          fixture,
+          started.revision,
+          worker,
+          (state) =>
+            state.view.run.status === RunStatus.CANCELLED &&
+            state.view.workflowCursor.disposition ===
+              WorkflowCursorDisposition.CANCELLED,
+          'durable workflow cancellation terminal',
+        );
+        expect(cancelled).toMatchObject({
+          view: {
+            run: {
+              status: RunStatus.CANCELLED,
+              cancellationRequest: { requestId },
+            },
+            workflowCursor: {
+              disposition: WorkflowCursorDisposition.CANCELLED,
+              stepId: 'first',
+              stepIndex: 0,
+              outputs: [],
+            },
+            invocations: [
+              expect.objectContaining({
+                status: InvocationStatus.CANCELLED,
+                cancellationRequest: expect.objectContaining({ requestId }),
+              }),
+            ],
+            attempts: [
+              expect.objectContaining({
+                status: AttemptStatus.CANCELLED,
+                cancellationRequest: expect.objectContaining({ requestId }),
+                terminal: expect.objectContaining({ type: 'cancelled' }),
+              }),
+            ],
+          },
+          ready: { items: [] },
+        });
+        expect(cancelled.events.map((event) => event.type)).toEqual([
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-cancellation-requested',
+          'workflow-activity-cancelled',
+        ]);
+        expect(markerEntries(fixture)).toEqual(['enter:0', 'cancel:0']);
+        const eventCount = cancelled.events.length;
+
+        const replay = parseSuccessfulOperatorJson(
+          runCli(cancellationArgs(fixture, requestId), fixture.env),
+          'ops active cancel replay',
+        );
+        expect(replay).toMatchObject({
+          runId: fixture.runId,
+          requestId,
+          outcome: 'cancellation-requested',
+          delivery: 'not-required',
+          runStatus: RunStatus.CANCELLED,
+          invocationStatus: InvocationStatus.CANCELLED,
+        });
+        const afterReplay = await readState(fixture, started.revision);
+        expect(afterReplay.events).toHaveLength(eventCount);
+        expect(afterReplay.view).toEqual(cancelled.view);
+        expect(afterReplay.ready).toEqual(cancelled.ready);
+        expect(markerEntries(fixture)).toEqual(['enter:0', 'cancel:0']);
+
+        expect(worker.child.kill('SIGTERM')).toBe(true);
+        const stopped = await waitForExit(
+          worker.exited,
+          'cancelled resident worker',
+          15_000,
+        );
+        expect(stopped).toMatchObject({ code: 0, signal: null, stderr: '' });
+      } finally {
+        if (
+          worker &&
+          worker.child.exitCode === null &&
+          worker.child.signalCode === null
+        ) {
+          worker.child.kill('SIGKILL');
+        }
+        await worker?.exited.catch(() => undefined);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    90_000,
+  );
+
+  itOnUnix(
+    'replays offline workflow cancellation after SIGKILL at the command response boundary',
+    async () => {
+      const fixture = createFixture('cancel-response');
+      const requestId = 'source-kill-workflow-cancellation';
+      try {
+        const started = startWorkflow(fixture);
+        const beforeCancellation = await readState(fixture, started.revision);
+        expect(beforeCancellation).toMatchObject({
+          view: {
+            run: { status: RunStatus.RUNNING, version: 1, lastSequence: 1 },
+            workflowCursor: {
+              disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+              stepIndex: 0,
+            },
+            attempts: [],
+          },
+          ready: {
+            items: [
+              expect.objectContaining({
+                kind: ExecutionLedgerReadyWorkKind.ACTIVITY,
+                stepIndex: 0,
+              }),
+            ],
+          },
+          ownership: null,
+        });
+
+        const crashed = await crashChild(
+          fixture,
+          {
+            mode: 'cancel-response',
+            runId: fixture.runId,
+            requestId,
+          },
+          'cancellation-response-ready',
+        );
+        expectKilledAt(crashed, 'cancellation-response-ready');
+        expect(crashed.message.detail.response).toEqual({
+          schemaVersion: 1,
+          kind: 'wharfie.execution-ledger.cancel',
+          runId: fixture.runId,
+          requestId,
+          outcome: 'cancellation-requested',
+          delivery: 'not-required',
+          runStatus: RunStatus.CANCELLED,
+          invocationStatus: InvocationStatus.CANCELLED,
+        });
+
+        const cancelled = await readState(fixture, started.revision);
+        expect(cancelled).toMatchObject({
+          view: {
+            run: {
+              status: RunStatus.CANCELLED,
+              version: 2,
+              lastSequence: 2,
+              cancellationRequest: { requestId },
+            },
+            workflowCursor: {
+              disposition: WorkflowCursorDisposition.CANCELLED,
+              stepIndex: 0,
+            },
+            invocations: [
+              expect.objectContaining({
+                status: InvocationStatus.CANCELLED,
+                cancellationRequest: expect.objectContaining({ requestId }),
+              }),
+            ],
+            attempts: [],
+          },
+          events: [
+            expect.objectContaining({ type: 'workflow-run-created' }),
+            expect.objectContaining({
+              type: 'workflow-cancellation-requested',
+            }),
+          ],
+          ready: { items: [] },
+          ownership: null,
+        });
+        expect(markerEntries(fixture)).toEqual([]);
+
+        const replay = parseSuccessfulOperatorJson(
+          runCli(cancellationArgs(fixture, requestId), fixture.env),
+          'ops cancel replay',
+        );
+        expect(replay).toEqual(crashed.message.detail.response);
+        await expect(readState(fixture, started.revision)).resolves.toEqual(
+          cancelled,
+        );
+        expect(markerEntries(fixture)).toEqual([]);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
   itOnUnix(
     'recovers retained terminal evidence, replays a lost reconciliation response, and advances exactly once',
     async () => {

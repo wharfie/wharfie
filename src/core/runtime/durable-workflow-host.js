@@ -189,7 +189,7 @@ export async function startDurableManifestWorkflow(options) {
  * Execute one exact persisted workflow activation against the workflow plan
  * sealed into the selected source or embedded revision. No managed-effect
  * handler is installed: workflow attempt effects remain deliberately closed.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('./durable-activity-host.js').ManifestActivityExecution, runId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, createFencingToken?: () => string}} options - Exact resident workflow activation.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('./durable-activity-host.js').ManifestActivityExecution, runId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, ownerCancellation?: import('./workflow-ledger-run.js').WorkflowLedgerOwnerCancellation, registerActiveWorkflowCancellationPort?: import('./workflow-ledger-run.js').WorkflowLedgerActiveCancellationPortRegistrar, createFencingToken?: () => string}} options - Exact resident workflow activation.
  * @returns {Promise<Readonly<{appId: string, revisionId: string, workflowId: string, planId: string, activityName: string, runId: string, outcome: Record<string, any>}>>} - Durable activation result.
  */
 export async function runPersistedDurableManifestWorkflowActivity(options) {
@@ -211,6 +211,8 @@ export async function runPersistedDurableManifestWorkflowActivity(options) {
     'actor',
     'admissionSignal',
     'signal',
+    'ownerCancellation',
+    'registerActiveWorkflowCancellationPort',
     'createFencingToken',
   ]);
   for (const key of Object.keys(options)) {
@@ -241,6 +243,9 @@ export async function runPersistedDurableManifestWorkflowActivity(options) {
         );
   const admissionSignal = options.admissionSignal;
   const signal = options.signal;
+  const ownerCancellation = options.ownerCancellation;
+  const registerActiveWorkflowCancellationPort =
+    options.registerActiveWorkflowCancellationPort;
   const createFencingToken = options.createFencingToken;
   if (!ledger) {
     throw new TypeError(
@@ -278,6 +283,10 @@ export async function runPersistedDurableManifestWorkflowActivity(options) {
     ...(actor === undefined ? {} : { actor }),
     ...(admissionSignal === undefined ? {} : { admissionSignal }),
     ...(signal === undefined ? {} : { signal }),
+    ...(ownerCancellation === undefined ? {} : { ownerCancellation }),
+    ...(registerActiveWorkflowCancellationPort === undefined
+      ? {}
+      : { registerActiveWorkflowCancellationPort }),
     ...(createFencingToken === undefined ? {} : { createFencingToken }),
     executeAttempt: async (startFrame, { signal }) =>
       await invokeManifestActivityAttemptWithStart({

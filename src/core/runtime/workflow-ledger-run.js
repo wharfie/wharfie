@@ -2,9 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import {
   AttemptStatus,
+  ExecutionLedgerConflictError,
+  ExecutionLedgerTransitionConflictError,
   InvocationStatus,
   RunStatus,
 } from '../lib/db/tables/execution-ledger.js';
+import { hasSameCanonicalJson } from '../lib/ledger/execution-ledger-contract.js';
 import {
   WorkflowCursorDisposition,
   assertWorkflowPlanId,
@@ -13,10 +16,53 @@ import {
 import { assertLedgerOpaqueId } from '../lib/ledger/record-key.js';
 import { serializeActivityAttemptError } from './activity-attempt.js';
 import { assertApplicationRevisionId } from './application-revision.js';
+import { createCanonicalJsonSha256Id } from './content-id.js';
 import { assertLogicalId } from './logical-id.js';
 
 const DEFAULT_ACTOR_KIND = 'resident-workflow';
-const SUPPORTED_TERMINALS = new Set(['completed', 'failed', 'protocol-failed']);
+const DEFAULT_CANCELLATION_ACTOR_KIND = 'local-owner-command';
+const SUPPORTED_TERMINALS = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'protocol-failed',
+]);
+
+const DEFAULT_OWNER_CANCELLATION_REASON = Object.freeze({
+  code: 'operator-cancel-requested',
+  name: 'CancellationRequested',
+  message: 'The active local owner accepted a workflow cancellation command.',
+  details: Object.freeze({}),
+});
+
+/**
+ * Version of the process-local run-cancellation capability registered for one
+ * exact durable STARTED workflow attempt. The port never exposes its internal
+ * AbortController and accepts only a stable request identity.
+ */
+export const WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION = 1;
+
+/**
+ * @typedef {{requestId: string}} WorkflowLedgerActiveCancellationRequest
+ */
+
+/**
+ * @typedef {{applied: boolean, outcome: 'cancellation-requested'|'terminal-authoritative'|'owner-not-ready', cancellationDeliveryRequired: boolean, signalDelivered: boolean, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, receipt?: Record<string, any>}} WorkflowLedgerCancellationResult
+ */
+
+/**
+ * @typedef {{version: number, runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, attemptId: string, fencingToken: string, generation: number, coordinatorEpoch: number, requestCancellation: (request: WorkflowLedgerActiveCancellationRequest) => Promise<WorkflowLedgerCancellationResult>}} WorkflowLedgerActiveCancellationPort
+ */
+
+/**
+ * @callback WorkflowLedgerActiveCancellationPortRegistrar
+ * @param {WorkflowLedgerActiveCancellationPort} port - Exact live workflow-attempt cancellation capability.
+ * @returns {void|(() => void)} - Optional unregister callback.
+ */
+
+/**
+ * @typedef {{actor?: {kind: string, id: string}, reason?: {code: string, name: string, message: string, details: Record<string, any>}}} WorkflowLedgerOwnerCancellation
+ */
 
 export const WorkflowLedgerRecoveryAction = Object.freeze({
   NONE: 'none',
@@ -68,6 +114,165 @@ function resolveActor(value, appId) {
     kind: assertLedgerOpaqueId(actor.kind, 'workflow activity actor.kind'),
     id: assertLedgerOpaqueId(actor.id, 'workflow activity actor.id'),
   };
+}
+
+/**
+ * Normalize fixed cancellation authority before a request can reach the
+ * ledger or physical attempt. Active ports accept only request IDs, so command
+ * payloads cannot choose actor or reason fields after registration.
+ * @param {unknown} value - Candidate owner cancellation descriptor.
+ * @param {{kind: string, id: string}} fallbackActor - Bound local actor.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{actor: {kind: string, id: string}, reason: Record<string, any>}} - Strict durable authority.
+ */
+function normalizeOwnerCancellation(value, fallbackActor, label) {
+  if (
+    value !== undefined &&
+    (!value || typeof value !== 'object' || Array.isArray(value))
+  ) {
+    throw new TypeError(`${label} must be an object when provided.`);
+  }
+  const descriptor = /** @type {Record<string, unknown> | undefined} */ (value);
+  if (descriptor) {
+    for (const key of Reflect.ownKeys(descriptor)) {
+      if (key !== 'actor' && key !== 'reason') {
+        throw new TypeError(`${label} accepts only actor and reason.`);
+      }
+    }
+  }
+  const actor = resolveActor(
+    descriptor?.actor ?? fallbackActor,
+    fallbackActor.id,
+  );
+  return {
+    actor,
+    reason: serializeActivityAttemptError(
+      descriptor?.reason ?? DEFAULT_OWNER_CANCELLATION_REASON,
+      'cancel-requested',
+    ),
+  };
+}
+
+/**
+ * @param {unknown} value - Candidate bounded active-port request.
+ * @returns {WorkflowLedgerActiveCancellationRequest} - Exact request identity.
+ */
+function normalizeActiveCancellationRequest(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(
+      'Active workflow cancellation requests must contain requestId.',
+    );
+  }
+  const request = /** @type {Record<string, unknown>} */ (value);
+  const keys = Reflect.ownKeys(request);
+  if (keys.length !== 1 || keys[0] !== 'requestId') {
+    throw new TypeError(
+      'Active workflow cancellation requests accept only requestId.',
+    );
+  }
+  return {
+    requestId: assertLedgerOpaqueId(
+      request.requestId,
+      'active workflow cancellation requestId',
+    ),
+  };
+}
+
+/**
+ * Derive one collision-resistant receipt identity from the semantic run-level
+ * cancellation identity. It deliberately excludes the current cursor so a
+ * terminal race can rebase the same request onto a successor activation.
+ * @param {{runId: string, requestId: string}} options - Run cancellation identity.
+ * @returns {string} - Domain-separated ledger transition ID.
+ */
+function createWorkflowCancellationTransitionId(options) {
+  return createCanonicalJsonSha256Id({
+    domain: 'wharfie:workflow-run-cancellation-transition:v1',
+    prefix: 'wcx',
+    value: {
+      runId: options.runId,
+      requestId: options.requestId,
+    },
+    valuePath: 'workflow run cancellation transition identity',
+  });
+}
+
+/**
+ * @param {unknown} value - Candidate active workflow cancellation port.
+ * @returns {WorkflowLedgerActiveCancellationPort | undefined} - Valid optional port.
+ */
+function normalizeOptionalActiveCancellationPort(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(
+      'requestWorkflowLedgerRunCancellation.activeCancellationPort must be an object when provided.',
+    );
+  }
+  const port = /** @type {Record<string, unknown>} */ (value);
+  const keys = Reflect.ownKeys(port);
+  const expected = [
+    'version',
+    'runId',
+    'invocationId',
+    'cursor',
+    'attemptId',
+    'fencingToken',
+    'generation',
+    'coordinatorEpoch',
+    'requestCancellation',
+  ];
+  if (
+    keys.length !== expected.length ||
+    expected.some((key) => !keys.includes(key))
+  ) {
+    throw new TypeError(
+      'requestWorkflowLedgerRunCancellation.activeCancellationPort has an unsupported shape.',
+    );
+  }
+  if (port.version !== WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION) {
+    throw new TypeError(
+      `requestWorkflowLedgerRunCancellation.activeCancellationPort.version must be ${WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION}.`,
+    );
+  }
+  if (typeof port.requestCancellation !== 'function') {
+    throw new TypeError(
+      'requestWorkflowLedgerRunCancellation.activeCancellationPort.requestCancellation must be a function.',
+    );
+  }
+  normalizeCursorGuard(
+    port.cursor,
+    'requestWorkflowLedgerRunCancellation.activeCancellationPort.cursor',
+  );
+  assertWorkflowRunId(
+    port.runId,
+    'requestWorkflowLedgerRunCancellation.activeCancellationPort.runId',
+  );
+  assertLedgerOpaqueId(
+    port.invocationId,
+    'requestWorkflowLedgerRunCancellation.activeCancellationPort.invocationId',
+  );
+  assertLedgerOpaqueId(
+    port.attemptId,
+    'requestWorkflowLedgerRunCancellation.activeCancellationPort.attemptId',
+  );
+  assertLedgerOpaqueId(
+    port.fencingToken,
+    'requestWorkflowLedgerRunCancellation.activeCancellationPort.fencingToken',
+  );
+  if (!Number.isSafeInteger(port.generation) || Number(port.generation) < 1) {
+    throw new TypeError(
+      'requestWorkflowLedgerRunCancellation.activeCancellationPort.generation must be a positive safe integer.',
+    );
+  }
+  if (
+    !Number.isSafeInteger(port.coordinatorEpoch) ||
+    Number(port.coordinatorEpoch) < 0
+  ) {
+    throw new TypeError(
+      'requestWorkflowLedgerRunCancellation.activeCancellationPort.coordinatorEpoch must be a non-negative safe integer.',
+    );
+  }
+  return /** @type {WorkflowLedgerActiveCancellationPort} */ (value);
 }
 
 /**
@@ -136,6 +341,19 @@ function isSameCursorGuard(cursor, expected) {
 }
 
 /**
+ * @param {Record<string, any>} cursor - Current cursor.
+ * @param {Record<string, any>} expected - Retained activation identity.
+ * @returns {boolean} - Whether both cursors name the same logical activation.
+ */
+function isSameCursorActivation(cursor, expected) {
+  return (
+    cursor.continuationId === expected.continuationId &&
+    cursor.stepId === expected.stepId &&
+    cursor.stepIndex === expected.stepIndex
+  );
+}
+
+/**
  * @param {Record<string, any>} attempt - Current physical attempt.
  * @param {Record<string, any>} expected - Retained attempt identity.
  * @returns {boolean} - Whether the same physical generation is retained.
@@ -146,6 +364,26 @@ function isSameAttempt(attempt, expected) {
     attempt.fencingToken === expected.fencingToken &&
     attempt.generation === expected.generation &&
     attempt.coordinatorEpoch === expected.coordinatorEpoch
+  );
+}
+
+/**
+ * @param {WorkflowLedgerActiveCancellationPort | undefined} port - Candidate live port.
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Current workflow activation.
+ * @returns {boolean} - Whether the port still owns this exact STARTED attempt.
+ */
+function isExactActiveCancellationPort(port, current) {
+  return Boolean(
+    port &&
+    current.attempt &&
+    current.attempt.status === AttemptStatus.STARTED &&
+    port.runId === current.run.runId &&
+    port.invocationId === current.invocation.invocationId &&
+    isSameCursorActivation(current.cursor, port.cursor) &&
+    port.attemptId === current.attempt.attemptId &&
+    port.fencingToken === current.attempt.fencingToken &&
+    port.generation === current.attempt.generation &&
+    port.coordinatorEpoch === current.attempt.coordinatorEpoch,
   );
 }
 
@@ -220,6 +458,252 @@ async function readCurrentWorkflow(ledger, runId) {
 }
 
 /**
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
+ * @param {'terminal-authoritative'|'owner-not-ready'} outcome - Non-mutating result class.
+ * @returns {WorkflowLedgerCancellationResult} - Public cancellation result.
+ */
+function nonAppliedCancellationResult(current, outcome) {
+  return {
+    applied: false,
+    outcome,
+    cancellationDeliveryRequired: false,
+    signalDelivered: false,
+    run: current.run,
+    workflowCursor: current.cursor,
+    invocation: current.invocation,
+    ...(current.attempt ? { attempt: current.attempt } : {}),
+  };
+}
+
+/**
+ * Return a current first-wins request after a lost response without replaying
+ * it against a newer cursor guard. Reusing the same public request identity
+ * with changed authority remains an immutable transition conflict.
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
+ * @param {{requestId: string, transitionId: string, actor: Record<string, any>, reason: Record<string, any>}} request - Stable caller request.
+ * @returns {WorkflowLedgerCancellationResult} - Retained first-wins result.
+ */
+function retainedCancellationResult(current, request) {
+  const retained = current.run.cancellationRequest;
+  if (!retained) {
+    throw new Error(
+      `Workflow ${current.run.runId} has no retained cancellation request.`,
+    );
+  }
+  if (
+    retained.requestId === request.requestId &&
+    (retained.transitionId !== request.transitionId ||
+      !hasSameCanonicalJson(retained.actor, request.actor) ||
+      !hasSameCanonicalJson(retained.reason, request.reason))
+  ) {
+    throw new ExecutionLedgerTransitionConflictError(
+      current.run.runId,
+      request.transitionId,
+    );
+  }
+  return /** @type {WorkflowLedgerCancellationResult} */ ({
+    applied: false,
+    outcome: 'cancellation-requested',
+    cancellationDeliveryRequired: false,
+    signalDelivered: false,
+    run: current.run,
+    workflowCursor: current.cursor,
+    invocation: current.invocation,
+    ...(current.attempt ? { attempt: current.attempt } : {}),
+  });
+}
+
+/**
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
+ * @returns {boolean} - Whether the current aggregate is terminal without a retained cancellation request to replay.
+ */
+function isTerminalWorkflowWithoutCancellationRequest(current) {
+  return (
+    !current.run.cancellationRequest &&
+    [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED].includes(
+      current.run.status,
+    )
+  );
+}
+
+/**
+ * Persist one stable run-level workflow cancellation request, rebasing it
+ * across cursor races. A fresh STARTED attempt is writable only when the
+ * caller presents the exact process-local port identity which owns it.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, requestId: string, transitionId: string, actor: {kind: string, id: string}, reason: Record<string, any>, authorizedPort?: WorkflowLedgerActiveCancellationPort}} options - Durable cancellation request.
+ * @returns {Promise<WorkflowLedgerCancellationResult>} - Durable or authoritative result.
+ */
+async function persistWorkflowLedgerRunCancellation(options) {
+  /** @type {unknown} */
+  let lastConflict;
+  for (let retry = 0; retry < 6; retry += 1) {
+    const current = await readCurrentWorkflow(options.ledger, options.runId);
+    if (!current) {
+      throw new Error(`Workflow run disappeared: ${options.runId}`);
+    }
+    if (current.run.cancellationRequest) {
+      return retainedCancellationResult(current, options);
+    }
+    if (isTerminalWorkflowWithoutCancellationRequest(current)) {
+      return nonAppliedCancellationResult(current, 'terminal-authoritative');
+    }
+    const freshStartedAttempt =
+      current.run.status === RunStatus.RUNNING &&
+      current.cursor.disposition ===
+        WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+      current.invocation.status === InvocationStatus.RUNNING &&
+      current.attempt?.status === AttemptStatus.STARTED &&
+      !current.run.cancellationRequest;
+    if (
+      freshStartedAttempt &&
+      !isExactActiveCancellationPort(options.authorizedPort, current)
+    ) {
+      return nonAppliedCancellationResult(current, 'owner-not-ready');
+    }
+
+    const attempt = current.attempt;
+    try {
+      const result = await options.ledger.requestWorkflowRunCancellation({
+        runId: options.runId,
+        invocationId: current.invocation.invocationId,
+        cursor: cursorGuard(current.cursor),
+        expectedVersion: current.run.version,
+        expectedGeneration: current.invocation.generation,
+        transitionId: options.transitionId,
+        requestId: options.requestId,
+        reason: options.reason,
+        actor: options.actor,
+        coordinatorEpoch: attempt?.coordinatorEpoch ?? 0,
+        ...(attempt
+          ? {
+              attemptId: attempt.attemptId,
+              fencingToken: attempt.fencingToken,
+            }
+          : {}),
+      });
+      return /** @type {WorkflowLedgerCancellationResult} */ ({
+        ...result,
+        signalDelivered: false,
+      });
+    } catch (error) {
+      let durable;
+      try {
+        durable = await readCurrentWorkflow(options.ledger, options.runId);
+      } catch (verificationError) {
+        throw new AggregateError(
+          [error, verificationError],
+          `Could not verify whether workflow cancellation was retained for ${options.runId}.`,
+        );
+      }
+      if (!durable) {
+        throw new AggregateError(
+          [error],
+          `Workflow run disappeared while cancellation was being persisted: ${options.runId}.`,
+        );
+      }
+      if (
+        error instanceof ExecutionLedgerConflictError ||
+        durable.run.version !== current.run.version
+      ) {
+        if (durable.run.cancellationRequest) {
+          return retainedCancellationResult(durable, options);
+        }
+        lastConflict = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw (
+    lastConflict ||
+    new Error(
+      `Could not persist workflow cancellation after bounded rebasing: ${options.runId}.`,
+    )
+  );
+}
+
+/**
+ * Request durable run-level workflow cancellation. RUNNABLE, CLAIMED, and
+ * uncertain work can be changed without a live physical owner. A fresh
+ * STARTED attempt requires its exact active port, which persists the request
+ * before delivering the retained reason to the one-shot worker.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, requestId: string, activeCancellationPort?: WorkflowLedgerActiveCancellationPort, actor?: {kind: string, id: string}, reason?: {code: string, name: string, message: string, details: Record<string, any>}}} options - Run-level cancellation command.
+ * @returns {Promise<WorkflowLedgerCancellationResult>} - Durable request, terminal state, or unavailable-owner result.
+ */
+export async function requestWorkflowLedgerRunCancellation(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'requestWorkflowLedgerRunCancellation requires options.',
+    );
+  }
+  const allowed = new Set([
+    'ledger',
+    'runId',
+    'requestId',
+    'activeCancellationPort',
+    'actor',
+    'reason',
+  ]);
+  for (const key of Reflect.ownKeys(options)) {
+    if (typeof key !== 'string' || !allowed.has(key)) {
+      throw new TypeError(
+        `requestWorkflowLedgerRunCancellation.${String(key)} is not supported.`,
+      );
+    }
+  }
+  if (
+    !options.ledger ||
+    typeof options.ledger.requestWorkflowRunCancellation !== 'function'
+  ) {
+    throw new TypeError(
+      'requestWorkflowLedgerRunCancellation requires a workflow cancellation ledger.',
+    );
+  }
+  assertWorkflowRunId(
+    options.runId,
+    'requestWorkflowLedgerRunCancellation.runId',
+  );
+  const runId = options.runId;
+  const requestId = assertLedgerOpaqueId(
+    options.requestId,
+    'requestWorkflowLedgerRunCancellation.requestId',
+  );
+  const activeCancellationPort = normalizeOptionalActiveCancellationPort(
+    options.activeCancellationPort,
+  );
+  const current = await readCurrentWorkflow(options.ledger, runId);
+  if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
+
+  if (
+    current.attempt?.status === AttemptStatus.STARTED &&
+    current.invocation.status === InvocationStatus.RUNNING &&
+    current.cursor.disposition === WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+    isExactActiveCancellationPort(activeCancellationPort, current)
+  ) {
+    return await /** @type {WorkflowLedgerActiveCancellationPort} */ (
+      activeCancellationPort
+    ).requestCancellation({ requestId });
+  }
+
+  const cancellation = normalizeOwnerCancellation(
+    {
+      ...(options.actor === undefined ? {} : { actor: options.actor }),
+      ...(options.reason === undefined ? {} : { reason: options.reason }),
+    },
+    { kind: DEFAULT_CANCELLATION_ACTOR_KIND, id: current.run.appId },
+    'requestWorkflowLedgerRunCancellation cancellation authority',
+  );
+  return await persistWorkflowLedgerRunCancellation({
+    ledger: options.ledger,
+    runId,
+    requestId,
+    transitionId: createWorkflowCancellationTransitionId({ runId, requestId }),
+    actor: cancellation.actor,
+    reason: cancellation.reason,
+  });
+}
+
+/**
  * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified current state.
  * @param {{reused?: boolean, dispatched?: boolean}} [options] - Result flags.
  * @returns {Record<string, any>} - Compact runner outcome.
@@ -230,12 +714,14 @@ function outcomeFromCurrent(current, options = {}) {
       ? 'completed'
       : current.run.status === RunStatus.FAILED
         ? 'failed'
-        : current.run.status === RunStatus.BLOCKED
-          ? 'blocked'
-          : current.cursor.disposition ===
-              WorkflowCursorDisposition.ACTIVITY_RUNNABLE
-            ? 'runnable'
-            : 'in-progress';
+        : current.run.status === RunStatus.CANCELLED
+          ? 'cancelled'
+          : current.run.status === RunStatus.BLOCKED
+            ? 'blocked'
+            : current.cursor.disposition ===
+                WorkflowCursorDisposition.ACTIVITY_RUNNABLE
+              ? 'runnable'
+              : 'in-progress';
   return {
     disposition,
     reused: options.reused ?? false,
@@ -493,7 +979,7 @@ export async function recoverWorkflowLedgerActivity(options) {
  * Execute one exact persisted workflow activity activation. The caller must
  * already hold the application mutation owner and must have cross-checked the
  * persisted plan against the exact executing revision.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, createFencingToken?: () => string, executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>}} options - Exact resident workflow activation.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, ownerCancellation?: WorkflowLedgerOwnerCancellation, registerActiveWorkflowCancellationPort?: WorkflowLedgerActiveCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>}} options - Exact resident workflow activation.
  * @returns {Promise<Record<string, any>>} - Durable current workflow outcome.
  */
 export async function runWorkflowLedgerActivity(options) {
@@ -514,6 +1000,8 @@ export async function runWorkflowLedgerActivity(options) {
     'actor',
     'admissionSignal',
     'signal',
+    'ownerCancellation',
+    'registerActiveWorkflowCancellationPort',
     'createFencingToken',
     'executeAttempt',
   ]);
@@ -538,6 +1026,14 @@ export async function runWorkflowLedgerActivity(options) {
       'runWorkflowLedgerActivity.createFencingToken must be a function when provided.',
     );
   }
+  if (
+    options.registerActiveWorkflowCancellationPort !== undefined &&
+    typeof options.registerActiveWorkflowCancellationPort !== 'function'
+  ) {
+    throw new TypeError(
+      'runWorkflowLedgerActivity.registerActiveWorkflowCancellationPort must be a function when provided.',
+    );
+  }
   assertWorkflowRunId(options.runId, 'workflow runId');
   const runId = options.runId;
   assertLogicalId(options.appId, 'workflow appId');
@@ -559,6 +1055,11 @@ export async function runWorkflowLedgerActivity(options) {
     'runWorkflowLedgerActivity.cursor',
   );
   const actor = resolveActor(options.actor, options.appId);
+  const ownerCancellation = normalizeOwnerCancellation(
+    options.ownerCancellation,
+    actor,
+    'runWorkflowLedgerActivity.ownerCancellation',
+  );
   const admissionSignal = resolveOptionalAbortSignal(
     options.admissionSignal,
     'runWorkflowLedgerActivity.admissionSignal',
@@ -738,127 +1239,256 @@ export async function runWorkflowLedgerActivity(options) {
   }
 
   const attemptController = new AbortController();
+  /** @type {Map<string, Promise<WorkflowLedgerCancellationResult>>} */
+  const cancellationPromises = new Map();
+  /** @type {WorkflowLedgerActiveCancellationPort | undefined} */
+  let activeCancellationPort;
+  /** @type {(() => void) | null} */
+  let unregisterCancellationPort = null;
+  let cancellationPortLive = false;
   const abortPhysicalAttempt = () => {
     if (!attemptController.signal.aborted) {
       attemptController.abort(physicalSignal?.reason);
     }
   };
-  physicalSignal?.addEventListener('abort', abortPhysicalAttempt, {
-    once: true,
-  });
-  if (physicalSignal?.aborted) abortPhysicalAttempt();
+
+  /**
+   * Persist exactly one request identity and deliver its retained reason only
+   * when this append owns the newly accepted STARTED cancellation decision.
+   * @param {string} requestId - Stable caller-facing request identity.
+   * @returns {Promise<WorkflowLedgerCancellationResult>} - Durable result.
+   */
+  const beginCancellation = (requestId) => {
+    const existing = cancellationPromises.get(requestId);
+    if (existing) return existing;
+    const transitionId = createWorkflowCancellationTransitionId({
+      runId,
+      requestId,
+    });
+    const promise = persistWorkflowLedgerRunCancellation({
+      ledger: options.ledger,
+      runId,
+      requestId,
+      transitionId,
+      actor: ownerCancellation.actor,
+      reason: ownerCancellation.reason,
+      authorizedPort: activeCancellationPort,
+    }).then((result) => {
+      let signalDelivered = false;
+      if (
+        cancellationPortLive &&
+        result.cancellationDeliveryRequired &&
+        result.outcome === 'cancellation-requested' &&
+        result.run.status === RunStatus.RUNNING &&
+        result.invocation.status === InvocationStatus.RUNNING &&
+        result.attempt?.status === AttemptStatus.STARTED &&
+        isSameAttempt(result.attempt, attempt) &&
+        result.run.cancellationRequest?.requestId === requestId &&
+        !attemptController.signal.aborted
+      ) {
+        attemptController.abort(result.run.cancellationRequest.reason);
+        signalDelivered = true;
+      }
+      return /** @type {WorkflowLedgerCancellationResult} */ ({
+        ...result,
+        signalDelivered,
+      });
+    });
+    cancellationPromises.set(requestId, promise);
+    // Fire-and-forget owner endpoints must not create an unhandled rejection.
+    // A failed or response-lost call remains retryable with the same ID; the
+    // ledger replay then reports delivery not required and cannot signal twice.
+    promise.catch(() => {
+      if (cancellationPromises.get(requestId) === promise) {
+        cancellationPromises.delete(requestId);
+      }
+    });
+    return promise;
+  };
 
   /** @type {Readonly<Record<string, any>> | undefined} */
   let evidence;
   /** @type {unknown} */
   let executionError;
+  let executionErrorPhase = 'physical-dispatch';
   try {
-    evidence = await options.executeAttempt(started.startFrame, {
-      signal: attemptController.signal,
-    });
-  } catch (error) {
-    executionError = error;
-  } finally {
-    physicalSignal?.removeEventListener('abort', abortPhysicalAttempt);
-  }
-  if (executionError !== undefined) {
+    try {
+      if (options.registerActiveWorkflowCancellationPort) {
+        cancellationPortLive = true;
+        activeCancellationPort = Object.freeze({
+          version: WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION,
+          runId,
+          invocationId,
+          cursor: Object.freeze(cursorGuard(started.workflowCursor)),
+          attemptId: attempt.attemptId,
+          fencingToken: attempt.fencingToken,
+          generation: attempt.generation,
+          coordinatorEpoch: attempt.coordinatorEpoch,
+          requestCancellation: (request) => {
+            if (!cancellationPortLive) {
+              return Promise.reject(
+                new Error(
+                  `Active workflow cancellation port is no longer live: ${runId}#${attempt.attemptId}.`,
+                ),
+              );
+            }
+            let normalized;
+            try {
+              normalized = normalizeActiveCancellationRequest(request);
+            } catch (error) {
+              return Promise.reject(error);
+            }
+            return beginCancellation(normalized.requestId);
+          },
+        });
+        const unregister = options.registerActiveWorkflowCancellationPort(
+          activeCancellationPort,
+        );
+        if (unregister !== undefined && typeof unregister !== 'function') {
+          throw new TypeError(
+            'runWorkflowLedgerActivity.registerActiveWorkflowCancellationPort must return a function or undefined.',
+          );
+        }
+        unregisterCancellationPort = unregister || null;
+      }
+    } catch (error) {
+      executionError = error;
+      executionErrorPhase = 'cancellation-port-registration';
+    }
+
+    if (executionError === undefined) {
+      physicalSignal?.addEventListener('abort', abortPhysicalAttempt, {
+        once: true,
+      });
+      if (physicalSignal?.aborted) abortPhysicalAttempt();
+
+      try {
+        evidence = await options.executeAttempt(started.startFrame, {
+          signal: attemptController.signal,
+        });
+      } catch (error) {
+        executionError = error;
+      }
+    }
+
+    // Bind terminal CAS to every cancellation append which began while the
+    // physical attempt was live. Response-loss failures are observed, but do
+    // not prevent a complete terminal transcript from competing normally.
+    await Promise.allSettled([...cancellationPromises.values()]);
+
+    if (executionError !== undefined) {
+      const settled = await settleRetainedAttempt({
+        ledger: options.ledger,
+        runId,
+        attempt,
+        actor,
+        phase: executionErrorPhase,
+        error: executionError,
+        dispatched: executionErrorPhase === 'physical-dispatch',
+      });
+      if (!settled) throw new Error(`Workflow run disappeared: ${runId}`);
+      return settled.outcome;
+    }
+    if (
+      !evidence ||
+      typeof evidence !== 'object' ||
+      !SUPPORTED_TERMINALS.has(
+        /** @type {Record<string, any>} */ (evidence).status,
+      )
+    ) {
+      const terminalType =
+        evidence && typeof evidence === 'object'
+          ? /** @type {Record<string, any>} */ (evidence).status
+          : undefined;
+      const settled = await settleRetainedAttempt({
+        ledger: options.ledger,
+        runId,
+        attempt,
+        actor,
+        phase: 'unsupported-terminal',
+        error: new Error(
+          `Workflow activity produced unsupported terminal '${String(terminalType)}'.`,
+        ),
+        dispatched: true,
+      });
+      if (!settled) throw new Error(`Workflow run disappeared: ${runId}`);
+      return settled.outcome;
+    }
+
+    let terminalCursor = cursorGuard(started.workflowCursor);
+    let terminalExpectedVersion = started.run.version;
+    /** @type {unknown[]} */
+    const terminalErrors = [];
+    for (let retry = 0; retry < 3; retry += 1) {
+      try {
+        await options.ledger.commitVerifiedWorkflowActivityTerminal({
+          runId,
+          invocationId,
+          cursor: terminalCursor,
+          attemptId: attempt.attemptId,
+          fencingToken,
+          generation: attempt.generation,
+          expectedVersion: terminalExpectedVersion,
+          transitionId: `workflow-terminal:${attempt.attemptId}`,
+          evidence,
+          actor,
+          coordinatorEpoch: attempt.coordinatorEpoch,
+        });
+        current = await readCurrentWorkflow(options.ledger, runId);
+        if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
+        return outcomeFromCurrent(current, { dispatched: true });
+      } catch (error) {
+        terminalErrors.push(error);
+        current = await readCurrentWorkflow(options.ledger, runId);
+        if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
+        if (
+          !current.attempt ||
+          !isSameAttempt(current.attempt, attempt) ||
+          current.attempt.status !== AttemptStatus.STARTED ||
+          current.invocation.status !== InvocationStatus.RUNNING ||
+          current.cursor.disposition !==
+            WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+          !isSameCursorActivation(current.cursor, started.workflowCursor)
+        ) {
+          return outcomeFromCurrent(current, {
+            reused: true,
+            dispatched: true,
+          });
+        }
+        // A retained cancellation request advances both the run and cursor.
+        // Rebase the same terminal evidence instead of misclassifying the
+        // stale optimistic version as an unknown physical outcome.
+        terminalCursor = cursorGuard(current.cursor);
+        terminalExpectedVersion = current.run.version;
+      }
+    }
+
     const settled = await settleRetainedAttempt({
       ledger: options.ledger,
       runId,
       attempt,
       actor,
-      phase: 'physical-dispatch',
-      error: executionError,
-      dispatched: true,
-    });
-    if (!settled) throw new Error(`Workflow run disappeared: ${runId}`);
-    return settled.outcome;
-  }
-  if (
-    !evidence ||
-    typeof evidence !== 'object' ||
-    !SUPPORTED_TERMINALS.has(
-      /** @type {Record<string, any>} */ (evidence).status,
-    )
-  ) {
-    const terminalType =
-      evidence && typeof evidence === 'object'
-        ? /** @type {Record<string, any>} */ (evidence).status
-        : undefined;
-    const settled = await settleRetainedAttempt({
-      ledger: options.ledger,
-      runId,
-      attempt,
-      actor,
-      phase: 'unsupported-terminal',
-      error: new Error(
-        `Workflow activity produced unsupported terminal '${String(terminalType)}'.`,
+      phase: 'terminal-commit',
+      error: new AggregateError(
+        terminalErrors,
+        'Could not confirm the durable workflow activity terminal.',
       ),
       dispatched: true,
     });
     if (!settled) throw new Error(`Workflow run disappeared: ${runId}`);
     return settled.outcome;
+  } finally {
+    cancellationPortLive = false;
+    physicalSignal?.removeEventListener('abort', abortPhysicalAttempt);
+    if (unregisterCancellationPort) unregisterCancellationPort();
+    await Promise.allSettled([...cancellationPromises.values()]);
   }
-
-  const terminalRequest = {
-    runId,
-    invocationId,
-    cursor: cursorGuard(started.workflowCursor),
-    attemptId: attempt.attemptId,
-    fencingToken,
-    generation: attempt.generation,
-    expectedVersion: started.run.version,
-    transitionId: `workflow-terminal:${attempt.attemptId}`,
-    evidence,
-    actor,
-    coordinatorEpoch: attempt.coordinatorEpoch,
-  };
-  /** @type {unknown[]} */
-  const terminalErrors = [];
-  for (let retry = 0; retry < 2; retry += 1) {
-    try {
-      await options.ledger.commitVerifiedWorkflowActivityTerminal(
-        terminalRequest,
-      );
-      current = await readCurrentWorkflow(options.ledger, runId);
-      if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
-      return outcomeFromCurrent(current, { dispatched: true });
-    } catch (error) {
-      terminalErrors.push(error);
-      current = await readCurrentWorkflow(options.ledger, runId);
-      if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
-      if (
-        !current.attempt ||
-        !isSameAttempt(current.attempt, attempt) ||
-        current.attempt.status !== AttemptStatus.STARTED ||
-        current.invocation.status !== InvocationStatus.RUNNING
-      ) {
-        return outcomeFromCurrent(current, {
-          reused: true,
-          dispatched: true,
-        });
-      }
-    }
-  }
-
-  const settled = await settleRetainedAttempt({
-    ledger: options.ledger,
-    runId,
-    attempt,
-    actor,
-    phase: 'terminal-commit',
-    error: new AggregateError(
-      terminalErrors,
-      'Could not confirm the durable workflow activity terminal.',
-    ),
-    dispatched: true,
-  });
-  if (!settled) throw new Error(`Workflow run disappeared: ${runId}`);
-  return settled.outcome;
 }
 
 export default {
+  WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION,
   WorkflowLedgerRecoveryAction,
   recoverWorkflowLedgerActivity,
+  requestWorkflowLedgerRunCancellation,
   runWorkflowLedgerActivity,
 };

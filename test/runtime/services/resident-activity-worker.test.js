@@ -40,6 +40,7 @@ import {
   LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
   LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS,
 } from '../../../src/core/runtime/operator/local-owner-command.js';
+import { EXECUTION_LEDGER_CANCEL_OWNER_COMMAND } from '../../../src/core/runtime/operator/execution-ledger-operator.js';
 import {
   RESIDENT_ACTIVITY_READY_WORK_LIMIT,
   RESIDENT_ACTIVITY_SUBMIT_COMMAND,
@@ -970,10 +971,341 @@ describe('resident activity worker', () => {
       actor: { kind: 'resident-workflow', id: harness.appId },
       admissionSignal: controller.signal,
       signal: expect.any(AbortSignal),
+      ownerCancellation: {
+        actor: { kind: 'local-owner-command', id: harness.appId },
+      },
+      registerActiveWorkflowCancellationPort: expect.any(Function),
     });
     expect(request).not.toHaveProperty('controlContext');
-    expect(request).not.toHaveProperty('ownerCancellation');
     expect(request).not.toHaveProperty('registerActiveAttemptCancellationPort');
+  });
+
+  it('accepts idle run-level workflow cancellation and isolates manual targets', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const workflowRunId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'idle-workflow-cancellation',
+    });
+    const manualRunId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'idle-manual-cancellation',
+    });
+    const workflowView = makeWorkflowView({
+      ...harness,
+      runId: workflowRunId,
+      planId,
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({ items: [] })),
+      rebuildRun: jest.fn(async (/** @type {string} */ runId) =>
+        runId === workflowRunId
+          ? workflowView
+          : makeView({ ...harness, runId }),
+      ),
+    };
+    const requestWorkflowCancellation = jest.fn(
+      async (/** @type {Record<string, any>} */ _request) => ({
+        outcome: /** @type {const} */ ('cancellation-requested'),
+        applied: true,
+        cancellationDeliveryRequired: false,
+        signalDelivered: false,
+        run: { ...workflowView.run, status: RunStatus.CANCELLED },
+        workflowCursor: {
+          ...workflowView.workflowCursor,
+          disposition: WorkflowCursorDisposition.CANCELLED,
+        },
+        invocation: {
+          ...workflowView.invocations[0],
+          status: InvocationStatus.CANCELLED,
+        },
+      }),
+    );
+    const requestCancellationHandler = /** @type {any} */ (
+      requestWorkflowCancellation
+    );
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      pollIntervalMs: 10_000,
+      runActivity: asRunActivity(jest.fn()),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      requestWorkflowCancellation: requestCancellationHandler,
+      createCommandServer: harness.createCommandServer,
+    });
+    await waitUntil(() => harness.getCommandServerOptions() !== undefined);
+    const { handleCommand } = harness.getCommandServerOptions();
+
+    await expect(
+      handleCommand(
+        {
+          requestId: 'idle-workflow-cancel-request',
+          command: EXECUTION_LEDGER_CANCEL_OWNER_COMMAND,
+          request: { runId: workflowRunId },
+        },
+        {},
+      ),
+    ).resolves.toEqual({
+      outcome: 'cancellation-requested',
+      delivery: 'not-required',
+      runStatus: RunStatus.CANCELLED,
+      invocationStatus: InvocationStatus.CANCELLED,
+    });
+    expect(requestWorkflowCancellation).toHaveBeenCalledWith({
+      ledger: asExecutionLedger(ledger),
+      runId: workflowRunId,
+      requestId: 'idle-workflow-cancel-request',
+      actor: { kind: 'local-owner-command', id: harness.appId },
+    });
+
+    await expect(
+      handleCommand(
+        {
+          requestId: 'idle-manual-cancel-request',
+          command: EXECUTION_LEDGER_CANCEL_OWNER_COMMAND,
+          request: { runId: manualRunId },
+        },
+        {},
+      ),
+    ).resolves.toEqual({
+      outcome: 'request-unavailable',
+      delivery: 'not-delivered',
+    });
+    expect(requestWorkflowCancellation).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+    await expect(running).resolves.toEqual({ processed: 0 });
+  });
+
+  it('cancels an inactive workflow while a different manual run is active', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const activeRunId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'active-manual-during-workflow-cancel',
+    });
+    const workflowRunId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'inactive-workflow-cancel',
+    });
+    const workflowView = makeWorkflowView({
+      ...harness,
+      runId: workflowRunId,
+      planId,
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [makeRow({ ...harness, runId: activeRunId })],
+      })),
+      rebuildRun: jest.fn(async (/** @type {string} */ runId) =>
+        runId === workflowRunId
+          ? workflowView
+          : makeView({ ...harness, runId }),
+      ),
+    };
+    /** @type {Deferred<void>} */
+    const releaseActive = deferred();
+    const runActivity = jest.fn(async () => await releaseActive.promise);
+    const requestWorkflowCancellation = jest.fn(
+      async (/** @type {Record<string, any>} */ _request) => ({
+        outcome: /** @type {const} */ ('cancellation-requested'),
+        applied: true,
+        cancellationDeliveryRequired: false,
+        signalDelivered: false,
+        run: { ...workflowView.run, status: RunStatus.CANCELLED },
+        workflowCursor: workflowView.workflowCursor,
+        invocation: {
+          ...workflowView.invocations[0],
+          status: InvocationStatus.CANCELLED,
+        },
+      }),
+    );
+    const requestCancellationHandler = /** @type {any} */ (
+      requestWorkflowCancellation
+    );
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      runActivity: asRunActivity(runActivity),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      requestWorkflowCancellation: requestCancellationHandler,
+      createCommandServer: harness.createCommandServer,
+    });
+    await waitUntil(() => runActivity.mock.calls.length === 1);
+    const { handleCommand } = harness.getCommandServerOptions();
+
+    await expect(
+      handleCommand(
+        {
+          requestId: 'different-run-workflow-cancel-request',
+          command: EXECUTION_LEDGER_CANCEL_OWNER_COMMAND,
+          request: { runId: workflowRunId },
+        },
+        {},
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'cancellation-requested',
+      delivery: 'not-required',
+      runStatus: RunStatus.CANCELLED,
+    });
+    expect(requestWorkflowCancellation).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        activeCancellationPort: expect.anything(),
+      }),
+    );
+
+    controller.abort();
+    releaseActive.resolve(undefined);
+    await expect(running).resolves.toEqual({ processed: 1 });
+  });
+
+  it('routes exact active workflow cancellation through its versioned port without replaying a signal', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const runId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'active-workflow-cancellation',
+    });
+    const workflowView = makeWorkflowView({
+      ...harness,
+      runId,
+      planId,
+    });
+    const activeInvocation = {
+      ...workflowView.invocations[0],
+      status: InvocationStatus.RUNNING,
+      generation: 1,
+    };
+    const activeAttempt = {
+      runId,
+      invocationId: activeInvocation.invocationId,
+      attemptId: 'active-workflow-attempt',
+      fencingToken: 'active-workflow-fence',
+      generation: 1,
+      coordinatorEpoch: 0,
+      status: AttemptStatus.STARTED,
+    };
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [makeWorkflowRow({ ...harness, runId })],
+      })),
+      rebuildRun: jest.fn(async () => workflowView),
+    };
+    /** @type {Deferred<void>} */
+    const releaseActive = deferred();
+    const portResult = {
+      outcome: /** @type {const} */ ('cancellation-requested'),
+      applied: true,
+      cancellationDeliveryRequired: true,
+      signalDelivered: true,
+      run: workflowView.run,
+      workflowCursor: workflowView.workflowCursor,
+      invocation: activeInvocation,
+      attempt: activeAttempt,
+    };
+    const replayResult = {
+      ...portResult,
+      applied: false,
+      cancellationDeliveryRequired: false,
+      signalDelivered: false,
+    };
+    const requestCancellation = jest
+      .fn(async (/** @type {{requestId: string}} */ _request) => portResult)
+      .mockResolvedValueOnce(portResult)
+      .mockResolvedValueOnce(replayResult);
+    const port = {
+      version: 1,
+      runId,
+      requestCancellation,
+    };
+    const runWorkflowActivity = jest.fn(
+      async (/** @type {RunWorkflowActivityOptions} */ request) => {
+        const unregister = request.registerActiveWorkflowCancellationPort?.(
+          /** @type {any} */ (port),
+        );
+        try {
+          await releaseActive.promise;
+          return { outcome: { dispatched: true } };
+        } finally {
+          unregister?.();
+        }
+      },
+    );
+    const requestWorkflowCancellation = jest.fn(
+      async (/** @type {Record<string, any>} */ request) =>
+        await request.activeCancellationPort.requestCancellation({
+          requestId: request.requestId,
+        }),
+    );
+    const requestCancellationHandler = /** @type {any} */ (
+      requestWorkflowCancellation
+    );
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      runActivity: asRunActivity(jest.fn()),
+      runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      recoverWorkflowActivity: asRecoverWorkflowActivity(jest.fn()),
+      requestWorkflowCancellation: requestCancellationHandler,
+      createCommandServer: harness.createCommandServer,
+    });
+    await waitUntil(
+      () =>
+        requestCancellation.mock.calls.length === 0 &&
+        runWorkflowActivity.mock.calls.length === 1,
+    );
+    const { handleCommand } = harness.getCommandServerOptions();
+    const command = {
+      requestId: 'active-workflow-cancel-request',
+      command: EXECUTION_LEDGER_CANCEL_OWNER_COMMAND,
+      request: { runId },
+    };
+
+    await expect(handleCommand(command, {})).resolves.toMatchObject({
+      outcome: 'cancellation-requested',
+      delivery: 'started',
+      runStatus: RunStatus.RUNNING,
+      invocationStatus: InvocationStatus.RUNNING,
+    });
+    await expect(handleCommand(command, {})).resolves.toMatchObject({
+      outcome: 'cancellation-requested',
+      delivery: 'not-required',
+      runStatus: RunStatus.RUNNING,
+      invocationStatus: InvocationStatus.RUNNING,
+    });
+    expect(requestWorkflowCancellation).toHaveBeenCalledTimes(2);
+    expect(requestWorkflowCancellation.mock.calls[0][0]).toMatchObject({
+      runId,
+      requestId: command.requestId,
+      activeCancellationPort: port,
+    });
+    expect(requestCancellation).toHaveBeenCalledTimes(2);
+    expect(requestCancellation).toHaveBeenNthCalledWith(1, {
+      requestId: command.requestId,
+    });
+    expect(requestCancellation).toHaveBeenNthCalledWith(2, {
+      requestId: command.requestId,
+    });
+
+    controller.abort();
+    releaseActive.resolve(undefined);
+    await expect(running).resolves.toEqual({ processed: 1 });
   });
 
   it('repairs stale workflow head, cursor, and generation rows before exact dispatch', async () => {
@@ -1383,7 +1715,7 @@ describe('resident activity worker', () => {
     },
   );
 
-  it('admits workflow drain immediately but delays physical cancellation without a manual registrar', async () => {
+  it('admits workflow drain immediately without converting it into durable cancellation', async () => {
     const execution = makeEmbeddedExecution();
     const harness = makeHarness(execution);
     const controller = new AbortController();
@@ -1442,10 +1774,15 @@ describe('resident activity worker', () => {
     expect(workflowRequest.admissionSignal).toBe(controller.signal);
     expect(workflowRequest.admissionSignal?.aborted).toBe(false);
     expect(workflowRequest.signal?.aborted).toBe(false);
+    expect(workflowRequest.registerActiveWorkflowCancellationPort).toEqual(
+      expect.any(Function),
+    );
+    expect(workflowRequest.ownerCancellation).toEqual({
+      actor: { kind: 'local-owner-command', id: harness.appId },
+    });
     expect(workflowRequest).not.toHaveProperty(
       'registerActiveAttemptCancellationPort',
     );
-    expect(workflowRequest).not.toHaveProperty('ownerCancellation');
     expect(workflowRequest).not.toHaveProperty('controlContext');
 
     controller.abort(new Error('resident workflow shutdown'));

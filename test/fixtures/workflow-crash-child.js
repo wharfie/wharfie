@@ -20,12 +20,14 @@ const WorkerBoundary = Object.freeze({
 });
 const CommandBoundary = Object.freeze({
   START_RESPONSE: 'start-response-ready',
+  CANCELLATION_RESPONSE: 'cancellation-response-ready',
   RECOVERY_RESPONSE: 'recovery-response-ready',
   RECONCILIATION_RESPONSE: 'reconciliation-response-ready',
 });
 const VALID_MODES = new Set([
   'worker',
   'start-response',
+  'cancel-response',
   'recover-response',
   'reconcile-response',
 ]);
@@ -217,6 +219,7 @@ function createCommandBoundary(boundary) {
       json(/** @type {Record<string, any>} */ value) {
         pending = reach(boundary, { response: value });
       },
+      success() {},
       failure(/** @type {unknown} */ error) {
         throw error;
       },
@@ -259,6 +262,21 @@ async function runStartResponse(options) {
   ]);
 }
 
+/** @param {Record<string, any>} options */
+async function runCancellationResponse(options) {
+  const boundary = createCommandBoundary(CommandBoundary.CANCELLATION_RESPONSE);
+  const commands = createExecutionLedgerOperatorCommands({
+    output: boundary.output,
+  });
+  await boundary.parse(commands.cancelCommand, [
+    '--run-id',
+    options.runId,
+    '--request-id',
+    options.requestId,
+    '--json',
+  ]);
+}
+
 /**
  * @param {Record<string, any>} options
  * @param {'recover'|'reconcile'} kind
@@ -295,6 +313,9 @@ async function main() {
   const options = parseOptions();
   if (options.mode === 'worker') return await runWorker(options);
   if (options.mode === 'start-response') return await runStartResponse(options);
+  if (options.mode === 'cancel-response') {
+    return await runCancellationResponse(options);
+  }
   if (options.mode === 'recover-response') {
     return await runOperatorResponse(options, 'recover');
   }

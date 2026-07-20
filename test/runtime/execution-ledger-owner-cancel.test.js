@@ -15,7 +15,11 @@ import {
   RunStatus,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
-import { createLedgerServiceOwnership } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
+import {
+  LedgerServiceOwnerKind,
+  createLedgerServiceOwnership,
+} from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
+import { createWorkflowRunId } from '../../src/core/lib/ledger/workflow-execution-contract.js';
 import { resolveExecutionPayloadStoreId } from '../../src/core/lib/config/db.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
@@ -27,6 +31,7 @@ import {
 import { EXECUTION_LEDGER_CANCEL_OWNER_COMMAND } from '../../src/core/runtime/operator/execution-ledger-operator.js';
 import { createLocalOwnerCommandServer } from '../../src/core/runtime/operator/local-owner-command.js';
 import { acquireLocalLedgerServiceSession } from '../../src/core/runtime/services/ledger-service.js';
+import { requestWorkflowLedgerRunCancellation } from '../../src/core/runtime/workflow-ledger-run.js';
 
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
 const EXECUTION_LEDGER_OPERATOR_MODULE_URL = new URL(
@@ -228,6 +233,36 @@ async function seedRunnableManualRun(ledger, options) {
     activityId: 'work',
     input: { credential: 'input-secret' },
     callerMetadata: { credential: 'caller-secret' },
+    transitionId: `create:${options.idempotencyKey}`,
+    actor: { kind: 'local', id: 'test' },
+  });
+  return runId;
+}
+
+/**
+ * @param {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} ledger
+ * @param {{appId: string, idempotencyKey: string}} options
+ * @returns {Promise<string>}
+ */
+async function seedRunnableWorkflowRun(ledger, options) {
+  const runId = createWorkflowRunId(options);
+  await ledger.createWorkflowRun({
+    runId,
+    appId: options.appId,
+    revisionId: REVISION_ID,
+    workflowId: 'main',
+    definition: {
+      steps: [
+        {
+          id: 'work',
+          kind: 'activity',
+          activity: 'work',
+          input: { kind: 'workflow-input' },
+        },
+      ],
+    },
+    input: { credential: 'workflow-input-secret' },
+    callerMetadata: { credential: 'workflow-caller-secret' },
     transitionId: `create:${options.idempotencyKey}`,
     actor: { kind: 'local', id: 'test' },
   });
@@ -551,6 +586,125 @@ describe('execution-ledger local owner cancellation operator', () => {
       });
     } finally {
       await host?.stop();
+      await db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('routes runnable workflow cancellation through a live resident and replays locally', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-owner-workflow-cancel-'),
+    );
+    const configuration = createConfiguration(
+      root,
+      'owner-workflow-cancel-test',
+    );
+    const appId = 'owner-workflow-cancel-demo';
+    const { db, ledger } = createLedger(configuration);
+    const ownership = createLedgerServiceOwnership({
+      db,
+      tableName: configuration.tableName,
+    });
+    /** @type {Awaited<ReturnType<typeof acquireLocalLedgerServiceSession>> | undefined} */
+    let owner;
+    /** @type {Awaited<ReturnType<typeof createLocalOwnerCommandServer>> | undefined} */
+    let server;
+    try {
+      const runId = await seedRunnableWorkflowRun(ledger, {
+        appId,
+        idempotencyKey: 'resident-routed-workflow',
+      });
+      const residentOwner = await acquireLocalLedgerServiceSession({
+        appId,
+        ownership,
+        ownerKind: LedgerServiceOwnerKind.RESIDENT,
+        sessionRoot: configuration.sessionPath,
+      });
+      owner = residentOwner;
+      /** @type {string[]} */
+      const receivedRequestIds = [];
+      server = await createLocalOwnerCommandServer({
+        session: residentOwner.commandSession,
+        isCurrentOwner: async () => {
+          const current = await ownership.getOwnership({
+            serviceId: residentOwner.ownership.serviceId,
+          });
+          return (
+            current?.sessionId === residentOwner.ownership.sessionId &&
+            current?.generation === residentOwner.ownership.generation
+          );
+        },
+        handleCommand: async (command) => {
+          receivedRequestIds.push(command.requestId);
+          const result = await requestWorkflowLedgerRunCancellation({
+            ledger,
+            runId: command.request.runId,
+            requestId: command.requestId,
+            actor: { kind: 'local-owner-command', id: appId },
+          });
+          return {
+            outcome: result.outcome,
+            delivery:
+              result.outcome === 'cancellation-requested'
+                ? result.signalDelivered
+                  ? 'started'
+                  : result.cancellationDeliveryRequired
+                    ? 'not-delivered'
+                    : 'not-required'
+                : result.outcome === 'owner-not-ready'
+                  ? 'not-delivered'
+                  : 'not-required',
+            runStatus: result.run.status,
+            invocationStatus: result.invocation.status,
+            reason: 'resident-private-workflow-reason',
+            endpoint: residentOwner.ownerCommandEndpoint,
+          };
+        },
+      });
+
+      const request = {
+        runId,
+        requestId: 'resident-workflow-cancel-request',
+        configuration,
+      };
+      const first = await externalCancellationResult(request);
+      expect(first).toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.cancel',
+        runId,
+        requestId: request.requestId,
+        outcome: 'cancellation-requested',
+        delivery: 'not-required',
+        runStatus: RunStatus.CANCELLED,
+        invocationStatus: InvocationStatus.CANCELLED,
+      });
+      await expect(externalCancellationResult(request)).resolves.toEqual(first);
+      expect(receivedRequestIds).toEqual([request.requestId]);
+
+      const view = await ledger.rebuildRun(runId);
+      expect(view).toMatchObject({
+        run: {
+          status: RunStatus.CANCELLED,
+          cancellationRequest: { requestId: request.requestId },
+        },
+        invocations: [
+          expect.objectContaining({ status: InvocationStatus.CANCELLED }),
+        ],
+      });
+      expect(
+        view?.events.filter(
+          (/** @type {Record<string, any>} */ event) =>
+            event.type === 'workflow-cancellation-requested',
+        ),
+      ).toHaveLength(1);
+      const serialized = JSON.stringify(first);
+      expect(serialized).not.toContain('resident-private-workflow-reason');
+      expect(serialized).not.toContain(residentOwner.ownerCommandEndpoint);
+      expect(serialized).not.toContain('workflow-input-secret');
+      expect(serialized).not.toContain('workflow-caller-secret');
+    } finally {
+      await server?.close();
+      await owner?.release();
       await db.close();
       rmSync(root, { recursive: true, force: true });
     }

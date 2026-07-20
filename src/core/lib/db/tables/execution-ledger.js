@@ -106,10 +106,12 @@ import {
   materializeFirstWorkflowActivity,
   materializeUncertainWorkflowActivityFailure,
   materializeUncertainWorkflowActivitySuccess,
+  materializeWorkflowActivityCancellation,
   materializeWorkflowActivityClaimRelease,
   materializeWorkflowActivityFailure,
   materializeWorkflowActivitySuccess,
   materializeWorkflowActivityUncertainty,
+  materializeWorkflowCancellationIntent,
   materializeWorkflowCursorActivity,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
@@ -177,9 +179,11 @@ const EVENT_TYPES = new Set([
   'workflow-activity-started',
   'workflow-activity-succeeded',
   'workflow-activity-failed',
+  'workflow-activity-cancelled',
   'workflow-activity-abandoned-before-start',
   'workflow-activity-became-uncertain',
   'workflow-activity-uncertainty-reconciled',
+  'workflow-cancellation-requested',
   'effect-successor-authorized',
   'effect-successor-run-created',
   'effect-successor-started',
@@ -210,6 +214,7 @@ const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
 const SUPPORTED_WORKFLOW_ACTIVITY_TERMINAL_TYPES = new Set([
   'completed',
   'failed',
+  'cancelled',
   'protocol-failed',
 ]);
 const ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA =
@@ -227,11 +232,18 @@ const STOPPED_ATTEMPT_SETTLEMENT_REASON_MAX_BYTES = 2 * 1024;
 const STOPPED_ATTEMPT_SETTLEMENT_REASON_RESERVE = Object.freeze({
   message: 'x'.repeat(STOPPED_ATTEMPT_SETTLEMENT_REASON_MAX_BYTES),
 });
+const WORKFLOW_ATTEMPT_UNCERTAINTY_REASON_MAX_BYTES = 32 * 1024;
+const WORKFLOW_ATTEMPT_UNCERTAINTY_REASON_RESERVE = Object.freeze({
+  message: 'x'.repeat(WORKFLOW_ATTEMPT_UNCERTAINTY_REASON_MAX_BYTES),
+});
 /**
  * @typedef {import('../base.js').DBClient} DBClient
  */
 /**
  * @typedef {{applied: boolean, outcome: 'cancellation-requested'|'terminal-authoritative'|'outcome-uncertain', receipt?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} ManualCancellationResult
+ */
+/**
+ * @typedef {{applied: boolean, outcome: 'cancellation-requested'|'terminal-authoritative', cancellationDeliveryRequired: boolean, receipt?: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} WorkflowCancellationResult
  */
 
 /**
@@ -2381,6 +2393,76 @@ function assertStoppedAttemptClosureFits(input) {
 }
 
 /**
+ * Keep enough encoded record and event space to turn one STARTED workflow
+ * attempt into honest uncertainty after cancellation delivery or owner loss.
+ * The uncertainty API is bounded by the same byte ceiling, so accepting a
+ * cancellation can never strand the attempt without its mandatory closure.
+ * @param {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor: Record<string, any>, attempt: Record<string, any>, label: string}} input - Prospective cancelled-but-still-started workflow state.
+ * @returns {void}
+ */
+function assertWorkflowStoppedAttemptClosureFits(input) {
+  const sequence = Number.MAX_SAFE_INTEGER;
+  const observedAt = Number.MAX_SAFE_INTEGER;
+  const run = {
+    ...cloneJsonObject(input.run, `${input.label} run reserve`),
+    status: RunStatus.BLOCKED,
+    version: Number.MAX_SAFE_INTEGER,
+    lastSequence: sequence,
+    updatedAt: observedAt,
+  };
+  const invocation = {
+    ...cloneJsonObject(input.invocation, `${input.label} invocation reserve`),
+    status: InvocationStatus.UNCERTAIN,
+    uncertainty: WORKFLOW_ATTEMPT_UNCERTAINTY_REASON_RESERVE,
+    version: Number.MAX_SAFE_INTEGER,
+    lastSequence: sequence,
+    updatedAt: observedAt,
+  };
+  const workflowCursor = {
+    ...cloneJsonObject(
+      input.workflowCursor,
+      `${input.label} workflow cursor reserve`,
+    ),
+    disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+    version: Number.MAX_SAFE_INTEGER,
+    lastSequence: sequence,
+    updatedAt: observedAt,
+  };
+  const attempt = {
+    ...cloneJsonObject(input.attempt, `${input.label} attempt reserve`),
+    status: AttemptStatus.ABANDONED,
+    abandonment: WORKFLOW_ATTEMPT_UNCERTAINTY_REASON_RESERVE,
+    version: Number.MAX_SAFE_INTEGER,
+    lastSequence: sequence,
+    updatedAt: observedAt,
+  };
+  cloneInlinePayload(run, `${input.label} run closure reserve`);
+  cloneInlinePayload(invocation, `${input.label} invocation closure reserve`);
+  cloneInlinePayload(
+    workflowCursor,
+    `${input.label} workflow cursor closure reserve`,
+  );
+  cloneInlinePayload(attempt, `${input.label} attempt closure reserve`);
+  cloneEventPayload(
+    { run, invocation, workflowCursor, attempt },
+    `${input.label} workflow stopped-attempt closure reserve`,
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate workflow uncertainty reason.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {Record<string, any>} - Strict bounded reason.
+ */
+function cloneWorkflowAttemptUncertaintyReason(value, label) {
+  return cloneBoundedJsonObject(
+    value,
+    WORKFLOW_ATTEMPT_UNCERTAINTY_REASON_MAX_BYTES,
+    label,
+  );
+}
+
+/**
  * @param {Record<string, any>} prior - Previous run snapshot.
  * @param {Record<string, any>} next - Candidate next run snapshot.
  * @param {number} sequence - Event sequence.
@@ -2827,6 +2909,13 @@ function eventSnapshots(event, runId) {
       ['run', 'invocation', 'workflowCursor', 'attempt'],
       'event payload',
     );
+  } else if (event.type === 'workflow-cancellation-requested') {
+    assertSnapshotKeys(
+      payload,
+      ['run', 'invocation', 'workflowCursor'],
+      ['attempt'],
+      'event payload',
+    );
   } else if (event.type === 'workflow-activity-succeeded') {
     assertSnapshotKeys(
       payload,
@@ -2834,7 +2923,10 @@ function eventSnapshots(event, runId) {
       ['nextInvocation'],
       'event payload',
     );
-  } else if (event.type === 'workflow-activity-failed') {
+  } else if (
+    event.type === 'workflow-activity-failed' ||
+    event.type === 'workflow-activity-cancelled'
+  ) {
     assertExactKeys(
       payload,
       ['run', 'invocation', 'workflowCursor', 'attempt'],
@@ -3072,6 +3164,57 @@ function hasExactWorkflowActivityUncertaintyEventLink(input) {
   const snapshots = eventSnapshots(uncertaintyEvent, runId);
   const uncertaintyCursor = snapshots.workflowCursor;
   const uncertaintyAttempt = snapshots.attempt;
+  const advance = run.lastSequence - uncertaintyEvent.sequence;
+  const unchangedSinceUncertainty =
+    advance === 0 &&
+    sameSnapshot(snapshots.run, run) &&
+    sameSnapshot(snapshots.invocation, invocation) &&
+    Boolean(
+      uncertaintyCursor && sameSnapshot(uncertaintyCursor, workflowCursor),
+    );
+  const cancellationRequest = run.cancellationRequest;
+  const advancedOnlyByCancellation = Boolean(
+    advance === 1 &&
+    uncertaintyCursor &&
+    cancellationRequest &&
+    !Object.prototype.hasOwnProperty.call(
+      snapshots.run,
+      'cancellationRequest',
+    ) &&
+    !Object.prototype.hasOwnProperty.call(
+      snapshots.invocation,
+      'cancellationRequest',
+    ) &&
+    !Object.prototype.hasOwnProperty.call(
+      uncertaintyAttempt || {},
+      'cancellationRequest',
+    ) &&
+    hasSameCanonicalJson(invocation.cancellationRequest, cancellationRequest) &&
+    hasSameCanonicalJson(run, {
+      ...cloneJsonObject(snapshots.run, 'uncertain workflow run'),
+      version: snapshots.run.version + 1,
+      lastSequence: run.lastSequence,
+      updatedAt: run.updatedAt,
+      cancellationRequest,
+    }) &&
+    hasSameCanonicalJson(invocation, {
+      ...cloneJsonObject(snapshots.invocation, 'uncertain workflow invocation'),
+      version: snapshots.invocation.version + 1,
+      lastSequence: invocation.lastSequence,
+      updatedAt: invocation.updatedAt,
+      cancellationRequest,
+    }) &&
+    hasSameCanonicalJson(workflowCursor, {
+      ...cloneJsonObject(uncertaintyCursor, 'uncertain workflow cursor'),
+      version: uncertaintyCursor.version + 1,
+      lastSequence: workflowCursor.lastSequence,
+      updatedAt: workflowCursor.updatedAt,
+    }) &&
+    run.lastSequence === invocation.lastSequence &&
+    run.lastSequence === workflowCursor.lastSequence &&
+    run.updatedAt === invocation.updatedAt &&
+    run.updatedAt === workflowCursor.updatedAt,
+  );
   return Boolean(
     uncertaintyCursor &&
     uncertaintyAttempt &&
@@ -3097,9 +3240,7 @@ function hasExactWorkflowActivityUncertaintyEventLink(input) {
       uncertaintyAttempt.abandonment,
     ) &&
     hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) &&
-    sameSnapshot(snapshots.run, run) &&
-    sameSnapshot(snapshots.invocation, invocation) &&
-    sameSnapshot(uncertaintyCursor, workflowCursor) &&
+    (unchangedSinceUncertainty || advancedOnlyByCancellation) &&
     sameSnapshot(uncertaintyAttempt, attempt),
   );
 }
@@ -3325,7 +3466,8 @@ function assertEventRequestDigest(
   const currentWorkflowCursor = workflowContext?.currentCursor;
   const nextWorkflowCursor = workflowContext?.nextCursor;
   if (
-    event.type.startsWith('workflow-activity-') &&
+    (event.type.startsWith('workflow-activity-') ||
+      event.type === 'workflow-cancellation-requested') &&
     (!currentWorkflowCursor || !nextWorkflowCursor)
   ) {
     throw new ExecutionLedgerProjectionError(
@@ -3411,10 +3553,33 @@ function assertEventRequestDigest(
       actor: event.actor,
       coordinatorEpoch: attempt?.coordinatorEpoch,
     };
+  } else if (event.type === 'workflow-cancellation-requested') {
+    const cancellationRequest = run.cancellationRequest;
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      cursor: workflowCursorGuard(
+        /** @type {Record<string, any>} */ (currentWorkflowCursor),
+      ),
+      expectedGeneration: currentInvocation?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      requestId: cancellationRequest?.requestId,
+      reason: cancellationRequest?.reason,
+      actor: event.actor,
+      coordinatorEpoch: currentAttempt?.coordinatorEpoch ?? 0,
+      ...(currentAttempt
+        ? {
+            attemptId: currentAttempt.attemptId,
+            fencingToken: currentAttempt.fencingToken,
+          }
+        : {}),
+    };
   } else if (event.type === 'workflow-activity-succeeded') {
-    const output = /** @type {Record<string, any>} */ (
-      nextWorkflowCursor
-    ).outputs.at(-1);
+    const output = /** @type {Record<string, any>} */ (nextWorkflowCursor)
+      .outputs[
+      /** @type {Record<string, any>} */ (currentWorkflowCursor).stepIndex
+    ];
     const nextInvocation = workflowContext?.nextInvocation;
     value = {
       runId,
@@ -3429,7 +3594,7 @@ function assertEventRequestDigest(
       transitionId: event.transition_id,
       terminal: attempt?.terminal,
       evidenceRef: attempt?.evidenceRef,
-      outputRef: output?.outputRef,
+      outputRef: output?.outputRef ?? null,
       successor: nextInvocation
         ? {
             continuationId: nextInvocation.workflow?.continuationId,
@@ -3443,7 +3608,10 @@ function assertEventRequestDigest(
       actor: event.actor,
       coordinatorEpoch: attempt?.coordinatorEpoch,
     };
-  } else if (event.type === 'workflow-activity-failed') {
+  } else if (
+    event.type === 'workflow-activity-failed' ||
+    event.type === 'workflow-activity-cancelled'
+  ) {
     value = {
       runId,
       invocationId: invocation.invocationId,
@@ -3485,7 +3653,7 @@ function assertEventRequestDigest(
       verifier: reconciliation?.verifier,
       evidenceRef: reconciliation?.evidenceRef,
       terminal: reconciliation?.terminal,
-      outputRef: completed ? output?.outputRef : null,
+      outputRef: completed ? (output?.outputRef ?? null) : null,
       successor:
         completed && nextInvocation
           ? {
@@ -4050,7 +4218,9 @@ async function applyEvent(
       ? state.attempts.get(
           attemptMapKey(reconciliation.invocationId, reconciliation.attemptId),
         )
-      : undefined;
+      : event.type === 'workflow-cancellation-requested' && currentInvocation
+        ? getCurrentGenerationAttempt(state, currentInvocation, runId)
+        : undefined;
   const currentEffect = effect
     ? state.effects.get(effectMapKey(effect.invocationId, effect.effectId))
     : undefined;
@@ -4317,6 +4487,7 @@ async function applyEvent(
       !reconciliation &&
       ![
         'manual-cancellation-requested',
+        'workflow-cancellation-requested',
         'effect-successor-authorized',
       ].includes(event.type))
   ) {
@@ -4328,21 +4499,27 @@ async function applyEvent(
       'workflow-activity-started',
       'workflow-activity-succeeded',
       'workflow-activity-failed',
+      'workflow-activity-cancelled',
       'workflow-activity-abandoned-before-start',
       'workflow-activity-became-uncertain',
       'workflow-activity-uncertainty-reconciled',
+      'workflow-cancellation-requested',
     ].includes(event.type)
   ) {
     const currentCursor = state.workflowCursor;
     const isReconciliation =
       event.type === 'workflow-activity-uncertainty-reconciled';
+    const isCancellationRequest =
+      event.type === 'workflow-cancellation-requested';
     if (
       currentRun.trigger?.kind !== 'workflow' ||
       !currentCursor ||
       !workflowCursor ||
       (isReconciliation
         ? Boolean(attempt) || !reconciliation || !currentAttempt
-        : !attempt || Boolean(reconciliation)) ||
+        : isCancellationRequest
+          ? Boolean(reconciliation)
+          : !attempt || Boolean(reconciliation)) ||
       effect ||
       effects ||
       (![
@@ -4369,12 +4546,14 @@ async function applyEvent(
       runId,
     );
     assertWorkflowCursorAdvance(currentCursor, workflowCursor, event, runId);
-    assertAttemptBelongsToInvocation(
-      /** @type {Record<string, any>} */ (attempt || currentAttempt),
-      run,
-      invocation,
-      runId,
-    );
+    if (attempt || currentAttempt) {
+      assertAttemptBelongsToInvocation(
+        /** @type {Record<string, any>} */ (attempt || currentAttempt),
+        run,
+        invocation,
+        runId,
+      );
+    }
 
     const planPayload = await payloadReader.readWorkflowPlan(
       currentCursor.planRef,
@@ -4424,7 +4603,8 @@ async function applyEvent(
       materializedCurrent.planId !== currentRun.trigger.planId ||
       materializedCurrent.invocationId !== currentInvocation.invocationId ||
       materializedCurrent.activityId !== currentInvocation.activityId ||
-      !isWorkflowActivityDispatchSupported(currentCursor, planPayload) ||
+      (event.type !== 'workflow-cancellation-requested' &&
+        !isWorkflowActivityDispatchSupported(currentCursor, planPayload)) ||
       !hasSameCanonicalJson(materializedCurrent.activityRequest, currentRequest)
     ) {
       throw new ExecutionLedgerProjectionError(
@@ -4453,7 +4633,178 @@ async function applyEvent(
       updatedAt: event.observed_at,
     };
 
-    if (event.type === 'workflow-activity-claimed') {
+    if (event.type !== 'workflow-cancellation-requested') {
+      if (
+        !hasSameCancellationRequest(currentRun, run) ||
+        !hasSameCancellationRequest(currentInvocation, invocation) ||
+        (attempt &&
+          currentAttempt &&
+          !hasSameCancellationRequest(currentAttempt, attempt))
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow cancellation request changed outside its decision event',
+        );
+      }
+    }
+
+    if (event.type === 'workflow-cancellation-requested') {
+      const cancellationRequest = run.cancellationRequest;
+      const matchingRequest =
+        cancellationRequest &&
+        cancellationRequest.transitionId === event.transition_id &&
+        cancellationRequest.requestedAt === event.observed_at &&
+        hasSameCanonicalJson(cancellationRequest.actor, event.actor) &&
+        hasSameCanonicalJson(
+          invocation.cancellationRequest,
+          cancellationRequest,
+        ) &&
+        (!attempt ||
+          hasSameCanonicalJson(
+            attempt.cancellationRequest,
+            cancellationRequest,
+          ));
+      const hadRequest =
+        Object.prototype.hasOwnProperty.call(
+          currentRun,
+          'cancellationRequest',
+        ) ||
+        Object.prototype.hasOwnProperty.call(
+          currentInvocation,
+          'cancellationRequest',
+        ) ||
+        Boolean(
+          currentAttempt &&
+          Object.prototype.hasOwnProperty.call(
+            currentAttempt,
+            'cancellationRequest',
+          ),
+        );
+      const cancelsRunnable =
+        currentRun.status === RunStatus.RUNNING &&
+        currentCursor.disposition ===
+          WorkflowCursorDisposition.ACTIVITY_RUNNABLE &&
+        currentInvocation.status === InvocationStatus.RUNNABLE &&
+        (!currentAttempt || currentAttempt.status === AttemptStatus.ABANDONED);
+      const cancelsClaimed =
+        currentRun.status === RunStatus.RUNNING &&
+        currentCursor.disposition ===
+          WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+        currentInvocation.status === InvocationStatus.RUNNING &&
+        currentAttempt?.status === AttemptStatus.CLAIMED;
+      const requestsStarted =
+        currentRun.status === RunStatus.RUNNING &&
+        currentCursor.disposition ===
+          WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+        currentInvocation.status === InvocationStatus.RUNNING &&
+        currentAttempt?.status === AttemptStatus.STARTED;
+      const requestsUncertain =
+        currentRun.status === RunStatus.BLOCKED &&
+        currentCursor.disposition ===
+          WorkflowCursorDisposition.ACTIVITY_UNCERTAIN &&
+        currentInvocation.status === InvocationStatus.UNCERTAIN &&
+        currentAttempt?.status === AttemptStatus.ABANDONED;
+      let materializedCancellation;
+      try {
+        materializedCancellation =
+          cancelsRunnable || cancelsClaimed
+            ? materializeWorkflowActivityCancellation({
+                currentCursor,
+                sequence,
+                observedAt: event.observed_at,
+              })
+            : materializeWorkflowCancellationIntent({
+                currentCursor,
+                sequence,
+                observedAt: event.observed_at,
+              });
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow cancellation cursor mismatch',
+        );
+      }
+      const expectsAttempt = cancelsClaimed || requestsStarted;
+      if (
+        !matchingRequest ||
+        hadRequest ||
+        (!cancelsRunnable &&
+          !cancelsClaimed &&
+          !requestsStarted &&
+          !requestsUncertain) ||
+        Boolean(attempt) !== expectsAttempt ||
+        event.fence.invocationGeneration !== currentInvocation.generation ||
+        event.fence.coordinatorEpoch !==
+          (currentAttempt?.coordinatorEpoch ?? 0) ||
+        !hasSameCanonicalJson(run, {
+          ...expectedRunBase,
+          status:
+            cancelsRunnable || cancelsClaimed
+              ? RunStatus.CANCELLED
+              : currentRun.status,
+          cancellationRequest,
+        }) ||
+        !hasSameCanonicalJson(invocation, {
+          ...expectedInvocationBase,
+          status:
+            cancelsRunnable || cancelsClaimed
+              ? InvocationStatus.CANCELLED
+              : currentInvocation.status,
+          cancellationRequest,
+        }) ||
+        !hasSameCanonicalJson(workflowCursor, materializedCancellation)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid workflow cancellation request',
+        );
+      }
+      if (attempt) {
+        if (!currentAttempt) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow cancellation attempt lacks prior state',
+          );
+        }
+        assertAttemptAdvance(currentAttempt, attempt, event, runId);
+        if (
+          !hasSameCanonicalJson(attempt, {
+            ...cloneJsonObject(
+              currentAttempt,
+              'prior workflow cancellation attempt',
+            ),
+            status: cancelsClaimed
+              ? AttemptStatus.CANCELLED
+              : AttemptStatus.STARTED,
+            version: currentAttempt.version + 1,
+            lastSequence: sequence,
+            updatedAt: event.observed_at,
+            cancellationRequest,
+          })
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow cancellation rewrote attempt lifecycle evidence',
+          );
+        }
+        if (requestsStarted) {
+          try {
+            assertWorkflowStoppedAttemptClosureFits({
+              run,
+              invocation,
+              workflowCursor,
+              attempt,
+              label: 'persisted workflow cancellation',
+            });
+          } catch {
+            throw new ExecutionLedgerProjectionError(
+              runId,
+              'workflow cancellation cannot retain recovery closure',
+            );
+          }
+        }
+      }
+    } else if (event.type === 'workflow-activity-claimed') {
       if (!attempt) {
         throw new ExecutionLedgerProjectionError(
           runId,
@@ -4613,6 +4964,18 @@ async function applyEvent(
           candidate.invocationId === currentAttempt.invocationId &&
           candidate.requestedBy.attemptId === currentAttempt.attemptId,
       );
+      let uncertaintyReason;
+      try {
+        uncertaintyReason = cloneWorkflowAttemptUncertaintyReason(
+          attempt.abandonment,
+          'persisted workflow uncertainty reason',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow uncertainty reason exceeds its recovery bound',
+        );
+      }
       if (
         currentRun.status !== RunStatus.RUNNING ||
         currentCursor.disposition !==
@@ -4627,7 +4990,7 @@ async function applyEvent(
         !hasSameCanonicalJson(invocation, {
           ...expectedInvocationBase,
           status: InvocationStatus.UNCERTAIN,
-          uncertainty: attempt.abandonment,
+          uncertainty: uncertaintyReason,
         }) ||
         !hasSameCanonicalJson(workflowCursor, materializedUncertainty) ||
         !hasSameCanonicalJson(attempt, {
@@ -4636,7 +4999,7 @@ async function applyEvent(
           version: currentAttempt.version + 1,
           lastSequence: sequence,
           updatedAt: event.observed_at,
-          abandonment: attempt.abandonment,
+          abandonment: uncertaintyReason,
         })
       ) {
         throw new ExecutionLedgerProjectionError(
@@ -4666,6 +5029,7 @@ async function applyEvent(
         assertSupportedWorkflowActivityTerminal(
           verifiedEvidence.terminal,
           verifiedEvidence.evidence,
+          currentAttempt.cancellationRequest,
           'persisted workflow activity evidence',
         );
       } catch {
@@ -4689,43 +5053,64 @@ async function applyEvent(
           candidate.invocationId === currentAttempt.invocationId &&
           candidate.requestedBy.attemptId === currentAttempt.attemptId,
       );
-      const outputBinding = workflowCursor.outputs.at(-1);
-      if (!outputBinding) {
-        throw new ExecutionLedgerProjectionError(
-          runId,
-          'workflow activity success lacks its output binding',
-        );
-      }
-      const outputPayload = await payloadReader.readWorkflowOutput(
-        outputBinding.outputRef,
-      );
       const nextStep =
         planPayload.definition.steps[currentCursor.stepIndex + 1];
+      const suppressesContinuation = Boolean(
+        currentRun.cancellationRequest && nextStep,
+      );
+      const outputBinding = workflowCursor.outputs[currentCursor.stepIndex];
+      let outputPayload;
       let nextSelectedOutput;
       let materializedSuccess;
       try {
-        nextSelectedOutput = nextStep
-          ? selectWorkflowStepOutput(
-              nextStep,
-              [
-                ...resolvedOutputs,
-                { binding: outputBinding, payload: outputPayload },
-              ],
-              'persisted workflow successor',
-            )
-          : undefined;
-        materializedSuccess = materializeWorkflowActivitySuccess({
-          currentCursor,
-          planPayload,
-          planRef: currentCursor.planRef,
-          startPayload,
-          startRef: currentCursor.startRef,
-          outputPayload,
-          outputRef: outputBinding.outputRef,
-          ...(nextSelectedOutput ? { selectedOutput: nextSelectedOutput } : {}),
-          sequence,
-          observedAt: event.observed_at,
-        });
+        if (suppressesContinuation) {
+          if (outputBinding) {
+            throw new TypeError(
+              'cancelled workflow continuation retained a current-step output.',
+            );
+          }
+          materializedSuccess = {
+            completed: false,
+            cursor: materializeWorkflowActivityCancellation({
+              currentCursor,
+              sequence,
+              observedAt: event.observed_at,
+            }),
+          };
+        } else {
+          if (!outputBinding) {
+            throw new TypeError(
+              'workflow activity success lacks its output binding.',
+            );
+          }
+          outputPayload = await payloadReader.readWorkflowOutput(
+            outputBinding.outputRef,
+          );
+          nextSelectedOutput = nextStep
+            ? selectWorkflowStepOutput(
+                nextStep,
+                [
+                  ...resolvedOutputs,
+                  { binding: outputBinding, payload: outputPayload },
+                ],
+                'persisted workflow successor',
+              )
+            : undefined;
+          materializedSuccess = materializeWorkflowActivitySuccess({
+            currentCursor,
+            planPayload,
+            planRef: currentCursor.planRef,
+            startPayload,
+            startRef: currentCursor.startRef,
+            outputPayload,
+            outputRef: outputBinding.outputRef,
+            ...(nextSelectedOutput
+              ? { selectedOutput: nextSelectedOutput }
+              : {}),
+            sequence,
+            observedAt: event.observed_at,
+          });
+        }
       } catch {
         throw new ExecutionLedgerProjectionError(
           runId,
@@ -4740,7 +5125,8 @@ async function applyEvent(
         attemptEffects.length !== 0 ||
         terminal.type !== 'completed' ||
         terminal.attemptId !== currentAttempt.attemptId ||
-        !hasSameCanonicalJson(outputPayload.value, terminal.result) ||
+        (!suppressesContinuation &&
+          !hasSameCanonicalJson(outputPayload?.value, terminal.result)) ||
         !hasSameCanonicalJson(workflowCursor, materializedSuccess.cursor) ||
         !hasSameCanonicalJson(attempt, {
           ...cloneJsonObject(currentAttempt, 'prior workflow attempt'),
@@ -4758,9 +5144,11 @@ async function applyEvent(
         }) ||
         !hasSameCanonicalJson(run, {
           ...expectedRunBase,
-          status: materializedSuccess.completed
-            ? RunStatus.COMPLETED
-            : RunStatus.RUNNING,
+          status: suppressesContinuation
+            ? RunStatus.CANCELLED
+            : materializedSuccess.completed
+              ? RunStatus.COMPLETED
+              : RunStatus.RUNNING,
         })
       ) {
         throw new ExecutionLedgerProjectionError(
@@ -4768,11 +5156,11 @@ async function applyEvent(
           'invalid workflow activity success',
         );
       }
-      if (materializedSuccess.completed) {
+      if (suppressesContinuation || materializedSuccess.completed) {
         if (nextInvocation) {
           throw new ExecutionLedgerProjectionError(
             runId,
-            'completed workflow retains a successor invocation',
+            'terminal workflow retains a successor invocation',
           );
         }
       } else {
@@ -4820,7 +5208,10 @@ async function applyEvent(
           );
         }
       }
-    } else if (event.type === 'workflow-activity-failed') {
+    } else if (
+      event.type === 'workflow-activity-failed' ||
+      event.type === 'workflow-activity-cancelled'
+    ) {
       if (!currentAttempt || !attempt) {
         throw new ExecutionLedgerProjectionError(
           runId,
@@ -4842,6 +5233,7 @@ async function applyEvent(
         assertSupportedWorkflowActivityTerminal(
           verifiedEvidence.terminal,
           verifiedEvidence.evidence,
+          currentAttempt.cancellationRequest,
           'persisted failed workflow activity evidence',
         );
       } catch {
@@ -4860,18 +5252,27 @@ async function applyEvent(
       );
       const terminal = verifiedEvidence.terminal;
       const terminalSummary = createTerminalSummary(terminal);
-      let materializedFailure;
+      let materializedTerminal;
       try {
-        materializedFailure = materializeWorkflowActivityFailure({
-          currentCursor,
-          planPayload,
-          planRef: currentCursor.planRef,
-          startPayload,
-          startRef: currentCursor.startRef,
-          outcome: terminal.type,
-          sequence,
-          observedAt: event.observed_at,
-        });
+        materializedTerminal =
+          terminal.type === 'cancelled'
+            ? {
+                cursor: materializeWorkflowActivityCancellation({
+                  currentCursor,
+                  sequence,
+                  observedAt: event.observed_at,
+                }),
+              }
+            : materializeWorkflowActivityFailure({
+                currentCursor,
+                planPayload,
+                planRef: currentCursor.planRef,
+                startPayload,
+                startRef: currentCursor.startRef,
+                outcome: terminal.type,
+                sequence,
+                observedAt: event.observed_at,
+              });
       } catch {
         throw new ExecutionLedgerProjectionError(
           runId,
@@ -4883,19 +5284,24 @@ async function applyEvent(
           candidate.invocationId === currentAttempt.invocationId &&
           candidate.requestedBy.attemptId === currentAttempt.attemptId,
       );
+      const terminalStatuses = statusesForTerminal(terminal);
       if (
         currentRun.status !== RunStatus.RUNNING ||
         currentCursor.disposition !==
           WorkflowCursorDisposition.ACTIVITY_RUNNING ||
         currentInvocation.status !== InvocationStatus.RUNNING ||
         currentAttempt.status !== AttemptStatus.STARTED ||
-        !['failed', 'protocol-failed'].includes(terminal.type) ||
+        !['failed', 'cancelled', 'protocol-failed'].includes(terminal.type) ||
+        event.type !==
+          (terminal.type === 'cancelled'
+            ? 'workflow-activity-cancelled'
+            : 'workflow-activity-failed') ||
         terminal.attemptId !== currentAttempt.attemptId ||
         attemptEffects.length !== 0 ||
-        !hasSameCanonicalJson(workflowCursor, materializedFailure.cursor) ||
+        !hasSameCanonicalJson(workflowCursor, materializedTerminal.cursor) ||
         !hasSameCanonicalJson(attempt, {
           ...cloneJsonObject(currentAttempt, 'prior workflow attempt'),
-          status: AttemptStatus.FAILED,
+          status: terminalStatuses.attempt,
           version: currentAttempt.version + 1,
           lastSequence: sequence,
           updatedAt: event.observed_at,
@@ -4904,12 +5310,12 @@ async function applyEvent(
         }) ||
         !hasSameCanonicalJson(invocation, {
           ...expectedInvocationBase,
-          status: InvocationStatus.FAILED,
+          status: terminalStatuses.invocation,
           terminal: terminalSummary,
         }) ||
         !hasSameCanonicalJson(run, {
           ...expectedRunBase,
-          status: RunStatus.FAILED,
+          status: terminalStatuses.run,
         })
       ) {
         throw new ExecutionLedgerProjectionError(
@@ -4944,6 +5350,7 @@ async function applyEvent(
         assertSupportedWorkflowActivityTerminal(
           verifiedEvidence.terminal,
           verifiedEvidence.evidence,
+          currentAttempt.cancellationRequest,
           'persisted uncertain workflow activity evidence',
         );
       } catch {
@@ -4963,10 +5370,16 @@ async function applyEvent(
       const terminal = verifiedEvidence.terminal;
       const terminalSummary = createTerminalSummary(terminal);
       const completed = terminal.type === 'completed';
+      const cancelled = terminal.type === 'cancelled';
+      const nextStep =
+        planPayload.definition.steps[currentCursor.stepIndex + 1];
+      const suppressesContinuation = Boolean(
+        completed && currentRun.cancellationRequest && nextStep,
+      );
       let outputPayload;
       /** @type {Record<string, any>} */
       let materializedTerminal;
-      if (completed) {
+      if (completed && !suppressesContinuation) {
         const outputBinding = workflowCursor.outputs[currentCursor.stepIndex];
         if (
           !outputBinding ||
@@ -4981,8 +5394,6 @@ async function applyEvent(
         outputPayload = await payloadReader.readWorkflowOutput(
           outputBinding.outputRef,
         );
-        const nextStep =
-          planPayload.definition.steps[currentCursor.stepIndex + 1];
         try {
           const nextSelectedOutput = nextStep
             ? selectWorkflowStepOutput(
@@ -5014,6 +5425,28 @@ async function applyEvent(
             'uncertain workflow activity successor derivation mismatch',
           );
         }
+      } else if (completed || cancelled) {
+        if (workflowCursor.outputs[currentCursor.stepIndex]) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'cancelled workflow reconciliation retained a current-step output',
+          );
+        }
+        try {
+          materializedTerminal = {
+            completed: false,
+            cursor: materializeWorkflowActivityCancellation({
+              currentCursor,
+              sequence,
+              observedAt: event.observed_at,
+            }),
+          };
+        } catch {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'uncertain workflow activity cancellation derivation mismatch',
+          );
+        }
       } else {
         try {
           materializedTerminal = materializeUncertainWorkflowActivityFailure({
@@ -5043,9 +5476,8 @@ async function applyEvent(
         'expected reconciled workflow invocation',
       );
       delete expectedReconciledInvocation.uncertainty;
-      expectedReconciledInvocation.status = completed
-        ? InvocationStatus.COMPLETED
-        : InvocationStatus.FAILED;
+      const terminalStatuses = statusesForTerminal(terminal);
+      expectedReconciledInvocation.status = terminalStatuses.invocation;
       expectedReconciledInvocation.terminal = terminalSummary;
       if (
         !uncertaintyBySequence ||
@@ -5063,10 +5495,13 @@ async function applyEvent(
         reconciliation.fencingToken !== currentAttempt.fencingToken ||
         event.fence.coordinatorEpoch !== reconciliation.coordinatorEpoch ||
         event.fence.invocationGeneration !== reconciliation.generation ||
-        !['completed', 'failed', 'protocol-failed'].includes(terminal.type) ||
+        !['completed', 'failed', 'cancelled', 'protocol-failed'].includes(
+          terminal.type,
+        ) ||
         terminal.attemptId !== currentAttempt.attemptId ||
         !hasSameCanonicalJson(reconciliation.terminal, terminalSummary) ||
         (completed &&
+          !suppressesContinuation &&
           !hasSameCanonicalJson(outputPayload?.value, terminal.result)) ||
         !hasExactWorkflowActivityUncertaintyEventLink({
           run: currentRun,
@@ -5081,11 +5516,13 @@ async function applyEvent(
         !hasSameCanonicalJson(invocation, expectedReconciledInvocation) ||
         !hasSameCanonicalJson(run, {
           ...expectedRunBase,
-          status: completed
-            ? materializedTerminal.completed
-              ? RunStatus.COMPLETED
-              : RunStatus.RUNNING
-            : RunStatus.FAILED,
+          status: suppressesContinuation
+            ? RunStatus.CANCELLED
+            : completed
+              ? materializedTerminal.completed
+                ? RunStatus.COMPLETED
+                : RunStatus.RUNNING
+              : terminalStatuses.run,
         })
       ) {
         throw new ExecutionLedgerProjectionError(
@@ -5093,11 +5530,11 @@ async function applyEvent(
           'invalid uncertain workflow activity reconciliation',
         );
       }
-      if (!completed) {
+      if (!completed || suppressesContinuation) {
         if (nextInvocation) {
           throw new ExecutionLedgerProjectionError(
             runId,
-            'failed reconciled workflow retains a successor invocation',
+            'terminal reconciled workflow retains a successor invocation',
           );
         }
       } else if (materializedTerminal.completed) {
@@ -7180,7 +7617,10 @@ function transitionResult(
     run: cloneJsonObject(state.run, 'run result'),
     invocation: cloneJsonObject(invocation, 'invocation result'),
   };
-  if (receipt.type.startsWith('workflow-activity-')) {
+  if (
+    receipt.type.startsWith('workflow-activity-') ||
+    receipt.type === 'workflow-cancellation-requested'
+  ) {
     const event = state.events[receipt.sequence - 1];
     if (!event || event.event_id !== receipt.event_id) {
       throw new ExecutionLedgerProjectionError(
@@ -7210,17 +7650,27 @@ function transitionResult(
       (receipt.type === 'workflow-activity-uncertainty-reconciled' &&
         snapshots.reconciliation?.terminal.type === 'completed');
     if (completedDecision) {
-      const output = snapshots.workflowCursor.outputs.at(-1);
-      if (!output) {
+      const priorEvent = state.events[receipt.sequence - 2];
+      const priorCursor = priorEvent
+        ? eventSnapshots(priorEvent, state.run.runId).workflowCursor
+        : undefined;
+      const output = priorCursor
+        ? snapshots.workflowCursor.outputs[priorCursor.stepIndex]
+        : undefined;
+      if (output) {
+        result.outputRef = cloneJsonObject(
+          output.outputRef,
+          'workflow output reference result',
+        );
+      } else if (
+        snapshots.workflowCursor.disposition !==
+        WorkflowCursorDisposition.CANCELLED
+      ) {
         throw new ExecutionLedgerProjectionError(
           state.run.runId,
           'workflow success result output is unavailable',
         );
       }
-      result.outputRef = cloneJsonObject(
-        output.outputRef,
-        'workflow output reference result',
-      );
     }
   }
   if (attempt) result.attempt = cloneJsonObject(attempt, 'attempt result');
@@ -7270,6 +7720,41 @@ function cancellationNoMutationResult(state, invocation, attempt, outcome) {
     applied: /** @type {const} */ (false),
     outcome,
     run: cloneJsonObject(state.run, 'run result'),
+    invocation: cloneJsonObject(invocation, 'invocation result'),
+  };
+  if (attempt) {
+    /** @type {Record<string, any>} */ (result).attempt = cloneJsonObject(
+      attempt,
+      'attempt result',
+    );
+  }
+  return result;
+}
+
+/**
+ * Return a cursor-aware no-mutation cancellation result for an aggregate
+ * whose terminal state already won the run-head race.
+ * @param {Record<string, any>} state - Verified folded workflow state.
+ * @param {Record<string, any>} invocation - Current cursor-bound invocation.
+ * @param {Record<string, any> | undefined} attempt - Current generation attempt.
+ * @returns {WorkflowCancellationResult} - Current terminal authority.
+ */
+function workflowCancellationNoMutationResult(state, invocation, attempt) {
+  if (!state.workflowCursor) {
+    throw new ExecutionLedgerProjectionError(
+      state.run.runId,
+      'workflow cancellation result cursor is unavailable',
+    );
+  }
+  const result = {
+    applied: /** @type {const} */ (false),
+    outcome: /** @type {const} */ ('terminal-authoritative'),
+    cancellationDeliveryRequired: false,
+    run: cloneJsonObject(state.run, 'run result'),
+    workflowCursor: cloneJsonObject(
+      state.workflowCursor,
+      'workflow cursor result',
+    ),
     invocation: cloneJsonObject(invocation, 'invocation result'),
   };
   if (attempt) {
@@ -7598,28 +8083,47 @@ function assertSupportedManualTerminal(
 
 /**
  * Restrict workflow activity terminals to outcomes with implemented cursor
- * semantics. Workflow cancellation has no durable cursor-aware authority yet:
- * a transcript may be structurally valid after a host cancel frame, but it
- * cannot become workflow authority until a persisted cancellation decision
- * authorizes that frame.
+ * semantics and require an exact attempt-bound durable request for every host
+ * cancel frame. A protocol failure after an authorized cancel remains
+ * ambiguous and must enter the separate uncertainty transition.
  * @param {Record<string, any>} terminal - Verified Activity Protocol terminal.
  * @param {Record<string, any>} evidence - Fully verified attempt evidence.
+ * @param {Record<string, any> | undefined} cancellationRequest - Exact request retained by the physical attempt before uncertainty.
  * @param {string} label - Human-readable boundary label.
  * @returns {void}
  */
-function assertSupportedWorkflowActivityTerminal(terminal, evidence, label) {
+function assertSupportedWorkflowActivityTerminal(
+  terminal,
+  evidence,
+  cancellationRequest,
+  label,
+) {
   if (!SUPPORTED_WORKFLOW_ACTIVITY_TERMINAL_TYPES.has(terminal.type)) {
     throw new TypeError(
       `${label}.terminal.type '${terminal.type}' requires a durable workflow decision that is not implemented.`,
     );
   }
-  if (
-    evidence.frames.some(
-      (/** @type {Record<string, any>} */ frame) => frame.type === 'cancel',
-    )
-  ) {
+  const cancelFrames = evidence.frames.filter(
+    (/** @type {Record<string, any>} */ frame) => frame.type === 'cancel',
+  );
+  const hasAuthorizedCancelFrame =
+    cancelFrames.length === 1 &&
+    cancellationRequest &&
+    cancelFrames[0].attemptId === terminal.attemptId &&
+    hasSameCanonicalJson(cancelFrames[0].reason, cancellationRequest.reason);
+  if (cancelFrames.length > 0 && !hasAuthorizedCancelFrame) {
     throw new TypeError(
       `${label} contains a host cancel frame, but workflow cancellation authority is not implemented.`,
+    );
+  }
+  if (terminal.type === 'protocol-failed' && cancelFrames.length > 0) {
+    throw new TypeError(
+      `${label}.terminal.type 'protocol-failed' after cancellation does not prove that the begun handler stopped.`,
+    );
+  }
+  if (terminal.type === 'cancelled' && !hasAuthorizedCancelFrame) {
+    throw new TypeError(
+      `${label}.terminal.type 'cancelled' requires the exact prior workflow cancellation request and accepted host cancel reason.`,
     );
   }
 }
@@ -11963,6 +12467,481 @@ export function createExecutionLedger({
   }
 
   /**
+   * Persist the one first-wins cancellation request for the current workflow
+   * activity. Runnable and claimed work terminalize immediately; begun work
+   * retains its physical state until exact protocol evidence settles it; an
+   * uncertain activation retains ambiguity while preventing any successor.
+   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, expectedVersion: number, expectedGeneration: number, transitionId: string, requestId: string, reason: {code: string, name: string, message: string, details: Record<string, any>}, attemptId?: string, fencingToken?: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded durable cancellation request.
+   * @returns {Promise<WorkflowCancellationResult>} - Accepted request, stable replay, or terminal authority.
+   */
+  async function requestWorkflowRunCancellation(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'requestWorkflowRunCancellation',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'cursor',
+        'expectedVersion',
+        'expectedGeneration',
+        'transitionId',
+        'requestId',
+        'reason',
+        'attemptId',
+        'fencingToken',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'requestWorkflowRunCancellation',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'requestWorkflowRunCancellation.invocationId',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'requestWorkflowRunCancellation.cursor',
+    );
+    const expectedGeneration = assertNonnegativeSafeInteger(
+      value.expectedGeneration,
+      'requestWorkflowRunCancellation.expectedGeneration',
+    );
+    const requestId = assertOpaqueId(
+      value.requestId,
+      'requestWorkflowRunCancellation.requestId',
+    );
+    const reason = normalizeCancellationReason(
+      value.reason,
+      'requestWorkflowRunCancellation.reason',
+    );
+    const hasAttemptId = Object.prototype.hasOwnProperty.call(
+      value,
+      'attemptId',
+    );
+    const hasFencingToken = Object.prototype.hasOwnProperty.call(
+      value,
+      'fencingToken',
+    );
+    if (hasAttemptId !== hasFencingToken) {
+      throw new TypeError(
+        'requestWorkflowRunCancellation.attemptId and fencingToken must be supplied together.',
+      );
+    }
+    const requestedAttemptId = hasAttemptId
+      ? assertOpaqueId(
+          value.attemptId,
+          'requestWorkflowRunCancellation.attemptId',
+        )
+      : undefined;
+    const requestedFencingToken = hasFencingToken
+      ? assertOpaqueId(
+          value.fencingToken,
+          'requestWorkflowRunCancellation.fencingToken',
+        )
+      : undefined;
+
+    /**
+     * @param {Record<string, any>} durableState - Fresh verified state.
+     * @returns {Promise<{cursor: Record<string, any>, invocation: Record<string, any>, currentAttempt?: Record<string, any>, result?: WorkflowCancellationResult}>} - Current authority and optional no-append result.
+     */
+    async function classifyDurableCancellation(durableState) {
+      if (
+        durableState.run.trigger?.kind !== 'workflow' ||
+        !durableState.workflowCursor
+      ) {
+        throw new ExecutionLedgerConflictError(
+          common.runId,
+          'requestWorkflowRunCancellation requires a workflow run',
+        );
+      }
+      const cursor = durableState.workflowCursor;
+      const durableInvocation = durableState.invocations.get(invocationId);
+      if (!durableInvocation) {
+        throw new ExecutionLedgerConflictError(
+          common.runId,
+          'workflow invocation does not exist',
+        );
+      }
+      const durableAttempt = getCurrentGenerationAttempt(
+        durableState,
+        durableInvocation,
+        common.runId,
+      );
+      const retainedRequest = durableState.run.cancellationRequest;
+      if (retainedRequest) {
+        const attemptHasRequest = Boolean(
+          durableAttempt &&
+          Object.prototype.hasOwnProperty.call(
+            durableAttempt,
+            'cancellationRequest',
+          ),
+        );
+        if (
+          !hasSameCanonicalJson(
+            durableInvocation.cancellationRequest,
+            retainedRequest,
+          ) ||
+          (attemptHasRequest &&
+            !hasSameCanonicalJson(
+              durableAttempt?.cancellationRequest,
+              retainedRequest,
+            )) ||
+          (!attemptHasRequest &&
+            durableAttempt &&
+            durableAttempt.status !== AttemptStatus.ABANDONED)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            common.runId,
+            'retained workflow cancellation request projection mismatch',
+          );
+        }
+        const retainedReceipt = await getTransitionReceipt(
+          db,
+          resolvedTableName,
+          common.runId,
+          retainedRequest.transitionId,
+        );
+        if (
+          !retainedReceipt ||
+          retainedReceipt.type !== 'workflow-cancellation-requested'
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            common.runId,
+            'retained workflow cancellation request receipt missing',
+          );
+        }
+        if (
+          requestId === retainedRequest.requestId &&
+          (!hasSameCanonicalJson(common.actor, retainedRequest.actor) ||
+            !hasSameCanonicalJson(reason, retainedRequest.reason))
+        ) {
+          throw new ExecutionLedgerTransitionConflictError(
+            common.runId,
+            common.transitionId,
+          );
+        }
+        if (common.transitionId === retainedRequest.transitionId) {
+          const replayedRequestDigest = createTransitionRequestDigest(
+            'workflow-cancellation-requested',
+            {
+              runId: common.runId,
+              invocationId,
+              cursor: guard,
+              expectedGeneration,
+              expectedVersion: common.expectedVersion,
+              transitionId: common.transitionId,
+              requestId,
+              reason,
+              actor: common.actor,
+              coordinatorEpoch: common.coordinatorEpoch,
+              ...(requestedAttemptId !== undefined &&
+              requestedFencingToken !== undefined
+                ? {
+                    attemptId: requestedAttemptId,
+                    fencingToken: requestedFencingToken,
+                  }
+                : {}),
+            },
+          );
+          if (retainedReceipt.request_digest !== replayedRequestDigest) {
+            throw new ExecutionLedgerTransitionConflictError(
+              common.runId,
+              common.transitionId,
+            );
+          }
+        }
+        const replayed = await existingTransitionResult(
+          durableState,
+          /** @type {Record<string, any>} */ (retainedReceipt),
+        );
+        return {
+          cursor,
+          invocation: durableInvocation,
+          ...(durableAttempt ? { currentAttempt: durableAttempt } : {}),
+          result: /** @type {WorkflowCancellationResult} */ ({
+            ...replayed,
+            ...(replayed.attempt || !durableAttempt
+              ? {}
+              : {
+                  attempt: cloneJsonObject(
+                    durableAttempt,
+                    'workflow cancellation attempt result',
+                  ),
+                }),
+            outcome: 'cancellation-requested',
+            cancellationDeliveryRequired: false,
+          }),
+        };
+      }
+      if (
+        [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED].includes(
+          durableState.run.status,
+        )
+      ) {
+        return {
+          cursor,
+          invocation: durableInvocation,
+          ...(durableAttempt ? { currentAttempt: durableAttempt } : {}),
+          result: workflowCancellationNoMutationResult(
+            durableState,
+            durableInvocation,
+            durableAttempt,
+          ),
+        };
+      }
+      return {
+        cursor,
+        invocation: durableInvocation,
+        ...(durableAttempt ? { currentAttempt: durableAttempt } : {}),
+      };
+    }
+
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const classified = await classifyDurableCancellation(state);
+    if (classified.result) return classified.result;
+    const cursor = classified.cursor;
+    const invocation = classified.invocation;
+    const currentAttempt = classified.currentAttempt;
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    if (
+      cursor.invocationId !== invocationId ||
+      !hasSameCanonicalJson(workflowCursorGuard(cursor), guard) ||
+      !invocation.workflow ||
+      !hasSameCanonicalJson(invocation.workflow, {
+        workflowId: cursor.workflowId,
+        planId: cursor.planId,
+        continuationId: cursor.continuationId,
+        stepId: cursor.stepId,
+        stepIndex: cursor.stepIndex,
+      })
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'requestWorkflowRunCancellation cursor is not current',
+      );
+    }
+    if (invocation.generation !== expectedGeneration) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'stale invocation generation',
+      );
+    }
+    if (currentAttempt) {
+      if (
+        requestedAttemptId === undefined ||
+        requestedFencingToken === undefined ||
+        requestedAttemptId !== currentAttempt.attemptId
+      ) {
+        throw new ExecutionLedgerConflictError(
+          common.runId,
+          'current workflow attempt identity is required',
+        );
+      }
+      assertCurrentAttemptFence(
+        currentAttempt,
+        {
+          coordinatorEpoch: common.coordinatorEpoch,
+          fencingToken: requestedFencingToken,
+          generation: expectedGeneration,
+        },
+        common.runId,
+      );
+    } else if (
+      requestedAttemptId !== undefined ||
+      requestedFencingToken !== undefined ||
+      common.coordinatorEpoch !== 0
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow cancellation supplied a stale attempt fence',
+      );
+    }
+    await verifyWorkflowCursorActivity(
+      state,
+      cursor,
+      invocation,
+      'requestWorkflowRunCancellation',
+    );
+
+    const isRunnable =
+      state.run.status === RunStatus.RUNNING &&
+      cursor.disposition === WorkflowCursorDisposition.ACTIVITY_RUNNABLE &&
+      invocation.status === InvocationStatus.RUNNABLE &&
+      (!currentAttempt || currentAttempt.status === AttemptStatus.ABANDONED);
+    const isClaimed =
+      state.run.status === RunStatus.RUNNING &&
+      cursor.disposition === WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+      invocation.status === InvocationStatus.RUNNING &&
+      currentAttempt?.status === AttemptStatus.CLAIMED;
+    const isStarted =
+      state.run.status === RunStatus.RUNNING &&
+      cursor.disposition === WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+      invocation.status === InvocationStatus.RUNNING &&
+      currentAttempt?.status === AttemptStatus.STARTED;
+    const isUncertain =
+      state.run.status === RunStatus.BLOCKED &&
+      cursor.disposition === WorkflowCursorDisposition.ACTIVITY_UNCERTAIN &&
+      invocation.status === InvocationStatus.UNCERTAIN &&
+      currentAttempt?.status === AttemptStatus.ABANDONED;
+    if (!isRunnable && !isClaimed && !isStarted && !isUncertain) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow run cannot accept cancellation in its current state',
+      );
+    }
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < cursor.updatedAt ||
+      (currentAttempt && common.observedAt < currentAttempt.updatedAt)
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow cancellation observation precedes durable state',
+      );
+    }
+
+    const cancellationRequest = {
+      requestId,
+      transitionId: common.transitionId,
+      requestedAt: common.observedAt,
+      actor: common.actor,
+      reason,
+    };
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-cancellation-requested',
+      {
+        runId: common.runId,
+        invocationId,
+        cursor: guard,
+        expectedGeneration,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        requestId,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+        ...(currentAttempt
+          ? {
+              attemptId: currentAttempt.attemptId,
+              fencingToken: currentAttempt.fencingToken,
+            }
+          : {}),
+      },
+    );
+    const sequence = state.head.sequence + 1;
+    const terminalizes = isRunnable || isClaimed;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      status: terminalizes ? RunStatus.CANCELLED : state.run.status,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      cancellationRequest,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(invocation, 'current workflow invocation'),
+      status: terminalizes ? InvocationStatus.CANCELLED : invocation.status,
+      version: invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      cancellationRequest,
+    };
+    const nextWorkflowCursor = terminalizes
+      ? materializeWorkflowActivityCancellation({
+          currentCursor: cursor,
+          sequence,
+          observedAt: common.observedAt,
+        })
+      : materializeWorkflowCancellationIntent({
+          currentCursor: cursor,
+          sequence,
+          observedAt: common.observedAt,
+        });
+    const nextAttempt =
+      currentAttempt && (isClaimed || isStarted)
+        ? {
+            ...cloneJsonObject(currentAttempt, 'current workflow attempt'),
+            status: isClaimed ? AttemptStatus.CANCELLED : AttemptStatus.STARTED,
+            version: currentAttempt.version + 1,
+            lastSequence: sequence,
+            updatedAt: common.observedAt,
+            cancellationRequest,
+          }
+        : undefined;
+    if (isStarted && nextAttempt) {
+      assertWorkflowStoppedAttemptClosureFits({
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: nextWorkflowCursor,
+        attempt: nextAttempt,
+        label: 'requestWorkflowRunCancellation',
+      });
+    }
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-cancellation-requested',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: currentAttempt?.coordinatorEpoch ?? 0,
+        invocationGeneration: expectedGeneration,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: nextWorkflowCursor,
+        ...(nextAttempt ? { attempt: nextAttempt } : {}),
+      },
+    );
+    let result;
+    try {
+      result = await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        nextWorkflowCursor,
+        ...(nextAttempt ? { nextAttempt, currentAttempt } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+      const racedState = await readVerifiedRun(common.runId);
+      if (!racedState) throw error;
+      const raced = await classifyDurableCancellation(racedState);
+      if (raced.result) return raced.result;
+      throw error;
+    }
+    return /** @type {WorkflowCancellationResult} */ ({
+      ...result,
+      ...(result.attempt || !currentAttempt
+        ? {}
+        : {
+            attempt: cloneJsonObject(
+              currentAttempt,
+              'workflow cancellation attempt result',
+            ),
+          }),
+      outcome: 'cancellation-requested',
+      cancellationDeliveryRequired: Boolean(result.applied && isStarted),
+    });
+  }
+
+  /**
    * Claim one exact runnable workflow activity under both the run head and
    * orchestration cursor CAS. The returned attempt remains undispatchable
    * until markWorkflowActivityStarted persists the irreversible boundary.
@@ -12657,7 +13636,7 @@ export function createExecutionLedger({
       value.generation,
       'markWorkflowActivityAttemptUncertain.generation',
     );
-    const reason = cloneInlinePayload(
+    const reason = cloneWorkflowAttemptUncertaintyReason(
       value.reason,
       'markWorkflowActivityAttemptUncertain.reason',
     );
@@ -12890,9 +13869,11 @@ export function createExecutionLedger({
         existingReceipt,
       );
       if (
-        !['workflow-activity-succeeded', 'workflow-activity-failed'].includes(
-          existingReceipt.type,
-        ) ||
+        ![
+          'workflow-activity-succeeded',
+          'workflow-activity-failed',
+          'workflow-activity-cancelled',
+        ].includes(existingReceipt.type) ||
         existingReceipt.invocation_id !== invocationId ||
         existingReceipt.attempt_id !== attemptId
       ) {
@@ -12942,6 +13923,7 @@ export function createExecutionLedger({
       assertSupportedWorkflowActivityTerminal(
         verifiedEvidence.terminal,
         verifiedEvidence.evidence,
+        persistedAttempt.cancellationRequest,
         'commitVerifiedWorkflowActivityTerminal.evidence',
       );
       await assertAttemptEvidenceMatchesManagedEffects(
@@ -12963,7 +13945,9 @@ export function createExecutionLedger({
       const eventType =
         terminal.type === 'completed'
           ? 'workflow-activity-succeeded'
-          : 'workflow-activity-failed';
+          : terminal.type === 'cancelled'
+            ? 'workflow-activity-cancelled'
+            : 'workflow-activity-failed';
       if (
         existingReceipt.type !== eventType ||
         terminal.attemptId !== attemptId ||
@@ -12981,26 +13965,34 @@ export function createExecutionLedger({
       let successor;
       if (terminal.type === 'completed') {
         const output = persistedCursor.outputs[priorCursor.stepIndex];
-        if (
-          !output ||
-          output.stepId !== priorCursor.stepId ||
-          output.stepIndex !== priorCursor.stepIndex
+        if (output) {
+          if (
+            output.stepId !== priorCursor.stepId ||
+            output.stepIndex !== priorCursor.stepIndex
+          ) {
+            throw new ExecutionLedgerProjectionError(
+              common.runId,
+              'workflow success receipt output is invalid',
+            );
+          }
+          const outputPayload = await payloadReader.readWorkflowOutput(
+            output.outputRef,
+          );
+          if (!hasSameCanonicalJson(outputPayload.value, terminal.result)) {
+            throw new ExecutionLedgerTransitionConflictError(
+              common.runId,
+              common.transitionId,
+            );
+          }
+          outputRef = output.outputRef;
+        } else if (
+          persistedCursor.disposition !== WorkflowCursorDisposition.CANCELLED
         ) {
           throw new ExecutionLedgerProjectionError(
             common.runId,
             'workflow success receipt output is unavailable',
           );
         }
-        const outputPayload = await payloadReader.readWorkflowOutput(
-          output.outputRef,
-        );
-        if (!hasSameCanonicalJson(outputPayload.value, terminal.result)) {
-          throw new ExecutionLedgerTransitionConflictError(
-            common.runId,
-            common.transitionId,
-          );
-        }
-        outputRef = output.outputRef;
         successor = snapshots.nextInvocation
           ? {
               continuationId: snapshots.nextInvocation.workflow?.continuationId,
@@ -13031,7 +14023,9 @@ export function createExecutionLedger({
         transitionId: common.transitionId,
         terminal: createTerminalSummary(terminal),
         evidenceRef: persistedAttempt.evidenceRef,
-        ...(terminal.type === 'completed' ? { outputRef, successor } : {}),
+        ...(terminal.type === 'completed'
+          ? { outputRef: outputRef ?? null, successor }
+          : {}),
         actor: common.actor,
         coordinatorEpoch: common.coordinatorEpoch,
       });
@@ -13111,6 +14105,7 @@ export function createExecutionLedger({
     assertSupportedWorkflowActivityTerminal(
       verifiedEvidence.terminal,
       verifiedEvidence.evidence,
+      attempt.cancellationRequest,
       'commitVerifiedWorkflowActivityTerminal.evidence',
     );
     await assertAttemptEvidenceMatchesManagedEffects(
@@ -13138,10 +14133,15 @@ export function createExecutionLedger({
       label: 'commitVerifiedWorkflowActivityTerminal.evidenceRef',
     });
     const sequence = state.head.sequence + 1;
-    let outputRef;
+    const nextStep =
+      verified.planPayload.definition.steps[authority.cursor.stepIndex + 1];
+    const suppressesContinuation = Boolean(
+      terminal.type === 'completed' && attempt.cancellationRequest && nextStep,
+    );
+    let outputRef = null;
     /** @type {Record<string, any>} */
     let materialized;
-    if (terminal.type === 'completed') {
+    if (terminal.type === 'completed' && !suppressesContinuation) {
       const outputPayload = normalizeWorkflowOutputPayload(
         {
           schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
@@ -13155,8 +14155,6 @@ export function createExecutionLedger({
         payloadSchema: WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
         label: 'commitVerifiedWorkflowActivityTerminal.outputRef',
       });
-      const nextStep =
-        verified.planPayload.definition.steps[authority.cursor.stepIndex + 1];
       let selectedOutput;
       if (
         nextStep?.kind === 'activity' &&
@@ -13181,6 +14179,15 @@ export function createExecutionLedger({
         sequence,
         observedAt: common.observedAt,
       });
+    } else if (terminal.type === 'completed' || terminal.type === 'cancelled') {
+      materialized = {
+        completed: false,
+        cursor: materializeWorkflowActivityCancellation({
+          currentCursor: authority.cursor,
+          sequence,
+          observedAt: common.observedAt,
+        }),
+      };
     } else {
       materialized = materializeWorkflowActivityFailure({
         currentCursor: authority.cursor,
@@ -13227,12 +14234,15 @@ export function createExecutionLedger({
     const eventType =
       terminal.type === 'completed'
         ? 'workflow-activity-succeeded'
-        : 'workflow-activity-failed';
+        : terminal.type === 'cancelled'
+          ? 'workflow-activity-cancelled'
+          : 'workflow-activity-failed';
     const terminalStatuses = statusesForTerminal(terminal);
     const nextRun = {
       ...cloneJsonObject(state.run, 'current workflow run'),
-      status:
-        terminal.type === 'completed'
+      status: suppressesContinuation
+        ? RunStatus.CANCELLED
+        : terminal.type === 'completed'
           ? materialized.completed
             ? RunStatus.COMPLETED
             : RunStatus.RUNNING
@@ -13433,7 +14443,10 @@ export function createExecutionLedger({
       const uncertaintySnapshots = uncertaintyEvent
         ? eventSnapshots(uncertaintyEvent, common.runId)
         : undefined;
-      const priorCursor = uncertaintySnapshots?.workflowCursor;
+      const priorEvent = receiptState.events[existingReceipt.sequence - 2];
+      const priorCursor = priorEvent
+        ? eventSnapshots(priorEvent, common.runId).workflowCursor
+        : undefined;
       if (
         !existingEvent ||
         existingEvent.event_id !== existingReceipt.event_id ||
@@ -13471,6 +14484,7 @@ export function createExecutionLedger({
       assertSupportedWorkflowActivityTerminal(
         verifiedEvidence.terminal,
         verifiedEvidence.evidence,
+        persistedAttempt.cancellationRequest,
         'reconcileUncertainWorkflowActivityAttempt.evidence',
       );
       await assertAttemptEvidenceMatchesManagedEffects(
@@ -13505,26 +14519,34 @@ export function createExecutionLedger({
       let successor = null;
       if (terminal.type === 'completed') {
         const outputBinding = persistedCursor.outputs[priorCursor.stepIndex];
-        if (
-          !outputBinding ||
-          outputBinding.stepId !== priorCursor.stepId ||
-          outputBinding.stepIndex !== priorCursor.stepIndex
+        if (outputBinding) {
+          if (
+            outputBinding.stepId !== priorCursor.stepId ||
+            outputBinding.stepIndex !== priorCursor.stepIndex
+          ) {
+            throw new ExecutionLedgerProjectionError(
+              common.runId,
+              'workflow reconciliation receipt output is invalid',
+            );
+          }
+          const outputPayload = await payloadReader.readWorkflowOutput(
+            outputBinding.outputRef,
+          );
+          if (!hasSameCanonicalJson(outputPayload.value, terminal.result)) {
+            throw new ExecutionLedgerTransitionConflictError(
+              common.runId,
+              common.transitionId,
+            );
+          }
+          outputRef = outputBinding.outputRef;
+        } else if (
+          persistedCursor.disposition !== WorkflowCursorDisposition.CANCELLED
         ) {
           throw new ExecutionLedgerProjectionError(
             common.runId,
             'workflow reconciliation receipt output is unavailable',
           );
         }
-        const outputPayload = await payloadReader.readWorkflowOutput(
-          outputBinding.outputRef,
-        );
-        if (!hasSameCanonicalJson(outputPayload.value, terminal.result)) {
-          throw new ExecutionLedgerTransitionConflictError(
-            common.runId,
-            common.transitionId,
-          );
-        }
-        outputRef = outputBinding.outputRef;
         successor = snapshots.nextInvocation
           ? {
               continuationId: snapshots.nextInvocation.workflow?.continuationId,
@@ -13661,6 +14683,7 @@ export function createExecutionLedger({
     assertSupportedWorkflowActivityTerminal(
       verifiedEvidence.terminal,
       verifiedEvidence.evidence,
+      attempt.cancellationRequest,
       'reconcileUncertainWorkflowActivityAttempt.evidence',
     );
     await assertAttemptEvidenceMatchesManagedEffects(
@@ -13683,10 +14706,17 @@ export function createExecutionLedger({
       label: 'reconcileUncertainWorkflowActivityAttempt.evidenceRef',
     });
     const sequence = state.head.sequence + 1;
+    const nextStep =
+      verified.planPayload.definition.steps[authority.cursor.stepIndex + 1];
+    const suppressesContinuation = Boolean(
+      terminal.type === 'completed' &&
+      state.run.cancellationRequest &&
+      nextStep,
+    );
     let outputRef = null;
     /** @type {Record<string, any>} */
     let materialized;
-    if (terminal.type === 'completed') {
+    if (terminal.type === 'completed' && !suppressesContinuation) {
       const outputPayload = normalizeWorkflowOutputPayload(
         {
           schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
@@ -13700,8 +14730,6 @@ export function createExecutionLedger({
         payloadSchema: WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
         label: 'reconcileUncertainWorkflowActivityAttempt.outputRef',
       });
-      const nextStep =
-        verified.planPayload.definition.steps[authority.cursor.stepIndex + 1];
       let selectedOutput;
       if (
         nextStep?.kind === 'activity' &&
@@ -13726,6 +14754,15 @@ export function createExecutionLedger({
         sequence,
         observedAt: common.observedAt,
       });
+    } else if (terminal.type === 'completed' || terminal.type === 'cancelled') {
+      materialized = {
+        completed: false,
+        cursor: materializeWorkflowActivityCancellation({
+          currentCursor: authority.cursor,
+          sequence,
+          observedAt: common.observedAt,
+        }),
+      };
     } else {
       materialized = materializeUncertainWorkflowActivityFailure({
         currentCursor: authority.cursor,
@@ -13772,8 +14809,9 @@ export function createExecutionLedger({
     const terminalStatuses = statusesForTerminal(terminal);
     const nextRun = {
       ...cloneJsonObject(state.run, 'current workflow run'),
-      status:
-        terminal.type === 'completed'
+      status: suppressesContinuation
+        ? RunStatus.CANCELLED
+        : terminal.type === 'completed'
           ? materialized.completed
             ? RunStatus.COMPLETED
             : RunStatus.RUNNING
@@ -17651,6 +18689,7 @@ export function createExecutionLedger({
     repairReadyWork,
     rebuildRun,
     requestManualRunCancellation,
+    requestWorkflowRunCancellation,
     settleStoppedAttemptManagedEffects,
     startManagedEffectSuccessor,
   };
@@ -17684,6 +18723,7 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} reconcileUncertainManualAttempt - Resolves one retained uncertain attempt from exact durable evidence.
  * @property {(...args: any[]) => Promise<any>} abandonUnstartedAttempt - Safely releases an unstarted claim.
  * @property {(...args: any[]) => Promise<any>} requestManualRunCancellation - Persists the first cancellation request or returns authoritative terminal/uncertain state.
+ * @property {(...args: any[]) => Promise<any>} requestWorkflowRunCancellation - Persists one cursor-aware first-wins workflow cancellation request.
  * @property {(runId: string) => Promise<Record<string, any> | null>} getRun - Reads a verified run projection.
  * @property {(runId: string, invocationId: string) => Promise<Record<string, any> | null>} getInvocation - Reads a verified invocation projection.
  * @property {(runId: string, invocationId: string, attemptId: string) => Promise<Record<string, any> | null>} getAttempt - Reads a verified attempt projection.

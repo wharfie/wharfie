@@ -37,7 +37,10 @@ import {
   reconcileManualLedgerActivity,
   recoverManualLedgerActivity,
 } from '../manual-ledger-run.js';
-import { recoverWorkflowLedgerActivity } from '../workflow-ledger-run.js';
+import {
+  recoverWorkflowLedgerActivity,
+  requestWorkflowLedgerRunCancellation,
+} from '../workflow-ledger-run.js';
 import {
   assertApplicationStateStoreIsolation,
   openApplicationStateDB,
@@ -530,6 +533,25 @@ function getManualInvocation(view) {
     (/** @type {Record<string, any>} */ invocation) =>
       invocation.invocationId === 'manual',
   );
+}
+
+/**
+ * Resolve the invocation whose state belongs in a cancellation response.
+ * Workflow invocation IDs are cursor identities rather than the historical
+ * `manual` constant, so cancellation must never report an unrelated or empty
+ * status for a valid workflow target.
+ * @param {Record<string, any>} view - Verified exact ledger run.
+ * @returns {Record<string, any> | undefined} - Current cancellable invocation.
+ */
+function getCancellationInvocation(view) {
+  if (view.run.trigger?.kind !== 'workflow') return getManualInvocation(view);
+  const invocationId = view.workflowCursor?.invocationId;
+  return typeof invocationId === 'string'
+    ? view.invocations.find(
+        (/** @type {Record<string, any>} */ invocation) =>
+          invocation.invocationId === invocationId,
+      )
+    : undefined;
 }
 
 /**
@@ -1537,14 +1559,25 @@ export async function recoverStoppedManagedEffectsAtOperatorBoundary(options) {
 
 /**
  * @param {Record<string, any>} view - Verified exact ledger run.
- * @returns {'terminal-authoritative'|'outcome-uncertain'|undefined} - Local no-delivery classification.
+ * Workflow cancellation is allowed to add a no-continuation fence to an
+ * uncertain activity, so only an already-retained request is classified
+ * locally in that state. Manual cancellation keeps its historical behavior.
+ * @returns {'cancellation-requested'|'terminal-authoritative'|'outcome-uncertain'|undefined} - Local no-delivery classification.
  */
 function classifyNonDeliverableCancellation(view) {
   if (isTerminalRun(view.run)) {
+    if (view.run.trigger?.kind === 'workflow' && view.run.cancellationRequest) {
+      return OwnerCancellationOutcome.CANCELLATION_REQUESTED;
+    }
     return OwnerCancellationOutcome.TERMINAL_AUTHORITATIVE;
   }
-  const invocation = getManualInvocation(view);
+  const invocation = getCancellationInvocation(view);
   if (view.run.status === 'BLOCKED' && invocation?.status === 'UNCERTAIN') {
+    if (view.run.trigger?.kind === 'workflow') {
+      return view.run.cancellationRequest
+        ? OwnerCancellationOutcome.CANCELLATION_REQUESTED
+        : undefined;
+    }
     return OwnerCancellationOutcome.OUTCOME_UNCERTAIN;
   }
   return undefined;
@@ -1587,7 +1620,7 @@ function createCancellationOperatorResponse(input) {
 /**
  * @param {Record<string, any>} view - Verified exact ledger run.
  * @param {string} requestId - Stable cancellation request identity.
- * @param {'terminal-authoritative'|'outcome-uncertain'} outcome - Current authority.
+ * @param {'cancellation-requested'|'terminal-authoritative'|'outcome-uncertain'} outcome - Current authority.
  * @returns {ReturnType<typeof createCancellationOperatorResponse>} - Safe no-delivery result.
  */
 function createNonDeliverableCancellationResponse(view, requestId, outcome) {
@@ -1597,7 +1630,7 @@ function createNonDeliverableCancellationResponse(view, requestId, outcome) {
     outcome,
     delivery: 'not-required',
     runStatus: view.run.status,
-    invocationStatus: getManualInvocation(view)?.status,
+    invocationStatus: getCancellationInvocation(view)?.status,
   });
 }
 
@@ -1612,7 +1645,11 @@ function createNonDeliverableCancellationResponse(view, requestId, outcome) {
  */
 function isSupportedOwnerCancellationResult(outcome, delivery) {
   if (outcome === OwnerCancellationOutcome.CANCELLATION_REQUESTED) {
-    return delivery === 'started' || delivery === 'not-delivered';
+    return (
+      delivery === 'started' ||
+      delivery === 'not-delivered' ||
+      delivery === 'not-required'
+    );
   }
   if (
     outcome === OwnerCancellationOutcome.TERMINAL_AUTHORITATIVE ||
@@ -1736,10 +1773,82 @@ function classifyOwnerCommandError(error) {
 }
 
 /**
+ * Convert the source-free workflow cancellation helper into the deliberately
+ * smaller public owner-command result. A retained unstarted or uncertain
+ * cancellation is durable without any physical delivery requirement.
+ * @param {Record<string, any>} result - Trusted runtime cancellation result.
+ * @param {string} requestId - Stable caller request identity.
+ * @returns {ReturnType<typeof createCancellationOperatorResponse>} - Redacted public result.
+ */
+function createWorkflowCancellationOperatorResponse(result, requestId) {
+  const delivery =
+    result.outcome === OwnerCancellationOutcome.OWNER_NOT_READY
+      ? 'not-delivered'
+      : result.outcome === OwnerCancellationOutcome.CANCELLATION_REQUESTED
+        ? result.signalDelivered === true
+          ? 'started'
+          : result.cancellationDeliveryRequired === true
+            ? 'not-delivered'
+            : 'not-required'
+        : 'not-required';
+  return createCancellationOperatorResponse({
+    runId: result.run.runId,
+    requestId,
+    outcome: result.outcome,
+    delivery,
+    runStatus: result.run.status,
+    invocationStatus: result.invocation.status,
+  });
+}
+
+/**
+ * Persist workflow cancellation under a short-lived owner after a read-only
+ * preflight observed no routable owner. Application scope and trigger kind
+ * are checked again inside the mutation fence.
+ * @param {{preflight: Record<string, any>, requestId: string, expectedAppId?: string, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} options - Offline workflow request.
+ * @returns {Promise<ReturnType<typeof createCancellationOperatorResponse> | null>} - Redacted direct result or null if the run disappeared.
+ */
+async function cancelWorkflowWithoutResident(options) {
+  const result = await withExecutionLedger(
+    async (ledger, context) => {
+      const current = await ledger.rebuildRun(options.preflight.run.runId);
+      if (!current) return null;
+      assertExpectedApp(current, options.expectedAppId);
+      if (
+        current.run.appId !== options.preflight.run.appId ||
+        current.run.trigger?.kind !== 'workflow'
+      ) {
+        throw new Error(
+          'Workflow cancellation authority changed before local ownership was acquired.',
+        );
+      }
+      return await withLocalLedgerServiceMutationOwnership({
+        appId: current.run.appId,
+        context,
+        handler: async () =>
+          await requestWorkflowLedgerRunCancellation({
+            ledger,
+            runId: current.run.runId,
+            requestId: options.requestId,
+            actor: {
+              kind: 'local-owner-command',
+              id: current.run.appId,
+            },
+          }),
+      });
+    },
+    { configuration: options.configuration },
+  );
+  return result
+    ? createWorkflowCancellationOperatorResponse(result, options.requestId)
+    : null;
+}
+
+/**
  * Ask the current same-principal LMDB owner to persist and, when applicable,
- * deliver cancellation. This function is intentionally only a command client:
- * it never calls `requestManualRunCancellation` or falls back to a direct
- * write when the owner is absent, stale, or unreachable.
+ * deliver cancellation. Manual runs retain their active-owner-only contract.
+ * Workflow runs may instead acquire a short-lived owner when no resident is
+ * present, because run-level cancellation does not require active user code.
  * @param {{runId: string, requestId: string, expectedAppId?: string, timeoutMs?: number, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} options - Exact cancellation request.
  * @returns {Promise<ReturnType<typeof createCancellationOperatorResponse> | null>} - Safe owner response or null when the run does not exist.
  */
@@ -1769,11 +1878,7 @@ export async function cancelExecutionLedgerRun(options) {
       'Cancellation is not supported for a managed-effect successor; reconcile its destination instead.',
     );
   }
-  if (preflight.run.trigger?.kind === 'workflow') {
-    throw new Error(
-      'Workflow cancellation is not implemented; inspect or reconcile the exact workflow activity instead.',
-    );
-  }
+  const isWorkflow = preflight.run.trigger?.kind === 'workflow';
 
   const nonDeliverable = classifyNonDeliverableCancellation(preflight);
   if (nonDeliverable) {
@@ -1784,10 +1889,38 @@ export async function cancelExecutionLedgerRun(options) {
     );
   }
 
-  const owner = await readLocalActivityOwner({
+  let owner = await readLocalActivityOwner({
     appId: preflight.run.appId,
     configuration,
   });
+  if (isWorkflow && !owner) {
+    try {
+      return await cancelWorkflowWithoutResident({
+        preflight,
+        requestId,
+        expectedAppId: options.expectedAppId,
+        configuration,
+      });
+    } catch (error) {
+      // Cover the inverse routing race: a resident may acquire ownership after
+      // the read-only lookup but before the short-lived owner claim. Re-read
+      // once and route only to that newly current resident.
+      owner = await readLocalActivityOwner({
+        appId: preflight.run.appId,
+        configuration,
+      });
+      if (!owner) {
+        return createCancellationOperatorResponse({
+          runId: preflight.run.runId,
+          requestId,
+          outcome: classifyOwnerCommandError(error),
+          delivery: 'not-delivered',
+          runStatus: preflight.run.status,
+          invocationStatus: getCancellationInvocation(preflight)?.status,
+        });
+      }
+    }
+  }
   if (!owner) {
     return createCancellationOperatorResponse({
       runId: preflight.run.runId,
@@ -1795,7 +1928,20 @@ export async function cancelExecutionLedgerRun(options) {
       outcome: OwnerCancellationOutcome.OWNER_UNREACHABLE,
       delivery: 'not-delivered',
       runStatus: preflight.run.status,
-      invocationStatus: getManualInvocation(preflight)?.status,
+      invocationStatus: getCancellationInvocation(preflight)?.status,
+    });
+  }
+  if (
+    isWorkflow &&
+    owner.ownership.ownerKind !== LedgerServiceOwnerKind.RESIDENT
+  ) {
+    return createCancellationOperatorResponse({
+      runId: preflight.run.runId,
+      requestId,
+      outcome: OwnerCancellationOutcome.OWNER_NOT_READY,
+      delivery: 'not-delivered',
+      runStatus: preflight.run.status,
+      invocationStatus: getCancellationInvocation(preflight)?.status,
     });
   }
   if (!isAddressableLocalOwner(owner.ownership, configuration)) {
@@ -1805,7 +1951,7 @@ export async function cancelExecutionLedgerRun(options) {
       outcome: OwnerCancellationOutcome.OWNER_MOVED,
       delivery: 'not-delivered',
       runStatus: preflight.run.status,
-      invocationStatus: getManualInvocation(preflight)?.status,
+      invocationStatus: getCancellationInvocation(preflight)?.status,
     });
   }
 
@@ -1866,7 +2012,7 @@ export async function cancelExecutionLedgerRun(options) {
       runStatus: ownerStatuses.runStatus || preflight.run.status,
       invocationStatus:
         ownerStatuses.invocationStatus ||
-        getManualInvocation(preflight)?.status,
+        getCancellationInvocation(preflight)?.status,
     });
   } catch (error) {
     return createCancellationOperatorResponse({
@@ -1875,7 +2021,7 @@ export async function cancelExecutionLedgerRun(options) {
       outcome: classifyOwnerCommandError(error),
       delivery: 'not-delivered',
       runStatus: preflight.run.status,
-      invocationStatus: getManualInvocation(preflight)?.status,
+      invocationStatus: getCancellationInvocation(preflight)?.status,
     });
   }
 }
@@ -2813,8 +2959,14 @@ function cancellationMessage(response) {
   if (isDeliveredCancellation(response)) {
     return `Cancellation request ${response.requestId} was durably accepted and delivery to the active attempt began.`;
   }
+  if (
+    response.outcome === OwnerCancellationOutcome.CANCELLATION_REQUESTED &&
+    response.delivery === 'not-required'
+  ) {
+    return 'Cancellation is durably authoritative; no physical attempt delivery is required.';
+  }
   if (response.outcome === OwnerCancellationOutcome.CANCELLATION_REQUESTED) {
-    return 'A different durable cancellation request is already authoritative; this command did not deliver a second signal.';
+    return 'A durable cancellation request is already authoritative; this command did not deliver a second signal.';
   }
   if (response.outcome === OwnerCancellationOutcome.TERMINAL_AUTHORITATIVE) {
     return 'The durable run already has an authoritative terminal outcome; no cancellation was delivered.';
@@ -3275,9 +3427,7 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
     });
 
   const cancelCommand = new Command('cancel')
-    .description(
-      'Ask the current local owner to durably cancel one exact active ledger run',
-    )
+    .description('Durably request cancellation of one exact ledger run')
     .option('--run-id <runId>', 'Persisted execution-ledger run ID')
     .requiredOption(
       '--request-id <requestId>',

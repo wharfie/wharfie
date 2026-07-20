@@ -76,6 +76,7 @@ export const WorkflowCursorDisposition = Object.freeze({
   ACTIVITY_RUNNABLE: 'ACTIVITY_RUNNABLE',
   ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
   ACTIVITY_UNCERTAIN: 'ACTIVITY_UNCERTAIN',
+  CANCELLED: 'CANCELLED',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
   PROTOCOL_FAILED: 'PROTOCOL_FAILED',
@@ -739,6 +740,7 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
     case WorkflowCursorDisposition.ACTIVITY_RUNNABLE:
     case WorkflowCursorDisposition.ACTIVITY_RUNNING:
     case WorkflowCursorDisposition.ACTIVITY_UNCERTAIN:
+    case WorkflowCursorDisposition.CANCELLED:
     case WorkflowCursorDisposition.FAILED:
     case WorkflowCursorDisposition.PROTOCOL_FAILED:
       expectedOutputCount = stepIndex;
@@ -1165,6 +1167,109 @@ export function materializeWorkflowActivityUncertainty(value) {
     label: 'workflow activity uncertainty',
     currentDisposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
     nextDisposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+  });
+}
+
+/**
+ * Terminalize the current workflow activation because its run-level
+ * cancellation decision prevents any later continuation. The physical
+ * attempt state remains a ledger concern, so the same cursor edge is used for
+ * runnable, claimed, started, and uncertain activity decisions.
+ * @param {{currentCursor: unknown, sequence: number, observedAt: number}} value - Exact cancellation materialization.
+ * @returns {Record<string, any>} - Same activity retained as a terminal cancelled cursor.
+ */
+export function materializeWorkflowActivityCancellation(value) {
+  const transition = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 2,
+    'workflow activity cancellation',
+  );
+  assertExactKeys(
+    transition,
+    ['currentCursor', 'sequence', 'observedAt'],
+    'workflow activity cancellation',
+  );
+  const currentCursor = normalizeWorkflowCursor(
+    transition.currentCursor,
+    'workflow activity cancellation.currentCursor',
+  );
+  if (
+    ![
+      WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+      WorkflowCursorDisposition.ACTIVITY_RUNNING,
+      WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+    ].includes(currentCursor.disposition)
+  ) {
+    throw new TypeError(
+      'workflow activity cancellation.currentCursor must name a nonterminal activity.',
+    );
+  }
+  const sequence = assertPositiveSafeInteger(
+    transition.sequence,
+    'workflow activity cancellation.sequence',
+  );
+  if (sequence !== currentCursor.lastSequence + 1) {
+    throw new TypeError(
+      'workflow activity cancellation.sequence must immediately follow currentCursor.lastSequence.',
+    );
+  }
+  const observedAt = assertPositiveSafeInteger(
+    transition.observedAt,
+    'workflow activity cancellation.observedAt',
+  );
+  if (observedAt < currentCursor.updatedAt) {
+    throw new TypeError(
+      'workflow activity cancellation.observedAt must not precede currentCursor.updatedAt.',
+    );
+  }
+  return normalizeWorkflowCursor(
+    {
+      ...currentCursor,
+      disposition: WorkflowCursorDisposition.CANCELLED,
+      version: currentCursor.version + 1,
+      lastSequence: sequence,
+      updatedAt: observedAt,
+    },
+    'workflow activity cancellation.cursor',
+  );
+}
+
+/**
+ * Advance a durable cancellation intent without claiming that a begun or
+ * uncertain physical attempt has stopped. This consumes the same workflow
+ * cursor CAS while retaining the exact logical activation and disposition.
+ * @param {{currentCursor: unknown, sequence: number, observedAt: number}} value - Exact cancellation-intent materialization.
+ * @returns {Record<string, any>} - Same running or uncertain activity at the next cursor version.
+ */
+export function materializeWorkflowCancellationIntent(value) {
+  const transition = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 2,
+    'workflow cancellation intent',
+  );
+  assertExactKeys(
+    transition,
+    ['currentCursor', 'sequence', 'observedAt'],
+    'workflow cancellation intent',
+  );
+  const currentCursor = normalizeWorkflowCursor(
+    transition.currentCursor,
+    'workflow cancellation intent.currentCursor',
+  );
+  if (
+    ![
+      WorkflowCursorDisposition.ACTIVITY_RUNNING,
+      WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+    ].includes(currentCursor.disposition)
+  ) {
+    throw new TypeError(
+      'workflow cancellation intent.currentCursor must be running or uncertain.',
+    );
+  }
+  return materializeWorkflowActivityCursorTransition(transition, {
+    label: 'workflow cancellation intent',
+    currentDisposition: currentCursor.disposition,
+    nextDisposition: currentCursor.disposition,
   });
 }
 
@@ -1662,10 +1767,12 @@ export default {
   materializeFirstWorkflowActivity,
   materializeUncertainWorkflowActivityFailure,
   materializeUncertainWorkflowActivitySuccess,
+  materializeWorkflowActivityCancellation,
   materializeWorkflowActivityClaimRelease,
   materializeWorkflowActivityFailure,
   materializeWorkflowActivitySuccess,
   materializeWorkflowActivityUncertainty,
+  materializeWorkflowCancellationIntent,
   materializeWorkflowCursorActivity,
   isWorkflowActivityDispatchSupported,
   normalizeWorkflowActivityRequest,

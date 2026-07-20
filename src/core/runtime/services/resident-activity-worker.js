@@ -38,7 +38,10 @@ import {
   createManualLedgerRunId,
   recoverManualLedgerActivity,
 } from '../manual-ledger-run.js';
-import { recoverWorkflowLedgerActivity } from '../workflow-ledger-run.js';
+import {
+  recoverWorkflowLedgerActivity,
+  requestWorkflowLedgerRunCancellation,
+} from '../workflow-ledger-run.js';
 import {
   EXECUTION_LEDGER_CANCEL_OWNER_COMMAND,
   recoverStoppedManagedEffectsAtOperatorBoundary,
@@ -63,8 +66,6 @@ export const RESIDENT_WORKFLOW_START_COMMAND =
 export const RESIDENT_ACTIVITY_DEFAULT_POLL_INTERVAL_MS = 1_000;
 export const RESIDENT_ACTIVITY_DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 export const RESIDENT_ACTIVITY_READY_WORK_LIMIT = 50;
-
-/** @typedef {{requestCancellation: (request: {requestId: string}) => Promise<Record<string, any>>}} ActiveCancellationPort */
 
 /** @typedef {{kind: 'manual', runId: string} | {kind: 'workflow', runId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} ResidentRunnableWork */
 
@@ -779,7 +780,7 @@ async function findRunnableWork(options) {
  * resident owner. It hosts the authenticated submission/cancellation endpoint,
  * consumes exact ready work serially, and drains an active attempt during
  * graceful shutdown.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
 export async function runResidentActivityWorker(options) {
@@ -833,6 +834,8 @@ export async function runResidentActivityWorker(options) {
     options.recoverActivity || recoverManualLedgerActivity;
   const recoverWorkflowActivity =
     options.recoverWorkflowActivity || recoverWorkflowLedgerActivity;
+  const requestWorkflowCancellation =
+    options.requestWorkflowCancellation || requestWorkflowLedgerRunCancellation;
   const recoverManagedEffects =
     options.recoverManagedEffects || recoverResidentManagedEffects;
   const createCommandServer =
@@ -842,10 +845,14 @@ export async function runResidentActivityWorker(options) {
     tableName: options.controlContext.tableName,
   });
 
-  /** @type {ActiveCancellationPort | undefined} */
-  let activeCancellationPort;
+  /** @type {import('../manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPort | undefined} */
+  let activeManualCancellationPort;
+  /** @type {import('../workflow-ledger-run.js').WorkflowLedgerActiveCancellationPort | undefined} */
+  let activeWorkflowCancellationPort;
   /** @type {string | undefined} */
   let activeRunId;
+  /** @type {'manual'|'workflow'|undefined} */
+  let activeWorkKind;
   /** @type {Set<() => void>} */
   const wakeListeners = new Set();
   let wakePending = true;
@@ -920,31 +927,75 @@ export async function runResidentActivityWorker(options) {
         typeof request !== 'object' ||
         Array.isArray(request) ||
         Object.keys(request).length !== 1 ||
-        typeof request.runId !== 'string' ||
-        request.runId !== activeRunId
+        typeof request.runId !== 'string'
       ) {
         return {
           outcome: 'request-unavailable',
           delivery: 'not-delivered',
         };
       }
-      if (!activeCancellationPort) {
-        return { outcome: 'owner-not-ready', delivery: 'not-delivered' };
+      const requestId = assertLedgerOpaqueId(
+        command.requestId,
+        'resident cancellation requestId',
+      );
+      if (request.runId === activeRunId && activeWorkKind === 'manual') {
+        if (!activeManualCancellationPort) {
+          return { outcome: 'owner-not-ready', delivery: 'not-delivered' };
+        }
+        const result = await activeManualCancellationPort.requestCancellation({
+          requestId,
+        });
+        return {
+          outcome: result.outcome,
+          delivery:
+            result.outcome === 'cancellation-requested'
+              ? result.signalDelivered
+                ? 'started'
+                : 'not-delivered'
+              : 'not-required',
+          runStatus: result.run.status,
+          invocationStatus: result.invocation.status,
+        };
       }
-      const result = await activeCancellationPort.requestCancellation({
-        requestId: assertLedgerOpaqueId(
-          command.requestId,
-          'resident cancellation requestId',
-        ),
+
+      const view = await options.ledger.rebuildRun(request.runId);
+      if (
+        !view ||
+        view.run?.appId !== binding.identity.appId ||
+        view.run?.trigger?.kind !== 'workflow'
+      ) {
+        return {
+          outcome: 'request-unavailable',
+          delivery: 'not-delivered',
+        };
+      }
+      const result = await requestWorkflowCancellation({
+        ledger: options.ledger,
+        runId: request.runId,
+        requestId,
+        actor: {
+          kind: 'local-owner-command',
+          id: binding.identity.appId,
+        },
+        ...(request.runId === activeRunId &&
+        activeWorkKind === 'workflow' &&
+        activeWorkflowCancellationPort
+          ? { activeCancellationPort: activeWorkflowCancellationPort }
+          : {}),
       });
+      wake();
       return {
         outcome: result.outcome,
         delivery:
           result.outcome === 'cancellation-requested'
             ? result.signalDelivered
               ? 'started'
-              : 'not-delivered'
-            : 'not-required',
+              : result.cancellationDeliveryRequired
+                ? 'not-delivered'
+                : 'not-required'
+            : result.outcome === 'owner-not-ready'
+              ? 'not-delivered'
+              : 'not-required',
         runStatus: result.run.status,
         invocationStatus: result.invocation.status,
       };
@@ -1029,6 +1080,7 @@ export async function runResidentActivityWorker(options) {
       if (work) {
         const { runId } = work;
         activeRunId = runId;
+        activeWorkKind = work.kind;
         const attemptCancellation = new AbortController();
         /** @type {ReturnType<typeof setTimeout> | undefined} */
         let drainTimer;
@@ -1073,10 +1125,10 @@ export async function runResidentActivityWorker(options) {
                 },
               },
               registerActiveAttemptCancellationPort: (port) => {
-                activeCancellationPort = port;
+                activeManualCancellationPort = port;
                 return () => {
-                  if (activeCancellationPort === port) {
-                    activeCancellationPort = undefined;
+                  if (activeManualCancellationPort === port) {
+                    activeManualCancellationPort = undefined;
                   }
                 };
               },
@@ -1099,14 +1151,30 @@ export async function runResidentActivityWorker(options) {
               },
               ...(signal === undefined ? {} : { admissionSignal: signal }),
               signal: attemptCancellation.signal,
+              ownerCancellation: {
+                actor: {
+                  kind: 'local-owner-command',
+                  id: binding.identity.appId,
+                },
+              },
+              registerActiveWorkflowCancellationPort: (port) => {
+                activeWorkflowCancellationPort = port;
+                return () => {
+                  if (activeWorkflowCancellationPort === port) {
+                    activeWorkflowCancellationPort = undefined;
+                  }
+                };
+              },
             });
             processed += 1;
           }
         } finally {
           signal?.removeEventListener('abort', requestBoundedDrain);
           if (drainTimer) clearTimeout(drainTimer);
-          activeCancellationPort = undefined;
+          activeManualCancellationPort = undefined;
+          activeWorkflowCancellationPort = undefined;
           activeRunId = undefined;
+          activeWorkKind = undefined;
         }
         continue;
       }
