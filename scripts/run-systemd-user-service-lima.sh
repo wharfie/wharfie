@@ -10,6 +10,7 @@ GUEST_REPO="/var/tmp/wharfie-systemd-proof-repo"
 GUEST_PROOF_ROOT="/var/tmp/wharfie-systemd-proof"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wharfie-systemd-proof.XXXXXX")"
 ARCHIVE_PATH="${TEMP_ROOT}/repo.tar"
+PREPARE_CAPTURE="${TEMP_ROOT}/prepare.json"
 CREATED=0
 RECEIPT_STAGING=""
 COMMIT=""
@@ -18,29 +19,39 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM
   if [[ "${status}" -ne 0 && "${CREATED}" -eq 1 ]]; then
-    if [[ -n "${COMMIT}" ]] && limactl shell --tty=false "${INSTANCE}" \
-      /usr/bin/test -f "${GUEST_PROOF_ROOT}/failure.json"; then
+    failure_directory=""
+    if [[ -n "${COMMIT}" ]]; then
       failure_directory="${OUTPUT_ROOT}/failures/${COMMIT}"
       mkdir -p "${failure_directory}"
-      limactl copy --backend=scp \
-        "${INSTANCE}:${GUEST_PROOF_ROOT}/failure.json" \
-        "${failure_directory}/failure.json" || true
-      echo "Failure receipt: ${failure_directory}/failure.json" >&2
+      if [[ -f "${PREPARE_CAPTURE}" ]]; then
+        cp "${PREPARE_CAPTURE}" "${failure_directory}/prepare.json"
+      fi
     fi
-    limactl shell --tty=false "${INSTANCE}" \
-      /usr/bin/systemctl --user status \
-      wharfie-systemd-service-proof.service \
-      --no-pager --full || true
-    limactl shell --tty=false "${INSTANCE}" \
-      /usr/bin/journalctl --user \
-      --boot=0 \
-      --unit=wharfie-systemd-service-proof.service \
-      --no-pager || true
-    limactl shell --tty=false "${INSTANCE}" \
-      /usr/bin/sudo /usr/bin/journalctl \
-      --boot=0 \
-      --unit=wharfie-systemd-proof-boot-check.service \
-      --no-pager || true
+    if limactl list --quiet "${INSTANCE}" >/dev/null 2>&1; then
+      if [[ -n "${failure_directory}" ]] && limactl shell --tty=false "${INSTANCE}" \
+        /usr/bin/test -f "${GUEST_PROOF_ROOT}/failure.json"; then
+        limactl copy --backend=scp \
+          "${INSTANCE}:${GUEST_PROOF_ROOT}/failure.json" \
+          "${failure_directory}/failure.json" || true
+      fi
+      limactl shell --tty=false "${INSTANCE}" \
+        /usr/bin/systemctl --user status \
+        wharfie-systemd-service-proof.service \
+        --no-pager --full || true
+      limactl shell --tty=false "${INSTANCE}" \
+        /usr/bin/journalctl --user \
+        --boot=0 \
+        --unit=wharfie-systemd-service-proof.service \
+        --no-pager || true
+      limactl shell --tty=false "${INSTANCE}" \
+        /usr/bin/sudo /usr/bin/journalctl \
+        --boot=0 \
+        --unit=wharfie-systemd-proof-boot-check.service \
+        --no-pager || true
+    fi
+    if [[ -n "${failure_directory}" ]]; then
+      echo "Failure receipts: ${failure_directory}" >&2
+    fi
   fi
   if [[ "${CREATED}" -eq 1 && "${KEEP_VM}" != "1" ]]; then
     limactl delete --force "${INSTANCE}" || true
@@ -98,11 +109,16 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   scripts/verify-systemd-user-service-linux.js \
   prepare \
   "${GUEST_REPO}"
+limactl copy --backend=scp \
+  "${INSTANCE}:${GUEST_PROOF_ROOT}/prepare.json" \
+  "${PREPARE_CAPTURE}"
 
-limactl restart --tty=false "${INSTANCE}"
+limactl stop --tty=false --force "${INSTANCE}"
+limactl start --tty=false "${INSTANCE}"
 limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
   "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
+  "WHARFIE_SYSTEMD_PROOF_POWER_CYCLE=forced-stop-start" \
   /usr/local/bin/node \
   scripts/verify-systemd-user-service-linux.js \
   verify \

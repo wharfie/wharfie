@@ -975,6 +975,11 @@ async function verify() {
     'lima',
     'refusing to mutate a Linux host without the disposable Lima attestation',
   );
+  assert.equal(
+    process.env.WHARFIE_SYSTEMD_PROOF_POWER_CYCLE,
+    'forced-stop-start',
+    'proof must use the declared abrupt VM power cycle',
+  );
   const prepared = JSON.parse(readFileSync(PREPARE_PATH, 'utf8'));
   assert.equal(prepared.kind, 'wharfie.systemd-proof.prepare');
   assert.match(prepared.commit, /^[0-9a-f]{40}$/);
@@ -1169,6 +1174,7 @@ async function verify() {
     boot: {
       before: prepared.bootId,
       after: bootReceipt.bootId,
+      powerCycle: process.env.WHARFIE_SYSTEMD_PROOF_POWER_CYCLE,
       sessionsBeforeCheck: bootReceipt.sessionsBeforeCheck,
       automaticStart: bootReceipt.automaticStart,
       processId: bootReceipt.status.systemd.mainPid,
