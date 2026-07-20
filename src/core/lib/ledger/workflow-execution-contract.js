@@ -29,6 +29,7 @@ import {
   hasSameCanonicalJson,
   normalizePayloadReference,
 } from './execution-ledger-contract.js';
+import { MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID } from './managed-effect-successor-contract.js';
 import { assertLedgerOpaqueId } from './record-key.js';
 
 export const WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION = 1;
@@ -116,6 +117,27 @@ const WORKFLOW_CURSOR_KEYS = [
   'createdAt',
   'updatedAt',
 ];
+
+/**
+ * Return whether the active activity has a fully implemented atomic success
+ * continuation. This is shared by the ledger and physical host so neither can
+ * begin user code which would strand the cursor at an unsupported timer,
+ * signal, or framework-owned successor boundary.
+ * @param {Record<string, any>} cursor - Exact active workflow cursor.
+ * @param {Record<string, any>} planPayload - Normalized immutable workflow plan.
+ * @returns {boolean} - Whether this activity can be dispatched safely.
+ */
+export function isWorkflowActivityDispatchSupported(cursor, planPayload) {
+  const current = planPayload.definition.steps[cursor.stepIndex];
+  const next = planPayload.definition.steps[cursor.stepIndex + 1];
+  return Boolean(
+    current?.kind === 'activity' &&
+    current.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID &&
+    (!next ||
+      (next.kind === 'activity' &&
+        next.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID)),
+  );
+}
 
 /**
  * Reapply one whole-document byte ceiling after nested semantic validation.
@@ -1645,6 +1667,7 @@ export default {
   materializeWorkflowActivitySuccess,
   materializeWorkflowActivityUncertainty,
   materializeWorkflowCursorActivity,
+  isWorkflowActivityDispatchSupported,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
   normalizeWorkflowOutputBinding,

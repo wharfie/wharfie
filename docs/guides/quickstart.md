@@ -212,10 +212,12 @@ override:
 
 The private environment-selected packaged service runtime starts the same
 resident activity implementation. Wharfie does not yet install it as an OS
-service or arrange startup on boot. The current worker is not a workflow or
-scheduler: it has no continuations, timers, schedules, multi-host leases, or
-heartbeats. `ACTIVITY` and `RECOVERY` rows are implemented; `TIMER` and
-framework-only `CONTINUATION` rows are reserved for the next workflow slice.
+service or arrange startup on boot. The current worker can continue an
+already-persisted workflow through ordinary activity steps, but there is no
+public workflow-start command yet. It has no timers, signals, schedules,
+multi-host leases, or heartbeats. Exact workflow `ACTIVITY` and `RECOVERY` rows
+are implemented; `TIMER` and framework-only `CONTINUATION` rows remain parked
+for later workflow slices.
 
 Inspection is read-only. Recovery is an explicit durable mutation to use only
 after every prior runner has stopped; it does not load an app manifest, parse
@@ -362,24 +364,30 @@ may still win, while unconfirmed post-cancellation termination becomes blocked
 cancel request. There is still no public run-history/list: the verified bounded
 V8 run directory paired with the V10 ledger is internal rather than the retired
 `ops list` surface. The resident now submits, claims, and executes exact-revision
-manual activities serially, but it does not run workflow continuations or
-schedules. The bounded recovery and reconciliation paths have prior real
-subprocess and relocated-SEA crash coverage across request, start, destination
-commit, payload publication, ledger settlement, and response-delivery
-boundaries. The resident dispatch and shutdown surface now has a complete
-source, package, and moved-SEA validation receipt, including exact-revision
-dispatch, graceful drain tests, current-revision managed-effect recovery, and
-service crash/restart with Node unavailable on `PATH`. It remains a
-single-process activity worker rather than a production workflow service:
-workflow continuations, OS installation/reboot proof, and multi-host
-coordination are still intentionally absent.
+manual activities serially and consumes exact manifest-bound workflow activity
+continuations already present in the ledger. It does not yet expose public
+workflow commands, timers, signals, or schedules. The manual bounded recovery
+and reconciliation paths have prior real subprocess and relocated-SEA crash
+coverage across request, start, destination commit, payload publication,
+ledger settlement, and response-delivery boundaries. The manual resident
+dispatch and shutdown surface has a complete source, package, and moved-SEA
+validation receipt, including exact-revision dispatch, graceful drain tests,
+current-revision managed-effect recovery, and service crash/restart with Node
+unavailable on `PATH`. The workflow dispatcher currently has focused
+real-ledger and resident lifecycle coverage. Wharfie remains a single-process
+activity worker rather than a production workflow service: public workflow
+command and process-kill proofs, timers/signals, OS installation/reboot proof,
+and multi-host coordination are still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.
-An active attempt receives 30 seconds to finish naturally; after that the
-worker uses the existing cooperative durable-cancellation path and keeps local
-ownership until the attempt settles. Only then does graceful shutdown write
-`STOPPED` and release ownership. Lifecycle remains `STARTING` until the
+An active attempt receives 30 seconds to finish naturally. After that, a manual
+attempt uses its existing cooperative durable-cancellation path; a workflow
+attempt receives only physical drain cancellation and becomes durably uncertain
+unless it still produces a supported terminal, because workflow cancellation
+authority is not implemented. The worker keeps local ownership until the
+attempt settles. Only then does graceful shutdown write `STOPPED` and release
+ownership. Lifecycle remains `STARTING` until the
 owner-command socket is bound, so durable `READY` means that authenticated
 submission/cancellation ingress is actually available. The resident endpoint
 accepts the ledger's bounded referenced-payload size; unrelated local-owner
@@ -409,9 +417,10 @@ Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
 
 The v2 manifest exposes only the bounded plain-data workflow definitions above;
-it does not yet expose durable workflow execution, schedules, arbitrary
-packaging assets, signing credentials, or other build secrets. External activity packages
-must be pinned as exact descriptors such as
+its resident can execute already-persisted ordinary activity continuations, but
+it does not yet expose public workflow start/inspection/reconciliation,
+timers/signals, schedules, arbitrary packaging assets, signing credentials, or
+other build secrets. External activity packages must be pinned as exact descriptors such as
 `externalPackages: [{ name: 'sharp', version: '0.34.4' }]`; ranges, tags, URLs,
 and ambient dependency resolution are not accepted. Multiple entries must use
 lowercase npm registry names, be unique, and be sorted by name.

@@ -39,11 +39,12 @@ are now defined; the superseded mutable Operation/Action snapshot store is
 gone. The manifest can declare a bounded plain-data linear workflow, and the
 internal ledger can atomically create an activity-headed workflow run with its
 immutable plan and start payloads, stable cursor and invocation identities,
-run-directory entry, and cursor-bound ready-work row. It does not yet claim,
-execute, or advance that workflow activity. The ledger's redacted per-service
-history directory is transactionally bound to every run transition. Its
-exact-revision ready-work projection is bound to each relevant manual lifecycle
-transition and initial workflow-run creation, while
+run-directory entry, and cursor-bound ready-work row. The resident claims,
+starts, and executes exact manifest-bound ordinary workflow activities,
+atomically persisting their output and next activity or terminal cursor. The
+ledger's redacted per-service history directory is transactionally bound to
+every run transition. Its exact-revision ready-work projection is bound to each
+relevant manual and workflow activity lifecycle transition, while
 revision-backed source and SEA activities consume
 one frozen target dependency closure instead of ambient `node_modules` or a
 newly resolved npm tree. Exact-run inspection, confirmed recovery, and
@@ -120,13 +121,15 @@ payload reuse and LMDB owner recovery. Those paths never dispatch authored
 app/CLI/activity code or the normal adapter. The resident activity vertical now
 persists offline submissions, executes serially, recovers conservative restart
 states, and drains gracefully through the transactional ready-work index. The
-internal activity-headed workflow start is durable and rebuildable, but
-workflow activity execution and cursor advancement, persisted outputs, timers,
-signals, workflow cancellation, resident workflow dispatch, public workflow
-commands, and schedules remain unfinished. OS service installation/startup,
-multi-host leases and heartbeats, and public run history/listing are also later
-work. The npm package remains deliberately private. It is not ready for
-production use.
+internal activity-headed workflow path is durable and rebuildable; the resident
+now executes exact manifest-bound ordinary activity chains, persists outputs,
+advances their cursor atomically, releases unstarted claims after restart, and
+blocks lost started attempts without redispatch. Public workflow start,
+inspection, and reconciliation commands, timers, signals, workflow
+cancellation, and schedules remain unfinished. OS service
+installation/startup, multi-host leases and heartbeats, and public run
+history/listing are also later work. The npm package remains deliberately
+private. It is not ready for production use.
 
 ## Start here
 
@@ -217,9 +220,11 @@ activity, timer, or signal steps; activity inputs explicitly select the
 workflow input, a JSON literal, or one earlier step's persisted output. The
 manifest compiler and packager bind that definition to the revision. The
 internal ledger can atomically start a workflow whose first step is an activity
-using `workflow-input` or `literal`; workflow execution/advancement, resident
-dispatch, and public workflow commands are not implemented yet. Application-
-and activity-level `resources` are not part
+using `workflow-input` or `literal`; the resident executes supported ordinary
+activity chains and atomically advances their persisted cursor. Public
+workflow start/inspection/reconciliation commands, timers, signals, and
+cursor-aware cancellation are not implemented yet. Application- and
+activity-level `resources` are not part
 of the schema and are rejected as unknown fields. A caller-metadata object may
 contain a property named `resources`, but it is ordinary inert JSON—not an
 injection request. Managed effects are a separate finite API on
@@ -260,12 +265,15 @@ the authenticated request, while an offline request remains `RUNNABLE` until
 that exact app/revision worker starts. The worker is deliberately serial. On
 `SIGINT` or `SIGTERM` it stops admitting commands and claims, records
 `STOPPING`, allows the active attempt up to 30 seconds to finish naturally,
-then requests cooperative durable cancellation and retains ownership until the
-attempt and admitted command handlers settle.
+then retains ownership until the attempt and admitted command handlers settle.
+A manual attempt receives cooperative durable cancellation; a workflow attempt
+receives physical drain cancellation and becomes durably uncertain unless it
+still returns a supported terminal.
 
 This is a foreground resident runtime, not service installation. Wharfie does
-not yet install startup-on-boot units or provide schedules, workflow
-continuations, multi-host reassignment, or public run-history/listing commands.
+not yet install startup-on-boot units or provide schedules, timer/signal
+workflow continuations, multi-host reassignment, or public workflow and
+run-history/listing commands.
 
 ## Reconcile one uncertain managed effect
 

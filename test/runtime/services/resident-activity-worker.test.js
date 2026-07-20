@@ -12,6 +12,12 @@ import {
   RunStatus,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
 import {
+  WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+  WORKFLOW_PLAN_PAYLOAD_KIND,
+  WorkflowCursorDisposition,
+  createWorkflowPlanId,
+} from '../../../src/core/lib/ledger/workflow-execution-contract.js';
+import {
   LedgerServiceOwnerKind,
   createLedgerServiceId,
 } from '../../../src/core/lib/db/tables/ledger-service-lifecycle.js';
@@ -44,10 +50,13 @@ import {
 /** @typedef {import('../../../src/core/runtime/durable-activity-host.js').ManifestActivityExecution} ManifestActivityExecution */
 /** @typedef {Extract<ManifestActivityExecution, {kind: 'embedded'}>} EmbeddedExecution */
 /** @typedef {typeof import('../../../src/core/runtime/durable-activity-host.js').runPersistedDurableManifestActivity} RunActivity */
+/** @typedef {typeof import('../../../src/core/runtime/durable-workflow-host.js').runPersistedDurableManifestWorkflowActivity} RunWorkflowActivity */
 /** @typedef {typeof import('../../../src/core/runtime/durable-activity-host.js').submitDurableManifestActivity} SubmitActivity */
 /** @typedef {typeof import('../../../src/core/runtime/manual-ledger-run.js').recoverManualLedgerActivity} RecoverActivity */
+/** @typedef {typeof import('../../../src/core/runtime/workflow-ledger-run.js').recoverWorkflowLedgerActivity} RecoverWorkflowActivity */
 /** @typedef {typeof import('../../../src/core/runtime/operator/local-owner-command.js').createLocalOwnerCommandServer} CommandServerFactory */
 /** @typedef {Parameters<RunActivity>[0]} RunActivityOptions */
+/** @typedef {Parameters<RunWorkflowActivity>[0]} RunWorkflowActivityOptions */
 /** @typedef {Parameters<CommandServerFactory>[0]} CommandServerOptions */
 /** @typedef {'RUNNING'|'BLOCKED'|'COMPLETED'|'FAILED'|'CANCELLED'} RunStatusValue */
 /** @typedef {'RUNNABLE'|'RUNNING'|'UNCERTAIN'|'COMPLETED'|'FAILED'|'CANCELLED'} InvocationStatusValue */
@@ -60,6 +69,11 @@ const TARGET = Object.freeze({
   architecture: 'x64',
   libc: 'glibc',
 });
+const WORKFLOW_ID = 'main';
+const WORKFLOW_STEP_ID = 'greet-step';
+const WORKFLOW_ACTIVITY_ID = 'greet';
+const WORKFLOW_INVOCATION_ID = 'workflow-invocation-1';
+const WORKFLOW_CONTINUATION_ID = 'workflow-continuation-1';
 
 /** @param {string} value */
 function digest(value) {
@@ -84,6 +98,18 @@ function makeEmbeddedExecution() {
           path: 'activities/greet.js',
           export: 'greet',
         },
+      },
+    },
+    workflows: {
+      [WORKFLOW_ID]: {
+        steps: [
+          {
+            id: WORKFLOW_STEP_ID,
+            kind: 'activity',
+            activity: WORKFLOW_ACTIVITY_ID,
+            input: { kind: 'workflow-input' },
+          },
+        ],
       },
     },
   };
@@ -111,6 +137,18 @@ function makeEmbeddedExecution() {
         target: { ...TARGET },
       },
     },
+  });
+}
+
+/** @param {EmbeddedExecution} execution */
+function workflowPlanId(execution) {
+  return createWorkflowPlanId({
+    schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+    kind: WORKFLOW_PLAN_PAYLOAD_KIND,
+    appId: execution.embeddedRevision.runtime.appId,
+    revisionId: execution.embeddedRevision.runtime.revisionId,
+    workflowId: WORKFLOW_ID,
+    definition: execution.manifest.workflows[WORKFLOW_ID],
   });
 }
 
@@ -231,8 +269,11 @@ function makeView({
     },
     invocations: [
       {
+        runId,
+        appId,
         invocationId: MANUAL_LEDGER_INVOCATION_ID,
         revisionId,
+        activityId: 'greet',
         status: invocationStatus,
         generation,
         updatedAt: availableAt,
@@ -252,6 +293,141 @@ function makeView({
             },
           ],
     effects,
+  };
+}
+
+/**
+ * @param {{appId: string, revisionId: string, runId: string, kind?: 'ACTIVITY'|'RECOVERY', invocationId?: string, generation?: number, attemptId?: string, availableAt?: number, version?: number, lastSequence?: number, cursorVersion?: number, continuationId?: string, stepId?: string, stepIndex?: number}} options
+ * @returns {Record<string, any>}
+ */
+function makeWorkflowRow({
+  appId,
+  revisionId,
+  runId,
+  kind = 'ACTIVITY',
+  invocationId = WORKFLOW_INVOCATION_ID,
+  generation = kind === 'RECOVERY' ? 1 : 0,
+  attemptId = 'workflow-attempt-1',
+  availableAt = 0,
+  version = 1,
+  lastSequence = 1,
+  cursorVersion = version,
+  continuationId = WORKFLOW_CONTINUATION_ID,
+  stepId = WORKFLOW_STEP_ID,
+  stepIndex = 0,
+}) {
+  return {
+    kind,
+    appId,
+    revisionId,
+    runId,
+    availableAt,
+    runVersion: version,
+    lastSequence,
+    invocationId,
+    generation,
+    cursorVersion,
+    continuationId,
+    stepId,
+    stepIndex,
+    ...(kind === 'RECOVERY' ? { attemptId } : {}),
+  };
+}
+
+/**
+ * @param {{appId: string, revisionId: string, runId: string, planId: string, runStatus?: RunStatusValue, invocationStatus?: InvocationStatusValue, cursorDisposition?: string, attemptStatus?: AttemptStatusValue, invocationId?: string, activityId?: string, generation?: number, attemptId?: string, version?: number, lastSequence?: number, cursorVersion?: number, availableAt?: number, continuationId?: string, stepId?: string, stepIndex?: number}} options
+ * @returns {Record<string, any>}
+ */
+function makeWorkflowView({
+  appId,
+  revisionId,
+  runId,
+  planId,
+  runStatus = RunStatus.RUNNING,
+  invocationStatus = InvocationStatus.RUNNABLE,
+  cursorDisposition = invocationStatus === InvocationStatus.RUNNABLE
+    ? WorkflowCursorDisposition.ACTIVITY_RUNNABLE
+    : invocationStatus === InvocationStatus.UNCERTAIN
+      ? WorkflowCursorDisposition.ACTIVITY_UNCERTAIN
+      : WorkflowCursorDisposition.ACTIVITY_RUNNING,
+  attemptStatus,
+  invocationId = WORKFLOW_INVOCATION_ID,
+  activityId = WORKFLOW_ACTIVITY_ID,
+  generation = attemptStatus ? 1 : 0,
+  attemptId = 'workflow-attempt-1',
+  version = 1,
+  lastSequence = 1,
+  cursorVersion = version,
+  availableAt = 0,
+  continuationId = WORKFLOW_CONTINUATION_ID,
+  stepId = WORKFLOW_STEP_ID,
+  stepIndex = 0,
+}) {
+  return {
+    run: {
+      kind: 'workflow',
+      appId,
+      revisionId,
+      runId,
+      trigger: { kind: 'workflow', workflowId: WORKFLOW_ID, planId },
+      status: runStatus,
+      version,
+      lastSequence,
+    },
+    workflowCursor: {
+      runId,
+      appId,
+      revisionId,
+      workflowId: WORKFLOW_ID,
+      planId,
+      invocationId,
+      continuationId,
+      stepId,
+      stepIndex,
+      disposition: cursorDisposition,
+      outputs: [],
+      version: cursorVersion,
+      lastSequence,
+      updatedAt: availableAt,
+    },
+    invocations: [
+      {
+        runId,
+        appId,
+        revisionId,
+        invocationId,
+        activityId,
+        status: invocationStatus,
+        generation,
+        updatedAt: availableAt,
+        workflow: {
+          workflowId: WORKFLOW_ID,
+          planId,
+          continuationId,
+          stepId,
+          stepIndex,
+        },
+      },
+    ],
+    attempts:
+      attemptStatus === undefined
+        ? []
+        : [
+            {
+              runId,
+              appId,
+              revisionId,
+              invocationId,
+              activityId,
+              attemptId,
+              fencingToken: 'workflow-fence-1',
+              coordinatorEpoch: 0,
+              generation,
+              status: attemptStatus,
+              updatedAt: availableAt,
+            },
+          ],
+    effects: [],
   };
 }
 
@@ -301,6 +477,11 @@ function asRunActivity(mock) {
   return /** @type {RunActivity} */ (mock);
 }
 
+/** @param {unknown} mock @returns {RunWorkflowActivity} */
+function asRunWorkflowActivity(mock) {
+  return /** @type {RunWorkflowActivity} */ (mock);
+}
+
 /** @param {unknown} mock @returns {SubmitActivity} */
 function asSubmitActivity(mock) {
   return /** @type {SubmitActivity} */ (mock);
@@ -309,6 +490,11 @@ function asSubmitActivity(mock) {
 /** @param {unknown} mock @returns {RecoverActivity} */
 function asRecoverActivity(mock) {
   return /** @type {RecoverActivity} */ (mock);
+}
+
+/** @param {unknown} mock @returns {RecoverWorkflowActivity} */
+function asRecoverWorkflowActivity(mock) {
+  return /** @type {RecoverWorkflowActivity} */ (mock);
 }
 
 describe('resident activity worker', () => {
@@ -709,6 +895,565 @@ describe('resident activity worker', () => {
     );
   });
 
+  it('routes an exact workflow activity only to the workflow runner', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const runId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'exact-workflow-activity',
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [makeWorkflowRow({ ...harness, runId })],
+      })),
+      rebuildRun: jest.fn(async () =>
+        makeWorkflowView({ ...harness, runId, planId }),
+      ),
+    };
+    const runActivity = jest.fn();
+    const recoverActivity = jest.fn();
+    const recoverWorkflowActivity = jest.fn();
+    const runWorkflowActivity = jest.fn(
+      async (/** @type {RunWorkflowActivityOptions} */ _options) => {
+        controller.abort();
+        return { outcome: { dispatched: true } };
+      },
+    );
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+        recoverActivity: asRecoverActivity(recoverActivity),
+        recoverWorkflowActivity: asRecoverWorkflowActivity(
+          recoverWorkflowActivity,
+        ),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 1 });
+
+    expect(runActivity).not.toHaveBeenCalled();
+    expect(recoverActivity).not.toHaveBeenCalled();
+    expect(recoverWorkflowActivity).not.toHaveBeenCalled();
+    expect(runWorkflowActivity).toHaveBeenCalledTimes(1);
+    const request = runWorkflowActivity.mock.calls[0][0];
+    expect(request).toEqual({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      runId,
+      workflowId: WORKFLOW_ID,
+      planId,
+      invocationId: WORKFLOW_INVOCATION_ID,
+      activityId: WORKFLOW_ACTIVITY_ID,
+      generation: 0,
+      cursor: {
+        version: 1,
+        continuationId: WORKFLOW_CONTINUATION_ID,
+        stepId: WORKFLOW_STEP_ID,
+        stepIndex: 0,
+      },
+      actor: { kind: 'resident-workflow', id: harness.appId },
+      admissionSignal: controller.signal,
+      signal: expect.any(AbortSignal),
+    });
+    expect(request).not.toHaveProperty('controlContext');
+    expect(request).not.toHaveProperty('ownerCancellation');
+    expect(request).not.toHaveProperty('registerActiveAttemptCancellationPort');
+  });
+
+  it('repairs stale workflow head, cursor, and generation rows before exact dispatch', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    /** @param {string} idempotencyKey */
+    const runId = (idempotencyKey) =>
+      createManualLedgerRunId({ appId: harness.appId, idempotencyKey });
+    const wrongRevisionRunId = runId('workflow-wrong-revision');
+    const staleHeadRunId = runId('workflow-stale-head');
+    const staleCursorRunId = runId('workflow-stale-cursor');
+    const staleGenerationRunId = runId('workflow-stale-generation');
+    const mismatchedPlanRunId = runId('workflow-mismatched-manifest-plan');
+    const exactRunId = runId('workflow-exact-after-stale');
+    const wrongRevisionRow = makeWorkflowRow({
+      ...harness,
+      revisionId: `${harness.revisionId}-other`,
+      runId: wrongRevisionRunId,
+    });
+    const staleHeadRow = makeWorkflowRow({
+      ...harness,
+      runId: staleHeadRunId,
+      version: 2,
+      lastSequence: 2,
+    });
+    const staleCursorRow = makeWorkflowRow({
+      ...harness,
+      runId: staleCursorRunId,
+      cursorVersion: 2,
+    });
+    const staleGenerationRow = makeWorkflowRow({
+      ...harness,
+      runId: staleGenerationRunId,
+      generation: 1,
+    });
+    const mismatchedPlanRow = makeWorkflowRow({
+      ...harness,
+      runId: mismatchedPlanRunId,
+    });
+    const exactRow = makeWorkflowRow({ ...harness, runId: exactRunId });
+    const repairReadyWork = jest.fn(
+      async (/** @type {Record<string, any>} */ _options) => undefined,
+    );
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [
+          wrongRevisionRow,
+          staleHeadRow,
+          staleCursorRow,
+          staleGenerationRow,
+          mismatchedPlanRow,
+          exactRow,
+        ],
+      })),
+      rebuildRun: jest.fn(async (/** @type {string} */ candidateRunId) =>
+        makeWorkflowView({
+          ...harness,
+          runId: candidateRunId,
+          planId:
+            candidateRunId === mismatchedPlanRunId
+              ? `${planId.slice(0, -1)}${planId.endsWith('A') ? 'B' : 'A'}`
+              : planId,
+        }),
+      ),
+      repairReadyWork,
+    };
+    const runActivity = jest.fn();
+    const recoverActivity = jest.fn();
+    const recoverWorkflowActivity = jest.fn();
+    const runWorkflowActivity = jest.fn(
+      async (/** @type {RunWorkflowActivityOptions} */ _options) => {
+        controller.abort();
+        return { outcome: { dispatched: true } };
+      },
+    );
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+        recoverActivity: asRecoverActivity(recoverActivity),
+        recoverWorkflowActivity: asRecoverWorkflowActivity(
+          recoverWorkflowActivity,
+        ),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 1 });
+
+    expect(ledger.rebuildRun.mock.calls.map(([id]) => id)).toEqual([
+      staleHeadRunId,
+      staleCursorRunId,
+      staleGenerationRunId,
+      mismatchedPlanRunId,
+      exactRunId,
+    ]);
+    expect(repairReadyWork.mock.calls.map(([request]) => request)).toEqual([
+      {
+        appId: harness.appId,
+        revisionId: harness.revisionId,
+        runId: staleHeadRunId,
+        observed: staleHeadRow,
+      },
+      {
+        appId: harness.appId,
+        revisionId: harness.revisionId,
+        runId: staleCursorRunId,
+        observed: staleCursorRow,
+      },
+      {
+        appId: harness.appId,
+        revisionId: harness.revisionId,
+        runId: staleGenerationRunId,
+        observed: staleGenerationRow,
+      },
+    ]);
+    expect(runWorkflowActivity).toHaveBeenCalledTimes(1);
+    expect(runWorkflowActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: exactRunId }),
+    );
+    expect(runActivity).not.toHaveBeenCalled();
+    expect(recoverActivity).not.toHaveBeenCalled();
+    expect(recoverWorkflowActivity).not.toHaveBeenCalled();
+  });
+
+  it('releases a claimed workflow attempt before dispatching its fresh generation', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const runId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'recover-claimed-workflow',
+    });
+    const recoveryRow = makeWorkflowRow({
+      ...harness,
+      runId,
+      kind: 'RECOVERY',
+      generation: 1,
+      version: 2,
+      lastSequence: 2,
+      cursorVersion: 2,
+      availableAt: 10,
+    });
+    let view = makeWorkflowView({
+      ...harness,
+      runId,
+      planId,
+      invocationStatus: InvocationStatus.RUNNING,
+      attemptStatus: AttemptStatus.CLAIMED,
+      generation: 1,
+      version: 2,
+      lastSequence: 2,
+      cursorVersion: 2,
+      availableAt: 10,
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({ items: [recoveryRow] })),
+      rebuildRun: jest.fn(async () => view),
+    };
+    /** @type {string[]} */
+    const order = [];
+    const recoverWorkflowActivity = jest.fn(
+      async (
+        /** @type {Parameters<RecoverWorkflowActivity>[0]} */ _options,
+      ) => {
+        order.push('release');
+        view = makeWorkflowView({
+          ...harness,
+          runId,
+          planId,
+          invocationStatus: InvocationStatus.RUNNABLE,
+          attemptStatus: AttemptStatus.ABANDONED,
+          generation: 1,
+          version: 3,
+          lastSequence: 3,
+          cursorVersion: 3,
+          availableAt: 11,
+        });
+      },
+    );
+    const runWorkflowActivity = jest.fn(
+      async (/** @type {RunWorkflowActivityOptions} */ _options) => {
+        order.push('dispatch');
+        controller.abort();
+        return { outcome: { dispatched: true } };
+      },
+    );
+    const runActivity = jest.fn();
+    const recoverActivity = jest.fn();
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+        recoverActivity: asRecoverActivity(recoverActivity),
+        recoverWorkflowActivity: asRecoverWorkflowActivity(
+          recoverWorkflowActivity,
+        ),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 1 });
+
+    expect(order).toEqual(['release', 'dispatch']);
+    expect(recoverWorkflowActivity).toHaveBeenCalledWith({
+      ledger: asExecutionLedger(ledger),
+      runId,
+      invocationId: WORKFLOW_INVOCATION_ID,
+      actor: { kind: 'resident-workflow-recovery', id: harness.appId },
+    });
+    expect(ledger.rebuildRun).toHaveBeenCalledTimes(2);
+    expect(runWorkflowActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId,
+        invocationId: WORKFLOW_INVOCATION_ID,
+        generation: 1,
+        cursor: {
+          version: 3,
+          continuationId: WORKFLOW_CONTINUATION_ID,
+          stepId: WORKFLOW_STEP_ID,
+          stepIndex: 0,
+        },
+      }),
+    );
+    expect(runActivity).not.toHaveBeenCalled();
+    expect(recoverActivity).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch an inconsistent workflow authority returned after recovery', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const runId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'reject-inconsistent-recovered-workflow',
+    });
+    const recoveryRow = makeWorkflowRow({
+      ...harness,
+      runId,
+      kind: 'RECOVERY',
+      generation: 1,
+      version: 2,
+      lastSequence: 2,
+      cursorVersion: 2,
+      availableAt: 10,
+    });
+    let view = makeWorkflowView({
+      ...harness,
+      runId,
+      planId,
+      invocationStatus: InvocationStatus.RUNNING,
+      attemptStatus: AttemptStatus.CLAIMED,
+      generation: 1,
+      version: 2,
+      lastSequence: 2,
+      cursorVersion: 2,
+      availableAt: 10,
+    });
+    let listCalls = 0;
+    const ledger = {
+      listReadyWork: jest.fn(async () => {
+        listCalls += 1;
+        if (listCalls === 1) return { items: [recoveryRow] };
+        controller.abort();
+        return { items: [] };
+      }),
+      rebuildRun: jest.fn(async () => view),
+    };
+    const recoverWorkflowActivity = jest.fn(async () => {
+      view = makeWorkflowView({
+        ...harness,
+        runId,
+        planId,
+        invocationStatus: InvocationStatus.RUNNABLE,
+        attemptStatus: AttemptStatus.ABANDONED,
+        generation: 1,
+        version: 3,
+        lastSequence: 3,
+        cursorVersion: 3,
+        availableAt: 11,
+      });
+      view.invocations[0].workflow.continuationId = 'inconsistent-continuation';
+    });
+    const runWorkflowActivity = jest.fn();
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        pollIntervalMs: 1,
+        runActivity: asRunActivity(jest.fn()),
+        runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+        recoverActivity: asRecoverActivity(jest.fn()),
+        recoverWorkflowActivity: asRecoverWorkflowActivity(
+          recoverWorkflowActivity,
+        ),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 0 });
+
+    expect(recoverWorkflowActivity).toHaveBeenCalledTimes(1);
+    expect(ledger.rebuildRun).toHaveBeenCalledTimes(2);
+    expect(runWorkflowActivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['matching manifest', true],
+    ['mismatched manifest', false],
+  ])(
+    'blocks a recovered started workflow attempt with a %s without redispatch',
+    async (_label, manifestMatches) => {
+      const execution = makeEmbeddedExecution();
+      const harness = makeHarness(execution);
+      const controller = new AbortController();
+      const exactPlanId = workflowPlanId(execution);
+      const planId = manifestMatches
+        ? exactPlanId
+        : `${exactPlanId.slice(0, -1)}${exactPlanId.endsWith('A') ? 'B' : 'A'}`;
+      const runId = createManualLedgerRunId({
+        appId: harness.appId,
+        idempotencyKey: 'recover-started-workflow',
+      });
+      const recoveryRow = makeWorkflowRow({
+        ...harness,
+        runId,
+        kind: 'RECOVERY',
+        generation: 1,
+        version: 2,
+        lastSequence: 2,
+        cursorVersion: 2,
+        availableAt: 10,
+      });
+      let view = makeWorkflowView({
+        ...harness,
+        runId,
+        planId,
+        invocationStatus: InvocationStatus.RUNNING,
+        attemptStatus: AttemptStatus.STARTED,
+        generation: 1,
+        version: 2,
+        lastSequence: 2,
+        cursorVersion: 2,
+        availableAt: 10,
+      });
+      const ledger = {
+        listReadyWork: jest.fn(async () => ({ items: [recoveryRow] })),
+        rebuildRun: jest.fn(async () => view),
+      };
+      const recoverWorkflowActivity = jest.fn(async () => {
+        view = makeWorkflowView({
+          ...harness,
+          runId,
+          planId,
+          runStatus: RunStatus.BLOCKED,
+          invocationStatus: InvocationStatus.UNCERTAIN,
+          cursorDisposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+          attemptStatus: AttemptStatus.ABANDONED,
+          generation: 1,
+          version: 3,
+          lastSequence: 3,
+          cursorVersion: 3,
+          availableAt: 11,
+        });
+        controller.abort();
+      });
+      const runWorkflowActivity = jest.fn();
+      const runActivity = jest.fn();
+      const recoverActivity = jest.fn();
+
+      await expect(
+        runResidentActivityWorker({
+          ledger: asExecutionLedger(ledger),
+          execution,
+          controlContext: harness.controlContext,
+          owner: harness.owner,
+          signal: controller.signal,
+          runActivity: asRunActivity(runActivity),
+          runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+          recoverActivity: asRecoverActivity(recoverActivity),
+          recoverWorkflowActivity: asRecoverWorkflowActivity(
+            recoverWorkflowActivity,
+          ),
+          createCommandServer: harness.createCommandServer,
+        }),
+      ).resolves.toEqual({ processed: 0 });
+
+      expect(recoverWorkflowActivity).toHaveBeenCalledTimes(1);
+      expect(ledger.rebuildRun).toHaveBeenCalledTimes(2);
+      expect(runWorkflowActivity).not.toHaveBeenCalled();
+      expect(runActivity).not.toHaveBeenCalled();
+      expect(recoverActivity).not.toHaveBeenCalled();
+    },
+  );
+
+  it('admits workflow drain immediately but delays physical cancellation without a manual registrar', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const drainTimeoutMs = 10;
+    const planId = workflowPlanId(execution);
+    const runId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'workflow-bounded-drain',
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [makeWorkflowRow({ ...harness, runId })],
+      })),
+      rebuildRun: jest.fn(async () =>
+        makeWorkflowView({ ...harness, runId, planId }),
+      ),
+    };
+    /** @type {Deferred<unknown>} */
+    const physicalAbort = deferred();
+    /** @type {RunWorkflowActivityOptions | undefined} */
+    let workflowRequest;
+    const runWorkflowActivity = jest.fn(
+      async (/** @type {RunWorkflowActivityOptions} */ options) => {
+        workflowRequest = options;
+        if (!options.signal) {
+          throw new Error('Expected resident workflow attempt signal.');
+        }
+        if (!options.signal.aborted) {
+          await new Promise((resolve) =>
+            options.signal?.addEventListener('abort', resolve, { once: true }),
+          );
+        }
+        physicalAbort.resolve(options.signal.reason);
+        return { outcome: { dispatched: false } };
+      },
+    );
+    const runActivity = jest.fn();
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      drainTimeoutMs,
+      runActivity: asRunActivity(runActivity),
+      runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      recoverWorkflowActivity: asRecoverWorkflowActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+    });
+    await waitUntil(() => runWorkflowActivity.mock.calls.length === 1);
+
+    if (!workflowRequest) {
+      throw new Error('Expected resident workflow request.');
+    }
+    expect(workflowRequest.admissionSignal).toBe(controller.signal);
+    expect(workflowRequest.admissionSignal?.aborted).toBe(false);
+    expect(workflowRequest.signal?.aborted).toBe(false);
+    expect(workflowRequest).not.toHaveProperty(
+      'registerActiveAttemptCancellationPort',
+    );
+    expect(workflowRequest).not.toHaveProperty('ownerCancellation');
+    expect(workflowRequest).not.toHaveProperty('controlContext');
+
+    controller.abort(new Error('resident workflow shutdown'));
+    expect(workflowRequest.admissionSignal?.aborted).toBe(true);
+    expect(workflowRequest.signal?.aborted).toBe(false);
+
+    await expect(physicalAbort.promise).resolves.toMatchObject({
+      name: 'ResidentWorkerDrainExpired',
+      code: 'resident-worker-drain-expired',
+      details: { runId, drainTimeoutMs },
+    });
+    await expect(running).resolves.toEqual({ processed: 1 });
+    expect(workflowRequest.signal?.aborted).toBe(true);
+    expect(runActivity).not.toHaveBeenCalled();
+  });
+
   it('does not dispatch a locator returned after shutdown begins', async () => {
     const execution = makeEmbeddedExecution();
     const harness = makeHarness(execution);
@@ -851,7 +1596,7 @@ describe('resident activity worker', () => {
     const recoverActivity = jest.fn(
       async (/** @type {Parameters<RecoverActivity>[0]} */ _options) => {
         order.push('recover');
-        view = makeView({ ...harness, runId });
+        view = makeView({ ...harness, runId, generation: 1 });
       },
     );
     const runActivity = jest.fn(
@@ -885,6 +1630,59 @@ describe('resident activity worker', () => {
     expect(runActivity).toHaveBeenCalledWith(
       expect.objectContaining({ runId }),
     );
+  });
+
+  it('does not dispatch inconsistent manual authority returned after recovery', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const runId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'reject-inconsistent-recovered-manual',
+    });
+    let view = makeView({
+      ...harness,
+      runId,
+      invocationStatus: InvocationStatus.RUNNING,
+      attemptStatus: AttemptStatus.CLAIMED,
+    });
+    let listCalls = 0;
+    const ledger = {
+      listReadyWork: jest.fn(async () => {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return {
+            items: [makeRow({ ...harness, runId, kind: 'RECOVERY' })],
+          };
+        }
+        controller.abort();
+        return { items: [] };
+      }),
+      rebuildRun: jest.fn(async () => view),
+    };
+    const recoverActivity = jest.fn(async () => {
+      view = makeView({ ...harness, runId, generation: 1 });
+      view.invocations[0].runId = 'different-run-authority';
+    });
+    const runActivity = jest.fn();
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        pollIntervalMs: 1,
+        runActivity: asRunActivity(runActivity),
+        recoverActivity: asRecoverActivity(recoverActivity),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 0 });
+
+    expect(recoverActivity).toHaveBeenCalledTimes(1);
+    expect(ledger.rebuildRun).toHaveBeenCalledTimes(2);
+    expect(runActivity).not.toHaveBeenCalled();
   });
 
   it('recovers stale started work to uncertainty without redispatch', async () => {

@@ -102,6 +102,7 @@ import {
   WORKFLOW_START_PAYLOAD_SCHEMA,
   WorkflowCursorDisposition,
   assertWorkflowRunId,
+  isWorkflowActivityDispatchSupported,
   materializeFirstWorkflowActivity,
   materializeUncertainWorkflowActivityFailure,
   materializeUncertainWorkflowActivitySuccess,
@@ -4008,27 +4009,6 @@ function selectWorkflowStepOutput(step, outputs, label) {
     );
   }
   return selected[0];
-}
-
-/**
- * This tranche can dispatch only ordinary activities whose immediate success
- * is either terminal or another ordinary activity. Keeping the predicate in
- * the fold makes that limitation part of durable history validity rather than
- * a convenience check on one public entry point.
- * @param {Record<string, any>} cursor - Exact active activity cursor.
- * @param {Record<string, any>} planPayload - Rehashed workflow plan.
- * @returns {boolean} - Whether physical dispatch has an implemented commit path.
- */
-function isWorkflowActivityDispatchSupported(cursor, planPayload) {
-  const current = planPayload.definition.steps[cursor.stepIndex];
-  const next = planPayload.definition.steps[cursor.stepIndex + 1];
-  return Boolean(
-    current?.kind === 'activity' &&
-    current.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID &&
-    (!next ||
-      (next.kind === 'activity' &&
-        next.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID)),
-  );
 }
 
 /**

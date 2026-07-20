@@ -13,19 +13,25 @@ successor. Reconciliation never rewrites the retained `ABANDONED` attempt.
 Ready-work V2 changes in the same transactions.
 Adapter matrices cover replay, races, injected payload and transaction
 failures, projection and payload tampering, and native LMDB close/reopen.
-Resident workflow dispatch, cursor-aware cancellation, timers, signals, public
-workflow commands, managed effects in workflow attempts, and reconciliation of
-cancelled or deadline-exceeded evidence remain prospective.
+The resident now consumes exact manifest-bound workflow `ACTIVITY` and
+`RECOVERY` rows, persists the cursor-guarded start before physical dispatch,
+continues ordinary activity chains serially, releases only unstarted claims,
+and turns lost started work into non-runnable uncertainty. Cursor-aware
+cancellation, timers, signals, public workflow commands, managed effects in
+workflow attempts, and reconciliation of cancelled or deadline-exceeded
+evidence remain prospective.
 
 ## Context
 
 [0011](0011-persisted-state-machine-execution-ledger.md) chooses explicit
 persisted state machines and continuations instead of deterministic replay of
 arbitrary application code. The resident activity worker now proves durable
-submission, exact-revision serial dispatch, conservative `CLAIMED` and
-`STARTED` recovery, managed-effect settlement, authenticated local commands,
-and graceful shutdown. It still executes one manual invocation whose terminal
-transition also terminalizes its run.
+submission, exact-revision serial dispatch for manual and ordinary workflow
+activities, conservative `CLAIMED` and `STARTED` recovery, managed-effect
+settlement for manual attempts, authenticated local commands, and graceful
+shutdown. A manual invocation's terminal transition still terminalizes its
+run; a workflow activity terminal instead atomically advances its persisted
+cursor or terminalizes the workflow.
 
 That shape cannot represent a durable workflow safely. A workflow needs to
 retain which declared step is current, the exact output and input selected for
@@ -222,8 +228,9 @@ uncertain removes `RECOVERY`; completed-evidence reconciliation creates exactly
 one successor `ACTIVITY` row or no row for terminal completion; direct and
 reconciled failures leave no row.
 
-The initial dispatched row kinds are runnable activity, activity recovery, and
-timer. A schema-level continuation row is reserved for fail-closed,
+The initial work-index row kinds are runnable activity, activity recovery, and
+timer; the resident currently dispatches only the first two. A schema-level
+continuation row is reserved for fail-closed,
 framework-owned cursor advancement or repair when an immediate successor
 cannot be materialized in its normal compound transition. It never represents
 a signal wait and never authorizes user-code dispatch. Normal activity, timer,

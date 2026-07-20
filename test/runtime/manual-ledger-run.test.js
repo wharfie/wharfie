@@ -1340,6 +1340,127 @@ describe('manual ledger activity runner', () => {
     });
   });
 
+  it('stops resident admission before claiming without requesting logical cancellation', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      controller.abort(new Error('resident is stopping'));
+      let dispatches = 0;
+
+      const result = await runManualLedgerActivity(
+        runOptions(ledger, {
+          admissionSignal: controller.signal,
+          executeAttempt: async () => {
+            dispatches += 1;
+            throw new Error('stopped admission must not dispatch');
+          },
+        }),
+      );
+
+      expect(dispatches).toBe(0);
+      expect(result).toMatchObject({
+        disposition: 'in-progress',
+        run: { status: RunStatus.RUNNING, version: 1 },
+        invocation: { status: InvocationStatus.RUNNABLE, generation: 0 },
+      });
+      expect(result.attempt).toBeUndefined();
+      expect(
+        (await ledger.getEvents(result.run.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual(['manual-run-created']);
+    });
+  });
+
+  it('releases a resident claim when admission stops before durable start', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const stoppingLedger = {
+        ...ledger,
+        claimInvocation: async (
+          /** @type {Parameters<typeof ledger.claimInvocation>[0]} */ options,
+        ) => {
+          const claimed = await ledger.claimInvocation(options);
+          controller.abort(new Error('resident is stopping'));
+          return claimed;
+        },
+      };
+      let dispatches = 0;
+
+      const result = await runManualLedgerActivity(
+        runOptions(stoppingLedger, {
+          admissionSignal: controller.signal,
+          executeAttempt: async () => {
+            dispatches += 1;
+            throw new Error('released resident claim must not dispatch');
+          },
+        }),
+      );
+
+      expect(dispatches).toBe(0);
+      expect(result).toMatchObject({
+        disposition: 'in-progress',
+        run: { status: RunStatus.RUNNING, version: 3 },
+        invocation: { status: InvocationStatus.RUNNABLE, generation: 1 },
+        attempt: { status: AttemptStatus.ABANDONED, generation: 1 },
+      });
+      expect(result.run.status).not.toBe(RunStatus.CANCELLED);
+      expect(
+        (await ledger.getEvents(result.run.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-abandoned-before-start',
+      ]);
+    });
+  });
+
+  it('makes a durably started attempt uncertain when admission stops before physical dispatch', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const stoppingLedger = {
+        ...ledger,
+        markAttemptStarted: async (
+          /** @type {Parameters<typeof ledger.markAttemptStarted>[0]} */ options,
+        ) => {
+          const started = await ledger.markAttemptStarted(options);
+          controller.abort(new Error('resident is stopping'));
+          return started;
+        },
+      };
+      let dispatches = 0;
+
+      const result = await runManualLedgerActivity(
+        runOptions(stoppingLedger, {
+          admissionSignal: controller.signal,
+          executeAttempt: async () => {
+            dispatches += 1;
+            throw new Error('uncertain started work must not dispatch');
+          },
+        }),
+      );
+
+      expect(dispatches).toBe(0);
+      expect(result).toMatchObject({
+        disposition: 'blocked',
+        run: { status: RunStatus.BLOCKED },
+        invocation: { status: InvocationStatus.UNCERTAIN, generation: 1 },
+        attempt: { status: AttemptStatus.ABANDONED, generation: 1 },
+      });
+      expect(
+        (await ledger.getEvents(result.run.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-started',
+        'attempt-became-uncertain',
+      ]);
+    });
+  });
+
   it('persists a started cancellation before signalling the physical attempt', async () => {
     await withLedger(async (ledger) => {
       const controller = new AbortController();

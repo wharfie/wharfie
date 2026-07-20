@@ -242,7 +242,7 @@ async function resolveDurableManifestActivityRequest(options) {
  * Ownership is deliberately outside this kernel so a future resident worker
  * can call it while holding its long-lived app-scoped owner generation.
  * @param {ResolvedDurableManifestActivityRequest | ResolvedPersistedDurableManifestActivityRequest} request - Exact submitted or persisted durable request.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, controlContext: {db: import('../lib/db/base.js').DBClient, adapterName: import('../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, applicationStateConfiguration: ReturnType<typeof resolveApplicationStateStoreConfiguration>, ownerCancellation?: import('./manual-ledger-run.js').ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: import('./manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPortRegistrar}} options - Owned host capabilities.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, controlContext: {db: import('../lib/db/base.js').DBClient, adapterName: import('../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, applicationStateConfiguration: ReturnType<typeof resolveApplicationStateStoreConfiguration>, admissionSignal?: AbortSignal, ownerCancellation?: import('./manual-ledger-run.js').ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: import('./manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPortRegistrar}} options - Owned host capabilities.
  * @returns {Promise<{appId: string, revisionId: string, activityName: string, idempotencyKey?: string, runId: string, outcome: Record<string, any>}>} - Durable run result.
  */
 async function runResolvedDurableManifestActivity(request, options) {
@@ -322,6 +322,9 @@ async function runResolvedDurableManifestActivity(request, options) {
       : {}),
     ...(request.actor === undefined ? {} : { actor: request.actor }),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
+    ...(options.admissionSignal === undefined
+      ? {}
+      : { admissionSignal: options.admissionSignal }),
     ...(options.ownerCancellation === undefined
       ? {}
       : { ownerCancellation: options.ownerCancellation }),
@@ -475,7 +478,7 @@ async function resolvePersistedDurableManifestActivityRequest(options) {
  * Execute one already-persisted request through an already-open control
  * ledger. Callers must hold the application mutation owner for the complete
  * call; this function never acquires or releases local ownership.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, controlContext: {db: import('../lib/db/base.js').DBClient, adapterName: import('../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, execution: ManifestActivityExecution, runId: string, signal?: AbortSignal, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, ownerCancellation?: import('./manual-ledger-run.js').ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: import('./manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPortRegistrar}} options - Owned persisted execution request.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, controlContext: {db: import('../lib/db/base.js').DBClient, adapterName: import('../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, execution: ManifestActivityExecution, runId: string, admissionSignal?: AbortSignal, signal?: AbortSignal, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, ownerCancellation?: import('./manual-ledger-run.js').ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: import('./manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPortRegistrar}} options - Owned persisted execution request.
  * @returns {ReturnType<typeof runResolvedDurableManifestActivity>} - Durable activity result.
  */
 export async function runPersistedDurableManifestActivity(options) {
@@ -511,10 +514,12 @@ export async function runPersistedDurableManifestActivity(options) {
     controlContext,
   );
   const request = await resolvePersistedDurableManifestActivityRequest(options);
+  const admissionSignal = resolveOptionalAbortSignal(options.admissionSignal);
   return await runResolvedDurableManifestActivity(request, {
     ledger: options.ledger,
     controlContext,
     applicationStateConfiguration,
+    ...(admissionSignal === undefined ? {} : { admissionSignal }),
     ...(options.ownerCancellation === undefined
       ? {}
       : { ownerCancellation: options.ownerCancellation }),

@@ -30,13 +30,16 @@ Any unresolved managed-effect siblings settle atomically through receipt-only
 recovery before that block. The public worker command and hidden packaged
 service runtime share this implementation and consume an exact-revision
 transactional ready-work locator rather than scanning run history. The strict
-manifest also accepts the bounded linear workflow definition from ADR 0019,
-but does not execute it yet.
+manifest also accepts the bounded linear workflow definition from ADR 0019.
+The resident executes exact manifest-bound ordinary activity continuations,
+persists their outputs, and conservatively releases `CLAIMED` or blocks lost
+`STARTED` workflow attempts. There is no public workflow-start command yet.
 
 This is not yet a durable workflow engine or an installed operating-system
-service. Workflow continuations, timers and schedules, startup-on-boot
-installation, provider-backed deployment, multi-host leases/heartbeats, and
-the trusted-node mesh remain roadmap work; Wharfie is not production ready.
+service. Public workflow operations, timer and signal continuations, schedules,
+startup-on-boot installation, provider-backed deployment, multi-host
+leases/heartbeats, and the trusted-node mesh remain roadmap work; Wharfie is
+not production ready.
 
 ## Start locally
 

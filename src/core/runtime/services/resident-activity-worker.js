@@ -5,6 +5,7 @@ import {
   InvocationStatus,
   RunStatus,
 } from '../../lib/db/tables/execution-ledger.js';
+import { WorkflowCursorDisposition } from '../../lib/ledger/workflow-execution-contract.js';
 import {
   LedgerServiceOwnerKind,
   createLedgerServiceId,
@@ -23,12 +24,17 @@ import {
   runPersistedDurableManifestActivity,
   submitDurableManifestActivity,
 } from '../durable-activity-host.js';
+import {
+  resolveManifestWorkflowActivityBinding,
+  runPersistedDurableManifestWorkflowActivity,
+} from '../durable-workflow-host.js';
 import { createBuiltinManagedEffectRecoveryCatalog } from '../effects/builtin-catalog.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
   recoverManualLedgerActivity,
 } from '../manual-ledger-run.js';
+import { recoverWorkflowLedgerActivity } from '../workflow-ledger-run.js';
 import {
   EXECUTION_LEDGER_CANCEL_OWNER_COMMAND,
   recoverStoppedManagedEffectsAtOperatorBoundary,
@@ -52,6 +58,8 @@ export const RESIDENT_ACTIVITY_DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 export const RESIDENT_ACTIVITY_READY_WORK_LIMIT = 50;
 
 /** @typedef {{requestCancellation: (request: {requestId: string}) => Promise<Record<string, any>>}} ActiveCancellationPort */
+
+/** @typedef {{kind: 'manual', runId: string} | {kind: 'workflow', runId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} ResidentRunnableWork */
 
 /**
  * @param {unknown} value - Candidate abort signal.
@@ -90,7 +98,7 @@ function resolvePollInterval(value) {
 
 /**
  * @param {unknown} value - Candidate graceful drain allowance.
- * @returns {number} - Bounded milliseconds before cooperative cancellation.
+ * @returns {number} - Bounded milliseconds before physical drain enforcement.
  */
 function resolveDrainTimeout(value) {
   if (value === undefined) return RESIDENT_ACTIVITY_DEFAULT_DRAIN_TIMEOUT_MS;
@@ -180,8 +188,7 @@ function normalizeSubmitRequest(value) {
 
 /**
  * Wait until a submit wakes the worker, its poll interval elapses, or shutdown
- * begins. An active attempt receives its own cooperative cancellation only if
- * the bounded natural-drain allowance expires.
+ * begins. Active-attempt drain signaling is owned by the dispatch loop.
  * @param {{signal?: AbortSignal, pollIntervalMs: number, subscribeWake: (listener: () => void) => () => void}} options - Wait controls.
  * @returns {Promise<void>} - Next ready-work poll boundary.
  */
@@ -313,20 +320,100 @@ export async function recoverResidentManagedEffects(options) {
 }
 
 /**
- * Rebuild a ready-work locator and return only an exact runnable manual
- * request. A retained CLAIMED or STARTED attempt is first recovered under the
- * successor resident owner; STARTED becomes blocked uncertainty and is never
- * returned for dispatch.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, row: Record<string, any>, recoverActivity: typeof recoverManualLedgerActivity, recoverManagedEffects: typeof recoverResidentManagedEffects, controlContext: {adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, signal?: AbortSignal}} options - Candidate and recovery authority.
- * @returns {Promise<string | null>} - Runnable run ID, if still authoritative.
+ * @param {Record<string, any>} view - Verified current workflow.
+ * @param {Record<string, any>} invocation - Cursor-bound invocation.
+ * @returns {ResidentRunnableWork} - Exact workflow dispatch descriptor.
+ */
+function createWorkflowWork(view, invocation) {
+  const cursor = view.workflowCursor;
+  return {
+    kind: 'workflow',
+    runId: view.run.runId,
+    workflowId: cursor.workflowId,
+    planId: cursor.planId,
+    invocationId: invocation.invocationId,
+    activityId: invocation.activityId,
+    generation: invocation.generation,
+    cursor: {
+      version: cursor.version,
+      continuationId: cursor.continuationId,
+      stepId: cursor.stepId,
+      stepIndex: cursor.stepIndex,
+    },
+  };
+}
+
+/**
+ * @param {Record<string, any>} row - Candidate workflow ready row.
+ * @param {Record<string, any>} cursor - Verified current cursor.
+ * @returns {boolean} - Whether every cursor coordinate is exact.
+ */
+function isExactWorkflowReadyCursor(row, cursor) {
+  return (
+    row.cursorVersion === cursor.version &&
+    row.continuationId === cursor.continuationId &&
+    row.stepId === cursor.stepId &&
+    row.stepIndex === cursor.stepIndex
+  );
+}
+
+/**
+ * Verify the complete rebuilt workflow/cursor/invocation binding before a
+ * ready row or recovery result can become a dispatch candidate.
+ * @param {Record<string, any>} view - Rebuilt workflow authority.
+ * @param {Record<string, any>} invocation - Candidate cursor invocation.
+ * @returns {boolean} - Whether every durable identity agrees.
+ */
+function isExactWorkflowInvocation(view, invocation) {
+  const cursor = view.workflowCursor;
+  return Boolean(
+    view.run.trigger?.kind === 'workflow' &&
+    cursor &&
+    cursor.runId === view.run.runId &&
+    cursor.appId === view.run.appId &&
+    cursor.revisionId === view.run.revisionId &&
+    cursor.workflowId === view.run.trigger.workflowId &&
+    cursor.planId === view.run.trigger.planId &&
+    cursor.invocationId === invocation?.invocationId &&
+    invocation.runId === view.run.runId &&
+    invocation.appId === view.run.appId &&
+    invocation.revisionId === view.run.revisionId &&
+    invocation.workflow?.workflowId === cursor.workflowId &&
+    invocation.workflow?.planId === cursor.planId &&
+    invocation.workflow?.continuationId === cursor.continuationId &&
+    invocation.workflow?.stepId === cursor.stepId &&
+    invocation.workflow?.stepIndex === cursor.stepIndex,
+  );
+}
+
+/**
+ * Treat a workflow activation which is valid in the ledger but unavailable in
+ * this exact embedded revision as parked work. One incompatible run must not
+ * terminate the resident or prevent it from serving later ready rows.
+ * @param {{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, workflowId: string, planId: string, activityId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} options - Exact persisted and manifest identities.
+ * @returns {boolean} - Whether this resident can safely dispatch the activity.
+ */
+function canDispatchManifestWorkflowActivity(options) {
+  try {
+    return resolveManifestWorkflowActivityBinding(options).dispatchSupported;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rebuild a ready-work locator and return only exact manual or workflow work.
+ * A retained attempt is first recovered under the successor resident owner;
+ * STARTED becomes blocked uncertainty and is never returned for redispatch.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, manifestIdentity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, row: Record<string, any>, recoverActivity: typeof recoverManualLedgerActivity, recoverWorkflowActivity: typeof recoverWorkflowLedgerActivity, recoverManagedEffects: typeof recoverResidentManagedEffects, controlContext: {adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, signal?: AbortSignal}} options - Candidate and recovery authority.
+ * @returns {Promise<ResidentRunnableWork | null>} - Exact runnable work.
  */
 async function resolveRunnableLocator(options) {
   if (options.signal?.aborted) return null;
   if (
     !['ACTIVITY', 'RECOVERY'].includes(options.row.kind) ||
     options.row.appId !== options.appId ||
-    options.row.revisionId !== options.revisionId ||
-    options.row.invocationId !== MANUAL_LEDGER_INVOCATION_ID
+    options.row.revisionId !== options.revisionId
   ) {
     return null;
   }
@@ -336,8 +423,7 @@ async function resolveRunnableLocator(options) {
     !view ||
     view.run.runId !== options.row.runId ||
     view.run.appId !== options.appId ||
-    view.run.revisionId !== options.revisionId ||
-    view.run.trigger?.kind !== 'manual'
+    view.run.revisionId !== options.revisionId
   ) {
     return null;
   }
@@ -349,31 +435,170 @@ async function resolveRunnableLocator(options) {
     await repairStaleReadyWorkLocator(options);
     return null;
   }
+
+  if (view.run.trigger?.kind === 'manual') {
+    if (
+      options.row.invocationId !== MANUAL_LEDGER_INVOCATION_ID ||
+      Object.prototype.hasOwnProperty.call(options.row, 'cursorVersion')
+    ) {
+      await repairStaleReadyWorkLocator(options);
+      return null;
+    }
+    let invocation = view.invocations.find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
+    );
+    if (
+      !invocation ||
+      invocation.revisionId !== options.revisionId ||
+      invocation.generation !== options.row.generation
+    ) {
+      await repairStaleReadyWorkLocator(options);
+      return null;
+    }
+    if (options.row.kind === 'ACTIVITY') {
+      if (
+        invocation.status === InvocationStatus.RUNNABLE &&
+        invocation.updatedAt === options.row.availableAt
+      ) {
+        return { kind: 'manual', runId: view.run.runId };
+      }
+      await repairStaleReadyWorkLocator(options);
+      return null;
+    }
+    if (invocation.status !== InvocationStatus.RUNNING) {
+      await repairStaleReadyWorkLocator(options);
+      return null;
+    }
+    const attempts = view.attempts.filter(
+      (/** @type {Record<string, any>} */ attempt) =>
+        attempt.invocationId === invocation.invocationId &&
+        attempt.generation === invocation.generation,
+    );
+    if (
+      attempts.length !== 1 ||
+      attempts[0].attemptId !== options.row.attemptId ||
+      attempts[0].updatedAt !== options.row.availableAt ||
+      ![AttemptStatus.CLAIMED, AttemptStatus.STARTED].includes(
+        attempts[0].status,
+      )
+    ) {
+      await repairStaleReadyWorkLocator(options);
+      return null;
+    }
+    if (options.signal?.aborted) return null;
+    const attempt = attempts[0];
+    const recoveringManual = {
+      runId: view.run.runId,
+      appId: view.run.appId,
+      revisionId: view.run.revisionId,
+      invocationId: invocation.invocationId,
+      activityId: invocation.activityId,
+      generation: invocation.generation,
+    };
+    const actor = { kind: 'resident-recovery', id: options.appId };
+    const unresolvedEffects = getUnresolvedAttemptEffects(
+      view,
+      invocation,
+      attempt,
+    );
+    if (
+      attempt.status === AttemptStatus.STARTED &&
+      unresolvedEffects.length > 0
+    ) {
+      await options.recoverManagedEffects({
+        ledger: options.ledger,
+        appId: options.appId,
+        runId: view.run.runId,
+        invocationId: invocation.invocationId,
+        attemptId: attempt.attemptId,
+        attempt,
+        effects: unresolvedEffects,
+        actor,
+        controlContext: options.controlContext,
+        ...(options.applicationStateConfiguration === undefined
+          ? {}
+          : {
+              applicationStateConfiguration:
+                options.applicationStateConfiguration,
+            }),
+      });
+    } else {
+      await options.recoverActivity({
+        ledger: options.ledger,
+        runId: view.run.runId,
+        invocationId: invocation.invocationId,
+        actor,
+      });
+    }
+    view = await options.ledger.rebuildRun(view.run.runId);
+    if (options.signal?.aborted || !view) return null;
+    invocation = view.invocations.find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.invocationId === recoveringManual.invocationId,
+    );
+    return view.run.runId === recoveringManual.runId &&
+      view.run.appId === recoveringManual.appId &&
+      view.run.revisionId === recoveringManual.revisionId &&
+      view.run.trigger?.kind === 'manual' &&
+      view.run.status === RunStatus.RUNNING &&
+      invocation?.runId === recoveringManual.runId &&
+      invocation.appId === recoveringManual.appId &&
+      invocation.revisionId === recoveringManual.revisionId &&
+      invocation.activityId === recoveringManual.activityId &&
+      invocation.generation === recoveringManual.generation &&
+      invocation.status === InvocationStatus.RUNNABLE
+      ? { kind: 'manual', runId: view.run.runId }
+      : null;
+  }
+
+  if (view.run.trigger?.kind !== 'workflow' || !view.workflowCursor) {
+    await repairStaleReadyWorkLocator(options);
+    return null;
+  }
+  let cursor = view.workflowCursor;
   let invocation = view.invocations.find(
     (/** @type {Record<string, any>} */ candidate) =>
-      candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
+      candidate.invocationId === options.row.invocationId,
   );
   if (
     !invocation ||
-    invocation.revisionId !== options.revisionId ||
+    !isExactWorkflowInvocation(view, invocation) ||
+    !isExactWorkflowReadyCursor(options.row, cursor) ||
     invocation.generation !== options.row.generation
   ) {
     await repairStaleReadyWorkLocator(options);
     return null;
   }
-
   if (options.row.kind === 'ACTIVITY') {
+    const manifestDispatchSupported = canDispatchManifestWorkflowActivity({
+      identity: options.manifestIdentity,
+      workflowId: cursor.workflowId,
+      planId: cursor.planId,
+      activityId: invocation.activityId,
+      cursor: {
+        version: cursor.version,
+        continuationId: cursor.continuationId,
+        stepId: cursor.stepId,
+        stepIndex: cursor.stepIndex,
+      },
+    });
+    if (!manifestDispatchSupported) return null;
     if (
+      cursor.disposition === WorkflowCursorDisposition.ACTIVITY_RUNNABLE &&
       invocation.status === InvocationStatus.RUNNABLE &&
       invocation.updatedAt === options.row.availableAt
     ) {
-      return view.run.runId;
+      return createWorkflowWork(view, invocation);
     }
     await repairStaleReadyWorkLocator(options);
     return null;
   }
 
-  if (invocation.status !== InvocationStatus.RUNNING) {
+  if (
+    cursor.disposition !== WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+    invocation.status !== InvocationStatus.RUNNING
+  ) {
     await repairStaleReadyWorkLocator(options);
     return null;
   }
@@ -392,69 +617,78 @@ async function resolveRunnableLocator(options) {
     return null;
   }
   if (options.signal?.aborted) return null;
-  const attempt = attempts[0];
-  const actor = { kind: 'resident-recovery', id: options.appId };
-  const unresolvedEffects = getUnresolvedAttemptEffects(
-    view,
-    invocation,
-    attempt,
-  );
-  if (
-    attempt.status === AttemptStatus.STARTED &&
-    unresolvedEffects.length > 0
-  ) {
-    await options.recoverManagedEffects({
-      ledger: options.ledger,
-      appId: options.appId,
-      runId: view.run.runId,
-      invocationId: invocation.invocationId,
-      attemptId: attempt.attemptId,
-      attempt,
-      effects: unresolvedEffects,
-      actor,
-      controlContext: options.controlContext,
-      ...(options.applicationStateConfiguration === undefined
-        ? {}
-        : {
-            applicationStateConfiguration:
-              options.applicationStateConfiguration,
-          }),
-    });
-  } else {
-    await options.recoverActivity({
-      ledger: options.ledger,
-      runId: view.run.runId,
-      invocationId: invocation.invocationId,
-      actor,
-    });
-  }
+  const recovering = {
+    runId: view.run.runId,
+    workflowId: cursor.workflowId,
+    planId: cursor.planId,
+    invocationId: invocation.invocationId,
+    activityId: invocation.activityId,
+    generation: invocation.generation,
+    cursorVersion: cursor.version,
+    continuationId: cursor.continuationId,
+    stepId: cursor.stepId,
+    stepIndex: cursor.stepIndex,
+  };
+  await options.recoverWorkflowActivity({
+    ledger: options.ledger,
+    runId: view.run.runId,
+    invocationId: invocation.invocationId,
+    actor: { kind: 'resident-workflow-recovery', id: options.appId },
+  });
   view = await options.ledger.rebuildRun(view.run.runId);
-  if (options.signal?.aborted) return null;
-  if (!view) return null;
+  if (options.signal?.aborted || !view || !view.workflowCursor) return null;
+  cursor = view.workflowCursor;
   invocation = view.invocations.find(
     (/** @type {Record<string, any>} */ candidate) =>
-      candidate.invocationId === options.row.invocationId,
+      candidate.invocationId === cursor.invocationId,
   );
-
-  return view.run.runId === options.row.runId &&
-    view.run.appId === options.appId &&
-    view.run.revisionId === options.revisionId &&
-    view.run.trigger?.kind === 'manual' &&
-    view.run.status === RunStatus.RUNNING &&
-    invocation?.revisionId === options.revisionId &&
-    invocation.status === InvocationStatus.RUNNABLE
-    ? view.run.runId
+  if (
+    view.run.runId !== recovering.runId ||
+    view.run.appId !== options.appId ||
+    view.run.revisionId !== options.revisionId ||
+    view.run.trigger?.kind !== 'workflow' ||
+    view.run.status !== RunStatus.RUNNING ||
+    cursor.disposition !== WorkflowCursorDisposition.ACTIVITY_RUNNABLE ||
+    !invocation ||
+    !isExactWorkflowInvocation(view, invocation) ||
+    cursor.workflowId !== recovering.workflowId ||
+    cursor.planId !== recovering.planId ||
+    cursor.version !== recovering.cursorVersion + 1 ||
+    cursor.continuationId !== recovering.continuationId ||
+    cursor.stepId !== recovering.stepId ||
+    cursor.stepIndex !== recovering.stepIndex ||
+    invocation.invocationId !== recovering.invocationId ||
+    invocation.activityId !== recovering.activityId ||
+    invocation.status !== InvocationStatus.RUNNABLE ||
+    invocation.generation !== recovering.generation
+  ) {
+    return null;
+  }
+  const recoveredDispatchSupported = canDispatchManifestWorkflowActivity({
+    identity: options.manifestIdentity,
+    workflowId: cursor.workflowId,
+    planId: cursor.planId,
+    activityId: invocation.activityId,
+    cursor: {
+      version: cursor.version,
+      continuationId: cursor.continuationId,
+      stepId: cursor.stepId,
+      stepIndex: cursor.stepIndex,
+    },
+  });
+  return recoveredDispatchSupported
+    ? createWorkflowWork(view, invocation)
     : null;
 }
 
 /**
  * Find the first exact runnable request. Ready work is only a bounded locator;
  * every candidate is rebuilt and all execution authority comes from the
- * ordinary ledger claim inside the persisted activity runner.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, recoverActivity: typeof recoverManualLedgerActivity, recoverManagedEffects: typeof recoverResidentManagedEffects, controlContext: {adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, signal?: AbortSignal}} options - Ready-work inputs.
- * @returns {Promise<string | null>} - Next runnable run ID.
+ * ordinary cursor-guarded claim inside its dedicated runner.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, appId: string, revisionId: string, manifestIdentity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, recoverActivity: typeof recoverManualLedgerActivity, recoverWorkflowActivity: typeof recoverWorkflowLedgerActivity, recoverManagedEffects: typeof recoverResidentManagedEffects, controlContext: {adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, signal?: AbortSignal}} options - Ready-work inputs.
+ * @returns {Promise<ResidentRunnableWork | null>} - Next runnable activation.
  */
-async function findRunnableRun(options) {
+async function findRunnableWork(options) {
   /** @type {string | undefined} */
   let cursor;
   do {
@@ -471,8 +705,8 @@ async function findRunnableRun(options) {
       // Deliberately serial: one held local owner performs at most one physical
       // attempt at a time in this first persistent-worker vertical.
       // eslint-disable-next-line no-await-in-loop
-      const runId = await resolveRunnableLocator({ ...options, row });
-      if (runId) return runId;
+      const work = await resolveRunnableLocator({ ...options, row });
+      if (work) return work;
     }
     cursor = ready.nextCursor;
   } while (cursor !== undefined);
@@ -484,7 +718,7 @@ async function findRunnableRun(options) {
  * resident owner. It hosts the authenticated submission/cancellation endpoint,
  * consumes exact ready work serially, and drains an active attempt during
  * graceful shutdown.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, submitActivity?: typeof submitDurableManifestActivity, recoverActivity?: typeof recoverManualLedgerActivity, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, submitActivity?: typeof submitDurableManifestActivity, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
 export async function runResidentActivityWorker(options) {
@@ -529,10 +763,14 @@ export async function runResidentActivityWorker(options) {
   const drainTimeoutMs = resolveDrainTimeout(options.drainTimeoutMs);
   const runActivity =
     options.runActivity || runPersistedDurableManifestActivity;
+  const runWorkflowActivity =
+    options.runWorkflowActivity || runPersistedDurableManifestWorkflowActivity;
   const submitActivity =
     options.submitActivity || submitDurableManifestActivity;
   const recoverActivity =
     options.recoverActivity || recoverManualLedgerActivity;
+  const recoverWorkflowActivity =
+    options.recoverWorkflowActivity || recoverWorkflowLedgerActivity;
   const recoverManagedEffects =
     options.recoverManagedEffects || recoverResidentManagedEffects;
   const createCommandServer =
@@ -685,11 +923,13 @@ export async function runResidentActivityWorker(options) {
     }
     while (!signal?.aborted) {
       wakePending = false;
-      const runId = await findRunnableRun({
+      const work = await findRunnableWork({
         ledger: options.ledger,
         appId: binding.identity.appId,
         revisionId: binding.identity.revisionId,
+        manifestIdentity: binding.identity,
         recoverActivity,
+        recoverWorkflowActivity,
         recoverManagedEffects,
         controlContext: options.controlContext,
         ...(options.applicationStateConfiguration === undefined
@@ -701,7 +941,8 @@ export async function runResidentActivityWorker(options) {
         ...(signal === undefined ? {} : { signal }),
       });
       if (signal?.aborted) break;
-      if (runId) {
+      if (work) {
+        const { runId } = work;
         activeRunId = runId;
         const attemptCancellation = new AbortController();
         /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -726,34 +967,56 @@ export async function runResidentActivityWorker(options) {
         signal?.addEventListener('abort', requestBoundedDrain, { once: true });
         if (signal?.aborted) requestBoundedDrain();
         try {
-          await runActivity({
-            ledger: options.ledger,
-            controlContext: options.controlContext,
-            execution: binding.execution,
-            runId,
-            signal: attemptCancellation.signal,
-            ...(options.applicationStateConfiguration === undefined
-              ? {}
-              : {
-                  applicationStateConfiguration:
-                    options.applicationStateConfiguration,
-                }),
-            ownerCancellation: {
+          if (work.kind === 'manual') {
+            await runActivity({
+              ledger: options.ledger,
+              controlContext: options.controlContext,
+              execution: binding.execution,
+              runId,
+              ...(signal === undefined ? {} : { admissionSignal: signal }),
+              signal: attemptCancellation.signal,
+              ...(options.applicationStateConfiguration === undefined
+                ? {}
+                : {
+                    applicationStateConfiguration:
+                      options.applicationStateConfiguration,
+                  }),
+              ownerCancellation: {
+                actor: {
+                  kind: 'local-owner-command',
+                  id: binding.identity.appId,
+                },
+              },
+              registerActiveAttemptCancellationPort: (port) => {
+                activeCancellationPort = port;
+                return () => {
+                  if (activeCancellationPort === port) {
+                    activeCancellationPort = undefined;
+                  }
+                };
+              },
+            });
+            processed += 1;
+          } else {
+            await runWorkflowActivity({
+              ledger: options.ledger,
+              execution: binding.execution,
+              runId,
+              workflowId: work.workflowId,
+              planId: work.planId,
+              invocationId: work.invocationId,
+              activityId: work.activityId,
+              generation: work.generation,
+              cursor: work.cursor,
               actor: {
-                kind: 'local-owner-command',
+                kind: 'resident-workflow',
                 id: binding.identity.appId,
               },
-            },
-            registerActiveAttemptCancellationPort: (port) => {
-              activeCancellationPort = port;
-              return () => {
-                if (activeCancellationPort === port) {
-                  activeCancellationPort = undefined;
-                }
-              };
-            },
-          });
-          processed += 1;
+              ...(signal === undefined ? {} : { admissionSignal: signal }),
+              signal: attemptCancellation.signal,
+            });
+            processed += 1;
+          }
         } finally {
           signal?.removeEventListener('abort', requestBoundedDrain);
           if (drainTimer) clearTimeout(drainTimer);
@@ -798,8 +1061,9 @@ export async function runResidentActivityWorker(options) {
  * Open one local control volume, acquire its resident lifecycle/ownership
  * generation, run the serial worker, and persist a graceful stop before the
  * control handle closes. An abort signal stops new claims and lets the active
- * attempt drain. After the bounded grace period, the worker converts it into
- * the existing durable cooperative-cancellation path.
+ * attempt drain. After the bounded grace period, manual work uses its durable
+ * cancellation path while workflow work is physically interrupted and then
+ * settles conservatively without inventing cancellation authority.
  * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>}} options - Local resident service request.
  * @returns {Promise<Readonly<{processed: number}>>} - Worker drain summary.
  */

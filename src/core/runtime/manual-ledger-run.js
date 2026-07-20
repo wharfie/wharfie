@@ -351,9 +351,13 @@ function startedRecoveryReason(attemptId) {
 
 /**
  * @param {unknown} value - Candidate external cancellation signal.
+ * @param {string} [label] - Human-readable option name.
  * @returns {void}
  */
-function assertOptionalAbortSignal(value) {
+function assertOptionalAbortSignal(
+  value,
+  label = 'runManualLedgerActivity.signal',
+) {
   if (
     value !== undefined &&
     (!value ||
@@ -363,9 +367,7 @@ function assertOptionalAbortSignal(value) {
       typeof (/** @type {AbortSignal} */ (value).removeEventListener) !==
         'function')
   ) {
-    throw new TypeError(
-      'runManualLedgerActivity.signal must be an AbortSignal when provided.',
-    );
+    throw new TypeError(`${label} must be an AbortSignal when provided.`);
   }
 }
 
@@ -1355,7 +1357,7 @@ export async function submitManualLedgerActivity(options) {
  * append-only ledger. A normal repeat never steals a RUNNING attempt because
  * coordinator leases do not exist yet; recovery is a separate operator action
  * that never accepts or compiles current application source.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt?: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, prepareAttemptDispatch?: (context: Readonly<ManualLedgerAttemptDispatchContext>) => ManualLedgerPreparedAttemptDispatch|Promise<ManualLedgerPreparedAttemptDispatch>}} options - Bound authored activity execution. Exactly one dispatch option is required.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt?: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, prepareAttemptDispatch?: (context: Readonly<ManualLedgerAttemptDispatchContext>) => ManualLedgerPreparedAttemptDispatch|Promise<ManualLedgerPreparedAttemptDispatch>}} options - Bound authored activity execution. Exactly one dispatch option is required.
  * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Durable terminal, blocked, or in-progress result.
  */
 export async function runManualLedgerActivity(options) {
@@ -1405,6 +1407,10 @@ export async function runManualLedgerActivity(options) {
     );
   }
   assertOptionalAbortSignal(options.signal);
+  assertOptionalAbortSignal(
+    options.admissionSignal,
+    'runManualLedgerActivity.admissionSignal',
+  );
   assertOptionalActiveAttemptCancellationPortRegistrar(
     options.registerActiveAttemptCancellationPort,
   );
@@ -1486,6 +1492,14 @@ export async function runManualLedgerActivity(options) {
     });
   }
 
+  if (options.admissionSignal?.aborted) {
+    return outcomeFromState({
+      run: current.run,
+      invocation: current.invocation,
+      reused: !created.applied,
+    });
+  }
+
   if (options.signal?.aborted) {
     const cancellation = await requestActiveOwnerCancellation({
       ledger,
@@ -1539,6 +1553,28 @@ export async function runManualLedgerActivity(options) {
       attempt: getCurrentAttempt(current.view, current.invocation),
       reused: true,
     });
+  }
+
+  /**
+   * Stop admitting this exact claim without turning resident shutdown into a
+   * logical manual cancellation. CLAIMED is safely released; a concurrently
+   * committed STARTED boundary becomes honest uncertainty.
+   * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Current durable outcome.
+   */
+  const stopBeforePhysicalDispatch = async () => {
+    const recovery = await recoverManualLedgerActivity({
+      ledger,
+      runId,
+      invocationId,
+      actor,
+    });
+    if (recovery.outcome) return recovery.outcome;
+    const durable = await readCurrent(ledger, runId, invocationId);
+    return outcomeFromView(durable.view, invocationId);
+  };
+
+  if (options.admissionSignal?.aborted) {
+    return await stopBeforePhysicalDispatch();
   }
 
   if (options.signal?.aborted) {
@@ -1673,6 +1709,10 @@ export async function runManualLedgerActivity(options) {
       );
     }
 
+    if (options.admissionSignal?.aborted) {
+      return await stopBeforePhysicalDispatch();
+    }
+
     // Preparation can perform asynchronous I/O. Honour a foreground abort
     // which arrived while those resources were opening without crossing
     // the durable STARTED boundary or invoking the physical executor.
@@ -1717,6 +1757,9 @@ export async function runManualLedgerActivity(options) {
           'The durable attempt-start receipt was replayed; physical dispatch cannot be confirmed.',
         ),
       });
+    }
+    if (options.admissionSignal?.aborted) {
+      return await stopBeforePhysicalDispatch();
     }
     const startedCancellationFence = cancellationAttemptFence(started.attempt);
 
