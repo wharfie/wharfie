@@ -452,8 +452,10 @@ workflow cursor without leaking payloads; generic `cancel` rejects workflows.
    provider-backed path that can create, inspect, update, and remove one durable
    node through the operator's credential chain.
 
-The current restart point is the [resident workflow activity dispatch
-checkpoint](llm/checkpoints/2026-07-19-v9-resident-workflow-activities.md). Its
+The current restart point is the [public workflow operator
+checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md).
+Its parent is the [resident workflow activity dispatch
+checkpoint](llm/checkpoints/2026-07-19-v9-resident-workflow-activities.md), whose
 parent is the [workflow activity failure
 checkpoint](llm/checkpoints/2026-07-19-v8-workflow-activity-failures.md), whose
 parent is the [workflow activity recovery

@@ -140,7 +140,9 @@ private. It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Activity-headed workflow-start checkpoint](llm/checkpoints/2026-07-19-v5-activity-headed-workflow-start.md) — the current implementation handoff for immutable workflow inputs, stable cursor identities, atomic initial materialization, and ready-work V2.
+- [Public workflow operator checkpoint](llm/checkpoints/2026-07-19-v10-public-workflow-operator-surface.md) — the current implementation handoff for shared source/package start, schema-v6 inspection, confirmed recovery, and event-anchored evidence reconciliation.
+- [Resident workflow activity checkpoint](llm/checkpoints/2026-07-19-v9-resident-workflow-activities.md) — the preceding handoff for exact manifest-bound dispatch and conservative restart recovery.
+- [Activity-headed workflow-start checkpoint](llm/checkpoints/2026-07-19-v5-activity-headed-workflow-start.md) — the historical handoff for immutable workflow inputs, stable cursor identities, atomic initial materialization, and ready-work V2.
 - [V10 ready-work checkpoint](llm/checkpoints/2026-07-19-v4-v10-ready-work.md) — the preceding implementation handoff for the exact-revision transactional scheduler locator and strict workflow authoring contract.
 - [Resident activity worker checkpoint](llm/checkpoints/2026-07-19-v3-resident-activity-worker.md) — the preceding fully validated handoff for offline submission, serial resident execution, and conservative restart recovery.
 - [V2 foundation stabilization checkpoint](llm/checkpoints/2026-07-19-v2-foundation-stabilized.md) — the preceding clean-install restart point after repository cleanup, the portable module gate, and the public V9 successor proof.
