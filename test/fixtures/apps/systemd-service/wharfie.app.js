@@ -45,7 +45,7 @@ export default defineApp({
         {
           id: 'cross-reboot-delay',
           kind: 'timer',
-          delayMs: 30_000,
+          delayMs: 120_000,
         },
         {
           id: 'resume-after-reboot',

@@ -11,22 +11,44 @@ GUEST_PROOF_ROOT="/var/tmp/wharfie-systemd-proof"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wharfie-systemd-proof.XXXXXX")"
 ARCHIVE_PATH="${TEMP_ROOT}/repo.tar"
 CREATED=0
+RECEIPT_STAGING=""
+COMMIT=""
 
 cleanup() {
   status=$?
   trap - EXIT INT TERM
   if [[ "${status}" -ne 0 && "${CREATED}" -eq 1 ]]; then
+    if [[ -n "${COMMIT}" ]] && limactl shell --tty=false "${INSTANCE}" \
+      /usr/bin/test -f "${GUEST_PROOF_ROOT}/failure.json"; then
+      failure_directory="${OUTPUT_ROOT}/failures/${COMMIT}"
+      mkdir -p "${failure_directory}"
+      limactl copy --backend=scp \
+        "${INSTANCE}:${GUEST_PROOF_ROOT}/failure.json" \
+        "${failure_directory}/failure.json" || true
+      echo "Failure receipt: ${failure_directory}/failure.json" >&2
+    fi
+    limactl shell --tty=false "${INSTANCE}" \
+      /usr/bin/systemctl --user status \
+      wharfie-systemd-service-proof.service \
+      --no-pager --full || true
+    limactl shell --tty=false "${INSTANCE}" \
+      /usr/bin/journalctl --user \
+      --boot=0 \
+      --unit=wharfie-systemd-service-proof.service \
+      --no-pager || true
     limactl shell --tty=false "${INSTANCE}" \
       /usr/bin/sudo /usr/bin/journalctl \
       --boot=0 \
       --unit=wharfie-systemd-proof-boot-check.service \
-      --unit=wharfie-systemd-service-proof.service \
       --no-pager || true
   fi
   if [[ "${CREATED}" -eq 1 && "${KEEP_VM}" != "1" ]]; then
     limactl delete --force "${INSTANCE}" || true
   elif [[ "${CREATED}" -eq 1 ]]; then
     echo "Retained Lima instance ${INSTANCE} for inspection." >&2
+  fi
+  if [[ -n "${RECEIPT_STAGING}" ]]; then
+    rm -rf "${RECEIPT_STAGING}"
   fi
   rm -rf "${TEMP_ROOT}"
   exit "${status}"
@@ -41,11 +63,15 @@ if ! command -v limactl >/dev/null 2>&1; then
   echo "limactl is required (Lima 2.1 or newer)." >&2
   exit 1
 fi
+if [[ ! "${INSTANCE}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+  echo "WHARFIE_SYSTEMD_PROOF_INSTANCE is not a safe Lima instance name." >&2
+  exit 1
+fi
 if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=all)" ]]; then
   echo "Commit or remove worktree changes before creating a proof receipt." >&2
   exit 1
 fi
-if limactl info "${INSTANCE}" >/dev/null 2>&1; then
+if limactl list --quiet "${INSTANCE}" >/dev/null 2>&1; then
   echo "Lima instance ${INSTANCE} already exists; choose a fresh WHARFIE_SYSTEMD_PROOF_INSTANCE." >&2
   exit 1
 fi
@@ -57,8 +83,8 @@ git -C "${REPO_ROOT}" archive \
   --output="${ARCHIVE_PATH}" \
   "${COMMIT}"
 
-limactl create --tty=false --name "${INSTANCE}" "${CONFIG_PATH}"
 CREATED=1
+limactl create --tty=false --name "${INSTANCE}" "${CONFIG_PATH}"
 limactl start --tty=false "${INSTANCE}"
 limactl copy --backend=scp "${ARCHIVE_PATH}" "${INSTANCE}:/tmp/wharfie-systemd-proof-repo.tar"
 limactl shell --tty=false "${INSTANCE}" /bin/bash -lc \
@@ -67,6 +93,7 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   /usr/local/bin/npm ci --no-audit --no-fund
 limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+  "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
   /usr/local/bin/node \
   scripts/verify-systemd-user-service-linux.js \
   prepare \
@@ -75,22 +102,33 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
 limactl restart --tty=false "${INSTANCE}"
 limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+  "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
   /usr/local/bin/node \
   scripts/verify-systemd-user-service-linux.js \
   verify \
   "${GUEST_REPO}"
 
 RECEIPT_DIRECTORY="${OUTPUT_ROOT}/${COMMIT}"
-mkdir -p "${RECEIPT_DIRECTORY}"
+if [[ -e "${RECEIPT_DIRECTORY}" ]]; then
+  echo "Proof receipts already exist for ${COMMIT}; refusing to overwrite them." >&2
+  exit 1
+fi
+RECEIPT_STAGING="$(mktemp -d "${OUTPUT_ROOT}/.${COMMIT}.XXXXXX")"
 limactl copy --backend=scp \
   "${INSTANCE}:${GUEST_PROOF_ROOT}/prepare.json" \
-  "${RECEIPT_DIRECTORY}/prepare.json"
+  "${RECEIPT_STAGING}/prepare.json"
 limactl copy --backend=scp \
   "${INSTANCE}:/var/lib/wharfie-systemd-proof/boot-receipt.json" \
-  "${RECEIPT_DIRECTORY}/boot-receipt.json"
+  "${RECEIPT_STAGING}/boot-receipt.json"
 limactl copy --backend=scp \
   "${INSTANCE}:${GUEST_PROOF_ROOT}/final.json" \
-  "${RECEIPT_DIRECTORY}/final.json"
+  "${RECEIPT_STAGING}/final.json"
+
+pushd "${RECEIPT_STAGING}" >/dev/null
+/usr/bin/shasum -a 256 prepare.json boot-receipt.json final.json > SHA256SUMS
+popd >/dev/null
+mv "${RECEIPT_STAGING}" "${RECEIPT_DIRECTORY}"
+RECEIPT_STAGING=""
 
 echo "Verified Wharfie systemd user-service reboot proof for ${COMMIT}."
 echo "Receipts: ${RECEIPT_DIRECTORY}"

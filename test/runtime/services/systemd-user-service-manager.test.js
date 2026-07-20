@@ -703,7 +703,8 @@ describe('systemd user service manager', () => {
     const harness = await createHarness();
     await harness.operator.install();
     await harness.operator.stop();
-    harness.state.fragmentPath = '/etc/systemd/user/wharfie-service-demo.service';
+    harness.state.fragmentPath =
+      '/etc/systemd/user/wharfie-service-demo.service';
 
     await expect(harness.operator.status()).resolves.toMatchObject({
       health: 'degraded',

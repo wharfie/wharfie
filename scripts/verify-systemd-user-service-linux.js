@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   closeSync,
+  cpSync,
   existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   rmSync,
   statSync,
@@ -14,6 +17,8 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+
+import { createPackageTarball, readJson } from './package-verification.js';
 
 const APP_ID = 'systemd-service-proof';
 const WORKFLOW_ID = 'reboot-chain';
@@ -24,11 +29,13 @@ const PROOF_ROOT =
   process.env.WHARFIE_SYSTEMD_PROOF_ROOT || '/var/tmp/wharfie-systemd-proof';
 const PREPARE_PATH = path.join(PROOF_ROOT, 'prepare.json');
 const FINAL_PATH = path.join(PROOF_ROOT, 'final.json');
+const FAILURE_PATH = path.join(PROOF_ROOT, 'failure.json');
 const MARKER_PATH = path.join(PROOF_ROOT, 'activity-entries.jsonl');
 const BOOT_RECEIPT_PATH = '/var/lib/wharfie-systemd-proof/boot-receipt.json';
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
-const STATUS_TIMEOUT_MS = 120_000;
+const STATUS_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 250;
+const EXPECTED_TIMER_DELAY_MS = 120_000;
 
 /**
  * @typedef CommandResult
@@ -77,13 +84,19 @@ function parseJsonResult(result, label) {
   assert.equal(result.status, 0, `${label} exited unsuccessfully`);
   const text = result.stdout.trim();
   assert.ok(text, `${label} emitted no JSON`);
+  const finalLine = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1);
   let value;
   try {
-    value = JSON.parse(text);
+    value = JSON.parse(finalLine);
   } catch (error) {
-    throw new Error(`${label} emitted invalid JSON: ${text.slice(0, 1024)}`, {
-      cause: error,
-    });
+    throw new Error(
+      `${label} emitted invalid final JSON line: ${String(finalLine).slice(0, 1024)}`,
+      { cause: error },
+    );
   }
   assert.ok(value && typeof value === 'object' && !Array.isArray(value));
   return value;
@@ -159,28 +172,47 @@ async function waitFor(observe, matches, label, timeoutMs = STATUS_TIMEOUT_MS) {
  * @returns {NodeJS.ProcessEnv} - Sanitized packaged environment.
  */
 function packagedEnvironment() {
-  const environment = {};
-  for (const [name, value] of Object.entries(process.env)) {
-    if (
-      value !== undefined &&
-      !name.startsWith('WHARFIE_') &&
-      name !== 'XDG_CONFIG_HOME' &&
-      name !== 'XDG_DATA_HOME' &&
-      name !== 'NODE_OPTIONS'
-    ) {
-      environment[name] = value;
-    }
-  }
+  const uid = process.getuid?.();
+  assert.ok(Number.isSafeInteger(uid) && Number(uid) > 0);
   return {
-    ...environment,
     HOME: homedir(),
     USER: process.env.USER,
     LOGNAME: process.env.LOGNAME || process.env.USER,
     XDG_DATA_HOME: path.join(homedir(), '.local', 'share'),
+    XDG_RUNTIME_DIR: `/run/user/${uid}`,
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`,
     LANG: 'C.UTF-8',
     PATH: '/usr/bin:/bin',
     TMPDIR: '/tmp',
   };
+}
+
+/**
+ * @param {string} filePath - Concrete file.
+ * @returns {string} - Lowercase SHA-256 digest.
+ */
+function sha256File(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+/**
+ * @returns {Readonly<Record<string, string>>} - Expected packaged app layout.
+ */
+function proofStorageLayout() {
+  const dataRoot = path.join(homedir(), '.local', 'share', 'wharfie-nodejs');
+  const appRoot = path.join(dataRoot, 'applications', APP_ID);
+  const stateRoot = path.join(appRoot, 'state');
+  const controlPath = path.join(stateRoot, 'control');
+  return Object.freeze({
+    dataRoot,
+    appRoot,
+    stateRoot,
+    controlPath,
+    payloadPath: path.join(controlPath, 'execution-payloads'),
+    applicationStatePath: path.join(stateRoot, 'application-state'),
+    releasesRoot: path.join(appRoot, 'releases'),
+    unitPath: path.join(homedir(), '.config', 'systemd', 'user', UNIT_NAME),
+  });
 }
 
 /**
@@ -222,6 +254,74 @@ function readServiceStatus(artifactPath) {
 }
 
 /**
+ * Capture the exact user-manager and packaged observations needed to diagnose
+ * a failed real-host phase before the disposable VM is removed.
+ * @param {string} artifactPath - Packaged SEA path.
+ * @param {string} phase - Failed proof phase.
+ * @param {unknown} error - Original failure.
+ * @returns {Record<string, any>} - Persisted diagnostic receipt.
+ */
+function captureServiceFailure(artifactPath, phase, error) {
+  /**
+   * @param {CommandResult} result - Captured command result.
+   * @returns {Record<string, any>} - Redacted command evidence.
+   */
+  const commandReceipt = (result) => ({
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+  const receipt = {
+    schemaVersion: 1,
+    kind: 'wharfie.systemd-proof.failure',
+    phase,
+    error: error instanceof Error ? error.message : String(error),
+    packagedStatus: commandReceipt(
+      runArtifact(artifactPath, ['wharfie', 'service', 'status', '--json'], {
+        allowFailure: true,
+      }),
+    ),
+    systemdStatus: commandReceipt(
+      run(
+        '/usr/bin/systemctl',
+        [
+          '--user',
+          'show',
+          UNIT_NAME,
+          '--no-pager',
+          '--property=LoadState,UnitFileState,ActiveState,SubState,Result,MainPID,ExecMainStatus,FragmentPath,DropInPaths',
+        ],
+        { allowFailure: true },
+      ),
+    ),
+    effectiveUnit: commandReceipt(
+      run('/usr/bin/systemctl', ['--user', 'cat', UNIT_NAME, '--no-pager'], {
+        allowFailure: true,
+      }),
+    ),
+    userJournal: commandReceipt(
+      run(
+        '/usr/bin/journalctl',
+        [
+          '--user',
+          '--boot=0',
+          '--unit',
+          UNIT_NAME,
+          '--lines=200',
+          '--no-pager',
+        ],
+        { allowFailure: true },
+      ),
+    ),
+  };
+  writeJsonAtomic(FAILURE_PATH, receipt);
+  process.stderr.write(
+    `Wharfie systemd proof diagnostics:\n${JSON.stringify(receipt, null, 2)}\n`,
+  );
+  return receipt;
+}
+
+/**
  * @param {string} artifactPath - SEA path.
  * @param {string} runId - Durable run ID.
  * @returns {Record<string, any>} - Redacted run view.
@@ -257,36 +357,98 @@ function readBootId() {
 /**
  * Build the current-target proof SEA from the committed fixture.
  * @param {string} repoRoot - Extracted repository root.
- * @returns {{artifactPath: string, artifact: Record<string, any>, revision: Record<string, any>}} - Package result.
+ * @returns {{artifactPath: string, artifact: Record<string, any>, revision: Record<string, any>, package: Readonly<Record<string, any>>}} - Package result.
  */
 function packageProofArtifact(repoRoot) {
-  const fixture = path.join(
+  const sourceFixture = path.join(
     repoRoot,
     'test',
     'fixtures',
     'apps',
     'systemd-service',
   );
+  const consumerRoot = path.join(PROOF_ROOT, 'package-consumer');
+  const fixture = path.join(consumerRoot, 'app');
   const outputDirectory = path.join(PROOF_ROOT, 'dist');
   const target = `linux/${process.arch}/glibc`;
-  const result = parseJsonResult(
-    run(
-      process.execPath,
-      [
-        path.join(repoRoot, 'bin', 'wharfie'),
-        'app',
-        'package',
-        fixture,
-        '--output-dir',
-        outputDirectory,
-        '--target',
-        target,
-        '--no-pretty',
-      ],
-      { cwd: repoRoot, env: process.env, timeoutMs: 600_000 },
-    ),
-    'proof artifact package',
+  mkdirSync(consumerRoot, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    path.join(consumerRoot, 'package.json'),
+    `${JSON.stringify({
+      name: 'wharfie-systemd-proof-consumer',
+      private: true,
+      version: '0.0.0',
+      type: 'module',
+    })}\n`,
   );
+  cpSync(sourceFixture, fixture, { recursive: true });
+  const fixtureManifestPath = path.join(fixture, 'wharfie.app.js');
+  const fixtureManifest = readFileSync(fixtureManifestPath, 'utf8');
+  const installedFixtureManifest = fixtureManifest.replace(
+    '../../../../src/app.js',
+    '@wharfie/wharfie/app',
+  );
+  assert.notEqual(installedFixtureManifest, fixtureManifest);
+  writeFileSync(fixtureManifestPath, installedFixtureManifest);
+  const packaged = createPackageTarball();
+  let result;
+  let packageEvidence;
+  try {
+    run(
+      path.join(path.dirname(process.execPath), 'npm'),
+      ['install', '--no-audit', '--no-fund', packaged.tarballPath],
+      {
+        cwd: consumerRoot,
+        env: {
+          ...process.env,
+          npm_config_cache: path.join(PROOF_ROOT, 'npm-cache'),
+        },
+        timeoutMs: 600_000,
+      },
+    );
+    const installedPackageRoot = path.join(
+      consumerRoot,
+      'node_modules',
+      '@wharfie',
+      'wharfie',
+    );
+    const installedMetadata = readJson(
+      path.join(installedPackageRoot, 'package.json'),
+    );
+    const wharfieBin = path.join(
+      consumerRoot,
+      'node_modules',
+      '.bin',
+      'wharfie',
+    );
+    assert.equal(existsSync(wharfieBin), true);
+    result = parseJsonResult(
+      run(
+        process.execPath,
+        [
+          wharfieBin,
+          'app',
+          'package',
+          fixture,
+          '--output-dir',
+          outputDirectory,
+          '--target',
+          target,
+          '--no-pretty',
+        ],
+        { cwd: consumerRoot, env: process.env, timeoutMs: 600_000 },
+      ),
+      'installed-package proof artifact package',
+    );
+    packageEvidence = Object.freeze({
+      name: installedMetadata.name,
+      version: installedMetadata.version,
+      tarballSha256: sha256File(packaged.tarballPath),
+      packedFileCount: packaged.manifest.files.length,
+    });
+  } finally {
+    packaged.cleanup();
+  }
   assert.equal(result.artifacts?.length, 1);
   const artifact = result.artifacts[0];
   assert.equal(artifact.target?.platform, 'linux');
@@ -295,7 +457,12 @@ function packageProofArtifact(repoRoot) {
   assert.equal(artifact.target?.libc, 'glibc');
   assert.equal(existsSync(artifact.path), true);
   assert.equal((statSync(artifact.path).mode & 0o111) !== 0, true);
-  return { artifactPath: artifact.path, artifact, revision: result.revision };
+  return {
+    artifactPath: artifact.path,
+    artifact,
+    revision: result.revision,
+    package: packageEvidence,
+  };
 }
 
 /**
@@ -313,24 +480,51 @@ function sudo(args) {
  * Install the root boot observer that proves automatic service readiness
  * before the proof user's first post-reboot login.
  * @param {string} repoRoot - Extracted repository root.
- * @param {string} artifactPath - Proof SEA.
+ * @param {{artifactPath: string, artifact: Record<string, any>}} packaged - Proof SEA evidence.
  * @param {Record<string, any>} serviceStatus - Last pre-reboot status.
  * @param {string} bootId - Pre-reboot kernel identity.
+ * @param {string} runId - Workflow crossing the reboot.
+ * @param {Record<string, any>} timer - Exact durable timer before reboot.
+ * @param {string} releasePath - Immutable selected service executable.
  * @returns {Record<string, any>} - Published boot configuration.
  */
-function installBootObserver(repoRoot, artifactPath, serviceStatus, bootId) {
+function installBootObserver(
+  repoRoot,
+  packaged,
+  serviceStatus,
+  bootId,
+  runId,
+  timer,
+  releasePath,
+) {
   const uid = process.getuid?.();
+  const gid = process.getgid?.();
   assert.ok(Number.isSafeInteger(uid) && Number(uid) > 0);
+  assert.ok(Number.isSafeInteger(gid) && Number(gid) > 0);
   assert.ok(Number.isSafeInteger(serviceStatus.runtime?.generation));
+  const commit = process.env.WHARFIE_SYSTEMD_PROOF_COMMIT;
+  assert.match(commit, /^[0-9a-f]{40}$/);
   const config = {
     schemaVersion: 1,
     kind: 'wharfie.systemd-proof.boot-config',
+    commit,
     user: process.env.USER,
     uid,
+    gid,
     home: homedir(),
-    artifactPath,
+    artifactPath: packaged.artifactPath,
+    releasePath,
+    unitPath: serviceStatus.systemd.fragmentPath,
     xdgDataHome: path.join(homedir(), '.local', 'share'),
     appId: APP_ID,
+    artifactId: packaged.artifact.artifactId,
+    revisionId: packaged.artifact.revisionId,
+    runId,
+    timer: {
+      timerId: timer.timerId,
+      scheduledAt: timer.scheduledAt,
+      dueAt: timer.dueAt,
+    },
     previousBootId: bootId,
     minimumGeneration: serviceStatus.runtime.generation,
     receiptPath: BOOT_RECEIPT_PATH,
@@ -343,9 +537,9 @@ function installBootObserver(repoRoot, artifactPath, serviceStatus, bootId) {
     [
       '[Unit]',
       'Description=Wharfie systemd user-service boot proof',
-      'After=network-online.target systemd-user-sessions.service',
-      'Wants=network-online.target',
-      'Before=ssh.service ssh.socket',
+      `Wants=user@${uid}.service`,
+      `After=user@${uid}.service`,
+      'Before=systemd-user-sessions.service',
       '',
       '[Service]',
       'Type=oneshot',
@@ -422,6 +616,7 @@ function removeBootObserver() {
  * @returns {void} - Returns for healthy PID-bound boot persistence.
  */
 function assertHealthy(status) {
+  const storage = proofStorageLayout();
   assert.equal(status.schemaVersion, 1);
   assert.equal(status.kind, 'wharfie.service.status');
   assert.equal(status.appId, APP_ID);
@@ -429,12 +624,121 @@ function assertHealthy(status) {
   assert.equal(status.persistence?.linger, true);
   assert.equal(status.persistence?.unitEnabled, true);
   assert.equal(status.persistence?.bootEnabled, true);
+  assert.equal(status.systemd?.fragmentPath, storage.unitPath);
+  assert.equal(status.systemd?.dropInPaths, '');
   assert.ok(status.systemd?.mainPid > 0);
   assert.equal(status.runtime?.processId, status.systemd.mainPid);
   assert.equal(status.runtime?.status, 'READY');
   assert.equal(status.runtime?.session, 'active');
   assert.equal(status.runtime?.currentOwner, true);
   assert.equal(status.integrity?.status, 'verified');
+}
+
+/**
+ * @param {Record<string, any>} timer - Observed timer.
+ * @param {Record<string, any>} expected - Previously persisted timer.
+ * @param {'WAITING'|'FIRED'} status - Required state.
+ * @returns {void} - Returns for the identical timer decision.
+ */
+function assertSameTimer(timer, expected, status) {
+  assert.equal(timer?.timerId, expected.timerId);
+  assert.equal(timer?.scheduledAt, expected.scheduledAt);
+  assert.equal(timer?.dueAt, expected.dueAt);
+  assert.equal(timer?.status, status);
+}
+
+/**
+ * @param {Record<string, any>} status - Healthy service status.
+ * @param {string} releasePath - Exact immutable release path.
+ * @returns {void} - Returns when the supervised PID executes that release.
+ */
+function assertRunningRelease(status, releasePath) {
+  assertHealthy(status);
+  assert.equal(
+    readlinkSync(`/proc/${status.systemd.mainPid}/exe`),
+    releasePath,
+  );
+}
+
+/**
+ * Read systemd directly after Wharfie removes its installation wiring. This
+ * deliberately does not trust the packaged command's uninstall tombstone.
+ * @returns {Readonly<Record<string, any>>} - Independent absence evidence.
+ */
+function readIndependentUninstallState() {
+  const properties = [
+    'LoadState',
+    'UnitFileState',
+    'ActiveState',
+    'SubState',
+    'MainPID',
+    'FragmentPath',
+    'DropInPaths',
+  ];
+  const args = ['--user', 'show', UNIT_NAME, '--no-pager'];
+  for (const property of properties) args.push(`--property=${property}`);
+  const shown = run('/usr/bin/systemctl', args, {
+    env: packagedEnvironment(),
+    allowFailure: true,
+  });
+  assert.equal(shown.status, 0, shown.stderr || shown.stdout);
+  const parsed = {};
+  for (const line of shown.stdout.trimEnd().split('\n')) {
+    const separator = line.indexOf('=');
+    assert.ok(separator > 0, `malformed systemd property: ${line}`);
+    const key = line.slice(0, separator);
+    assert.ok(properties.includes(key), `unexpected systemd property: ${key}`);
+    assert.equal(
+      Object.hasOwn(parsed, key),
+      false,
+      `duplicate property: ${key}`,
+    );
+    parsed[key] = line.slice(separator + 1);
+  }
+  assert.deepEqual(Object.keys(parsed).sort(), [...properties].sort());
+  assert.equal(parsed.LoadState, 'not-found');
+  assert.ok(['', 'disabled', 'not-found'].includes(parsed.UnitFileState));
+  assert.equal(parsed.ActiveState, 'inactive');
+  assert.equal(parsed.SubState, 'dead');
+  assert.equal(parsed.MainPID, '0');
+  assert.equal(parsed.FragmentPath, '');
+  assert.equal(parsed.DropInPaths, '');
+
+  const active = run('/usr/bin/systemctl', ['--user', 'is-active', UNIT_NAME], {
+    env: packagedEnvironment(),
+    allowFailure: true,
+  });
+  const enabled = run(
+    '/usr/bin/systemctl',
+    ['--user', 'is-enabled', UNIT_NAME],
+    { env: packagedEnvironment(), allowFailure: true },
+  );
+  assert.notEqual(active.status, 0);
+  assert.notEqual(enabled.status, 0);
+  assert.equal(
+    existsSync(
+      path.join(
+        homedir(),
+        '.config',
+        'systemd',
+        'user',
+        'default.target.wants',
+        UNIT_NAME,
+      ),
+    ),
+    false,
+  );
+  return Object.freeze({
+    show: Object.freeze(parsed),
+    isActive: Object.freeze({
+      status: active.status,
+      output: active.stdout.trim(),
+    }),
+    isEnabled: Object.freeze({
+      status: enabled.status,
+      output: enabled.stdout.trim(),
+    }),
+  });
 }
 
 /**
@@ -447,6 +751,15 @@ async function prepare(repoRoot) {
   assert.equal(process.platform, 'linux');
   assert.ok((process.getuid?.() || 0) > 0, 'proof must run as non-root');
   assert.equal(process.versions.node, '24.13.1');
+  assert.equal(
+    process.env.WHARFIE_SYSTEMD_PROOF_DISPOSABLE,
+    'lima',
+    'refusing to mutate a Linux host without the disposable Lima attestation',
+  );
+  assert.match(process.env.WHARFIE_SYSTEMD_PROOF_COMMIT, /^[0-9a-f]{40}$/);
+  process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
+    .filter(Boolean)
+    .join(path.delimiter);
   rmSync(PROOF_ROOT, { recursive: true, force: true });
   mkdirSync(PROOF_ROOT, { recursive: true, mode: 0o700 });
 
@@ -461,19 +774,9 @@ async function prepare(repoRoot) {
   );
 
   const packaged = packageProofArtifact(repoRoot);
+  const storage = proofStorageLayout();
   const absent = readServiceStatus(packaged.artifactPath);
   assert.equal(absent.health, 'absent');
-  const install = runArtifactJson(
-    packaged.artifactPath,
-    ['wharfie', 'service', 'install', '--json'],
-    'service install',
-  );
-  assert.equal(install.action, 'install');
-  assert.equal(install.outcome, 'installed');
-  assert.equal(install.health, 'healthy');
-  const installed = readServiceStatus(packaged.artifactPath);
-  assertHealthy(installed);
-
   const idempotencyKey = 'systemd-real-reboot-proof';
   const started = runArtifactJson(
     packaged.artifactPath,
@@ -488,11 +791,79 @@ async function prepare(repoRoot) {
       JSON.stringify({ markerPath: MARKER_PATH, stepIndex: 0 }),
       '--json',
     ],
-    'workflow start',
+    'offline workflow start before service install',
   );
   assert.equal(started.workflow, WORKFLOW_ID);
+  assert.equal(started.cursor_disposition, 'ACTIVITY_RUNNABLE');
   assert.match(started.run_id, /^wfr_[A-Za-z0-9_-]{43}$/);
   const runId = started.run_id;
+  const pendingBeforeInstall = inspectRun(packaged.artifactPath, runId);
+  assert.equal(pendingBeforeInstall.run?.status, 'RUNNING');
+  assert.equal(
+    pendingBeforeInstall.workflowCursor?.disposition,
+    'ACTIVITY_RUNNABLE',
+  );
+  assert.deepEqual(readMarkers(), []);
+  assert.equal(existsSync(storage.appRoot), true);
+  assert.equal(existsSync(storage.controlPath), true);
+  for (const legacyPath of [
+    path.join(storage.dataRoot, 'control'),
+    path.join(storage.dataRoot, 'application-state'),
+    path.join(storage.dataRoot, 'services'),
+  ]) {
+    assert.equal(
+      existsSync(legacyPath),
+      false,
+      `legacy path exists: ${legacyPath}`,
+    );
+  }
+
+  let install;
+  try {
+    install = runArtifactJson(
+      packaged.artifactPath,
+      ['wharfie', 'service', 'install', '--json'],
+      'service install',
+    );
+  } catch (error) {
+    captureServiceFailure(packaged.artifactPath, 'service-install', error);
+    throw error;
+  }
+  assert.equal(install.action, 'install');
+  assert.equal(install.outcome, 'installed');
+  assert.equal(install.health, 'healthy');
+  const installed = readServiceStatus(packaged.artifactPath);
+  assertHealthy(installed);
+  assert.equal(
+    installed.installation.activeArtifactId,
+    packaged.artifact.artifactId,
+  );
+  assert.equal(
+    installed.installation.activeRevisionId,
+    packaged.artifact.revisionId,
+  );
+  for (const expectedPath of [
+    storage.stateRoot,
+    storage.controlPath,
+    storage.payloadPath,
+    storage.applicationStatePath,
+    storage.releasesRoot,
+  ]) {
+    assert.equal(
+      existsSync(expectedPath),
+      true,
+      `missing path: ${expectedPath}`,
+    );
+  }
+  const releaseDirectory = path.join(
+    storage.releasesRoot,
+    packaged.artifact.artifactId,
+  );
+  const releasePath = path.join(releaseDirectory, 'app');
+  const releaseRecordPath = path.join(releaseDirectory, 'release.json');
+  assert.equal(sha256File(releasePath), sha256File(packaged.artifactPath));
+  assertRunningRelease(installed, releasePath);
+
   const timerWaiting = await waitFor(
     () => inspectRun(packaged.artifactPath, runId),
     (view) => view.workflowCursor?.disposition === 'TIMER_WAITING',
@@ -501,6 +872,10 @@ async function prepare(repoRoot) {
   assert.equal(timerWaiting.run?.status, 'RUNNING');
   assert.equal(timerWaiting.timers?.length, 1);
   assert.equal(timerWaiting.timers[0].status, 'WAITING');
+  assert.equal(
+    timerWaiting.timers[0].dueAt - timerWaiting.timers[0].scheduledAt,
+    EXPECTED_TIMER_DELAY_MS,
+  );
   assert.deepEqual(
     readMarkers().map((entry) => entry.stepIndex),
     [0],
@@ -520,11 +895,9 @@ async function prepare(repoRoot) {
   );
   assertHealthy(afterCrash);
   const afterCrashRun = inspectRun(packaged.artifactPath, runId);
-  assert.ok(
-    ['TIMER_WAITING', 'SIGNAL_WAITING'].includes(
-      afterCrashRun.workflowCursor?.disposition,
-    ),
-  );
+  assert.equal(afterCrashRun.workflowCursor?.disposition, 'TIMER_WAITING');
+  assertSameTimer(afterCrashRun.timers?.[0], timerWaiting.timers[0], 'WAITING');
+  assertRunningRelease(afterCrash, releasePath);
   assert.deepEqual(
     readMarkers().map((entry) => entry.stepIndex),
     [0],
@@ -533,23 +906,47 @@ async function prepare(repoRoot) {
   const bootId = readBootId();
   const bootConfig = installBootObserver(
     repoRoot,
-    packaged.artifactPath,
+    packaged,
     afterCrash,
     bootId,
+    runId,
+    afterCrashRun.timers[0],
+    releasePath,
   );
   const receipt = {
     schemaVersion: 1,
     kind: 'wharfie.systemd-proof.prepare',
-    commit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT || null,
+    commit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
     preparedAt: Date.now(),
     appId: APP_ID,
     artifactPath: packaged.artifactPath,
     artifactId: packaged.artifact.artifactId,
     revisionId: packaged.artifact.revisionId,
+    artifact: {
+      byteDigest: packaged.artifact.byteDigest,
+      size: packaged.artifact.size,
+      target: packaged.artifact.target,
+      sha256: sha256File(packaged.artifactPath),
+    },
+    package: packaged.package,
+    toolchain: {
+      node: process.versions.node,
+      npm: run(path.join(path.dirname(process.execPath), 'npm'), [
+        '--version',
+      ]).stdout.trim(),
+    },
+    storage,
+    release: {
+      artifactPath: releasePath,
+      artifactSha256: sha256File(releasePath),
+      recordPath: releaseRecordPath,
+      recordSha256: sha256File(releaseRecordPath),
+    },
     runId,
     idempotencyKey,
     bootId,
     timer: timerWaiting.timers[0],
+    pendingBeforeInstall,
     crashReplacement: {
       before: {
         processId: beforeCrash.systemd.mainPid,
@@ -574,8 +971,15 @@ async function prepare(repoRoot) {
  * @returns {Promise<Record<string, any>>} - Final proof receipt.
  */
 async function verify() {
+  assert.equal(
+    process.env.WHARFIE_SYSTEMD_PROOF_DISPOSABLE,
+    'lima',
+    'refusing to mutate a Linux host without the disposable Lima attestation',
+  );
   const prepared = JSON.parse(readFileSync(PREPARE_PATH, 'utf8'));
   assert.equal(prepared.kind, 'wharfie.systemd-proof.prepare');
+  assert.match(prepared.commit, /^[0-9a-f]{40}$/);
+  assert.equal(process.env.WHARFIE_SYSTEMD_PROOF_COMMIT, prepared.commit);
   const bootReceipt = JSON.parse(readFileSync(BOOT_RECEIPT_PATH, 'utf8'));
   assert.equal(bootReceipt.kind, 'wharfie.systemd-proof.boot-receipt');
   assert.notEqual(bootReceipt.bootId, prepared.bootId);
@@ -583,6 +987,13 @@ async function verify() {
   assert.deepEqual(bootReceipt.sessionsBeforeCheck, []);
   assert.equal(bootReceipt.automaticStart, true);
   assertHealthy(bootReceipt.status);
+  assert.equal(bootReceipt.executablePath, prepared.release.artifactPath);
+  assert.equal(bootReceipt.workflow.run?.runId, prepared.runId);
+  assert.equal(
+    bootReceipt.workflow.workflowCursor?.disposition,
+    'TIMER_WAITING',
+  );
+  assertSameTimer(bootReceipt.workflow.timers?.[0], prepared.timer, 'WAITING');
   assert.ok(
     bootReceipt.status.runtime.generation >
       prepared.crashReplacement.after.generation,
@@ -595,15 +1006,19 @@ async function verify() {
 
   const artifactPath = prepared.artifactPath;
   const bootStatus = readServiceStatus(artifactPath);
-  assertHealthy(bootStatus);
+  assertRunningRelease(bootStatus, prepared.release.artifactPath);
   assert.equal(bootStatus.systemd.mainPid, bootReceipt.status.systemd.mainPid);
+  const waitBeforePolling = prepared.timer.dueAt - Date.now() - 1_000;
+  if (waitBeforePolling > 0) await wait(waitBeforePolling);
   const signalWaiting = await waitFor(
     () => inspectRun(artifactPath, prepared.runId),
     (view) => view.workflowCursor?.disposition === 'SIGNAL_WAITING',
     'persisted timer fire and signal wait after reboot',
   );
   assert.equal(signalWaiting.run?.status, 'RUNNING');
-  assert.equal(signalWaiting.timers?.[0]?.status, 'FIRED');
+  assertSameTimer(signalWaiting.timers?.[0], prepared.timer, 'FIRED');
+  assert.ok(Number.isSafeInteger(signalWaiting.timers[0].firedAt));
+  assert.ok(signalWaiting.timers[0].firedAt >= prepared.timer.dueAt);
   assert.equal(signalWaiting.signalWaits?.[0]?.status, 'WAITING');
   assert.equal(signalWaiting.signalWaits?.[0]?.signalId, SIGNAL_ID);
   const firstMarkers = readMarkers();
@@ -687,6 +1102,10 @@ async function verify() {
   assert.ok(afterStart.runtime.generation > afterRestart.runtime.generation);
 
   const beforeUninstall = inspectRun(artifactPath, prepared.runId);
+  const releaseBeforeUninstall = {
+    artifactSha256: sha256File(prepared.release.artifactPath),
+    recordSha256: sha256File(prepared.release.recordPath),
+  };
   const uninstall = runArtifactJson(
     artifactPath,
     ['wharfie', 'service', 'uninstall', '--json'],
@@ -708,10 +1127,35 @@ async function verify() {
   const absent = readServiceStatus(artifactPath);
   assert.equal(absent.health, 'absent');
   assert.equal(absent.installation?.state, 'uninstalled');
+  const independentSystemd = readIndependentUninstallState();
   const afterUninstall = inspectRun(artifactPath, prepared.runId);
   assert.equal(afterUninstall.run?.status, 'COMPLETED');
   assert.equal(afterUninstall.workflowCursor?.disposition, 'COMPLETED');
-  assert.deepEqual(afterUninstall.events, beforeUninstall.events);
+  assert.deepEqual(afterUninstall, beforeUninstall);
+  assert.deepEqual(
+    {
+      artifactSha256: sha256File(prepared.release.artifactPath),
+      recordSha256: sha256File(prepared.release.recordPath),
+    },
+    releaseBeforeUninstall,
+  );
+  assert.deepEqual(releaseBeforeUninstall, {
+    artifactSha256: prepared.release.artifactSha256,
+    recordSha256: prepared.release.recordSha256,
+  });
+  for (const expectedPath of [
+    prepared.storage.stateRoot,
+    prepared.storage.controlPath,
+    prepared.storage.payloadPath,
+    prepared.storage.applicationStatePath,
+    prepared.storage.releasesRoot,
+  ]) {
+    assert.equal(
+      existsSync(expectedPath),
+      true,
+      `uninstall removed ${expectedPath}`,
+    );
+  }
   assert.deepEqual(readMarkers(), completedMarkers);
 
   removeBootObserver();
@@ -723,6 +1167,9 @@ async function verify() {
     appId: APP_ID,
     artifactId: prepared.artifactId,
     revisionId: prepared.revisionId,
+    artifact: prepared.artifact,
+    package: prepared.package,
+    toolchain: prepared.toolchain,
     runId: prepared.runId,
     boot: {
       before: prepared.bootId,
@@ -748,6 +1195,10 @@ async function verify() {
       status: afterUninstall.run.status,
       disposition: afterUninstall.workflowCursor.disposition,
       timerStatus: afterUninstall.timers[0].status,
+      timerId: afterUninstall.timers[0].timerId,
+      scheduledAt: afterUninstall.timers[0].scheduledAt,
+      dueAt: afterUninstall.timers[0].dueAt,
+      firedAt: afterUninstall.timers[0].firedAt,
       signalStatus: afterUninstall.signalWaits[0].status,
       markerEntries: completedMarkers,
     },
@@ -755,6 +1206,8 @@ async function verify() {
       status: absent.installation.state,
       preserved: uninstall.preserved,
       inspectableAfterUninstall: true,
+      release: releaseBeforeUninstall,
+      systemd: independentSystemd,
     },
   };
   writeJsonAtomic(FINAL_PATH, receipt);

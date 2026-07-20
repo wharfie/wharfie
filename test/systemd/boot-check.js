@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   writeFileSync,
 } from 'node:fs';
@@ -38,12 +39,14 @@ function run(command, args, options = {}) {
     maxBuffer: MAX_OUTPUT_BYTES,
     timeout: 30_000,
   });
-  if (result.error) throw result.error;
+  if (result.error && options.allowFailure !== true) throw result.error;
   const status = result.status ?? 1;
   const output = {
     status,
     stdout: String(result.stdout || ''),
-    stderr: String(result.stderr || ''),
+    stderr: [String(result.stderr || ''), result.error?.message || '']
+      .filter(Boolean)
+      .join('\n'),
   };
   if (status !== 0 && options.allowFailure !== true) {
     throw new Error(
@@ -64,12 +67,20 @@ function validateConfig(value) {
   const keys = [
     'schemaVersion',
     'kind',
+    'commit',
     'user',
     'uid',
+    'gid',
     'home',
     'artifactPath',
+    'releasePath',
+    'unitPath',
     'xdgDataHome',
     'appId',
+    'artifactId',
+    'revisionId',
+    'runId',
+    'timer',
     'previousBootId',
     'minimumGeneration',
     'receiptPath',
@@ -77,9 +88,23 @@ function validateConfig(value) {
   assert.deepEqual(Object.keys(config).sort(), [...keys].sort());
   assert.equal(config.schemaVersion, 1);
   assert.equal(config.kind, 'wharfie.systemd-proof.boot-config');
+  assert.match(config.commit, /^[0-9a-f]{40}$/);
   assert.match(config.user, /^[a-z_][a-z0-9_-]*[$]?$/i);
   assert.ok(Number.isSafeInteger(config.uid) && config.uid > 0);
+  assert.ok(Number.isSafeInteger(config.gid) && config.gid > 0);
   assert.match(config.appId, /^[a-z][a-z0-9-]*$/);
+  assert.match(config.artifactId, /^waf1_[A-Za-z0-9_-]{43}$/);
+  assert.match(config.revisionId, /^wrv1_[A-Za-z0-9_-]{43}$/);
+  assert.match(config.runId, /^wfr_[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(Object.keys(config.timer).sort(), [
+    'dueAt',
+    'scheduledAt',
+    'timerId',
+  ]);
+  assert.match(config.timer.timerId, /^wft_[A-Za-z0-9_-]{43}$/);
+  assert.ok(Number.isSafeInteger(config.timer.scheduledAt));
+  assert.ok(Number.isSafeInteger(config.timer.dueAt));
+  assert.ok(config.timer.dueAt > config.timer.scheduledAt);
   assert.match(
     config.previousBootId,
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
@@ -88,7 +113,14 @@ function validateConfig(value) {
     Number.isSafeInteger(config.minimumGeneration) &&
       config.minimumGeneration > 0,
   );
-  for (const name of ['home', 'artifactPath', 'xdgDataHome', 'receiptPath']) {
+  for (const name of [
+    'home',
+    'artifactPath',
+    'releasePath',
+    'unitPath',
+    'xdgDataHome',
+    'receiptPath',
+  ]) {
     assert.equal(
       path.isAbsolute(config[name]),
       true,
@@ -123,14 +155,15 @@ function readUserSessions(uid) {
  * session. `setpriv` cannot start a missing user manager, so success proves the
  * linger-started manager and enabled unit were already resident.
  * @param {Readonly<Record<string, any>>} config - Boot configuration.
+ * @param {string[]} args - Packaged command arguments.
  * @returns {{result: ReturnType<typeof run>, parsed?: Record<string, any>}} - One observation.
  */
-function readPackagedStatus(config) {
+function runPackaged(config, args) {
   const result = run(
     '/usr/bin/setpriv',
     [
       `--reuid=${config.uid}`,
-      `--regid=${config.uid}`,
+      `--regid=${config.gid}`,
       '--init-groups',
       '/usr/bin/env',
       '-i',
@@ -143,10 +176,7 @@ function readPackagedStatus(config) {
       'LANG=C.UTF-8',
       'PATH=/usr/bin:/bin',
       config.artifactPath,
-      'wharfie',
-      'service',
-      'status',
-      '--json',
+      ...args,
     ],
     { allowFailure: true },
   );
@@ -157,6 +187,28 @@ function readPackagedStatus(config) {
     parsed = undefined;
   }
   return { result, parsed };
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} config - Boot configuration.
+ * @returns {{result: ReturnType<typeof run>, parsed?: Record<string, any>}} - Status observation.
+ */
+function readPackagedStatus(config) {
+  return runPackaged(config, ['wharfie', 'service', 'status', '--json']);
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} config - Boot configuration.
+ * @returns {{result: ReturnType<typeof run>, parsed?: Record<string, any>}} - Workflow observation.
+ */
+function inspectPackagedRun(config) {
+  return runPackaged(config, [
+    'wharfie',
+    'inspect',
+    '--run-id',
+    config.runId,
+    '--json',
+  ]);
 }
 
 /**
@@ -197,6 +249,8 @@ assert.deepEqual(
 
 const deadline = Date.now() + STATUS_TIMEOUT_MS;
 let observation;
+let workflowObservation;
+let executablePath;
 let receipt;
 while (Date.now() < deadline) {
   observation = readPackagedStatus(config);
@@ -207,11 +261,39 @@ while (Date.now() < deadline) {
     status.kind === 'wharfie.service.status' &&
     status.appId === config.appId &&
     status.health === 'healthy' &&
+    status.installation?.activeArtifactId === config.artifactId &&
+    status.installation?.activeRevisionId === config.revisionId &&
     status.persistence?.bootEnabled === true &&
+    status.systemd?.fragmentPath === config.unitPath &&
+    status.systemd?.dropInPaths === '' &&
     status.runtime?.generation > config.minimumGeneration &&
     status.systemd?.mainPid > 0 &&
     status.runtime?.processId === status.systemd.mainPid
   ) {
+    try {
+      executablePath = readlinkSync(`/proc/${status.systemd.mainPid}/exe`);
+    } catch {
+      executablePath = undefined;
+    }
+    workflowObservation = inspectPackagedRun(config);
+    const workflow = workflowObservation.parsed;
+    const timer = workflow?.timers?.[0];
+    if (
+      executablePath !== config.releasePath ||
+      workflowObservation.result.status !== 0 ||
+      workflow?.run?.runId !== config.runId ||
+      workflow?.run?.status !== 'RUNNING' ||
+      workflow?.workflowCursor?.disposition !== 'TIMER_WAITING' ||
+      workflow?.workflowCursor?.timerId !== config.timer.timerId ||
+      workflow?.timers?.length !== 1 ||
+      timer?.status !== 'WAITING' ||
+      timer?.timerId !== config.timer.timerId ||
+      timer?.scheduledAt !== config.timer.scheduledAt ||
+      timer?.dueAt !== config.timer.dueAt
+    ) {
+      sleep(STATUS_POLL_INTERVAL_MS);
+      continue;
+    }
     receipt = {
       schemaVersion: 1,
       kind: 'wharfie.systemd-proof.boot-receipt',
@@ -220,7 +302,9 @@ while (Date.now() < deadline) {
       previousBootId: config.previousBootId,
       sessionsBeforeCheck,
       automaticStart: true,
+      executablePath,
       status,
+      workflow,
     };
     break;
   }
@@ -233,6 +317,10 @@ if (!receipt) {
       exitCode: observation?.result.status,
       stderr: observation?.result.stderr.trim().slice(0, 1024),
       status: observation?.parsed,
+      workflowExitCode: workflowObservation?.result.status,
+      workflowStderr: workflowObservation?.result.stderr.trim().slice(0, 1024),
+      workflow: workflowObservation?.parsed,
+      executablePath,
     })}`,
   );
 }

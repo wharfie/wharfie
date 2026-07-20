@@ -239,8 +239,7 @@ describe('systemd user service contract', () => {
       result: 'success',
       mainPid: 123,
       execMainStatus: 0,
-      fragmentPath:
-        '/home/example/.config/systemd/user/wharfie-demo.service',
+      fragmentPath: '/home/example/.config/systemd/user/wharfie-demo.service',
       dropInPaths: '',
     });
     expect(() =>
