@@ -3375,15 +3375,9 @@ export function createSystemdUserServiceOperator(options = {}) {
    * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
    * @param {{activation: ReturnType<typeof createLocalApplicationActivation>, driver: Readonly<Record<string, Function>>}} runtime - Locked activation runtime.
    * @param {Readonly<Record<string, any>>} current - Exact ACTIVE state.
-   * @param {{requireInvokingRelease?: boolean}} [options] - Reprojection authority.
    * @returns {Promise<Readonly<Record<string, any>>>} - Synthetic activation result.
    */
-  async function reinstallActiveSelection(
-    context,
-    runtime,
-    current,
-    options = {},
-  ) {
+  async function reinstallActiveSelection(context, runtime, current) {
     if (
       current.phase !== LocalApplicationActivationPhase.ACTIVE ||
       !current.selected
@@ -3392,17 +3386,15 @@ export function createSystemdUserServiceOperator(options = {}) {
         'Systemd service reinstall requires one exact ACTIVE activation selection.',
       );
     }
-    if (options.requireInvokingRelease !== false) {
-      const artifact = await inspectBytes(artifactPath);
-      const target = Object.freeze({
-        artifactId: artifact.artifactId,
-        revisionId: context.pair.runtime.revisionId,
-      });
-      if (!hasSameReleaseReference(current.selected, target)) {
-        throw new Error(
-          'A different activation release is selected; use service update.',
-        );
-      }
+    const artifact = await inspectBytes(artifactPath);
+    const target = Object.freeze({
+      artifactId: artifact.artifactId,
+      revisionId: context.pair.runtime.revisionId,
+    });
+    if (!hasSameReleaseReference(current.selected, target)) {
+      throw new Error(
+        'A different activation release is selected; invoke its exact selected SEA and run service install before service update.',
+      );
     }
     const projection = Object.freeze({
       appId: context.pair.runtime.appId,
@@ -3592,20 +3584,11 @@ export function createSystemdUserServiceOperator(options = {}) {
               context.pair.runtime.target,
               { allowUninstalledTargetMismatch: true },
             );
-            if (installation?.state !== 'uninstalled') {
-              throw new Error(
-                installation?.state === 'installed'
-                  ? 'A different activation release is selected; use service update.'
-                  : 'The durable activation lacks its installed source projection; invoke its exact selected SEA and run service install before service update.',
-              );
-            }
-            await reinstallActiveSelection(context, runtime, current, {
-              requireInvokingRelease: false,
-            });
-            result = await runtime.coordinator.update({
-              appId: context.pair.runtime.appId,
-              target,
-            });
+            throw new Error(
+              installation?.state === 'installed'
+                ? 'A different activation release is selected; use service update.'
+                : 'The durable activation lacks its installed source projection; invoke its exact selected SEA and run service install before service update.',
+            );
           } else {
             result = await reinstallActiveSelection(context, runtime, current);
           }
@@ -3636,32 +3619,19 @@ export function createSystemdUserServiceOperator(options = {}) {
             'Systemd update requires one exact ACTIVE source release.',
           );
         }
-        const installation = await readInstallation(
-          context.layout,
-          context.uid,
-          context.filesystemUid,
-          context.pair.runtime.target,
-          { allowUninstalledTargetMismatch: true },
+        const projection = Object.freeze({
+          appId: context.pair.runtime.appId,
+          current: current.selected,
+          previous: current.rollbackCandidate,
+        });
+        const physical = await inspectPhysicalSelectionRepair(
+          context,
+          projection,
         );
-        if (installation?.state === 'uninstalled') {
-          await reinstallActiveSelection(context, runtime, current, {
-            requireInvokingRelease: false,
-          });
-        } else {
-          const projection = Object.freeze({
-            appId: context.pair.runtime.appId,
-            current: current.selected,
-            previous: current.rollbackCandidate,
-          });
-          const physical = await inspectPhysicalSelectionRepair(
-            context,
-            projection,
+        if (physical.needsRepair) {
+          throw new Error(
+            'The durable activation lacks its exact installed source projection; invoke its exact selected SEA and run service install before service update.',
           );
-          if (physical.needsRepair) {
-            throw new Error(
-              'The durable activation lacks its exact installed source projection; invoke its exact selected SEA and run service install before service update.',
-            );
-          }
         }
       }
       const result = await runtime.coordinator.update({
