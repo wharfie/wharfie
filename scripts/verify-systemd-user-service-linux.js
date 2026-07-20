@@ -81,10 +81,12 @@ const ACTIVATION_RESTORE_CRASH_BOUNDARIES = Object.freeze(
 );
 const FAILING_RESIDENT_SOURCE_SUFFIX =
   'src/core/runtime/services/ledger-service-command.js';
+const FAILING_RESIDENT_CODE =
+  "if (process.env.WHARFIE_RUNTIME_COMMAND === 'ledger-service') process.exit(0);";
 const FAILING_RESIDENT_INJECTION = [
   '',
   '// Disposable systemd proof fault: a selected target exits cleanly before READY.',
-  "if (process.env.WHARFIE_RUNTIME_COMMAND === 'ledger-service') process.exit(0);",
+  FAILING_RESIDENT_CODE,
   '',
 ].join('\n');
 
@@ -602,6 +604,7 @@ function packageProofArtifacts(repoRoot) {
         .update(FAILING_RESIDENT_INJECTION)
         .digest('hex'),
       expectedExitStatus: 0,
+      expectedSystemdResult: 'success',
     });
     failingTarget = buildFixture('failing-target');
   } finally {
@@ -863,6 +866,8 @@ function readIndependentServiceState() {
     'ActiveState',
     'SubState',
     'Result',
+    'ExecMainCode',
+    'ExecMainStatus',
     'MainPID',
     'FragmentPath',
     'DropInPaths',
@@ -1010,6 +1015,33 @@ function bindActivationStoreBreakpoint(installedPackageRoot) {
 }
 
 /**
+ * Bind the debugger to the exact fault source embedded only in the failing SEA.
+ * @param {string} installedPackageRoot - Installed tarball root.
+ * @returns {{sourceSuffix: string, anchor: string, occurrence: number, expectedSourceContent: string, sourceSha256: string}} - Bound fault target.
+ */
+function bindFailingResidentBreakpoint(installedPackageRoot) {
+  const sourcePath = path.join(
+    installedPackageRoot,
+    FAILING_RESIDENT_SOURCE_SUFFIX,
+  );
+  const expectedSourceContent = readFileSync(sourcePath, 'utf8');
+  assert.equal(
+    expectedSourceContent.split(FAILING_RESIDENT_CODE).length - 1,
+    1,
+    'failing resident injection anchor must be unique',
+  );
+  return Object.freeze({
+    sourceSuffix: FAILING_RESIDENT_SOURCE_SUFFIX,
+    anchor: FAILING_RESIDENT_CODE,
+    occurrence: 1,
+    expectedSourceContent,
+    sourceSha256: createHash('sha256')
+      .update(expectedSourceContent)
+      .digest('hex'),
+  });
+}
+
+/**
  * Require one pause to originate only from the exact retained breakpoint IDs.
  * @param {Record<string, any>} pause - Inspector pause.
  * @param {Record<string, any>} breakpoint - Installed-source breakpoint.
@@ -1098,22 +1130,81 @@ async function crashActivationCommandAtBoundary(options) {
       'activation-store-post-commit',
       boundTarget,
     );
-    for (let hit = 1; hit <= options.boundary.writeNumber; hit += 1) {
+    let faultBreakpoint;
+    let boundFault;
+    if (options.mode === 'restore') {
+      boundFault = bindFailingResidentBreakpoint(options.installedPackageRoot);
+      faultBreakpoint = await inspector.setSourceBreakpoint(
+        'failing-resident-injection',
+        boundFault,
+      );
       const paused = inspector.waitForPause();
       await inspector.resume();
       const pause = await paused;
       assertActivationBreakpointPause(
         pause,
+        faultBreakpoint,
+        `${options.mode} ${options.action} embedded fault`,
+      );
+      assert.deepEqual(
+        await activationStore.get({ appId: APP_ID }),
+        options.baseline,
+        'activation changed before the embedded fault line executed',
+      );
+    }
+
+    const targetRecordVersion =
+      options.baseline.recordVersion + options.boundary.writeNumber;
+    let observedRecordVersion = options.baseline.recordVersion;
+    let observedPauseCount = 0;
+    let cleanExit;
+    let frozen;
+    const maximumPauses =
+      options.boundary.writeNumber * breakpoint.breakpointIds.length;
+    while (observedRecordVersion < targetRecordVersion) {
+      assert.ok(
+        observedPauseCount < maximumPauses,
+        `${options.action} exceeded ${maximumPauses} post-commit pauses before write ${options.boundary.writeNumber}`,
+      );
+      const paused = inspector.waitForPause();
+      await inspector.resume();
+      const pause = await paused;
+      observedPauseCount += 1;
+      assertActivationBreakpointPause(
+        pause,
         breakpoint,
-        `${options.mode} ${options.action} write ${hit}`,
+        `${options.mode} ${options.action} pause ${observedPauseCount}`,
       );
       assert.equal(
         command.getExit(),
         null,
-        `${options.action} exited at activation write ${hit}`,
+        `${options.action} exited at activation pause ${observedPauseCount}`,
       );
+      const snapshot = await activationStore.get({ appId: APP_ID });
+      assert.ok(snapshot);
+      assert.ok(
+        snapshot.recordVersion === observedRecordVersion ||
+          snapshot.recordVersion === observedRecordVersion + 1,
+        `${options.action} activation record version advanced unexpectedly from ${observedRecordVersion} to ${snapshot.recordVersion}`,
+      );
+      observedRecordVersion = snapshot.recordVersion;
+      assert.ok(
+        observedRecordVersion <= targetRecordVersion,
+        `${options.action} passed target activation record version ${targetRecordVersion}`,
+      );
+      if (
+        options.mode === 'restore' &&
+        observedRecordVersion === options.baseline.recordVersion + 5 &&
+        !cleanExit
+      ) {
+        cleanExit = readIndependentServiceState();
+        assert.equal(cleanExit.ActiveState, 'inactive');
+        assert.equal(cleanExit.SubState, 'dead');
+        assert.equal(cleanExit.Result, 'success');
+        assert.equal(cleanExit.ExecMainStatus, '0');
+      }
+      if (observedRecordVersion === targetRecordVersion) frozen = snapshot;
     }
-    const frozen = await activationStore.get({ appId: APP_ID });
     assert.ok(frozen);
     assertActivationBoundary(frozen, options);
     const physical = captureActivationPhysicalState(options.storage);
@@ -1142,7 +1233,10 @@ async function crashActivationCommandAtBoundary(options) {
       activation: frozen,
       physical,
       processExit: exit,
+      observedPauseCount,
+      ...(cleanExit ? { cleanExit } : {}),
       breakpoint: Object.freeze({
+        retainedLocationCount: breakpoint.breakpointIds.length,
         sourceSuffix: ACTIVATION_STORE_WRITE_BREAKPOINT.sourceSuffix,
         sourceSha256: boundTarget.sourceSha256,
         originalLine: breakpoint.originalLine,
@@ -1150,6 +1244,19 @@ async function crashActivationCommandAtBoundary(options) {
         generatedLine: breakpoint.generatedLine,
         generatedColumn: breakpoint.generatedColumn,
       }),
+      ...(faultBreakpoint
+        ? {
+            embeddedFault: Object.freeze({
+              retainedLocationCount: faultBreakpoint.breakpointIds.length,
+              sourceSuffix: FAILING_RESIDENT_SOURCE_SUFFIX,
+              sourceSha256: boundFault.sourceSha256,
+              originalLine: faultBreakpoint.originalLine,
+              originalColumn: faultBreakpoint.originalColumn,
+              generatedLine: faultBreakpoint.generatedLine,
+              generatedColumn: faultBreakpoint.generatedColumn,
+            }),
+          }
+        : {}),
     });
   } finally {
     await cleanupInspectedCommand(command, inspector);
@@ -1726,6 +1833,20 @@ async function proveActivationEvolution(options) {
     target: failingTarget,
     storage,
   });
+  for (const restorationCase of restoration.cases) {
+    assert.equal(
+      restorationCase.embeddedFault?.sourceSha256,
+      faultInjection.injectedSha256,
+    );
+    assert.equal(
+      restorationCase.cleanExit?.ExecMainStatus,
+      String(faultInjection.expectedExitStatus),
+    );
+    assert.equal(
+      restorationCase.cleanExit?.Result,
+      faultInjection.expectedSystemdResult,
+    );
+  }
 
   const failed = runArtifact(
     failingTarget.artifactPath,
