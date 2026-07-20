@@ -47,7 +47,7 @@ afterEach(async () => {
 });
 
 /**
- * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -61,6 +61,7 @@ async function createHarness(options = {}) {
     options.artifactBytes || Buffer.from('packaged-artifact-v1'),
     { mode: 0o700 },
   );
+  const sourceArtifact = await inspectArtifactBytes(artifactPath);
   const homeDirectory = path.join(root, 'account-home');
   const dataRoot = options.deriveDataRoot
     ? path.join(homeDirectory, '.local', 'share', 'wharfie-nodejs')
@@ -245,6 +246,7 @@ async function createHarness(options = {}) {
     if (state.runtimeMode === 'starting') {
       return {
         status: 'STARTING',
+        artifactId: sourceArtifact.artifactId,
         revisionId: REVISION_ID,
         generation: 2,
         ownerKind: 'resident',
@@ -257,6 +259,7 @@ async function createHarness(options = {}) {
     if (!state.active) {
       return {
         status: 'STOPPED',
+        artifactId: sourceArtifact.artifactId,
         revisionId: REVISION_ID,
         generation: 1,
         session: 'absent',
@@ -265,6 +268,10 @@ async function createHarness(options = {}) {
     }
     return {
       status: 'READY',
+      artifactId:
+        state.runtimeMode === 'wrong-artifact'
+          ? `${sourceArtifact.artifactId.slice(0, -1)}${sourceArtifact.artifactId.endsWith('A') ? 'B' : 'A'}`
+          : sourceArtifact.artifactId,
       revisionId:
         state.runtimeMode === 'wrong-revision'
           ? `wrv1_${Buffer.alloc(32, 5).toString('base64url')}`
@@ -400,6 +407,7 @@ describe('systemd user service manager', () => {
 
   it('joins durable lifecycle ownership with the live session process', async () => {
     const harness = await createHarness();
+    const artifact = await inspectArtifactBytes(harness.artifactPath);
     await fsp.mkdir(harness.layout.controlPath, { recursive: true });
     const db = createVanillaDB({ path: harness.layout.controlPath });
     const serviceId = createLedgerServiceId({ appId: APP_ID });
@@ -425,6 +433,7 @@ describe('systemd user service manager', () => {
     const started = await lifecycle.start({
       serviceId,
       appId: APP_ID,
+      artifactId: artifact.artifactId,
       revisionId: REVISION_ID,
       sessionId,
       observedAt: 100,
@@ -459,6 +468,7 @@ describe('systemd user service manager', () => {
       }),
     ).resolves.toMatchObject({
       status: 'READY',
+      artifactId: artifact.artifactId,
       revisionId: REVISION_ID,
       ownerKind: 'resident',
       session: 'active',
@@ -1114,6 +1124,24 @@ describe('systemd user service manager', () => {
       systemd: { activeState: 'active' },
       runtime: { status: 'READY', session: 'absent' },
     });
+  });
+
+  it('requires the durable resident to run the exact installed artifact', async () => {
+    const harness = await createHarness();
+    const installed = await harness.operator.install();
+    harness.state.runtimeMode = 'wrong-artifact';
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'degraded',
+      installation: { activeArtifactId: installed.activeArtifactId },
+      runtime: {
+        status: 'READY',
+        revisionId: REVISION_ID,
+        session: 'active',
+      },
+    });
+    const status = await harness.operator.status();
+    expect(status.runtime.artifactId).not.toBe(installed.activeArtifactId);
   });
 
   it('requires the live durable resident to be systemd MainPID', async () => {

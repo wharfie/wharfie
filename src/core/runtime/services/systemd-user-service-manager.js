@@ -1218,6 +1218,7 @@ async function readRuntimeState(options) {
     if (!lifecycle && !ownership) return null;
     return Object.freeze({
       status: lifecycle?.status || 'UNKNOWN',
+      artifactId: lifecycle?.artifactId,
       revisionId: lifecycle?.revisionId,
       generation: lifecycle?.generation,
       ownerKind: ownership?.ownerKind,
@@ -1260,6 +1261,7 @@ function classifyHealth(
     systemd.mainPid > 0 &&
     systemd.execMainStatus === 0 &&
     runtime?.status === LedgerServiceLifecycleStatus.READY &&
+    runtime.artifactId === installation.current.artifactId &&
     runtime.revisionId === installation.current.revisionId &&
     runtime.ownerKind === LedgerServiceOwnerKind.RESIDENT &&
     runtime.session === 'active' &&
