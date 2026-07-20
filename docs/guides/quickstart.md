@@ -269,7 +269,9 @@ remain parked for later workflow slices.
 Inspection is read-only. Recovery is an explicit durable mutation to use only
 after every prior runner has stopped; it does not load an app manifest, parse
 current input, compile source, or dispatch user code. Cancellation is a
-separate request to an already active foreground or resident owner:
+separate request. A manual run requires its already active foreground or
+resident owner; a workflow run can instead route through a resident or acquire
+short-lived local ownership for an activation that needs no physical delivery:
 
 ```bash
 wharfie ops inspect --run-id <run-id>
