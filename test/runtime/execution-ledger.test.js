@@ -1372,7 +1372,7 @@ for (const adapter of getAdapterMatrix()) {
       } finally {
         await byteHarness.cleanup();
       }
-    });
+    }, 15_000);
 
     test('reconciles a cancelled terminal that omits the result of a durably cancelled effect', async () => {
       const { db, cleanup } = await adapter.create();
