@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { promises as fsp } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -249,6 +249,42 @@ describe('local service session', () => {
         await expect(
           probeLocalServiceSession(firstOptions),
         ).resolves.toMatchObject({ status: 'absent' });
+      });
+    },
+  );
+
+  itOnUnix(
+    'keeps ownership when a probe disconnects before its identity write',
+    async () => {
+      await withSessionRoot(async (root) => {
+        const options = {
+          serviceId: 'wls-disconnected-probe',
+          sessionId: 'session-disconnected-probe',
+          sessionRoot: root,
+        };
+        const session = await acquireLocalServiceSession(options);
+        try {
+          const probe = spawnSync(
+            process.execPath,
+            [
+              '--input-type=module',
+              '--eval',
+              "import net from 'node:net'; const socket = net.createConnection(process.argv[1]); socket.once('connect', () => socket.destroy()); socket.once('error', () => process.exit(2)); socket.once('close', () => process.exit(0)); setTimeout(() => process.exit(3), 1000).unref();",
+              session.endpoint,
+            ],
+            { encoding: 'utf8' },
+          );
+
+          expect(probe.status).toBe(0);
+          await expect(
+            probeLocalServiceSession(options),
+          ).resolves.toMatchObject({
+            status: 'active',
+            processId: process.pid,
+          });
+        } finally {
+          await session.release();
+        }
       });
     },
   );

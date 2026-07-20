@@ -674,6 +674,13 @@ export async function probeLocalServiceSession(options) {
  */
 function createSessionServer() {
   const server = net.createServer((socket) => {
+    socket.on('error', () => {
+      // The identity frame is best-effort metadata after connect already
+      // proved liveness. A probe may time out or exit before this process gets
+      // scheduled to write, especially while the owner is briefly blocked in
+      // native or synchronous work. That peer-local disconnect must not crash
+      // the durable session owner.
+    });
     socket.end(
       `${JSON.stringify({
         schemaVersion: 1,
