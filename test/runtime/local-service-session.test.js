@@ -224,12 +224,14 @@ describe('local service session', () => {
         ).resolves.toMatchObject({
           endpoint: first.endpoint,
           status: 'active',
+          processId: process.pid,
         });
         await expect(
           probeLocalServiceSession(secondOptions),
         ).resolves.toMatchObject({
           endpoint: second.endpoint,
           status: 'active',
+          processId: process.pid,
         });
         await expect(
           acquireLocalServiceSession(firstOptions),

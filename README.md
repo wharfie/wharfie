@@ -134,9 +134,10 @@ deliver one stable, current-wait-only signal decision through the same local
 owner boundary. The shared exact-run inspection, recovery, cancellation, and
 evidence-reconciliation commands understand the activation-aware cursor and
 schema-v7 redacted timer/signal lifecycle state. Managed-effect workflow
-successors and schedules remain unfinished. OS
-service installation/startup, multi-host leases and heartbeats, and public run
-history/listing are also later work. The npm package remains deliberately
+successors and schedules remain unfinished. Packaged Linux artifacts now have
+a systemd user-service install/start/stop/restart/status/uninstall foundation;
+the disposable-Linux boot/reboot proof is still outstanding. Multi-host leases
+and heartbeats and public run history/listing are also later work. The npm package remains deliberately
 private. It is not ready for production use.
 
 ## Start here
@@ -312,11 +313,27 @@ receives physical drain cancellation and becomes durably uncertain unless it
 still returns a supported terminal. That shutdown path remains physical-only;
 an operator `cancel` request is the separate durable run-level decision.
 
-This is a foreground resident runtime, not service installation. A due timer
+On Linux with a usable systemd user manager and administrator-enabled user
+lingering, the packaged artifact can manage that same resident as a fixed user
+service:
+
+```bash
+<app> wharfie service install
+<app> wharfie service status --json
+<app> wharfie service stop
+<app> wharfie service start
+<app> wharfie service restart
+<app> wharfie service uninstall
+```
+
+These commands reject root, never invoke `sudo`, preserve durable state and
+immutable releases on uninstall, and do not yet expose update or rollback.
+Startup across a real machine reboot remains an explicit disposable-Linux
+verification item. A due timer
 remains persisted until the exact-revision resident observes and fires it;
 there is deliberately no public timer-fire command. Wharfie does not yet
-install startup-on-boot units or provide schedules, managed-effect workflow
-successors, multi-host reassignment, or public run-history/listing commands.
+provide schedules, managed-effect workflow successors, multi-host
+reassignment, or public run-history/listing commands.
 
 ## Reconcile one uncertain managed effect
 

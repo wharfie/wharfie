@@ -9168,6 +9168,33 @@ export default defineApp({
   assert.match(operatorHelp, /\bretry-effect\b/);
   assert.match(operatorHelp, /\bstart\b/);
   assert.match(operatorHelp, /\bsignal\b/);
+  assert.match(operatorHelp, /\bservice\b/);
+  const serviceStatus = spawnSync(
+    cleanArtifactPath,
+    ['wharfie', 'service', 'status', '--json'],
+    {
+      cwd: cleanRunDirectory,
+      encoding: 'utf8',
+      env: {
+        ...cleanEnvironment,
+        XDG_DATA_HOME: path.join(cleanRunDirectory, 'service-data'),
+        XDG_CONFIG_HOME: path.join(cleanRunDirectory, 'service-config'),
+      },
+      maxBuffer: 20 * 1024 * 1024,
+    },
+  );
+  if (serviceStatus.error) throw serviceStatus.error;
+  assert.equal(serviceStatus.signal, null);
+  assert.equal(serviceStatus.stderr, '');
+  const serviceStatusReceipt = JSON.parse(serviceStatus.stdout);
+  if (serviceStatusReceipt.kind === 'wharfie.service.status') {
+    assert.equal(serviceStatus.status, 0);
+    assert.equal(serviceStatusReceipt.installation?.state, 'absent');
+  } else {
+    assert.equal(serviceStatus.status, 1);
+    assert.equal(serviceStatusReceipt.kind, 'wharfie.service.error');
+    assert.equal(serviceStatusReceipt.action, 'status');
+  }
   const workflowStartHelp = spawnSync(
     cleanArtifactPath,
     ['wharfie', 'start', '--help'],

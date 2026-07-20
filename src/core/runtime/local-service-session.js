@@ -6,6 +6,9 @@ import { join, resolve } from 'node:path';
 
 const SESSION_ENDPOINT_HASH_LENGTH = 24;
 const LOCAL_ENDPOINT_PROBE_TIMEOUT_MS = 250;
+const LOCAL_ENDPOINT_PROBE_IDENTITY_MAX_BYTES = 512;
+const LOCAL_ENDPOINT_PROBE_IDENTITY_KIND =
+  'wharfie.local-service-session.identity';
 const LOCAL_SOCKET_DIRECTORY_PREFIX = 'wharfie-';
 const LOCAL_SOCKET_FILENAME_PREFIX = 's-';
 const LOCAL_SOCKET_FILENAME_SUFFIX = '.sock';
@@ -523,16 +526,45 @@ function closeServer(server) {
 }
 
 /**
- * @typedef {{kind: 'active'} | {kind: 'absent'} | {kind: 'unknown', error: unknown}} LocalEndpointProbe
+ * @typedef {{kind: 'active', processId?: number} | {kind: 'absent'} | {kind: 'unknown', error: unknown}} LocalEndpointProbe
  */
 
 /**
+ * Parse the optional fixed identity frame emitted by a Wharfie session owner.
+ * A connected endpoint remains live even when an older or unrelated listener
+ * does not provide the frame, but callers cannot bind that endpoint to a PID.
+ * @param {Buffer} bytes - Bounded response bytes.
+ * @returns {number | undefined} - Positive owner PID when exact.
+ */
+function parseProbeIdentity(bytes) {
+  try {
+    const value = JSON.parse(bytes.toString('utf8').trim());
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Array.isArray(value) ||
+      Object.keys(value).length !== 3 ||
+      value.schemaVersion !== 1 ||
+      value.kind !== LOCAL_ENDPOINT_PROBE_IDENTITY_KIND ||
+      !Number.isSafeInteger(value.processId) ||
+      value.processId < 1
+    ) {
+      return undefined;
+    }
+    return Number(value.processId);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Connect once to an occupied Unix socket or Windows named pipe. A successful
- * connect is enough to prove another live process owns it; deliberately no
- * application-level handshake is attempted because a parent process may be
- * synchronously spawning the child that will serve the rest of its lifecycle.
- * `ECONNREFUSED` and `ENOENT` mean absent; every other failure is unknown.
- * No probe result ever triggers path cleanup.
+ * connect is enough to prove another live process owns it. Current Wharfie
+ * owners additionally emit one bounded identity frame so an OS supervisor can
+ * bind that live durable session to its main PID; an endpoint without a valid
+ * frame remains live but has no process identity. `ECONNREFUSED` and `ENOENT`
+ * mean absent; every other pre-connect failure is unknown. No probe result
+ * ever triggers path cleanup.
  * @param {string} endpoint - Candidate process-held endpoint.
  * @returns {Promise<LocalEndpointProbe>} - Conservative liveness classification.
  */
@@ -541,6 +573,10 @@ function probeLocalEndpoint(endpoint) {
     /** @type {import('node:net').Socket | undefined} */
     let socket;
     let settled = false;
+    let connected = false;
+    let responseSize = 0;
+    /** @type {Buffer[]} */
+    const response = [];
     /** @param {LocalEndpointProbe} result - Final probe result. */
     const finish = (result) => {
       if (settled) return;
@@ -551,8 +587,33 @@ function probeLocalEndpoint(endpoint) {
 
     try {
       socket = net.createConnection(endpoint);
-      socket.once('connect', () => finish({ kind: 'active' }));
+      socket.once('connect', () => {
+        connected = true;
+      });
+      socket.on('data', (chunk) => {
+        responseSize += chunk.length;
+        if (responseSize <= LOCAL_ENDPOINT_PROBE_IDENTITY_MAX_BYTES) {
+          response.push(Buffer.from(chunk));
+        }
+      });
+      socket.once('end', () => {
+        const processId =
+          responseSize <= LOCAL_ENDPOINT_PROBE_IDENTITY_MAX_BYTES
+            ? parseProbeIdentity(Buffer.concat(response, responseSize))
+            : undefined;
+        finish({
+          kind: 'active',
+          ...(processId === undefined ? {} : { processId }),
+        });
+      });
+      socket.once('close', () => {
+        if (connected) finish({ kind: 'active' });
+      });
       socket.once('error', (error) => {
+        if (connected) {
+          finish({ kind: 'active' });
+          return;
+        }
         if (isDefinitelyAbsentLocalEndpoint(error)) {
           finish({ kind: 'absent' });
         } else {
@@ -560,12 +621,16 @@ function probeLocalEndpoint(endpoint) {
         }
       });
       socket.once('timeout', () => {
-        finish({
-          kind: 'unknown',
-          error: new Error(
-            'Timed out while probing an occupied local endpoint.',
-          ),
-        });
+        finish(
+          connected
+            ? { kind: 'active' }
+            : {
+                kind: 'unknown',
+                error: new Error(
+                  'Timed out while probing an occupied local endpoint.',
+                ),
+              },
+        );
       });
       socket.setTimeout(LOCAL_ENDPOINT_PROBE_TIMEOUT_MS);
     } catch (error) {
@@ -580,7 +645,7 @@ function probeLocalEndpoint(endpoint) {
  * owner to decide whether an existing session is still locally live before it
  * attempts its own compare-and-set recovery transition.
  * @param {{serviceId: string, sessionId: string, sessionRoot?: string}} options - Exact session identity.
- * @returns {Promise<Readonly<{serviceId: string, sessionId: string, sessionRoot: string, endpoint: string, status: 'active'|'absent'|'unknown'}>>} - Safe local liveness observation.
+ * @returns {Promise<Readonly<{serviceId: string, sessionId: string, sessionRoot: string, endpoint: string, status: 'active'|'absent'|'unknown', processId?: number}>>} - Safe local liveness observation.
  */
 export async function probeLocalServiceSession(options) {
   const { serviceId, sessionId, sessionRoot } =
@@ -598,6 +663,9 @@ export async function probeLocalServiceSession(options) {
     sessionRoot,
     endpoint,
     status: probe.kind,
+    ...(probe.kind === 'active' && probe.processId !== undefined
+      ? { processId: probe.processId }
+      : {}),
   });
 }
 
@@ -606,9 +674,13 @@ export async function probeLocalServiceSession(options) {
  */
 function createSessionServer() {
   const server = net.createServer((socket) => {
-    // Ownership probes only need the TCP/Unix connect to succeed. Closing
-    // immediately prevents a probe from delaying graceful session release.
-    socket.destroy();
+    socket.end(
+      `${JSON.stringify({
+        schemaVersion: 1,
+        kind: LOCAL_ENDPOINT_PROBE_IDENTITY_KIND,
+        processId: process.pid,
+      })}\n`,
+    );
   });
   server.on('error', () => {
     // A bind failure is handled by the one-shot listener in listen(). Once

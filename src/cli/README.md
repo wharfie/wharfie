@@ -24,3 +24,10 @@ whose dedicated projection rows omit signal payloads, payload references,
 digests, and actor fields. The existing event history retains its safe actor
 metadata. Branches, schedules, and managed-effect workflow successors remain
 unsupported.
+
+Packaged Linux artifacts additionally expose
+`<app> wharfie service install|start|stop|restart|status|uninstall`. This is a
+packaged-only systemd user-service boundary: it requires pre-enabled lingering,
+rejects root, never accepts unit or environment overrides, and preserves state
+and immutable releases on uninstall. Update, rollback, and source-side service
+management are intentionally absent.

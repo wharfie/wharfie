@@ -279,8 +279,28 @@ and worker commands without any source-directory override:
 ```
 
 The private environment-selected packaged service runtime starts the same
-resident activity implementation. Wharfie does not yet install it as an OS
-service or arrange startup on boot. The current worker executes exact workflow
+resident activity implementation. On Linux, a packaged artifact can install
+that runtime as a systemd user service when the invoking non-root user's
+systemd manager is available and an administrator has already enabled
+lingering:
+
+```bash
+<app> wharfie service install
+<app> wharfie service status --json
+<app> wharfie service stop
+<app> wharfie service start
+<app> wharfie service restart
+<app> wharfie service uninstall
+```
+
+The commands never invoke `sudo` or accept arbitrary unit/environment input.
+Uninstall disables the unit and removes the executable selector while
+preserving immutable releases, ledger data, payloads, application state, and
+the installation identity tombstone. Update and rollback remain unavailable
+until Wharfie has a race-free maintenance/handoff protocol. A real machine
+boot/reboot proof is still pending in a disposable Linux environment.
+
+The current worker executes exact workflow
 `ACTIVITY` rows, conservatively handles `RECOVERY` rows, and fires due `TIMER`
 rows as framework-owned continuations without Activity Protocol or authored
 code dispatch. A timer's persisted deadline is not recomputed after restart;
@@ -479,8 +499,8 @@ unavailable on `PATH`. Source-process and relocated-SEA matrices also prove
 public workflow start, persisted timer restart, current-wait signal delivery,
 recovery, reconciliation, offline cancellation, and active
 persist-before-signal response-loss behavior. Wharfie remains a single-process
-worker rather than a production workflow service: OS installation/reboot proof
-and multi-host coordination are still intentionally absent.
+worker rather than a production workflow service: real boot/reboot proof and
+multi-host coordination are still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.

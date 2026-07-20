@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Persisted timers and current-wait signals are implemented; SEA service installation and reboot proof are next · **Last updated:** 2026-07-20
+**Status:** Linux SEA systemd user-service lifecycle is implemented; disposable boot/reboot proof and race-free update handoff are next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -375,8 +375,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       source effect as `COMPENSATED`.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
 - [ ] Support manual, cron, and workflow-triggered runs through one execution path.
-- [ ] Install/uninstall the artifact as an OS-managed resident service, initially systemd, with startup on boot, health reporting, graceful shutdown/restart, and reboot recovery.
-- [ ] Make service status, logs, run history, retry, cancel, approve, and effect reconciliation available as human-readable and JSON operations in the reserved operator namespace.
+- [x] Implement packaged Linux systemd user-service install/start/stop/restart/status/uninstall with fixed-unit rendering, immutable releases, PID-bound durable health, graceful drain, retry-safe uninstall, and preserved state.
+- [ ] Prove enabled startup, crash replacement, and durable recovery across a real machine reboot in a disposable Linux systemd environment.
+- [x] Make service status available as human-readable and JSON operations in the reserved packaged operator namespace.
+- [ ] Add logs, run history/listing, and any remaining operator surfaces that are still deliberately absent.
 - [x] Build one shared source/packaged foreground durable-run host. Source
       `wharfie ops run` supplies a sealed prepared revision. The packaged
       command `<app> wharfie run` binds only its embedded manifest/revision/
@@ -476,8 +478,9 @@ responses, resident generation takeover, persisted timer firing, current-wait
 signal consumption, and evidence-backed continuation. The moved artifact
 completes the linear workflow proof with Node unavailable on `PATH`.
 
-1. Install the SEA as an OS-managed service and prove startup-on-boot, graceful
-   restart, and durable workflow recovery across a real machine reboot.
+1. Prove the implemented SEA systemd user-service lifecycle across startup,
+   crash replacement, graceful restart, and durable workflow recovery through
+   a real machine reboot in a disposable Linux environment.
 2. Add the smallest provider-backed path that can create, inspect, update, and
    remove one durable node through the operator's credential chain.
 3. Begin provider-backed coordinator recovery only after the single-node

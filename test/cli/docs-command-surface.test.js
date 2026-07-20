@@ -42,6 +42,7 @@ const staleClaims = [
   'There is no public workflow-start command yet',
   'schema-v5 redacted run view',
   'schema-v6 redacted run view',
+  'Wharfie does not yet install it as an OS service',
 ];
 
 describe('docs command surface', () => {
@@ -149,6 +150,10 @@ describe('docs command surface', () => {
       '<app> wharfie signal --run-id <run-id> --signal <signal-step-id>',
     );
     expect(quickstart).toContain('<app> wharfie worker');
+    expect(quickstart).toContain('<app> wharfie service install');
+    expect(quickstart).toContain('<app> wharfie service status --json');
+    expect(quickstart).toContain('<app> wharfie service uninstall');
+    expect(quickstart).toContain('Update and rollback remain unavailable');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
     expect(quickstart).not.toContain('--operation-id');
     expect(quickstart).toContain('append-only run → invocation → attempt');
