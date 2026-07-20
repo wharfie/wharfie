@@ -288,6 +288,36 @@ describe('packaged systemd user service command', () => {
     );
   });
 
+  it('prioritizes activation recovery over orphan cleanup guidance', async () => {
+    const operator = makeOperator();
+    operator.status.mockResolvedValue({
+      schemaVersion: 2,
+      kind: 'wharfie.service.status',
+      appId: 'service-demo',
+      health: 'degraded',
+      activation: { phase: 'SELECTED', action: 'update' },
+      wiring: {
+        state: 'orphaned',
+        unitFile: 'managed',
+        selection: 'absent',
+        effectiveUnit: 'managed',
+        cleanupPending: false,
+      },
+    });
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'status']);
+
+    expect(line).toHaveBeenCalledWith(
+      'status: degraded; wiring: orphaned; activation: SELECTED; run service recover (service-demo)',
+    );
+  });
+
   it.each(HUMAN_ACTIVATION_CASES)(
     'writes an actionable human %s result for %s activation',
     async (action, requestStatus, outcome, message) => {
@@ -333,7 +363,7 @@ describe('packaged systemd user service command', () => {
     await command.parseAsync(['node', 'service', 'install']);
 
     expect(line).toHaveBeenCalledWith(
-      'install: in-flight; request pending; settle incompatible durable work or install its matching revision (service-demo)',
+      'install: in-flight; request pending; settle incompatible durable work, then run service recover; or install its matching revision (service-demo)',
     );
     expect(processRef.exitCode).toBe(1);
   });
@@ -480,6 +510,7 @@ describe('packaged systemd user service command', () => {
       }),
     ],
     ['start', makeResult('start', { outcome: 'stopped' })],
+    ['stop', makeResult('stop', { health: 'starting' })],
     ['update', withoutField(makeResult('update'), 'activeArtifactId')],
     ['update', makeResult('update', { activeArtifactId: null })],
     ['update', makeResult('update', { activeArtifactId: 42 })],
@@ -607,6 +638,73 @@ describe('packaged systemd user service command', () => {
     });
     expect(processRef.exitCode).toBe(1);
   });
+
+  it('sanitizes an untagged human activation preflight failure', async () => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('lingering\nis\u001brequired'), {
+            code: 'systemd-user-service-preflight-failed',
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install']);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      code: 'systemd-user-service-preflight-failed',
+      message: 'lingering is required',
+    });
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('remediation');
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('secret');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['wrong', 'Retry service install.'],
+  ])(
+    'does not trust %s remediation on a recovery-coded error',
+    async (_label, remediation) => {
+      const json = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => ({
+          ...makeOperator(),
+          update: async () => {
+            const error = Object.assign(new Error('activation interrupted'), {
+              code: 'systemd-user-service-activation-recovery-required',
+            });
+            if (remediation !== undefined) {
+              Object.assign(error, { remediation });
+            }
+            throw error;
+          },
+        }),
+        output: { json },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', 'update', '--json']);
+
+      expect(json).toHaveBeenCalledWith({
+        schemaVersion: 1,
+        kind: 'wharfie.service.error',
+        action: 'update',
+        code: 'systemd-user-service-activation-recovery-required',
+        message: 'activation interrupted',
+      });
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
 
   it('fails closed when the implementation omits the requested method', async () => {
     const failure = jest.fn();

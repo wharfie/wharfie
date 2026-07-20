@@ -255,6 +255,7 @@ function normalizeResult(value, action) {
     action === 'status' ||
     (normalized.action === action &&
       SERVICE_HEALTH_STATES.has(normalized.health) &&
+      (normalized.health !== 'starting' || ACTIVATION_ACTIONS.has(action)) &&
       hasValidResultSettlement(normalized, action) &&
       hasValidReleaseReferences(normalized));
   if (
@@ -318,12 +319,13 @@ function createJsonError(error, action) {
  * error objects, stacks, or control characters to the human output boundary.
  * @param {unknown} error - Operation failure.
  * @param {string} action - Requested operation.
- * @returns {unknown} - Original lifecycle failure or safe activation error.
+ * @returns {Error} - Safe one-line failure with optional recovery guidance.
  */
 function createHumanFailure(error, action) {
   const safe = createJsonError(error, action);
-  if (!safe.remediation) return error;
-  const failure = new Error(`${safe.message} ${safe.remediation}`);
+  const failure = new Error(
+    `${safe.message}${safe.remediation ? ` ${safe.remediation}` : ''}`,
+  );
   Object.assign(failure, { code: safe.code });
   return failure;
 }
@@ -347,18 +349,20 @@ function formatHumanResult(action, result) {
       : '';
   if (action.name === 'status') {
     const wiring = result.wiring.state;
-    const wiringRemediation =
-      wiring === 'orphaned' ? '; run service uninstall' : '';
     const activationPhase = result.activation?.phase;
     const activationRemediation =
       typeof activationPhase === 'string' && activationPhase !== 'ACTIVE'
         ? `; activation: ${activationPhase}; run service recover`
         : '';
+    const wiringRemediation =
+      !activationRemediation && wiring === 'orphaned'
+        ? '; run service uninstall'
+        : '';
     return `${action.name}: ${outcome}; wiring: ${wiring}${wiringRemediation}${activationRemediation}${app}`;
   }
   if (result.requestStatus === 'pending') {
     if (result.reason === 'incompatible-durable-work') {
-      return `${action.name}: ${outcome}; request pending; settle incompatible durable work or install its matching revision${app}`;
+      return `${action.name}: ${outcome}; request pending; settle incompatible durable work, then run service recover; or install its matching revision${app}`;
     }
     return `${action.name}: ${outcome}; request pending; run service recover${app}`;
   }

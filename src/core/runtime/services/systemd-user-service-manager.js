@@ -3551,9 +3551,7 @@ export function createSystemdUserServiceOperator(options = {}) {
         });
         let result;
         if (current?.phase === LocalApplicationActivationPhase.ACTIVE) {
-          if (hasSameReleaseReference(current.selected, target)) {
-            result = await reinstallActiveSelection(context, runtime, current);
-          } else {
+          if (!hasSameReleaseReference(current.selected, target)) {
             const installation = await readInstallation(
               context.layout,
               context.uid,
@@ -3573,6 +3571,8 @@ export function createSystemdUserServiceOperator(options = {}) {
               appId: context.pair.runtime.appId,
               target,
             });
+          } else {
+            result = await reinstallActiveSelection(context, runtime, current);
           }
         } else {
           result = await runtime.coordinator.install({

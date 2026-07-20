@@ -107,7 +107,6 @@ async function createHarness(options = {}) {
       ? [path.dirname(layout.unitPath)]
       : null,
     unknownUnitShows: options.unitInitiallyUnknown ? 1 : 0,
-    target: options.target || TARGET,
     now: 100,
   };
   const readSelectedIdentity = async () => {
@@ -332,62 +331,61 @@ async function createHarness(options = {}) {
   let token = 0;
   const releaseOperationLock = jest.fn(async () => undefined);
   const acquireOperationLock = jest.fn(async () => releaseOperationLock);
-  const operator = createSystemdUserServiceOperator({
-    platform: options.platform || 'linux',
-    architecture: 'x64',
-    nodeVersion: '24.13.1',
-    artifactPath,
-    ...(options.deriveDataRoot ? {} : { dataRoot }),
-    ...(options.deriveConfigRoot ? {} : { configRoot }),
-    ...(options.deriveConfigRoot || options.deriveDataRoot
-      ? { getHomeDirectory: () => homeDirectory }
-      : {}),
-    environment:
-      options.environment ||
-      (options.useDefaultXdgConfigHome
-        ? { XDG_CONFIG_HOME: `${configRoot}/` }
+  /** @param {Readonly<Record<string, string>>} target - Exact packaged target. */
+  const createOperatorForTarget = (target) =>
+    createSystemdUserServiceOperator({
+      platform: options.platform || 'linux',
+      architecture: target.architecture,
+      nodeVersion: target.nodeVersion,
+      artifactPath,
+      ...(options.deriveDataRoot ? {} : { dataRoot }),
+      ...(options.deriveConfigRoot ? {} : { configRoot }),
+      ...(options.deriveConfigRoot || options.deriveDataRoot
+        ? { getHomeDirectory: () => homeDirectory }
         : {}),
-    getLocalAppStorageLayout: () =>
-      options.packagedStorage === false
-        ? undefined
-        : {
-            appId: layout.appId,
-            dataRoot: layout.dataRoot,
-            appRoot: layout.serviceRoot,
-            stateRoot: layout.stateRoot,
-            controlPath: layout.controlPath,
-            payloadPath: layout.payloadPath,
-            applicationStatePath: layout.applicationStatePath,
-            sessionPath: layout.sessionPath,
-            executionLedgerTable: layout.executionLedgerTable,
-          },
-    getUid: () => options.uid ?? 1000,
-    getEffectiveUid: () => options.uid ?? 1000,
-    getFilesystemUid: () =>
-      options.filesystemUid ?? process.getuid?.() ?? options.uid ?? 1000,
-    acquireOperationLock,
-    ...(options.listRuns
-      ? {
-          createExecutionLedger: () => ({ listRuns: options.listRuns }),
-        }
-      : {}),
-    createToken: () => `token-${(token += 1)}`,
-    now: () => state.now,
-    wait: async () => undefined,
-    pollIntervalMs: 1,
-    startTimeoutMs: 2,
-    stopTimeoutMs: 2,
-    execute,
-    readRuntimeState,
-    readEmbeddedRevisionRuntimePair: async () => ({
-      revision: { revisionId: REVISION_ID },
-      runtime: {
-        appId: APP_ID,
-        revisionId: REVISION_ID,
-        target: state.target,
-      },
-    }),
-  });
+      environment:
+        options.environment ||
+        (options.useDefaultXdgConfigHome
+          ? { XDG_CONFIG_HOME: `${configRoot}/` }
+          : {}),
+      getLocalAppStorageLayout: () =>
+        options.packagedStorage === false
+          ? undefined
+          : {
+              appId: layout.appId,
+              dataRoot: layout.dataRoot,
+              appRoot: layout.serviceRoot,
+              stateRoot: layout.stateRoot,
+              controlPath: layout.controlPath,
+              payloadPath: layout.payloadPath,
+              applicationStatePath: layout.applicationStatePath,
+              sessionPath: layout.sessionPath,
+              executionLedgerTable: layout.executionLedgerTable,
+            },
+      getUid: () => options.uid ?? 1000,
+      getEffectiveUid: () => options.uid ?? 1000,
+      getFilesystemUid: () =>
+        options.filesystemUid ?? process.getuid?.() ?? options.uid ?? 1000,
+      acquireOperationLock,
+      ...(options.listRuns
+        ? {
+            createExecutionLedger: () => ({ listRuns: options.listRuns }),
+          }
+        : {}),
+      createToken: () => `token-${(token += 1)}`,
+      now: () => state.now,
+      wait: async () => undefined,
+      pollIntervalMs: 1,
+      startTimeoutMs: 2,
+      stopTimeoutMs: 2,
+      execute,
+      readRuntimeState,
+      readEmbeddedRevisionRuntimePair: async () => ({
+        revision: { revisionId: REVISION_ID },
+        runtime: { appId: APP_ID, revisionId: REVISION_ID, target },
+      }),
+    });
+  const operator = createOperatorForTarget(options.target || TARGET);
   return {
     root,
     artifactPath,
@@ -399,6 +397,7 @@ async function createHarness(options = {}) {
     execute,
     acquireOperationLock,
     releaseOperationLock,
+    createOperatorForTarget,
     readRuntimeState,
     operator,
   };
@@ -2179,7 +2178,25 @@ describe('systemd user service manager', () => {
     });
   });
 
-  it('reprojects the retained source before installing a new release after uninstall', async () => {
+  it('reprojects the retained source before an update after uninstall', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+
+    await expect(harness.operator.update()).resolves.toMatchObject({
+      action: 'update',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
+  });
+
+  it('treats install from a new release over an uninstall tombstone as update', async () => {
     const harness = await createHarness();
     const source = await inspectArtifactBytes(harness.artifactPath);
     await harness.operator.install();
@@ -2200,12 +2217,18 @@ describe('systemd user service manager', () => {
   it('installs over an activation-less uninstalled tombstone', async () => {
     const harness = await createHarness();
     await harness.operator.install();
-    await harness.operator.uninstall();
     await eraseActivationRecord(harness);
+    await harness.operator.uninstall();
+    const replacementTarget = Object.freeze({
+      ...TARGET,
+      architecture: 'arm64',
+    });
+    const replacementOperator =
+      harness.createOperatorForTarget(replacementTarget);
     await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
     const target = await inspectArtifactBytes(harness.artifactPath);
 
-    await expect(harness.operator.install()).resolves.toMatchObject({
+    await expect(replacementOperator.install()).resolves.toMatchObject({
       action: 'install',
       requestStatus: 'fulfilled',
       outcome: 'target-active',
@@ -2213,11 +2236,18 @@ describe('systemd user service manager', () => {
       activeArtifactId: target.artifactId,
       rollbackArtifactId: null,
     });
+    const installation = JSON.parse(
+      await fsp.readFile(harness.layout.installationPath, 'utf8'),
+    );
+    expect(installation.current.target).toEqual(replacementTarget);
   });
 
   it('reinstalls the same release across wall-clock rollback', async () => {
     const harness = await createHarness();
     await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.update();
     const beforeUninstall = await readActivationRecord(harness);
     harness.state.now = 200;
     await harness.operator.uninstall();
@@ -2231,7 +2261,17 @@ describe('systemd user service manager', () => {
     await expect(harness.operator.status()).resolves.toMatchObject({
       health: 'absent',
       installation: { state: 'uninstalled' },
-      activation: { phase: 'ACTIVE' },
+      activation: {
+        phase: 'ACTIVE',
+        selected: { artifactId: target.artifactId },
+        rollback: { artifactId: expect.any(String) },
+      },
+    });
+    harness.state.now = 50;
+
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      outcome: 'target-active',
+      health: 'healthy',
     });
     const afterReinstall = await readActivationRecord(harness);
     expect(afterReinstall).toMatchObject({
@@ -2239,12 +2279,6 @@ describe('systemd user service manager', () => {
       selectionGeneration: beforeUninstall?.selectionGeneration,
       selected: beforeUninstall?.selected,
       rollbackCandidate: beforeUninstall?.rollbackCandidate,
-    });
-    harness.state.now = 50;
-
-    await expect(harness.operator.install()).resolves.toMatchObject({
-      outcome: 'target-active',
-      health: 'healthy',
     });
     await expect(harness.operator.status()).resolves.toMatchObject({
       health: 'healthy',
