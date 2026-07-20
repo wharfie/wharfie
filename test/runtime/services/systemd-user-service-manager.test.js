@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 /**
- * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -171,6 +171,21 @@ async function createHarness(options = {}) {
     artifactPath,
     dataRoot,
     configRoot,
+    environment: options.environment || {},
+    getLocalAppStorageLayout: () =>
+      options.packagedStorage === false
+        ? undefined
+        : {
+            appId: layout.appId,
+            dataRoot: layout.dataRoot,
+            appRoot: layout.serviceRoot,
+            stateRoot: layout.stateRoot,
+            controlPath: layout.controlPath,
+            payloadPath: layout.payloadPath,
+            applicationStatePath: layout.applicationStatePath,
+            sessionPath: layout.sessionPath,
+            executionLedgerTable: layout.executionLedgerTable,
+          },
     getUid: () => options.uid ?? 1000,
     getEffectiveUid: () => options.uid ?? 1000,
     getFilesystemUid: () =>
@@ -369,6 +384,26 @@ describe('systemd user service manager', () => {
     });
   });
 
+  it('refuses service management outside packaged app storage context', async () => {
+    const harness = await createHarness({ packagedStorage: false });
+
+    await expect(harness.operator.install()).rejects.toThrow(
+      /requires packaged app storage context/,
+    );
+    expect(harness.calls).toEqual([]);
+  });
+
+  it('refuses an explicit path that would split foreground and resident ledgers', async () => {
+    const harness = await createHarness({
+      environment: { WHARFIE_CONTROL_PATH: '/tmp/redirected-control' },
+    });
+
+    await expect(harness.operator.install()).rejects.toThrow(
+      /WHARFIE_CONTROL_PATH redirects packaged commands/,
+    );
+    expect(harness.calls).toEqual([]);
+  });
+
   it('is idempotent for the same verified release', async () => {
     const harness = await createHarness();
     await harness.operator.install();
@@ -445,10 +480,14 @@ describe('systemd user service manager', () => {
     const redirect = path.join(linked.root, 'redirect');
     await fsp.mkdir(linked.dataRoot, { recursive: true });
     await fsp.mkdir(redirect);
-    await fsp.symlink(redirect, path.join(linked.dataRoot, 'services'), 'dir');
+    await fsp.symlink(
+      redirect,
+      path.join(linked.dataRoot, 'applications'),
+      'dir',
+    );
 
     await expect(linked.operator.install()).rejects.toThrow(
-      /services root must be a real directory/,
+      /applications root must be a real directory/,
     );
 
     const foreign = await createHarness({ filesystemUid: 999_999 });

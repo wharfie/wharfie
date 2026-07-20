@@ -357,6 +357,21 @@ class ActorSystem extends BuildResourceGroup {
             'services',
             'ledger-service-command.js',
           );
+          const packagedAppStoragePath = path.resolve(
+            actorSystemDir,
+            '..',
+            '..',
+            'runtime',
+            'packaged-app-storage.js',
+          );
+          const localAppStorageContextPath = path.resolve(
+            actorSystemDir,
+            '..',
+            '..',
+            'lib',
+            'config',
+            'local-app-storage-context.js',
+          );
           const developerCliLoader = developerCliEntrypoint
             ? `const loadDeveloperCliModule = () => import(${JSON.stringify(
                 developerCliEntrypoint,
@@ -377,6 +392,12 @@ class ActorSystem extends BuildResourceGroup {
               import { runPackagedApp } from ${JSON.stringify(
                 packagedAppEntryPath,
               )};
+              import { resolvePackagedAppStorage } from ${JSON.stringify(
+                packagedAppStoragePath,
+              )};
+              import { withLocalAppStorageLayout } from ${JSON.stringify(
+                localAppStorageContextPath,
+              )};
               import runtimeOperatorCli from ${JSON.stringify(runtimeCliPath)};
               import ledgerServiceCmd from ${JSON.stringify(
                 runtimeLedgerServicePath,
@@ -385,17 +406,20 @@ class ActorSystem extends BuildResourceGroup {
               (async () => {
                 sourceMapSupport.install();
                 await preparePackagedCoreRuntimeDependencies();
-                await runPackagedApp({
-                  loadDeveloperCliModule,
-                  ${
-                    developerCliExportName
-                      ? `cliExportName: ${JSON.stringify(developerCliExportName)},`
-                      : ''
-                  }
-                  runtimeModules: {
-                    operatorCli: runtimeOperatorCli,
-                    'ledger-service': ledgerServiceCmd,
-                  },
+                const packagedAppStorage = await resolvePackagedAppStorage();
+                await withLocalAppStorageLayout(packagedAppStorage, async () => {
+                  await runPackagedApp({
+                    loadDeveloperCliModule,
+                    ${
+                      developerCliExportName
+                        ? `cliExportName: ${JSON.stringify(developerCliExportName)},`
+                        : ''
+                    }
+                    runtimeModules: {
+                      operatorCli: runtimeOperatorCli,
+                      'ledger-service': ledgerServiceCmd,
+                    },
+                  });
                 });
               })();
           `;

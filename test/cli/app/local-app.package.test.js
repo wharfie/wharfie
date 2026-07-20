@@ -471,6 +471,15 @@ describe('packageLocalApp', () => {
                 'await preparePackagedCoreRuntimeDependencies()',
               ),
             ).toBeLessThan(entryCode.indexOf('await runPackagedApp({'));
+            expect(entryCode).toContain(
+              'const packagedAppStorage = await resolvePackagedAppStorage()',
+            );
+            expect(entryCode).toContain(
+              'await withLocalAppStorageLayout(packagedAppStorage',
+            );
+            expect(
+              entryCode.indexOf('await resolvePackagedAppStorage()'),
+            ).toBeLessThan(entryCode.indexOf('await runPackagedApp({'));
             expect(entryCode).not.toContain('state_cmds');
             expect(entryCode).not.toContain("'serve-lambda':");
             expect(entryCode).not.toContain("'serve-queue':");

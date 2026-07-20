@@ -81,12 +81,21 @@ preserves all durable application and control data.
 
 ### Immutable releases and one atomic executable selection
 
-The default installation uses Wharfie's existing `env-paths` data root (the
-current Linux default is below `$XDG_DATA_HOME/wharfie-nodejs`, or
+Every packaged application derives one immutable, app-scoped local-storage
+layout from its embedded `appId` before developer code, public operators, or a
+hidden runtime can execute. The layout is carried as process-local async
+bootstrap context rather than hidden environment mutation. Installing a
+service adds supervision and immutable releases around those same state paths;
+it does not move, copy, or select a second ledger. Explicit foreground storage
+overrides remain available, but service management refuses them unless every
+durable route exactly matches the fixed resident layout.
+
+The layout uses Wharfie's existing `env-paths` data root (the current Linux
+default is below `$XDG_DATA_HOME/wharfie-nodejs`, or
 `$HOME/.local/share/wharfie-nodejs` when that variable is absent):
 
 ```text
-<wharfie-data>/services/<appId>/
+<wharfie-data>/applications/<appId>/
   releases/<artifactId>/app
   current -> releases/<artifactId>
   installation.json
@@ -159,18 +168,18 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-ExecStart=<wharfie-data>/services/<appId>/current/app
-WorkingDirectory=<wharfie-data>/services/<appId>/state
+ExecStart=<wharfie-data>/applications/<appId>/current/app
+WorkingDirectory=<wharfie-data>/applications/<appId>/state
 Environment=WHARFIE_RUNTIME_COMMAND=ledger-service
 Environment=WHARFIE_RUNTIME_ARGS=[]
 Environment=WHARFIE_CONTROL_ADAPTER=lmdb
-Environment=WHARFIE_CONTROL_PATH=<wharfie-data>/services/<appId>/state/control
-Environment=WHARFIE_EXECUTION_PAYLOAD_PATH=<wharfie-data>/services/<appId>/state/control/execution-payloads
+Environment=WHARFIE_CONTROL_PATH=<wharfie-data>/applications/<appId>/state/control
+Environment=WHARFIE_EXECUTION_PAYLOAD_PATH=<wharfie-data>/applications/<appId>/state/control/execution-payloads
 Environment=WHARFIE_EXECUTION_PAYLOAD_STORE_ID=
 Environment=WHARFIE_EXECUTION_LEDGER_TABLE=wharfie-execution-ledger-v10
 Environment=WHARFIE_APPLICATION_STATE_ADAPTER=lmdb
-Environment=WHARFIE_APPLICATION_STATE_PATH=<wharfie-data>/services/<appId>/state/application-state
-Environment=WHARFIE_LEDGER_SERVICE_SESSION_PATH=<wharfie-data>/services/<appId>/state/control/ledger-service-sessions
+Environment=WHARFIE_APPLICATION_STATE_PATH=<wharfie-data>/applications/<appId>/state/application-state
+Environment=WHARFIE_LEDGER_SERVICE_SESSION_PATH=<wharfie-data>/applications/<appId>/state/control/ledger-service-sessions
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGTERM

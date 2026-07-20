@@ -376,6 +376,12 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
 - [ ] Support manual, cron, and workflow-triggered runs through one execution path.
 - [x] Implement packaged Linux systemd user-service install/start/stop/restart/status/uninstall with fixed-unit rendering, immutable releases, PID-bound durable health, graceful drain, retry-safe uninstall, and preserved state.
+- [x] Give every packaged application one immutable app-scoped local-storage
+      layout under `<wharfie-data>/applications/<appId>` before any developer,
+      operator, or hidden-runtime entrypoint runs. Foreground commands and the
+      systemd resident now share that exact ledger, payload, session, and
+      application-state authority; service management rejects explicit
+      overrides that would split them.
 - [ ] Prove enabled startup, crash replacement, and durable recovery across a real machine reboot in a disposable Linux systemd environment.
 - [x] Make service status available as human-readable and JSON operations in the reserved packaged operator namespace.
 - [ ] Add logs, run history/listing, and any remaining operator surfaces that are still deliberately absent.

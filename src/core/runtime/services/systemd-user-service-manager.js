@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+import { getLocalAppStorageLayout } from '../../lib/config/local-app-storage-context.js';
 import { createControlDBClient } from '../../lib/config/db.js';
 import {
   LedgerServiceLifecycleStatus,
@@ -41,6 +42,16 @@ const DEFAULT_POLL_INTERVAL_MS = 200;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
 const MAX_PROCESS_DURATION_MS = 60_000;
 const MAX_SERVICE_RECORD_BYTES = 64 * 1024;
+const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
+  'appId',
+  'dataRoot',
+  'stateRoot',
+  'controlPath',
+  'payloadPath',
+  'applicationStatePath',
+  'sessionPath',
+  'executionLedgerTable',
+]);
 const SYSTEMD_SHOW_PROPERTIES = Object.freeze([
   'LoadState',
   'UnitFileState',
@@ -257,11 +268,11 @@ async function ensureManagedServiceRoot(fsOps, layout, uid) {
     'Wharfie data root',
     uid,
   );
-  const servicesRoot = path.dirname(layout.serviceRoot);
+  const applicationsRoot = path.dirname(layout.serviceRoot);
   await ensureManagedDirectory(
     fsOps,
-    servicesRoot,
-    'Wharfie services root',
+    applicationsRoot,
+    'Wharfie applications root',
     uid,
   );
   await ensureManagedDirectory(
@@ -282,7 +293,7 @@ async function ensureManagedServiceRoot(fsOps, layout, uid) {
 async function hasManagedServiceRoot(fsOps, layout, uid) {
   const directories = [
     [layout.dataRoot, 'Wharfie data root'],
-    [path.dirname(layout.serviceRoot), 'Wharfie services root'],
+    [path.dirname(layout.serviceRoot), 'Wharfie applications root'],
     [layout.serviceRoot, 'Systemd user-service root'],
   ];
   for (const [directory, label] of directories) {
@@ -969,6 +980,72 @@ function classifyHealth(
 }
 
 /**
+ * @param {string} payloadPath - Canonical local payload root.
+ * @returns {string} - Default logical payload-store identity.
+ */
+function defaultPayloadStoreId(payloadPath) {
+  const digest = createHash('sha256')
+    .update(path.resolve(payloadPath), 'utf8')
+    .digest('hex');
+  return `payload-${digest.slice(0, 55)}`;
+}
+
+/**
+ * Refuse service management unless the packaged bootstrap and every explicit
+ * durable-storage override agree with the fixed resident layout. This turns a
+ * silent split-ledger failure into an actionable boundary error.
+ * @param {Readonly<Record<string, string>>} layout - Derived systemd service layout.
+ * @param {Readonly<Record<string, string>> | undefined} packagedStorage - Active packaged bootstrap authority.
+ * @param {Record<string, string | undefined>} environment - Ambient explicit overrides.
+ * @returns {void} - Returns after exact agreement is established.
+ */
+function assertSharedPackagedStorage(layout, packagedStorage, environment) {
+  if (!packagedStorage) {
+    throw new Error(
+      'Systemd user-service management requires packaged app storage context.',
+    );
+  }
+  for (const key of PACKAGED_STORAGE_LAYOUT_KEYS) {
+    if (packagedStorage[key] !== layout[key]) {
+      throw new Error(
+        `Packaged app storage disagrees with the systemd service layout at ${key}.`,
+      );
+    }
+  }
+  if (packagedStorage.appRoot !== layout.serviceRoot) {
+    throw new Error(
+      'Packaged app storage disagrees with the systemd service application root.',
+    );
+  }
+
+  const expected = Object.freeze({
+    WHARFIE_CONTROL_ADAPTER: 'lmdb',
+    WHARFIE_CONTROL_PATH: layout.controlPath,
+    WHARFIE_EXECUTION_PAYLOAD_PATH: layout.payloadPath,
+    WHARFIE_EXECUTION_PAYLOAD_STORE_ID: defaultPayloadStoreId(
+      layout.payloadPath,
+    ),
+    WHARFIE_EXECUTION_LEDGER_TABLE: layout.executionLedgerTable,
+    WHARFIE_LEDGER_SERVICE_SESSION_PATH: layout.sessionPath,
+    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+    WHARFIE_APPLICATION_STATE_PATH: layout.applicationStatePath,
+  });
+  for (const [name, expectedValue] of Object.entries(expected)) {
+    const raw = environment[name];
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const actual = raw.trim();
+    const matches = name.endsWith('_ADAPTER')
+      ? actual.toLowerCase() === expectedValue
+      : actual === expectedValue;
+    if (!matches) {
+      throw new Error(
+        `${name} redirects packaged commands away from the fixed systemd service storage.`,
+      );
+    }
+  }
+}
+
+/**
  * Create the packaged Linux systemd user-service operator. Construction is
  * side-effect free; every method resolves embedded identity lazily.
  * @param {Record<string, any>} [options] - Testable host adapters and roots.
@@ -982,14 +1059,17 @@ export function createSystemdUserServiceOperator(options = {}) {
     options.artifactPath ||
     getRunningExecutablePath({ platform, execPath: process.execPath });
   const dataRoot = options.dataRoot || paths.data;
+  const environment = options.environment || process.env;
   const configuredConfigRoot =
     options.configRoot ||
-    (typeof process.env.XDG_CONFIG_HOME === 'string' &&
-    path.isAbsolute(process.env.XDG_CONFIG_HOME)
-      ? path.normalize(process.env.XDG_CONFIG_HOME)
+    (typeof environment.XDG_CONFIG_HOME === 'string' &&
+    path.isAbsolute(environment.XDG_CONFIG_HOME)
+      ? path.normalize(environment.XDG_CONFIG_HOME)
       : path.join(homedir(), '.config'));
   const configRoot = configuredConfigRoot;
   const fsOps = options.fsOps || fsp;
+  const readPackagedStorage =
+    options.getLocalAppStorageLayout || getLocalAppStorageLayout;
   const execute = options.execute || runProcess;
   const readPair =
     options.readEmbeddedRevisionRuntimePair || readEmbeddedRevisionRuntimePair;
@@ -1066,15 +1146,17 @@ export function createSystemdUserServiceOperator(options = {}) {
       );
     }
     const uid = Number(getUid());
+    const layout = createSystemdUserServiceLayout({
+      appId: pair.runtime.appId,
+      dataRoot,
+      configRoot,
+    });
+    assertSharedPackagedStorage(layout, readPackagedStorage(), environment);
     return {
       pair,
       uid,
       filesystemUid: Number(getFilesystemUid()),
-      layout: createSystemdUserServiceLayout({
-        appId: pair.runtime.appId,
-        dataRoot,
-        configRoot,
-      }),
+      layout,
     };
   }
 

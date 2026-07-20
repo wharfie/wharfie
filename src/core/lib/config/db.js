@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import paths from '../paths.js';
+import { getLocalAppStorageLayout } from './local-app-storage-context.js';
 
 /**
  * Centralized DB configuration for Wharfie core runtime.
@@ -94,6 +95,7 @@ export function resolveControlAdapterName() {
     return normalizeAdapterName(explicit, 'WHARFIE_CONTROL_ADAPTER');
   }
 
+  if (getLocalAppStorageLayout()) return 'lmdb';
   return process.env.NODE_ENV === 'test' ? 'vanilla' : 'lmdb';
 }
 
@@ -113,6 +115,7 @@ export function resolveApplicationStateAdapterName() {
     return normalizeAdapterName(explicit, 'WHARFIE_APPLICATION_STATE_ADAPTER');
   }
 
+  if (getLocalAppStorageLayout()) return 'lmdb';
   return process.env.NODE_ENV === 'test' ? 'vanilla' : 'lmdb';
 }
 
@@ -127,6 +130,8 @@ export function resolveControlStorePath() {
   if (typeof configured === 'string' && configured.trim()) {
     return configured.trim();
   }
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.controlPath;
   if (process.env.NODE_ENV === 'test') {
     return join(tmpdir(), `wharfie-control-${randomUUID()}`);
   }
@@ -144,6 +149,8 @@ export function resolveApplicationStateStorePath() {
   if (typeof configured === 'string' && configured.trim()) {
     return configured.trim();
   }
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.applicationStatePath;
   if (process.env.NODE_ENV === 'test') {
     return join(tmpdir(), `wharfie-application-state-${randomUUID()}`);
   }
@@ -172,6 +179,8 @@ export function resolveApplicationStateTableName() {
 export function resolveExecutionLedgerTableName() {
   const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
   if (name && String(name).trim()) return String(name).trim();
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.executionLedgerTable;
   return 'wharfie-execution-ledger-v10';
 }
 
@@ -197,6 +206,9 @@ export function resolveExecutionPayloadPath(resolvedControlPath) {
       ? process.env.WHARFIE_CONTROL_PATH.trim()
       : undefined);
   if (controlPath) return join(controlPath, 'execution-payloads');
+
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.payloadPath;
 
   if (process.env.NODE_ENV === 'test') {
     return join(mkTempDir('wharfie-execution-payload-'), 'payloads');
@@ -256,6 +268,9 @@ export function resolveLedgerServiceSessionPath(resolvedControlPath) {
       ? process.env.WHARFIE_CONTROL_PATH.trim()
       : undefined);
   if (controlPath) return join(controlPath, 'ledger-service-sessions');
+
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.sessionPath;
 
   if (process.env.NODE_ENV === 'test') {
     return join(mkTempDir('wharfie-ledger-service-session-'), 'sessions');

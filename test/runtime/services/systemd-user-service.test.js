@@ -60,22 +60,23 @@ describe('systemd user service contract', () => {
       appId: 'example-app',
       dataRoot: '/srv/wharfie data%$',
       configRoot: '/home/example/.config',
-      serviceRoot: '/srv/wharfie data%$/services/example-app',
-      releasesRoot: '/srv/wharfie data%$/services/example-app/releases',
-      currentLink: '/srv/wharfie data%$/services/example-app/current',
-      currentArtifact: '/srv/wharfie data%$/services/example-app/current/app',
-      stateRoot: '/srv/wharfie data%$/services/example-app/state',
-      controlPath: '/srv/wharfie data%$/services/example-app/state/control',
+      serviceRoot: '/srv/wharfie data%$/applications/example-app',
+      releasesRoot: '/srv/wharfie data%$/applications/example-app/releases',
+      currentLink: '/srv/wharfie data%$/applications/example-app/current',
+      currentArtifact:
+        '/srv/wharfie data%$/applications/example-app/current/app',
+      stateRoot: '/srv/wharfie data%$/applications/example-app/state',
+      controlPath: '/srv/wharfie data%$/applications/example-app/state/control',
       payloadPath:
-        '/srv/wharfie data%$/services/example-app/state/control/execution-payloads',
+        '/srv/wharfie data%$/applications/example-app/state/control/execution-payloads',
       applicationStatePath:
-        '/srv/wharfie data%$/services/example-app/state/application-state',
+        '/srv/wharfie data%$/applications/example-app/state/application-state',
       sessionPath:
-        '/srv/wharfie data%$/services/example-app/state/control/ledger-service-sessions',
+        '/srv/wharfie data%$/applications/example-app/state/control/ledger-service-sessions',
       installationPath:
-        '/srv/wharfie data%$/services/example-app/installation.json',
+        '/srv/wharfie data%$/applications/example-app/installation.json',
       uninstallPath:
-        '/srv/wharfie data%$/services/example-app/.uninstalling.json',
+        '/srv/wharfie data%$/applications/example-app/.uninstalling.json',
       unitName: 'wharfie-example-app.service',
       unitPath:
         '/home/example/.config/systemd/user/wharfie-example-app.service',
@@ -100,10 +101,10 @@ describe('systemd user service contract', () => {
 
     expect(unit).toContain('[Service]\nType=exec');
     expect(unit).toContain(
-      'ExecStart="/srv/wharfie data%%$$/services/example-app/current/app"',
+      'ExecStart="/srv/wharfie data%%$$/applications/example-app/current/app"',
     );
     expect(unit).toContain(
-      'WorkingDirectory="/srv/wharfie data%%$/services/example-app/state"',
+      'WorkingDirectory="/srv/wharfie data%%$/applications/example-app/state"',
     );
     expect(unit).toContain(
       'Environment="WHARFIE_RUNTIME_COMMAND=ledger-service"',
@@ -114,7 +115,7 @@ describe('systemd user service contract', () => {
       'Environment="WHARFIE_EXECUTION_LEDGER_TABLE=wharfie-execution-ledger-v10"',
     );
     expect(unit).toContain(
-      'Environment="WHARFIE_CONTROL_PATH=/srv/wharfie data%%$/services/example-app/state/control"',
+      'Environment="WHARFIE_CONTROL_PATH=/srv/wharfie data%%$/applications/example-app/state/control"',
     );
     expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('KillSignal=SIGTERM');

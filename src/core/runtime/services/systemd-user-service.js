@@ -9,6 +9,10 @@ import {
 } from '../application-revision.js';
 import { validateBuildTarget } from '../build-target.js';
 import { cloneJsonObject } from '../json-value.js';
+import {
+  LOCAL_APP_EXECUTION_LEDGER_TABLE,
+  createLocalAppStorageLayout,
+} from '../local-app-storage.js';
 import { assertLogicalId } from '../logical-id.js';
 
 export const SYSTEMD_USER_SERVICE_SCHEMA_VERSION = 1;
@@ -17,7 +21,7 @@ export const SYSTEMD_USER_SERVICE_RELEASE_KIND =
 export const SYSTEMD_USER_SERVICE_INSTALLATION_KIND =
   'wharfie.systemd-user-service.installation';
 export const SYSTEMD_USER_SERVICE_EXECUTION_LEDGER_TABLE =
-  'wharfie-execution-ledger-v10';
+  LOCAL_APP_EXECUTION_LEDGER_TABLE;
 
 const RELEASE_KEYS = new Set([
   'schemaVersion',
@@ -130,38 +134,35 @@ function canonicalAbsolutePath(value, label) {
  * @returns {Readonly<Record<string, string>>} - Canonical layout.
  */
 export function createSystemdUserServiceLayout(input) {
-  assertLogicalId(input?.appId, 'systemd user service appId');
-  const dataRoot = canonicalAbsolutePath(
-    input?.dataRoot,
-    'systemd user service dataRoot',
-  );
+  const storage = createLocalAppStorageLayout({
+    appId: input?.appId,
+    dataRoot: input?.dataRoot,
+  });
   const configRoot = canonicalAbsolutePath(
     input?.configRoot,
     'systemd user service configRoot',
   );
-  const appId = input.appId;
+  const appId = storage.appId;
   const unitName = `wharfie-${appId}.service`;
-  const serviceRoot = path.join(dataRoot, 'services', appId);
-  const stateRoot = path.join(serviceRoot, 'state');
-  const controlPath = path.join(stateRoot, 'control');
+  const serviceRoot = storage.appRoot;
   return Object.freeze({
     appId,
-    dataRoot,
+    dataRoot: storage.dataRoot,
     configRoot,
     serviceRoot,
     releasesRoot: path.join(serviceRoot, 'releases'),
     currentLink: path.join(serviceRoot, 'current'),
     currentArtifact: path.join(serviceRoot, 'current', 'app'),
-    stateRoot,
-    controlPath,
-    payloadPath: path.join(controlPath, 'execution-payloads'),
-    applicationStatePath: path.join(stateRoot, 'application-state'),
-    sessionPath: path.join(controlPath, 'ledger-service-sessions'),
+    stateRoot: storage.stateRoot,
+    controlPath: storage.controlPath,
+    payloadPath: storage.payloadPath,
+    applicationStatePath: storage.applicationStatePath,
+    sessionPath: storage.sessionPath,
     installationPath: path.join(serviceRoot, 'installation.json'),
     uninstallPath: path.join(serviceRoot, '.uninstalling.json'),
     unitName,
     unitPath: path.join(configRoot, 'systemd', 'user', unitName),
-    executionLedgerTable: SYSTEMD_USER_SERVICE_EXECUTION_LEDGER_TABLE,
+    executionLedgerTable: storage.executionLedgerTable,
   });
 }
 
