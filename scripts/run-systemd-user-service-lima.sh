@@ -11,6 +11,8 @@ GUEST_PROOF_ROOT="/var/tmp/wharfie-systemd-proof"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wharfie-systemd-proof.XXXXXX")"
 ARCHIVE_PATH="${TEMP_ROOT}/repo.tar"
 PREPARE_CAPTURE="${TEMP_ROOT}/prepare.json"
+PREPARE_LOG="${TEMP_ROOT}/prepare.log"
+VERIFY_LOG="${TEMP_ROOT}/verify.log"
 CREATED=0
 RECEIPT_STAGING=""
 COMMIT=""
@@ -25,6 +27,12 @@ cleanup() {
       mkdir -p "${failure_directory}"
       if [[ -f "${PREPARE_CAPTURE}" ]]; then
         cp "${PREPARE_CAPTURE}" "${failure_directory}/prepare.json"
+      fi
+      if [[ -f "${PREPARE_LOG}" ]]; then
+        cp "${PREPARE_LOG}" "${failure_directory}/prepare.log"
+      fi
+      if [[ -f "${VERIFY_LOG}" ]]; then
+        cp "${VERIFY_LOG}" "${failure_directory}/verify.log"
       fi
     fi
     if limactl list --quiet "${INSTANCE}" >/dev/null 2>&1; then
@@ -108,7 +116,8 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   /usr/local/bin/node \
   scripts/verify-systemd-user-service-linux.js \
   prepare \
-  "${GUEST_REPO}"
+  "${GUEST_REPO}" > "${PREPARE_LOG}"
+echo "Prepared offline work, installed the SEA service, and verified process replacement."
 limactl copy --backend=scp \
   "${INSTANCE}:${GUEST_PROOF_ROOT}/prepare.json" \
   "${PREPARE_CAPTURE}"
@@ -122,7 +131,8 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   /usr/local/bin/node \
   scripts/verify-systemd-user-service-linux.js \
   verify \
-  "${GUEST_REPO}"
+  "${GUEST_REPO}" > "${VERIFY_LOG}"
+echo "Verified automatic boot recovery, durable workflow completion, and uninstall preservation."
 
 RECEIPT_DIRECTORY="${OUTPUT_ROOT}/${COMMIT}"
 if [[ -e "${RECEIPT_DIRECTORY}" ]]; then
