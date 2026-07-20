@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Linux SEA systemd user-service crash/reboot recovery is proven; recoverable quiescent activation is implemented and repository-tested, with a real-host activation crash matrix, stale-runtime cleanup, and provider-backed self-deployment next · **Last updated:** 2026-07-20
+**Status:** Linux SEA systemd user-service crash/reboot and two-release activation recovery are proven on a real host; stale-runtime cleanup and provider-backed self-deployment are next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -430,6 +430,17 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       restart and stop/start, and prove uninstall preserves inspectable state.
       These receipts predate public update/rollback and do not prove activation
       crash recovery on a real systemd host.
+- [x] Prove two-release activation and failed-target source restoration on a
+      real disposable systemd host. The checksummed [V18 proof
+      receipts](llm_artifacts/systemd-proof/939e0f251db97189d9f003048570bd29cabc5165/final.json)
+      bind three distinct installed-package Linux arm64 SEAs to commit
+      `939e0f2`. Exact source-mapped post-commit breakpoints cover update and
+      rollback at `QUIESCING`, `QUIESCENT`, `SELECTED`, `ACTIVATING`, and
+      committed `ACTIVE`, plus all five source-restoration writes after a
+      target exits cleanly before readiness. Every killed operator recovers
+      through the public SEA command; stale ambiguous rollback retry is
+      refused, exact source bytes and health are restored, and durable state
+      remains preserved through uninstall.
 - [x] Make service status available as human-readable and JSON operations in the reserved packaged operator namespace.
 - [ ] Add logs, run history/listing, and any remaining operator surfaces that are still deliberately absent.
 - [x] Build one shared source/packaged foreground durable-run host. Source
@@ -535,27 +546,29 @@ signal consumption, and evidence-backed continuation. The moved artifact
 completes the linear workflow proof with Node unavailable on `PATH`.
 
 The packaged Linux service path is also proven outside the developer session.
-An installed npm tarball built the application SEA in a fresh Ubuntu 24.04 VM,
-persisted workflow work before service installation, verified the exact
-effective unit and immutable executable, recovered from both resident
-`SIGKILL` and an abrupt VM power cycle, then preserved the completed ledger
-through uninstall. The successful receipts are bound to commit `0d927463`.
-That proof covers install/start/stop/restart/status/uninstall, resident process
-replacement, and reboot recovery; update, rollback, and recovery through each
-activation phase currently have focused unit and manager evidence only.
+An installed npm tarball built three application SEAs in a fresh Ubuntu 24.04
+VM, persisted workflow work before service installation, verified the exact
+effective unit and immutable executable, recovered from resident `SIGKILL`
+and an abrupt VM power cycle, and then exercised 15 exact durable activation
+crash boundaries. Update, rollback, committed-response loss, clean target
+exit, source restoration, and stale retry refusal all converged through public
+packaged commands before uninstall preserved the completed ledger. The current
+checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
+receipts remain bound to `0d927463`.
 
-1. Close the remaining single-node service hardening: bounded stale
-   native-runtime extraction after abrupt termination and a disposable-host
-   crash matrix for each activation phase.
+1. Close the remaining single-node service hardening: bound and clean stale
+   native-runtime extraction after abrupt termination.
 2. Add the smallest provider-backed path that can create, inspect, update, and
    remove one durable node through the operator's credential chain.
 3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [recoverable systemd activation
-checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md).
-Its parent is the [systemd reboot-proof
+The current restart point is the [real-host activation proof
+checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md).
+Its parent is the [recoverable systemd activation
+checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md),
+whose parent is the [systemd reboot-proof
 checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md), whose parent
 is the [shared packaged-storage
 checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md), whose

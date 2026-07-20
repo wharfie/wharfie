@@ -390,10 +390,10 @@ or revision rules are incompatible.
 
 - A packaged application can be configured as a boot-persistent resident
   without Node, containers, a root daemon, or a second Wharfie supervisor. A
-  disposable Ubuntu VM proof now verifies the installed tarball and SEA across
-  process death and an abrupt machine stop/start with a changed kernel boot ID.
-  That proof predates update/rollback and does not establish real-host
-  activation crash recovery.
+  disposable Ubuntu VM proof now verifies the installed tarball and three SEAs
+  across process death, an abrupt machine stop/start with a changed kernel boot
+  ID, all five post-commit update and rollback boundaries, and all five source
+  restoration boundaries after a clean target exit.
 - Service and interactive operators share the same UID, matching the current
   authenticated local-owner protocol without widening private socket access.
 - UID 0 and mismatched real/effective UIDs are rejected; this slice never turns

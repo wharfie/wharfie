@@ -351,9 +351,10 @@ Activation receipts separate `requestStatus` (`fulfilled`, `refused`,
 `source-restored`, `in-flight`, or `absent`). Non-fulfilled receipts use a
 nonzero exit code even in `--json` mode. The repository's disposable Ubuntu
 proof covers crash replacement, abrupt reboot, pre-login recovery, workflow
-continuation, and state-preserving uninstall, but predates update/rollback;
-their phase recovery currently has focused unit and manager evidence rather
-than a disposable-host two-release proof.
+continuation, and state-preserving uninstall. Its current three-SEA matrix also
+kills update and rollback after each durable phase write, recovers a lost
+committed response, refuses a stale reverse request, and restores the source
+across every phase after a clean target exit before readiness.
 
 The current worker executes exact workflow
 `ACTIVITY` rows, conservatively handles `RECOVERY` rows, and fires due `TIMER`

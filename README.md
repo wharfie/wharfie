@@ -142,15 +142,15 @@ admission, requires every existing source run to be terminal during update or
 rollback, and retains one exact rollback candidate before it changes the
 executable selection. First install separately admits already queued work for
 the exact target revision. Interrupted activation is resumed explicitly from
-durable phase state. The activation
-coordinator and packaged service manager are covered by focused repository
-tests; the disposable-host proof described below predates update/rollback and
-does not yet prove their crash boundaries on a real systemd host.
-A checksummed Ubuntu proof covers exact-unit startup, resident `SIGKILL`
-replacement, abrupt VM power loss, pre-login recovery, durable workflow
-continuation, lifecycle operations, and state-preserving uninstall. Multi-host
-leases and heartbeats and public run history/listing are still later work. The
-npm package remains deliberately private. It is not ready for production use.
+durable phase state. In addition to focused repository tests, a checksummed
+Ubuntu proof builds three distinct SEAs from the installed npm tarball and
+covers exact-unit startup, resident `SIGKILL` replacement, abrupt VM power
+loss, pre-login recovery, durable workflow continuation, all five post-commit
+update and rollback boundaries, all five failed-target source-restoration
+boundaries, ambiguous-response recovery, and state-preserving uninstall.
+Multi-host leases and heartbeats and public run history/listing are still later
+work. The npm package remains deliberately private. It is not ready for
+production use.
 
 ## Start here
 
@@ -158,7 +158,8 @@ npm package remains deliberately private. It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Recoverable systemd activation checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md) — the current handoff for durable single-node release activation and the manager/CLI integration being finalized.
+- [Real-host activation proof checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md) — the current handoff for checksummed two-release update, rollback, response-loss, and failed-target source-restoration evidence.
+- [Recoverable systemd activation checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md) — the preceding handoff for durable single-node release activation and manager/CLI integration.
 - [Systemd reboot-proof checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md) — the preceding handoff for checksummed real-VM crash, boot, workflow-continuation, lifecycle, and uninstall evidence.
 - [Shared packaged-storage checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md) — the preceding handoff that unified foreground and resident durable state.
 - [Systemd user-service checkpoint](llm/checkpoints/2026-07-20-v14-systemd-user-service-foundation.md) — the implementation foundation for packaged Linux service lifecycle, immutable releases, and PID-bound health.
@@ -388,7 +389,11 @@ drop-ins.
 The repository's disposable Ubuntu proof builds the app from the installed npm
 tarball, removes Node from the packaged command `PATH`, force-cycles the VM,
 requires automatic healthy startup before a login session, and completes the
-same persisted workflow after the kernel boot ID changes. Run it with
+same persisted workflow after the kernel boot ID changes. It builds distinct
+source, target, and clean-exit target SEAs; exact source-mapped breakpoints then
+kill update, rollback, and restoration operators after each durable write and
+require public recovery plus independent selector, receipt, process, systemd,
+and immutable-byte evidence. Run it with
 `npm run verify:service:systemd:lima`. A due timer remains persisted until the
 exact-revision resident observes and fires it; there is deliberately no public
 timer-fire command. Wharfie does not yet provide schedules, managed-effect
