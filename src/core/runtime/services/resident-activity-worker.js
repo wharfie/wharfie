@@ -17,6 +17,7 @@ import {
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
 import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
 import { resolveManifestActivityExecutionBinding } from '../app-runs.js';
+import { assertArtifactId } from '../artifact-record.js';
 import {
   assertApplicationStateStoreIsolation,
   resolveApplicationStateStoreConfiguration,
@@ -1413,7 +1414,7 @@ export async function runResidentActivityWorker(options) {
  * attempt drain. After the bounded grace period, manual work uses its durable
  * cancellation path while workflow work is physically interrupted and then
  * settles conservatively without inventing cancellation authority.
- * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>}} options - Local resident service request.
+ * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>}} options - Local resident service request.
  * @returns {Promise<Readonly<{processed: number}>>} - Worker drain summary.
  */
 export async function runLocalResidentActivityService(options) {
@@ -1421,6 +1422,13 @@ export async function runLocalResidentActivityService(options) {
     throw new TypeError('runLocalResidentActivityService requires options.');
   }
   const binding = resolveManifestActivityExecutionBinding(options.execution);
+  if (options.artifactId !== undefined) {
+    assertArtifactId(
+      options.artifactId,
+      'resident activity service artifactId',
+    );
+  }
+  const artifactId = options.artifactId;
   const signal = resolveOptionalAbortSignal(options.signal);
   const configuration =
     options.configuration || resolveExecutionLedgerStoreConfiguration();
@@ -1458,6 +1466,7 @@ export async function runLocalResidentActivityService(options) {
       const service = createLedgerService({
         appId: binding.identity.appId,
         revisionId: binding.identity.revisionId,
+        ...(artifactId === undefined ? {} : { artifactId }),
         lifecycle,
         ownership,
         sessionRoot: controlContext.sessionPath,

@@ -134,6 +134,7 @@ import {
 } from '../../ledger/workflow-execution-contract.js';
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 import { comparePortablePageKeys } from '../utils.js';
+import { getLocalApplicationRunCreationFence } from './local-application-activation.js';
 
 export {
   AttemptStatus,
@@ -11596,7 +11597,7 @@ export function createExecutionLedger({
    * the affected projections, including the current ready-work locator. The
    * caller supplies already-folded snapshots so the event remains sufficient
    * to reconstruct every authoritative projection.
-   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation?: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextTimer?: Record<string, any>, currentTimer?: Record<string, any>, nextAdditionalTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, currentSignalWait?: Record<string, any>, nextAdditionalSignalWait?: Record<string, any>, nextSignalDelivery?: Record<string, any>, signalDeliveryIdentityRecord?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
+   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, conditionChecks?: import('../base.js').TransactionConditionCheck[], nextInvocation?: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextTimer?: Record<string, any>, currentTimer?: Record<string, any>, nextAdditionalTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, currentSignalWait?: Record<string, any>, nextAdditionalSignalWait?: Record<string, any>, nextSignalDelivery?: Record<string, any>, signalDeliveryIdentityRecord?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
    * @returns {Promise<void>} - Resolves only after the durable transaction commits.
    */
   async function appendTransition(input) {
@@ -11999,6 +12000,9 @@ export function createExecutionLedger({
 
     await db.transactionWrite({
       tableName: resolvedTableName,
+      ...(input.conditionChecks?.length
+        ? { conditionChecks: input.conditionChecks }
+        : {}),
       putRequests,
       ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
     });
@@ -12268,6 +12272,13 @@ export function createExecutionLedger({
       };
     }
 
+    const admissionFence = await getLocalApplicationRunCreationFence({
+      db,
+      tableName: resolvedTableName,
+      appId,
+      revisionId,
+    });
+
     const requestRef = await putVerifiedPayload(payloadStore, {
       value: { input, callerMetadata },
       payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
@@ -12335,58 +12346,77 @@ export function createExecutionLedger({
         event,
         nextRun: run,
         nextInvocation: invocation,
+        conditionChecks: [admissionFence],
       });
     } catch (error) {
       if (!isConditionalCheckFailed(error)) throw error;
       const raced = await readVerifiedRun(runId);
-      if (!raced) throw new ExecutionLedgerConflictError(runId);
-      const persistedInvocation = raced.invocations.get(invocationId);
-      if (
-        !persistedInvocation ||
-        !(await isSameManualRun(
-          raced.run,
-          persistedInvocation,
-          requested,
-          createLedgerPayloadReader(payloadStore, runId),
-        ))
-      ) {
-        throw new ExecutionLedgerRunConflictError(runId);
+      if (raced) {
+        const persistedInvocation = raced.invocations.get(invocationId);
+        if (
+          persistedInvocation &&
+          (await isSameManualRun(
+            raced.run,
+            persistedInvocation,
+            requested,
+            createLedgerPayloadReader(payloadStore, runId),
+          ))
+        ) {
+          const racedRequestDigest = createTransitionRequestDigest(
+            'manual-run-created',
+            {
+              runId,
+              invocationId,
+              transitionId,
+              actor,
+              coordinatorEpoch,
+              appId,
+              revisionId,
+              activityId,
+              requestRef: raced.run.requestRef,
+              trigger,
+            },
+          );
+          const receipt = await getTransitionReceipt(
+            db,
+            resolvedTableName,
+            runId,
+            transitionId,
+          );
+          if (receipt && receipt.request_digest !== racedRequestDigest) {
+            throw new ExecutionLedgerTransitionConflictError(
+              runId,
+              transitionId,
+            );
+          }
+          try {
+            await repairReadyWork({ appId, revisionId, runId });
+          } catch (repairError) {
+            if (!(repairError instanceof ExecutionLedgerConflictError)) {
+              throw repairError;
+            }
+          }
+          return {
+            applied: false,
+            ...(receipt
+              ? { receipt: cloneJsonObject(receipt, 'receipt') }
+              : {}),
+            run: cloneJsonObject(raced.run, 'run result'),
+            invocation: cloneJsonObject(
+              persistedInvocation,
+              'invocation result',
+            ),
+          };
+        }
       }
-      const racedRequestDigest = createTransitionRequestDigest(
-        'manual-run-created',
-        {
-          runId,
-          invocationId,
-          transitionId,
-          actor,
-          coordinatorEpoch,
-          appId,
-          revisionId,
-          activityId,
-          requestRef: raced.run.requestRef,
-          trigger,
-        },
-      );
-      const receipt = await getTransitionReceipt(
+      if (raced) throw new ExecutionLedgerRunConflictError(runId);
+      await getLocalApplicationRunCreationFence({
         db,
-        resolvedTableName,
-        runId,
-        transitionId,
-      );
-      if (receipt && receipt.request_digest !== racedRequestDigest) {
-        throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
-      }
-      try {
-        await repairReadyWork({ appId, revisionId, runId });
-      } catch (error) {
-        if (!(error instanceof ExecutionLedgerConflictError)) throw error;
-      }
-      return {
-        applied: false,
-        ...(receipt ? { receipt: cloneJsonObject(receipt, 'receipt') } : {}),
-        run: cloneJsonObject(raced.run, 'run result'),
-        invocation: cloneJsonObject(persistedInvocation, 'invocation result'),
-      };
+        tableName: resolvedTableName,
+        appId,
+        revisionId,
+      });
+      throw new ExecutionLedgerConflictError(runId);
     }
 
     const next = await readVerifiedRun(runId);
@@ -12692,6 +12722,13 @@ export function createExecutionLedger({
       return workflowCreationResult(existing, receipt, false);
     }
 
+    const admissionFence = await getLocalApplicationRunCreationFence({
+      db,
+      tableName: resolvedTableName,
+      appId,
+      revisionId,
+    });
+
     const planRef = await putVerifiedPayload(payloadStore, {
       value: planPayload,
       payloadSchema: WORKFLOW_PLAN_PAYLOAD_SCHEMA,
@@ -12838,45 +12875,60 @@ export function createExecutionLedger({
         ...(timer ? { nextTimer: timer } : {}),
         ...(signalWait ? { nextSignalWait: signalWait } : {}),
         nextWorkflowCursor: workflowCursor,
+        conditionChecks: [admissionFence],
       });
     } catch (error) {
       if (!isConditionalCheckFailed(error)) throw error;
       const raced = await readVerifiedRun(runId);
-      if (!raced) throw new ExecutionLedgerConflictError(runId);
-      const racedCreation = await getMatchingWorkflowCreation(raced, requested);
-      if (!racedCreation || !raced.workflowCursor) {
-        throw new ExecutionLedgerRunConflictError(runId);
-      }
-      const racedRequestDigest = createWorkflowRunRequestDigest({
-        runId,
-        activation: workflowCreationActivationDigest(racedCreation),
-        transitionId,
-        actor,
-        appId,
-        revisionId,
-        workflowId,
-        planId: racedCreation.workflowCursor.planId,
-        planRef: racedCreation.workflowCursor.planRef,
-        startRef: racedCreation.workflowCursor.startRef,
-        trigger: racedCreation.run.trigger,
-      });
-      const receipt = await getTransitionReceipt(
-        db,
-        resolvedTableName,
-        runId,
-        transitionId,
-      );
-      if (receipt && receipt.request_digest !== racedRequestDigest) {
-        throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
-      }
-      try {
-        await repairReadyWork({ appId, revisionId, runId });
-      } catch (repairError) {
-        if (!(repairError instanceof ExecutionLedgerConflictError)) {
-          throw repairError;
+      if (raced) {
+        const racedCreation = await getMatchingWorkflowCreation(
+          raced,
+          requested,
+        );
+        if (racedCreation && raced.workflowCursor) {
+          const racedRequestDigest = createWorkflowRunRequestDigest({
+            runId,
+            activation: workflowCreationActivationDigest(racedCreation),
+            transitionId,
+            actor,
+            appId,
+            revisionId,
+            workflowId,
+            planId: racedCreation.workflowCursor.planId,
+            planRef: racedCreation.workflowCursor.planRef,
+            startRef: racedCreation.workflowCursor.startRef,
+            trigger: racedCreation.run.trigger,
+          });
+          const receipt = await getTransitionReceipt(
+            db,
+            resolvedTableName,
+            runId,
+            transitionId,
+          );
+          if (receipt && receipt.request_digest !== racedRequestDigest) {
+            throw new ExecutionLedgerTransitionConflictError(
+              runId,
+              transitionId,
+            );
+          }
+          try {
+            await repairReadyWork({ appId, revisionId, runId });
+          } catch (repairError) {
+            if (!(repairError instanceof ExecutionLedgerConflictError)) {
+              throw repairError;
+            }
+          }
+          return workflowCreationResult(raced, receipt, false);
         }
       }
-      return workflowCreationResult(raced, receipt, false);
+      if (raced) throw new ExecutionLedgerRunConflictError(runId);
+      await getLocalApplicationRunCreationFence({
+        db,
+        tableName: resolvedTableName,
+        appId,
+        revisionId,
+      });
+      throw new ExecutionLedgerConflictError(runId);
     }
 
     const next = await readVerifiedRun(runId);
@@ -13803,6 +13855,12 @@ export function createExecutionLedger({
         sourceTransitionId,
       );
     }
+    const admissionFence = await getLocalApplicationRunCreationFence({
+      db,
+      tableName: resolvedTableName,
+      appId: state.run.appId,
+      revisionId: state.run.revisionId,
+    });
 
     const targetRequestRef = await putVerifiedPayload(payloadStore, {
       value: {
@@ -14015,14 +14073,23 @@ export function createExecutionLedger({
     try {
       await db.transactionWrite({
         tableName: resolvedTableName,
+        conditionChecks: [admissionFence],
         putRequests,
       });
     } catch (error) {
       if (!isConditionalCheckFailed(error)) throw error;
       const raced = await readVerifiedRun(sourceRunId);
+      if (raced) {
+        const winner = await readExisting(raced);
+        if (winner) return winner;
+      }
+      await getLocalApplicationRunCreationFence({
+        db,
+        tableName: resolvedTableName,
+        appId: state.run.appId,
+        revisionId: state.run.revisionId,
+      });
       if (!raced) throw new ExecutionLedgerConflictError(sourceRunId);
-      const winner = await readExisting(raced);
-      if (winner) return winner;
       throw new ExecutionLedgerConflictError(
         sourceRunId,
         'successor authorization lost its atomic first-wins race',

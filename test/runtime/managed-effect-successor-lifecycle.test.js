@@ -12,6 +12,12 @@ import {
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
 import {
+  LocalApplicationActivationAction,
+  LocalApplicationActivationDestination,
+  LocalApplicationAdmissionClosedError,
+  createLocalApplicationActivation,
+} from '../../src/core/lib/db/tables/local-application-activation.js';
+import {
   getEventSortKey,
   getInvocationProjectionSortKey,
   getTransitionSortKey,
@@ -32,6 +38,14 @@ import { MANUAL_LEDGER_INVOCATION_ID } from '../../src/core/runtime/manual-ledge
 
 const APP_ID = 'successor-lifecycle';
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
+const RELEASE = Object.freeze({
+  artifactId: `waf1_${'A'.repeat(43)}`,
+  revisionId: REVISION_ID,
+});
+const NEXT_RELEASE = Object.freeze({
+  artifactId: `waf1_${'B'.repeat(42)}A`,
+  revisionId: `wrv1_${'B'.repeat(42)}A`,
+});
 const ACTOR = Object.freeze({ kind: 'test', id: 'successor-lifecycle' });
 const SOURCE_EFFECT_ID = 'write-settings';
 const SOURCE_FENCE = 'source-fence';
@@ -89,20 +103,28 @@ async function createHarness(label) {
       adapterName: 'vanilla',
       allowTestAdapter: true,
     });
+  const payloadStore = createLocalExecutionPayloadStore({
+    path: join(root, 'payloads'),
+    storeId: `successor-${label}`,
+  });
   const ledger = createExecutionLedger({
     db,
     tableName,
-    payloadStore: createLocalExecutionPayloadStore({
-      path: join(root, 'payloads'),
-      storeId: `successor-${label}`,
-    }),
+    payloadStore,
     effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
   });
   cleanups.push(async () => {
     await db.close();
     rmSync(root, { recursive: true, force: true });
   });
-  return { catalog, db, ledger, reconciliationCatalog, tableName };
+  return {
+    catalog,
+    db,
+    ledger,
+    payloadStore,
+    reconciliationCatalog,
+    tableName,
+  };
 }
 
 /** @param {Record<string, any>} event */
@@ -254,7 +276,173 @@ async function authorizeSuccessor(
   });
 }
 
+/** @param {ReturnType<typeof createLocalApplicationActivation>} activation */
+async function activateApplication(activation) {
+  const begun = await activation.beginInstall({
+    appId: APP_ID,
+    target: RELEASE,
+  });
+  const transitionId = begun.activation.transition.transitionId;
+  await activation.markQuiescent({ appId: APP_ID, transitionId });
+  await activation.markSelected({
+    appId: APP_ID,
+    transitionId,
+    destination: LocalApplicationActivationDestination.TARGET,
+  });
+  await activation.markActivating({ appId: APP_ID, transitionId });
+  await activation.completeActivation({ appId: APP_ID, transitionId });
+}
+
+/** @param {ReturnType<typeof createLocalApplicationActivation>} activation */
+async function closeApplicationAdmission(activation) {
+  await activation.beginChange({
+    appId: APP_ID,
+    action: LocalApplicationActivationAction.UPDATE,
+    source: RELEASE,
+    target: NEXT_RELEASE,
+  });
+}
+
+/** @param {import('../../src/core/lib/db/base.js').DBClient} db @param {() => Promise<void>} beforeConditionedWrite */
+function interceptFirstConditionedWrite(db, beforeConditionedWrite) {
+  let intercepted = false;
+  return /** @type {import('../../src/core/lib/db/base.js').DBClient} */ (
+    new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === 'transactionWrite') {
+          /** @param {import('../../src/core/lib/db/base.js').TransactionWriteParams} params */
+          return async (params) => {
+            if (!intercepted && params.conditionChecks?.length) {
+              intercepted = true;
+              await beforeConditionedWrite();
+            }
+            return await target.transactionWrite(params);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    })
+  );
+}
+
 describe('managed-effect successor dedicated lifecycle', () => {
+  test('fences new successors while preserving an exact authorized replay', async () => {
+    const harness = await createHarness('admission');
+    const replaySource = await seedNotAppliedSource(
+      harness,
+      'admission-replay',
+    );
+    const closedSource = await seedNotAppliedSource(
+      harness,
+      'admission-closed',
+    );
+    const accepted = await authorizeSuccessor(
+      harness,
+      replaySource.runId,
+      SOURCE_EFFECT_ID,
+      'admission-replay-successor',
+    );
+    const activation = createLocalApplicationActivation({
+      db: harness.db,
+      tableName: harness.tableName,
+    });
+    await activation.beginInstall({ appId: APP_ID, target: RELEASE });
+
+    await expect(
+      authorizeSuccessor(
+        harness,
+        replaySource.runId,
+        SOURCE_EFFECT_ID,
+        'admission-replay-successor',
+      ),
+    ).resolves.toMatchObject({
+      applied: false,
+      authorization: { target: accepted.authorization.target },
+    });
+    await expect(
+      authorizeSuccessor(
+        harness,
+        closedSource.runId,
+        SOURCE_EFFECT_ID,
+        'admission-closed-successor',
+      ),
+    ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+  });
+
+  test('rejects a successor when activation changes after preflight', async () => {
+    const harness = await createHarness('admission-race');
+    const activation = createLocalApplicationActivation({
+      db: harness.db,
+      tableName: harness.tableName,
+    });
+    await activateApplication(activation);
+    const source = await seedNotAppliedSource(harness, 'admission-race');
+    const racingDb = interceptFirstConditionedWrite(harness.db, async () => {
+      await closeApplicationAdmission(activation);
+    });
+    const racingLedger = createExecutionLedger({
+      db: racingDb,
+      tableName: harness.tableName,
+      payloadStore: harness.payloadStore,
+      effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
+    });
+
+    await expect(
+      racingLedger.authorizeManagedEffectSuccessorRetry({
+        sourceRunId: source.runId,
+        sourceEffectId: SOURCE_EFFECT_ID,
+        successorId: 'admission-race-successor',
+        reason: reason('operator-retry'),
+        actor: ACTOR,
+      }),
+    ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+    await expect(harness.ledger.getEvents(source.runId)).resolves.not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'effect-successor-authorized' }),
+      ]),
+    );
+  });
+
+  test('returns an exact raced successor before reclassifying admission', async () => {
+    const harness = await createHarness('admission-winner');
+    const activation = createLocalApplicationActivation({
+      db: harness.db,
+      tableName: harness.tableName,
+    });
+    await activateApplication(activation);
+    const source = await seedNotAppliedSource(harness, 'admission-winner');
+    const successorId = 'admission-raced-winner';
+    const racingDb = interceptFirstConditionedWrite(harness.db, async () => {
+      await authorizeSuccessor(
+        harness,
+        source.runId,
+        SOURCE_EFFECT_ID,
+        successorId,
+      );
+      await closeApplicationAdmission(activation);
+    });
+    const racingLedger = createExecutionLedger({
+      db: racingDb,
+      tableName: harness.tableName,
+      payloadStore: harness.payloadStore,
+      effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
+    });
+
+    await expect(
+      racingLedger.authorizeManagedEffectSuccessorRetry({
+        sourceRunId: source.runId,
+        sourceEffectId: SOURCE_EFFECT_ID,
+        successorId,
+        reason: reason('operator-retry'),
+        actor: ACTOR,
+      }),
+    ).resolves.toMatchObject({
+      applied: false,
+      authorization: { successorId },
+    });
+  });
+
   test('uses atomic start/interruption/reconciliation transitions and permits an exact S1 -> S2 chain', async () => {
     const harness = await createHarness('chain');
     const source = await seedNotAppliedSource(harness, 'chain');

@@ -8,7 +8,13 @@ import { join } from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
 import {
+  LocalApplicationActivationDestination,
+  LocalApplicationAdmissionClosedError,
+  createLocalApplicationActivation,
+} from '../../src/core/lib/db/tables/local-application-activation.js';
+import {
   LEDGER_SERVICE_LIFECYCLE_RECORD_KIND,
+  LEDGER_SERVICE_LIFECYCLE_SCHEMA_VERSION,
   LEDGER_SERVICE_LIFECYCLE_SORT_KEY,
   LEDGER_SERVICE_OWNERSHIP_RECORD_KIND,
   LEDGER_SERVICE_OWNERSHIP_SORT_KEY,
@@ -23,6 +29,8 @@ import {
 } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 
 const APP_ID = 'demo';
+const ARTIFACT_A = `waf1_${'A'.repeat(43)}`;
+const ARTIFACT_B = `waf1_${'B'.repeat(42)}A`;
 const REVISION_A = `wrv1_${'A'.repeat(43)}`;
 const REVISION_B = `wrv1_${'B'.repeat(42)}A`;
 const SCOPE_ID = 'local-session-root';
@@ -72,6 +80,37 @@ function createStartInput(overrides = {}) {
   };
 }
 
+/** @param {import('../../src/core/lib/db/base.js').DBClient} db */
+async function installThroughActivating(db) {
+  const activation = createLocalApplicationActivation({
+    db,
+    tableName: 'execution-ledger-v3',
+  });
+  const installing = await activation.beginInstall({
+    appId: APP_ID,
+    target: { artifactId: ARTIFACT_A, revisionId: REVISION_A },
+    observedAt: 10,
+  });
+  const transitionId = installing.activation.transition.transitionId;
+  await activation.markQuiescent({
+    appId: APP_ID,
+    transitionId,
+    observedAt: 11,
+  });
+  await activation.markSelected({
+    appId: APP_ID,
+    transitionId,
+    destination: LocalApplicationActivationDestination.TARGET,
+    observedAt: 12,
+  });
+  await activation.markActivating({
+    appId: APP_ID,
+    transitionId,
+    observedAt: 13,
+  });
+  return { activation, transitionId };
+}
+
 function createOwnershipClaim(overrides = {}) {
   return {
     serviceId: createLedgerServiceId({ appId: APP_ID }),
@@ -108,10 +147,11 @@ describe('ledger service lifecycle', () => {
     expect(started).toEqual({
       applied: true,
       lifecycle: {
-        schemaVersion: 1,
+        schemaVersion: LEDGER_SERVICE_LIFECYCLE_SCHEMA_VERSION,
         serviceId: createLedgerServiceId({ appId: APP_ID }),
         appId: APP_ID,
         revisionId: REVISION_A,
+        artifactId: null,
         sessionId: expect.stringMatching(/^wss_[A-Za-z0-9_-]{43}$/),
         generation: 1,
         status: LedgerServiceLifecycleStatus.STARTING,
@@ -197,11 +237,12 @@ describe('ledger service lifecycle', () => {
       run_id: getLedgerServiceLifecyclePartitionKey(
         started.lifecycle.serviceId,
       ),
-      sort_key: 'ledger-service/v1/lifecycle',
+      sort_key: LEDGER_SERVICE_LIFECYCLE_SORT_KEY,
       record_kind: LEDGER_SERVICE_LIFECYCLE_RECORD_KIND,
-      schema_version: 1,
+      schema_version: LEDGER_SERVICE_LIFECYCLE_SCHEMA_VERSION,
       app_id: APP_ID,
       revision_id: REVISION_A,
+      artifact_id: null,
       status: LedgerServiceLifecycleStatus.STOPPED,
     });
   });
@@ -286,6 +327,127 @@ describe('ledger service lifecycle', () => {
     });
   });
 
+  test('admits a selected service only with its exact artifact and revision', async () => {
+    const { db, store } = createStore();
+    await installThroughActivating(db);
+
+    await expect(store.start(createStartInput())).rejects.toBeInstanceOf(
+      LocalApplicationAdmissionClosedError,
+    );
+    await expect(
+      store.start(createStartInput({ artifactId: ARTIFACT_B })),
+    ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+
+    const admittedInput = createStartInput({ artifactId: ARTIFACT_A });
+    const admitted = await store.start(admittedInput);
+    expect(admitted).toMatchObject({
+      applied: true,
+      lifecycle: {
+        appId: APP_ID,
+        revisionId: REVISION_A,
+        artifactId: ARTIFACT_A,
+        status: LedgerServiceLifecycleStatus.STARTING,
+      },
+    });
+    await expect(store.start(admittedInput)).resolves.toEqual({
+      applied: false,
+      lifecycle: admitted.lifecycle,
+    });
+    await expect(
+      store.start({ ...admittedInput, artifactId: ARTIFACT_B }),
+    ).rejects.toMatchObject({
+      name: 'LedgerServiceLifecycleConflictError',
+      reason: 'session already advanced',
+    });
+    const fence = {
+      serviceId: admitted.lifecycle.serviceId,
+      sessionId: admitted.lifecycle.sessionId,
+      generation: admitted.lifecycle.generation,
+    };
+    await expect(store.markReady(fence)).resolves.toMatchObject({
+      lifecycle: { artifactId: ARTIFACT_A },
+    });
+    await expect(store.markStopping(fence)).resolves.toMatchObject({
+      lifecycle: { artifactId: ARTIFACT_A },
+    });
+    await expect(store.markStopped(fence)).resolves.toMatchObject({
+      lifecycle: { artifactId: ARTIFACT_A },
+    });
+    await expect(
+      store.get({ serviceId: admitted.lifecycle.serviceId }),
+    ).resolves.toMatchObject({ artifactId: ARTIFACT_A });
+  });
+
+  test('replays an exact starting session before consulting a newly closed admission fence', async () => {
+    const { db, store } = createStore();
+    const input = createStartInput();
+    const started = await store.start(input);
+    const activation = createLocalApplicationActivation({
+      db,
+      tableName: 'execution-ledger-v3',
+    });
+    await activation.beginInstall({
+      appId: APP_ID,
+      target: { artifactId: ARTIFACT_A, revisionId: REVISION_A },
+      observedAt: 110,
+    });
+
+    await expect(store.start(input)).resolves.toEqual({
+      applied: false,
+      lifecycle: started.lifecycle,
+    });
+    await expect(
+      store.start(
+        createStartInput({
+          artifactId: ARTIFACT_A,
+          sessionId: createLedgerServiceSessionId(),
+          observedAt: 111,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+  });
+
+  test('classifies an activation race before falling back to a lifecycle conflict', async () => {
+    const { db } = createStore();
+    const activation = createLocalApplicationActivation({
+      db,
+      tableName: 'execution-ledger-v3',
+    });
+    let closeAdmission = true;
+    const racingDb = {
+      get: db.get.bind(db),
+      transactionWrite: jest.fn(
+        async (
+          /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+        ) => {
+          if (closeAdmission) {
+            closeAdmission = false;
+            await activation.beginInstall({
+              appId: APP_ID,
+              target: { artifactId: ARTIFACT_A, revisionId: REVISION_A },
+              observedAt: 10,
+            });
+          }
+          return await db.transactionWrite(params);
+        },
+      ),
+    };
+    const racingStore = createLedgerServiceLifecycle({
+      db: /** @type {any} */ (racingDb),
+      tableName: 'execution-ledger-v3',
+    });
+
+    await expect(
+      racingStore.start(createStartInput({ artifactId: ARTIFACT_A })),
+    ).rejects.toMatchObject({
+      name: 'LocalApplicationAdmissionClosedError',
+      operation: 'service-start',
+    });
+    await expect(
+      racingStore.get({ serviceId: createLedgerServiceId({ appId: APP_ID }) }),
+    ).resolves.toBeNull();
+  });
+
   test('rejects weak session strings and translates a conditional create race', async () => {
     const serviceId = createLedgerServiceId({ appId: APP_ID });
     const { store } = createStore();
@@ -316,6 +478,20 @@ describe('ledger service lifecycle', () => {
     });
     expect(racingDb.transactionWrite).toHaveBeenCalledWith({
       tableName: 'execution-ledger-v3',
+      conditionChecks: [
+        {
+          keyName: 'run_id',
+          keyValue: expect.stringMatching(/^wlap_[A-Za-z0-9_-]{43}$/),
+          sortKeyName: 'sort_key',
+          sortKeyValue: 'local-application/v1/activation',
+          conditions: [
+            {
+              conditionType: 'NOT_EXISTS',
+              propertyName: 'sort_key',
+            },
+          ],
+        },
+      ],
       putRequests: [
         expect.objectContaining({
           keyName: 'run_id',

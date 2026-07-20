@@ -1,4 +1,5 @@
 import { assertApplicationRevisionId } from '../application-revision.js';
+import { assertArtifactId } from '../artifact-record.js';
 import { assertLogicalId } from '../logical-id.js';
 import {
   LedgerServiceLifecycleStatus,
@@ -314,12 +315,15 @@ export async function acquireLocalLedgerServiceSession(options) {
  * and releases only after a graceful `STOPPING`/`STOPPED` sequence. There is
  * intentionally no scheduler, run claim, queue poller, lease, heartbeat, or
  * coordinator epoch in this first lifecycle vertical.
- * @param {{appId: string, revisionId: string, lifecycle: LedgerServiceLifecycleStore, ownership: LedgerServiceOwnershipStore, sessionRoot?: string, sessionId?: string, now?: () => number, acquireSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<LocalServiceSession>, probeSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<{endpoint: string, status: 'active'|'absent'|'unknown'}>}} options - Service dependencies.
+ * @param {{appId: string, revisionId: string, artifactId?: string, lifecycle: LedgerServiceLifecycleStore, ownership: LedgerServiceOwnershipStore, sessionRoot?: string, sessionId?: string, now?: () => number, acquireSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<LocalServiceSession>, probeSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<{endpoint: string, status: 'active'|'absent'|'unknown'}>}} options - Service dependencies.
  * @returns {{start: (options?: {deferReady?: boolean}) => Promise<LedgerServiceLifecycleSnapshot>, markReady: () => Promise<LedgerServiceLifecycleSnapshot>, beginStopping: () => Promise<LedgerServiceLifecycleSnapshot | null>, stop: () => Promise<LedgerServiceLifecycleSnapshot | null>, getLifecycle: () => LedgerServiceLifecycleSnapshot | null, getRuntimeStatus: () => LedgerServiceRuntimeStatusValue, getServiceId: () => string, getLocalOwner: () => LocalLedgerServiceOwner | null, ownsLocalSession: () => boolean}} - Resident service handle.
  */
 export function createLedgerService(options) {
   assertLogicalId(options?.appId, 'appId');
   assertApplicationRevisionId(options?.revisionId, 'revisionId');
+  if (options?.artifactId !== undefined) {
+    assertArtifactId(options.artifactId, 'artifactId');
+  }
   assertLifecycleStore(options?.lifecycle);
   assertOwnershipStore(options?.ownership);
   if (options?.now !== undefined && typeof options.now !== 'function') {
@@ -328,6 +332,7 @@ export function createLedgerService(options) {
 
   const appId = options.appId;
   const revisionId = options.revisionId;
+  const artifactId = options.artifactId;
   const lifecycle = options.lifecycle;
   const ownership = options.ownership;
   const sessionRoot = options.sessionRoot;
@@ -431,6 +436,7 @@ export function createLedgerService(options) {
             serviceId,
             appId,
             revisionId,
+            ...(artifactId === undefined ? {} : { artifactId }),
             sessionId,
             observedAt: now(),
           });

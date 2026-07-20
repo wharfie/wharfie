@@ -29,6 +29,7 @@ import {
 } from '../../../src/core/runtime/services/ledger-service.js';
 
 const APP_ID = 'resident-demo';
+const ARTIFACT_A = `waf1_${'A'.repeat(43)}`;
 const REVISION_A = `wrv1_${'A'.repeat(43)}`;
 const REVISION_B = `wrv1_${'B'.repeat(42)}A`;
 
@@ -74,10 +75,11 @@ function createDependencies(options = {}) {
 describe('resident ledger service lifecycle', () => {
   it('can defer READY until the composed command endpoint is bound', async () => {
     const { lifecycle, ownership, sessionRoot } = createDependencies();
+    const startLifecycle = jest.fn(lifecycle.start);
     const service = createLedgerService({
       appId: APP_ID,
       revisionId: REVISION_A,
-      lifecycle,
+      lifecycle: { ...lifecycle, start: startLifecycle },
       ownership,
       sessionRoot,
     });
@@ -85,7 +87,9 @@ describe('resident ledger service lifecycle', () => {
     await expect(service.start({ deferReady: true })).resolves.toMatchObject({
       status: LedgerServiceLifecycleStatus.STARTING,
       generation: 1,
+      artifactId: null,
     });
+    expect(startLifecycle.mock.calls[0][0]).not.toHaveProperty('artifactId');
     expect(service.getRuntimeStatus()).toBe(
       LedgerServiceRuntimeStatus.STARTING,
     );
@@ -96,6 +100,44 @@ describe('resident ledger service lifecycle', () => {
     });
     expect(service.getRuntimeStatus()).toBe(LedgerServiceRuntimeStatus.READY);
     await service.stop();
+  });
+
+  it('threads an exact optional artifact into durable service startup', async () => {
+    const { lifecycle, ownership, sessionRoot } = createDependencies();
+    const startLifecycle = jest.fn(lifecycle.start);
+    const service = createLedgerService({
+      appId: APP_ID,
+      revisionId: REVISION_A,
+      artifactId: ARTIFACT_A,
+      lifecycle: { ...lifecycle, start: startLifecycle },
+      ownership,
+      sessionRoot,
+    });
+
+    await expect(service.start({ deferReady: true })).resolves.toMatchObject({
+      revisionId: REVISION_A,
+      artifactId: ARTIFACT_A,
+      status: LedgerServiceLifecycleStatus.STARTING,
+    });
+    expect(startLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: APP_ID,
+        revisionId: REVISION_A,
+        artifactId: ARTIFACT_A,
+      }),
+    );
+    await service.stop();
+
+    expect(() =>
+      createLedgerService({
+        appId: APP_ID,
+        revisionId: REVISION_A,
+        artifactId: 'not-an-artifact-id',
+        lifecycle,
+        ownership,
+        sessionRoot,
+      }),
+    ).toThrow(/artifactId/i);
   });
 
   it('lets shutdown win before deferred readiness without publishing READY', async () => {

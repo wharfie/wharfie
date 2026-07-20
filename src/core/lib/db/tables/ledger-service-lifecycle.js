@@ -3,6 +3,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { assertApplicationRevisionId } from '../../../runtime/application-revision.js';
+import { assertArtifactId } from '../../../runtime/artifact-record.js';
 import {
   assertDomainSeparatedSha256Id,
   createCanonicalJsonSha256Id,
@@ -10,6 +11,7 @@ import {
 import { cloneBoundedJsonObject } from '../../../runtime/json-value.js';
 import { assertLogicalId } from '../../../runtime/logical-id.js';
 import { CONDITION_TYPE } from '../base.js';
+import { getLocalApplicationServiceStartFence } from './local-application-activation.js';
 
 /**
  * One lifecycle record is intentionally colocated with execution-ledger data,
@@ -19,15 +21,17 @@ import { CONDITION_TYPE } from '../base.js';
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
 
-export const LEDGER_SERVICE_LIFECYCLE_SCHEMA_VERSION = 1;
+export const LEDGER_SERVICE_LIFECYCLE_SCHEMA_VERSION = 2;
 export const LEDGER_SERVICE_LIFECYCLE_RECORD_KIND = 'ledger-service-lifecycle';
-export const LEDGER_SERVICE_LIFECYCLE_SORT_KEY = 'ledger-service/v1/lifecycle';
+export const LEDGER_SERVICE_LIFECYCLE_SORT_KEY = 'ledger-service/v2/lifecycle';
 export const LEDGER_SERVICE_OWNERSHIP_SCHEMA_VERSION = 1;
 export const LEDGER_SERVICE_OWNERSHIP_RECORD_KIND = 'ledger-service-ownership';
 export const LEDGER_SERVICE_OWNERSHIP_SORT_KEY = 'ledger-service/v1/ownership';
+export const LEDGER_SERVICE_ID_SCHEMA_VERSION = 1;
 export const LEDGER_SERVICE_ID_DOMAIN = 'wharfie:ledger-service:v1';
 export const LEDGER_SERVICE_ID_PREFIX = 'wls';
 export const LEDGER_SERVICE_SESSION_ID_PREFIX = 'wss';
+export const LEDGER_SERVICE_PARTITION_SCHEMA_VERSION = 1;
 export const LEDGER_SERVICE_LIFECYCLE_PARTITION_DOMAIN =
   'wharfie:ledger-service-lifecycle-partition:v1';
 export const LEDGER_SERVICE_LIFECYCLE_PARTITION_PREFIX = 'wlsp';
@@ -54,6 +58,7 @@ const STORAGE_RECORD_KEYS = new Set([
   'service_id',
   'app_id',
   'revision_id',
+  'artifact_id',
   'session_id',
   'generation',
   'status',
@@ -295,7 +300,7 @@ export function createLedgerServiceId({ appId }) {
     domain: LEDGER_SERVICE_ID_DOMAIN,
     prefix: LEDGER_SERVICE_ID_PREFIX,
     value: {
-      schemaVersion: LEDGER_SERVICE_LIFECYCLE_SCHEMA_VERSION,
+      schemaVersion: LEDGER_SERVICE_ID_SCHEMA_VERSION,
       appId,
     },
     valuePath: 'ledger service identity',
@@ -324,7 +329,7 @@ export function getLedgerServiceLifecyclePartitionKey(serviceId) {
     domain: LEDGER_SERVICE_LIFECYCLE_PARTITION_DOMAIN,
     prefix: LEDGER_SERVICE_LIFECYCLE_PARTITION_PREFIX,
     value: {
-      schemaVersion: LEDGER_SERVICE_LIFECYCLE_SCHEMA_VERSION,
+      schemaVersion: LEDGER_SERVICE_PARTITION_SCHEMA_VERSION,
       serviceId,
     },
     valuePath: 'ledger service lifecycle partition',
@@ -347,6 +352,7 @@ function replacementConditions(record) {
     eq('service_id', record.service_id),
     eq('app_id', record.app_id),
     eq('revision_id', record.revision_id),
+    eq('artifact_id', record.artifact_id),
     eq('session_id', record.session_id),
     eq('generation', record.generation),
     eq('status', record.status),
@@ -365,6 +371,7 @@ function toLifecycleSnapshot(record) {
     serviceId: record.service_id,
     appId: record.app_id,
     revisionId: record.revision_id,
+    artifactId: record.artifact_id,
     sessionId: record.session_id,
     generation: record.generation,
     status: record.status,
@@ -411,6 +418,12 @@ function normalizeStorageRecord(raw, serviceId) {
       record.revision_id,
       'ledger service lifecycle record.revision_id',
     );
+    if (record.artifact_id !== null) {
+      assertArtifactId(
+        record.artifact_id,
+        'ledger service lifecycle record.artifact_id',
+      );
+    }
     if (createLedgerServiceId({ appId: record.app_id }) !== serviceId) {
       throw new TypeError('service application binding');
     }
@@ -442,7 +455,7 @@ function normalizeStorageRecord(raw, serviceId) {
 }
 
 /**
- * @param {{serviceId: string, appId: string, revisionId: string, sessionId: string, generation: number, status: string, startedAt: number, updatedAt: number}} input - Validated lifecycle fields.
+ * @param {{serviceId: string, appId: string, revisionId: string, artifactId?: string, sessionId: string, generation: number, status: string, startedAt: number, updatedAt: number}} input - Validated lifecycle fields.
  * @returns {Record<string, any>} - Canonical storage record.
  */
 function createStorageRecord(input) {
@@ -454,6 +467,7 @@ function createStorageRecord(input) {
     service_id: input.serviceId,
     app_id: input.appId,
     revision_id: input.revisionId,
+    artifact_id: input.artifactId ?? null,
     session_id: input.sessionId,
     generation: input.generation,
     status: input.status,
@@ -465,7 +479,7 @@ function createStorageRecord(input) {
 /**
  * @param {unknown} value - Candidate start options.
  * @param {() => number} now - Durable observation clock.
- * @returns {{serviceId: string, appId: string, revisionId: string, sessionId: string, observedAt: number}} - Validated start options.
+ * @returns {{serviceId: string, appId: string, revisionId: string, artifactId?: string, sessionId: string, observedAt: number}} - Validated start options.
  */
 function normalizeStartOptions(value, now) {
   const input = cloneBoundedJsonObject(
@@ -475,12 +489,22 @@ function normalizeStartOptions(value, now) {
   );
   assertExactKeys(
     input,
-    new Set(['serviceId', 'appId', 'revisionId', 'sessionId', 'observedAt']),
+    new Set([
+      'serviceId',
+      'appId',
+      'revisionId',
+      'artifactId',
+      'sessionId',
+      'observedAt',
+    ]),
     'ledger service lifecycle start',
   );
   assertLedgerServiceId(input.serviceId, 'start.serviceId');
   assertLogicalId(input.appId, 'start.appId');
   assertApplicationRevisionId(input.revisionId, 'start.revisionId');
+  if (input.artifactId !== undefined) {
+    assertArtifactId(input.artifactId, 'start.artifactId');
+  }
   if (createLedgerServiceId({ appId: input.appId }) !== input.serviceId) {
     throw new TypeError('start.serviceId must bind start.appId.');
   }
@@ -489,6 +513,7 @@ function normalizeStartOptions(value, now) {
     serviceId: input.serviceId,
     appId: input.appId,
     revisionId: input.revisionId,
+    ...(input.artifactId !== undefined ? { artifactId: input.artifactId } : {}),
     sessionId: input.sessionId,
     observedAt: assertNonnegativeSafeInteger(
       Object.prototype.hasOwnProperty.call(input, 'observedAt')
@@ -562,7 +587,7 @@ function normalizeGetOptions(value) {
  * acquire that ownership before calling `start`; the conditional generation
  * write prevents two would-be successors from both becoming current.
  * @param {{db: import('../base.js').DBClient, tableName: string, now?: () => number}} options - Store dependencies.
- * @returns {{get: (input: {serviceId: string}) => Promise<Readonly<Record<string, any>> | null>, start: (input: {serviceId: string, appId: string, revisionId: string, sessionId: string, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markReady: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markStopping: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markStopped: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>}} - Durable lifecycle API.
+ * @returns {{get: (input: {serviceId: string}) => Promise<Readonly<Record<string, any>> | null>, start: (input: {serviceId: string, appId: string, revisionId: string, artifactId?: string, sessionId: string, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markReady: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markStopping: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markStopped: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>}} - Durable lifecycle API.
  */
 export function createLedgerServiceLifecycle({
   db,
@@ -617,7 +642,7 @@ export function createLedgerServiceLifecycle({
    * Persist a new STARTING generation after independently obtaining ownership.
    * Repeating the exact initial STARTING write is idempotent; reusing that
    * session after it advances is rejected so an old process cannot regain it.
-   * @param {{serviceId: string, appId: string, revisionId: string, sessionId: string, observedAt?: number}} input - Fresh owner identity.
+   * @param {{serviceId: string, appId: string, revisionId: string, artifactId?: string, sessionId: string, observedAt?: number}} input - Fresh owner identity.
    * @returns {Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>} - Current durable lifecycle.
    */
   async function start(input) {
@@ -627,6 +652,7 @@ export function createLedgerServiceLifecycle({
       if (
         current.app_id === options.appId &&
         current.revision_id === options.revisionId &&
+        current.artifact_id === (options.artifactId ?? null) &&
         current.status === LedgerServiceLifecycleStatus.STARTING
       ) {
         return { applied: false, lifecycle: toLifecycleSnapshot(current) };
@@ -636,6 +662,16 @@ export function createLedgerServiceLifecycle({
         'session already advanced',
       );
     }
+
+    const admissionFence = await getLocalApplicationServiceStartFence({
+      db,
+      tableName: resolvedTableName,
+      appId: options.appId,
+      revisionId: options.revisionId,
+      ...(options.artifactId !== undefined
+        ? { artifactId: options.artifactId }
+        : {}),
+    });
 
     const generation = current
       ? assertPositiveSafeInteger(
@@ -653,6 +689,7 @@ export function createLedgerServiceLifecycle({
     try {
       await db.transactionWrite({
         tableName: resolvedTableName,
+        conditionChecks: [admissionFence],
         putRequests: [
           {
             keyName: KEY_NAME,
@@ -666,6 +703,26 @@ export function createLedgerServiceLifecycle({
       });
     } catch (error) {
       if (isConditionalCheckFailed(error)) {
+        const raced = await readStored(options.serviceId);
+        if (
+          raced &&
+          raced.session_id === options.sessionId &&
+          raced.app_id === options.appId &&
+          raced.revision_id === options.revisionId &&
+          raced.artifact_id === (options.artifactId ?? null) &&
+          raced.status === LedgerServiceLifecycleStatus.STARTING
+        ) {
+          return { applied: false, lifecycle: toLifecycleSnapshot(raced) };
+        }
+        await getLocalApplicationServiceStartFence({
+          db,
+          tableName: resolvedTableName,
+          appId: options.appId,
+          revisionId: options.revisionId,
+          ...(options.artifactId !== undefined
+            ? { artifactId: options.artifactId }
+            : {}),
+        });
         throw new LedgerServiceLifecycleConflictError(
           options.serviceId,
           'concurrent lifecycle update',
@@ -714,6 +771,9 @@ export function createLedgerServiceLifecycle({
       serviceId: current.service_id,
       appId: current.app_id,
       revisionId: current.revision_id,
+      ...(current.artifact_id === null
+        ? {}
+        : { artifactId: current.artifact_id }),
       sessionId: current.session_id,
       generation: current.generation,
       status: targetStatus,
@@ -1323,6 +1383,7 @@ export function createLedgerServiceOwnership({
 export default {
   LEDGER_SERVICE_ID_DOMAIN,
   LEDGER_SERVICE_ID_PREFIX,
+  LEDGER_SERVICE_ID_SCHEMA_VERSION,
   LEDGER_SERVICE_LIFECYCLE_MAX_RECORD_BYTES,
   LEDGER_SERVICE_LIFECYCLE_PARTITION_DOMAIN,
   LEDGER_SERVICE_LIFECYCLE_PARTITION_PREFIX,
@@ -1332,6 +1393,7 @@ export default {
   LEDGER_SERVICE_OWNERSHIP_RECORD_KIND,
   LEDGER_SERVICE_OWNERSHIP_SCHEMA_VERSION,
   LEDGER_SERVICE_OWNERSHIP_SORT_KEY,
+  LEDGER_SERVICE_PARTITION_SCHEMA_VERSION,
   LEDGER_SERVICE_SESSION_ID_PREFIX,
   LedgerServiceLifecycleConflictError,
   LedgerServiceLifecycleNotFoundError,

@@ -2,6 +2,10 @@ import { Command } from 'commander';
 
 import { readEmbeddedAppManifest } from '../../resources/builds/lib/app-manifest-asset.js';
 import { readEmbeddedRevisionRuntimePair } from '../../resources/builds/lib/revision-runtime-assets.js';
+import {
+  getRunningExecutablePath,
+  inspectArtifactBytes,
+} from '../packaged-artifact.js';
 import { runLocalResidentActivityService } from './resident-activity-worker.js';
 
 /**
@@ -52,7 +56,7 @@ export function waitForLedgerServiceShutdown(options = {}) {
  * authenticated command endpoint, restart recovery, serial activity dispatch,
  * and graceful drain. This wrapper only translates process-manager signals
  * into that service's abort contract.
- * @param {{readEmbeddedAppManifest?: () => Promise<Record<string, any>>, readEmbeddedRevisionRuntimePair?: () => Promise<import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair>, runResidentActivityService?: typeof runLocalResidentActivityService, waitForShutdown?: (options?: {signal?: AbortSignal}) => Promise<unknown>}} [options] - Injected runtime dependencies for tests.
+ * @param {{readEmbeddedAppManifest?: () => Promise<Record<string, any>>, readEmbeddedRevisionRuntimePair?: () => Promise<import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair>, getRunningExecutablePath?: typeof getRunningExecutablePath, inspectArtifactBytes?: typeof inspectArtifactBytes, runResidentActivityService?: typeof runLocalResidentActivityService, waitForShutdown?: (options?: {signal?: AbortSignal}) => Promise<unknown>}} [options] - Injected runtime dependencies for tests.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful resident drain summary.
  */
 export async function runLedgerServiceRuntime(options = {}) {
@@ -60,6 +64,9 @@ export async function runLedgerServiceRuntime(options = {}) {
     options.readEmbeddedAppManifest || readEmbeddedAppManifest;
   const readIdentity =
     options.readEmbeddedRevisionRuntimePair || readEmbeddedRevisionRuntimePair;
+  const resolveRunningExecutablePath =
+    options.getRunningExecutablePath || getRunningExecutablePath;
+  const inspectBytes = options.inspectArtifactBytes || inspectArtifactBytes;
   const runResident =
     options.runResidentActivityService || runLocalResidentActivityService;
   const waitForShutdown =
@@ -79,9 +86,12 @@ export async function runLedgerServiceRuntime(options = {}) {
     shutdownOutcome = Promise.resolve(
       waitForShutdown({ signal: waitAbort.signal }),
     ).then((signal) => ({ kind: 'shutdown', signal }));
-    const [manifest, embeddedRevision] = await Promise.all([
+    const [manifest, embeddedRevision, artifact] = await Promise.all([
       readManifest(),
       readIdentity(),
+      Promise.resolve(resolveRunningExecutablePath()).then((artifactPath) =>
+        inspectBytes(artifactPath),
+      ),
     ]);
     residentOutcome = Promise.resolve().then(async () => {
       try {
@@ -93,6 +103,7 @@ export async function runLedgerServiceRuntime(options = {}) {
               manifest,
               embeddedRevision,
             },
+            artifactId: artifact.artifactId,
             signal: residentAbort.signal,
           }),
         };
