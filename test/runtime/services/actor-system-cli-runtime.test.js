@@ -69,6 +69,7 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('metadata');
     expect(help).toMatch(/\brun\b/);
     expect(help).toContain('submit');
+    expect(help).toContain('start');
     expect(help).toContain('worker');
     expect(help).toContain('inspect');
     expect(help).toContain('recover');
@@ -111,6 +112,61 @@ describe('packaged application dispatch', () => {
     );
     expect(sourceOps.helpInformation()).toContain('retry-effect');
     expect(packaged.helpInformation()).toContain('retry-effect');
+  });
+
+  it('mounts the flat public workflow-start command with the expected source-only directory option', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const packaged = createProgram();
+    const sourceStart = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'start',
+    );
+    const packagedStart = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'start',
+    );
+
+    expect(sourceStart).toBeDefined();
+    expect(packagedStart).toBeDefined();
+    expect(packagedStart?.description()).toBe(sourceStart?.description());
+    expect(
+      sourceStart?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        '--workflow',
+        '--idempotency-key',
+        '--dir',
+        '--input',
+        '--caller-metadata',
+        '--json',
+      ]),
+    );
+    expect(
+      packagedStart?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        '--workflow',
+        '--idempotency-key',
+        '--input',
+        '--caller-metadata',
+        '--json',
+      ]),
+    );
+    expect(
+      packagedStart?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).not.toContain('--dir');
+    expect(sourceOps.helpInformation()).toContain('start');
+    expect(packaged.helpInformation()).toContain('start');
   });
 
   it('honors the private ledger-service runtime command and arguments', async () => {

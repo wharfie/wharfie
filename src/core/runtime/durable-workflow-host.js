@@ -2,25 +2,33 @@ import {
   WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
   WORKFLOW_PLAN_PAYLOAD_KIND,
   createWorkflowPlanId,
+  createWorkflowRunId,
   isWorkflowActivityDispatchSupported,
   normalizeWorkflowPlanPayload,
 } from '../lib/ledger/workflow-execution-contract.js';
 import {
   getManifestActivityNames,
+  getManifestWorkflowDefinition,
   invokeManifestActivityAttemptWithStart,
   resolveManifestActivityExecutionBinding,
 } from './app-runs.js';
-import { cloneJsonObject } from './json-value.js';
+import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import { runWorkflowLedgerActivity } from './workflow-ledger-run.js';
 
+const WORKFLOW_START_TRANSITION_ID = 'workflow-start';
+
 /**
- * Cross-check one persisted activation against the exact workflow definition
- * sealed into an already-bound application revision.
- * @param {{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, workflowId: string, planId: string, activityId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} options - Bound revision and persisted activation.
- * @returns {Readonly<{planPayload: Record<string, any>, step: Record<string, any>, dispatchSupported: boolean}>} - Exact manifest binding.
+ * Bind one named workflow to the exact immutable application revision. Public
+ * start currently accepts only plans whose complete activity chain can finish
+ * on the implemented resident continuation surface.
+ * @param {{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, workflowId: string}} options - Bound revision and workflow name.
+ * @returns {Readonly<{planId: string, planPayload: Record<string, any>, dispatchSupported: boolean}>} - Exact immutable plan binding.
  */
-export function resolveManifestWorkflowActivityBinding(options) {
-  const definition = options.identity.manifest.workflows?.[options.workflowId];
+export function resolveManifestWorkflowStartBinding(options) {
+  const definition = getManifestWorkflowDefinition({
+    manifest: options.identity.manifest,
+    workflowName: options.workflowId,
+  });
   if (!definition) {
     throw new Error(
       `Workflow '${String(options.workflowId)}' is unavailable in revision ${options.identity.revisionId}.`,
@@ -35,15 +43,34 @@ export function resolveManifestWorkflowActivityBinding(options) {
       workflowId: options.workflowId,
       definition,
     },
-    'resident manifest workflow plan',
+    'manifest workflow plan',
   );
-  const expectedPlanId = createWorkflowPlanId(planPayload);
-  if (expectedPlanId !== options.planId) {
+  return Object.freeze({
+    planId: createWorkflowPlanId(planPayload),
+    planPayload,
+    dispatchSupported: planPayload.definition.steps.every((_, stepIndex) =>
+      isWorkflowActivityDispatchSupported({ stepIndex }, planPayload),
+    ),
+  });
+}
+
+/**
+ * Cross-check one persisted activation against the exact workflow definition
+ * sealed into an already-bound application revision.
+ * @param {{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, workflowId: string, planId: string, activityId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} options - Bound revision and persisted activation.
+ * @returns {Readonly<{planPayload: Record<string, any>, step: Record<string, any>, dispatchSupported: boolean}>} - Exact manifest binding.
+ */
+export function resolveManifestWorkflowActivityBinding(options) {
+  const workflow = resolveManifestWorkflowStartBinding({
+    identity: options.identity,
+    workflowId: options.workflowId,
+  });
+  if (workflow.planId !== options.planId) {
     throw new Error(
       `Persisted workflow plan ${String(options.planId)} does not match workflow '${String(options.workflowId)}' in revision ${options.identity.revisionId}.`,
     );
   }
-  const step = planPayload.definition.steps[options.cursor?.stepIndex];
+  const step = workflow.planPayload.definition.steps[options.cursor?.stepIndex];
   if (
     !step ||
     step.kind !== 'activity' ||
@@ -58,12 +85,103 @@ export function resolveManifestWorkflowActivityBinding(options) {
     );
   }
   return Object.freeze({
-    planPayload,
+    planPayload: workflow.planPayload,
     step,
     dispatchSupported: isWorkflowActivityDispatchSupported(
       options.cursor,
-      planPayload,
+      workflow.planPayload,
     ),
+  });
+}
+
+/**
+ * Persist one exact manifest workflow start without executing user code. The
+ * caller must hold the app mutation owner; source and packaged command hosts
+ * share this boundary.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('./durable-activity-host.js').ManifestActivityExecution, workflowId: string, idempotencyKey: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}}} options - Immutable workflow start request.
+ * @returns {Promise<Readonly<{appId: string, revisionId: string, workflowId: string, planId: string, idempotencyKey: string, runId: string, outcome: Record<string, any>}>>} - Durable start result.
+ */
+export async function startDurableManifestWorkflow(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('startDurableManifestWorkflow requires options.');
+  }
+  const allowed = new Set([
+    'ledger',
+    'execution',
+    'workflowId',
+    'idempotencyKey',
+    'input',
+    'callerMetadata',
+    'actor',
+  ]);
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) {
+      throw new TypeError(
+        `startDurableManifestWorkflow.${key} is not supported.`,
+      );
+    }
+  }
+  const ledger = options.ledger;
+  const execution = options.execution;
+  const workflowId = options.workflowId;
+  const idempotencyKey = options.idempotencyKey;
+  const input = cloneJsonValue(
+    Object.prototype.hasOwnProperty.call(options, 'input') ? options.input : {},
+    'Workflow start input',
+  );
+  const callerMetadata = cloneJsonObject(
+    Object.prototype.hasOwnProperty.call(options, 'callerMetadata')
+      ? options.callerMetadata
+      : {},
+    'Workflow start caller metadata',
+  );
+  const actor =
+    options.actor === undefined
+      ? undefined
+      : /** @type {{kind: string, id: string}} */ (
+          cloneJsonObject(options.actor, 'Workflow start actor')
+        );
+  if (!ledger || typeof ledger.createWorkflowRun !== 'function') {
+    throw new TypeError(
+      'startDurableManifestWorkflow requires a workflow execution ledger.',
+    );
+  }
+  const binding = resolveManifestActivityExecutionBinding(execution);
+  const workflow = resolveManifestWorkflowStartBinding({
+    identity: binding.identity,
+    workflowId,
+  });
+  if (!workflow.dispatchSupported) {
+    throw new Error(
+      `Workflow '${String(workflowId)}' cannot start until every declared continuation kind is implemented.`,
+    );
+  }
+  const runId = createWorkflowRunId({
+    appId: binding.identity.appId,
+    idempotencyKey,
+  });
+  if (binding.execution.kind === 'prepared-source') {
+    await binding.execution.prepared.verifyRuntime();
+  }
+  const outcome = await ledger.createWorkflowRun({
+    runId,
+    appId: binding.identity.appId,
+    revisionId: binding.identity.revisionId,
+    workflowId,
+    definition: workflow.planPayload.definition,
+    input,
+    callerMetadata,
+    transitionId: WORKFLOW_START_TRANSITION_ID,
+    ...(actor === undefined ? {} : { actor }),
+  });
+  return Object.freeze({
+    appId: binding.identity.appId,
+    revisionId: binding.identity.revisionId,
+    workflowId,
+    planId: workflow.planId,
+    idempotencyKey,
+    runId,
+    outcome,
   });
 }
 

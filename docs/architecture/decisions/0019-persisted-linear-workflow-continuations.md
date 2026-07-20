@@ -16,9 +16,12 @@ failures, projection and payload tampering, and native LMDB close/reopen.
 The resident now consumes exact manifest-bound workflow `ACTIVITY` and
 `RECOVERY` rows, persists the cursor-guarded start before physical dispatch,
 continues ordinary activity chains serially, releases only unstarted claims,
-and turns lost started work into non-runnable uncertainty. Cursor-aware
-cancellation, timers, signals, public workflow commands, managed effects in
-workflow attempts, and reconciliation of cancelled or deadline-exceeded
+and turns lost started work into non-runnable uncertainty. Shared source and
+packaged `start` commands now persist plans composed entirely of ordinary
+activity steps, and generic exact-run inspection, confirmed recovery, and
+evidence reconciliation understand the workflow trigger and cursor. Cursor-aware
+cancellation, timers, signals, managed-effect successor steps, managed effects
+in workflow attempts, and reconciliation of cancelled or deadline-exceeded
 evidence remain prospective.
 
 ## Context

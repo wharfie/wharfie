@@ -5,13 +5,14 @@ import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.
 import manifestCommand from './control_cmds/manifest.js';
 import metadataCommand from './control_cmds/metadata.js';
 import { createPackagedDurableRunCommand } from './control_cmds/run.js';
+import { createPackagedDurableWorkflowStartCommand } from './control_cmds/start.js';
 import { createPackagedDurableSubmitCommand } from './control_cmds/submit.js';
 import { createPackagedDurableWorkerCommand } from './control_cmds/worker.js';
 
 /**
  * Build a fresh packaged operator program. Identity is read lazily so help and
  * immutable metadata commands do not open application control state.
- * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, loadDurableSubmitExecution?: () => Promise<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitExecutionHandle>, durableSubmitOutput?: Partial<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitCommandOutput>, submitActivity?: import('../../../runtime/operator/durable-submit-command.js').ResidentActivitySubmit, loadDurableWorkerExecution?: () => Promise<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerExecutionHandle>, durableWorkerOutput?: Partial<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerCommandOutput>, runResidentWorker?: import('../../../runtime/operator/durable-worker-command.js').ResidentActivityWorkerRunner, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable command providers.
+ * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, loadDurableWorkflowStartExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, durableWorkflowStartOutput?: Partial<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, loadDurableSubmitExecution?: () => Promise<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitExecutionHandle>, durableSubmitOutput?: Partial<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitCommandOutput>, submitActivity?: import('../../../runtime/operator/durable-submit-command.js').ResidentActivitySubmit, loadDurableWorkerExecution?: () => Promise<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerExecutionHandle>, durableWorkerOutput?: Partial<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerCommandOutput>, runResidentWorker?: import('../../../runtime/operator/durable-worker-command.js').ResidentActivityWorkerRunner, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable command providers.
  * @returns {Command} - Packaged operator program.
  */
 export function createProgram(options = {}) {
@@ -63,6 +64,20 @@ export function createProgram(options = {}) {
       ? {}
       : { processRef: options.processRef }),
   });
+  const startCommand = createPackagedDurableWorkflowStartCommand({
+    ...(options.loadDurableWorkflowStartExecution === undefined
+      ? {}
+      : { loadExecution: options.loadDurableWorkflowStartExecution }),
+    ...(options.durableWorkflowStartOutput === undefined
+      ? {}
+      : { output: options.durableWorkflowStartOutput }),
+    ...(options.startWorkflow === undefined
+      ? {}
+      : { startWorkflow: options.startWorkflow }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
   const workerCommand = createPackagedDurableWorkerCommand({
     ...(options.loadDurableWorkerExecution === undefined
       ? {}
@@ -84,6 +99,7 @@ export function createProgram(options = {}) {
     .addCommand(manifestCommand)
     .addCommand(metadataCommand)
     .addCommand(runCommand)
+    .addCommand(startCommand)
     .addCommand(submitCommand)
     .addCommand(workerCommand)
     .addCommand(inspectCommand)

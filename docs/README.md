@@ -33,13 +33,16 @@ transactional ready-work locator rather than scanning run history. The strict
 manifest also accepts the bounded linear workflow definition from ADR 0019.
 The resident executes exact manifest-bound ordinary activity continuations,
 persists their outputs, and conservatively releases `CLAIMED` or blocks lost
-`STARTED` workflow attempts. There is no public workflow-start command yet.
+`STARTED` workflow attempts. Source `wharfie ops start` and packaged
+`<app> wharfie start` persist activity-only workflow plans, while the shared
+exact-run inspection, confirmed recovery, and evidence-reconciliation commands
+understand their redacted workflow cursor.
 
 This is not yet a durable workflow engine or an installed operating-system
-service. Public workflow operations, timer and signal continuations, schedules,
-startup-on-boot installation, provider-backed deployment, multi-host
-leases/heartbeats, and the trusted-node mesh remain roadmap work; Wharfie is
-not production ready.
+service. Workflow cancellation, timer and signal continuations, managed-effect
+successor steps, schedules, startup-on-boot installation, provider-backed
+deployment, multi-host leases/heartbeats, and the trusted-node mesh remain
+roadmap work; Wharfie is not production ready.
 
 ## Start locally
 
@@ -48,13 +51,19 @@ wharfie app manifest ./path/to/app
 wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
 wharfie ops submit --activity <activity-id> --dir ./path/to/app \
   --idempotency-key <stable-key> --input '{"who":"cli-user"}'
+wharfie ops start --workflow <workflow-id> --dir ./path/to/app \
+  --idempotency-key <stable-key> --input '{"who":"cli-user"}'
 wharfie ops worker --dir ./path/to/app
 wharfie app package ./path/to/app
 ```
 
-The packaged equivalents are `<app> wharfie submit ...` and `<app> wharfie
-worker`; they are bound to the manifest and revision embedded in that artifact
-and do not accept `--dir`.
+The packaged equivalents are `<app> wharfie submit ...`, `<app> wharfie start
+...`, and `<app> wharfie worker`; they are bound to the manifest and revision
+embedded in that artifact and do not accept `--dir`. Workflow start currently
+accepts only plans composed entirely of ordinary activity steps. Exact-run
+`inspect --json` emits the shared schema-v6 redacted trigger and workflow
+cursor; confirmed `recover` and evidence-backed `reconcile` use the same safe
+view.
 
 The shipped top-level CLI contains `app` and `ops`. Continue with the
 [installation guide](./guides/installation.md), [quickstart](./guides/quickstart.md),

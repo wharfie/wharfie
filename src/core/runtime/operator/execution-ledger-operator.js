@@ -26,6 +26,7 @@ import {
   assertLedgerOpaqueId,
 } from '../../lib/ledger/record-key.js';
 import { hasSameCanonicalJson } from '../../lib/ledger/execution-ledger-contract.js';
+import { WorkflowCursorDisposition } from '../../lib/ledger/workflow-execution-contract.js';
 import {
   assertInitialManagedEffectSuccessorRetryEligible,
   normalizeManagedEffectSuccessorAuthorization,
@@ -36,6 +37,7 @@ import {
   reconcileManualLedgerActivity,
   recoverManualLedgerActivity,
 } from '../manual-ledger-run.js';
+import { recoverWorkflowLedgerActivity } from '../workflow-ledger-run.js';
 import {
   assertApplicationStateStoreIsolation,
   openApplicationStateDB,
@@ -43,6 +45,7 @@ import {
   withApplicationStateDB,
 } from '../application-state-store.js';
 import { createCanonicalJsonSha256Id } from '../content-id.js';
+import { cloneBoundedJsonObject } from '../json-value.js';
 import {
   APPLICATION_STATE_ADAPTER_DESCRIPTOR,
   APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
@@ -547,6 +550,206 @@ function getRecoverableInvocation(view) {
     (/** @type {Record<string, any>} */ invocation) =>
       invocation.invocationId === authorization.target.invocationId,
   );
+}
+
+/**
+ * Reduce a verified workflow cursor to the exact optimistic mutation guard
+ * accepted by the ledger. Payload references and the output prefix remain
+ * separately protected by the verified event snapshots.
+ * @param {Record<string, any>} cursor - Verified workflow cursor.
+ * @returns {{version: number, continuationId: string, stepId: string, stepIndex: number}} - Exact cursor guard.
+ */
+function workflowCursorGuard(cursor) {
+  return {
+    version: cursor.version,
+    continuationId: cursor.continuationId,
+    stepId: cursor.stepId,
+    stepIndex: cursor.stepIndex,
+  };
+}
+
+/**
+ * Reconstruct the exact blocked workflow authority represented by one
+ * uncertainty event. This accepts historical snapshots so response-loss
+ * replay remains possible after the current cursor has advanced.
+ * @param {Record<string, any>} view - Verified complete run history.
+ * @param {Record<string, any>} event - Candidate uncertainty event.
+ * @param {string} label - Diagnostic boundary.
+ * @returns {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, uncertaintyEvent: Record<string, any>}} - Exact historical uncertainty authority.
+ */
+function getWorkflowUncertaintyAuthorityFromEvent(view, event, label) {
+  const run = event?.payload?.run;
+  const cursor = event?.payload?.workflowCursor;
+  const invocation = event?.payload?.invocation;
+  const attempt = event?.payload?.attempt;
+  if (
+    event?.type !== 'workflow-activity-became-uncertain' ||
+    !run ||
+    !cursor ||
+    !invocation ||
+    !attempt ||
+    run.runId !== view.run.runId ||
+    run.trigger?.kind !== 'workflow' ||
+    run.status !== RunStatus.BLOCKED ||
+    run.lastSequence !== event.sequence ||
+    cursor.runId !== run.runId ||
+    cursor.appId !== run.appId ||
+    cursor.revisionId !== run.revisionId ||
+    cursor.workflowId !== run.trigger.workflowId ||
+    cursor.planId !== run.trigger.planId ||
+    !hasSameCanonicalJson(cursor.planRef, run.trigger.planRef) ||
+    !hasSameCanonicalJson(cursor.startRef, run.requestRef) ||
+    cursor.disposition !== WorkflowCursorDisposition.ACTIVITY_UNCERTAIN ||
+    cursor.lastSequence !== event.sequence ||
+    invocation.runId !== run.runId ||
+    invocation.appId !== run.appId ||
+    invocation.revisionId !== run.revisionId ||
+    invocation.invocationId !== cursor.invocationId ||
+    invocation.status !== InvocationStatus.UNCERTAIN ||
+    invocation.lastSequence !== event.sequence ||
+    invocation.workflow?.workflowId !== cursor.workflowId ||
+    invocation.workflow?.planId !== cursor.planId ||
+    invocation.workflow?.continuationId !== cursor.continuationId ||
+    invocation.workflow?.stepId !== cursor.stepId ||
+    invocation.workflow?.stepIndex !== cursor.stepIndex ||
+    attempt.runId !== run.runId ||
+    attempt.appId !== run.appId ||
+    attempt.revisionId !== run.revisionId ||
+    attempt.invocationId !== invocation.invocationId ||
+    attempt.activityId !== invocation.activityId ||
+    attempt.generation !== invocation.generation ||
+    attempt.status !== AttemptStatus.ABANDONED ||
+    attempt.lastSequence !== event.sequence ||
+    event.fence?.coordinatorEpoch !== attempt.coordinatorEpoch ||
+    event.fence?.invocationGeneration !== attempt.generation
+  ) {
+    throw new Error(
+      `${label} has inconsistent workflow uncertainty authority.`,
+    );
+  }
+  return { run, cursor, invocation, attempt, uncertaintyEvent: event };
+}
+
+/**
+ * Select a fresh uncertain workflow target or reconstruct the original target
+ * of an already-committed same-ID reconciliation. The latter must follow the
+ * immutable reconciliation link back to its uncertainty event: the current
+ * cursor may already name a successor or terminal workflow.
+ * @param {Record<string, any>} view - Verified complete workflow view.
+ * @param {string} reconciliationId - Stable public retry identity.
+ * @returns {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, uncertaintyEvent: Record<string, any>, expectedVersion: number, transitionId: string}} - Exact original mutation authority.
+ */
+function getWorkflowReconciliationAuthority(view, reconciliationId) {
+  if (view.run.trigger?.kind !== 'workflow') {
+    throw new Error('The requested run is not a workflow run.');
+  }
+  const transitionId = `${RECONCILIATION_TRANSITION_PREFIX}${reconciliationId}`;
+  const retained = view.events.filter(
+    (/** @type {Record<string, any>} */ event) =>
+      event.transition_id === transitionId,
+  );
+  if (retained.length > 1) {
+    throw new Error(
+      'The workflow reconciliation identity has multiple durable events.',
+    );
+  }
+  const reconciliationEvent = retained[0];
+  if (reconciliationEvent) {
+    const reconciliation = reconciliationEvent.payload?.reconciliation;
+    const reconciliationRun = reconciliationEvent.payload?.run;
+    const uncertaintySequence = reconciliation?.uncertaintySequence;
+    const uncertaintyEvent = Number.isSafeInteger(uncertaintySequence)
+      ? view.events[uncertaintySequence - 1]
+      : undefined;
+    if (
+      reconciliationEvent.type !== 'workflow-activity-uncertainty-reconciled' ||
+      !reconciliation ||
+      reconciliation.reconciliationId !== reconciliationId ||
+      reconciliationEvent.payload?.invocation?.invocationId !==
+        reconciliation.invocationId ||
+      !reconciliationRun ||
+      reconciliationRun.runId !== view.run.runId ||
+      reconciliationRun.lastSequence !== reconciliationEvent.sequence ||
+      !Number.isSafeInteger(reconciliationRun.version) ||
+      reconciliationRun.version < 2 ||
+      !uncertaintyEvent ||
+      uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
+      uncertaintyEvent.sequence !== reconciliation.uncertaintySequence
+    ) {
+      throw new Error(
+        'The retained workflow reconciliation has inconsistent event authority.',
+      );
+    }
+    const authority = getWorkflowUncertaintyAuthorityFromEvent(
+      view,
+      uncertaintyEvent,
+      'Retained workflow reconciliation',
+    );
+    if (
+      reconciliation.invocationId !== authority.invocation.invocationId ||
+      reconciliation.attemptId !== authority.attempt.attemptId ||
+      reconciliation.generation !== authority.attempt.generation ||
+      reconciliation.coordinatorEpoch !== authority.attempt.coordinatorEpoch ||
+      reconciliation.fencingToken !== authority.attempt.fencingToken ||
+      reconciliationEvent.fence?.coordinatorEpoch !==
+        authority.attempt.coordinatorEpoch ||
+      reconciliationEvent.fence?.invocationGeneration !==
+        authority.attempt.generation ||
+      reconciliationRun.version - 1 !== authority.run.version
+    ) {
+      throw new Error(
+        'The retained workflow reconciliation does not match its original uncertainty.',
+      );
+    }
+    return {
+      ...authority,
+      expectedVersion: reconciliationRun.version - 1,
+      transitionId,
+    };
+  }
+
+  const cursor = view.workflowCursor;
+  const invocation = cursor
+    ? view.invocations.find(
+        (/** @type {Record<string, any>} */ candidate) =>
+          candidate.invocationId === cursor.invocationId,
+      )
+    : undefined;
+  const attempt = invocation
+    ? view.attempts.find(
+        (/** @type {Record<string, any>} */ candidate) =>
+          candidate.invocationId === invocation.invocationId &&
+          candidate.generation === invocation.generation,
+      )
+    : undefined;
+  const uncertaintyEvent = attempt
+    ? view.events[attempt.lastSequence - 1]
+    : undefined;
+  if (!cursor || !invocation || !attempt || !uncertaintyEvent) {
+    throw new Error(
+      'The workflow run has no retained uncertain activity to reconcile.',
+    );
+  }
+  const authority = getWorkflowUncertaintyAuthorityFromEvent(
+    view,
+    uncertaintyEvent,
+    'Current workflow',
+  );
+  if (
+    !hasSameCanonicalJson(authority.run, view.run) ||
+    !hasSameCanonicalJson(authority.cursor, cursor) ||
+    !hasSameCanonicalJson(authority.invocation, invocation) ||
+    !hasSameCanonicalJson(authority.attempt, attempt)
+  ) {
+    throw new Error(
+      'The current workflow uncertainty event does not match its projections.',
+    );
+  }
+  return {
+    ...authority,
+    expectedVersion: view.run.version,
+    transitionId,
+  };
 }
 
 /**
@@ -1566,6 +1769,11 @@ export async function cancelExecutionLedgerRun(options) {
       'Cancellation is not supported for a managed-effect successor; reconcile its destination instead.',
     );
   }
+  if (preflight.run.trigger?.kind === 'workflow') {
+    throw new Error(
+      'Workflow cancellation is not implemented; inspect or reconcile the exact workflow activity instead.',
+    );
+  }
 
   const nonDeliverable = classifyNonDeliverableCancellation(preflight);
   if (nonDeliverable) {
@@ -1701,10 +1909,11 @@ export async function recoverExecutionLedgerRun(options) {
   // Refuse unsupported effect sets while every opened store is still
   // read-only. The same selection is repeated under local ownership below so
   // a concurrent transition cannot authorize work from this stale view.
-  const preflightTarget =
-    preflight.run.trigger?.kind === 'effect-successor'
-      ? undefined
-      : getStoppedEffectRecoveryTarget(preflight);
+  const preflightTarget = ['effect-successor', 'workflow'].includes(
+    preflight.run.trigger?.kind,
+  )
+    ? undefined
+    : getStoppedEffectRecoveryTarget(preflight);
 
   return await withExecutionLedger(
     async (ledger, context) =>
@@ -1747,6 +1956,30 @@ export async function recoverExecutionLedgerRun(options) {
               },
               view,
             };
+          }
+          if (current.run.trigger?.kind === 'workflow') {
+            const cursor = current.workflowCursor;
+            const invocation = cursor
+              ? current.invocations.find(
+                  (/** @type {Record<string, any>} */ candidate) =>
+                    candidate.invocationId === cursor.invocationId,
+                )
+              : undefined;
+            if (!cursor || !invocation) {
+              throw new Error(
+                'The recoverable workflow cursor invocation is unavailable.',
+              );
+            }
+            const workflowRecovery = await recoverWorkflowLedgerActivity({
+              ledger,
+              runId: options.runId,
+              invocationId: invocation.invocationId,
+              actor,
+            });
+            const view = await ledger.rebuildRun(options.runId);
+            if (!workflowRecovery.found || !view) return null;
+            assertExpectedApp(view, options.expectedAppId);
+            return { recovery: workflowRecovery, view };
           }
           const target = getStoppedEffectRecoveryTarget(current);
           if (target?.fingerprint !== preflightTarget?.fingerprint) {
@@ -1889,6 +2122,7 @@ export async function reconcileExecutionLedgerRun(options) {
   }
   const reconciliationId = resolveReconciliationId(options.reconciliationId);
   const reason = createReconciliationReason(reconciliationId, options.reason);
+  const actor = resolveRecoveryOperatorActor(options.actor);
   if (
     !options.evidence ||
     typeof options.evidence !== 'object' ||
@@ -1898,6 +2132,11 @@ export async function reconcileExecutionLedgerRun(options) {
       'reconcileExecutionLedgerRun.evidence must be a JSON object.',
     );
   }
+  const evidence = cloneBoundedJsonObject(
+    options.evidence,
+    EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES,
+    'reconcileExecutionLedgerRun.evidence',
+  );
   const preflight = await inspectExecutionLedgerRun({
     runId: options.runId,
     expectedAppId: options.expectedAppId,
@@ -1914,6 +2153,44 @@ export async function reconcileExecutionLedgerRun(options) {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
+          if (current.run.trigger?.kind === 'workflow') {
+            const authority = getWorkflowReconciliationAuthority(
+              current,
+              reconciliationId,
+            );
+            const result =
+              await ledger.reconcileUncertainWorkflowActivityAttempt({
+                runId: options.runId,
+                invocationId: authority.invocation.invocationId,
+                cursor: workflowCursorGuard(authority.cursor),
+                attemptId: authority.attempt.attemptId,
+                fencingToken: authority.attempt.fencingToken,
+                generation: authority.attempt.generation,
+                coordinatorEpoch: authority.attempt.coordinatorEpoch,
+                expectedVersion: authority.expectedVersion,
+                uncertaintyEventId: authority.uncertaintyEvent.event_id,
+                uncertaintySequence: authority.uncertaintyEvent.sequence,
+                transitionId: authority.transitionId,
+                reconciliationId,
+                reason,
+                evidence,
+                actor,
+              });
+            const view = await ledger.rebuildRun(options.runId);
+            if (!view) {
+              throw new Error(
+                `Workflow reconciliation committed without a verified readback: ${options.runId}`,
+              );
+            }
+            assertExpectedApp(view, options.expectedAppId);
+            return {
+              reconciliation: {
+                reconciliationId,
+                changed: result.applied,
+              },
+              view,
+            };
+          }
           const invocation = getRecoverableInvocation(current);
           if (!invocation) {
             throw new Error(
@@ -1925,9 +2202,9 @@ export async function reconcileExecutionLedgerRun(options) {
             runId: options.runId,
             invocationId: invocation.invocationId,
             reconciliationId,
-            evidence: options.evidence,
+            evidence,
             reason,
-            ...(options.actor ? { actor: options.actor } : {}),
+            actor,
           });
           if (!reconciliation.found || !reconciliation.view) return null;
           assertExpectedApp(reconciliation.view, options.expectedAppId);

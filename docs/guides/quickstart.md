@@ -58,15 +58,29 @@ export default defineApp({
       },
     },
   },
+  workflows: {
+    greet: {
+      steps: [
+        {
+          id: 'greet',
+          kind: 'activity',
+          activity: 'greet',
+          input: { kind: 'workflow-input' },
+        },
+      ],
+    },
+  },
 });
 ```
 
 The optional `workflows` map accepts the finite revision-bound contract from
 ADR 0019: one to 64 ordered `activity`, `timer`, or `signal` steps. Activity
 input is exactly the workflow input, a JSON literal, or one named earlier
-step's output. The manifest compiler and packager preserve this data now; the
-durable workflow start and signal commands are not implemented yet. See
-[Application Structure](./application-structure.md) for the exact shape.
+step's output. The source and packaged `start` commands accept a workflow only
+when every step can currently run as an ordinary activity. Plans containing a
+timer, signal, or managed-effect successor fail before durable state is
+created. See [Application Structure](./application-structure.md) for the exact
+shape.
 
 The application ID, activity keys, and other logical IDs use lowercase kebab
 case: `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with at most 63 ASCII bytes. Wharfie
@@ -180,6 +194,36 @@ while offline. The receipt contains the exact app revision and derived run ID;
 reuse the idempotency key only with the identical activity, input, and caller
 metadata. It does not imply that physical execution has begun.
 
+## Start a durable workflow
+
+Persist an activity-only workflow from its source manifest with a stable start
+identity:
+
+```bash
+wharfie ops start --workflow <workflow-id> --dir ./path/to/app \
+  --idempotency-key <stable-key> --input '{"who":"cli-user"}'
+```
+
+The packaged form is bound to its embedded app and revision and has no `--dir`
+override:
+
+```bash
+<app> wharfie start --workflow <workflow-id> \
+  --idempotency-key <stable-key> --input '{"who":"cli-user"}'
+```
+
+`start` uses the same authenticated resident-or-short-lived-owner boundary as
+`submit`. It atomically persists the immutable plan, workflow input, initial
+cursor, invocation, and runnable work row. An exact retry of the same stable
+key and request returns the retained run with `reused: true`; changing the
+workflow, input, caller metadata, or immutable app revision conflicts. Output
+contains only safe run, revision, workflow, cursor, and invocation lifecycle
+fields. It does not echo inputs or internal payload references.
+
+Only a plan composed entirely of ordinary activity steps is accepted by this
+first public slice. Timer and signal continuations, managed-effect successors,
+and workflow cancellation remain unsupported.
+
 Run the matching source revision as a foreground resident in another terminal:
 
 ```bash
@@ -201,23 +245,25 @@ requests are checked read-only for permanent receipts. The whole set and the
 blocked attempt advance in one ledger event; authored activity and normal
 adapter code are not rerun.
 
-The packaged artifact exposes the same pair without any source-directory
-override:
+The packaged artifact exposes the same activity submission, workflow start,
+and worker commands without any source-directory override:
 
 ```bash
 <app> wharfie submit --activity <activity-id> \
   --idempotency-key <stable-key> --input '{"who":"cli-user"}'
+<app> wharfie start --workflow <workflow-id> \
+  --idempotency-key <stable-workflow-key> --input '{"who":"cli-user"}'
 <app> wharfie worker
 ```
 
 The private environment-selected packaged service runtime starts the same
 resident activity implementation. Wharfie does not yet install it as an OS
-service or arrange startup on boot. The current worker can continue an
-already-persisted workflow through ordinary activity steps, but there is no
-public workflow-start command yet. It has no timers, signals, schedules,
-multi-host leases, or heartbeats. Exact workflow `ACTIVITY` and `RECOVERY` rows
-are implemented; `TIMER` and framework-only `CONTINUATION` rows remain parked
-for later workflow slices.
+service or arrange startup on boot. The current worker executes workflows
+started through the public command above when every step is an ordinary
+activity. It has no timers, signals, schedules, managed-effect workflow
+successors, multi-host leases, or heartbeats. Exact workflow `ACTIVITY` and
+`RECOVERY` rows are implemented; `TIMER` and framework-only `CONTINUATION` rows
+remain parked for later workflow slices.
 
 Inspection is read-only. Recovery is an explicit durable mutation to use only
 after every prior runner has stopped; it does not load an app manifest, parse
@@ -249,13 +295,14 @@ Packaged inspection, recovery, reconciliation, effect reconciliation, and
 cancellation are scoped to the immutable app identity embedded in
 the artifact. They can operate an older revision of that same app, but reject
 another app's run ID before output or mutation. With `--json`, the source and
-packaged forms of `inspect` emit the same schema-v5 redacted run view, including
-effect identity/status/adapter-lifecycle rows but not requests, destinations,
-receipts, evidence, values, paths, or fencing tokens. `recover` emits that view
-plus recovery action `settled-managed-effect-set` and one sorted
-`managedEffects` result for the atomically settled active set; `reconcile`
-wraps the view with its stable reconciliation ID and whether it was newly
-applied. `cancel` instead emits a redacted schema-v1 cancellation result
+packaged forms of `inspect` emit the same schema-v6 redacted run view, including
+the safe manual/workflow trigger and current workflow cursor identities plus
+effect identity/status/adapter-lifecycle rows, but not requests, destinations,
+receipts, evidence, values, paths, payload references, or fencing tokens.
+`recover` emits that view plus recovery action `settled-managed-effect-set` and
+one sorted `managedEffects` result for the atomically settled active set;
+`reconcile` wraps the view with its stable reconciliation ID and whether it was
+newly applied. `cancel` instead emits a redacted schema-v1 cancellation result
 containing the request ID, outcome, delivery state, and safe lifecycle statuses.
 Without `--json`, these commands use the compact human-oriented table and
 message format shown above.
@@ -308,9 +355,11 @@ retry or compensation.
 
 Inspection opens existing control state read-only and never creates missing
 state. Recovery is deliberately explicit: use it only after confirming every
-prior runner is gone. For an ordinary manual run, it can release a generic
+prior runner is gone. For a manual or workflow run, it can release a current
 claim that never started; a begun attempt becomes visibly blocked as
-`UNCERTAIN` instead of replaying code. The successor lifecycle instead uses the
+`UNCERTAIN` instead of replaying code. Workflow recovery conditions on the
+exact retained cursor, continuation, invocation, generation, attempt, and
+fence. The successor lifecycle instead uses the
 dedicated behavior above and has no generic claim. V10 retains V9's recovery of
 the complete active-effect set, bounded to 16 unresolved effects, for an
 ordinary stopped attempt under the held local owner. Every `PENDING` request
@@ -339,8 +388,14 @@ against the retained revision, input, caller metadata, attempt identity,
 fencing token, and exact earlier uncertainty event. It appends one terminal
 resolution only when the evidence proves it; the abandoned physical attempt is
 never rewritten, and the transcript, result, reason, and fence are never echoed
-in the operator response. A `cancelled` result still requires the matching
-earlier durable cancellation request and host cancellation frame.
+in the operator response. For a workflow, verified `completed` evidence
+atomically creates the next ordinary activity or completes the run; verified
+`failed` or `protocol-failed` evidence terminalizes it without a successor.
+Exact reconciliation replay remains bound to the original uncertainty event
+even after its cursor has advanced. For a manual run, a `cancelled` result still
+requires the matching earlier durable cancellation request and host
+cancellation frame. Workflow `cancelled` and `deadline-exceeded` evidence
+remain unsupported.
 
 The V10 ledger carries forward cancellation by the active local owner. During
 `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
@@ -361,14 +416,17 @@ The external command intentionally cannot directly cancel `RUNNABLE`,
 cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
 `UNCERTAIN` work; later reconciliation needs evidence rather than another
-cancel request. There is still no public run-history/list: the verified bounded
-V8 run directory paired with the V10 ledger is internal rather than the retired
-`ops list` surface. The resident now submits, claims, and executes exact-revision
-manual activities serially and consumes exact manifest-bound workflow activity
-continuations already present in the ledger. It does not yet expose public
-workflow commands, timers, signals, or schedules. The manual bounded recovery
-and reconciliation paths have prior real subprocess and relocated-SEA crash
-coverage across request, start, destination commit, payload publication,
+cancel request. The generic `cancel` command rejects workflow runs until a
+cursor-aware run-level cancellation decision exists. There is still no public
+run-history/list: the verified bounded V8 run directory paired with the V10
+ledger is internal rather than the retired `ops list` surface. The resident now
+submits, claims, and executes exact-revision manual activities serially and
+consumes exact manifest-bound workflow activity continuations created through
+public `start`. Public `inspect`, confirmed `recover`, and evidence-backed
+`reconcile` understand those workflow runs; timers, signals, managed-effect
+successors, cancellation, and schedules remain unsupported. The manual bounded
+recovery and reconciliation paths have prior real subprocess and relocated-SEA
+crash coverage across request, start, destination commit, payload publication,
 ledger settlement, and response-delivery boundaries. The manual resident
 dispatch and shutdown surface has a complete source, package, and moved-SEA
 validation receipt, including exact-revision dispatch, graceful drain tests,
@@ -376,8 +434,8 @@ current-revision managed-effect recovery, and service crash/restart with Node
 unavailable on `PATH`. The workflow dispatcher currently has focused
 real-ledger and resident lifecycle coverage. Wharfie remains a single-process
 activity worker rather than a production workflow service: public workflow
-command and process-kill proofs, timers/signals, OS installation/reboot proof,
-and multi-host coordination are still intentionally absent.
+process-kill and relocated-SEA proofs, timers/signals, OS installation/reboot
+proof, and multi-host coordination are still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.
@@ -417,10 +475,10 @@ Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
 
 The v2 manifest exposes only the bounded plain-data workflow definitions above;
-its resident can execute already-persisted ordinary activity continuations, but
-it does not yet expose public workflow start/inspection/reconciliation,
-timers/signals, schedules, arbitrary packaging assets, signing credentials, or
-other build secrets. External activity packages must be pinned as exact descriptors such as
+its public start and operator commands handle activity-only continuations, but
+timers/signals, managed-effect successors, cursor-aware cancellation, schedules,
+arbitrary packaging assets, signing credentials, and other build secrets remain
+unsupported. External activity packages must be pinned as exact descriptors such as
 `externalPackages: [{ name: 'sharp', version: '0.34.4' }]`; ranges, tags, URLs,
 and ambient dependency resolution are not accepted. Multiple entries must use
 lowercase npm registry names, be unique, and be sorted by name.

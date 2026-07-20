@@ -304,11 +304,9 @@ const SEA_MIXED_SETTLEMENT_CRASH_CASES = Object.freeze([
     label: 'mixed-effect recovery helper return before operator readback',
     breakpoint: {
       sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
-      anchor: 'const view = await ledger.rebuildRun(options.runId);',
-      // The dedicated successor branch now has its own source-free readback
-      // with the same statement. This crash matrix exercises ordinary mixed
-      // effect recovery, so bind the generic branch after its helper returns.
-      occurrence: 2,
+      // This unique guard runs after ordinary mixed-effect recovery and
+      // application-state cleanup, but before the operator readback.
+      anchor: 'if (!recovery) {',
     },
     settledAtBoundary: true,
   },
@@ -1540,7 +1538,7 @@ function assertManagedEffectBatchInspectionView(serialized, fixture, adapter) {
     'run',
     'schemaVersion',
   ]);
-  assert.equal(view.schemaVersion, 5);
+  assert.equal(view.schemaVersion, 6);
   assert.equal(view.kind, 'wharfie.execution-ledger.run');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -1591,7 +1589,7 @@ function assertManagedEffectBatchRecoveryView(serialized, fixture, expected) {
     'run',
     'schemaVersion',
   ]);
-  assert.equal(view.schemaVersion, 5);
+  assert.equal(view.schemaVersion, 6);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -2179,7 +2177,7 @@ function assertManagedEffectReconciliationView(
     'run',
     'schemaVersion',
   ]);
-  assert.equal(view.schemaVersion, 5);
+  assert.equal(view.schemaVersion, 6);
   assert.equal(view.kind, 'wharfie.execution-ledger.effect-reconciliation');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, batch.runId);
@@ -3087,7 +3085,7 @@ function terminalDeliveryAuthority(delivery) {
  * @returns {void}
  */
 function assertSeaCrashRecoveryView(serialized, view, scenario, expected) {
-  assert.equal(view.schemaVersion, 5);
+  assert.equal(view.schemaVersion, 6);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, expected.runId);
@@ -4945,7 +4943,7 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
 }
 
 /**
- * Reproduce the stable schema-v5 projection used by the packaged operator so
+ * Reproduce the stable schema-v6 projection used by the packaged operator so
  * successor responses can be compared as complete JSON values, not partial
  * shapes.
  * @param {Record<string, any>} raw - Verified rebuilt ledger run.
@@ -4957,13 +4955,21 @@ function createExpectedSeaOperatorRunView(
   kind = 'wharfie.execution-ledger.run',
 ) {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind,
     integrity: { verified: true },
     run: {
       runId: raw.run.runId,
       appId: raw.run.appId,
       revisionId: raw.run.revisionId,
+      trigger:
+        raw.run.trigger.kind === 'workflow'
+          ? {
+              kind: raw.run.trigger.kind,
+              workflowId: raw.run.trigger.workflowId,
+              planId: raw.run.trigger.planId,
+            }
+          : { kind: raw.run.trigger.kind },
       status: raw.run.status,
       version: raw.run.version,
       lastSequence: raw.run.lastSequence,
@@ -4987,6 +4993,17 @@ function createExpectedSeaOperatorRunView(
       lastSequence: invocation.lastSequence,
       createdAt: invocation.createdAt,
       updatedAt: invocation.updatedAt,
+      ...(invocation.workflow
+        ? {
+            workflow: {
+              workflowId: invocation.workflow.workflowId,
+              planId: invocation.workflow.planId,
+              continuationId: invocation.workflow.continuationId,
+              stepId: invocation.workflow.stepId,
+              stepIndex: invocation.workflow.stepIndex,
+            },
+          }
+        : {}),
     })),
     attempts: raw.attempts.map((attempt) => ({
       invocationId: attempt.invocationId,
@@ -5020,6 +5037,30 @@ function createExpectedSeaOperatorRunView(
       observedAt: event.observed_at,
       actor: event.actor,
     })),
+    ...(raw.workflowCursor
+      ? {
+          workflowCursor: {
+            runId: raw.workflowCursor.runId,
+            appId: raw.workflowCursor.appId,
+            revisionId: raw.workflowCursor.revisionId,
+            workflowId: raw.workflowCursor.workflowId,
+            planId: raw.workflowCursor.planId,
+            stepId: raw.workflowCursor.stepId,
+            stepIndex: raw.workflowCursor.stepIndex,
+            continuationId: raw.workflowCursor.continuationId,
+            invocationId: raw.workflowCursor.invocationId,
+            disposition: raw.workflowCursor.disposition,
+            outputs: raw.workflowCursor.outputs.map((output) => ({
+              stepId: output.stepId,
+              stepIndex: output.stepIndex,
+            })),
+            version: raw.workflowCursor.version,
+            lastSequence: raw.workflowCursor.lastSequence,
+            createdAt: raw.workflowCursor.createdAt,
+            updatedAt: raw.workflowCursor.updatedAt,
+          },
+        }
+      : {}),
   };
 }
 
@@ -5035,7 +5076,7 @@ function createExpectedSeaOperatorRunView(
 function assertSeaSuccessorOperatorView(serialized, source, target, expected) {
   const value = JSON.parse(serialized);
   assert.deepEqual(value, {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'wharfie.execution-ledger.effect-successor',
     integrity: { verified: true },
     effectSuccessor: {
@@ -5068,7 +5109,9 @@ function assertSeaSuccessorOperatorView(serialized, source, target, expected) {
     'businessObservation',
     'contractDigest',
     'receiptDigest',
-    '"trigger"',
+    '"planRef"',
+    '"requestRef"',
+    '"startRef"',
     '"payload"',
   ]) {
     assert.equal(
@@ -7143,6 +7186,35 @@ export default defineApp({
     env: cleanEnvironment,
   }).stdout;
   assert.match(operatorHelp, /\bretry-effect\b/);
+  assert.match(operatorHelp, /\bstart\b/);
+  const workflowStartHelp = spawnSync(
+    cleanArtifactPath,
+    ['wharfie', 'start', '--help'],
+    {
+      cwd: cleanRunDirectory,
+      encoding: 'utf8',
+      env: cleanEnvironment,
+      maxBuffer: 20 * 1024 * 1024,
+    },
+  );
+  if (workflowStartHelp.error) {
+    throw workflowStartHelp.error;
+  }
+  assert.equal(workflowStartHelp.signal, null);
+  assert.equal(workflowStartHelp.status, 0);
+  for (const option of [
+    '--workflow',
+    '--idempotency-key',
+    '--input',
+    '--caller-metadata',
+    '--json',
+  ]) {
+    assert.match(
+      workflowStartHelp.stdout,
+      new RegExp(`\\b${option.slice(2)}\\b`),
+    );
+  }
+  assert.doesNotMatch(workflowStartHelp.stdout, /\bdir\b/);
   const retryEffectHelp = spawnSync(
     cleanArtifactPath,
     ['wharfie', 'retry-effect', '--help'],

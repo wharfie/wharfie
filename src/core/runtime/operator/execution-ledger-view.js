@@ -4,7 +4,55 @@
  * evidence, fencing material, or event payloads. Those need an explicit future
  * disclosure and authorization policy.
  */
-export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 5;
+export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 6;
+
+/**
+ * Expose only trigger identity needed to distinguish run semantics. Payload
+ * references and managed-effect successor causal authority remain private.
+ * @param {Record<string, any>} trigger - Verified run trigger.
+ * @returns {Record<string, any>} - Redacted trigger identity.
+ */
+function triggerSummary(trigger) {
+  return trigger.kind === 'workflow'
+    ? {
+        kind: trigger.kind,
+        workflowId: trigger.workflowId,
+        planId: trigger.planId,
+      }
+    : { kind: trigger.kind };
+}
+
+/**
+ * Expose the exact workflow position without disclosing plan, start, or output
+ * payload references and values.
+ * @param {Record<string, any> | undefined} cursor - Verified current cursor.
+ * @returns {Record<string, any> | undefined} - Redacted workflow cursor.
+ */
+function workflowCursorSummary(cursor) {
+  if (!cursor) return undefined;
+  return {
+    runId: cursor.runId,
+    appId: cursor.appId,
+    revisionId: cursor.revisionId,
+    workflowId: cursor.workflowId,
+    planId: cursor.planId,
+    stepId: cursor.stepId,
+    stepIndex: cursor.stepIndex,
+    continuationId: cursor.continuationId,
+    invocationId: cursor.invocationId,
+    disposition: cursor.disposition,
+    outputs: cursor.outputs.map(
+      (/** @type {Record<string, any>} */ output) => ({
+        stepId: output.stepId,
+        stepIndex: output.stepIndex,
+      }),
+    ),
+    version: cursor.version,
+    lastSequence: cursor.lastSequence,
+    createdAt: cursor.createdAt,
+    updatedAt: cursor.updatedAt,
+  };
+}
 
 /**
  * Expose cancellation identity and ordering without disclosing its operator
@@ -34,6 +82,7 @@ export function createExecutionLedgerOperatorView(view) {
       runId: run.runId,
       appId: run.appId,
       revisionId: run.revisionId,
+      trigger: triggerSummary(run.trigger),
       status: run.status,
       version: run.version,
       lastSequence: run.lastSequence,
@@ -53,6 +102,17 @@ export function createExecutionLedgerOperatorView(view) {
         lastSequence: invocation.lastSequence,
         createdAt: invocation.createdAt,
         updatedAt: invocation.updatedAt,
+        ...(invocation.workflow
+          ? {
+              workflow: {
+                workflowId: invocation.workflow.workflowId,
+                planId: invocation.workflow.planId,
+                continuationId: invocation.workflow.continuationId,
+                stepId: invocation.workflow.stepId,
+                stepIndex: invocation.workflow.stepIndex,
+              },
+            }
+          : {}),
       }),
     ),
     attempts: view.attempts.map(
@@ -91,6 +151,9 @@ export function createExecutionLedgerOperatorView(view) {
       observedAt: event.observed_at,
       actor: event.actor,
     })),
+    ...(view.workflowCursor
+      ? { workflowCursor: workflowCursorSummary(view.workflowCursor) }
+      : {}),
   };
 }
 
@@ -114,9 +177,18 @@ export function formatExecutionLedgerOperatorRows(view) {
         run_id: view.run.runId,
         app_id: view.run.appId,
         revision: view.run.revisionId,
+        run_kind: view.run.trigger.kind,
         run_status: view.run.status,
         invocation_id: invocation.invocationId,
         activity: invocation.activityId,
+        workflow: invocation.workflow?.workflowId || '',
+        workflow_plan: invocation.workflow?.planId || '',
+        workflow_step: invocation.workflow?.stepId || '',
+        workflow_step_index: invocation.workflow?.stepIndex ?? '',
+        cursor_disposition:
+          view.workflowCursor?.invocationId === invocation.invocationId
+            ? view.workflowCursor.disposition
+            : '',
         invocation_status: invocation.status,
         attempt_generation: invocation.generation,
         attempt_id: attempt?.attemptId || '',

@@ -5,7 +5,10 @@ import {
   InvocationStatus,
   RunStatus,
 } from '../../lib/db/tables/execution-ledger.js';
-import { WorkflowCursorDisposition } from '../../lib/ledger/workflow-execution-contract.js';
+import {
+  WorkflowCursorDisposition,
+  createWorkflowRunId,
+} from '../../lib/ledger/workflow-execution-contract.js';
 import {
   LedgerServiceOwnerKind,
   createLedgerServiceId,
@@ -27,6 +30,7 @@ import {
 import {
   resolveManifestWorkflowActivityBinding,
   runPersistedDurableManifestWorkflowActivity,
+  startDurableManifestWorkflow,
 } from '../durable-workflow-host.js';
 import { createBuiltinManagedEffectRecoveryCatalog } from '../effects/builtin-catalog.js';
 import {
@@ -50,9 +54,12 @@ import {
   createLocalOwnerCommandServer,
   sendLocalOwnerCommand,
 } from '../operator/local-owner-command.js';
+import { cloneJsonObject } from '../json-value.js';
 import { createLedgerService } from './ledger-service.js';
 
 export const RESIDENT_ACTIVITY_SUBMIT_COMMAND = 'execution-ledger-submit';
+export const RESIDENT_WORKFLOW_START_COMMAND =
+  'execution-ledger-workflow-start';
 export const RESIDENT_ACTIVITY_DEFAULT_POLL_INTERVAL_MS = 1_000;
 export const RESIDENT_ACTIVITY_DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 export const RESIDENT_ACTIVITY_READY_WORK_LIMIT = 50;
@@ -173,6 +180,60 @@ function normalizeSubmitRequest(value) {
     appId: request.appId,
     revisionId: request.revisionId,
     activityName: request.activityName,
+    idempotencyKey: request.idempotencyKey,
+    ...(Object.prototype.hasOwnProperty.call(request, 'input')
+      ? { input: request.input }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(request, 'callerMetadata')
+      ? { callerMetadata: request.callerMetadata }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(request, 'actor')
+      ? { actor: request.actor }
+      : {}),
+  };
+}
+
+/**
+ * @param {unknown} value - Authenticated workflow-start payload.
+ * @returns {{appId: string, revisionId: string, workflowId: string, idempotencyKey: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}}} - Exact supported durable request.
+ */
+function normalizeWorkflowStartRequest(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Resident workflow start must be an object.');
+  }
+  const request = /** @type {Record<string, any>} */ (value);
+  const supported = new Set([
+    'appId',
+    'revisionId',
+    'workflowId',
+    'idempotencyKey',
+    'input',
+    'callerMetadata',
+    'actor',
+  ]);
+  for (const key of Object.keys(request)) {
+    if (!supported.has(key)) {
+      throw new TypeError(`Resident workflow start.${key} is unsupported.`);
+    }
+  }
+  if (
+    typeof request.appId !== 'string' ||
+    !request.appId ||
+    typeof request.revisionId !== 'string' ||
+    !request.revisionId ||
+    typeof request.workflowId !== 'string' ||
+    !request.workflowId ||
+    typeof request.idempotencyKey !== 'string' ||
+    !request.idempotencyKey
+  ) {
+    throw new TypeError(
+      'Resident workflow start requires appId, revisionId, workflowId, and idempotencyKey.',
+    );
+  }
+  return {
+    appId: request.appId,
+    revisionId: request.revisionId,
+    workflowId: request.workflowId,
     idempotencyKey: request.idempotencyKey,
     ...(Object.prototype.hasOwnProperty.call(request, 'input')
       ? { input: request.input }
@@ -718,7 +779,7 @@ async function findRunnableWork(options) {
  * resident owner. It hosts the authenticated submission/cancellation endpoint,
  * consumes exact ready work serially, and drains an active attempt during
  * graceful shutdown.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, submitActivity?: typeof submitDurableManifestActivity, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
 export async function runResidentActivityWorker(options) {
@@ -767,6 +828,7 @@ export async function runResidentActivityWorker(options) {
     options.runWorkflowActivity || runPersistedDurableManifestWorkflowActivity;
   const submitActivity =
     options.submitActivity || submitDurableManifestActivity;
+  const startWorkflow = options.startWorkflow || startDurableManifestWorkflow;
   const recoverActivity =
     options.recoverActivity || recoverManualLedgerActivity;
   const recoverWorkflowActivity =
@@ -824,6 +886,29 @@ export async function runResidentActivityWorker(options) {
         ledger: options.ledger,
         execution: binding.execution,
         ...activityRequest,
+      });
+      wake();
+      return result;
+    }
+    if (command.command === RESIDENT_WORKFLOW_START_COMMAND) {
+      const request = normalizeWorkflowStartRequest(command.request);
+      if (
+        request.appId !== binding.identity.appId ||
+        request.revisionId !== binding.identity.revisionId
+      ) {
+        throw new Error(
+          'Resident workflow start does not match the owned application revision.',
+        );
+      }
+      const {
+        appId: _appId,
+        revisionId: _revisionId,
+        ...workflowRequest
+      } = request;
+      const result = await startWorkflow({
+        ledger: options.ledger,
+        execution: binding.execution,
+        ...workflowRequest,
       });
       wake();
       return result;
@@ -1205,6 +1290,93 @@ export async function runLocalResidentActivityService(options) {
 }
 
 /**
+ * Route one app-scoped durable mutation to the current resident, or acquire a
+ * short-lived local owner and apply it directly. A failed socket response is
+ * never treated as non-application; the stable request is retried only after
+ * the ownership fence permits it.
+ * @param {{appId: string, requestId: string, command: string, request: Record<string, any>, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, mutateDirect: (ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore) => Promise<Readonly<Record<string, any>>>, failureMessage: string}} options - Exact local mutation request.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Durable mutation response.
+ */
+async function routeLocalResidentMutation(options) {
+  const serviceId = createLedgerServiceId({ appId: options.appId });
+  return await withExecutionLedger(
+    async (ledger, controlContext) => {
+      const ownershipStore = createLedgerServiceOwnership({
+        db: controlContext.db,
+        tableName: controlContext.tableName,
+      });
+
+      /** @returns {Promise<Readonly<Record<string, any>>>} - Direct durable mutation. */
+      const mutateDirect = async () =>
+        await withLocalLedgerServiceMutationOwnership({
+          appId: options.appId,
+          context: controlContext,
+          handler: async () => await options.mutateDirect(ledger),
+        });
+
+      /**
+       * @param {Readonly<Record<string, any>>} owner - Resident owner snapshot.
+       * @returns {Promise<Readonly<Record<string, any>>>} - Authenticated resident response.
+       */
+      const mutateThroughResident = async (owner) =>
+        /** @type {Promise<Readonly<Record<string, any>>>} */ (
+          sendLocalOwnerCommand({
+            serviceId,
+            sessionId: owner.sessionId,
+            sessionRoot: controlContext.sessionPath,
+            requestId: options.requestId,
+            command: options.command,
+            request: options.request,
+            timeoutMs: LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS,
+            maxRequestBytes: LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
+          })
+        );
+
+      let observed = await ownershipStore.getOwnership({ serviceId });
+      /** @type {unknown} */
+      let routeError;
+      if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
+        try {
+          return await mutateThroughResident(observed);
+        } catch (error) {
+          routeError = error;
+        }
+      }
+
+      try {
+        return await mutateDirect();
+      } catch (directError) {
+        // Cover the opposite race: a resident may acquire ownership after the
+        // first read but before the short-lived manual claim.
+        observed = await ownershipStore.getOwnership({ serviceId });
+        if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
+          try {
+            return await mutateThroughResident(observed);
+          } catch (retryRouteError) {
+            throw new AggregateError(
+              [
+                ...(routeError === undefined ? [] : [routeError]),
+                directError,
+                retryRouteError,
+              ],
+              options.failureMessage,
+            );
+          }
+        }
+        if (routeError !== undefined) {
+          throw new AggregateError(
+            [routeError, directError],
+            options.failureMessage,
+          );
+        }
+        throw directError;
+      }
+    },
+    { configuration: options.configuration },
+  );
+}
+
+/**
  * Persist a durable activity locally. When a resident generation owns the
  * app, route the request through its authenticated command socket; otherwise
  * acquire a short-lived manual owner and append directly. A route failure is
@@ -1219,10 +1391,6 @@ export async function submitLocalDurableManifestActivity(options) {
     throw new TypeError('submitLocalDurableManifestActivity requires options.');
   }
   const binding = resolveManifestActivityExecutionBinding(options.execution);
-  const runId = createManualLedgerRunId({
-    appId: binding.identity.appId,
-    idempotencyKey: options.idempotencyKey,
-  });
   const configuration =
     options.configuration || resolveExecutionLedgerStoreConfiguration();
   if (configuration.adapterName !== 'lmdb') {
@@ -1230,101 +1398,111 @@ export async function submitLocalDurableManifestActivity(options) {
       'Local resident submission requires the LMDB control adapter.',
     );
   }
-  const commandRequest = {
-    appId: binding.identity.appId,
-    revisionId: binding.identity.revisionId,
-    activityName: options.activityName,
-    idempotencyKey: options.idempotencyKey,
-    ...(Object.prototype.hasOwnProperty.call(options, 'input')
-      ? { input: options.input }
-      : {}),
-    ...(Object.prototype.hasOwnProperty.call(options, 'callerMetadata')
-      ? { callerMetadata: options.callerMetadata }
-      : {}),
-    ...(options.actor === undefined ? {} : { actor: options.actor }),
-  };
-  const serviceId = createLedgerServiceId({ appId: binding.identity.appId });
-
-  return await withExecutionLedger(
-    async (ledger, controlContext) => {
-      const ownershipStore = createLedgerServiceOwnership({
-        db: controlContext.db,
-        tableName: controlContext.tableName,
-      });
-
-      /** @returns {Promise<Readonly<Record<string, any>>>} - Direct durable append. */
-      const submitDirect = async () =>
-        await withLocalLedgerServiceMutationOwnership({
-          appId: binding.identity.appId,
-          context: controlContext,
-          handler: async () =>
-            await submitDurableManifestActivity({
-              ledger,
-              execution: binding.execution,
-              ...commandRequest,
-            }),
-        });
-
-      /**
-       * @param {Readonly<Record<string, any>>} owner - Resident owner snapshot.
-       * @returns {Promise<Readonly<Record<string, any>>>} - Authenticated resident response.
-       */
-      const submitToResident = async (owner) =>
-        /** @type {Promise<Readonly<Record<string, any>>>} */ (
-          sendLocalOwnerCommand({
-            serviceId,
-            sessionId: owner.sessionId,
-            sessionRoot: controlContext.sessionPath,
-            requestId: runId,
-            command: RESIDENT_ACTIVITY_SUBMIT_COMMAND,
-            request: commandRequest,
-            timeoutMs: LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS,
-            maxRequestBytes: LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
-          })
-        );
-
-      let observed = await ownershipStore.getOwnership({ serviceId });
-      /** @type {unknown} */
-      let routeError;
-      if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
-        try {
-          return await submitToResident(observed);
-        } catch (error) {
-          routeError = error;
-        }
-      }
-
-      try {
-        return await submitDirect();
-      } catch (directError) {
-        // Cover the opposite race: a resident may have acquired ownership
-        // after our first read but before the short-lived manual claim.
-        observed = await ownershipStore.getOwnership({ serviceId });
-        if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
-          try {
-            return await submitToResident(observed);
-          } catch (retryRouteError) {
-            throw new AggregateError(
-              [
-                ...(routeError === undefined ? [] : [routeError]),
-                directError,
-                retryRouteError,
-              ],
-              'Could not route or directly persist the resident activity submission.',
-            );
-          }
-        }
-        if (routeError !== undefined) {
-          throw new AggregateError(
-            [routeError, directError],
-            'Could not route or directly persist the resident activity submission.',
-          );
-        }
-        throw directError;
-      }
-    },
-    { configuration },
+  const commandRequest = normalizeSubmitRequest(
+    cloneJsonObject(
+      {
+        appId: binding.identity.appId,
+        revisionId: binding.identity.revisionId,
+        activityName: options.activityName,
+        idempotencyKey: options.idempotencyKey,
+        ...(Object.prototype.hasOwnProperty.call(options, 'input')
+          ? { input: options.input }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(options, 'callerMetadata')
+          ? { callerMetadata: options.callerMetadata }
+          : {}),
+        ...(options.actor === undefined ? {} : { actor: options.actor }),
+      },
+      'Local durable activity submission',
+    ),
   );
+  const runId = createManualLedgerRunId({
+    appId: binding.identity.appId,
+    idempotencyKey: commandRequest.idempotencyKey,
+  });
+  return await routeLocalResidentMutation({
+    appId: binding.identity.appId,
+    requestId: runId,
+    command: RESIDENT_ACTIVITY_SUBMIT_COMMAND,
+    request: commandRequest,
+    configuration,
+    mutateDirect: async (ledger) =>
+      await submitDurableManifestActivity({
+        ledger,
+        execution: binding.execution,
+        ...commandRequest,
+      }),
+    failureMessage:
+      'Could not route or directly persist the resident activity submission.',
+  });
+}
+
+/**
+ * Persist one exact manifest workflow locally using the same authenticated
+ * resident-or-short-lived-owner fence as manual activity submission.
+ * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, workflowId: string, idempotencyKey: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} options - Local durable workflow start.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Durable workflow start result.
+ */
+export async function startLocalDurableManifestWorkflow(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('startLocalDurableManifestWorkflow requires options.');
+  }
+  const binding = resolveManifestActivityExecutionBinding(options.execution);
+  const configuration =
+    options.configuration || resolveExecutionLedgerStoreConfiguration();
+  if (configuration.adapterName !== 'lmdb') {
+    throw new Error('Local workflow start requires the LMDB control adapter.');
+  }
+  const commandRequest = normalizeWorkflowStartRequest(
+    cloneJsonObject(
+      {
+        appId: binding.identity.appId,
+        revisionId: binding.identity.revisionId,
+        workflowId: options.workflowId,
+        idempotencyKey: options.idempotencyKey,
+        ...(Object.prototype.hasOwnProperty.call(options, 'input')
+          ? { input: options.input }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(options, 'callerMetadata')
+          ? { callerMetadata: options.callerMetadata }
+          : {}),
+        ...(options.actor === undefined ? {} : { actor: options.actor }),
+      },
+      'Local durable workflow start',
+    ),
+  );
+  const runId = createWorkflowRunId({
+    appId: binding.identity.appId,
+    idempotencyKey: commandRequest.idempotencyKey,
+  });
+  return await routeLocalResidentMutation({
+    appId: binding.identity.appId,
+    requestId: runId,
+    command: RESIDENT_WORKFLOW_START_COMMAND,
+    request: commandRequest,
+    configuration,
+    mutateDirect: async (ledger) =>
+      await startDurableManifestWorkflow({
+        ledger,
+        execution: binding.execution,
+        workflowId: commandRequest.workflowId,
+        idempotencyKey: commandRequest.idempotencyKey,
+        ...(Object.prototype.hasOwnProperty.call(commandRequest, 'input')
+          ? { input: commandRequest.input }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(
+          commandRequest,
+          'callerMetadata',
+        )
+          ? { callerMetadata: commandRequest.callerMetadata }
+          : {}),
+        ...(commandRequest.actor === undefined
+          ? {}
+          : { actor: commandRequest.actor }),
+      }),
+    failureMessage:
+      'Could not route or directly persist the resident workflow start.',
+  });
 }
 
 export default runResidentActivityWorker;

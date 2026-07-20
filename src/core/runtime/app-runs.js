@@ -404,6 +404,33 @@ export function getManifestActivityDefinition(options) {
 }
 
 /**
+ * @param {any} manifest - Validated application manifest.
+ * @returns {Record<string, any>} - Declared workflow definitions.
+ */
+export function getManifestWorkflows(manifest) {
+  return isObjectRecord(manifest?.workflows) ? manifest.workflows : {};
+}
+
+/**
+ * @param {any} manifest - Validated application manifest.
+ * @returns {string[]} - Canonically ordered workflow names.
+ */
+export function getManifestWorkflowNames(manifest) {
+  return Object.keys(getManifestWorkflows(manifest)).sort(
+    compareCanonicalStrings,
+  );
+}
+
+/**
+ * @param {{manifest: any, workflowName: string}} options - Manifest lookup.
+ * @returns {any | undefined} - Exact declared workflow definition.
+ */
+export function getManifestWorkflowDefinition(options) {
+  assertLogicalId(options.workflowName, 'workflowName');
+  return getManifestWorkflows(options.manifest)[options.workflowName];
+}
+
+/**
  * @param {unknown} value - Candidate complete source execution identity.
  * @returns {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, verifyRuntime: () => Promise<void> }} - Validated sealed source identity.
  */
@@ -1044,6 +1071,9 @@ export default {
   getManifestActivities,
   getManifestActivityDefinition,
   getManifestActivityNames,
+  getManifestWorkflowDefinition,
+  getManifestWorkflowNames,
+  getManifestWorkflows,
   ActivityAttemptOutcomeError,
   invokeEmbeddedManifestActivityAttempt,
   invokeManifestActivity,

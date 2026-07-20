@@ -262,6 +262,22 @@ async function loadHost() {
 }
 
 describe('durable workflow manifest binding', () => {
+  it('resolves one fully dispatchable manifest workflow start', async () => {
+    const { resolveManifestWorkflowStartBinding } = await loadHost();
+    const fixture = bindingFixture();
+
+    expect(
+      resolveManifestWorkflowStartBinding({
+        identity: fixture.identity,
+        workflowId: WORKFLOW_ID,
+      }),
+    ).toEqual({
+      planId: fixture.planId,
+      planPayload: fixture.planPayload,
+      dispatchSupported: true,
+    });
+  });
+
   it('resolves the exact manifest workflow plan and activity step', async () => {
     const { resolveManifestWorkflowActivityBinding } = await loadHost();
     const fixture = bindingFixture();
@@ -377,6 +393,167 @@ describe('durable workflow manifest binding', () => {
     ).rejects.toThrow(/cannot dispatch before its continuation kind/i);
     expect(ledger.rebuildRun).not.toHaveBeenCalled();
     expect(physicalAttempts).toEqual([]);
+  });
+});
+
+describe('durable workflow start host', () => {
+  it('creates and exactly replays one manifest-bound workflow start', async () => {
+    const { startDurableManifestWorkflow } = await loadHost();
+    const root = mkdtempSync(join(tmpdir(), 'wharfie-workflow-start-host-'));
+    const fixture = bindingFixture();
+    const db = createVanillaDB({ path: join(root, 'db') });
+    const payloadStore = createLocalExecutionPayloadStore({
+      path: join(root, 'payloads'),
+      storeId: 'durable-workflow-start-host-test',
+    });
+    const ledger = createExecutionLedger({
+      db,
+      tableName: 'durable-workflow-start-host-test',
+      payloadStore,
+    });
+    const idempotencyKey = 'public-workflow-start';
+    const runId = createWorkflowRunId({
+      appId: APP_ID,
+      idempotencyKey,
+    });
+    const request = {
+      ledger,
+      execution: fixture.execution,
+      workflowId: WORKFLOW_ID,
+      idempotencyKey,
+      input: { name: 'Ada' },
+      callerMetadata: { source: 'workflow-start-host-test' },
+      actor: { kind: 'workflow-operator', id: fixture.identity.revisionId },
+    };
+
+    try {
+      const created = await startDurableManifestWorkflow(request);
+      const replayed = await startDurableManifestWorkflow(request);
+
+      expect(created).toMatchObject({
+        appId: APP_ID,
+        revisionId: fixture.identity.revisionId,
+        workflowId: WORKFLOW_ID,
+        planId: fixture.planId,
+        idempotencyKey,
+        runId,
+        outcome: {
+          applied: true,
+          run: {
+            runId,
+            trigger: {
+              kind: 'workflow',
+              workflowId: WORKFLOW_ID,
+              planId: fixture.planId,
+            },
+            status: RunStatus.RUNNING,
+          },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+            stepId: STEP_ID,
+            stepIndex: 0,
+          },
+          invocation: {
+            activityId: ACTIVITY_ID,
+            status: InvocationStatus.RUNNABLE,
+          },
+        },
+      });
+      expect(replayed).toMatchObject({
+        runId,
+        planId: fixture.planId,
+        outcome: { applied: false },
+      });
+      await expect(ledger.getEvents(runId)).resolves.toHaveLength(1);
+      await expect(
+        ledger.listReadyWork({
+          appId: APP_ID,
+          revisionId: fixture.identity.revisionId,
+          observedAt: Number.MAX_SAFE_INTEGER,
+          limit: 10,
+        }),
+      ).resolves.toMatchObject({
+        items: [
+          expect.objectContaining({
+            runId,
+            stepId: STEP_ID,
+          }),
+        ],
+      });
+    } finally {
+      await db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a plan with an unsupported continuation before ledger access', async () => {
+    const { startDurableManifestWorkflow } = await loadHost();
+    const fixture = bindingFixture(
+      makeEmbeddedExecution({
+        steps: [ACTIVITY_STEP, { id: 'pause', kind: 'timer', delayMs: 1_000 }],
+      }),
+    );
+    const ledger = { createWorkflowRun: jest.fn() };
+    const ledgerStore = /** @type {any} */ (ledger);
+
+    await expect(
+      startDurableManifestWorkflow({
+        ledger: ledgerStore,
+        execution: fixture.execution,
+        workflowId: WORKFLOW_ID,
+        idempotencyKey: 'unsupported-public-start',
+      }),
+    ).rejects.toThrow(/cannot start until every declared continuation kind/i);
+    expect(ledger.createWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('snapshots caller-owned start fields before async source verification', async () => {
+    const { startDurableManifestWorkflow } = await loadHost();
+    const fixture = bindingFixture();
+    const originalLedger = {
+      createWorkflowRun: jest.fn(
+        async (/** @type {Record<string, any>} */ request) => ({
+          applied: true,
+          run: { runId: request.runId },
+          workflowCursor: { planId: fixture.planId },
+          invocation: {},
+        }),
+      ),
+    };
+    const replacementLedger = { createWorkflowRun: jest.fn() };
+    const execution = makePreparedExecution(fixture.execution, async () => {
+      request.ledger = replacementLedger;
+      request.workflowId = 'mutated-workflow';
+      request.idempotencyKey = 'mutated-key';
+      request.input.name = 'Mutated';
+      request.callerMetadata.source = 'mutated';
+      request.actor.id = 'mutated-actor';
+    });
+    const request = /** @type {Record<string, any>} */ ({
+      ledger: originalLedger,
+      execution,
+      workflowId: WORKFLOW_ID,
+      idempotencyKey: 'snapshotted-start',
+      input: { name: 'Ada' },
+      callerMetadata: { source: 'original' },
+      actor: { kind: 'workflow-operator', id: 'original-actor' },
+    });
+
+    await startDurableManifestWorkflow(/** @type {any} */ (request));
+
+    expect(originalLedger.createWorkflowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: createWorkflowRunId({
+          appId: APP_ID,
+          idempotencyKey: 'snapshotted-start',
+        }),
+        workflowId: WORKFLOW_ID,
+        input: { name: 'Ada' },
+        callerMetadata: { source: 'original' },
+        actor: { kind: 'workflow-operator', id: 'original-actor' },
+      }),
+    );
+    expect(replacementLedger.createWorkflowRun).not.toHaveBeenCalled();
   });
 });
 

@@ -1,12 +1,15 @@
 import { prepareApplicationRevision } from './compile-application-revision.js';
 import { loadApp } from './load-app.js';
-import { getManifestActivityNames } from '../../core/runtime/app-runs.js';
+import {
+  getManifestActivityNames,
+  getManifestWorkflowNames,
+} from '../../core/runtime/app-runs.js';
 
 /**
  * Load and seal one source application for a durable source command. When an
- * activity option is present, fail before compilation unless the exact named
- * activity belongs to the manifest.
- * @param {{dir?: string, activity?: string}} [options] - Source command options.
+ * activity or workflow option is present, fail before compilation unless the
+ * exact name belongs to the manifest.
+ * @param {{dir?: string, activity?: string, workflow?: string}} [options] - Source command options.
  * @returns {Promise<import('../../core/runtime/operator/durable-run-command.js').DurableRunExecutionHandle>} - Prepared immutable source execution.
  */
 export async function loadPreparedDurableExecution(options = {}) {
@@ -18,6 +21,16 @@ export async function loadPreparedDurableExecution(options = {}) {
       throw new Error(
         `Activity '${options.activity}' was not found in ${appDir}. Available activities: ${
           availableActivities.join(', ') || '(none)'
+        }`,
+      );
+    }
+  }
+  if (typeof options.workflow === 'string') {
+    const availableWorkflows = getManifestWorkflowNames(loadedApp.manifest);
+    if (!availableWorkflows.includes(options.workflow)) {
+      throw new Error(
+        `Workflow '${options.workflow}' was not found in ${appDir}. Available workflows: ${
+          availableWorkflows.join(', ') || '(none)'
         }`,
       );
     }

@@ -111,7 +111,7 @@ abandoned authored activity. The source stays `BLOCKED` / `UNCERTAIN`.
 The public packaged command's Node-absent relocated-SEA crash/recovery matrix
 passes across every successor publication and transaction boundary, including
 redaction and response-loss replay. Generic handler retries, compensation,
-workflow scheduling, and wider exactly-once claims remain unfinished.
+scheduled workflow starts, and wider exactly-once claims remain unfinished.
 Earlier V8 real-child coverage exercises seven source/core durable-run
 `SIGKILL` boundaries and three mixed-set recovery
 boundaries. A relocated SEA with Node absent from `PATH` proves the complete
@@ -124,9 +124,12 @@ states, and drains gracefully through the transactional ready-work index. The
 internal activity-headed workflow path is durable and rebuildable; the resident
 now executes exact manifest-bound ordinary activity chains, persists outputs,
 advances their cursor atomically, releases unstarted claims after restart, and
-blocks lost started attempts without redispatch. Public workflow start,
-inspection, and reconciliation commands, timers, signals, workflow
-cancellation, and schedules remain unfinished. OS service
+blocks lost started attempts without redispatch. Source `wharfie ops start` and
+packaged `<app> wharfie start` now persist an activity-only manifest workflow,
+and the shared exact-run inspection, recovery, and evidence-reconciliation
+commands understand its redacted cursor and recovery authority. Timers,
+signals, managed-effect successor steps, workflow cancellation, and schedules
+remain unfinished. OS service
 installation/startup, multi-host leases and heartbeats, and public run
 history/listing are also later work. The npm package remains deliberately
 private. It is not ready for production use.
@@ -219,12 +222,14 @@ targets and workflows are optional. A workflow is one to 64 ordered plain-data
 activity, timer, or signal steps; activity inputs explicitly select the
 workflow input, a JSON literal, or one earlier step's persisted output. The
 manifest compiler and packager bind that definition to the revision. The
-internal ledger can atomically start a workflow whose first step is an activity
-using `workflow-input` or `literal`; the resident executes supported ordinary
-activity chains and atomically advances their persisted cursor. Public
-workflow start/inspection/reconciliation commands, timers, signals, and
-cursor-aware cancellation are not implemented yet. Application- and
-activity-level `resources` are not part
+shared source and packaged `start` command accepts a workflow only when its
+entire plan is currently executable as ordinary activity steps; it rejects a
+timer, signal, or managed-effect successor before creating durable state. The
+resident executes those accepted activity chains and atomically advances their
+persisted cursor. Exact-run `inspect`, confirmed `recover`, and evidence-backed
+`reconcile` are workflow-aware. Cursor-aware workflow cancellation is not
+implemented, so the generic `cancel` command rejects workflow runs.
+Application- and activity-level `resources` are not part
 of the schema and are rejected as unknown fields. A caller-metadata object may
 contain a property named `resources`, but it is ordinary inert JSON—not an
 injection request. Managed effects are a separate finite API on
@@ -246,6 +251,8 @@ The source commands prepare and pin the application revision from `--dir`:
 ```bash
 wharfie ops submit --dir ./path/to/app --activity greet \
   --idempotency-key <stable-key> --input '{"name":"Ada"}'
+wharfie ops start --workflow greet --dir ./path/to/app \
+  --idempotency-key <stable-workflow-key> --input '{"name":"Ada"}'
 wharfie ops worker --dir ./path/to/app
 ```
 
@@ -255,14 +262,22 @@ override:
 ```bash
 <app> wharfie submit --activity greet \
   --idempotency-key <stable-key> --input '{"name":"Ada"}'
+<app> wharfie start --workflow greet \
+  --idempotency-key <stable-workflow-key> --input '{"name":"Ada"}'
 <app> wharfie worker
 ```
 
-`submit` is durable and does not require a live worker. Reusing the same
-idempotency key with the identical request returns the retained run; changing
-the request conflicts. A matching resident wakes immediately when it accepts
-the authenticated request, while an offline request remains `RUNNABLE` until
-that exact app/revision worker starts. The worker is deliberately serial. On
+`submit` and `start` are durable and do not require a live worker. Reusing the
+same idempotency key with the identical activity or workflow request returns
+the retained run; changing the request conflicts. A matching resident wakes
+immediately when it accepts the authenticated request, while offline work
+remains `RUNNABLE` until that exact app/revision worker starts. The workflow
+start output includes the derived run ID, immutable revision, workflow and
+current cursor position without exposing inputs or payload references. The
+shared `inspect --json` surface emits a schema-v6 redacted manual/workflow
+trigger and workflow cursor; confirmed `recover` and evidence-backed
+`reconcile` return the same safe view around their result. The worker is
+deliberately serial. On
 `SIGINT` or `SIGTERM` it stops admitting commands and claims, records
 `STOPPING`, allows the active attempt up to 30 seconds to finish naturally,
 then retains ownership until the attempt and admitted command handlers settle.
@@ -272,8 +287,9 @@ still returns a supported terminal.
 
 This is a foreground resident runtime, not service installation. Wharfie does
 not yet install startup-on-boot units or provide schedules, timer/signal
-workflow continuations, multi-host reassignment, or public workflow and
-run-history/listing commands.
+workflow continuations, managed-effect workflow successors, cursor-aware
+workflow cancellation, multi-host reassignment, or public run-history/listing
+commands.
 
 ## Reconcile one uncertain managed effect
 

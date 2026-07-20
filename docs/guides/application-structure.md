@@ -78,9 +78,14 @@ and selects its entire input from `{ kind: 'workflow-input' }`, a JSON
 integer milliseconds; a signal's name is its step ID. Branches, executable
 deciders, loops, parallel steps, and early-signal buffering are not part of
 this contract. The complete `workflows` map is limited to 1 MiB of exact UTF-8
-JSON. The compiler and packager preserve these definitions now; the
-durable workflow start/signal execution commands are the next runtime slice and
-are not yet public.
+JSON. The compiler and packager preserve these definitions now. The public
+source `wharfie ops start --workflow <workflow-id>` and packaged
+`<app> wharfie start --workflow <workflow-id>` commands can persist a plan
+composed entirely of ordinary activity steps. A timer, signal, or
+managed-effect successor step is rejected before durable run state is created.
+Exact-run inspection, confirmed recovery, and evidence-backed reconciliation
+are also workflow-aware. Workflow cancellation, timer/signal execution, and
+schedules remain later runtime slices.
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains

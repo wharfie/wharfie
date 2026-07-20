@@ -27,6 +27,7 @@ import {
   RunStatus,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
+import { createWorkflowRunId } from '../../src/core/lib/ledger/workflow-execution-contract.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import {
   APPLICATION_STATE_ADAPTER_DESCRIPTOR,
@@ -410,6 +411,7 @@ describe('shared execution-ledger operator boundary', () => {
         runId: 'run-with-cancellation',
         appId: 'application-a',
         revisionId: RUN_REVISION_ID,
+        trigger: { kind: 'manual' },
         status: 'RUNNING',
         version: 4,
         lastSequence: 4,
@@ -441,7 +443,7 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       run: {
         cancellationRequest: {
           requestId: 'cancel-request-1',
@@ -458,6 +460,138 @@ describe('shared execution-ledger operator boundary', () => {
     });
     expect(JSON.stringify(view)).not.toContain('reason-secret');
     expect(JSON.stringify(view)).not.toContain('reason-details-secret');
+  });
+
+  it('exposes exact workflow position while redacting payload and fence authority', () => {
+    const view = createExecutionLedgerOperatorView({
+      run: {
+        runId: 'workflow-run',
+        appId: 'application-a',
+        revisionId: RUN_REVISION_ID,
+        trigger: {
+          kind: 'workflow',
+          workflowId: 'main',
+          planId: 'plan-1',
+          planRef: { payloadId: 'plan-payload-secret' },
+        },
+        requestRef: { payloadId: 'start-payload-secret' },
+        status: 'BLOCKED',
+        version: 4,
+        lastSequence: 4,
+        createdAt: 1,
+        updatedAt: 4,
+      },
+      workflowCursor: {
+        runId: 'workflow-run',
+        appId: 'application-a',
+        revisionId: RUN_REVISION_ID,
+        workflowId: 'main',
+        planId: 'plan-1',
+        planRef: { payloadId: 'plan-payload-secret' },
+        startRef: { payloadId: 'start-payload-secret' },
+        stepId: 'second',
+        stepIndex: 1,
+        continuationId: 'continuation-2',
+        invocationId: 'invocation-2',
+        disposition: 'ACTIVITY_UNCERTAIN',
+        outputs: [
+          {
+            stepId: 'first',
+            stepIndex: 0,
+            outputRef: { payloadId: 'output-payload-secret' },
+          },
+        ],
+        version: 4,
+        lastSequence: 4,
+        createdAt: 1,
+        updatedAt: 4,
+      },
+      invocations: [
+        {
+          invocationId: 'invocation-2',
+          activityId: 'second-activity',
+          requestRef: { payloadId: 'activity-input-secret' },
+          status: 'UNCERTAIN',
+          generation: 1,
+          version: 4,
+          lastSequence: 4,
+          createdAt: 2,
+          updatedAt: 4,
+          uncertainty: { message: 'uncertainty-reason-secret' },
+          workflow: {
+            workflowId: 'main',
+            planId: 'plan-1',
+            continuationId: 'continuation-2',
+            stepId: 'second',
+            stepIndex: 1,
+          },
+        },
+      ],
+      attempts: [
+        {
+          invocationId: 'invocation-2',
+          attemptId: 'attempt-1',
+          status: 'ABANDONED',
+          generation: 1,
+          version: 2,
+          fencingToken: 'fencing-token-secret',
+          claimedAt: 2,
+          updatedAt: 4,
+          lastSequence: 4,
+        },
+      ],
+      effects: [],
+      events: [
+        {
+          sequence: 4,
+          type: 'workflow-activity-became-uncertain',
+          observed_at: 4,
+          actor: { kind: 'resident', id: 'worker' },
+          payload: { evidence: 'event-payload-secret' },
+        },
+      ],
+    });
+
+    expect(view).toMatchObject({
+      schemaVersion: 6,
+      run: {
+        trigger: { kind: 'workflow', workflowId: 'main', planId: 'plan-1' },
+      },
+      workflowCursor: {
+        runId: 'workflow-run',
+        workflowId: 'main',
+        planId: 'plan-1',
+        stepId: 'second',
+        stepIndex: 1,
+        continuationId: 'continuation-2',
+        invocationId: 'invocation-2',
+        disposition: 'ACTIVITY_UNCERTAIN',
+        outputs: [{ stepId: 'first', stepIndex: 0 }],
+      },
+      invocations: [
+        {
+          workflow: {
+            workflowId: 'main',
+            planId: 'plan-1',
+            continuationId: 'continuation-2',
+            stepId: 'second',
+            stepIndex: 1,
+          },
+        },
+      ],
+    });
+    const serialized = JSON.stringify(view);
+    for (const secret of [
+      'plan-payload-secret',
+      'start-payload-secret',
+      'output-payload-secret',
+      'activity-input-secret',
+      'uncertainty-reason-secret',
+      'fencing-token-secret',
+      'event-payload-secret',
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
   });
 
   it('rejects cross-app inspection, recovery, and reconciliation before changing the run', async () => {
@@ -544,6 +678,57 @@ describe('shared execution-ledger operator boundary', () => {
         },
       });
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects workflow cancellation before owner routing or durable mutation', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-workflow-cancel-'),
+    );
+    const configuration = createLmdbConfiguration(
+      root,
+      'operator-workflow-cancel',
+    );
+    const { db, ledger } = createLmdbLedger(configuration);
+    const appId = 'operator-workflow-cancel-app';
+    const runId = createWorkflowRunId({
+      appId,
+      idempotencyKey: 'unsupported-cancellation',
+    });
+    try {
+      await ledger.createWorkflowRun({
+        runId,
+        appId,
+        revisionId: RUN_REVISION_ID,
+        workflowId: 'cancel-workflow',
+        definition: {
+          steps: [
+            {
+              id: 'work',
+              kind: 'activity',
+              activity: 'work',
+              input: { kind: 'workflow-input' },
+            },
+          ],
+        },
+        input: {},
+        callerMetadata: {},
+        transitionId: 'create-workflow-cancel-test',
+      });
+      const before = await ledger.rebuildRun(runId);
+
+      await expect(
+        cancelExecutionLedgerRun({
+          runId,
+          requestId: 'workflow-cancel-request',
+          expectedAppId: appId,
+          configuration,
+        }),
+      ).rejects.toThrow(/workflow cancellation is not implemented/i);
+      await expect(ledger.rebuildRun(runId)).resolves.toEqual(before);
+    } finally {
+      await db.close();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -805,7 +990,7 @@ describe('shared execution-ledger operator boundary', () => {
         result.view,
       );
       expect(operatorView).toMatchObject({
-        schemaVersion: 5,
+        schemaVersion: 6,
         recovery: {
           action: 'settled-managed-effect-set',
           changed: true,
@@ -1147,7 +1332,7 @@ describe('shared execution-ledger operator boundary', () => {
           result.view,
         );
       expect(operatorView).toMatchObject({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'wharfie.execution-ledger.effect-reconciliation',
         effectReconciliation: result.reconciliation,
         run: { status: RunStatus.BLOCKED },
@@ -1265,7 +1450,7 @@ describe('shared execution-ledger operator boundary', () => {
         result.targetView,
       );
       expect(operatorView).toMatchObject({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'wharfie.execution-ledger.effect-successor',
         effectSuccessor: {
           successorId,

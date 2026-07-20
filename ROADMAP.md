@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Resident cursor-guarded workflow activity dispatch and conservative restart recovery implemented; public commands, timers, signals, and cursor-aware cancellation next · **Last updated:** 2026-07-19
+**Status:** Public activity-only workflow start plus workflow-aware inspection, recovery, and reconciliation implemented; real crash proof, cancellation, timers, and signals next · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -210,6 +210,14 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       and is never redispatched. Shutdown stops admission immediately, retains
       a bounded physical drain, and does not expose manual cancellation or
       managed-effect authority to workflow attempts.
+- [x] Mount shared source `wharfie ops start` and packaged `<app> wharfie start`
+      commands for plans composed entirely of ordinary activity steps. Stable
+      idempotency keys converge across resident-routed and offline short-owner
+      starts, while timer, signal, and managed-effect successor plans fail
+      before ledger creation. Extend generic exact-run inspection, confirmed
+      recovery, and evidence reconciliation to workflow trigger/cursor state;
+      preserve response-loss replay against the original uncertainty event and
+      reject workflow cancellation until it has cursor-aware authority.
 - [x] Delete the superseded mutable Operation/Action graph, operation table,
       queue-run bridge, and second writable run model. Manual durable execution
       established the distinction between a caller idempotency key and the
@@ -255,10 +263,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       redispatch a retained `STARTED` effect, and attempt terminals cannot omit
       or invent effect state. V4 records and its V2 directory remain inert.
 - [ ] Extend the workflow ledger from ordinary activity continuations to
-      persisted timer/signal decisions, cursor-aware cancellation, cancelled
-      reconciliation under durable cancellation authority, and the remaining
-      public operator actions. Resident activity dispatch plus direct and
-      reconciled `failed` and `protocol-failed` terminals are complete.
+      persisted timer/signal decisions, cursor-aware cancellation, and cancelled
+      reconciliation under durable cancellation authority. Activity-only start,
+      workflow-aware inspection/recovery/reconciliation, resident dispatch, and
+      direct or reconciled `failed` and `protocol-failed` terminals are complete.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
@@ -425,12 +433,15 @@ maintaining the workflow cursor and ready-work row. Direct and reconciled
 create no output, successor, or ready row. The resident now dispatches exact
 manifest-bound workflow `ACTIVITY` rows, recovers `RECOVERY` rows without
 redispatching lost started work, and runs supported activity-to-activity chains
-serially. No public workflow operator surface is mounted yet.
+serially. Shared source and packaged `start` commands now persist only plans
+that are executable end to end as ordinary activities. Generic `inspect`,
+confirmed `recover`, and evidence-backed `reconcile` expose or mutate the exact
+workflow cursor without leaking payloads; generic `cancel` rejects workflows.
 
-1. Mount shared source/packaged workflow start, inspect, and evidence
-   reconciliation, then prove real process-kill recovery through the relocated
-   SEA. A crash after `STARTED` but before terminal delivery may remain visibly
-   `BLOCKED` when no trustworthy terminal evidence can be recovered.
+1. Prove the public workflow start and recovery path across real process-kill
+   boundaries through a relocated SEA with Node absent from `PATH`. A crash
+   after `STARTED` but before terminal delivery may remain visibly `BLOCKED`
+   when no trustworthy terminal evidence can be recovered.
 2. Add run-level cursor-aware workflow cancellation, including races with
    activity success and blocked recovery; broaden reconciliation only when each
    cancelled or deadline outcome has an explicit policy. `cancelled` and

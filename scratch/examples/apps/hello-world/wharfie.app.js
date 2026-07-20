@@ -32,4 +32,22 @@ export default defineApp({
       },
     },
   },
+  workflows: {
+    'echo-twice': {
+      steps: [
+        {
+          id: 'echo-first',
+          kind: 'activity',
+          activity: 'echo-event',
+          input: { kind: 'workflow-input' },
+        },
+        {
+          id: 'echo-second',
+          kind: 'activity',
+          activity: 'echo-event',
+          input: { kind: 'step-output', step: 'echo-first' },
+        },
+      ],
+    },
+  },
 });

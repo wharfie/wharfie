@@ -39,6 +39,8 @@ const staleClaims = [
   'runtime resource needs',
   'persisting local operations',
   'pure TypeScript path has a clean generated-SEA release proof',
+  'There is no public workflow-start command yet',
+  'schema-v5 redacted run view',
 ];
 
 describe('docs command surface', () => {
@@ -129,9 +131,15 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops submit --activity <activity-id> --dir ./path/to/app',
     );
+    expect(quickstart).toContain(
+      'wharfie ops start --workflow <workflow-id> --dir ./path/to/app',
+    );
     expect(quickstart).toContain('wharfie ops worker --dir ./path/to/app');
     expect(quickstart).toContain(
       '<app> wharfie submit --activity <activity-id>',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie start --workflow <workflow-id>',
     );
     expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
@@ -165,6 +173,36 @@ describe('docs command surface', () => {
     );
     expect(quickstart).not.toContain('wharfie ops list');
     expect(quickstart).not.toContain('<app> wharfie ops cancel');
+    expect(quickstart).not.toContain('<app> wharfie ops start');
+  });
+
+  it('documents the public activity-only workflow operator boundary', async () => {
+    const documents = await Promise.all(
+      [
+        'README.md',
+        'docs/README.md',
+        'docs/guides/quickstart.md',
+        'docs/guides/application-structure.md',
+        'src/cli/README.md',
+      ].map((relativePath) =>
+        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ),
+    );
+
+    for (const document of documents) {
+      expect(document).toContain('wharfie ops start');
+      expect(document).toContain('<app> wharfie start');
+      expect(document).toMatch(/ordinary activity steps|ordinary activities/);
+      expect(document).toMatch(/workflow-aware|workflow cursor/);
+      expect(document).toMatch(/workflow cancellation|workflow `cancel`/i);
+      expect(document).toMatch(/timer|signal/);
+    }
+
+    const quickstart = documents[2];
+    expect(quickstart).toContain('schema-v6 redacted run view');
+    expect(quickstart).toContain('reused: true');
+    expect(quickstart).toContain('original uncertainty event');
+    expect(quickstart).not.toContain('schema-v5 redacted run view');
   });
 
   it('documents the trusted redacted effect-reconciliation contract', async () => {

@@ -16,6 +16,7 @@ import {
   WORKFLOW_PLAN_PAYLOAD_KIND,
   WorkflowCursorDisposition,
   createWorkflowPlanId,
+  createWorkflowRunId,
 } from '../../../src/core/lib/ledger/workflow-execution-contract.js';
 import {
   LedgerServiceOwnerKind,
@@ -42,6 +43,7 @@ import {
 import {
   RESIDENT_ACTIVITY_READY_WORK_LIMIT,
   RESIDENT_ACTIVITY_SUBMIT_COMMAND,
+  RESIDENT_WORKFLOW_START_COMMAND,
   runResidentActivityWorker,
 } from '../../../src/core/runtime/services/resident-activity-worker.js';
 
@@ -52,6 +54,7 @@ import {
 /** @typedef {typeof import('../../../src/core/runtime/durable-activity-host.js').runPersistedDurableManifestActivity} RunActivity */
 /** @typedef {typeof import('../../../src/core/runtime/durable-workflow-host.js').runPersistedDurableManifestWorkflowActivity} RunWorkflowActivity */
 /** @typedef {typeof import('../../../src/core/runtime/durable-activity-host.js').submitDurableManifestActivity} SubmitActivity */
+/** @typedef {typeof import('../../../src/core/runtime/durable-workflow-host.js').startDurableManifestWorkflow} StartWorkflow */
 /** @typedef {typeof import('../../../src/core/runtime/manual-ledger-run.js').recoverManualLedgerActivity} RecoverActivity */
 /** @typedef {typeof import('../../../src/core/runtime/workflow-ledger-run.js').recoverWorkflowLedgerActivity} RecoverWorkflowActivity */
 /** @typedef {typeof import('../../../src/core/runtime/operator/local-owner-command.js').createLocalOwnerCommandServer} CommandServerFactory */
@@ -485,6 +488,11 @@ function asRunWorkflowActivity(mock) {
 /** @param {unknown} mock @returns {SubmitActivity} */
 function asSubmitActivity(mock) {
   return /** @type {SubmitActivity} */ (mock);
+}
+
+/** @param {unknown} mock @returns {StartWorkflow} */
+function asStartWorkflow(mock) {
+  return /** @type {StartWorkflow} */ (mock);
 }
 
 /** @param {unknown} mock @returns {RecoverActivity} */
@@ -1877,6 +1885,239 @@ describe('resident activity worker', () => {
     expect(submitActivity).not.toHaveBeenCalled();
     controller.abort();
     await expect(running).resolves.toEqual({ processed: 0 });
+  });
+
+  it('starts an exact authenticated workflow and wakes idle dispatch', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const idempotencyKey = 'resident-workflow-start';
+    const runId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey,
+    });
+    const planId = workflowPlanId(execution);
+    let started = false;
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: started ? [makeWorkflowRow({ ...harness, runId })] : [],
+      })),
+      rebuildRun: jest.fn(async () =>
+        started ? makeWorkflowView({ ...harness, runId, planId }) : null,
+      ),
+    };
+    const accepted = Object.freeze({ accepted: true, runId });
+    const startWorkflow = jest.fn(
+      async (/** @type {Parameters<StartWorkflow>[0]} */ _options) => {
+        started = true;
+        return accepted;
+      },
+    );
+    const runWorkflowActivity = jest.fn(
+      async (/** @type {RunWorkflowActivityOptions} */ _options) => {
+        controller.abort();
+      },
+    );
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      pollIntervalMs: 10_000,
+      runActivity: asRunActivity(jest.fn()),
+      runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+      startWorkflow: asStartWorkflow(startWorkflow),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+    });
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 1);
+    const { handleCommand } = harness.getCommandServerOptions();
+    const response = await handleCommand(
+      {
+        requestId: runId,
+        command: RESIDENT_WORKFLOW_START_COMMAND,
+        request: {
+          appId: harness.appId,
+          revisionId: harness.revisionId,
+          workflowId: WORKFLOW_ID,
+          idempotencyKey,
+          input: { name: 'Ada' },
+          callerMetadata: { requestId: 'workflow-start-request' },
+          actor: { kind: 'workflow-operator', id: harness.revisionId },
+        },
+      },
+      {},
+    );
+
+    expect(response).toBe(accepted);
+    await expect(running).resolves.toEqual({ processed: 1 });
+    expect(startWorkflow).toHaveBeenCalledWith({
+      ledger: asExecutionLedger(ledger),
+      execution: expect.objectContaining({ kind: 'embedded' }),
+      workflowId: WORKFLOW_ID,
+      idempotencyKey,
+      input: { name: 'Ada' },
+      callerMetadata: { requestId: 'workflow-start-request' },
+      actor: { kind: 'workflow-operator', id: harness.revisionId },
+    });
+    expect(ledger.listReadyWork).toHaveBeenCalledTimes(2);
+    expect(runWorkflowActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId,
+        workflowId: WORKFLOW_ID,
+        planId,
+      }),
+    );
+  });
+
+  it('rejects mismatched or expanded workflow starts before mutation', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({ items: [] })),
+      rebuildRun: jest.fn(),
+    };
+    const startWorkflow = jest.fn();
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      pollIntervalMs: 10_000,
+      runActivity: asRunActivity(jest.fn()),
+      startWorkflow: asStartWorkflow(startWorkflow),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+    });
+    await waitUntil(() => harness.getCommandServerOptions() !== undefined);
+    const { handleCommand } = harness.getCommandServerOptions();
+    const request = {
+      appId: harness.appId,
+      revisionId: harness.revisionId,
+      workflowId: WORKFLOW_ID,
+      idempotencyKey: 'rejected-workflow-start',
+    };
+
+    await expect(
+      handleCommand(
+        {
+          requestId: 'mismatched-workflow-app',
+          command: RESIDENT_WORKFLOW_START_COMMAND,
+          request: { ...request, appId: `${harness.appId}-other` },
+        },
+        {},
+      ),
+    ).rejects.toThrow(
+      'Resident workflow start does not match the owned application revision.',
+    );
+    await expect(
+      handleCommand(
+        {
+          requestId: 'mismatched-workflow-revision',
+          command: RESIDENT_WORKFLOW_START_COMMAND,
+          request: { ...request, revisionId: `${harness.revisionId}-other` },
+        },
+        {},
+      ),
+    ).rejects.toThrow(
+      'Resident workflow start does not match the owned application revision.',
+    );
+    await expect(
+      handleCommand(
+        {
+          requestId: 'expanded-workflow-request',
+          command: RESIDENT_WORKFLOW_START_COMMAND,
+          request: {
+            ...request,
+            definition: execution.manifest.workflows[WORKFLOW_ID],
+          },
+        },
+        {},
+      ),
+    ).rejects.toThrow('Resident workflow start.definition is unsupported.');
+
+    expect(startWorkflow).not.toHaveBeenCalled();
+    controller.abort();
+    await expect(running).resolves.toEqual({ processed: 0 });
+  });
+
+  it('stops admitting workflow starts and waits for an admitted start', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({ items: [] })),
+      rebuildRun: jest.fn(),
+    };
+    /** @type {Deferred<Record<string, any>>} */
+    const pendingStart = deferred();
+    const startWorkflow = jest.fn(async () => await pendingStart.promise);
+    let workerSettled = false;
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      pollIntervalMs: 10_000,
+      runActivity: asRunActivity(jest.fn()),
+      startWorkflow: asStartWorkflow(startWorkflow),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+    });
+    running.then(
+      () => {
+        workerSettled = true;
+      },
+      () => {
+        workerSettled = true;
+      },
+    );
+    await waitUntil(() => harness.getCommandServerOptions() !== undefined);
+    const { handleCommand } = harness.getCommandServerOptions();
+    const request = {
+      appId: harness.appId,
+      revisionId: harness.revisionId,
+      workflowId: WORKFLOW_ID,
+      idempotencyKey: 'in-flight-workflow-start',
+    };
+    const admitted = handleCommand(
+      {
+        requestId: 'in-flight-workflow-start-request',
+        command: RESIDENT_WORKFLOW_START_COMMAND,
+        request,
+      },
+      {},
+    );
+    await waitUntil(() => startWorkflow.mock.calls.length === 1);
+
+    controller.abort();
+    await expect(
+      handleCommand(
+        {
+          requestId: 'late-workflow-start-request',
+          command: RESIDENT_WORKFLOW_START_COMMAND,
+          request: { ...request, idempotencyKey: 'too-late' },
+        },
+        {},
+      ),
+    ).resolves.toEqual({
+      outcome: 'request-unavailable',
+      delivery: 'not-delivered',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(workerSettled).toBe(false);
+    expect(harness.close).not.toHaveBeenCalled();
+
+    const accepted = { accepted: true, runId: 'started-workflow-run' };
+    pendingStart.resolve(accepted);
+    await expect(admitted).resolves.toBe(accepted);
+    await expect(running).resolves.toEqual({ processed: 0 });
+    expect(startWorkflow).toHaveBeenCalledTimes(1);
+    expect(harness.close).toHaveBeenCalledTimes(1);
   });
 
   it('stops commands, bounds attempt drain, and waits for in-flight submits', async () => {
