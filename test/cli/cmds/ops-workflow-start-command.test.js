@@ -158,7 +158,8 @@ describe('wharfie ops start', () => {
         cursor_disposition: 'ACTIVITY_RUNNABLE',
         step: FIRST_STEP_ID,
         step_index: 0,
-        invocation_status: 'RUNNABLE',
+        activation_kind: 'activity',
+        activation_status: 'RUNNABLE',
         reused: false,
       });
       expect(JSON.stringify(first)).not.toContain('workflow-input-secret');
@@ -169,7 +170,7 @@ describe('wharfie ops start', () => {
         'ops inspect',
       );
       expect(inspected).toMatchObject({
-        schemaVersion: 6,
+        schemaVersion: 7,
         kind: 'wharfie.execution-ledger.run',
         integrity: { verified: true },
         run: {

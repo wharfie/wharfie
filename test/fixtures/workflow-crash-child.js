@@ -20,6 +20,7 @@ const WorkerBoundary = Object.freeze({
 });
 const CommandBoundary = Object.freeze({
   START_RESPONSE: 'start-response-ready',
+  SIGNAL_RESPONSE: 'signal-response-ready',
   CANCELLATION_RESPONSE: 'cancellation-response-ready',
   RECOVERY_RESPONSE: 'recovery-response-ready',
   RECONCILIATION_RESPONSE: 'reconciliation-response-ready',
@@ -27,6 +28,7 @@ const CommandBoundary = Object.freeze({
 const VALID_MODES = new Set([
   'worker',
   'start-response',
+  'signal-response',
   'cancel-response',
   'recover-response',
   'reconcile-response',
@@ -263,6 +265,33 @@ async function runStartResponse(options) {
 }
 
 /** @param {Record<string, any>} options */
+async function runSignalResponse(options) {
+  const { createDurableWorkflowSignalCommand } =
+    await import('../../src/core/runtime/operator/durable-workflow-signal-command.js');
+  const boundary = createCommandBoundary(CommandBoundary.SIGNAL_RESPONSE);
+  const command = createDurableWorkflowSignalCommand({
+    output: {
+      ...boundary.output,
+      // Rejected deliveries emit their durable JSON decision before the
+      // command reports failure. The boundary owns that post-receipt pause;
+      // pre-receipt failures still leave `pending` unset and fail parse().
+      failure() {},
+    },
+  });
+  await boundary.parse(command, [
+    '--run-id',
+    options.runId,
+    '--signal',
+    options.signalId,
+    '--delivery-id',
+    options.deliveryId,
+    '--payload',
+    JSON.stringify(options.payload),
+    '--json',
+  ]);
+}
+
+/** @param {Record<string, any>} options */
 async function runCancellationResponse(options) {
   const boundary = createCommandBoundary(CommandBoundary.CANCELLATION_RESPONSE);
   const commands = createExecutionLedgerOperatorCommands({
@@ -313,6 +342,9 @@ async function main() {
   const options = parseOptions();
   if (options.mode === 'worker') return await runWorker(options);
   if (options.mode === 'start-response') return await runStartResponse(options);
+  if (options.mode === 'signal-response') {
+    return await runSignalResponse(options);
+  }
   if (options.mode === 'cancel-response') {
     return await runCancellationResponse(options);
   }

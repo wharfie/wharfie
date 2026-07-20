@@ -80,14 +80,22 @@ deciders, loops, parallel steps, and early-signal buffering are not part of
 this contract. The complete `workflows` map is limited to 1 MiB of exact UTF-8
 JSON. The compiler and packager preserve these definitions now. The public
 source `wharfie ops start --workflow <workflow-id>` and packaged
-`<app> wharfie start --workflow <workflow-id>` commands can persist a plan
-composed entirely of ordinary activity steps. A timer, signal, or
-managed-effect successor step is rejected before durable run state is created.
-Exact-run inspection, confirmed recovery, and evidence-backed reconciliation
-are also workflow-aware. Run-level workflow cancellation terminalizes
-unstarted work, persists before exact active-attempt delivery, and fences
-uncertain work against continuation. Timer/signal execution and schedules
-remain later runtime slices.
+`<app> wharfie start --workflow <workflow-id>` commands persist the complete
+finite activity/timer/signal plan and atomically materialize its first
+activation. The exact-revision resident executes activity steps and fires due
+timers as framework work; there is no public timer-fire command. Deliver a
+signal with source
+`wharfie ops signal --run-id <run-id> --signal <signal-step-id> --delivery-id <stable-delivery-id> --payload <json>`
+or packaged `<app> wharfie signal ...`. A signal is accepted only for the
+current declared wait. Exact accepted and rejected deliveries replay under the
+same stable delivery ID; early, unexpected, and late deliveries are durably
+classified as `early-signal`, `unexpected-signal`, or `late-signal` rather than
+buffered in an early-signal inbox. Exact-run schema-v7 inspection, confirmed
+recovery, and evidence-backed reconciliation are workflow-aware and redact
+signal payloads and internal references. Run-level workflow cancellation
+terminalizes unstarted work, persists before exact active-attempt delivery,
+and fences uncertain work against continuation. Schedules and managed-effect
+workflow successors remain later runtime slices.
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains

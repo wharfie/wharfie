@@ -27,6 +27,15 @@ const REVISION_ID = `wrv1_${createHash('sha256')
 const OTHER_REVISION_ID = `wrv1_${createHash('sha256')
   .update('other-ready-work-revision')
   .digest('base64url')}`;
+const WORKFLOW_INVOCATION_ID = `wfi_${createHash('sha256')
+  .update('ready-work-workflow-invocation')
+  .digest('base64url')}`;
+const WORKFLOW_CONTINUATION_ID = `wfc_${createHash('sha256')
+  .update('ready-work-workflow-continuation')
+  .digest('base64url')}`;
+const WORKFLOW_TIMER_ID = `wft_${createHash('sha256')
+  .update('ready-work-workflow-timer')
+  .digest('base64url')}`;
 
 function common(overrides = {}) {
   return {
@@ -144,18 +153,18 @@ describe('execution ledger ready-work projection codec', () => {
       'workflow activity',
       ExecutionLedgerReadyWorkKind.ACTIVITY,
       {
-        invocationId: 'invocation-1',
+        invocationId: WORKFLOW_INVOCATION_ID,
         generation: 0,
         cursorVersion: 2,
-        continuationId: 'continue-1',
+        continuationId: WORKFLOW_CONTINUATION_ID,
         stepId: 'activity-1',
         stepIndex: 0,
       },
       {
-        invocation_id: 'invocation-1',
+        invocation_id: WORKFLOW_INVOCATION_ID,
         generation: 0,
         cursor_version: 2,
-        continuation_id: 'continue-1',
+        continuation_id: WORKFLOW_CONTINUATION_ID,
         step_id: 'activity-1',
         step_index: 0,
       },
@@ -178,20 +187,20 @@ describe('execution ledger ready-work projection codec', () => {
       'workflow recovery',
       ExecutionLedgerReadyWorkKind.RECOVERY,
       {
-        invocationId: 'invocation-1',
+        invocationId: WORKFLOW_INVOCATION_ID,
         attemptId: 'attempt-1',
         generation: 1,
         cursorVersion: 3,
-        continuationId: 'continue-1',
+        continuationId: WORKFLOW_CONTINUATION_ID,
         stepId: 'activity-1',
         stepIndex: 0,
       },
       {
-        invocation_id: 'invocation-1',
+        invocation_id: WORKFLOW_INVOCATION_ID,
         attempt_id: 'attempt-1',
         generation: 1,
         cursor_version: 3,
-        continuation_id: 'continue-1',
+        continuation_id: WORKFLOW_CONTINUATION_ID,
         step_id: 'activity-1',
         step_index: 0,
       },
@@ -201,13 +210,13 @@ describe('execution ledger ready-work projection codec', () => {
       ExecutionLedgerReadyWorkKind.CONTINUATION,
       {
         cursorVersion: 4,
-        continuationId: 'continue-1',
+        continuationId: WORKFLOW_CONTINUATION_ID,
         stepId: 'wait-1',
         stepIndex: 2,
       },
       {
         cursor_version: 4,
-        continuation_id: 'continue-1',
+        continuation_id: WORKFLOW_CONTINUATION_ID,
         step_id: 'wait-1',
         step_index: 2,
       },
@@ -217,17 +226,17 @@ describe('execution ledger ready-work projection codec', () => {
       ExecutionLedgerReadyWorkKind.TIMER,
       {
         cursorVersion: 5,
-        continuationId: 'continue-1',
+        continuationId: WORKFLOW_CONTINUATION_ID,
         stepId: 'timer-1',
         stepIndex: 2,
-        timerId: 'timer-run-1',
+        timerId: WORKFLOW_TIMER_ID,
       },
       {
         cursor_version: 5,
-        continuation_id: 'continue-1',
+        continuation_id: WORKFLOW_CONTINUATION_ID,
         step_id: 'timer-1',
         step_index: 2,
-        timer_id: 'timer-run-1',
+        timer_id: WORKFLOW_TIMER_ID,
       },
     ],
   ])(
@@ -280,12 +289,12 @@ describe('execution ledger ready-work projection codec', () => {
   test.each([
     [
       ExecutionLedgerReadyWorkKind.ACTIVITY,
-      { invocationId: 'invocation-1', generation: 0 },
+      { invocationId: WORKFLOW_INVOCATION_ID, generation: 0 },
     ],
     [
       ExecutionLedgerReadyWorkKind.RECOVERY,
       {
-        invocationId: 'invocation-1',
+        invocationId: WORKFLOW_INVOCATION_ID,
         attemptId: 'attempt-1',
         generation: 1,
       },
@@ -293,7 +302,7 @@ describe('execution ledger ready-work projection codec', () => {
   ])('requires an all-or-none workflow cursor tuple for %s', (kind, base) => {
     const workflowCursor = {
       cursorVersion: 1,
-      continuationId: 'continue-1',
+      continuationId: WORKFLOW_CONTINUATION_ID,
       stepId: 'activity-1',
       stepIndex: 0,
     };

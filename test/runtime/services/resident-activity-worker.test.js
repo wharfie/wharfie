@@ -44,6 +44,7 @@ import { EXECUTION_LEDGER_CANCEL_OWNER_COMMAND } from '../../../src/core/runtime
 import {
   RESIDENT_ACTIVITY_READY_WORK_LIMIT,
   RESIDENT_ACTIVITY_SUBMIT_COMMAND,
+  RESIDENT_WORKFLOW_SIGNAL_COMMAND,
   RESIDENT_WORKFLOW_START_COMMAND,
   runResidentActivityWorker,
 } from '../../../src/core/runtime/services/resident-activity-worker.js';
@@ -87,8 +88,8 @@ function digest(value) {
   };
 }
 
-/** @returns {EmbeddedExecution} */
-function makeEmbeddedExecution() {
+/** @param {Record<string, any>[]} [steps] @returns {EmbeddedExecution} */
+function makeEmbeddedExecution(steps) {
   const contract = {
     schemaVersion: 2,
     app: { id: 'resident-worker-demo' },
@@ -106,7 +107,7 @@ function makeEmbeddedExecution() {
     },
     workflows: {
       [WORKFLOW_ID]: {
-        steps: [
+        steps: steps || [
           {
             id: WORKFLOW_STEP_ID,
             kind: 'activity',
@@ -335,6 +336,109 @@ function makeWorkflowRow({
     stepId,
     stepIndex,
     ...(kind === 'RECOVERY' ? { attemptId } : {}),
+  };
+}
+
+/**
+ * @param {{appId: string, revisionId: string, runId: string, timerId: string, availableAt: number, version?: number, lastSequence?: number, cursorVersion?: number, continuationId?: string, stepId: string, stepIndex?: number}} options
+ * @returns {Record<string, any>}
+ */
+function makeWorkflowTimerRow({
+  appId,
+  revisionId,
+  runId,
+  timerId,
+  availableAt,
+  version = 1,
+  lastSequence = 1,
+  cursorVersion = version,
+  continuationId = WORKFLOW_CONTINUATION_ID,
+  stepId,
+  stepIndex = 0,
+}) {
+  return {
+    kind: 'TIMER',
+    appId,
+    revisionId,
+    runId,
+    timerId,
+    availableAt,
+    runVersion: version,
+    lastSequence,
+    cursorVersion,
+    continuationId,
+    stepId,
+    stepIndex,
+  };
+}
+
+/**
+ * @param {{appId: string, revisionId: string, runId: string, planId: string, timerId: string, dueAt: number, version?: number, lastSequence?: number, cursorVersion?: number, continuationId?: string, stepId: string, stepIndex?: number}} options
+ * @returns {Record<string, any>}
+ */
+function makeWorkflowTimerView({
+  appId,
+  revisionId,
+  runId,
+  planId,
+  timerId,
+  dueAt,
+  version = 1,
+  lastSequence = 1,
+  cursorVersion = version,
+  continuationId = WORKFLOW_CONTINUATION_ID,
+  stepId,
+  stepIndex = 0,
+}) {
+  return {
+    run: {
+      kind: 'workflow',
+      appId,
+      revisionId,
+      runId,
+      trigger: { kind: 'workflow', workflowId: WORKFLOW_ID, planId },
+      status: RunStatus.RUNNING,
+      version,
+      lastSequence,
+    },
+    workflowCursor: {
+      runId,
+      appId,
+      revisionId,
+      workflowId: WORKFLOW_ID,
+      planId,
+      timerId,
+      continuationId,
+      stepId,
+      stepIndex,
+      disposition: WorkflowCursorDisposition.TIMER_WAITING,
+      outputs: [],
+      version: cursorVersion,
+      lastSequence,
+      updatedAt: dueAt,
+    },
+    invocations: [],
+    timers: [
+      {
+        runId,
+        appId,
+        revisionId,
+        workflowId: WORKFLOW_ID,
+        planId,
+        timerId,
+        continuationId,
+        stepId,
+        stepIndex,
+        status: 'WAITING',
+        scheduledAt: dueAt - 1,
+        dueAt,
+        updatedAt: dueAt - 1,
+      },
+    ],
+    signalWaits: [],
+    signalDeliveries: [],
+    attempts: [],
+    effects: [],
   };
 }
 
@@ -978,6 +1082,297 @@ describe('resident activity worker', () => {
     });
     expect(request).not.toHaveProperty('controlContext');
     expect(request).not.toHaveProperty('registerActiveAttemptCancellationPort');
+  });
+
+  it('fires an exact due workflow timer as framework work without Activity Protocol dispatch', async () => {
+    const stepId = 'pause';
+    const execution = makeEmbeddedExecution([
+      { id: stepId, kind: 'timer', delayMs: 1 },
+    ]);
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const runId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'exact-workflow-timer',
+    });
+    const timerId = 'workflow-timer-1';
+    const dueAt = 10;
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [
+          makeWorkflowTimerRow({
+            ...harness,
+            runId,
+            timerId,
+            availableAt: dueAt,
+            stepId,
+          }),
+        ],
+      })),
+      rebuildRun: jest.fn(async () =>
+        makeWorkflowTimerView({
+          ...harness,
+          runId,
+          planId,
+          timerId,
+          dueAt,
+          stepId,
+        }),
+      ),
+    };
+    const fireTimer = /** @type {any} */ (
+      jest.fn(async () => {
+        controller.abort();
+        return { applied: true, outcome: 'fired' };
+      })
+    );
+    const runActivity = jest.fn();
+    const runWorkflowActivity = jest.fn();
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+        fireTimer,
+        recoverActivity: asRecoverActivity(jest.fn()),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 1 });
+
+    expect(fireTimer).toHaveBeenCalledWith({
+      ledger: asExecutionLedger(ledger),
+      runId,
+      timerId,
+      actor: {
+        kind: 'resident-workflow-timer',
+        id: harness.appId,
+      },
+    });
+    expect(runActivity).not.toHaveBeenCalled();
+    expect(runWorkflowActivity).not.toHaveBeenCalled();
+  });
+
+  it('reloads ready work after a concurrent timer authority conflict', async () => {
+    const stepId = 'pause';
+    const execution = makeEmbeddedExecution([
+      { id: stepId, kind: 'timer', delayMs: 1 },
+    ]);
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const planId = workflowPlanId(execution);
+    const runId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'workflow-timer-head-churn',
+    });
+    const timerId = 'workflow-timer-head-churn-1';
+    const dueAt = 10;
+    let listCalls = 0;
+    const ledger = {
+      listReadyWork: jest.fn(async () => {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return {
+            items: [
+              makeWorkflowTimerRow({
+                ...harness,
+                runId,
+                timerId,
+                availableAt: dueAt,
+                stepId,
+              }),
+            ],
+          };
+        }
+        controller.abort();
+        return { items: [] };
+      }),
+      rebuildRun: jest.fn(async () =>
+        makeWorkflowTimerView({
+          ...harness,
+          runId,
+          planId,
+          timerId,
+          dueAt,
+          stepId,
+        }),
+      ),
+    };
+    const fireTimer = /** @type {any} */ (
+      jest.fn(async () => {
+        throw new ExecutionLedgerConflictError(
+          runId,
+          'a concurrent signal rejection advanced the run head',
+        );
+      })
+    );
+    const runActivity = jest.fn();
+    const runWorkflowActivity = jest.fn();
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        signal: controller.signal,
+        runActivity: asRunActivity(runActivity),
+        runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+        fireTimer,
+        recoverActivity: asRecoverActivity(jest.fn()),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).resolves.toEqual({ processed: 0 });
+
+    expect(ledger.listReadyWork).toHaveBeenCalledTimes(2);
+    expect(ledger.rebuildRun).toHaveBeenCalledTimes(1);
+    expect(fireTimer).toHaveBeenCalledTimes(1);
+    expect(runActivity).not.toHaveBeenCalled();
+    expect(runWorkflowActivity).not.toHaveBeenCalled();
+  });
+
+  it('propagates a non-conflict timer firing failure', async () => {
+    const stepId = 'pause';
+    const execution = makeEmbeddedExecution([
+      { id: stepId, kind: 'timer', delayMs: 1 },
+    ]);
+    const harness = makeHarness(execution);
+    const planId = workflowPlanId(execution);
+    const runId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'workflow-timer-storage-failure',
+    });
+    const timerId = 'workflow-timer-storage-failure-1';
+    const dueAt = 10;
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [
+          makeWorkflowTimerRow({
+            ...harness,
+            runId,
+            timerId,
+            availableAt: dueAt,
+            stepId,
+          }),
+        ],
+      })),
+      rebuildRun: jest.fn(async () =>
+        makeWorkflowTimerView({
+          ...harness,
+          runId,
+          planId,
+          timerId,
+          dueAt,
+          stepId,
+        }),
+      ),
+    };
+    const failure = new Error('timer storage failed');
+    const fireTimer = /** @type {any} */ (
+      jest.fn(async () => {
+        throw failure;
+      })
+    );
+
+    await expect(
+      runResidentActivityWorker({
+        ledger: asExecutionLedger(ledger),
+        execution,
+        controlContext: harness.controlContext,
+        owner: harness.owner,
+        fireTimer,
+        recoverActivity: asRecoverActivity(jest.fn()),
+        createCommandServer: harness.createCommandServer,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(fireTimer).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts an authenticated workflow signal while idle and wakes ready-work polling', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const runId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'resident-workflow-signal',
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({ items: [] })),
+      rebuildRun: jest.fn(),
+    };
+    const accepted = Object.freeze({
+      applied: true,
+      outcome: 'accepted',
+      run: { runId, status: RunStatus.RUNNING },
+    });
+    const deliverSignal = /** @type {any} */ (jest.fn(async () => accepted));
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      pollIntervalMs: 10_000,
+      runActivity: asRunActivity(jest.fn()),
+      deliverSignal,
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+    });
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 1);
+    const { handleCommand } = harness.getCommandServerOptions();
+
+    await expect(
+      handleCommand(
+        {
+          requestId: 'signal-delivery-1',
+          command: RESIDENT_WORKFLOW_SIGNAL_COMMAND,
+          request: {
+            appId: harness.appId,
+            runId,
+            signalId: 'approval',
+            deliveryId: 'signal-delivery-1',
+            payload: { approved: true },
+          },
+        },
+        {},
+      ),
+    ).resolves.toBe(accepted);
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 2);
+    expect(deliverSignal).toHaveBeenCalledWith({
+      ledger: asExecutionLedger(ledger),
+      appId: harness.appId,
+      runId,
+      signalId: 'approval',
+      deliveryId: 'signal-delivery-1',
+      payload: { approved: true },
+    });
+
+    await expect(
+      handleCommand(
+        {
+          requestId: 'different-envelope-id',
+          command: RESIDENT_WORKFLOW_SIGNAL_COMMAND,
+          request: {
+            appId: harness.appId,
+            runId,
+            signalId: 'approval',
+            deliveryId: 'signal-delivery-2',
+            payload: null,
+          },
+        },
+        {},
+      ),
+    ).rejects.toThrow(/request identity does not match/i);
+    expect(deliverSignal).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+    await expect(running).resolves.toEqual({ processed: 0 });
   });
 
   it('accepts idle run-level workflow cancellation and isolates manual targets', async () => {

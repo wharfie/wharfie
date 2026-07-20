@@ -76,11 +76,11 @@ export default defineApp({
 The optional `workflows` map accepts the finite revision-bound contract from
 ADR 0019: one to 64 ordered `activity`, `timer`, or `signal` steps. Activity
 input is exactly the workflow input, a JSON literal, or one named earlier
-step's output. The source and packaged `start` commands accept a workflow only
-when every step can currently run as an ordinary activity. Plans containing a
-timer, signal, or managed-effect successor fail before durable state is
-created. See [Application Structure](./application-structure.md) for the exact
-shape.
+step's output. The source and packaged `start` commands accept the complete
+finite activity/timer/signal plan and atomically create its first activation.
+Branches, schedules, and managed-effect workflow successors remain
+unsupported. See [Application Structure](./application-structure.md) for the
+exact shape.
 
 The application ID, activity keys, and other logical IDs use lowercase kebab
 case: `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with at most 63 ASCII bytes. Wharfie
@@ -196,7 +196,7 @@ metadata. It does not imply that physical execution has begun.
 
 ## Start a durable workflow
 
-Persist an activity-only workflow from its source manifest with a stable start
+Persist a bounded linear workflow from its source manifest with a stable start
 identity:
 
 ```bash
@@ -214,16 +214,37 @@ override:
 
 `start` uses the same authenticated resident-or-short-lived-owner boundary as
 `submit`. It atomically persists the immutable plan, workflow input, initial
-cursor, invocation, and runnable work row. An exact retry of the same stable
-key and request returns the retained run with `reused: true`; changing the
-workflow, input, caller metadata, or immutable app revision conflicts. Output
-contains only safe run, revision, workflow, cursor, and invocation lifecycle
-fields. It does not echo inputs or internal payload references.
-
-Only a plan composed entirely of ordinary activity steps is accepted by this
-first public slice. Timer and signal continuations and managed-effect
-successors remain unsupported. Run-level cancellation is available after the
+cursor, exact activity/timer/signal activation, and any runnable work row. An
+exact retry of the same stable key and request returns the retained run with
+`reused: true`; changing the workflow, input, caller metadata, or immutable app
+revision conflicts. Output contains only safe run, revision, workflow, cursor,
+activation kind, and activation lifecycle fields. It does not echo inputs or
+internal payload references. Run-level cancellation is available after the
 workflow has been created.
+
+## Deliver the current workflow signal
+
+When inspection shows that the cursor is waiting for a signal step, deliver
+one required JSON payload with a caller-stable delivery ID:
+
+```bash
+wharfie ops signal --run-id <run-id> --signal <signal-step-id> \
+  --delivery-id <stable-delivery-id> --payload '{"approved":true}'
+
+<app> wharfie signal --run-id <run-id> --signal <signal-step-id> \
+  --delivery-id <stable-delivery-id> --payload '{"approved":true}'
+```
+
+The source command resolves app scope from the existing run; the packaged
+command also enforces the app identity embedded in the artifact. Signal
+delivery routes to the authenticated resident when it owns the local control
+store or acquires a short-lived app owner when no resident is active. Only the
+signal named by the current wait can advance the cursor. An early, unexpected,
+or late request is durably rejected as `early-signal`, `unexpected-signal`, or
+`late-signal`; Wharfie does not keep an early-signal inbox. Retry the exact
+run, signal, delivery ID, and payload after response loss to receive the
+retained accepted or rejected decision. Reusing the delivery ID with changed
+contents conflicts. An unknown run is refused without creating durable state.
 
 Run the matching source revision as a foreground resident in another terminal:
 
@@ -259,12 +280,15 @@ and worker commands without any source-directory override:
 
 The private environment-selected packaged service runtime starts the same
 resident activity implementation. Wharfie does not yet install it as an OS
-service or arrange startup on boot. The current worker executes workflows
-started through the public command above when every step is an ordinary
-activity. It has no timers, signals, schedules, managed-effect workflow
-successors, multi-host leases, or heartbeats. Exact workflow `ACTIVITY` and
-`RECOVERY` rows are implemented; `TIMER` and framework-only `CONTINUATION` rows
-remain parked for later workflow slices.
+service or arrange startup on boot. The current worker executes exact workflow
+`ACTIVITY` rows, conservatively handles `RECOVERY` rows, and fires due `TIMER`
+rows as framework-owned continuations without Activity Protocol or authored
+code dispatch. A timer's persisted deadline is not recomputed after restart;
+if no matching resident is running, it remains waiting until one resumes.
+There is no public timer-fire command. Schedules, managed-effect workflow
+successors, multi-host leases, and heartbeats remain unsupported. The reserved
+framework-only `CONTINUATION` row remains fail-closed repair authority, not a
+signal queue or user-code dispatch request.
 
 Inspection is read-only. Recovery is an explicit durable mutation to use only
 after every prior runner has stopped; it does not load an app manifest, parse
@@ -294,14 +318,17 @@ its reserved operator namespace:
 <app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
-Packaged inspection, recovery, reconciliation, effect reconciliation, and
-cancellation are scoped to the immutable app identity embedded in
-the artifact. They can operate an older revision of that same app, but reject
-another app's run ID before output or mutation. With `--json`, the source and
-packaged forms of `inspect` emit the same schema-v6 redacted run view, including
-the safe manual/workflow trigger and current workflow cursor identities plus
-effect identity/status/adapter-lifecycle rows, but not requests, destinations,
-receipts, evidence, values, paths, payload references, or fencing tokens.
+Packaged inspection, recovery, reconciliation, effect reconciliation,
+cancellation, and signal delivery are scoped to the immutable app identity
+embedded in the artifact. They can operate an older revision of that same app,
+but reject another app's run ID before output or mutation. With `--json`, the source and
+packaged forms of `inspect` emit the same schema-v7 redacted run view, including
+the safe manual/workflow trigger, activation-aware cursor, timer timing and
+status, signal-wait status, signal-delivery outcome/rejection, and effect
+identity/status/adapter-lifecycle rows. They do not expose requests,
+destinations, receipts, evidence, values, signal payloads, paths, payload
+references, digests, or fencing tokens. Dedicated signal-delivery lifecycle
+rows also omit their actor field; event history retains safe actor metadata.
 `recover` emits that view plus recovery action `settled-managed-effect-set` and
 one sorted `managedEffects` result for the atomically settled active set;
 `reconcile` wraps the view with its stable reconciliation ID and whether it was
@@ -392,8 +419,9 @@ fencing token, and exact earlier uncertainty event. It appends one terminal
 resolution only when the evidence proves it; the abandoned physical attempt is
 never rewritten, and the transcript, result, reason, and fence are never echoed
 in the operator response. For a workflow, verified `completed` evidence
-atomically creates the next ordinary activity or completes the run; verified
-`failed` or `protocol-failed` evidence terminalizes it without a successor.
+atomically creates the exact next activity, timer, or signal wait or completes
+the run; verified `failed` or `protocol-failed` evidence terminalizes it
+without a successor.
 Exact reconciliation replay remains bound to the original uncertainty event
 even after its cursor has advanced. A `cancelled` result for either a manual or
 workflow attempt requires the matching earlier durable cancellation request
@@ -436,10 +464,11 @@ There is still no public run-history/list: the verified bounded V8 run
 directory paired with the V10
 ledger is internal rather than the retired `ops list` surface. The resident now
 submits, claims, and executes exact-revision manual activities serially and
-consumes exact manifest-bound workflow activity continuations created through
-public `start`. Public `inspect`, confirmed `recover`, and evidence-backed
-`reconcile` understand those workflow runs; timers, signals, managed-effect
-successors, and schedules remain unsupported. The manual bounded
+consumes exact manifest-bound workflow activity and timer continuations created
+through public `start`; public `signal` consumes only the current declared
+signal wait. Public `inspect`, confirmed `recover`, and evidence-backed
+`reconcile` understand those workflow runs. Managed-effect workflow successors
+and schedules remain unsupported. The manual bounded
 recovery and reconciliation paths have prior real subprocess and relocated-SEA
 crash coverage across request, start, destination commit, payload publication,
 ledger settlement, and response-delivery boundaries. The manual resident
@@ -447,11 +476,11 @@ dispatch and shutdown surface has a complete source, package, and moved-SEA
 validation receipt, including exact-revision dispatch, graceful drain tests,
 current-revision managed-effect recovery, and service crash/restart with Node
 unavailable on `PATH`. Source-process and relocated-SEA matrices also prove
-public workflow start, recovery, reconciliation, offline cancellation, and
-active persist-before-signal response-loss behavior. Wharfie remains a
-single-process activity worker rather than a production workflow service:
-timers/signals, OS installation/reboot proof, and multi-host coordination are
-still intentionally absent.
+public workflow start, persisted timer restart, current-wait signal delivery,
+recovery, reconciliation, offline cancellation, and active
+persist-before-signal response-loss behavior. Wharfie remains a single-process
+worker rather than a production workflow service: OS installation/reboot proof
+and multi-host coordination are still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.
@@ -464,7 +493,8 @@ authority. The worker keeps local ownership until the attempt settles. Only
 then does graceful shutdown write `STOPPED` and release ownership. Lifecycle
 remains `STARTING` until the
 owner-command socket is bound, so durable `READY` means that authenticated
-submission/cancellation ingress is actually available. The resident endpoint
+submission, cancellation, and workflow-signal ingress is actually available.
+The resident endpoint
 accepts the ledger's bounded referenced-payload size; unrelated local-owner
 commands keep their smaller request default.
 
@@ -492,9 +522,10 @@ Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
 
 The v2 manifest exposes only the bounded plain-data workflow definitions above;
-its public start and operator commands handle activity-only continuations, but
-timers/signals, managed-effect successors, schedules, arbitrary packaging
-assets, signing credentials, and other build secrets remain unsupported.
+its public start and operator commands handle activity, persisted timer, and
+current-wait signal continuations. Branches, an early-signal inbox,
+managed-effect workflow successors, schedules, arbitrary packaging assets,
+signing credentials, and other build secrets remain unsupported.
 External activity packages must be pinned as exact descriptors such as
 `externalPackages: [{ name: 'sharp', version: '0.34.4' }]`; ranges, tags, URLs,
 and ambient dependency resolution are not accepted. Multiple entries must use

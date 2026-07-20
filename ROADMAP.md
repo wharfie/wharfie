@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Durable run-level workflow cancellation is implemented; persisted timers and signals are next · **Last updated:** 2026-07-19
+**Status:** Persisted timers and current-wait signals are implemented; SEA service installation and reboot proof are next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -211,13 +211,12 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       a bounded physical drain, and does not expose manual cancellation or
       managed-effect authority to workflow attempts.
 - [x] Mount shared source `wharfie ops start` and packaged `<app> wharfie start`
-      commands for plans composed entirely of ordinary activity steps. Stable
+      commands for bounded activity, timer, and signal plans. Stable
       idempotency keys converge across resident-routed and offline short-owner
-      starts, while timer, signal, and managed-effect successor plans fail
-      before ledger creation. Extend generic exact-run inspection, confirmed
-      recovery, and evidence reconciliation to workflow trigger/cursor state;
-      preserve response-loss replay against the original uncertainty event and
-      reject workflow cancellation until it has cursor-aware authority.
+      starts, including activity-, timer-, and signal-headed materialization.
+      Extend generic exact-run inspection, confirmed recovery, and evidence
+      reconciliation to workflow trigger/cursor state; preserve response-loss
+      replay against the original uncertainty event.
 - [x] Prove the public workflow path across real process death. Five source
       `SIGKILL` cases cover offline start-response loss, a committed `CLAIMED`
       attempt, `STARTED` before authored dispatch, the compound first-step
@@ -281,11 +280,17 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       `cancelled` evidence requires that exact prior authority, while success and
       failure races preserve their proven terminal evidence and never create a
       successor after cancellation wins.
-- [ ] Extend the workflow ledger from ordinary activity continuations to
-      persisted timer and current-wait signal decisions. Activity-only start,
-      workflow-aware inspection/recovery/reconciliation, resident dispatch,
-      cursor-aware cancellation, and direct or reconciled activity terminals
-      are complete.
+- [x] Extend the workflow ledger from ordinary activity continuations to
+      persisted timer and current-wait signal decisions. The resident fires
+      exact due `TIMER` rows as framework work without Activity Protocol
+      dispatch. Shared source `wharfie ops signal` and packaged
+      `<app> wharfie signal` require stable delivery IDs, accept only the
+      current declared wait, retain exact accepted/rejected replay, and record
+      explicit `early-signal`, `unexpected-signal`, or `late-signal`
+      rejections without an early-signal inbox. Schema-v7 inspection exposes
+      redacted timer, signal-wait, and signal-delivery lifecycle state.
+      Branches, scheduled starts, and managed-effect workflow successors remain
+      unsupported.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
@@ -445,33 +450,36 @@ serial resident worker, authenticated submit/cancel routing, conservative
 `CLAIMED`/`STARTED` restart recovery, bounded graceful drain, and a
 transactional exact-revision ready-work locator share one source, packaged, and
 hidden-service runtime. The public manifest accepts ADR 0019's bounded linear
-workflow. The core ledger now materializes, claims, starts, completes, fails,
-releases, blocks, and reconciles activity activations while atomically
-maintaining the workflow cursor and ready-work row. Direct and reconciled
-`failed` and `protocol-failed` terminals preserve the prior output prefix and
-create no output, successor, or ready row. The resident now dispatches exact
-manifest-bound workflow `ACTIVITY` rows, recovers `RECOVERY` rows without
-redispatching lost started work, and runs supported activity-to-activity chains
-serially. Shared source and packaged `start` commands now persist only plans
-that are executable end to end as ordinary activities. Generic `inspect`,
-confirmed `recover`, and evidence-backed `reconcile` expose or mutate the exact
-workflow cursor without leaking payloads. Generic `cancel` now accepts workflow
-runs with a stable request identity: it terminalizes unstarted work, records
-intent before signaling an exact active attempt, or fences blocked uncertainty
-against later continuation. Matching cancelled evidence can reconcile only
-when the retained attempt itself carries that prior request; deadline evidence
-remains unsupported.
+workflow. The core ledger now materializes and atomically advances activity,
+timer, and current-wait signal activations on one workflow cursor and run head.
+Direct and reconciled `failed` and `protocol-failed` activity terminals
+preserve the prior output prefix and create no output, successor, or ready row.
+The resident dispatches exact manifest-bound `ACTIVITY` rows, recovers
+`RECOVERY` rows without redispatching lost started work, and fires due `TIMER`
+rows as framework work without entering Activity Protocol. Shared source and
+packaged `start` commands persist the complete finite plan. Shared source and
+packaged `signal` commands require stable delivery IDs and accept only the
+current declared wait; exact accepted or rejected requests replay, while
+early, unexpected, and late signals are durably rejected without an inbox.
+Generic schema-v7 `inspect`, confirmed `recover`, and evidence-backed
+`reconcile` expose or mutate the exact workflow cursor without leaking signal
+payloads or internal references. Generic `cancel` accepts workflow runs with a
+stable request identity: it terminalizes unstarted work, records intent before
+signaling an exact active attempt, or fences blocked uncertainty against later
+continuation. Matching cancelled evidence can reconcile only when the retained
+attempt itself carries that prior request; deadline evidence remains
+unsupported.
 
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
-responses, resident generation takeover, and evidence-backed continuation. The
-moved artifact completes the two-step proof with Node unavailable on `PATH`.
+responses, resident generation takeover, persisted timer firing, current-wait
+signal consumption, and evidence-backed continuation. The moved artifact
+completes the linear workflow proof with Node unavailable on `PATH`.
 
-1. Add persisted timers and current-wait signals on the same cursor and
-   run-head boundary, followed by their shared source/packaged commands.
-2. Install the SEA as an OS-managed service, then add the smallest
-   provider-backed path that can create, inspect, update, and remove one durable
-   node through the operator's credential chain.
+1. Install the SEA as an OS-managed service and prove startup-on-boot, graceful
+   restart, and durable workflow recovery across a real machine reboot.
+2. Add the smallest provider-backed path that can create, inspect, update, and
+   remove one durable node through the operator's credential chain.
 3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.

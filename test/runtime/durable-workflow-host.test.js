@@ -274,7 +274,6 @@ describe('durable workflow manifest binding', () => {
     ).toEqual({
       planId: fixture.planId,
       planPayload: fixture.planPayload,
-      dispatchSupported: true,
     });
   });
 
@@ -293,7 +292,6 @@ describe('durable workflow manifest binding', () => {
     expect(binding).toEqual({
       planPayload: fixture.planPayload,
       step: ACTIVITY_STEP,
-      dispatchSupported: true,
     });
     expect(Object.isFrozen(binding)).toBe(true);
   });
@@ -367,11 +365,8 @@ describe('durable workflow manifest binding', () => {
     ).toThrow(/does not match its exact manifest activity step/i);
   });
 
-  it('reports an unsupported continuation before opening ledger authority', async () => {
-    const {
-      resolveManifestWorkflowActivityBinding,
-      runPersistedDurableManifestWorkflowActivity,
-    } = await loadHost();
+  it('binds an activity whose persisted successor is a framework timer', async () => {
+    const { resolveManifestWorkflowActivityBinding } = await loadHost();
     const fixture = bindingFixture(
       makeEmbeddedExecution({
         steps: [ACTIVITY_STEP, { id: 'pause', kind: 'timer', delayMs: 1_000 }],
@@ -386,11 +381,10 @@ describe('durable workflow manifest binding', () => {
         activityId: ACTIVITY_ID,
         cursor: CURSOR,
       }),
-    ).toMatchObject({ dispatchSupported: false });
-
-    await expect(
-      runPersistedDurableManifestWorkflowActivity(hostOptions(fixture, ledger)),
-    ).rejects.toThrow(/cannot dispatch before its continuation kind/i);
+    ).toEqual({
+      planPayload: fixture.planPayload,
+      step: ACTIVITY_STEP,
+    });
     expect(ledger.rebuildRun).not.toHaveBeenCalled();
     expect(physicalAttempts).toEqual([]);
   });
@@ -486,14 +480,26 @@ describe('durable workflow start host', () => {
     }
   });
 
-  it('rejects a plan with an unsupported continuation before ledger access', async () => {
+  it('starts a plan whose first persisted continuation is a timer', async () => {
     const { startDurableManifestWorkflow } = await loadHost();
     const fixture = bindingFixture(
       makeEmbeddedExecution({
         steps: [ACTIVITY_STEP, { id: 'pause', kind: 'timer', delayMs: 1_000 }],
       }),
     );
-    const ledger = { createWorkflowRun: jest.fn() };
+    const outcome = {
+      applied: true,
+      run: { status: RunStatus.RUNNING },
+      workflowCursor: {
+        disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+      },
+      invocation: { status: InvocationStatus.RUNNABLE },
+    };
+    const ledger = {
+      createWorkflowRun: jest.fn(
+        async (/** @type {Record<string, any>} */ _request) => outcome,
+      ),
+    };
     const ledgerStore = /** @type {any} */ (ledger);
 
     await expect(
@@ -503,8 +509,12 @@ describe('durable workflow start host', () => {
         workflowId: WORKFLOW_ID,
         idempotencyKey: 'unsupported-public-start',
       }),
-    ).rejects.toThrow(/cannot start until every declared continuation kind/i);
-    expect(ledger.createWorkflowRun).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ outcome });
+    expect(ledger.createWorkflowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definition: fixture.planPayload.definition,
+      }),
+    );
   });
 
   it('snapshots caller-owned start fields before async source verification', async () => {

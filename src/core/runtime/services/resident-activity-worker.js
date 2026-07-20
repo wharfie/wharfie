@@ -29,6 +29,7 @@ import {
 } from '../durable-activity-host.js';
 import {
   resolveManifestWorkflowActivityBinding,
+  resolveManifestWorkflowStartBinding,
   runPersistedDurableManifestWorkflowActivity,
   startDurableManifestWorkflow,
 } from '../durable-workflow-host.js';
@@ -42,6 +43,10 @@ import {
   recoverWorkflowLedgerActivity,
   requestWorkflowLedgerRunCancellation,
 } from '../workflow-ledger-run.js';
+import {
+  deliverWorkflowLedgerSignal,
+  fireWorkflowLedgerTimer,
+} from '../workflow-ledger-continuation.js';
 import {
   EXECUTION_LEDGER_CANCEL_OWNER_COMMAND,
   recoverStoppedManagedEffectsAtOperatorBoundary,
@@ -63,11 +68,13 @@ import { createLedgerService } from './ledger-service.js';
 export const RESIDENT_ACTIVITY_SUBMIT_COMMAND = 'execution-ledger-submit';
 export const RESIDENT_WORKFLOW_START_COMMAND =
   'execution-ledger-workflow-start';
+export const RESIDENT_WORKFLOW_SIGNAL_COMMAND =
+  'execution-ledger-workflow-signal';
 export const RESIDENT_ACTIVITY_DEFAULT_POLL_INTERVAL_MS = 1_000;
 export const RESIDENT_ACTIVITY_DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 export const RESIDENT_ACTIVITY_READY_WORK_LIMIT = 50;
 
-/** @typedef {{kind: 'manual', runId: string} | {kind: 'workflow', runId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} ResidentRunnableWork */
+/** @typedef {{kind: 'manual', runId: string} | {kind: 'workflow', runId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}} | {kind: 'timer', runId: string, workflowId: string, planId: string, timerId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} ResidentRunnableWork */
 
 /**
  * @param {unknown} value - Candidate abort signal.
@@ -249,6 +256,53 @@ function normalizeWorkflowStartRequest(value) {
 }
 
 /**
+ * @param {unknown} value - Authenticated workflow-signal payload.
+ * @returns {{appId: string, runId: string, signalId: string, deliveryId: string, payload: any}} - Exact supported delivery request.
+ */
+function normalizeWorkflowSignalRequest(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Resident workflow signal must be an object.');
+  }
+  const request = /** @type {Record<string, any>} */ (value);
+  const supported = new Set([
+    'appId',
+    'runId',
+    'signalId',
+    'deliveryId',
+    'payload',
+  ]);
+  for (const key of Reflect.ownKeys(request)) {
+    if (typeof key !== 'string' || !supported.has(key)) {
+      throw new TypeError(
+        `Resident workflow signal.${String(key)} is unsupported.`,
+      );
+    }
+  }
+  if (
+    typeof request.appId !== 'string' ||
+    !request.appId ||
+    typeof request.runId !== 'string' ||
+    !request.runId ||
+    typeof request.signalId !== 'string' ||
+    !request.signalId ||
+    typeof request.deliveryId !== 'string' ||
+    !request.deliveryId ||
+    !Object.prototype.hasOwnProperty.call(request, 'payload')
+  ) {
+    throw new TypeError(
+      'Resident workflow signal requires appId, runId, signalId, deliveryId, and payload.',
+    );
+  }
+  return {
+    appId: request.appId,
+    runId: request.runId,
+    signalId: request.signalId,
+    deliveryId: request.deliveryId,
+    payload: request.payload,
+  };
+}
+
+/**
  * Wait until a submit wakes the worker, its poll interval elapses, or shutdown
  * begins. Active-attempt drain signaling is owned by the dispatch loop.
  * @param {{signal?: AbortSignal, pollIntervalMs: number, subscribeWake: (listener: () => void) => () => void}} options - Wait controls.
@@ -406,6 +460,28 @@ function createWorkflowWork(view, invocation) {
 }
 
 /**
+ * @param {Record<string, any>} view - Verified current workflow.
+ * @param {Record<string, any>} timer - Cursor-bound framework timer.
+ * @returns {ResidentRunnableWork} - Exact timer decision descriptor.
+ */
+function createWorkflowTimerWork(view, timer) {
+  const cursor = view.workflowCursor;
+  return {
+    kind: 'timer',
+    runId: view.run.runId,
+    workflowId: cursor.workflowId,
+    planId: cursor.planId,
+    timerId: timer.timerId,
+    cursor: {
+      version: cursor.version,
+      continuationId: cursor.continuationId,
+      stepId: cursor.stepId,
+      stepIndex: cursor.stepIndex,
+    },
+  };
+}
+
+/**
  * @param {Record<string, any>} row - Candidate workflow ready row.
  * @param {Record<string, any>} cursor - Verified current cursor.
  * @returns {boolean} - Whether every cursor coordinate is exact.
@@ -457,7 +533,32 @@ function isExactWorkflowInvocation(view, invocation) {
  */
 function canDispatchManifestWorkflowActivity(options) {
   try {
-    return resolveManifestWorkflowActivityBinding(options).dispatchSupported;
+    resolveManifestWorkflowActivityBinding(options);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Cross-check a persisted timer against the exact manifest plan pinned to the
+ * resident revision. A timer is framework work, but a different revision or
+ * plan must remain parked rather than being reinterpreted.
+ * @param {{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, workflowId: string, planId: string, cursor: {stepId: string, stepIndex: number}}} options - Persisted timer binding.
+ * @returns {boolean} - Whether the resident may attempt the timer CAS.
+ */
+function canFireManifestWorkflowTimer(options) {
+  try {
+    const binding = resolveManifestWorkflowStartBinding({
+      identity: options.identity,
+      workflowId: options.workflowId,
+    });
+    const step = binding.planPayload.definition.steps[options.cursor.stepIndex];
+    return (
+      binding.planId === options.planId &&
+      step?.kind === 'timer' &&
+      step.id === options.cursor.stepId
+    );
   } catch {
     return false;
   }
@@ -473,7 +574,7 @@ function canDispatchManifestWorkflowActivity(options) {
 async function resolveRunnableLocator(options) {
   if (options.signal?.aborted) return null;
   if (
-    !['ACTIVITY', 'RECOVERY'].includes(options.row.kind) ||
+    !['ACTIVITY', 'RECOVERY', 'TIMER'].includes(options.row.kind) ||
     options.row.appId !== options.appId ||
     options.row.revisionId !== options.revisionId
   ) {
@@ -500,6 +601,7 @@ async function resolveRunnableLocator(options) {
 
   if (view.run.trigger?.kind === 'manual') {
     if (
+      options.row.kind === 'TIMER' ||
       options.row.invocationId !== MANUAL_LEDGER_INVOCATION_ID ||
       Object.prototype.hasOwnProperty.call(options.row, 'cursorVersion')
     ) {
@@ -619,6 +721,41 @@ async function resolveRunnableLocator(options) {
     return null;
   }
   let cursor = view.workflowCursor;
+  if (options.row.kind === 'TIMER') {
+    const timer = (view.timers || []).find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.timerId === options.row.timerId,
+    );
+    if (
+      cursor.disposition !== WorkflowCursorDisposition.TIMER_WAITING ||
+      cursor.timerId !== options.row.timerId ||
+      !isExactWorkflowReadyCursor(options.row, cursor) ||
+      !timer ||
+      timer.runId !== view.run.runId ||
+      timer.appId !== view.run.appId ||
+      timer.revisionId !== view.run.revisionId ||
+      timer.workflowId !== cursor.workflowId ||
+      timer.planId !== cursor.planId ||
+      timer.continuationId !== cursor.continuationId ||
+      timer.stepId !== cursor.stepId ||
+      timer.stepIndex !== cursor.stepIndex ||
+      timer.status !== 'WAITING' ||
+      timer.dueAt !== options.row.availableAt ||
+      !canFireManifestWorkflowTimer({
+        identity: options.manifestIdentity,
+        workflowId: cursor.workflowId,
+        planId: cursor.planId,
+        cursor: {
+          stepId: cursor.stepId,
+          stepIndex: cursor.stepIndex,
+        },
+      })
+    ) {
+      await repairStaleReadyWorkLocator(options);
+      return null;
+    }
+    return createWorkflowTimerWork(view, timer);
+  }
   let invocation = view.invocations.find(
     (/** @type {Record<string, any>} */ candidate) =>
       candidate.invocationId === options.row.invocationId,
@@ -780,7 +917,7 @@ async function findRunnableWork(options) {
  * resident owner. It hosts the authenticated submission/cancellation endpoint,
  * consumes exact ready work serially, and drains an active attempt during
  * graceful shutdown.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, fireTimer?: typeof fireWorkflowLedgerTimer, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, deliverSignal?: typeof deliverWorkflowLedgerSignal, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
 export async function runResidentActivityWorker(options) {
@@ -827,9 +964,11 @@ export async function runResidentActivityWorker(options) {
     options.runActivity || runPersistedDurableManifestActivity;
   const runWorkflowActivity =
     options.runWorkflowActivity || runPersistedDurableManifestWorkflowActivity;
+  const fireTimer = options.fireTimer || fireWorkflowLedgerTimer;
   const submitActivity =
     options.submitActivity || submitDurableManifestActivity;
   const startWorkflow = options.startWorkflow || startDurableManifestWorkflow;
+  const deliverSignal = options.deliverSignal || deliverWorkflowLedgerSignal;
   const recoverActivity =
     options.recoverActivity || recoverManualLedgerActivity;
   const recoverWorkflowActivity =
@@ -851,7 +990,7 @@ export async function runResidentActivityWorker(options) {
   let activeWorkflowCancellationPort;
   /** @type {string | undefined} */
   let activeRunId;
-  /** @type {'manual'|'workflow'|undefined} */
+  /** @type {'manual'|'workflow'|'timer'|undefined} */
   let activeWorkKind;
   /** @type {Set<() => void>} */
   const wakeListeners = new Set();
@@ -920,6 +1059,25 @@ export async function runResidentActivityWorker(options) {
       wake();
       return result;
     }
+    if (command.command === RESIDENT_WORKFLOW_SIGNAL_COMMAND) {
+      const request = normalizeWorkflowSignalRequest(command.request);
+      if (request.appId !== binding.identity.appId) {
+        throw new Error(
+          'Resident workflow signal does not match the owned application.',
+        );
+      }
+      if (command.requestId !== request.deliveryId) {
+        throw new Error(
+          'Resident workflow signal request identity does not match its delivery ID.',
+        );
+      }
+      const result = await deliverSignal({
+        ledger: options.ledger,
+        ...request,
+      });
+      if (result.outcome === 'accepted') wake();
+      return result;
+    }
     if (command.command === EXECUTION_LEDGER_CANCEL_OWNER_COMMAND) {
       const request = command.request;
       if (
@@ -984,6 +1142,11 @@ export async function runResidentActivityWorker(options) {
           : {}),
       });
       wake();
+      const activation = result.timer
+        ? { kind: 'timer', status: result.timer.status }
+        : result.signalWait
+          ? { kind: 'signal', status: result.signalWait.status }
+          : undefined;
       return {
         outcome: result.outcome,
         delivery:
@@ -997,7 +1160,15 @@ export async function runResidentActivityWorker(options) {
               ? 'not-delivered'
               : 'not-required',
         runStatus: result.run.status,
-        invocationStatus: result.invocation.status,
+        ...(result.invocation
+          ? { invocationStatus: result.invocation.status }
+          : {}),
+        ...(activation
+          ? {
+              activationKind: activation.kind,
+              activationStatus: activation.status,
+            }
+          : {}),
       };
     }
     return { outcome: 'request-unavailable', delivery: 'not-delivered' };
@@ -1081,6 +1252,31 @@ export async function runResidentActivityWorker(options) {
         const { runId } = work;
         activeRunId = runId;
         activeWorkKind = work.kind;
+        if (work.kind === 'timer') {
+          try {
+            try {
+              const result = await fireTimer({
+                ledger: options.ledger,
+                runId,
+                timerId: work.timerId,
+                actor: {
+                  kind: 'resident-workflow-timer',
+                  id: binding.identity.appId,
+                },
+              });
+              if (result.outcome === 'fired') processed += 1;
+            } catch (error) {
+              // A signal audit decision, cancellation, or another terminal may
+              // win after locator verification. Reload on the next loop; only
+              // this ordinary authority conflict is a benign scheduling race.
+              if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+            }
+          } finally {
+            activeRunId = undefined;
+            activeWorkKind = undefined;
+          }
+          continue;
+        }
         const attemptCancellation = new AbortController();
         /** @type {ReturnType<typeof setTimeout> | undefined} */
         let drainTimer;
@@ -1365,7 +1561,7 @@ export async function runLocalResidentActivityService(options) {
  * @param {{appId: string, requestId: string, command: string, request: Record<string, any>, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, mutateDirect: (ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore) => Promise<Readonly<Record<string, any>>>, failureMessage: string}} options - Exact local mutation request.
  * @returns {Promise<Readonly<Record<string, any>>>} - Durable mutation response.
  */
-async function routeLocalResidentMutation(options) {
+export async function routeLocalResidentMutation(options) {
   const serviceId = createLedgerServiceId({ appId: options.appId });
   return await withExecutionLedger(
     async (ledger, controlContext) => {
@@ -1570,6 +1766,67 @@ export async function startLocalDurableManifestWorkflow(options) {
       }),
     failureMessage:
       'Could not route or directly persist the resident workflow start.',
+  });
+}
+
+/**
+ * Deliver one stable workflow signal through the app's authenticated resident
+ * owner, or under a short-lived app owner when no resident is active. The
+ * socket is only a route; the ledger decision remains the durable authority.
+ * @param {{appId: string, runId: string, signalId: string, deliveryId: string, payload: any, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} options - Exact signal delivery.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Durable accept/reject decision.
+ */
+export async function signalLocalDurableWorkflow(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('signalLocalDurableWorkflow requires options.');
+  }
+  const allowed = new Set([
+    'appId',
+    'runId',
+    'signalId',
+    'deliveryId',
+    'payload',
+    'configuration',
+  ]);
+  for (const key of Reflect.ownKeys(options)) {
+    if (typeof key !== 'string' || !allowed.has(key)) {
+      throw new TypeError(
+        `signalLocalDurableWorkflow.${String(key)} is not supported.`,
+      );
+    }
+  }
+  const configuration =
+    options.configuration || resolveExecutionLedgerStoreConfiguration();
+  if (configuration.adapterName !== 'lmdb') {
+    throw new Error('Local workflow signal requires the LMDB control adapter.');
+  }
+  const commandRequest = normalizeWorkflowSignalRequest(
+    cloneJsonObject(
+      {
+        appId: options.appId,
+        runId: options.runId,
+        signalId: options.signalId,
+        deliveryId: options.deliveryId,
+        ...(Object.prototype.hasOwnProperty.call(options, 'payload')
+          ? { payload: options.payload }
+          : {}),
+      },
+      'Local workflow signal',
+    ),
+  );
+  return await routeLocalResidentMutation({
+    appId: commandRequest.appId,
+    requestId: commandRequest.deliveryId,
+    command: RESIDENT_WORKFLOW_SIGNAL_COMMAND,
+    request: commandRequest,
+    configuration,
+    mutateDirect: async (ledger) =>
+      await deliverWorkflowLedgerSignal({
+        ledger,
+        ...commandRequest,
+      }),
+    failureMessage:
+      'Could not route or directly persist the workflow signal delivery.',
   });
 }
 

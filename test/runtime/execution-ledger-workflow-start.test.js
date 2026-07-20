@@ -383,44 +383,69 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
-    test('rejects timer- and signal-headed definitions without creating a run', async () => {
+    test('creates timer- and signal-headed definitions with exact activation projections', async () => {
       const { db, cleanup } = await adapter.create();
       const tableName = 'execution-ledger-workflow-start-unsupported-head';
       try {
         const ledger = createExecutionLedger({ db, tableName });
-        const unsupported = [
+        const headed = [
           {
             runId: workflowRunId('workflow-timer-head'),
+            disposition: 'TIMER_WAITING',
+            projection: 'timer',
             definition: {
               steps: [{ id: 'pause', kind: 'timer', delayMs: 1_000 }],
             },
           },
           {
             runId: workflowRunId('workflow-signal-head'),
+            disposition: 'SIGNAL_WAITING',
+            projection: 'signalWait',
             definition: {
               steps: [{ id: 'approval', kind: 'signal' }],
             },
           },
         ];
 
-        for (const candidate of unsupported) {
+        for (const candidate of headed) {
+          const created = await ledger.createWorkflowRun(
+            workflowRun(candidate.runId, {
+              definition: candidate.definition,
+            }),
+          );
+          expect(created).toMatchObject({
+            applied: true,
+            run: { status: 'RUNNING', version: 1 },
+            workflowCursor: {
+              disposition: candidate.disposition,
+              stepIndex: 0,
+            },
+            [candidate.projection]: { status: 'WAITING', version: 1 },
+          });
+          expect(created).not.toHaveProperty('invocation');
+          await expect(ledger.getEvents(candidate.runId)).resolves.toHaveLength(
+            1,
+          );
           await expect(
-            ledger.createWorkflowRun(
-              workflowRun(candidate.runId, {
-                definition: candidate.definition,
-              }),
-            ),
-          ).rejects.toThrow(/first.*activity|activity.*first/i);
-          await expect(ledger.getRun(candidate.runId)).resolves.toBeNull();
-          await expect(ledger.getEvents(candidate.runId)).resolves.toEqual([]);
-          await expect(
-            readRunRecords(db, tableName, candidate.runId),
-          ).resolves.toEqual([]);
+            ledger.rebuildRun(candidate.runId),
+          ).resolves.toMatchObject({
+            run: created.run,
+            workflowCursor: created.workflowCursor,
+            timers: candidate.projection === 'timer' ? [created.timer] : [],
+            signalWaits:
+              candidate.projection === 'signalWait' ? [created.signalWait] : [],
+          });
         }
-        await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
-        await expect(ledger.listRuns({ appId: APP_ID })).resolves.toEqual({
-          items: [],
+        await expect(listReadyWork(ledger)).resolves.toMatchObject({
+          items: [{ kind: 'TIMER', runId: headed[0].runId }],
         });
+        await expect(ledger.listRuns({ appId: APP_ID })).resolves.toMatchObject(
+          {
+            items: expect.arrayContaining(
+              headed.map(({ runId }) => expect.objectContaining({ runId })),
+            ),
+          },
+        );
       } finally {
         await cleanup();
       }

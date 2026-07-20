@@ -76,6 +76,8 @@ export const WorkflowCursorDisposition = Object.freeze({
   ACTIVITY_RUNNABLE: 'ACTIVITY_RUNNABLE',
   ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
   ACTIVITY_UNCERTAIN: 'ACTIVITY_UNCERTAIN',
+  TIMER_WAITING: 'TIMER_WAITING',
+  SIGNAL_WAITING: 'SIGNAL_WAITING',
   CANCELLED: 'CANCELLED',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
@@ -98,7 +100,7 @@ const OUTPUT_PAYLOAD_KEYS = ['schemaVersion', 'kind', 'value'];
 const ACTIVITY_REQUEST_KEYS = ['input', 'callerMetadata'];
 const WORKFLOW_OUTPUT_BINDING_KEYS = ['stepId', 'stepIndex', 'outputRef'];
 const SELECTED_OUTPUT_KEYS = ['binding', 'payload'];
-const WORKFLOW_CURSOR_KEYS = [
+const WORKFLOW_CURSOR_COMMON_KEYS = [
   'schemaVersion',
   'runId',
   'appId',
@@ -110,7 +112,6 @@ const WORKFLOW_CURSOR_KEYS = [
   'stepId',
   'stepIndex',
   'continuationId',
-  'invocationId',
   'disposition',
   'outputs',
   'version',
@@ -118,12 +119,17 @@ const WORKFLOW_CURSOR_KEYS = [
   'createdAt',
   'updatedAt',
 ];
+const WORKFLOW_CURSOR_ACTIVATION_KEYS = Object.freeze([
+  'invocationId',
+  'timerId',
+  'signalWaitId',
+]);
 
 /**
  * Return whether the active activity has a fully implemented atomic success
- * continuation. This is shared by the ledger and physical host so neither can
- * begin user code which would strand the cursor at an unsupported timer,
- * signal, or framework-owned successor boundary.
+ * continuation. Timer and signal successors are ordinary durable workflow
+ * activations; only the reserved framework-owned managed-effect successor is
+ * excluded from user workflow dispatch.
  * @param {Record<string, any>} cursor - Exact active workflow cursor.
  * @param {Record<string, any>} planPayload - Normalized immutable workflow plan.
  * @returns {boolean} - Whether this activity can be dispatched safely.
@@ -135,8 +141,8 @@ export function isWorkflowActivityDispatchSupported(cursor, planPayload) {
     current?.kind === 'activity' &&
     current.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID &&
     (!next ||
-      (next.kind === 'activity' &&
-        next.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID)),
+      next.kind !== 'activity' ||
+      next.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID),
   );
 }
 
@@ -662,7 +668,20 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
     EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
     label,
   );
-  assertExactKeys(cursor, WORKFLOW_CURSOR_KEYS, label);
+  const activationKeys = WORKFLOW_CURSOR_ACTIVATION_KEYS.filter((key) =>
+    Object.prototype.hasOwnProperty.call(cursor, key),
+  );
+  if (activationKeys.length !== 1) {
+    throw new TypeError(
+      `${label} must contain exactly one of ${WORKFLOW_CURSOR_ACTIVATION_KEYS.join(', ')}.`,
+    );
+  }
+  const activationKey = activationKeys[0];
+  assertExactKeys(
+    cursor,
+    [...WORKFLOW_CURSOR_COMMON_KEYS, activationKey],
+    label,
+  );
   if (cursor.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
     throw new TypeError(
       `${label}.schemaVersion must be the integer ${EXECUTION_LEDGER_SCHEMA_VERSION}.`,
@@ -708,7 +727,39 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
       `${label}.continuationId does not match its exact step activation.`,
     );
   }
-  assertWorkflowInvocationId(cursor.invocationId, `${label}.invocationId`);
+  if (activationKey === 'invocationId') {
+    assertWorkflowInvocationId(cursor.invocationId, `${label}.invocationId`);
+  } else if (activationKey === 'timerId') {
+    assertWorkflowTimerId(cursor.timerId, `${label}.timerId`);
+    if (
+      cursor.timerId !==
+      createWorkflowTimerId({
+        runId: cursor.runId,
+        planId: cursor.planId,
+        stepId: cursor.stepId,
+        stepIndex,
+      })
+    ) {
+      throw new TypeError(
+        `${label}.timerId does not match its exact step activation.`,
+      );
+    }
+  } else {
+    assertWorkflowSignalWaitId(cursor.signalWaitId, `${label}.signalWaitId`);
+    if (
+      cursor.signalWaitId !==
+      createWorkflowSignalWaitId({
+        runId: cursor.runId,
+        planId: cursor.planId,
+        stepId: cursor.stepId,
+        stepIndex,
+      })
+    ) {
+      throw new TypeError(
+        `${label}.signalWaitId does not match its exact step activation.`,
+      );
+    }
+  }
   if (!WORKFLOW_CURSOR_DISPOSITIONS.has(cursor.disposition)) {
     throw new TypeError(
       `${label}.disposition must be one of ${[...WORKFLOW_CURSOR_DISPOSITIONS].join(', ')}.`,
@@ -740,9 +791,43 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
     case WorkflowCursorDisposition.ACTIVITY_RUNNABLE:
     case WorkflowCursorDisposition.ACTIVITY_RUNNING:
     case WorkflowCursorDisposition.ACTIVITY_UNCERTAIN:
+      if (activationKey !== 'invocationId') {
+        throw new TypeError(
+          `${label}.${cursor.disposition} requires invocationId activation.`,
+        );
+      }
+      expectedOutputCount = stepIndex;
+      includesCurrentStepOutput = false;
+      break;
+    case WorkflowCursorDisposition.TIMER_WAITING:
+      if (activationKey !== 'timerId') {
+        throw new TypeError(
+          `${label}.TIMER_WAITING requires timerId activation.`,
+        );
+      }
+      expectedOutputCount = stepIndex;
+      includesCurrentStepOutput = false;
+      break;
+    case WorkflowCursorDisposition.SIGNAL_WAITING:
+      if (activationKey !== 'signalWaitId') {
+        throw new TypeError(
+          `${label}.SIGNAL_WAITING requires signalWaitId activation.`,
+        );
+      }
+      expectedOutputCount = stepIndex;
+      includesCurrentStepOutput = false;
+      break;
     case WorkflowCursorDisposition.CANCELLED:
+      expectedOutputCount = stepIndex;
+      includesCurrentStepOutput = false;
+      break;
     case WorkflowCursorDisposition.FAILED:
     case WorkflowCursorDisposition.PROTOCOL_FAILED:
+      if (activationKey !== 'invocationId') {
+        throw new TypeError(
+          `${label}.${cursor.disposition} requires invocationId activation.`,
+        );
+      }
       expectedOutputCount = stepIndex;
       includesCurrentStepOutput = false;
       break;
@@ -797,7 +882,7 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
     stepId: cursor.stepId,
     stepIndex,
     continuationId: cursor.continuationId,
-    invocationId: cursor.invocationId,
+    [activationKey]: cursor[activationKey],
     disposition: cursor.disposition,
     outputs,
     version,
@@ -873,6 +958,17 @@ function assertWorkflowCursorContext(cursor, context, label) {
   const currentStep = context.planPayload.definition.steps[cursor.stepIndex];
   if (!currentStep || currentStep.id !== cursor.stepId) {
     throw new TypeError(`${label} does not match its exact plan step.`);
+  }
+  const activationKey =
+    currentStep.kind === 'activity'
+      ? 'invocationId'
+      : currentStep.kind === 'timer'
+        ? 'timerId'
+        : 'signalWaitId';
+  if (!Object.prototype.hasOwnProperty.call(cursor, activationKey)) {
+    throw new TypeError(
+      `${label} activation does not match its exact plan step kind.`,
+    );
   }
   for (const binding of cursor.outputs) {
     if (
@@ -1115,9 +1211,9 @@ function materializeWorkflowActivityCursorTransition(value, options) {
     transition.sequence,
     `${options.label}.sequence`,
   );
-  if (sequence !== currentCursor.lastSequence + 1) {
+  if (sequence <= currentCursor.lastSequence) {
     throw new TypeError(
-      `${options.label}.sequence must immediately follow currentCursor.lastSequence.`,
+      `${options.label}.sequence must follow currentCursor.lastSequence.`,
     );
   }
   const observedAt = assertPositiveSafeInteger(
@@ -1171,10 +1267,10 @@ export function materializeWorkflowActivityUncertainty(value) {
 }
 
 /**
- * Terminalize the current workflow activation because its run-level
+ * Terminalize the current unstarted or waiting workflow activation because its run-level
  * cancellation decision prevents any later continuation. The physical
  * attempt state remains a ledger concern, so the same cursor edge is used for
- * runnable, claimed, started, and uncertain activity decisions.
+ * runnable, claimed, started, uncertain activity, timer, and signal decisions.
  * @param {{currentCursor: unknown, sequence: number, observedAt: number}} value - Exact cancellation materialization.
  * @returns {Record<string, any>} - Same activity retained as a terminal cancelled cursor.
  */
@@ -1198,19 +1294,21 @@ export function materializeWorkflowActivityCancellation(value) {
       WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
       WorkflowCursorDisposition.ACTIVITY_RUNNING,
       WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+      WorkflowCursorDisposition.TIMER_WAITING,
+      WorkflowCursorDisposition.SIGNAL_WAITING,
     ].includes(currentCursor.disposition)
   ) {
     throw new TypeError(
-      'workflow activity cancellation.currentCursor must name a nonterminal activity.',
+      'workflow activity cancellation.currentCursor must name a cancellable nonterminal activation.',
     );
   }
   const sequence = assertPositiveSafeInteger(
     transition.sequence,
     'workflow activity cancellation.sequence',
   );
-  if (sequence !== currentCursor.lastSequence + 1) {
+  if (sequence <= currentCursor.lastSequence) {
     throw new TypeError(
-      'workflow activity cancellation.sequence must immediately follow currentCursor.lastSequence.',
+      'workflow activity cancellation.sequence must follow currentCursor.lastSequence.',
     );
   }
   const observedAt = assertPositiveSafeInteger(
@@ -1274,12 +1372,139 @@ export function materializeWorkflowCancellationIntent(value) {
 }
 
 /**
- * Materialize the logical completion of one activity from an exact supported
- * source disposition. Exported wrappers keep ordinary success and uncertain
- * reconciliation as distinct authority boundaries.
+ * Materialize one exact plan activation. The returned cursor contains one and
+ * only one activation identity, while the kind-specific descriptor carries
+ * the data needed to create its durable projection.
+ * @param {{runId: string, context: ReturnType<typeof normalizeWorkflowPayloadContext>, stepIndex: number, outputs: Array<ReturnType<typeof normalizeWorkflowOutputBinding>>, selectedOutput?: ReturnType<typeof normalizeSelectedWorkflowOutput>, currentOutput?: ReturnType<typeof normalizeSelectedWorkflowOutput>, version: number, lastSequence: number, createdAt: number, observedAt: number, label: string}} value - Exact activation inputs.
+ * @returns {Record<string, any>} - Cursor plus one kind-specific activation descriptor.
+ */
+function materializeWorkflowStepActivation(value) {
+  const step = value.context.planPayload.definition.steps[value.stepIndex];
+  if (!step) {
+    throw new TypeError(`${value.label} does not name a workflow plan step.`);
+  }
+  const continuationId = createWorkflowContinuationId({
+    runId: value.runId,
+    planId: value.context.planId,
+    stepId: step.id,
+    stepIndex: value.stepIndex,
+  });
+  const cursorCommon = {
+    schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+    runId: value.runId,
+    appId: value.context.planPayload.appId,
+    revisionId: value.context.planPayload.revisionId,
+    workflowId: value.context.planPayload.workflowId,
+    planId: value.context.planId,
+    planRef: value.context.planRef,
+    startRef: value.context.startRef,
+    stepId: step.id,
+    stepIndex: value.stepIndex,
+    continuationId,
+    outputs: value.outputs,
+    version: value.version,
+    lastSequence: value.lastSequence,
+    createdAt: value.createdAt,
+    updatedAt: value.observedAt,
+  };
+  if (step.kind === 'activity') {
+    const activityRequest = selectWorkflowActivityRequest({
+      step,
+      stepIndex: value.stepIndex,
+      planPayload: value.context.planPayload,
+      startPayload: value.context.startPayload,
+      outputs: value.outputs,
+      selectedOutput: value.selectedOutput,
+      currentOutput: value.currentOutput,
+      label: `${value.label}.activity`,
+    });
+    const invocationId = createWorkflowInvocationId({
+      runId: value.runId,
+      continuationId,
+      stepId: step.id,
+      stepIndex: value.stepIndex,
+      activityId: step.activity,
+    });
+    const cursor = normalizeWorkflowCursor({
+      ...cursorCommon,
+      invocationId,
+      disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+    });
+    return {
+      cursor,
+      nextActivity: {
+        stepId: step.id,
+        stepIndex: value.stepIndex,
+        continuationId,
+        invocationId,
+        activityId: step.activity,
+        activityRequest,
+      },
+    };
+  }
+  if (value.selectedOutput) {
+    throw new TypeError(
+      `${value.label}.selectedOutput is supported only when entering an activity.`,
+    );
+  }
+  if (step.kind === 'timer') {
+    const dueAt = value.observedAt + step.delayMs;
+    if (!Number.isSafeInteger(dueAt)) {
+      throw new RangeError(`${value.label}.dueAt exceeds a safe integer.`);
+    }
+    const timerId = createWorkflowTimerId({
+      runId: value.runId,
+      planId: value.context.planId,
+      stepId: step.id,
+      stepIndex: value.stepIndex,
+    });
+    const cursor = normalizeWorkflowCursor({
+      ...cursorCommon,
+      timerId,
+      disposition: WorkflowCursorDisposition.TIMER_WAITING,
+    });
+    return {
+      cursor,
+      nextTimer: {
+        stepId: step.id,
+        stepIndex: value.stepIndex,
+        continuationId,
+        timerId,
+        scheduledAt: value.observedAt,
+        dueAt,
+      },
+    };
+  }
+  const signalWaitId = createWorkflowSignalWaitId({
+    runId: value.runId,
+    planId: value.context.planId,
+    stepId: step.id,
+    stepIndex: value.stepIndex,
+  });
+  const cursor = normalizeWorkflowCursor({
+    ...cursorCommon,
+    signalWaitId,
+    disposition: WorkflowCursorDisposition.SIGNAL_WAITING,
+  });
+  return {
+    cursor,
+    nextSignalWait: {
+      stepId: step.id,
+      stepIndex: value.stepIndex,
+      continuationId,
+      signalWaitId,
+      signalId: step.id,
+    },
+  };
+}
+
+/**
+ * Materialize the logical completion of one activity, timer, or signal wait
+ * from an exact supported source disposition. Exported wrappers keep each
+ * authority boundary explicit.
  * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outputPayload: unknown, outputRef: unknown, selectedOutput?: {binding: unknown, payload: unknown}, sequence: number, observedAt: number}} value - Completed activity materialization.
- * @param {{label: string, currentDisposition: string}} options - Exact supported completion source.
- * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, outputPayload: ReturnType<typeof normalizeWorkflowOutputPayload>, outputRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, outputBinding: ReturnType<typeof normalizeWorkflowOutputBinding>, completed: boolean, cursor: Record<string, any>, nextActivity?: {stepId: string, stepIndex: number, continuationId: string, invocationId: string, activityId: string, activityRequest: {input: any, callerMetadata: Record<string, any>}}}} - Exact successor or terminal materialization.
+ * @param {{label: string, currentDisposition: string, currentKind?: 'activity'|'timer'|'signal'}} options - Exact supported completion source.
+ * @returns {Record<string, any>} - Exact successor or terminal materialization.
  */
 function materializeWorkflowActivityCompletion(value, options) {
   const { label } = options;
@@ -1326,28 +1551,33 @@ function materializeWorkflowActivityCompletion(value, options) {
     context,
     `${label}.currentCursor`,
   );
-  if (currentStep.kind !== 'activity') {
-    throw new TypeError(`${label}.currentCursor must name an activity step.`);
-  }
-  const expectedInvocationId = createWorkflowInvocationId({
-    runId: currentCursor.runId,
-    continuationId: currentCursor.continuationId,
-    stepId: currentCursor.stepId,
-    stepIndex: currentCursor.stepIndex,
-    activityId: currentStep.activity,
-  });
-  if (currentCursor.invocationId !== expectedInvocationId) {
+  const currentKind = options.currentKind || 'activity';
+  if (currentStep.kind !== currentKind) {
     throw new TypeError(
-      `${label}.currentCursor invocationId does not match its exact activity activation.`,
+      `${label}.currentCursor must name a ${currentKind} step.`,
     );
+  }
+  if (currentStep.kind === 'activity') {
+    const expectedInvocationId = createWorkflowInvocationId({
+      runId: currentCursor.runId,
+      continuationId: currentCursor.continuationId,
+      stepId: currentCursor.stepId,
+      stepIndex: currentCursor.stepIndex,
+      activityId: currentStep.activity,
+    });
+    if (currentCursor.invocationId !== expectedInvocationId) {
+      throw new TypeError(
+        `${label}.currentCursor invocationId does not match its exact activity activation.`,
+      );
+    }
   }
   const sequence = assertPositiveSafeInteger(
     materialization.sequence,
     `${label}.sequence`,
   );
-  if (sequence !== currentCursor.lastSequence + 1) {
+  if (sequence <= currentCursor.lastSequence) {
     throw new TypeError(
-      `${label}.sequence must immediately follow currentCursor.lastSequence.`,
+      `${label}.sequence must follow currentCursor.lastSequence.`,
     );
   }
   const observedAt = assertPositiveSafeInteger(
@@ -1412,59 +1642,25 @@ function materializeWorkflowActivityCompletion(value, options) {
     });
     return { ...common, completed: true, cursor };
   }
-  if (nextStep.kind !== 'activity') {
-    throw new TypeError(
-      `${label} supports only an activity successor or terminal workflow; timer and signal successors are not implemented.`,
-    );
-  }
   const currentOutput = { binding: outputBinding, payload: outputPayload };
-  const activityRequest = selectWorkflowActivityRequest({
-    step: nextStep,
+  const activation = materializeWorkflowStepActivation({
+    runId: currentCursor.runId,
+    context,
     stepIndex: nextStepIndex,
-    planPayload: context.planPayload,
-    startPayload: context.startPayload,
     outputs,
     selectedOutput,
     currentOutput,
-    label: `${label}.nextActivity`,
-  });
-  const continuationId = createWorkflowContinuationId({
-    runId: currentCursor.runId,
-    planId: context.planId,
-    stepId: nextStep.id,
-    stepIndex: nextStepIndex,
-  });
-  const invocationId = createWorkflowInvocationId({
-    runId: currentCursor.runId,
-    continuationId,
-    stepId: nextStep.id,
-    stepIndex: nextStepIndex,
-    activityId: nextStep.activity,
-  });
-  const cursor = normalizeWorkflowCursor({
-    ...currentCursor,
-    stepId: nextStep.id,
-    stepIndex: nextStepIndex,
-    continuationId,
-    invocationId,
-    disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
-    outputs,
     version: currentCursor.version + 1,
     lastSequence: sequence,
-    updatedAt: observedAt,
+    createdAt: currentCursor.createdAt,
+    observedAt,
+    label: `${label}.successor`,
   });
   return {
     ...common,
     completed: false,
-    cursor,
-    nextActivity: {
-      stepId: nextStep.id,
-      stepIndex: nextStepIndex,
-      continuationId,
-      invocationId,
-      activityId: nextStep.activity,
-      activityRequest,
-    },
+    cursor: activation.cursor,
+    ...activation,
   };
 }
 
@@ -1495,6 +1691,34 @@ export function materializeUncertainWorkflowActivitySuccess(value) {
   return materializeWorkflowActivityCompletion(value, {
     label: 'resolved uncertain workflow activity materialization',
     currentDisposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
+  });
+}
+
+/**
+ * Consume one waiting timer, bind its canonical persisted output, and enter
+ * the statically declared successor or terminal cursor.
+ * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outputPayload: unknown, outputRef: unknown, selectedOutput?: {binding: unknown, payload: unknown}, sequence: number, observedAt: number}} value - Fired timer materialization.
+ * @returns {ReturnType<typeof materializeWorkflowActivityCompletion>} - Exact successor or terminal materialization.
+ */
+export function materializeWorkflowTimerFire(value) {
+  return materializeWorkflowActivityCompletion(value, {
+    label: 'fired workflow timer materialization',
+    currentDisposition: WorkflowCursorDisposition.TIMER_WAITING,
+    currentKind: 'timer',
+  });
+}
+
+/**
+ * Consume one expected signal wait, bind the accepted payload as its output,
+ * and enter the statically declared successor or terminal cursor.
+ * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outputPayload: unknown, outputRef: unknown, selectedOutput?: {binding: unknown, payload: unknown}, sequence: number, observedAt: number}} value - Accepted signal materialization.
+ * @returns {ReturnType<typeof materializeWorkflowActivityCompletion>} - Exact successor or terminal materialization.
+ */
+export function materializeWorkflowSignalAcceptance(value) {
+  return materializeWorkflowActivityCompletion(value, {
+    label: 'accepted workflow signal materialization',
+    currentDisposition: WorkflowCursorDisposition.SIGNAL_WAITING,
+    currentKind: 'signal',
   });
 }
 
@@ -1575,9 +1799,9 @@ function materializeWorkflowActivityTerminalFailure(value, options) {
     materialization.sequence,
     `${label}.sequence`,
   );
-  if (sequence !== currentCursor.lastSequence + 1) {
+  if (sequence <= currentCursor.lastSequence) {
     throw new TypeError(
-      `${label}.sequence must immediately follow currentCursor.lastSequence.`,
+      `${label}.sequence must follow currentCursor.lastSequence.`,
     );
   }
   const observedAt = assertPositiveSafeInteger(
@@ -1633,15 +1857,14 @@ export function materializeUncertainWorkflowActivityFailure(value) {
 }
 
 /**
- * Select the first activity from verified immutable plan/start payloads and
+ * Select the first activation from verified immutable plan/start payloads and
  * construct every pure identity and cursor field needed by the atomic start
- * transition. Timer- and signal-headed workflows fail before a caller needs
- * to publish an activity request or mutate the ledger.
- * @param {{runId: string, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, observedAt: number}} value - First-activity materialization inputs.
- * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, continuationId: string, invocationId: string, activityId: string, activityRequest: {input: any, callerMetadata: Record<string, any>}, cursor: Record<string, any>}} - Exact first activity materialization.
+ * transition.
+ * @param {{runId: string, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, observedAt: number}} value - First-step materialization inputs.
+ * @returns {Record<string, any>} - Exact first activity, timer, or signal-wait materialization.
  */
-export function materializeFirstWorkflowActivity(value) {
-  const label = 'first workflow activity materialization';
+export function materializeFirstWorkflowStep(value) {
+  const label = 'first workflow step materialization';
   const materialization = cloneBoundedJsonObject(
     value,
     WORKFLOW_PLAN_PAYLOAD_MAX_BYTES +
@@ -1667,62 +1890,46 @@ export function materializeFirstWorkflowActivity(value) {
     materialization.observedAt,
     `${label}.observedAt`,
   );
-  const firstStep = context.planPayload.definition.steps[0];
-  if (firstStep.kind !== 'activity') {
-    throw new TypeError(
-      `${label} requires an activity-headed workflow; timer and signal first steps are not implemented.`,
-    );
-  }
-  const continuationId = createWorkflowContinuationId({
+  const activation = materializeWorkflowStepActivation({
     runId: materialization.runId,
-    planId: context.planId,
-    stepId: firstStep.id,
+    context,
     stepIndex: 0,
-  });
-  const invocationId = createWorkflowInvocationId({
-    runId: materialization.runId,
-    continuationId,
-    stepId: firstStep.id,
-    stepIndex: 0,
-    activityId: firstStep.activity,
-  });
-  const cursor = normalizeWorkflowCursor({
-    schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
-    runId: materialization.runId,
-    appId: context.planPayload.appId,
-    revisionId: context.planPayload.revisionId,
-    workflowId: context.planPayload.workflowId,
-    planId: context.planId,
-    planRef: context.planRef,
-    startRef: context.startRef,
-    stepId: firstStep.id,
-    stepIndex: 0,
-    continuationId,
-    invocationId,
-    disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
     outputs: [],
     version: 1,
     lastSequence: 1,
     createdAt: observedAt,
-    updatedAt: observedAt,
-  });
-  const selected = materializeNormalizedWorkflowActivityAtCursor({
-    context,
-    cursor,
+    observedAt,
     label,
   });
   return {
-    runId: selected.runId,
-    planPayload: selected.planPayload,
-    planRef: selected.planRef,
-    startPayload: selected.startPayload,
-    startRef: selected.startRef,
-    planId: selected.planId,
-    continuationId: selected.continuationId,
-    invocationId: selected.invocationId,
-    activityId: selected.activityId,
-    activityRequest: selected.activityRequest,
-    cursor: selected.cursor,
+    runId: materialization.runId,
+    ...context,
+    ...activation,
+  };
+}
+
+/**
+ * Backward-compatible activity-headed wrapper around the generic first-step
+ * materializer.
+ * @param {{runId: string, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, observedAt: number}} value - First-activity materialization inputs.
+ * @returns {Record<string, any>} - Exact first activity materialization.
+ */
+export function materializeFirstWorkflowActivity(value) {
+  const materialized = materializeFirstWorkflowStep(value);
+  if (!materialized.nextActivity) {
+    throw new TypeError(
+      'first workflow activity materialization requires an activity-headed workflow.',
+    );
+  }
+  return {
+    runId: materialized.runId,
+    planPayload: materialized.planPayload,
+    planRef: materialized.planRef,
+    startPayload: materialized.startPayload,
+    startRef: materialized.startRef,
+    planId: materialized.planId,
+    ...materialized.nextActivity,
+    cursor: materialized.cursor,
   };
 }
 
@@ -1765,6 +1972,7 @@ export default {
   createWorkflowSignalWaitId,
   createWorkflowTimerId,
   materializeFirstWorkflowActivity,
+  materializeFirstWorkflowStep,
   materializeUncertainWorkflowActivityFailure,
   materializeUncertainWorkflowActivitySuccess,
   materializeWorkflowActivityCancellation,
@@ -1774,6 +1982,8 @@ export default {
   materializeWorkflowActivityUncertainty,
   materializeWorkflowCancellationIntent,
   materializeWorkflowCursorActivity,
+  materializeWorkflowSignalAcceptance,
+  materializeWorkflowTimerFire,
   isWorkflowActivityDispatchSupported,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,

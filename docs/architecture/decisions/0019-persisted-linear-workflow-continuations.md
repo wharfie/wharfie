@@ -2,33 +2,38 @@
 
 **Status:** Accepted · **Date:** 2026-07-19
 
-**Implementation status (2026-07-19):** the V10 ledger implements
-activity-headed materialization, cursor-guarded activity claim/start, compound
-verified terminal settlement, conservative recovery, and run-level
-cancellation. It releases an unstarted `CLAIMED` generation back to
-`ACTIVITY_RUNNABLE`, blocks a lost `STARTED` generation at
-`ACTIVITY_UNCERTAIN`, accepts exact completed evidence to atomically continue
-or complete the workflow, and terminalizes direct or reconciled failures
-without an output or successor. Runnable and claimed cancellation removes
-ready authority without authored dispatch; started cancellation persists
-before exact-owner delivery; uncertain cancellation prevents continuation
-without claiming a physical outcome. Matching verified `cancelled` evidence is
-accepted only under the exact prior cancellation authority. Reconciliation
-never rewrites the retained `ABANDONED` attempt. Ready-work V2 changes in the
-same transactions.
+**Implementation status (2026-07-20):** the V10 ledger implements
+activity-, timer-, and signal-headed materialization on one cursor and run
+head, cursor-guarded activity claim/start, compound verified activity terminal
+settlement, persisted timer firing, current-wait signal consumption,
+conservative recovery, and run-level cancellation. It releases an unstarted
+`CLAIMED` generation back to `ACTIVITY_RUNNABLE`, blocks a lost `STARTED`
+generation at `ACTIVITY_UNCERTAIN`, accepts exact completed evidence to
+atomically continue or complete the workflow, and terminalizes direct or
+reconciled failures without an output or successor. Runnable activities, timer
+waits, and signal waits cancel without authored dispatch; started cancellation
+persists before exact-owner delivery; uncertain cancellation prevents
+continuation without claiming a physical outcome. Matching verified
+`cancelled` evidence is accepted only under the exact prior cancellation
+authority. Reconciliation never rewrites the retained `ABANDONED` attempt.
+Ready-work V2 changes in the same transactions.
+
 Adapter matrices cover replay, races, injected payload and transaction
 failures, projection and payload tampering, and native LMDB close/reopen.
-The resident now consumes exact manifest-bound workflow `ACTIVITY` and
-`RECOVERY` rows, persists the cursor-guarded start before physical dispatch,
-continues ordinary activity chains serially, releases only unstarted claims,
-and turns lost started work into non-runnable uncertainty. Shared source and
-packaged `start` commands now persist plans composed entirely of ordinary
-activity steps, and generic exact-run inspection, confirmed recovery, and
-evidence reconciliation understand the workflow trigger and cursor. Generic
-source and packaged `cancel` commands now share the same cursor-aware workflow
-decision. Timers, signals, managed-effect successor steps, managed effects in
-workflow attempts, and reconciliation of `deadline-exceeded` evidence remain
-prospective.
+
+The resident consumes exact manifest-bound workflow `ACTIVITY`, `RECOVERY`, and
+`TIMER` rows. Timers fire as framework work without Activity Protocol dispatch,
+and a persisted deadline survives restart unchanged. Shared source and packaged
+`start` commands persist the complete finite activity/timer/signal plan. Shared
+source `wharfie ops signal` and packaged `<app> wharfie signal` commands require
+stable delivery IDs and accept only the current declared wait; exact accepted
+or rejected decisions replay, while early, unexpected, and late deliveries are
+durably rejected without an inbox. Generic schema-v7 exact-run inspection,
+confirmed recovery, evidence reconciliation, and cursor-aware cancellation
+understand these activation kinds while keeping signal payloads and internal
+references redacted. Managed-effect workflow successors, managed effects in
+workflow attempts, schedules, branches, and reconciliation of
+`deadline-exceeded` evidence remain prospective.
 
 ## Context
 
@@ -36,7 +41,8 @@ prospective.
 persisted state machines and continuations instead of deterministic replay of
 arbitrary application code. The resident activity worker now proves durable
 submission, exact-revision serial dispatch for manual and ordinary workflow
-activities, conservative `CLAIMED` and `STARTED` recovery, managed-effect
+activities, persisted framework timer firing, current-wait signal delivery,
+conservative `CLAIMED` and `STARTED` recovery, managed-effect
 settlement for manual attempts, authenticated local commands, and graceful
 shutdown. A manual invocation's terminal transition still terminalizes its
 run; a workflow activity terminal instead atomically advances its persisted
@@ -201,9 +207,10 @@ Reconciliation accepts a complete verified Activity Protocol transcript ending
 in `completed`, `failed`, `protocol-failed`, or an authorized `cancelled` for
 that exact abandoned attempt and anchored to the exact uncertainty event. It
 leaves the physical attempt byte-identical. Completed evidence persists the
-logical output and atomically installs the next activity and `ACTIVITY` row or
-completes the workflow unless a prior cancellation request already forbids a
-successor. Failure evidence changes the logical invocation and run to `FAILED`,
+logical output and atomically installs the exact next activity, timer, or signal
+wait and any corresponding ready row, or completes the workflow unless a prior
+cancellation request already forbids a successor. Failure evidence changes the
+logical invocation and run to `FAILED`,
 advances the cursor to the matching failure disposition, retains the prior
 output prefix, and creates no output, successor, or ready row. Cancelled
 evidence is valid only when that abandoned attempt itself retained the prior
@@ -240,9 +247,10 @@ uncertain removes `RECOVERY`; completed-evidence reconciliation creates exactly
 one successor `ACTIVITY` row or no row for terminal completion; direct and
 reconciled failures leave no row.
 
-The initial work-index row kinds are runnable activity, activity recovery, and
-timer; the resident currently dispatches only the first two. A schema-level
-continuation row is reserved for fail-closed,
+The work-index row kinds are runnable activity, activity recovery, and timer;
+the resident handles all three, with timer rows entering only the
+framework-owned firing transition. A schema-level continuation row is reserved
+for fail-closed,
 framework-owned cursor advancement or repair when an immediate successor
 cannot be materialized in its normal compound transition. It never represents
 a signal wait and never authorizes user-code dispatch. Normal activity, timer,
@@ -282,12 +290,13 @@ of the later multi-host control-store contract.
 ### Signals consume only the current expected wait in V10
 
 A signal submission carries a required stable delivery ID and one bounded,
-content-addressed JSON payload. The initial V10 policy accepts a signal only
-when the exact run cursor is currently waiting for that declared signal. An
-unknown run is refused without mutation. For an existing run, an early,
-wrong-step, or late delivery appends a durable rejection against the observed
-run head and consumes that delivery identity without advancing the workflow
-cursor or making the payload a step output. An exact retry returns the retained
+content-addressed JSON payload. V10 accepts a signal only when the exact run
+cursor is currently waiting for that declared signal. An unknown run is
+refused without mutation. For an existing run, an early, wrong-step, or late
+delivery appends the explicit durable rejection `early-signal`,
+`unexpected-signal`, or `late-signal` against the observed run head and
+consumes that delivery identity without advancing the workflow cursor or
+making the payload a step output. An exact retry returns the retained
 rejection; reusing the delivery ID with different target, signal, payload, or
 actor conflicts. This is an audit/replay decision, not a durable early-signal
 inbox; buffering for later consumption is explicitly deferred.
@@ -300,10 +309,20 @@ actor, and target returns the retained receipt after response loss. Reusing the
 delivery ID with different contents conflicts. Another delivery cannot consume
 the already consumed wait.
 
-Local source and packaged signal commands use the same app-scoped ownership
-boundary as submission. They route to the authenticated resident when it owns
-the control volume or acquire short-lived local ownership only after proving
-that no resident is active. Socket delivery is not durable signal authority.
+Local source
+`wharfie ops signal --run-id <run-id> --signal <signal-step-id> --delivery-id <stable-delivery-id> --payload <json>`
+and packaged `<app> wharfie signal ...` commands use the same app-scoped
+ownership boundary as submission. They route to the authenticated resident
+when it owns the control volume or acquire short-lived local ownership only
+after proving that no resident is active. Socket delivery is not durable signal
+authority. There is no public timer-fire command; due timers are resident-owned
+framework work.
+
+Schema-v7 exact-run inspection exposes redacted timer, signal-wait, and
+signal-delivery identities, lifecycle status, safe timer timestamps, and signal
+rejection classification. Those dedicated lifecycle projections do not expose
+signal payloads, payload references, digests, actor fields, or other durable
+request internals. Event history retains its existing safe actor metadata.
 
 ### Cancellation is a run decision and cannot race past a continuation
 
@@ -351,9 +370,9 @@ waiting or blocked until that exact revision is restored or a future explicit
 migration protocol is used. V10 defines no workflow migration and no mutable
 `latest` alias.
 
-### The first public vertical is deliberately narrow
+### The public vertical is deliberately narrow
 
-The first V10 proof is one manually started, single-active-continuation workflow
+The V10 proof is one manually started, single-active-continuation workflow
 that can follow a linear path such as:
 
 ```text
@@ -362,7 +381,7 @@ activity -> timer -> signal -> activity -> terminal
 
 Source and packaged commands share workflow start, expected-signal delivery,
 cancellation, inspection, and the resident worker implementation. The moved
-SEA must run the same path from locked LMDB with Node unavailable on `PATH`.
+SEA runs the same path from locked LMDB with Node unavailable on `PATH`.
 
 Branches, loops, parallel steps, child workflows, retry/backoff policy, cron or
 other scheduled starts, a durable early-signal inbox, dynamic expressions,
@@ -373,7 +392,7 @@ in this decision.
 
 ## Required proof
 
-The implementation is incomplete until tests establish at least:
+The required proof for this vertical includes:
 
 - manifest and plan canonicalization, selector availability, stable identities,
   payload bounds, exact replay, conflicting reuse, event folding, and

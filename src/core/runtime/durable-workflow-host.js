@@ -3,7 +3,6 @@ import {
   WORKFLOW_PLAN_PAYLOAD_KIND,
   createWorkflowPlanId,
   createWorkflowRunId,
-  isWorkflowActivityDispatchSupported,
   normalizeWorkflowPlanPayload,
 } from '../lib/ledger/workflow-execution-contract.js';
 import {
@@ -19,10 +18,11 @@ const WORKFLOW_START_TRANSITION_ID = 'workflow-start';
 
 /**
  * Bind one named workflow to the exact immutable application revision. Public
- * start currently accepts only plans whose complete activity chain can finish
- * on the implemented resident continuation surface.
+ * All declared step kinds are framework-owned persisted continuations. This
+ * binding only seals the exact manifest plan; execution-time dispatch checks
+ * remain specific to the current activation kind.
  * @param {{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, workflowId: string}} options - Bound revision and workflow name.
- * @returns {Readonly<{planId: string, planPayload: Record<string, any>, dispatchSupported: boolean}>} - Exact immutable plan binding.
+ * @returns {Readonly<{planId: string, planPayload: Record<string, any>}>} - Exact immutable plan binding.
  */
 export function resolveManifestWorkflowStartBinding(options) {
   const definition = getManifestWorkflowDefinition({
@@ -48,9 +48,6 @@ export function resolveManifestWorkflowStartBinding(options) {
   return Object.freeze({
     planId: createWorkflowPlanId(planPayload),
     planPayload,
-    dispatchSupported: planPayload.definition.steps.every((_, stepIndex) =>
-      isWorkflowActivityDispatchSupported({ stepIndex }, planPayload),
-    ),
   });
 }
 
@@ -58,7 +55,7 @@ export function resolveManifestWorkflowStartBinding(options) {
  * Cross-check one persisted activation against the exact workflow definition
  * sealed into an already-bound application revision.
  * @param {{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, workflowId: string, planId: string, activityId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}}} options - Bound revision and persisted activation.
- * @returns {Readonly<{planPayload: Record<string, any>, step: Record<string, any>, dispatchSupported: boolean}>} - Exact manifest binding.
+ * @returns {Readonly<{planPayload: Record<string, any>, step: Record<string, any>}>} - Exact manifest binding.
  */
 export function resolveManifestWorkflowActivityBinding(options) {
   const workflow = resolveManifestWorkflowStartBinding({
@@ -87,10 +84,6 @@ export function resolveManifestWorkflowActivityBinding(options) {
   return Object.freeze({
     planPayload: workflow.planPayload,
     step,
-    dispatchSupported: isWorkflowActivityDispatchSupported(
-      options.cursor,
-      workflow.planPayload,
-    ),
   });
 }
 
@@ -151,11 +144,6 @@ export async function startDurableManifestWorkflow(options) {
     identity: binding.identity,
     workflowId,
   });
-  if (!workflow.dispatchSupported) {
-    throw new Error(
-      `Workflow '${String(workflowId)}' cannot start until every declared continuation kind is implemented.`,
-    );
-  }
   const runId = createWorkflowRunId({
     appId: binding.identity.appId,
     idempotencyKey,
@@ -253,18 +241,13 @@ export async function runPersistedDurableManifestWorkflowActivity(options) {
     );
   }
   const binding = resolveManifestActivityExecutionBinding(execution);
-  const manifestBinding = resolveManifestWorkflowActivityBinding({
+  resolveManifestWorkflowActivityBinding({
     identity: binding.identity,
     workflowId,
     planId,
     activityId,
     cursor,
   });
-  if (!manifestBinding.dispatchSupported) {
-    throw new Error(
-      `Workflow activity '${manifestBinding.step.id}' cannot dispatch before its continuation kind is implemented.`,
-    );
-  }
   if (binding.execution.kind === 'prepared-source') {
     await binding.execution.prepared.verifyRuntime();
   }

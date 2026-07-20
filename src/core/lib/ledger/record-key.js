@@ -81,6 +81,39 @@ export function getWorkflowCursorProjectionSortKey() {
 }
 
 /**
+ * @param {string} timerId - Stable workflow timer identity.
+ * @returns {string} - Timer-projection sort key.
+ */
+export function getWorkflowTimerProjectionSortKey(timerId) {
+  return `${EXECUTION_LEDGER_SORT_KEY_PREFIX}projection/workflow-timer/${encodeLedgerKeySegment(
+    timerId,
+    'timerId',
+  )}`;
+}
+
+/**
+ * @param {string} signalWaitId - Stable workflow signal-wait identity.
+ * @returns {string} - Signal-wait-projection sort key.
+ */
+export function getWorkflowSignalWaitProjectionSortKey(signalWaitId) {
+  return `${EXECUTION_LEDGER_SORT_KEY_PREFIX}projection/workflow-signal-wait/${encodeLedgerKeySegment(
+    signalWaitId,
+    'signalWaitId',
+  )}`;
+}
+
+/**
+ * @param {string} deliveryId - App-scoped public signal-delivery identity.
+ * @returns {string} - Per-run signal-delivery-projection sort key.
+ */
+export function getWorkflowSignalDeliveryProjectionSortKey(deliveryId) {
+  return `${EXECUTION_LEDGER_SORT_KEY_PREFIX}projection/workflow-signal-delivery/${encodeLedgerKeySegment(
+    deliveryId,
+    'deliveryId',
+  )}`;
+}
+
+/**
  * @param {number} sequence - Event sequence.
  * @returns {string} - Event sort key.
  */
@@ -162,4 +195,7 @@ export default {
   getRunProjectionSortKey,
   getTransitionSortKey,
   getWorkflowCursorProjectionSortKey,
+  getWorkflowSignalDeliveryProjectionSortKey,
+  getWorkflowSignalWaitProjectionSortKey,
+  getWorkflowTimerProjectionSortKey,
 };

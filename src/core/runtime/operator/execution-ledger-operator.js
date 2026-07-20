@@ -15,6 +15,8 @@ import {
   EffectStatus,
   InvocationStatus,
   RunStatus,
+  WorkflowSignalWaitStatus,
+  WorkflowTimerStatus,
 } from '../../lib/db/tables/execution-ledger.js';
 import {
   LedgerServiceOwnerKind,
@@ -38,6 +40,7 @@ import {
   recoverManualLedgerActivity,
 } from '../manual-ledger-run.js';
 import {
+  WorkflowLedgerRecoveryAction,
   recoverWorkflowLedgerActivity,
   requestWorkflowLedgerRunCancellation,
 } from '../workflow-ledger-run.js';
@@ -510,6 +513,33 @@ const OWNER_CANCELLATION_RUN_STATUSES = new Set(Object.values(RunStatus));
 const OWNER_CANCELLATION_INVOCATION_STATUSES = new Set(
   Object.values(InvocationStatus),
 );
+/** @type {Set<string>} */
+const OWNER_CANCELLATION_TIMER_STATUSES = new Set(
+  Object.values(WorkflowTimerStatus),
+);
+/** @type {Set<string>} */
+const OWNER_CANCELLATION_SIGNAL_STATUSES = new Set(
+  Object.values(WorkflowSignalWaitStatus),
+);
+
+/**
+ * @param {unknown} kind - Candidate activation class.
+ * @param {unknown} status - Candidate status scoped by activation class.
+ * @returns {boolean} - Whether the pair belongs to one exact lifecycle enum.
+ */
+function isSupportedOwnerCancellationActivationStatus(kind, status) {
+  if (typeof status !== 'string') return false;
+  if (kind === 'activity') {
+    return OWNER_CANCELLATION_INVOCATION_STATUSES.has(status);
+  }
+  if (kind === 'timer') {
+    return OWNER_CANCELLATION_TIMER_STATUSES.has(status);
+  }
+  if (kind === 'signal') {
+    return OWNER_CANCELLATION_SIGNAL_STATUSES.has(status);
+  }
+  return false;
+}
 
 /**
  * @param {unknown} value - Optional user-supplied retry identity.
@@ -552,6 +582,47 @@ function getCancellationInvocation(view) {
           invocation.invocationId === invocationId,
       )
     : undefined;
+}
+
+/**
+ * Resolve a compact current activation classification for cancellation output.
+ * Payload references, timer deadlines, and signal payload state remain private.
+ * @param {Record<string, any>} view - Verified exact ledger run.
+ * @returns {{kind: 'activity'|'timer'|'signal', status: string} | undefined} - Current activation summary.
+ */
+function getCancellationActivation(view) {
+  const invocation = getCancellationInvocation(view);
+  if (invocation) return undefined;
+  const cursor = view.workflowCursor;
+  if (typeof cursor?.timerId === 'string') {
+    const timer = (view.timers || []).find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.timerId === cursor.timerId,
+    );
+    return timer ? { kind: 'timer', status: timer.status } : undefined;
+  }
+  if (typeof cursor?.signalWaitId === 'string') {
+    const wait = (view.signalWaits || []).find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.signalWaitId === cursor.signalWaitId,
+    );
+    return wait ? { kind: 'signal', status: wait.status } : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * @param {Record<string, any>} view - Verified exact ledger run.
+ * @returns {{activationKind?: string, activationStatus?: string}} - Safe optional fields.
+ */
+function cancellationActivationResponseFields(view) {
+  const activation = getCancellationActivation(view);
+  return activation
+    ? {
+        activationKind: activation.kind,
+        activationStatus: activation.status,
+      }
+    : {};
 }
 
 /**
@@ -1587,8 +1658,8 @@ function classifyNonDeliverableCancellation(view) {
  * Return only the status information an external operator needs. Reasons,
  * transcripts, payload references, endpoint paths, session IDs, and fences
  * never leave the current owner or read-only control layer through this API.
- * @param {{runId: string, requestId: string, outcome: OwnerCancellationOutcomeValue, delivery: OwnerCancellationDelivery, runStatus?: unknown, invocationStatus?: unknown}} input - Candidate public cancellation response.
- * @returns {Readonly<{schemaVersion: 1, kind: 'wharfie.execution-ledger.cancel', runId: string, requestId: string, outcome: string, delivery: string, runStatus?: string, invocationStatus?: string}>} - Redacted response.
+ * @param {{runId: string, requestId: string, outcome: OwnerCancellationOutcomeValue, delivery: OwnerCancellationDelivery, runStatus?: unknown, invocationStatus?: unknown, activationKind?: unknown, activationStatus?: unknown}} input - Candidate public cancellation response.
+ * @returns {Readonly<{schemaVersion: 1, kind: 'wharfie.execution-ledger.cancel', runId: string, requestId: string, outcome: string, delivery: string, runStatus?: string, invocationStatus?: string, activationKind?: string, activationStatus?: string}>} - Redacted response.
  */
 function createCancellationOperatorResponse(input) {
   if (!OWNER_CANCELLATION_OUTCOMES.has(input.outcome)) {
@@ -1601,7 +1672,7 @@ function createCancellationOperatorResponse(input) {
       'Local owner returned an unsupported cancellation delivery state.',
     );
   }
-  /** @type {{schemaVersion: 1, kind: 'wharfie.execution-ledger.cancel', runId: string, requestId: string, outcome: OwnerCancellationOutcomeValue, delivery: OwnerCancellationDelivery, runStatus?: string, invocationStatus?: string}} */
+  /** @type {{schemaVersion: 1, kind: 'wharfie.execution-ledger.cancel', runId: string, requestId: string, outcome: OwnerCancellationOutcomeValue, delivery: OwnerCancellationDelivery, runStatus?: string, invocationStatus?: string, activationKind?: string, activationStatus?: string}} */
   const response = {
     schemaVersion: /** @type {const} */ (1),
     kind: /** @type {const} */ ('wharfie.execution-ledger.cancel'),
@@ -1613,6 +1684,23 @@ function createCancellationOperatorResponse(input) {
   if (typeof input.runStatus === 'string') response.runStatus = input.runStatus;
   if (typeof input.invocationStatus === 'string') {
     response.invocationStatus = input.invocationStatus;
+  }
+  const hasActivationKind = input.activationKind !== undefined;
+  const hasActivationStatus = input.activationStatus !== undefined;
+  if (
+    (hasActivationKind || hasActivationStatus) &&
+    !isSupportedOwnerCancellationActivationStatus(
+      input.activationKind,
+      input.activationStatus,
+    )
+  ) {
+    throw new TypeError(
+      'Local owner returned an unsupported cancellation activation status.',
+    );
+  }
+  if (hasActivationKind && hasActivationStatus) {
+    response.activationKind = /** @type {string} */ (input.activationKind);
+    response.activationStatus = /** @type {string} */ (input.activationStatus);
   }
   return Object.freeze(response);
 }
@@ -1631,6 +1719,7 @@ function createNonDeliverableCancellationResponse(view, requestId, outcome) {
     delivery: 'not-required',
     runStatus: view.run.status,
     invocationStatus: getCancellationInvocation(view)?.status,
+    ...cancellationActivationResponseFields(view),
   });
 }
 
@@ -1667,15 +1756,46 @@ function isSupportedOwnerCancellationResult(outcome, delivery) {
  * relabel that owner's state.
  * @param {Record<string, unknown>} candidate - Authenticated owner response.
  * @param {OwnerCancellationDelivery} delivery - Validated delivery result.
- * @returns {{runStatus?: string, invocationStatus?: string}} - Safe accepted-owner statuses.
+ * @returns {{runStatus?: string, invocationStatus?: string, activationKind?: string, activationStatus?: string}} - Safe accepted-owner statuses.
  */
 function getAcceptedOwnerStatuses(candidate, delivery) {
   if (delivery === 'not-delivered') return {};
+  const invocationStatus =
+    typeof candidate.invocationStatus === 'string' &&
+    OWNER_CANCELLATION_INVOCATION_STATUSES.has(candidate.invocationStatus)
+      ? candidate.invocationStatus
+      : undefined;
+  const hasActivationKind = Object.prototype.hasOwnProperty.call(
+    candidate,
+    'activationKind',
+  );
+  const hasActivationStatus = Object.prototype.hasOwnProperty.call(
+    candidate,
+    'activationStatus',
+  );
+  if (
+    hasActivationKind !== hasActivationStatus ||
+    (hasActivationKind &&
+      !isSupportedOwnerCancellationActivationStatus(
+        candidate.activationKind,
+        candidate.activationStatus,
+      ))
+  ) {
+    throw Object.assign(
+      new Error('Local owner returned invalid cancellation statuses.'),
+      { code: 'local-owner-command-response' },
+    );
+  }
+  const activationKind = hasActivationKind
+    ? /** @type {string} */ (candidate.activationKind)
+    : undefined;
+  const activationStatus = hasActivationStatus
+    ? /** @type {string} */ (candidate.activationStatus)
+    : undefined;
   if (
     typeof candidate.runStatus !== 'string' ||
     !OWNER_CANCELLATION_RUN_STATUSES.has(candidate.runStatus) ||
-    typeof candidate.invocationStatus !== 'string' ||
-    !OWNER_CANCELLATION_INVOCATION_STATUSES.has(candidate.invocationStatus)
+    (!invocationStatus && !(activationKind && activationStatus))
   ) {
     throw Object.assign(
       new Error('Local owner returned invalid cancellation statuses.'),
@@ -1684,7 +1804,10 @@ function getAcceptedOwnerStatuses(candidate, delivery) {
   }
   return {
     runStatus: candidate.runStatus,
-    invocationStatus: candidate.invocationStatus,
+    ...(invocationStatus ? { invocationStatus } : {}),
+    ...(activationKind && activationStatus
+      ? { activationKind, activationStatus }
+      : {}),
   };
 }
 
@@ -1791,13 +1914,26 @@ function createWorkflowCancellationOperatorResponse(result, requestId) {
             ? 'not-delivered'
             : 'not-required'
         : 'not-required';
+  const activation = result.timer
+    ? { kind: 'timer', status: result.timer.status }
+    : result.signalWait
+      ? { kind: 'signal', status: result.signalWait.status }
+      : undefined;
   return createCancellationOperatorResponse({
     runId: result.run.runId,
     requestId,
     outcome: result.outcome,
     delivery,
     runStatus: result.run.status,
-    invocationStatus: result.invocation.status,
+    ...(result.invocation
+      ? { invocationStatus: result.invocation.status }
+      : {}),
+    ...(activation
+      ? {
+          activationKind: activation.kind,
+          activationStatus: activation.status,
+        }
+      : {}),
   });
 }
 
@@ -1917,6 +2053,7 @@ export async function cancelExecutionLedgerRun(options) {
           delivery: 'not-delivered',
           runStatus: preflight.run.status,
           invocationStatus: getCancellationInvocation(preflight)?.status,
+          ...cancellationActivationResponseFields(preflight),
         });
       }
     }
@@ -1929,6 +2066,7 @@ export async function cancelExecutionLedgerRun(options) {
       delivery: 'not-delivered',
       runStatus: preflight.run.status,
       invocationStatus: getCancellationInvocation(preflight)?.status,
+      ...cancellationActivationResponseFields(preflight),
     });
   }
   if (
@@ -1942,6 +2080,7 @@ export async function cancelExecutionLedgerRun(options) {
       delivery: 'not-delivered',
       runStatus: preflight.run.status,
       invocationStatus: getCancellationInvocation(preflight)?.status,
+      ...cancellationActivationResponseFields(preflight),
     });
   }
   if (!isAddressableLocalOwner(owner.ownership, configuration)) {
@@ -1952,6 +2091,7 @@ export async function cancelExecutionLedgerRun(options) {
       delivery: 'not-delivered',
       runStatus: preflight.run.status,
       invocationStatus: getCancellationInvocation(preflight)?.status,
+      ...cancellationActivationResponseFields(preflight),
     });
   }
 
@@ -2013,6 +2153,12 @@ export async function cancelExecutionLedgerRun(options) {
       invocationStatus:
         ownerStatuses.invocationStatus ||
         getCancellationInvocation(preflight)?.status,
+      activationKind:
+        ownerStatuses.activationKind ||
+        getCancellationActivation(preflight)?.kind,
+      activationStatus:
+        ownerStatuses.activationStatus ||
+        getCancellationActivation(preflight)?.status,
     });
   } catch (error) {
     return createCancellationOperatorResponse({
@@ -2022,6 +2168,7 @@ export async function cancelExecutionLedgerRun(options) {
       delivery: 'not-delivered',
       runStatus: preflight.run.status,
       invocationStatus: getCancellationInvocation(preflight)?.status,
+      ...cancellationActivationResponseFields(preflight),
     });
   }
 }
@@ -2111,10 +2258,29 @@ export async function recoverExecutionLedgerRun(options) {
                     candidate.invocationId === cursor.invocationId,
                 )
               : undefined;
-            if (!cursor || !invocation) {
+            if (!cursor) {
               throw new Error(
-                'The recoverable workflow cursor invocation is unavailable.',
+                'The recoverable workflow cursor is unavailable.',
               );
+            }
+            if (!invocation) {
+              if (
+                typeof cursor.timerId !== 'string' &&
+                typeof cursor.signalWaitId !== 'string'
+              ) {
+                throw new Error(
+                  'The workflow cursor has no recoverable activation identity.',
+                );
+              }
+              return {
+                recovery: {
+                  found: true,
+                  mayExecute: false,
+                  action: WorkflowLedgerRecoveryAction.NONE,
+                  changed: false,
+                },
+                view: current,
+              };
             }
             const workflowRecovery = await recoverWorkflowLedgerActivity({
               ledger,

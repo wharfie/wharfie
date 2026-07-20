@@ -13,6 +13,8 @@ import {
   AttemptStatus,
   InvocationStatus,
   RunStatus,
+  WorkflowSignalWaitStatus,
+  WorkflowTimerStatus,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
 import {
@@ -642,6 +644,11 @@ describe('execution-ledger local owner cancellation operator', () => {
             requestId: command.requestId,
             actor: { kind: 'local-owner-command', id: appId },
           });
+          if (!result.invocation) {
+            throw new Error(
+              'activity cancellation result omitted its invocation projection',
+            );
+          }
           return {
             outcome: result.outcome,
             delivery:
@@ -702,6 +709,83 @@ describe('execution-ledger local owner cancellation operator', () => {
       expect(serialized).not.toContain(residentOwner.ownerCommandEndpoint);
       expect(serialized).not.toContain('workflow-input-secret');
       expect(serialized).not.toContain('workflow-caller-secret');
+    } finally {
+      await server?.close();
+      await owner?.release();
+      await db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('rejects owner activation statuses from a different lifecycle enum', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-owner-cancel-status-'),
+    );
+    const configuration = createConfiguration(root, 'owner-cancel-status-test');
+    const appId = 'owner-cancel-status-demo';
+    const { db, ledger } = createLedger(configuration);
+    const ownership = createLedgerServiceOwnership({
+      db,
+      tableName: configuration.tableName,
+    });
+    /** @type {Awaited<ReturnType<typeof acquireLocalLedgerServiceSession>> | undefined} */
+    let owner;
+    /** @type {Awaited<ReturnType<typeof createLocalOwnerCommandServer>> | undefined} */
+    let server;
+    try {
+      const runId = await seedRunnableWorkflowRun(ledger, {
+        appId,
+        idempotencyKey: 'malformed-activation-status',
+      });
+      const before = await ledger.rebuildRun(runId);
+      owner = await acquireLocalLedgerServiceSession({
+        appId,
+        ownership,
+        ownerKind: LedgerServiceOwnerKind.RESIDENT,
+        sessionRoot: configuration.sessionPath,
+      });
+      const pairs = new Map([
+        [
+          'invalid-timer-status',
+          { kind: 'timer', status: WorkflowSignalWaitStatus.CONSUMED },
+        ],
+        [
+          'invalid-signal-status',
+          { kind: 'signal', status: WorkflowTimerStatus.FIRED },
+        ],
+      ]);
+      server = await createLocalOwnerCommandServer({
+        session: owner.commandSession,
+        isCurrentOwner: async () => true,
+        handleCommand: async (command) => {
+          const pair = pairs.get(command.requestId);
+          if (!pair) throw new Error('Unexpected cancellation request ID.');
+          return {
+            outcome: 'cancellation-requested',
+            delivery: 'not-required',
+            runStatus: RunStatus.RUNNING,
+            invocationStatus: InvocationStatus.RUNNABLE,
+            activationKind: pair.kind,
+            activationStatus: pair.status,
+          };
+        },
+      });
+
+      for (const requestId of pairs.keys()) {
+        await expect(
+          externalCancellationResult({ runId, requestId, configuration }),
+        ).resolves.toEqual({
+          schemaVersion: 1,
+          kind: 'wharfie.execution-ledger.cancel',
+          runId,
+          requestId,
+          outcome: 'request-unavailable',
+          delivery: 'not-delivered',
+          runStatus: RunStatus.RUNNING,
+          invocationStatus: InvocationStatus.RUNNABLE,
+        });
+      }
+      await expect(ledger.rebuildRun(runId)).resolves.toEqual(before);
     } finally {
       await server?.close();
       await owner?.release();

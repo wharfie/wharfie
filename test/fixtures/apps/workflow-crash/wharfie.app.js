@@ -49,5 +49,30 @@ export default defineApp({
         },
       ],
     },
+    'timer-signal-chain': {
+      steps: [
+        {
+          id: 'first',
+          kind: 'activity',
+          activity: 'crash-step',
+          input: { kind: 'workflow-input' },
+        },
+        {
+          id: 'durable-delay',
+          kind: 'timer',
+          delayMs: 1_500,
+        },
+        {
+          id: 'continue',
+          kind: 'signal',
+        },
+        {
+          id: 'last',
+          kind: 'activity',
+          activity: 'crash-step',
+          input: { kind: 'step-output', step: 'continue' },
+        },
+      ],
+    },
   },
 });

@@ -9,6 +9,10 @@ import {
 } from '../../../runtime/activity-protocol.js';
 import { createCanonicalJsonSha256Id } from '../../../runtime/content-id.js';
 import {
+  createExecutionPayloadId,
+  encodeCanonicalJsonPayload,
+} from '../../../runtime/execution-payload.js';
+import {
   cloneBoundedJsonObject,
   cloneJsonObject,
 } from '../../../runtime/json-value.js';
@@ -68,6 +72,9 @@ import {
   getRunProjectionSortKey,
   getTransitionSortKey,
   getWorkflowCursorProjectionSortKey,
+  getWorkflowSignalDeliveryProjectionSortKey,
+  getWorkflowSignalWaitProjectionSortKey,
+  getWorkflowTimerProjectionSortKey,
 } from '../../ledger/record-key.js';
 import {
   EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX,
@@ -101,9 +108,13 @@ import {
   WORKFLOW_START_PAYLOAD_KIND,
   WORKFLOW_START_PAYLOAD_SCHEMA,
   WorkflowCursorDisposition,
+  assertWorkflowSignalWaitId,
+  assertWorkflowTimerId,
   assertWorkflowRunId,
+  createWorkflowSignalWaitId,
+  createWorkflowTimerId,
   isWorkflowActivityDispatchSupported,
-  materializeFirstWorkflowActivity,
+  materializeFirstWorkflowStep,
   materializeUncertainWorkflowActivityFailure,
   materializeUncertainWorkflowActivitySuccess,
   materializeWorkflowActivityCancellation,
@@ -113,6 +124,8 @@ import {
   materializeWorkflowActivityUncertainty,
   materializeWorkflowCancellationIntent,
   materializeWorkflowCursorActivity,
+  materializeWorkflowSignalAcceptance,
+  materializeWorkflowTimerFire,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
   normalizeWorkflowOutputPayload,
@@ -172,6 +185,7 @@ const READY_WORK_MAX_PAGE_SIZE = 100;
 const READY_WORK_CURSOR_SCHEMA_VERSION = 1;
 const READY_WORK_CURSOR_MAX_BYTES = 4096;
 const SUCCESSOR_IDENTITY_SORT_KEY_PREFIX = 'successor-identity/v1/';
+const SIGNAL_DELIVERY_IDENTITY_SORT_KEY_PREFIX = 'signal-delivery-identity/v1/';
 const EVENT_TYPES = new Set([
   'manual-run-created',
   'workflow-run-created',
@@ -184,6 +198,9 @@ const EVENT_TYPES = new Set([
   'workflow-activity-became-uncertain',
   'workflow-activity-uncertainty-reconciled',
   'workflow-cancellation-requested',
+  'workflow-timer-fired',
+  'workflow-signal-accepted',
+  'workflow-signal-rejected',
   'effect-successor-authorized',
   'effect-successor-run-created',
   'effect-successor-started',
@@ -204,6 +221,20 @@ const EVENT_TYPES = new Set([
   'effect-became-uncertain',
   'uncertain-effect-reconciled',
 ]);
+export const WorkflowTimerStatus = Object.freeze({
+  WAITING: 'WAITING',
+  FIRED: 'FIRED',
+  CANCELLED: 'CANCELLED',
+});
+export const WorkflowSignalWaitStatus = Object.freeze({
+  WAITING: 'WAITING',
+  CONSUMED: 'CONSUMED',
+  CANCELLED: 'CANCELLED',
+});
+export const WorkflowSignalDeliveryStatus = Object.freeze({
+  ACCEPTED: 'ACCEPTED',
+  REJECTED: 'REJECTED',
+});
 const TERMINAL_TYPES = new Set(ACTIVITY_PROTOCOL_TERMINAL_TYPES);
 const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
   'completed',
@@ -257,6 +288,29 @@ function eq(propertyName, propertyValue) {
     propertyName,
     propertyValue,
   };
+}
+
+/**
+ * Return the most recent workflow cursor captured at or before an event
+ * sequence. Some workflow events (notably rejected signal deliveries) advance
+ * the run head without changing or repeating the cursor snapshot.
+ * @param {Record<string, any>} state - Verified folded state.
+ * @param {number} sequence - Inclusive one-based event sequence.
+ * @returns {Record<string, any> | undefined} - Historical workflow cursor.
+ */
+function workflowCursorAtOrBeforeSequence(state, sequence) {
+  for (
+    let index = Math.min(sequence, state.events.length) - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    const cursor = eventSnapshots(
+      state.events[index],
+      state.run.runId,
+    ).workflowCursor;
+    if (cursor) return cursor;
+  }
+  return undefined;
 }
 
 /**
@@ -845,6 +899,589 @@ function createWorkflowCursorProjectionRecord(runId, data) {
 }
 
 /**
+ * @param {unknown} value - Candidate workflow timer projection.
+ * @param {string} runId - Expected workflow run identity.
+ * @returns {Record<string, any>} - Strict timer snapshot.
+ */
+function normalizeWorkflowTimerSnapshot(value, runId) {
+  const timer = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'workflow timer projection',
+  );
+  assertSnapshotKeys(
+    timer,
+    [
+      'schemaVersion',
+      'runId',
+      'timerId',
+      'appId',
+      'revisionId',
+      'workflowId',
+      'planId',
+      'continuationId',
+      'stepId',
+      'stepIndex',
+      'status',
+      'scheduledAt',
+      'dueAt',
+      'version',
+      'lastSequence',
+      'createdAt',
+      'updatedAt',
+    ],
+    ['firedAt', 'outputRef', 'cancellationRequest'],
+    'workflow timer projection',
+  );
+  if (
+    timer.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION ||
+    timer.runId !== runId
+  ) {
+    throw new ExecutionLedgerProjectionError(runId, 'workflow timer scope');
+  }
+  assertWorkflowRunId(timer.runId, 'workflow timer runId');
+  assertWorkflowTimerId(timer.timerId, 'workflow timer timerId');
+  assertLogicalId(timer.appId, 'workflow timer appId');
+  assertApplicationRevisionId(timer.revisionId, 'workflow timer revisionId');
+  assertLogicalId(timer.workflowId, 'workflow timer workflowId');
+  assertOpaqueId(timer.planId, 'workflow timer planId');
+  assertOpaqueId(timer.continuationId, 'workflow timer continuationId');
+  assertLogicalId(timer.stepId, 'workflow timer stepId');
+  timer.stepIndex = assertNonnegativeSafeInteger(
+    timer.stepIndex,
+    'workflow timer stepIndex',
+  );
+  if (
+    timer.timerId !==
+    createWorkflowTimerId({
+      runId,
+      planId: timer.planId,
+      stepId: timer.stepId,
+      stepIndex: timer.stepIndex,
+    })
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow timer activation identity',
+    );
+  }
+  if (!Object.values(WorkflowTimerStatus).includes(timer.status)) {
+    throw new ExecutionLedgerProjectionError(runId, 'workflow timer status');
+  }
+  timer.scheduledAt = normalizeObservedAt(
+    timer.scheduledAt,
+    'workflow timer scheduledAt',
+  );
+  timer.dueAt = normalizeObservedAt(timer.dueAt, 'workflow timer dueAt');
+  if (timer.dueAt <= timer.scheduledAt) {
+    throw new ExecutionLedgerProjectionError(runId, 'workflow timer dueAt');
+  }
+  timer.version = assertPositiveSafeInteger(
+    timer.version,
+    'workflow timer version',
+  );
+  timer.lastSequence = assertPositiveSafeInteger(
+    timer.lastSequence,
+    'workflow timer sequence',
+  );
+  timer.createdAt = normalizeObservedAt(
+    timer.createdAt,
+    'workflow timer createdAt',
+  );
+  timer.updatedAt = normalizeObservedAt(
+    timer.updatedAt,
+    'workflow timer updatedAt',
+  );
+  const hasFiredAt = Object.prototype.hasOwnProperty.call(timer, 'firedAt');
+  const hasOutputRef = Object.prototype.hasOwnProperty.call(timer, 'outputRef');
+  const hasCancellation = Object.prototype.hasOwnProperty.call(
+    timer,
+    'cancellationRequest',
+  );
+  if (
+    (timer.status === WorkflowTimerStatus.WAITING &&
+      (hasFiredAt || hasOutputRef || hasCancellation)) ||
+    (timer.status === WorkflowTimerStatus.FIRED &&
+      (!hasFiredAt || !hasOutputRef || hasCancellation)) ||
+    (timer.status === WorkflowTimerStatus.CANCELLED &&
+      (hasFiredAt || hasOutputRef || !hasCancellation))
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow timer lifecycle fields',
+    );
+  }
+  if (hasFiredAt) {
+    timer.firedAt = normalizeObservedAt(
+      timer.firedAt,
+      'workflow timer firedAt',
+    );
+    if (timer.firedAt < timer.dueAt) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow timer fired before dueAt',
+      );
+    }
+  }
+  if (hasOutputRef) {
+    timer.outputRef = normalizePayloadReference(
+      timer.outputRef,
+      WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      'workflow timer outputRef',
+    );
+  }
+  if (hasCancellation) {
+    timer.cancellationRequest = normalizeCancellationRequest(
+      timer.cancellationRequest,
+      'workflow timer cancellationRequest',
+    );
+  }
+  return timer;
+}
+
+/**
+ * @param {string} runId - Workflow run identity.
+ * @param {Record<string, any>} data - Timer projection.
+ * @returns {Record<string, any>} - Typed timer projection record.
+ */
+function createWorkflowTimerProjectionRecord(runId, data) {
+  const timer = normalizeWorkflowTimerSnapshot(data, runId);
+  return {
+    [KEY_NAME]: runId,
+    [SORT_KEY_NAME]: getWorkflowTimerProjectionSortKey(timer.timerId),
+    record_type: 'execution_ledger_workflow_timer_projection',
+    schema_version: EXECUTION_LEDGER_SCHEMA_VERSION,
+    timer_id: timer.timerId,
+    status: timer.status,
+    version: timer.version,
+    sequence: timer.lastSequence,
+    revision_id: timer.revisionId,
+    data: cloneInlinePayload(timer, 'workflow timer projection'),
+  };
+}
+
+/**
+ * @param {unknown} value - Candidate workflow signal-wait projection.
+ * @param {string} runId - Expected workflow run identity.
+ * @returns {Record<string, any>} - Strict signal-wait snapshot.
+ */
+function normalizeWorkflowSignalWaitSnapshot(value, runId) {
+  const wait = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'workflow signal-wait projection',
+  );
+  assertSnapshotKeys(
+    wait,
+    [
+      'schemaVersion',
+      'runId',
+      'signalWaitId',
+      'appId',
+      'revisionId',
+      'workflowId',
+      'planId',
+      'continuationId',
+      'stepId',
+      'stepIndex',
+      'signalId',
+      'status',
+      'version',
+      'lastSequence',
+      'createdAt',
+      'updatedAt',
+    ],
+    ['deliveryId', 'payloadRef', 'acceptedAt', 'cancellationRequest'],
+    'workflow signal-wait projection',
+  );
+  if (
+    wait.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION ||
+    wait.runId !== runId
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal-wait scope',
+    );
+  }
+  assertWorkflowRunId(wait.runId, 'workflow signal-wait runId');
+  assertWorkflowSignalWaitId(
+    wait.signalWaitId,
+    'workflow signal-wait signalWaitId',
+  );
+  assertLogicalId(wait.appId, 'workflow signal-wait appId');
+  assertApplicationRevisionId(
+    wait.revisionId,
+    'workflow signal-wait revisionId',
+  );
+  assertLogicalId(wait.workflowId, 'workflow signal-wait workflowId');
+  assertOpaqueId(wait.planId, 'workflow signal-wait planId');
+  assertOpaqueId(wait.continuationId, 'workflow signal-wait continuationId');
+  assertLogicalId(wait.stepId, 'workflow signal-wait stepId');
+  assertLogicalId(wait.signalId, 'workflow signal-wait signalId');
+  if (wait.signalId !== wait.stepId) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal-wait signal identity',
+    );
+  }
+  wait.stepIndex = assertNonnegativeSafeInteger(
+    wait.stepIndex,
+    'workflow signal-wait stepIndex',
+  );
+  if (
+    wait.signalWaitId !==
+    createWorkflowSignalWaitId({
+      runId,
+      planId: wait.planId,
+      stepId: wait.stepId,
+      stepIndex: wait.stepIndex,
+    })
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal-wait activation identity',
+    );
+  }
+  if (!Object.values(WorkflowSignalWaitStatus).includes(wait.status)) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal-wait status',
+    );
+  }
+  wait.version = assertPositiveSafeInteger(
+    wait.version,
+    'workflow signal-wait version',
+  );
+  wait.lastSequence = assertPositiveSafeInteger(
+    wait.lastSequence,
+    'workflow signal-wait sequence',
+  );
+  wait.createdAt = normalizeObservedAt(
+    wait.createdAt,
+    'workflow signal-wait createdAt',
+  );
+  wait.updatedAt = normalizeObservedAt(
+    wait.updatedAt,
+    'workflow signal-wait updatedAt',
+  );
+  const acceptedFields = ['deliveryId', 'payloadRef', 'acceptedAt'];
+  const acceptedCount = acceptedFields.filter((field) =>
+    Object.prototype.hasOwnProperty.call(wait, field),
+  ).length;
+  const hasCancellation = Object.prototype.hasOwnProperty.call(
+    wait,
+    'cancellationRequest',
+  );
+  if (
+    (wait.status === WorkflowSignalWaitStatus.WAITING &&
+      (acceptedCount !== 0 || hasCancellation)) ||
+    (wait.status === WorkflowSignalWaitStatus.CONSUMED &&
+      (acceptedCount !== acceptedFields.length || hasCancellation)) ||
+    (wait.status === WorkflowSignalWaitStatus.CANCELLED &&
+      (acceptedCount !== 0 || !hasCancellation))
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal-wait lifecycle fields',
+    );
+  }
+  if (wait.status === WorkflowSignalWaitStatus.CONSUMED) {
+    wait.deliveryId = assertOpaqueId(
+      wait.deliveryId,
+      'workflow signal-wait deliveryId',
+    );
+    wait.payloadRef = normalizePayloadReference(
+      wait.payloadRef,
+      WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      'workflow signal-wait payloadRef',
+    );
+    wait.acceptedAt = normalizeObservedAt(
+      wait.acceptedAt,
+      'workflow signal-wait acceptedAt',
+    );
+  }
+  if (hasCancellation) {
+    wait.cancellationRequest = normalizeCancellationRequest(
+      wait.cancellationRequest,
+      'workflow signal-wait cancellationRequest',
+    );
+  }
+  return wait;
+}
+
+/**
+ * @param {string} runId - Workflow run identity.
+ * @param {Record<string, any>} data - Signal-wait projection.
+ * @returns {Record<string, any>} - Typed signal-wait projection record.
+ */
+function createWorkflowSignalWaitProjectionRecord(runId, data) {
+  const wait = normalizeWorkflowSignalWaitSnapshot(data, runId);
+  return {
+    [KEY_NAME]: runId,
+    [SORT_KEY_NAME]: getWorkflowSignalWaitProjectionSortKey(wait.signalWaitId),
+    record_type: 'execution_ledger_workflow_signal_wait_projection',
+    schema_version: EXECUTION_LEDGER_SCHEMA_VERSION,
+    signal_wait_id: wait.signalWaitId,
+    status: wait.status,
+    version: wait.version,
+    sequence: wait.lastSequence,
+    revision_id: wait.revisionId,
+    data: cloneInlinePayload(wait, 'workflow signal-wait projection'),
+  };
+}
+
+/**
+ * @param {unknown} value - Candidate per-run signal-delivery projection.
+ * @param {string} runId - Expected workflow run identity.
+ * @returns {Record<string, any>} - Strict signal-delivery decision.
+ */
+function normalizeWorkflowSignalDeliverySnapshot(value, runId) {
+  const delivery = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'workflow signal delivery projection',
+  );
+  assertSnapshotKeys(
+    delivery,
+    [
+      'schemaVersion',
+      'runId',
+      'deliveryId',
+      'appId',
+      'signalId',
+      'payloadRef',
+      'actor',
+      'status',
+      'version',
+      'lastSequence',
+      'observedAt',
+    ],
+    ['signalWaitId', 'rejectionReason'],
+    'workflow signal delivery projection',
+  );
+  if (
+    delivery.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION ||
+    delivery.runId !== runId
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal delivery scope',
+    );
+  }
+  assertWorkflowRunId(delivery.runId, 'workflow signal delivery runId');
+  delivery.deliveryId = assertOpaqueId(
+    delivery.deliveryId,
+    'workflow signal delivery deliveryId',
+  );
+  assertLogicalId(delivery.appId, 'workflow signal delivery appId');
+  assertLogicalId(delivery.signalId, 'workflow signal delivery signalId');
+  delivery.payloadRef = normalizePayloadReference(
+    delivery.payloadRef,
+    WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+    'workflow signal delivery payloadRef',
+  );
+  delivery.actor = normalizeActor(delivery.actor);
+  if (!Object.values(WorkflowSignalDeliveryStatus).includes(delivery.status)) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal delivery status',
+    );
+  }
+  delivery.version = assertPositiveSafeInteger(
+    delivery.version,
+    'workflow signal delivery version',
+  );
+  delivery.lastSequence = assertPositiveSafeInteger(
+    delivery.lastSequence,
+    'workflow signal delivery sequence',
+  );
+  delivery.observedAt = normalizeObservedAt(
+    delivery.observedAt,
+    'workflow signal delivery observedAt',
+  );
+  const hasWait = Object.prototype.hasOwnProperty.call(
+    delivery,
+    'signalWaitId',
+  );
+  const hasReason = Object.prototype.hasOwnProperty.call(
+    delivery,
+    'rejectionReason',
+  );
+  if (
+    (delivery.status === WorkflowSignalDeliveryStatus.ACCEPTED &&
+      (!hasWait || hasReason)) ||
+    (delivery.status === WorkflowSignalDeliveryStatus.REJECTED &&
+      (hasWait || !hasReason))
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal delivery lifecycle fields',
+    );
+  }
+  if (hasWait) {
+    assertWorkflowSignalWaitId(
+      delivery.signalWaitId,
+      'workflow signal delivery signalWaitId',
+    );
+  }
+  if (
+    hasReason &&
+    !['early-signal', 'unexpected-signal', 'late-signal'].includes(
+      delivery.rejectionReason,
+    )
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow signal delivery rejection reason',
+    );
+  }
+  return delivery;
+}
+
+/**
+ * Classify a signal against one verified workflow head. The same derivation is
+ * used both before append and while replaying the event chain so a validly
+ * shaped rejection cannot contradict the durable cursor and plan.
+ * @param {Record<string, any>} run - Current workflow run.
+ * @param {Record<string, any>} cursor - Current workflow cursor.
+ * @param {Record<string, any> | undefined} currentWait - Selected signal wait.
+ * @param {Record<string, any>} planPayload - Rehashed workflow plan.
+ * @param {string} signalId - Delivered logical signal identity.
+ * @returns {{accepts: true} | {accepts: false, rejectionReason: 'early-signal' | 'unexpected-signal' | 'late-signal'}} - Exact durable classification.
+ */
+function classifyWorkflowSignalDelivery(
+  run,
+  cursor,
+  currentWait,
+  planPayload,
+  signalId,
+) {
+  const accepts =
+    run.status === RunStatus.RUNNING &&
+    cursor.disposition === WorkflowCursorDisposition.SIGNAL_WAITING &&
+    currentWait?.status === WorkflowSignalWaitStatus.WAITING &&
+    currentWait.signalId === signalId;
+  if (accepts) return { accepts: true };
+
+  const steps = /** @type {Record<string, any>[]} */ (
+    planPayload.definition.steps
+  );
+  const declaredIndex = steps.findIndex(
+    (step) => step.kind === 'signal' && step.id === signalId,
+  );
+  if (
+    declaredIndex < 0 ||
+    (cursor.disposition === WorkflowCursorDisposition.SIGNAL_WAITING &&
+      currentWait?.signalId !== signalId)
+  ) {
+    return { accepts: false, rejectionReason: 'unexpected-signal' };
+  }
+  if (run.status !== RunStatus.RUNNING || declaredIndex <= cursor.stepIndex) {
+    return { accepts: false, rejectionReason: 'late-signal' };
+  }
+  return { accepts: false, rejectionReason: 'early-signal' };
+}
+
+/**
+ * @param {string} runId - Workflow run identity.
+ * @param {Record<string, any>} data - Signal-delivery projection.
+ * @returns {Record<string, any>} - Typed per-run delivery projection record.
+ */
+function createWorkflowSignalDeliveryProjectionRecord(runId, data) {
+  const delivery = normalizeWorkflowSignalDeliverySnapshot(data, runId);
+  return {
+    [KEY_NAME]: runId,
+    [SORT_KEY_NAME]: getWorkflowSignalDeliveryProjectionSortKey(
+      delivery.deliveryId,
+    ),
+    record_type: 'execution_ledger_workflow_signal_delivery_projection',
+    schema_version: EXECUTION_LEDGER_SCHEMA_VERSION,
+    delivery_id: delivery.deliveryId,
+    status: delivery.status,
+    version: delivery.version,
+    sequence: delivery.lastSequence,
+    data: cloneInlinePayload(delivery, 'workflow signal delivery projection'),
+  };
+}
+
+/**
+ * @param {Record<string, any>} run - Workflow run snapshot.
+ * @param {Record<string, any>} cursor - Cursor selecting the new timer.
+ * @param {Record<string, any>} descriptor - Pure timer materialization.
+ * @param {number} sequence - Creating event sequence.
+ * @param {number} observedAt - Creating event time.
+ * @returns {Record<string, any>} - Initial waiting timer projection.
+ */
+function createWaitingWorkflowTimerSnapshot(
+  run,
+  cursor,
+  descriptor,
+  sequence,
+  observedAt,
+) {
+  return normalizeWorkflowTimerSnapshot(
+    {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: run.runId,
+      timerId: descriptor.timerId,
+      appId: run.appId,
+      revisionId: run.revisionId,
+      workflowId: cursor.workflowId,
+      planId: cursor.planId,
+      continuationId: descriptor.continuationId,
+      stepId: descriptor.stepId,
+      stepIndex: descriptor.stepIndex,
+      status: WorkflowTimerStatus.WAITING,
+      scheduledAt: descriptor.scheduledAt,
+      dueAt: descriptor.dueAt,
+      version: 1,
+      lastSequence: sequence,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    },
+    run.runId,
+  );
+}
+
+/**
+ * @param {Record<string, any>} run - Workflow run snapshot.
+ * @param {Record<string, any>} cursor - Cursor selecting the new wait.
+ * @param {Record<string, any>} descriptor - Pure signal-wait materialization.
+ * @param {number} sequence - Creating event sequence.
+ * @param {number} observedAt - Creating event time.
+ * @returns {Record<string, any>} - Initial waiting signal projection.
+ */
+function createWaitingWorkflowSignalSnapshot(
+  run,
+  cursor,
+  descriptor,
+  sequence,
+  observedAt,
+) {
+  return normalizeWorkflowSignalWaitSnapshot(
+    {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: run.runId,
+      signalWaitId: descriptor.signalWaitId,
+      appId: run.appId,
+      revisionId: run.revisionId,
+      workflowId: cursor.workflowId,
+      planId: cursor.planId,
+      continuationId: descriptor.continuationId,
+      stepId: descriptor.stepId,
+      stepIndex: descriptor.stepIndex,
+      signalId: descriptor.signalId,
+      status: WorkflowSignalWaitStatus.WAITING,
+      version: 1,
+      lastSequence: sequence,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    },
+    run.runId,
+  );
+}
+
+/**
  * Build the small, redacted projection used to locate a service's run history.
  * The directory contains no payload references, terminal data, evidence, or
  * fencing tokens; callers must rebuild the referenced run before relying on
@@ -979,6 +1616,163 @@ async function readSuccessorIdentityRecord(db, tableName, appId, successorId) {
     ['source_run_id', 'successor identity source run'],
     ['target_run_id', 'successor identity target run'],
     ['authorization_digest', 'successor identity authorization digest'],
+  ]) {
+    assertOpaqueId(record[field], label);
+  }
+  return record;
+}
+
+/**
+ * @param {string} deliveryId - Stable app-scoped public delivery identity.
+ * @returns {string} - Collision-safe app-directory sort key.
+ */
+function getSignalDeliveryIdentitySortKey(deliveryId) {
+  const normalized = assertOpaqueId(deliveryId, 'deliveryId');
+  return `${SIGNAL_DELIVERY_IDENTITY_SORT_KEY_PREFIX}${createCanonicalJsonSha256Id(
+    {
+      domain: 'wharfie:workflow-signal-delivery-public-id:v1',
+      prefix: 'wsd',
+      value: normalized,
+      valuePath: 'workflow signal delivery public identity',
+    },
+  )}`;
+}
+
+/**
+ * @param {string} appId - Application identity scope.
+ * @param {string} deliveryId - Stable public delivery identity.
+ * @returns {string} - Stable per-run transition identity.
+ */
+function createSignalDeliveryTransitionId(appId, deliveryId) {
+  return createCanonicalJsonSha256Id({
+    domain: 'wharfie:workflow-signal-delivery-transition:v1',
+    prefix: 'wsg',
+    value: {
+      appId,
+      deliveryId: assertOpaqueId(deliveryId, 'deliveryId'),
+    },
+    valuePath: 'workflow signal delivery transition identity',
+  });
+}
+
+/**
+ * @param {string} runId - Workflow run identity.
+ * @param {string} timerId - Exact durable timer activation.
+ * @returns {string} - Stable fire transition identity.
+ */
+function createWorkflowTimerFireTransitionId(runId, timerId) {
+  assertWorkflowRunId(runId, 'timer fire runId');
+  assertWorkflowTimerId(timerId, 'timer fire timerId');
+  return createCanonicalJsonSha256Id({
+    domain: 'wharfie:workflow-timer-fire-transition:v1',
+    prefix: 'wtf',
+    value: {
+      runId,
+      timerId,
+    },
+    valuePath: 'workflow timer fire transition identity',
+  });
+}
+
+/**
+ * @param {{appId: string, runId: string, deliveryId: string, signalId: string, payloadId: string, actor: {kind: string, id: string}, transitionId: string, requestDigest: string}} value - Exact immutable delivery binding.
+ * @returns {Record<string, any>} - Global app-scoped delivery identity row.
+ */
+function createSignalDeliveryIdentityRecord(value) {
+  const scope = createExecutionLedgerRunDirectoryScope({ appId: value.appId });
+  assertWorkflowRunId(value.runId, 'signal delivery identity.runId');
+  assertLogicalId(value.signalId, 'signal delivery identity.signalId');
+  assertOpaqueId(value.deliveryId, 'signal delivery identity.deliveryId');
+  assertOpaqueId(value.payloadId, 'signal delivery identity.payloadId');
+  assertOpaqueId(value.transitionId, 'signal delivery identity.transitionId');
+  assertOpaqueId(value.requestDigest, 'signal delivery identity.requestDigest');
+  const actor = normalizeActor(value.actor);
+  return {
+    [KEY_NAME]: scope.directoryId,
+    [SORT_KEY_NAME]: getSignalDeliveryIdentitySortKey(value.deliveryId),
+    record_type: 'execution_ledger_signal_delivery_identity',
+    schema_version: EXECUTION_LEDGER_SCHEMA_VERSION,
+    app_id: value.appId,
+    delivery_id: value.deliveryId,
+    target_run_id: value.runId,
+    signal_id: value.signalId,
+    payload_id: value.payloadId,
+    actor_kind: actor.kind,
+    actor_id: actor.id,
+    transition_id: value.transitionId,
+    request_digest: value.requestDigest,
+  };
+}
+
+/**
+ * @param {DBClient} db - Transactional control store.
+ * @param {string} tableName - Ledger table name.
+ * @param {string} appId - Application identity scope.
+ * @param {string} deliveryId - Stable public delivery identity.
+ * @returns {Promise<Record<string, any> | null>} - Verified immutable identity row.
+ */
+async function readSignalDeliveryIdentityRecord(
+  db,
+  tableName,
+  appId,
+  deliveryId,
+) {
+  const scope = createExecutionLedgerRunDirectoryScope({ appId });
+  const sortKey = getSignalDeliveryIdentitySortKey(deliveryId);
+  const raw = await db.get({
+    tableName,
+    keyName: KEY_NAME,
+    keyValue: scope.directoryId,
+    sortKeyName: SORT_KEY_NAME,
+    sortKeyValue: sortKey,
+    consistentRead: true,
+  });
+  if (!raw) return null;
+  const record = cloneBoundedJsonObject(
+    raw,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'signal delivery identity record',
+  );
+  assertExactKeys(
+    record,
+    [
+      KEY_NAME,
+      SORT_KEY_NAME,
+      'record_type',
+      'schema_version',
+      'app_id',
+      'delivery_id',
+      'target_run_id',
+      'signal_id',
+      'payload_id',
+      'actor_kind',
+      'actor_id',
+      'transition_id',
+      'request_digest',
+    ],
+    'signal delivery identity record',
+  );
+  if (
+    record[KEY_NAME] !== scope.directoryId ||
+    record[SORT_KEY_NAME] !== sortKey ||
+    record.record_type !== 'execution_ledger_signal_delivery_identity' ||
+    record.schema_version !== EXECUTION_LEDGER_SCHEMA_VERSION ||
+    record.app_id !== appId ||
+    record.delivery_id !== deliveryId
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      record.target_run_id || deliveryId,
+      'invalid signal delivery identity record',
+    );
+  }
+  assertWorkflowRunId(record.target_run_id, 'signal identity target run');
+  assertLogicalId(record.signal_id, 'signal identity signal');
+  for (const [field, label] of [
+    ['payload_id', 'signal identity payload'],
+    ['actor_kind', 'signal identity actor kind'],
+    ['actor_id', 'signal identity actor id'],
+    ['transition_id', 'signal identity transition'],
+    ['request_digest', 'signal identity request digest'],
   ]) {
     assertOpaqueId(record[field], label);
   }
@@ -2884,7 +3678,7 @@ function normalizeTransitionReceipt(value, runId) {
 /**
  * @param {Record<string, any>} event - Event being folded.
  * @param {string} runId - Expected run identity.
- * @returns {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots.
+ * @returns {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, timer?: Record<string, any>, nextTimer?: Record<string, any>, signalWait?: Record<string, any>, nextSignalWait?: Record<string, any>, signalDelivery?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots. Wait-only events omit invocation at runtime and are handled before invocation-dependent folds.
  */
 function eventSnapshots(event, runId) {
   const payload = cloneBoundedJsonObject(
@@ -2893,9 +3687,10 @@ function eventSnapshots(event, runId) {
     'event payload',
   );
   if (event.type === 'workflow-run-created') {
-    assertExactKeys(
+    assertSnapshotKeys(
       payload,
-      ['run', 'invocation', 'workflowCursor'],
+      ['run', 'workflowCursor'],
+      ['invocation', 'timer', 'signalWait'],
       'event payload',
     );
   } else if (
@@ -2912,15 +3707,15 @@ function eventSnapshots(event, runId) {
   } else if (event.type === 'workflow-cancellation-requested') {
     assertSnapshotKeys(
       payload,
-      ['run', 'invocation', 'workflowCursor'],
-      ['attempt'],
+      ['run', 'workflowCursor'],
+      ['invocation', 'timer', 'signalWait', 'attempt'],
       'event payload',
     );
   } else if (event.type === 'workflow-activity-succeeded') {
     assertSnapshotKeys(
       payload,
       ['run', 'invocation', 'workflowCursor', 'attempt'],
-      ['nextInvocation'],
+      ['nextInvocation', 'nextTimer', 'nextSignalWait'],
       'event payload',
     );
   } else if (
@@ -2936,9 +3731,25 @@ function eventSnapshots(event, runId) {
     assertSnapshotKeys(
       payload,
       ['run', 'invocation', 'workflowCursor', 'reconciliation'],
-      ['nextInvocation'],
+      ['nextInvocation', 'nextTimer', 'nextSignalWait'],
       'event payload',
     );
+  } else if (event.type === 'workflow-timer-fired') {
+    assertSnapshotKeys(
+      payload,
+      ['run', 'workflowCursor', 'timer'],
+      ['nextInvocation', 'nextTimer', 'nextSignalWait'],
+      'event payload',
+    );
+  } else if (event.type === 'workflow-signal-accepted') {
+    assertSnapshotKeys(
+      payload,
+      ['run', 'workflowCursor', 'signalWait', 'signalDelivery'],
+      ['nextInvocation', 'nextTimer', 'nextSignalWait'],
+      'event payload',
+    );
+  } else if (event.type === 'workflow-signal-rejected') {
+    assertExactKeys(payload, ['run', 'signalDelivery'], 'event payload');
   } else if (
     event.type === 'effect-successor-authorized' ||
     event.type === 'effect-successor-run-created'
@@ -2999,9 +3810,11 @@ function eventSnapshots(event, runId) {
     );
   }
   const run = normalizeRunSnapshot(payload.run, runId);
-  const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
-  /** @type {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
-  const result = { run, invocation };
+  /** @type {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, timer?: Record<string, any>, nextTimer?: Record<string, any>, signalWait?: Record<string, any>, nextSignalWait?: Record<string, any>, signalDelivery?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
+  const result = /** @type {any} */ ({ run });
+  if (Object.prototype.hasOwnProperty.call(payload, 'invocation')) {
+    result.invocation = normalizeInvocationSnapshot(payload.invocation, runId);
+  }
   if (Object.prototype.hasOwnProperty.call(payload, 'workflowCursor')) {
     result.workflowCursor = normalizeWorkflowCursorSnapshot(
       payload.workflowCursor,
@@ -3011,6 +3824,30 @@ function eventSnapshots(event, runId) {
   if (Object.prototype.hasOwnProperty.call(payload, 'nextInvocation')) {
     result.nextInvocation = normalizeInvocationSnapshot(
       payload.nextInvocation,
+      runId,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'timer')) {
+    result.timer = normalizeWorkflowTimerSnapshot(payload.timer, runId);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'nextTimer')) {
+    result.nextTimer = normalizeWorkflowTimerSnapshot(payload.nextTimer, runId);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'signalWait')) {
+    result.signalWait = normalizeWorkflowSignalWaitSnapshot(
+      payload.signalWait,
+      runId,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'nextSignalWait')) {
+    result.nextSignalWait = normalizeWorkflowSignalWaitSnapshot(
+      payload.nextSignalWait,
+      runId,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'signalDelivery')) {
+    result.signalDelivery = normalizeWorkflowSignalDeliverySnapshot(
+      payload.signalDelivery,
       runId,
     );
   }
@@ -3066,6 +3903,16 @@ function eventSnapshots(event, runId) {
   if (Object.prototype.hasOwnProperty.call(payload, 'authorization')) {
     result.authorization = normalizeManagedEffectSuccessorAuthorization(
       payload.authorization,
+    );
+  }
+  if (
+    event.type === 'workflow-run-created' &&
+    [result.invocation, result.timer, result.signalWait].filter(Boolean)
+      .length !== 1
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow creation activation count',
     );
   }
   return result;
@@ -3426,6 +4273,57 @@ function classifyNotAppliedManagedEffectSuccessorSource(input) {
 }
 
 /**
+ * @param {{nextInvocation?: Record<string, any>, nextTimer?: Record<string, any>, nextSignalWait?: Record<string, any>} | undefined} context - Optional successor snapshots.
+ * @returns {Record<string, any> | null} - Canonical successor digest view.
+ */
+function workflowSuccessorDigestView(context) {
+  const count = [
+    context?.nextInvocation,
+    context?.nextTimer,
+    context?.nextSignalWait,
+  ].filter(Boolean).length;
+  if (count > 1) {
+    throw new TypeError('workflow transition has multiple successors.');
+  }
+  if (context?.nextInvocation) {
+    const next = context.nextInvocation;
+    return {
+      kind: 'activity',
+      continuationId: next.workflow?.continuationId,
+      stepId: next.workflow?.stepId,
+      stepIndex: next.workflow?.stepIndex,
+      invocationId: next.invocationId,
+      activityId: next.activityId,
+      requestRef: next.requestRef,
+    };
+  }
+  if (context?.nextTimer) {
+    const next = context.nextTimer;
+    return {
+      kind: 'timer',
+      continuationId: next.continuationId,
+      stepId: next.stepId,
+      stepIndex: next.stepIndex,
+      timerId: next.timerId,
+      scheduledAt: next.scheduledAt,
+      dueAt: next.dueAt,
+    };
+  }
+  if (context?.nextSignalWait) {
+    const next = context.nextSignalWait;
+    return {
+      kind: 'signal',
+      continuationId: next.continuationId,
+      stepId: next.stepId,
+      stepIndex: next.stepIndex,
+      signalWaitId: next.signalWaitId,
+      signalId: next.signalId,
+    };
+  }
+  return null;
+}
+
+/**
  * Recompute the semantic idempotency digest from the immutable event and the
  * prior folded state. Event IDs bind a stored digest, but this check binds the
  * digest itself to the transition it claims to represent.
@@ -3436,12 +4334,12 @@ function classifyNotAppliedManagedEffectSuccessorSource(input) {
  * @param {Record<string, any> | undefined} currentEffect - Prior effect snapshot.
  * @param {Map<string, Record<string, any>>} currentEffectsForAttempt - Prior compound effect snapshots by logical ID.
  * @param {Record<string, any>} run - Next run snapshot.
- * @param {Record<string, any>} invocation - Next invocation snapshot.
+ * @param {Record<string, any>} invocation - Next invocation snapshot. Wait-only events pass no value at runtime and take a branch that never dereferences it.
  * @param {Record<string, any> | undefined} attempt - Next attempt snapshot.
  * @param {Record<string, any> | undefined} effect - Next effect snapshot.
  * @param {Record<string, any>[] | undefined} effects - Next compound effect snapshots.
  * @param {Record<string, any> | undefined} reconciliation - Reconciliation payload for an event that deliberately retains its attempt unchanged.
- * @param {{currentCursor: Record<string, any>, nextCursor: Record<string, any>, nextInvocation?: Record<string, any>} | undefined} workflowContext - Exact workflow transition context.
+ * @param {{currentCursor?: Record<string, any>, nextCursor?: Record<string, any>, nextInvocation?: Record<string, any>, currentTimer?: Record<string, any>, nextTimer?: Record<string, any>, currentSignalWait?: Record<string, any>, nextSignalWait?: Record<string, any>, signalDelivery?: Record<string, any>} | undefined} workflowContext - Exact workflow transition context.
  * @param {string} runId - Durable run identity.
  * @returns {void}
  */
@@ -3463,11 +4361,14 @@ function assertEventRequestDigest(
 ) {
   /** @type {Record<string, any>} */
   let value;
+  let digestType = event.type;
   const currentWorkflowCursor = workflowContext?.currentCursor;
   const nextWorkflowCursor = workflowContext?.nextCursor;
   if (
     (event.type.startsWith('workflow-activity-') ||
-      event.type === 'workflow-cancellation-requested') &&
+      event.type === 'workflow-cancellation-requested' ||
+      event.type === 'workflow-timer-fired' ||
+      event.type === 'workflow-signal-accepted') &&
     (!currentWorkflowCursor || !nextWorkflowCursor)
   ) {
     throw new ExecutionLedgerProjectionError(
@@ -3489,9 +4390,29 @@ function assertEventRequestDigest(
       trigger: run.trigger,
     };
   } else if (event.type === 'workflow-run-created') {
+    const activation = invocation
+      ? {
+          kind: 'activity',
+          invocationId: invocation.invocationId,
+          activityRequestRef: invocation.requestRef,
+        }
+      : workflowContext?.nextTimer
+        ? {
+            kind: 'timer',
+            timerId: workflowContext.nextTimer.timerId,
+            scheduledAt: workflowContext.nextTimer.scheduledAt,
+            dueAt: workflowContext.nextTimer.dueAt,
+          }
+        : workflowContext?.nextSignalWait
+          ? {
+              kind: 'signal',
+              signalWaitId: workflowContext.nextSignalWait.signalWaitId,
+              signalId: workflowContext.nextSignalWait.signalId,
+            }
+          : null;
     value = {
       runId,
-      invocationId: invocation.invocationId,
+      activation,
       transitionId: event.transition_id,
       actor: event.actor,
       coordinatorEpoch: event.fence.coordinatorEpoch,
@@ -3501,7 +4422,6 @@ function assertEventRequestDigest(
       planId: run.trigger.planId,
       planRef: run.trigger.planRef,
       startRef: run.requestRef,
-      activityRequestRef: invocation.requestRef,
       trigger: run.trigger,
     };
   } else if (event.type === 'workflow-activity-claimed') {
@@ -3557,11 +4477,29 @@ function assertEventRequestDigest(
     const cancellationRequest = run.cancellationRequest;
     value = {
       runId,
-      invocationId: invocation.invocationId,
+      activation: invocation
+        ? {
+            kind: 'activity',
+            invocationId: invocation.invocationId,
+            expectedGeneration: currentInvocation?.generation,
+          }
+        : workflowContext?.currentTimer
+          ? {
+              kind: 'timer',
+              timerId: workflowContext.currentTimer.timerId,
+              expectedTimerVersion: workflowContext.currentTimer.version,
+            }
+          : workflowContext?.currentSignalWait
+            ? {
+                kind: 'signal',
+                signalWaitId: workflowContext.currentSignalWait.signalWaitId,
+                expectedSignalWaitVersion:
+                  workflowContext.currentSignalWait.version,
+              }
+            : null,
       cursor: workflowCursorGuard(
         /** @type {Record<string, any>} */ (currentWorkflowCursor),
       ),
-      expectedGeneration: currentInvocation?.generation,
       expectedVersion: currentRun?.version,
       transitionId: event.transition_id,
       requestId: cancellationRequest?.requestId,
@@ -3580,7 +4518,6 @@ function assertEventRequestDigest(
       .outputs[
       /** @type {Record<string, any>} */ (currentWorkflowCursor).stepIndex
     ];
-    const nextInvocation = workflowContext?.nextInvocation;
     value = {
       runId,
       invocationId: invocation.invocationId,
@@ -3595,16 +4532,7 @@ function assertEventRequestDigest(
       terminal: attempt?.terminal,
       evidenceRef: attempt?.evidenceRef,
       outputRef: output?.outputRef ?? null,
-      successor: nextInvocation
-        ? {
-            continuationId: nextInvocation.workflow?.continuationId,
-            stepId: nextInvocation.workflow?.stepId,
-            stepIndex: nextInvocation.workflow?.stepIndex,
-            invocationId: nextInvocation.invocationId,
-            activityId: nextInvocation.activityId,
-            requestRef: nextInvocation.requestRef,
-          }
-        : null,
+      successor: workflowSuccessorDigestView(workflowContext),
       actor: event.actor,
       coordinatorEpoch: attempt?.coordinatorEpoch,
     };
@@ -3635,7 +4563,6 @@ function assertEventRequestDigest(
           /** @type {Record<string, any>} */ (currentWorkflowCursor).stepIndex
         ]
       : undefined;
-    const nextInvocation = workflowContext?.nextInvocation;
     value = {
       runId,
       invocationId: reconciliation?.invocationId,
@@ -3654,20 +4581,41 @@ function assertEventRequestDigest(
       evidenceRef: reconciliation?.evidenceRef,
       terminal: reconciliation?.terminal,
       outputRef: completed ? (output?.outputRef ?? null) : null,
-      successor:
-        completed && nextInvocation
-          ? {
-              continuationId: nextInvocation.workflow?.continuationId,
-              stepId: nextInvocation.workflow?.stepId,
-              stepIndex: nextInvocation.workflow?.stepIndex,
-              invocationId: nextInvocation.invocationId,
-              activityId: nextInvocation.activityId,
-              requestRef: nextInvocation.requestRef,
-            }
-          : null,
+      successor: completed
+        ? workflowSuccessorDigestView(workflowContext)
+        : null,
       reason: reconciliation?.reason,
       actor: event.actor,
       coordinatorEpoch: reconciliation?.coordinatorEpoch,
+    };
+  } else if (event.type === 'workflow-timer-fired') {
+    const currentTimer = workflowContext?.currentTimer;
+    value = {
+      runId,
+      timerId: currentTimer?.timerId,
+      cursor: workflowCursorGuard(
+        /** @type {Record<string, any>} */ (currentWorkflowCursor),
+      ),
+      expectedVersion: currentRun?.version,
+      expectedTimerVersion: currentTimer?.version,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: event.fence.coordinatorEpoch,
+    };
+  } else if (
+    event.type === 'workflow-signal-accepted' ||
+    event.type === 'workflow-signal-rejected'
+  ) {
+    const delivery = workflowContext?.signalDelivery;
+    digestType = 'workflow-signal-delivery';
+    value = {
+      appId: delivery?.appId,
+      runId,
+      deliveryId: delivery?.deliveryId,
+      signalId: delivery?.signalId,
+      payloadId: delivery?.payloadRef?.payloadId,
+      actor: delivery?.actor,
+      transitionId: event.transition_id,
     };
   } else if (event.type === 'effect-successor-run-created') {
     value = {
@@ -4004,7 +4952,7 @@ function assertEventRequestDigest(
       coordinatorEpoch: attempt?.coordinatorEpoch,
     };
   }
-  const expectedDigest = createTransitionRequestDigest(event.type, value);
+  const expectedDigest = createTransitionRequestDigest(digestType, value);
   if (event.request_digest !== expectedDigest) {
     throw new ExecutionLedgerProjectionError(runId, 'event request digest');
   }
@@ -4167,7 +5115,9 @@ async function readWorkflowCursorOutputs(cursor, payloadReader) {
  * @returns {{binding: Record<string, any>, payload: Record<string, any>} | undefined} - Exact selected output.
  */
 function selectWorkflowStepOutput(step, outputs, label) {
-  if (step.input.kind !== 'step-output') return undefined;
+  if (step.kind !== 'activity' || step.input.kind !== 'step-output') {
+    return undefined;
+  }
   const selected = outputs.filter(
     ({ binding }) => binding.stepId === step.input.step,
   );
@@ -4180,16 +5130,144 @@ function selectWorkflowStepOutput(step, outputs, label) {
 }
 
 /**
+ * Verify exactly one materialized successor projection, or no projection for
+ * a terminal workflow. Payload-backed activity requests are rehashed here.
+ * @param {{materialized: Record<string, any>, nextInvocation?: Record<string, any>, nextTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, run: Record<string, any>, cursor: Record<string, any>, sequence: number, observedAt: number, state: Record<string, any>, payloadReader: ReturnType<typeof createLedgerPayloadReader>, label: string}} input - Successor verification inputs.
+ * @returns {Promise<void>}
+ */
+async function assertWorkflowSuccessorProjection(input) {
+  const actualCount = [
+    input.nextInvocation,
+    input.nextTimer,
+    input.nextSignalWait,
+  ].filter(Boolean).length;
+  if (input.materialized.completed) {
+    if (actualCount !== 0) {
+      throw new ExecutionLedgerProjectionError(
+        input.run.runId,
+        `${input.label} terminal workflow retains a successor`,
+      );
+    }
+    return;
+  }
+  if (actualCount !== 1) {
+    throw new ExecutionLedgerProjectionError(
+      input.run.runId,
+      `${input.label} successor count`,
+    );
+  }
+  if (input.materialized.nextActivity) {
+    const activity = input.materialized.nextActivity;
+    const next = input.nextInvocation;
+    if (!next || input.nextTimer || input.nextSignalWait) {
+      throw new ExecutionLedgerProjectionError(
+        input.run.runId,
+        `${input.label} activity successor is unavailable`,
+      );
+    }
+    const request = normalizeWorkflowActivityRequest(
+      await input.payloadReader.readActivityRequest(next.requestRef),
+      `${input.label} activity request`,
+    );
+    const expected = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: input.run.runId,
+      invocationId: activity.invocationId,
+      appId: input.run.appId,
+      revisionId: input.run.revisionId,
+      activityId: activity.activityId,
+      requestRef: next.requestRef,
+      status: InvocationStatus.RUNNABLE,
+      generation: 0,
+      version: 1,
+      lastSequence: input.sequence,
+      createdAt: input.observedAt,
+      updatedAt: input.observedAt,
+      workflow: {
+        workflowId: input.cursor.workflowId,
+        planId: input.cursor.planId,
+        continuationId: activity.continuationId,
+        stepId: activity.stepId,
+        stepIndex: activity.stepIndex,
+      },
+    };
+    if (
+      input.state.invocations.has(next.invocationId) ||
+      !hasSameCanonicalJson(request, activity.activityRequest) ||
+      !hasSameCanonicalJson(next, expected)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        input.run.runId,
+        `${input.label} activity successor mismatch`,
+      );
+    }
+    return;
+  }
+  if (input.materialized.nextTimer) {
+    const next = input.nextTimer;
+    const expected = createWaitingWorkflowTimerSnapshot(
+      input.run,
+      input.cursor,
+      input.materialized.nextTimer,
+      input.sequence,
+      input.observedAt,
+    );
+    if (
+      !next ||
+      input.nextInvocation ||
+      input.nextSignalWait ||
+      input.state.timers.has(next.timerId) ||
+      !hasSameCanonicalJson(next, expected)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        input.run.runId,
+        `${input.label} timer successor mismatch`,
+      );
+    }
+    return;
+  }
+  const descriptor = input.materialized.nextSignalWait;
+  const next = input.nextSignalWait;
+  const expected = descriptor
+    ? createWaitingWorkflowSignalSnapshot(
+        input.run,
+        input.cursor,
+        descriptor,
+        input.sequence,
+        input.observedAt,
+      )
+    : undefined;
+  if (
+    !descriptor ||
+    !next ||
+    input.nextInvocation ||
+    input.nextTimer ||
+    input.state.signalWaits.has(next.signalWaitId) ||
+    !hasSameCanonicalJson(next, expected)
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      input.run.runId,
+      `${input.label} signal-wait successor mismatch`,
+    );
+  }
+}
+
+/**
  * @param {Record<string, any>} run - Run snapshot.
- * @param {Record<string, any>} invocation - Invocation snapshot.
+ * @param {Record<string, any>} invocation - Invocation snapshot when the event affects one; wait-only events pass undefined at runtime and return before activity/manual branches.
  * @param {Record<string, any> | undefined} workflowCursor - Workflow cursor snapshot.
  * @param {Record<string, any> | undefined} nextInvocation - Newly materialized workflow successor invocation.
+ * @param {Record<string, any> | undefined} timer - Affected workflow timer.
+ * @param {Record<string, any> | undefined} nextTimer - Newly materialized workflow timer.
+ * @param {Record<string, any> | undefined} signalWait - Affected workflow signal wait.
+ * @param {Record<string, any> | undefined} nextSignalWait - Newly materialized workflow signal wait.
+ * @param {Record<string, any> | undefined} signalDelivery - Signal delivery decision.
  * @param {Record<string, any> | undefined} attempt - Attempt snapshot.
  * @param {Record<string, any> | undefined} effect - Effect snapshot.
  * @param {Record<string, any>[] | undefined} effects - Compound effect snapshots.
  * @param {Record<string, any> | undefined} reconciliation - Reconciliation payload when the retained attempt is deliberately unchanged.
  * @param {Record<string, any>} event - Event being folded.
- * @param {{run?: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} state - Mutable fold state.
+ * @param {{run?: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, timers: Map<string, Record<string, any>>, signalWaits: Map<string, Record<string, any>>, signalDeliveries: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} state - Mutable fold state.
  * @param {string} runId - Run identity.
  * @param {ReturnType<typeof createLedgerPayloadReader>} payloadReader - Per-fold verified immutable payload reader.
  * @param {Map<string, {descriptor: {kind: string, version: number}, verify: (input: Record<string, any>) => boolean}>} effectVerifierRegistry - Versioned deterministic effect verifiers.
@@ -4200,6 +5278,11 @@ async function applyEvent(
   invocation,
   workflowCursor,
   nextInvocation,
+  timer,
+  nextTimer,
+  signalWait,
+  nextSignalWait,
+  signalDelivery,
   attempt,
   effect,
   effects,
@@ -4211,7 +5294,13 @@ async function applyEvent(
   effectVerifierRegistry,
 ) {
   const currentRun = state.run;
-  const currentInvocation = state.invocations.get(invocation.invocationId);
+  const currentInvocation = invocation
+    ? state.invocations.get(invocation.invocationId)
+    : undefined;
+  const currentTimer = timer ? state.timers.get(timer.timerId) : undefined;
+  const currentSignalWait = signalWait
+    ? state.signalWaits.get(signalWait.signalWaitId)
+    : undefined;
   const currentAttempt = attempt
     ? state.attempts.get(attemptMapKey(attempt.invocationId, attempt.attemptId))
     : reconciliation
@@ -4248,12 +5337,21 @@ async function applyEvent(
     );
 
   if (event.type === 'workflow-run-created') {
+    const activationCount = [invocation, timer, signalWait].filter(
+      Boolean,
+    ).length;
     if (
       currentRun ||
       currentInvocation ||
+      currentTimer ||
+      currentSignalWait ||
       state.workflowCursor ||
       !workflowCursor ||
+      activationCount !== 1 ||
       nextInvocation ||
+      nextTimer ||
+      nextSignalWait ||
+      signalDelivery ||
       attempt ||
       effect ||
       effects ||
@@ -4262,23 +5360,13 @@ async function applyEvent(
       run.status !== RunStatus.RUNNING ||
       run.version !== 1 ||
       run.lastSequence !== 1 ||
-      invocation.status !== InvocationStatus.RUNNABLE ||
-      invocation.generation !== 0 ||
-      invocation.version !== 1 ||
-      invocation.lastSequence !== 1 ||
       workflowCursor.version !== 1 ||
       workflowCursor.lastSequence !== 1 ||
-      workflowCursor.disposition !==
-        WorkflowCursorDisposition.ACTIVITY_RUNNABLE ||
       run.createdAt !== event.observed_at ||
       run.updatedAt !== event.observed_at ||
-      invocation.createdAt !== event.observed_at ||
-      invocation.updatedAt !== event.observed_at ||
       workflowCursor.createdAt !== event.observed_at ||
       workflowCursor.updatedAt !== event.observed_at ||
-      run.appId !== invocation.appId ||
       run.appId !== workflowCursor.appId ||
-      run.revisionId !== invocation.revisionId ||
       run.revisionId !== workflowCursor.revisionId ||
       run.runId !== workflowCursor.runId ||
       run.trigger.kind !== 'workflow' ||
@@ -4286,15 +5374,6 @@ async function applyEvent(
       run.trigger.planId !== workflowCursor.planId ||
       !hasSameCanonicalJson(run.trigger.planRef, workflowCursor.planRef) ||
       !hasSameCanonicalJson(run.requestRef, workflowCursor.startRef) ||
-      invocation.invocationId !== workflowCursor.invocationId ||
-      !invocation.workflow ||
-      !hasSameCanonicalJson(invocation.workflow, {
-        workflowId: workflowCursor.workflowId,
-        planId: workflowCursor.planId,
-        continuationId: workflowCursor.continuationId,
-        stepId: workflowCursor.stepId,
-        stepIndex: workflowCursor.stepIndex,
-      }) ||
       event.fence.coordinatorEpoch !== 0 ||
       event.fence.invocationGeneration !== 0
     ) {
@@ -4308,13 +5387,9 @@ async function applyEvent(
       run.trigger.planRef,
     );
     const startPayload = await payloadReader.readWorkflowStart(run.requestRef);
-    const activityRequest = normalizeWorkflowActivityRequest(
-      await payloadReader.readActivityRequest(invocation.requestRef),
-      'persisted workflow activity request',
-    );
     let materialized;
     try {
-      materialized = materializeFirstWorkflowActivity({
+      materialized = materializeFirstWorkflowStep({
         runId,
         planPayload,
         planRef: run.trigger.planRef,
@@ -4333,16 +5408,114 @@ async function applyEvent(
       materialized.planPayload.revisionId !== run.revisionId ||
       materialized.planPayload.workflowId !== run.trigger.workflowId ||
       materialized.planId !== run.trigger.planId ||
-      materialized.invocationId !== invocation.invocationId ||
-      materialized.activityId !== invocation.activityId ||
-      materialized.activityId === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID ||
-      !hasSameCanonicalJson(materialized.activityRequest, activityRequest) ||
       !hasSameCanonicalJson(materialized.cursor, workflowCursor)
     ) {
       throw new ExecutionLedgerProjectionError(
         runId,
         'workflow start derivation mismatch',
       );
+    }
+    if (materialized.nextActivity) {
+      const activity = materialized.nextActivity;
+      const activityRequest = normalizeWorkflowActivityRequest(
+        await payloadReader.readActivityRequest(invocation?.requestRef),
+        'persisted workflow activity request',
+      );
+      if (
+        !invocation ||
+        timer ||
+        signalWait ||
+        invocation.status !== InvocationStatus.RUNNABLE ||
+        invocation.generation !== 0 ||
+        invocation.version !== 1 ||
+        invocation.lastSequence !== 1 ||
+        invocation.createdAt !== event.observed_at ||
+        invocation.updatedAt !== event.observed_at ||
+        run.appId !== invocation.appId ||
+        run.revisionId !== invocation.revisionId ||
+        activity.invocationId !== invocation.invocationId ||
+        activity.activityId !== invocation.activityId ||
+        activity.activityId === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID ||
+        !hasSameCanonicalJson(activity.activityRequest, activityRequest) ||
+        !invocation.workflow ||
+        !hasSameCanonicalJson(invocation.workflow, {
+          workflowId: workflowCursor.workflowId,
+          planId: workflowCursor.planId,
+          continuationId: workflowCursor.continuationId,
+          stepId: workflowCursor.stepId,
+          stepIndex: workflowCursor.stepIndex,
+        })
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow start activity mismatch',
+        );
+      }
+    } else if (materialized.nextTimer) {
+      const expectedTimer = {
+        schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+        runId,
+        timerId: materialized.nextTimer.timerId,
+        appId: run.appId,
+        revisionId: run.revisionId,
+        workflowId: workflowCursor.workflowId,
+        planId: workflowCursor.planId,
+        continuationId: materialized.nextTimer.continuationId,
+        stepId: materialized.nextTimer.stepId,
+        stepIndex: materialized.nextTimer.stepIndex,
+        status: WorkflowTimerStatus.WAITING,
+        scheduledAt: materialized.nextTimer.scheduledAt,
+        dueAt: materialized.nextTimer.dueAt,
+        version: 1,
+        lastSequence: 1,
+        createdAt: event.observed_at,
+        updatedAt: event.observed_at,
+      };
+      if (
+        invocation ||
+        signalWait ||
+        !timer ||
+        !hasSameCanonicalJson(timer, expectedTimer)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow start timer mismatch',
+        );
+      }
+    } else {
+      const wait = materialized.nextSignalWait;
+      const expectedWait = wait
+        ? {
+            schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+            runId,
+            signalWaitId: wait.signalWaitId,
+            appId: run.appId,
+            revisionId: run.revisionId,
+            workflowId: workflowCursor.workflowId,
+            planId: workflowCursor.planId,
+            continuationId: wait.continuationId,
+            stepId: wait.stepId,
+            stepIndex: wait.stepIndex,
+            signalId: wait.signalId,
+            status: WorkflowSignalWaitStatus.WAITING,
+            version: 1,
+            lastSequence: 1,
+            createdAt: event.observed_at,
+            updatedAt: event.observed_at,
+          }
+        : undefined;
+      if (
+        invocation ||
+        timer ||
+        !signalWait ||
+        !expectedWait ||
+        !hasSameCanonicalJson(signalWait, expectedWait)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow start signal-wait mismatch',
+        );
+      }
     }
     assertEventRequestDigest(
       event,
@@ -4357,12 +5530,20 @@ async function applyEvent(
       undefined,
       undefined,
       undefined,
-      undefined,
+      {
+        nextCursor: workflowCursor,
+        ...(timer ? { nextTimer: timer } : {}),
+        ...(signalWait ? { nextSignalWait: signalWait } : {}),
+      },
       runId,
     );
     state.run = run;
     state.workflowCursor = workflowCursor;
-    state.invocations.set(invocation.invocationId, invocation);
+    if (invocation) state.invocations.set(invocation.invocationId, invocation);
+    if (timer) state.timers.set(timer.timerId, timer);
+    if (signalWait) {
+      state.signalWaits.set(signalWait.signalWaitId, signalWait);
+    }
     return;
   }
 
@@ -4480,6 +5661,554 @@ async function applyEvent(
     return;
   }
 
+  if (event.type === 'workflow-signal-rejected') {
+    const currentCursor = state.workflowCursor;
+    if (
+      !currentRun ||
+      currentRun.trigger?.kind !== 'workflow' ||
+      !currentCursor ||
+      invocation ||
+      workflowCursor ||
+      nextInvocation ||
+      timer ||
+      nextTimer ||
+      signalWait ||
+      nextSignalWait ||
+      !signalDelivery ||
+      attempt ||
+      effect ||
+      effects ||
+      reconciliation ||
+      signalDelivery.status !== WorkflowSignalDeliveryStatus.REJECTED ||
+      signalDelivery.runId !== runId ||
+      signalDelivery.appId !== currentRun.appId ||
+      signalDelivery.lastSequence !== event.sequence ||
+      signalDelivery.version !== 1 ||
+      signalDelivery.observedAt !== event.observed_at ||
+      !hasSameCanonicalJson(signalDelivery.actor, event.actor) ||
+      state.signalDeliveries.has(signalDelivery.deliveryId) ||
+      event.fence.coordinatorEpoch !== 0 ||
+      event.fence.invocationGeneration !== 0
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid rejected workflow signal',
+      );
+    }
+    assertRunAdvance(currentRun, run, event.sequence, runId);
+    if (
+      run.status !== currentRun.status ||
+      !hasSameCancellationRequest(currentRun, run) ||
+      run.updatedAt !== event.observed_at
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'rejected workflow signal changed run semantics',
+      );
+    }
+    const planPayload = await payloadReader.readWorkflowPlan(
+      currentCursor.planRef,
+    );
+    const currentWait = currentCursor.signalWaitId
+      ? state.signalWaits.get(currentCursor.signalWaitId)
+      : undefined;
+    const decision = classifyWorkflowSignalDelivery(
+      currentRun,
+      currentCursor,
+      currentWait,
+      planPayload,
+      signalDelivery.signalId,
+    );
+    if (
+      decision.accepts ||
+      decision.rejectionReason !== signalDelivery.rejectionReason
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'rejected workflow signal contradicts durable state',
+      );
+    }
+    await payloadReader.readWorkflowOutput(signalDelivery.payloadRef);
+    assertEventRequestDigest(
+      event,
+      currentRun,
+      undefined,
+      undefined,
+      undefined,
+      new Map(),
+      run,
+      /** @type {any} */ (undefined),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { signalDelivery },
+      runId,
+    );
+    state.run = run;
+    state.signalDeliveries.set(signalDelivery.deliveryId, signalDelivery);
+    return;
+  }
+
+  if (event.type === 'workflow-timer-fired') {
+    const currentCursor = state.workflowCursor;
+    if (
+      !currentRun ||
+      currentRun.trigger?.kind !== 'workflow' ||
+      !currentCursor ||
+      !workflowCursor ||
+      invocation ||
+      !timer ||
+      !currentTimer ||
+      signalWait ||
+      signalDelivery ||
+      attempt ||
+      effect ||
+      effects ||
+      reconciliation ||
+      currentRun.status !== RunStatus.RUNNING ||
+      currentCursor.disposition !== WorkflowCursorDisposition.TIMER_WAITING ||
+      currentCursor.timerId !== currentTimer.timerId ||
+      currentTimer.status !== WorkflowTimerStatus.WAITING ||
+      timer.status !== WorkflowTimerStatus.FIRED ||
+      timer.timerId !== currentTimer.timerId ||
+      event.observed_at < currentTimer.dueAt ||
+      event.fence.coordinatorEpoch !== 0 ||
+      event.fence.invocationGeneration !== 0
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid workflow timer fire scope',
+      );
+    }
+    assertRunAdvance(currentRun, run, event.sequence, runId);
+    assertWorkflowCursorAdvance(currentCursor, workflowCursor, event, runId);
+    const planPayload = await payloadReader.readWorkflowPlan(
+      currentCursor.planRef,
+    );
+    const startPayload = await payloadReader.readWorkflowStart(
+      currentCursor.startRef,
+    );
+    const resolvedOutputs = await readWorkflowCursorOutputs(
+      currentCursor,
+      payloadReader,
+    );
+    const outputBinding = workflowCursor.outputs[currentCursor.stepIndex];
+    if (!outputBinding) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow timer fire lacks output binding',
+      );
+    }
+    const outputPayload = await payloadReader.readWorkflowOutput(
+      outputBinding.outputRef,
+    );
+    const nextStep = planPayload.definition.steps[currentCursor.stepIndex + 1];
+    const nextSelectedOutput = nextStep
+      ? selectWorkflowStepOutput(
+          nextStep,
+          [
+            ...resolvedOutputs,
+            { binding: outputBinding, payload: outputPayload },
+          ],
+          'persisted workflow timer successor',
+        )
+      : undefined;
+    let materialized;
+    try {
+      materialized = materializeWorkflowTimerFire({
+        currentCursor,
+        planPayload,
+        planRef: currentCursor.planRef,
+        startPayload,
+        startRef: currentCursor.startRef,
+        outputPayload,
+        outputRef: outputBinding.outputRef,
+        ...(nextSelectedOutput ? { selectedOutput: nextSelectedOutput } : {}),
+        sequence: event.sequence,
+        observedAt: event.observed_at,
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow timer successor derivation mismatch',
+      );
+    }
+    const expectedTimer = {
+      ...cloneJsonObject(currentTimer, 'prior workflow timer'),
+      status: WorkflowTimerStatus.FIRED,
+      firedAt: event.observed_at,
+      outputRef: outputBinding.outputRef,
+      version: currentTimer.version + 1,
+      lastSequence: event.sequence,
+      updatedAt: event.observed_at,
+    };
+    if (
+      !hasSameCanonicalJson(outputPayload.value, {
+        scheduledAt: currentTimer.scheduledAt,
+        dueAt: currentTimer.dueAt,
+        firedAt: event.observed_at,
+      }) ||
+      !hasSameCanonicalJson(timer, expectedTimer) ||
+      !hasSameCanonicalJson(workflowCursor, materialized.cursor) ||
+      !hasSameCanonicalJson(run, {
+        ...cloneJsonObject(currentRun, 'prior workflow run'),
+        status: materialized.completed
+          ? RunStatus.COMPLETED
+          : RunStatus.RUNNING,
+        version: currentRun.version + 1,
+        lastSequence: event.sequence,
+        updatedAt: event.observed_at,
+      })
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid workflow timer fire',
+      );
+    }
+    await assertWorkflowSuccessorProjection({
+      materialized,
+      nextInvocation,
+      nextTimer,
+      nextSignalWait,
+      run,
+      cursor: workflowCursor,
+      sequence: event.sequence,
+      observedAt: event.observed_at,
+      state,
+      payloadReader,
+      label: 'workflow timer',
+    });
+    assertEventRequestDigest(
+      event,
+      currentRun,
+      undefined,
+      undefined,
+      undefined,
+      new Map(),
+      run,
+      /** @type {any} */ (undefined),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        currentCursor,
+        nextCursor: workflowCursor,
+        currentTimer,
+        ...(nextInvocation ? { nextInvocation } : {}),
+        ...(nextTimer ? { nextTimer } : {}),
+        ...(nextSignalWait ? { nextSignalWait } : {}),
+      },
+      runId,
+    );
+    state.run = run;
+    state.workflowCursor = workflowCursor;
+    state.timers.set(timer.timerId, timer);
+    if (nextInvocation) {
+      state.invocations.set(nextInvocation.invocationId, nextInvocation);
+    }
+    if (nextTimer) state.timers.set(nextTimer.timerId, nextTimer);
+    if (nextSignalWait) {
+      state.signalWaits.set(nextSignalWait.signalWaitId, nextSignalWait);
+    }
+    return;
+  }
+
+  if (event.type === 'workflow-signal-accepted') {
+    const currentCursor = state.workflowCursor;
+    if (
+      !currentRun ||
+      currentRun.trigger?.kind !== 'workflow' ||
+      !currentCursor ||
+      !workflowCursor ||
+      invocation ||
+      timer ||
+      !signalWait ||
+      !currentSignalWait ||
+      !signalDelivery ||
+      attempt ||
+      effect ||
+      effects ||
+      reconciliation ||
+      currentRun.status !== RunStatus.RUNNING ||
+      currentCursor.disposition !== WorkflowCursorDisposition.SIGNAL_WAITING ||
+      currentCursor.signalWaitId !== currentSignalWait.signalWaitId ||
+      currentSignalWait.status !== WorkflowSignalWaitStatus.WAITING ||
+      signalWait.status !== WorkflowSignalWaitStatus.CONSUMED ||
+      signalWait.signalWaitId !== currentSignalWait.signalWaitId ||
+      signalDelivery.status !== WorkflowSignalDeliveryStatus.ACCEPTED ||
+      signalDelivery.signalWaitId !== currentSignalWait.signalWaitId ||
+      signalDelivery.deliveryId !== signalWait.deliveryId ||
+      signalDelivery.signalId !== currentSignalWait.signalId ||
+      !hasSameCanonicalJson(signalDelivery.payloadRef, signalWait.payloadRef) ||
+      !hasSameCanonicalJson(signalDelivery.actor, event.actor) ||
+      signalDelivery.lastSequence !== event.sequence ||
+      signalDelivery.version !== 1 ||
+      signalDelivery.observedAt !== event.observed_at ||
+      state.signalDeliveries.has(signalDelivery.deliveryId) ||
+      event.fence.coordinatorEpoch !== 0 ||
+      event.fence.invocationGeneration !== 0
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid accepted workflow signal scope',
+      );
+    }
+    assertRunAdvance(currentRun, run, event.sequence, runId);
+    assertWorkflowCursorAdvance(currentCursor, workflowCursor, event, runId);
+    const planPayload = await payloadReader.readWorkflowPlan(
+      currentCursor.planRef,
+    );
+    const startPayload = await payloadReader.readWorkflowStart(
+      currentCursor.startRef,
+    );
+    const resolvedOutputs = await readWorkflowCursorOutputs(
+      currentCursor,
+      payloadReader,
+    );
+    const outputBinding = workflowCursor.outputs[currentCursor.stepIndex];
+    if (!outputBinding) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow signal acceptance lacks output binding',
+      );
+    }
+    const outputPayload = await payloadReader.readWorkflowOutput(
+      outputBinding.outputRef,
+    );
+    const nextStep = planPayload.definition.steps[currentCursor.stepIndex + 1];
+    const nextSelectedOutput = nextStep
+      ? selectWorkflowStepOutput(
+          nextStep,
+          [
+            ...resolvedOutputs,
+            { binding: outputBinding, payload: outputPayload },
+          ],
+          'persisted workflow signal successor',
+        )
+      : undefined;
+    let materialized;
+    try {
+      materialized = materializeWorkflowSignalAcceptance({
+        currentCursor,
+        planPayload,
+        planRef: currentCursor.planRef,
+        startPayload,
+        startRef: currentCursor.startRef,
+        outputPayload,
+        outputRef: outputBinding.outputRef,
+        ...(nextSelectedOutput ? { selectedOutput: nextSelectedOutput } : {}),
+        sequence: event.sequence,
+        observedAt: event.observed_at,
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow signal successor derivation mismatch',
+      );
+    }
+    const expectedWait = {
+      ...cloneJsonObject(currentSignalWait, 'prior workflow signal wait'),
+      status: WorkflowSignalWaitStatus.CONSUMED,
+      deliveryId: signalDelivery.deliveryId,
+      payloadRef: signalDelivery.payloadRef,
+      acceptedAt: event.observed_at,
+      version: currentSignalWait.version + 1,
+      lastSequence: event.sequence,
+      updatedAt: event.observed_at,
+    };
+    if (
+      !hasSameCanonicalJson(signalWait, expectedWait) ||
+      !hasSameCanonicalJson(workflowCursor, materialized.cursor) ||
+      !hasSameCanonicalJson(run, {
+        ...cloneJsonObject(currentRun, 'prior workflow run'),
+        status: materialized.completed
+          ? RunStatus.COMPLETED
+          : RunStatus.RUNNING,
+        version: currentRun.version + 1,
+        lastSequence: event.sequence,
+        updatedAt: event.observed_at,
+      })
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid accepted workflow signal',
+      );
+    }
+    // Reading through the delivery reference independently proves that the
+    // accepted output binding and delivery identity name the same bytes.
+    const deliveryPayload = await payloadReader.readWorkflowOutput(
+      signalDelivery.payloadRef,
+    );
+    if (!hasSameCanonicalJson(deliveryPayload, outputPayload)) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow signal delivery output mismatch',
+      );
+    }
+    await assertWorkflowSuccessorProjection({
+      materialized,
+      nextInvocation,
+      nextTimer,
+      nextSignalWait,
+      run,
+      cursor: workflowCursor,
+      sequence: event.sequence,
+      observedAt: event.observed_at,
+      state,
+      payloadReader,
+      label: 'workflow signal',
+    });
+    assertEventRequestDigest(
+      event,
+      currentRun,
+      undefined,
+      undefined,
+      undefined,
+      new Map(),
+      run,
+      /** @type {any} */ (undefined),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        currentCursor,
+        nextCursor: workflowCursor,
+        currentSignalWait,
+        signalDelivery,
+        ...(nextInvocation ? { nextInvocation } : {}),
+        ...(nextTimer ? { nextTimer } : {}),
+        ...(nextSignalWait ? { nextSignalWait } : {}),
+      },
+      runId,
+    );
+    state.run = run;
+    state.workflowCursor = workflowCursor;
+    state.signalWaits.set(signalWait.signalWaitId, signalWait);
+    state.signalDeliveries.set(signalDelivery.deliveryId, signalDelivery);
+    if (nextInvocation) {
+      state.invocations.set(nextInvocation.invocationId, nextInvocation);
+    }
+    if (nextTimer) state.timers.set(nextTimer.timerId, nextTimer);
+    if (nextSignalWait) {
+      state.signalWaits.set(nextSignalWait.signalWaitId, nextSignalWait);
+    }
+    return;
+  }
+
+  if (
+    event.type === 'workflow-cancellation-requested' &&
+    !invocation &&
+    (timer || signalWait)
+  ) {
+    const currentCursor = state.workflowCursor;
+    const currentActivation = timer ? currentTimer : currentSignalWait;
+    if (
+      !currentRun ||
+      currentRun.trigger?.kind !== 'workflow' ||
+      !currentCursor ||
+      !workflowCursor ||
+      !currentActivation ||
+      nextInvocation ||
+      nextTimer ||
+      nextSignalWait ||
+      signalDelivery ||
+      attempt ||
+      effect ||
+      effects ||
+      reconciliation ||
+      currentRun.status !== RunStatus.RUNNING ||
+      (timer
+        ? currentCursor.disposition !==
+            WorkflowCursorDisposition.TIMER_WAITING ||
+          currentCursor.timerId !== currentActivation.timerId ||
+          currentActivation.status !== WorkflowTimerStatus.WAITING
+        : currentCursor.disposition !==
+            WorkflowCursorDisposition.SIGNAL_WAITING ||
+          currentCursor.signalWaitId !== currentActivation.signalWaitId ||
+          currentActivation.status !== WorkflowSignalWaitStatus.WAITING) ||
+      event.fence.coordinatorEpoch !== 0 ||
+      event.fence.invocationGeneration !== 0
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid waiting workflow cancellation scope',
+      );
+    }
+    assertRunAdvance(currentRun, run, event.sequence, runId);
+    assertWorkflowCursorAdvance(currentCursor, workflowCursor, event, runId);
+    const cancellationRequest = run.cancellationRequest;
+    const expectedCursor = materializeWorkflowActivityCancellation({
+      currentCursor,
+      sequence: event.sequence,
+      observedAt: event.observed_at,
+    });
+    const expectedRun = {
+      ...cloneJsonObject(currentRun, 'prior waiting workflow run'),
+      status: RunStatus.CANCELLED,
+      cancellationRequest,
+      version: currentRun.version + 1,
+      lastSequence: event.sequence,
+      updatedAt: event.observed_at,
+    };
+    const expectedActivation = {
+      ...cloneJsonObject(
+        currentActivation,
+        'prior waiting workflow activation',
+      ),
+      status: timer
+        ? WorkflowTimerStatus.CANCELLED
+        : WorkflowSignalWaitStatus.CANCELLED,
+      cancellationRequest,
+      version: currentActivation.version + 1,
+      lastSequence: event.sequence,
+      updatedAt: event.observed_at,
+    };
+    if (
+      !cancellationRequest ||
+      cancellationRequest.transitionId !== event.transition_id ||
+      cancellationRequest.requestedAt !== event.observed_at ||
+      !hasSameCanonicalJson(cancellationRequest.actor, event.actor) ||
+      !hasSameCanonicalJson(run, expectedRun) ||
+      !hasSameCanonicalJson(workflowCursor, expectedCursor) ||
+      !hasSameCanonicalJson(timer || signalWait, expectedActivation)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid waiting workflow cancellation',
+      );
+    }
+    assertEventRequestDigest(
+      event,
+      currentRun,
+      undefined,
+      undefined,
+      undefined,
+      new Map(),
+      run,
+      /** @type {any} */ (undefined),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        currentCursor,
+        nextCursor: workflowCursor,
+        ...(timer ? { currentTimer } : { currentSignalWait }),
+      },
+      runId,
+    );
+    state.run = run;
+    state.workflowCursor = workflowCursor;
+    if (timer) state.timers.set(timer.timerId, timer);
+    if (signalWait) {
+      state.signalWaits.set(signalWait.signalWaitId, signalWait);
+    }
+    return;
+  }
+
   if (
     !currentRun ||
     !currentInvocation ||
@@ -4520,13 +6249,16 @@ async function applyEvent(
         : isCancellationRequest
           ? Boolean(reconciliation)
           : !attempt || Boolean(reconciliation)) ||
+      timer ||
+      signalWait ||
+      signalDelivery ||
       effect ||
       effects ||
       (![
         'workflow-activity-succeeded',
         'workflow-activity-uncertainty-reconciled',
       ].includes(event.type) &&
-        Boolean(nextInvocation)) ||
+        Boolean(nextInvocation || nextTimer || nextSignalWait)) ||
       currentCursor.invocationId !== currentInvocation.invocationId ||
       run.updatedAt !== event.observed_at ||
       invocation.updatedAt !== event.observed_at ||
@@ -5156,57 +6888,27 @@ async function applyEvent(
           'invalid workflow activity success',
         );
       }
-      if (suppressesContinuation || materializedSuccess.completed) {
-        if (nextInvocation) {
+      if (suppressesContinuation) {
+        if (nextInvocation || nextTimer || nextSignalWait) {
           throw new ExecutionLedgerProjectionError(
             runId,
-            'terminal workflow retains a successor invocation',
+            'cancelled workflow retains a successor',
           );
         }
       } else {
-        const nextActivity = materializedSuccess.nextActivity;
-        if (!nextActivity || !nextInvocation) {
-          throw new ExecutionLedgerProjectionError(
-            runId,
-            'workflow successor invocation is unavailable',
-          );
-        }
-        const nextRequest = normalizeWorkflowActivityRequest(
-          await payloadReader.readActivityRequest(nextInvocation.requestRef),
-          'persisted workflow successor request',
-        );
-        const expectedNextInvocation = {
-          schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
-          runId,
-          invocationId: nextActivity.invocationId,
-          appId: currentRun.appId,
-          revisionId: currentRun.revisionId,
-          activityId: nextActivity.activityId,
-          requestRef: nextInvocation.requestRef,
-          status: InvocationStatus.RUNNABLE,
-          generation: 0,
-          version: 1,
-          lastSequence: sequence,
-          createdAt: event.observed_at,
-          updatedAt: event.observed_at,
-          workflow: {
-            workflowId: currentCursor.workflowId,
-            planId: currentCursor.planId,
-            continuationId: nextActivity.continuationId,
-            stepId: nextActivity.stepId,
-            stepIndex: nextActivity.stepIndex,
-          },
-        };
-        if (
-          state.invocations.has(nextInvocation.invocationId) ||
-          !hasSameCanonicalJson(nextRequest, nextActivity.activityRequest) ||
-          !hasSameCanonicalJson(nextInvocation, expectedNextInvocation)
-        ) {
-          throw new ExecutionLedgerProjectionError(
-            runId,
-            'workflow successor invocation mismatch',
-          );
-        }
+        await assertWorkflowSuccessorProjection({
+          materialized: materializedSuccess,
+          nextInvocation,
+          nextTimer,
+          nextSignalWait,
+          run,
+          cursor: workflowCursor,
+          sequence,
+          observedAt: event.observed_at,
+          state,
+          payloadReader,
+          label: 'workflow activity',
+        });
       }
     } else if (
       event.type === 'workflow-activity-failed' ||
@@ -5531,63 +7233,26 @@ async function applyEvent(
         );
       }
       if (!completed || suppressesContinuation) {
-        if (nextInvocation) {
+        if (nextInvocation || nextTimer || nextSignalWait) {
           throw new ExecutionLedgerProjectionError(
             runId,
-            'terminal reconciled workflow retains a successor invocation',
-          );
-        }
-      } else if (materializedTerminal.completed) {
-        if (nextInvocation) {
-          throw new ExecutionLedgerProjectionError(
-            runId,
-            'completed reconciled workflow retains a successor invocation',
+            'terminal reconciled workflow retains a successor',
           );
         }
       } else {
-        const nextActivity = materializedTerminal.nextActivity;
-        if (!nextActivity || !nextInvocation) {
-          throw new ExecutionLedgerProjectionError(
-            runId,
-            'reconciled workflow successor invocation is unavailable',
-          );
-        }
-        const nextRequest = normalizeWorkflowActivityRequest(
-          await payloadReader.readActivityRequest(nextInvocation.requestRef),
-          'persisted reconciled workflow successor request',
-        );
-        const expectedNextInvocation = {
-          schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
-          runId,
-          invocationId: nextActivity.invocationId,
-          appId: currentRun.appId,
-          revisionId: currentRun.revisionId,
-          activityId: nextActivity.activityId,
-          requestRef: nextInvocation.requestRef,
-          status: InvocationStatus.RUNNABLE,
-          generation: 0,
-          version: 1,
-          lastSequence: sequence,
-          createdAt: event.observed_at,
-          updatedAt: event.observed_at,
-          workflow: {
-            workflowId: currentCursor.workflowId,
-            planId: currentCursor.planId,
-            continuationId: nextActivity.continuationId,
-            stepId: nextActivity.stepId,
-            stepIndex: nextActivity.stepIndex,
-          },
-        };
-        if (
-          state.invocations.has(nextInvocation.invocationId) ||
-          !hasSameCanonicalJson(nextRequest, nextActivity.activityRequest) ||
-          !hasSameCanonicalJson(nextInvocation, expectedNextInvocation)
-        ) {
-          throw new ExecutionLedgerProjectionError(
-            runId,
-            'reconciled workflow successor invocation mismatch',
-          );
-        }
+        await assertWorkflowSuccessorProjection({
+          materialized: materializedTerminal,
+          nextInvocation,
+          nextTimer,
+          nextSignalWait,
+          run,
+          cursor: workflowCursor,
+          sequence,
+          observedAt: event.observed_at,
+          state,
+          payloadReader,
+          label: 'reconciled workflow activity',
+        });
       }
     }
 
@@ -5608,6 +7273,8 @@ async function applyEvent(
         currentCursor,
         nextCursor: workflowCursor,
         ...(nextInvocation ? { nextInvocation } : {}),
+        ...(nextTimer ? { nextTimer } : {}),
+        ...(nextSignalWait ? { nextSignalWait } : {}),
       },
       runId,
     );
@@ -5622,6 +7289,10 @@ async function applyEvent(
     }
     if (nextInvocation) {
       state.invocations.set(nextInvocation.invocationId, nextInvocation);
+    }
+    if (nextTimer) state.timers.set(nextTimer.timerId, nextTimer);
+    if (nextSignalWait) {
+      state.signalWaits.set(nextSignalWait.signalWaitId, nextSignalWait);
     }
     return;
   }
@@ -7192,7 +8863,7 @@ function sameSnapshot(left, right) {
  * @param {string} runId - Expected run identity.
  * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
  * @param {Map<string, {descriptor: {kind: string, version: number}, verify: (input: Record<string, any>) => boolean}>} effectVerifierRegistry - Versioned deterministic effect verifiers.
- * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, events: Record<string, any>[]}|null>} - Verified current state, if the run exists.
+ * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, timers: Map<string, Record<string, any>>, signalWaits: Map<string, Record<string, any>>, signalDeliveries: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, events: Record<string, any>[]}|null>} - Verified current state, if the run exists.
  */
 async function foldAndVerifyRun(
   records,
@@ -7209,6 +8880,9 @@ async function foldAndVerifyRun(
   /** @type {Record<string, any> | undefined} */
   let workflowCursorProjection;
   const invocationProjections = new Map();
+  const timerProjections = new Map();
+  const signalWaitProjections = new Map();
+  const signalDeliveryProjections = new Map();
   const attemptProjections = new Map();
   const effectProjections = new Map();
   /** @type {Record<string, any>[]} */
@@ -7302,6 +8976,89 @@ async function foldAndVerifyRun(
           );
         }
         invocationProjections.set(invocation.invocationId, invocation);
+        break;
+      }
+      case 'execution_ledger_workflow_timer_projection': {
+        const timer = normalizeWorkflowTimerSnapshot(record.data, runId);
+        const expectedSortKey = getWorkflowTimerProjectionSortKey(
+          timer.timerId,
+        );
+        requireRecord(
+          record,
+          runId,
+          expectedSortKey,
+          'execution_ledger_workflow_timer_projection',
+        );
+        if (
+          record.timer_id !== timer.timerId ||
+          record.status !== timer.status ||
+          record.version !== timer.version ||
+          record.sequence !== timer.lastSequence ||
+          record.revision_id !== timer.revisionId ||
+          timerProjections.has(timer.timerId)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow timer projection index mismatch',
+          );
+        }
+        timerProjections.set(timer.timerId, timer);
+        break;
+      }
+      case 'execution_ledger_workflow_signal_wait_projection': {
+        const wait = normalizeWorkflowSignalWaitSnapshot(record.data, runId);
+        const expectedSortKey = getWorkflowSignalWaitProjectionSortKey(
+          wait.signalWaitId,
+        );
+        requireRecord(
+          record,
+          runId,
+          expectedSortKey,
+          'execution_ledger_workflow_signal_wait_projection',
+        );
+        if (
+          record.signal_wait_id !== wait.signalWaitId ||
+          record.status !== wait.status ||
+          record.version !== wait.version ||
+          record.sequence !== wait.lastSequence ||
+          record.revision_id !== wait.revisionId ||
+          signalWaitProjections.has(wait.signalWaitId)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow signal-wait projection index mismatch',
+          );
+        }
+        signalWaitProjections.set(wait.signalWaitId, wait);
+        break;
+      }
+      case 'execution_ledger_workflow_signal_delivery_projection': {
+        const delivery = normalizeWorkflowSignalDeliverySnapshot(
+          record.data,
+          runId,
+        );
+        const expectedSortKey = getWorkflowSignalDeliveryProjectionSortKey(
+          delivery.deliveryId,
+        );
+        requireRecord(
+          record,
+          runId,
+          expectedSortKey,
+          'execution_ledger_workflow_signal_delivery_projection',
+        );
+        if (
+          record.delivery_id !== delivery.deliveryId ||
+          record.status !== delivery.status ||
+          record.version !== delivery.version ||
+          record.sequence !== delivery.lastSequence ||
+          signalDeliveryProjections.has(delivery.deliveryId)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow signal delivery projection index mismatch',
+          );
+        }
+        signalDeliveryProjections.set(delivery.deliveryId, delivery);
         break;
       }
       case 'execution_ledger_attempt_projection': {
@@ -7416,9 +9173,12 @@ async function foldAndVerifyRun(
     receiptsByTransition.set(receipt.transition_id, receipt);
   }
 
-  /** @type {{run?: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} */
+  /** @type {{run?: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, timers: Map<string, Record<string, any>>, signalWaits: Map<string, Record<string, any>>, signalDeliveries: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} */
   const state = {
     invocations: new Map(),
+    timers: new Map(),
+    signalWaits: new Map(),
+    signalDeliveries: new Map(),
     attempts: new Map(),
     effects: new Map(),
     eventsBySequence: new Map(),
@@ -7475,6 +9235,11 @@ async function foldAndVerifyRun(
       snapshots.invocation,
       snapshots.workflowCursor,
       snapshots.nextInvocation,
+      snapshots.timer,
+      snapshots.nextTimer,
+      snapshots.signalWait,
+      snapshots.nextSignalWait,
+      snapshots.signalDelivery,
       snapshots.attempt,
       snapshots.effect,
       snapshots.effects,
@@ -7543,6 +9308,27 @@ async function foldAndVerifyRun(
       );
     }
   }
+  /** @type {Array<[string, Map<string, Record<string, any>>, Map<string, Record<string, any>>]>} */
+  const workflowProjectionSets = [
+    ['workflow timer', state.timers, timerProjections],
+    ['workflow signal-wait', state.signalWaits, signalWaitProjections],
+    [
+      'workflow signal delivery',
+      state.signalDeliveries,
+      signalDeliveryProjections,
+    ],
+  ];
+  for (const [label, folded, projected] of workflowProjectionSets) {
+    if (folded.size !== projected.size) {
+      throw new ExecutionLedgerProjectionError(runId, `${label} count`);
+    }
+    for (const [key, snapshot] of folded) {
+      const projection = projected.get(key);
+      if (!projection || !sameSnapshot(snapshot, projection)) {
+        throw new ExecutionLedgerProjectionError(runId, `${label} disagrees`);
+      }
+    }
+  }
   if (state.attempts.size !== attemptProjections.size) {
     throw new ExecutionLedgerProjectionError(runId, 'attempt projection count');
   }
@@ -7573,6 +9359,9 @@ async function foldAndVerifyRun(
     run: state.run,
     ...(state.workflowCursor ? { workflowCursor: state.workflowCursor } : {}),
     invocations: state.invocations,
+    timers: state.timers,
+    signalWaits: state.signalWaits,
+    signalDeliveries: state.signalDeliveries,
     attempts: state.attempts,
     effects: state.effects,
     events,
@@ -7586,7 +9375,7 @@ async function foldAndVerifyRun(
  * @param {boolean} applied - Whether this call appended the transition.
  * @param {Record<string, any> | undefined} effect - Current affected effect.
  * @param {Record<string, any>[] | undefined} effects - Current compound affected effects.
- * @returns {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, outputRef?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} - Public transition view.
+ * @returns {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, nextTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, signalDelivery?: Record<string, any>, outputRef?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} - Public transition view. Wait-only workflow transitions omit invocation at runtime.
  */
 function transitionResult(
   state,
@@ -7596,30 +9385,67 @@ function transitionResult(
   effect = undefined,
   effects = undefined,
 ) {
+  const isWorkflowReceipt = receipt.type.startsWith('workflow-');
   const invocation =
     (typeof receipt.invocation_id === 'string'
       ? state.invocations.get(receipt.invocation_id)
-      : state.workflowCursor
+      : state.workflowCursor?.invocationId
         ? state.invocations.get(state.workflowCursor.invocationId)
         : state.invocations.size === 1
           ? [...state.invocations.values()][0]
           : undefined) || undefined;
-  if (!invocation) {
+  if (!invocation && state.run.trigger?.kind !== 'workflow') {
     throw new ExecutionLedgerProjectionError(
       state.run.runId,
       'transition result invocation is unavailable',
     );
   }
-  /** @type {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, outputRef?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} */
+  /** @type {Record<string, any>} */
   const result = {
     applied,
     receipt: cloneJsonObject(receipt, 'transition receipt'),
     run: cloneJsonObject(state.run, 'run result'),
-    invocation: cloneJsonObject(invocation, 'invocation result'),
+    ...(invocation
+      ? { invocation: cloneJsonObject(invocation, 'invocation result') }
+      : {}),
   };
+  if (receipt.type === 'workflow-signal-rejected') {
+    const event = state.events[receipt.sequence - 1];
+    if (!event || event.event_id !== receipt.event_id) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'rejected workflow signal result event is unavailable',
+      );
+    }
+    const snapshots = event
+      ? eventSnapshots(event, state.run.runId)
+      : undefined;
+    const eventCursor = workflowCursorAtOrBeforeSequence(
+      state,
+      receipt.sequence - 1,
+    );
+    if (!snapshots?.signalDelivery || !eventCursor) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'rejected workflow signal result is unavailable',
+      );
+    }
+    result.run = cloneJsonObject(snapshots.run, 'workflow run result');
+    delete result.invocation;
+    result.workflowCursor = cloneJsonObject(
+      eventCursor,
+      'workflow cursor result',
+    );
+    result.signalDelivery = cloneJsonObject(
+      snapshots.signalDelivery,
+      'workflow signal delivery result',
+    );
+  }
   if (
     receipt.type.startsWith('workflow-activity-') ||
-    receipt.type === 'workflow-cancellation-requested'
+    receipt.type === 'workflow-cancellation-requested' ||
+    receipt.type === 'workflow-timer-fired' ||
+    receipt.type === 'workflow-signal-accepted'
   ) {
     const event = state.events[receipt.sequence - 1];
     if (!event || event.event_id !== receipt.event_id) {
@@ -7629,20 +9455,101 @@ function transitionResult(
       );
     }
     const snapshots = eventSnapshots(event, state.run.runId);
-    if (!snapshots.workflowCursor) {
+    if (
+      !snapshots.workflowCursor ||
+      (receipt.type.startsWith('workflow-activity-') && !snapshots.invocation)
+    ) {
       throw new ExecutionLedgerProjectionError(
         state.run.runId,
-        'workflow transition result cursor is unavailable',
+        'workflow transition result snapshots are unavailable',
       );
     }
     result.workflowCursor = cloneJsonObject(
       snapshots.workflowCursor,
       'workflow cursor result',
     );
+    result.run = cloneJsonObject(snapshots.run, 'workflow run result');
+    if (snapshots.invocation) {
+      result.invocation = cloneJsonObject(
+        snapshots.invocation,
+        'workflow invocation result',
+      );
+    } else {
+      delete result.invocation;
+    }
     if (snapshots.nextInvocation) {
       result.nextInvocation = cloneJsonObject(
         snapshots.nextInvocation,
         'workflow successor invocation result',
+      );
+    }
+    if (snapshots.timer) {
+      result.timer = cloneJsonObject(snapshots.timer, 'workflow timer result');
+    }
+    if (snapshots.nextTimer) {
+      result.nextTimer = cloneJsonObject(
+        snapshots.nextTimer,
+        'workflow successor timer result',
+      );
+    }
+    if (snapshots.signalWait) {
+      result.signalWait = cloneJsonObject(
+        snapshots.signalWait,
+        'workflow signal-wait result',
+      );
+    }
+    if (snapshots.nextSignalWait) {
+      result.nextSignalWait = cloneJsonObject(
+        snapshots.nextSignalWait,
+        'workflow successor signal-wait result',
+      );
+    }
+    if (snapshots.signalDelivery) {
+      result.signalDelivery = cloneJsonObject(
+        snapshots.signalDelivery,
+        'workflow signal delivery result',
+      );
+    }
+    if (snapshots.attempt) {
+      result.attempt = cloneJsonObject(
+        snapshots.attempt,
+        'workflow attempt result',
+      );
+    } else if (receipt.type === 'workflow-activity-uncertainty-reconciled') {
+      const reconciliation = snapshots.reconciliation;
+      const uncertaintyEvent = reconciliation
+        ? state.events[reconciliation.uncertaintySequence - 1]
+        : undefined;
+      const uncertaintySnapshots = uncertaintyEvent
+        ? eventSnapshots(uncertaintyEvent, state.run.runId)
+        : undefined;
+      const historicalAttempt = uncertaintySnapshots?.attempt;
+      if (
+        !reconciliation ||
+        !uncertaintyEvent ||
+        uncertaintyEvent.type !== 'workflow-activity-became-uncertain' ||
+        uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
+        !historicalAttempt ||
+        historicalAttempt.invocationId !== receipt.invocation_id ||
+        historicalAttempt.attemptId !== receipt.attempt_id
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          state.run.runId,
+          'workflow reconciliation result attempt is unavailable',
+        );
+      }
+      result.attempt = cloneJsonObject(
+        historicalAttempt,
+        'workflow reconciliation attempt result',
+      );
+    } else if (
+      receipt.type.startsWith('workflow-activity-') ||
+      (receipt.type === 'workflow-cancellation-requested' &&
+        typeof receipt.attempt_id === 'string')
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'workflow transition result attempt is unavailable',
       );
     }
     const completedDecision =
@@ -7650,10 +9557,10 @@ function transitionResult(
       (receipt.type === 'workflow-activity-uncertainty-reconciled' &&
         snapshots.reconciliation?.terminal.type === 'completed');
     if (completedDecision) {
-      const priorEvent = state.events[receipt.sequence - 2];
-      const priorCursor = priorEvent
-        ? eventSnapshots(priorEvent, state.run.runId).workflowCursor
-        : undefined;
+      const priorCursor = workflowCursorAtOrBeforeSequence(
+        state,
+        receipt.sequence - 1,
+      );
       const output = priorCursor
         ? snapshots.workflowCursor.outputs[priorCursor.stepIndex]
         : undefined;
@@ -7672,15 +9579,25 @@ function transitionResult(
         );
       }
     }
+    const waitOutputRef =
+      snapshots.timer?.outputRef || snapshots.signalWait?.outputRef;
+    if (waitOutputRef) {
+      result.outputRef = cloneJsonObject(
+        waitOutputRef,
+        'workflow wait output reference result',
+      );
+    }
   }
-  if (attempt) result.attempt = cloneJsonObject(attempt, 'attempt result');
+  if (!isWorkflowReceipt && attempt) {
+    result.attempt = cloneJsonObject(attempt, 'attempt result');
+  }
   if (effect) result.effect = cloneJsonObject(effect, 'effect result');
   if (effects) {
     result.effects = effects.map((item) =>
       cloneJsonObject(item, 'compound effect result'),
     );
   }
-  return result;
+  return /** @type {any} */ (result);
 }
 
 /**
@@ -8627,9 +10544,8 @@ function createAttemptId(runId, invocationId, generation) {
 
 /**
  * Create a provider-neutral append-only execution ledger over one transactional
- * DB table. It intentionally does not provide leases, scheduling, or a general
- * workflow engine; it admits activity-headed workflows and atomically advances
- * completed activities only to another activity or terminal state.
+ * DB table. It intentionally does not provide leases or a general workflow
+ * interpreter; it atomically advances a finite activity/timer/signal plan.
  * @param {{db: DBClient, tableName: string, payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}, effectEvidenceVerifiers?: {kind: string, version: number, verify: (input: Record<string, any>) => boolean}[], now?: () => number}} options - Store dependencies.
  * @returns {ExecutionLedgerStore} - Durable ledger API.
  */
@@ -8676,6 +10592,261 @@ export function createExecutionLedger({
       payloadStore,
       effectVerifierRegistry,
     );
+  }
+
+  /**
+   * Cancel a timer or signal wait without inventing an activity invocation.
+   * @param {Record<string, any>} value - Normalized public request.
+   * @param {Record<string, any>} common - Normalized transition coordinates.
+   * @returns {Promise<Record<string, any>>} - Durable cancellation result.
+   */
+  async function requestWorkflowWaitCancellation(value, common) {
+    const hasTimer = Object.prototype.hasOwnProperty.call(value, 'timerId');
+    const hasSignal = Object.prototype.hasOwnProperty.call(
+      value,
+      'signalWaitId',
+    );
+    if (hasTimer === hasSignal) {
+      throw new TypeError(
+        'requestWorkflowRunCancellation must name exactly one waiting activation.',
+      );
+    }
+    const forbidden = [
+      'invocationId',
+      'expectedGeneration',
+      'attemptId',
+      'fencingToken',
+    ];
+    if (
+      forbidden.some((field) =>
+        Object.prototype.hasOwnProperty.call(value, field),
+      )
+    ) {
+      throw new TypeError(
+        'requestWorkflowRunCancellation waiting activation must not include activity fencing fields.',
+      );
+    }
+    if (common.coordinatorEpoch !== 0) {
+      throw new TypeError(
+        'requestWorkflowRunCancellation waiting activation coordinatorEpoch must be zero.',
+      );
+    }
+    const activationId = hasTimer
+      ? assertOpaqueId(value.timerId, 'requestWorkflowRunCancellation.timerId')
+      : assertOpaqueId(
+          value.signalWaitId,
+          'requestWorkflowRunCancellation.signalWaitId',
+        );
+    const expectedActivationVersion = assertPositiveSafeInteger(
+      hasTimer ? value.expectedTimerVersion : value.expectedSignalWaitVersion,
+      hasTimer
+        ? 'requestWorkflowRunCancellation.expectedTimerVersion'
+        : 'requestWorkflowRunCancellation.expectedSignalWaitVersion',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'requestWorkflowRunCancellation.cursor',
+    );
+    const requestId = assertOpaqueId(
+      value.requestId,
+      'requestWorkflowRunCancellation.requestId',
+    );
+    const reason = normalizeCancellationReason(
+      value.reason,
+      'requestWorkflowRunCancellation.reason',
+    );
+    const digestValue = {
+      runId: common.runId,
+      activation: hasTimer
+        ? {
+            kind: 'timer',
+            timerId: activationId,
+            expectedTimerVersion: expectedActivationVersion,
+          }
+        : {
+            kind: 'signal',
+            signalWaitId: activationId,
+            expectedSignalWaitVersion: expectedActivationVersion,
+          },
+      cursor: guard,
+      expectedVersion: common.expectedVersion,
+      transitionId: common.transitionId,
+      requestId,
+      reason,
+      actor: common.actor,
+      coordinatorEpoch: 0,
+    };
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-cancellation-requested',
+      digestValue,
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    if (state.run.trigger?.kind !== 'workflow' || !state.workflowCursor) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'requestWorkflowRunCancellation requires a workflow run',
+      );
+    }
+    const retained = state.run.cancellationRequest;
+    if (retained) {
+      const receipt = await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        retained.transitionId,
+      );
+      if (!receipt) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'retained waiting cancellation receipt missing',
+        );
+      }
+      if (retained.transitionId === common.transitionId) {
+        assertMatchingReceipt(state, receipt, requestDigest);
+      } else if (
+        retained.requestId === requestId &&
+        (!hasSameCanonicalJson(retained.actor, common.actor) ||
+          !hasSameCanonicalJson(retained.reason, reason))
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return {
+        ...(await existingTransitionResult(state, receipt)),
+        outcome: 'cancellation-requested',
+        cancellationDeliveryRequired: false,
+      };
+    }
+    const cursor = state.workflowCursor;
+    const activation = hasTimer
+      ? state.timers.get(activationId)
+      : state.signalWaits.get(activationId);
+    const isWaiting = hasTimer
+      ? cursor.disposition === WorkflowCursorDisposition.TIMER_WAITING &&
+        cursor.timerId === activationId &&
+        activation?.status === WorkflowTimerStatus.WAITING
+      : cursor.disposition === WorkflowCursorDisposition.SIGNAL_WAITING &&
+        cursor.signalWaitId === activationId &&
+        activation?.status === WorkflowSignalWaitStatus.WAITING;
+    if (
+      state.run.status !== RunStatus.RUNNING ||
+      !isWaiting ||
+      !activation ||
+      state.head.version !== common.expectedVersion ||
+      activation.version !== expectedActivationVersion ||
+      !hasSameCanonicalJson(workflowCursorGuard(cursor), guard)
+    ) {
+      if (
+        [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED].includes(
+          state.run.status,
+        )
+      ) {
+        return {
+          applied: false,
+          outcome: 'terminal-authoritative',
+          cancellationDeliveryRequired: false,
+          run: cloneJsonObject(state.run, 'workflow cancellation run result'),
+          workflowCursor: cloneJsonObject(
+            cursor,
+            'workflow cancellation cursor result',
+          ),
+          ...(activation
+            ? {
+                [hasTimer ? 'timer' : 'signalWait']: cloneJsonObject(
+                  activation,
+                  'workflow cancellation activation result',
+                ),
+              }
+            : {}),
+        };
+      }
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow waiting activation is not current',
+      );
+    }
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < cursor.updatedAt ||
+      common.observedAt < activation.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow cancellation observation precedes durable state',
+      );
+    }
+    const sequence = state.head.sequence + 1;
+    const cancellationRequest = {
+      requestId,
+      transitionId: common.transitionId,
+      requestedAt: common.observedAt,
+      actor: common.actor,
+      reason,
+    };
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      status: RunStatus.CANCELLED,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      cancellationRequest,
+    };
+    const nextWorkflowCursor = materializeWorkflowActivityCancellation({
+      currentCursor: cursor,
+      sequence,
+      observedAt: common.observedAt,
+    });
+    const nextActivation = {
+      ...cloneJsonObject(activation, 'current workflow wait'),
+      status: hasTimer
+        ? WorkflowTimerStatus.CANCELLED
+        : WorkflowSignalWaitStatus.CANCELLED,
+      version: activation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      cancellationRequest,
+    };
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-cancellation-requested',
+      common.observedAt,
+      common.actor,
+      { coordinatorEpoch: 0, invocationGeneration: 0 },
+      {
+        run: nextRun,
+        workflowCursor: nextWorkflowCursor,
+        [hasTimer ? 'timer' : 'signalWait']: nextActivation,
+      },
+    );
+    const result = await appendOrReplay(
+      /** @type {any} */ ({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation: undefined,
+        nextWorkflowCursor,
+        ...(hasTimer
+          ? { currentTimer: activation, nextTimer: nextActivation }
+          : {
+              currentSignalWait: activation,
+              nextSignalWait: nextActivation,
+            }),
+      }),
+    );
+    return {
+      ...result,
+      outcome: 'cancellation-requested',
+      cancellationDeliveryRequired: false,
+    };
   }
 
   /**
@@ -8757,13 +10928,137 @@ export function createExecutionLedger({
   }
 
   /**
+   * Prove that every per-run signal decision retains its atomically-created
+   * app-scoped public identity. Missing or changed directory authority makes
+   * reads and rebuilds fail closed.
+   * @param {Record<string, any>} state - Locally folded run state.
+   * @returns {Promise<void>}
+   */
+  async function verifyWorkflowSignalDeliveryLinks(state) {
+    for (const delivery of state.signalDeliveries.values()) {
+      const event = state.events[delivery.lastSequence - 1];
+      if (
+        !event ||
+        !['workflow-signal-accepted', 'workflow-signal-rejected'].includes(
+          event.type,
+        ) ||
+        event.payload.signalDelivery?.deliveryId !== delivery.deliveryId
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          state.run.runId,
+          'signal delivery event link is unavailable',
+        );
+      }
+      const expected = createSignalDeliveryIdentityRecord({
+        appId: delivery.appId,
+        runId: delivery.runId,
+        deliveryId: delivery.deliveryId,
+        signalId: delivery.signalId,
+        payloadId: delivery.payloadRef.payloadId,
+        actor: delivery.actor,
+        transitionId: event.transition_id,
+        requestDigest: event.request_digest,
+      });
+      const identity = await readSignalDeliveryIdentityRecord(
+        db,
+        resolvedTableName,
+        delivery.appId,
+        delivery.deliveryId,
+      );
+      if (!identity || !hasSameCanonicalJson(identity, expected)) {
+        throw new ExecutionLedgerProjectionError(
+          state.run.runId,
+          'signal delivery atomic identity link is unavailable',
+        );
+      }
+    }
+  }
+
+  /**
    * @param {string} runId - Run identity.
    * @returns {Promise<ReturnType<typeof foldAndVerifyRun>>} - Fully verified run state.
    */
   async function readVerifiedRun(runId) {
     const state = await readFoldedRun(runId);
-    if (state) await verifyManagedEffectSuccessorLinks(state);
+    if (state) {
+      await verifyManagedEffectSuccessorLinks(state);
+      await verifyWorkflowSignalDeliveryLinks(state);
+    }
     return state;
+  }
+
+  /**
+   * Publish and project the single successor selected by a pure workflow wait
+   * completion. A terminal materialization returns an empty object.
+   * @param {Record<string, any>} materialized - Pure contract materialization.
+   * @param {Record<string, any>} state - Current verified run state.
+   * @param {number} sequence - Creating event sequence.
+   * @param {number} observedAt - Creating event timestamp.
+   * @param {string} label - Payload publication context.
+   * @returns {Promise<{nextInvocation?: Record<string, any>, nextTimer?: Record<string, any>, nextSignalWait?: Record<string, any>}>} - Published successor snapshots.
+   */
+  async function createWorkflowSuccessorSnapshots(
+    materialized,
+    state,
+    sequence,
+    observedAt,
+    label,
+  ) {
+    if (materialized.nextActivity) {
+      const activity = materialized.nextActivity;
+      const requestRef = await putVerifiedPayload(payloadStore, {
+        value: activity.activityRequest,
+        payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
+        label: `${label}.requestRef`,
+      });
+      return {
+        nextInvocation: {
+          schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+          runId: state.run.runId,
+          invocationId: activity.invocationId,
+          appId: state.run.appId,
+          revisionId: state.run.revisionId,
+          activityId: activity.activityId,
+          requestRef,
+          status: InvocationStatus.RUNNABLE,
+          generation: 0,
+          version: 1,
+          lastSequence: sequence,
+          createdAt: observedAt,
+          updatedAt: observedAt,
+          workflow: {
+            workflowId: materialized.cursor.workflowId,
+            planId: materialized.cursor.planId,
+            continuationId: activity.continuationId,
+            stepId: activity.stepId,
+            stepIndex: activity.stepIndex,
+          },
+        },
+      };
+    }
+    if (materialized.nextTimer) {
+      return {
+        nextTimer: createWaitingWorkflowTimerSnapshot(
+          state.run,
+          materialized.cursor,
+          materialized.nextTimer,
+          sequence,
+          observedAt,
+        ),
+      };
+    }
+    if (materialized.nextSignalWait) {
+      return {
+        nextSignalWait: createWaitingWorkflowSignalSnapshot(
+          state.run,
+          materialized.cursor,
+          materialized.nextSignalWait,
+          sequence,
+          observedAt,
+        ),
+      };
+    }
+    return {};
   }
 
   /**
@@ -8986,9 +11281,9 @@ export function createExecutionLedger({
   }
 
   /**
-   * Keep physical dispatch behind the continuation shapes this tranche can
-   * commit atomically. A worker must not begin user code if success would stop
-   * at an unimplemented timer or signal boundary.
+   * Keep physical dispatch behind the finite workflow shapes the ledger can
+   * commit atomically. The reserved framework activity remains non-dispatchable
+   * through the authored workflow path.
    * @param {Record<string, any>} state - Verified workflow state.
    * @param {Record<string, any>} cursor - Current activity cursor.
    * @param {Record<string, any>} planPayload - Rehashed immutable plan.
@@ -9004,7 +11299,7 @@ export function createExecutionLedger({
     if (!isWorkflowActivityDispatchSupported(cursor, planPayload)) {
       throw new ExecutionLedgerConflictError(
         state.run.runId,
-        `${operation} cannot dispatch an activity whose continuation is not implemented`,
+        `${operation} cannot dispatch this reserved workflow activity`,
       );
     }
   }
@@ -9205,6 +11500,85 @@ export function createExecutionLedger({
   }
 
   /**
+   * Derive the current workflow locator from the cursor's strict activation
+   * union. Signal waits and terminal cursors deliberately have no row.
+   * @param {Record<string, any>} run - Workflow run projection.
+   * @param {Record<string, any>} cursor - Current workflow cursor.
+   * @param {Record<string, any> | undefined} invocation - Current activity invocation.
+   * @param {Record<string, any> | undefined} attempt - Current physical attempt.
+   * @param {Record<string, any> | undefined} timer - Current timer projection.
+   * @returns {Record<string, any> | undefined} - Canonical ready-work row.
+   */
+  function createWorkflowReadyWorkRecord(
+    run,
+    cursor,
+    invocation,
+    attempt,
+    timer,
+  ) {
+    if (Object.prototype.hasOwnProperty.call(cursor, 'invocationId')) {
+      if (!invocation || invocation.invocationId !== cursor.invocationId) {
+        if (run.status === RunStatus.RUNNING) {
+          throw new ExecutionLedgerProjectionError(
+            run.runId,
+            'workflow ready activity projection is unavailable',
+          );
+        }
+        return undefined;
+      }
+      return createLifecycleReadyWorkRecord(run, invocation, attempt, cursor);
+    }
+    if (Object.prototype.hasOwnProperty.call(cursor, 'timerId')) {
+      if (
+        run.status !== RunStatus.RUNNING ||
+        cursor.disposition !== WorkflowCursorDisposition.TIMER_WAITING
+      ) {
+        return undefined;
+      }
+      if (
+        !timer ||
+        timer.timerId !== cursor.timerId ||
+        timer.status !== WorkflowTimerStatus.WAITING ||
+        timer.runId !== run.runId ||
+        timer.appId !== run.appId ||
+        timer.revisionId !== run.revisionId ||
+        timer.continuationId !== cursor.continuationId ||
+        timer.stepId !== cursor.stepId ||
+        timer.stepIndex !== cursor.stepIndex
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          run.runId,
+          'workflow ready timer projection mismatch',
+        );
+      }
+      return createExecutionLedgerReadyWorkRecord({
+        appId: run.appId,
+        revisionId: run.revisionId,
+        runId: run.runId,
+        kind: ExecutionLedgerReadyWorkKind.TIMER,
+        availableAt: timer.dueAt,
+        runVersion: run.version,
+        lastSequence: run.lastSequence,
+        cursorVersion: cursor.version,
+        continuationId: cursor.continuationId,
+        stepId: cursor.stepId,
+        stepIndex: cursor.stepIndex,
+        timerId: timer.timerId,
+      });
+    }
+    if (
+      run.status === RunStatus.RUNNING &&
+      cursor.disposition !== WorkflowCursorDisposition.SIGNAL_WAITING
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        run.runId,
+        'workflow signal activation has invalid cursor disposition',
+      );
+    }
+    return undefined;
+  }
+
+  /**
    * Match the exact prior locator before replacing or deleting it. Conditions
    * deliberately cover both lifecycle coordinates and storage scope so a
    * forged or stale row makes the authoritative transition fail closed.
@@ -9222,7 +11596,7 @@ export function createExecutionLedger({
    * the affected projections, including the current ready-work locator. The
    * caller supplies already-folded snapshots so the event remains sufficient
    * to reconstruct every authoritative projection.
-   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
+   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation?: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextTimer?: Record<string, any>, currentTimer?: Record<string, any>, nextAdditionalTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, currentSignalWait?: Record<string, any>, nextAdditionalSignalWait?: Record<string, any>, nextSignalDelivery?: Record<string, any>, signalDeliveryIdentityRecord?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
    * @returns {Promise<void>} - Resolves only after the durable transaction commits.
    */
   async function appendTransition(input) {
@@ -9266,7 +11640,8 @@ export function createExecutionLedger({
       eventRecord,
     );
     const currentWorkflowCursor = input.state?.workflowCursor;
-    const nextWorkflowCursor = input.nextWorkflowCursor;
+    const nextWorkflowCursor =
+      input.nextWorkflowCursor || currentWorkflowCursor;
     if (
       input.nextRun.trigger?.kind === 'workflow'
         ? !nextWorkflowCursor
@@ -9277,10 +11652,11 @@ export function createExecutionLedger({
         'transition workflow cursor presence mismatch',
       );
     }
-    const currentInvocation = input.state
-      ? input.state.invocations.get(input.nextInvocation.invocationId)
-      : undefined;
-    if (input.state && !currentInvocation) {
+    const currentInvocation =
+      input.state && input.nextInvocation
+        ? input.state.invocations.get(input.nextInvocation.invocationId)
+        : undefined;
+    if (input.state && input.nextInvocation && !currentInvocation) {
       throw new ExecutionLedgerProjectionError(
         input.runId,
         'transition invocation missing',
@@ -9291,7 +11667,7 @@ export function createExecutionLedger({
       nextAdditionalInvocation &&
       (!input.state ||
         nextAdditionalInvocation.invocationId ===
-          input.nextInvocation.invocationId ||
+          input.nextInvocation?.invocationId ||
         input.state.invocations.has(nextAdditionalInvocation.invocationId))
     ) {
       throw new ExecutionLedgerProjectionError(
@@ -9299,34 +11675,90 @@ export function createExecutionLedger({
         'additional transition invocation conflicts with retained state',
       );
     }
-    const persistedInvocation = /** @type {Record<string, any>} */ (
-      currentInvocation
-    );
+    const persistedInvocation = currentInvocation;
     const currentReadyWork = input.state
-      ? createLifecycleReadyWorkRecord(
-          input.state.run,
-          persistedInvocation,
-          getReadyWorkAttempt(input.state, persistedInvocation),
-          currentWorkflowCursor,
-        )
+      ? currentWorkflowCursor
+        ? createWorkflowReadyWorkRecord(
+            input.state.run,
+            currentWorkflowCursor,
+            Object.prototype.hasOwnProperty.call(
+              currentWorkflowCursor,
+              'invocationId',
+            )
+              ? input.state.invocations.get(currentWorkflowCursor.invocationId)
+              : undefined,
+            Object.prototype.hasOwnProperty.call(
+              currentWorkflowCursor,
+              'invocationId',
+            )
+              ? getReadyWorkAttempt(
+                  input.state,
+                  input.state.invocations.get(
+                    currentWorkflowCursor.invocationId,
+                  ),
+                )
+              : undefined,
+            Object.prototype.hasOwnProperty.call(
+              currentWorkflowCursor,
+              'timerId',
+            )
+              ? input.state.timers.get(currentWorkflowCursor.timerId)
+              : undefined,
+          )
+        : persistedInvocation
+          ? createLifecycleReadyWorkRecord(
+              input.state.run,
+              persistedInvocation,
+              getReadyWorkAttempt(input.state, persistedInvocation),
+            )
+          : undefined
       : undefined;
     const nextReadyInvocation =
-      nextAdditionalInvocation || input.nextInvocation;
+      nextWorkflowCursor &&
+      Object.prototype.hasOwnProperty.call(nextWorkflowCursor, 'invocationId')
+        ? [nextAdditionalInvocation, input.nextInvocation]
+            .filter((candidate) => candidate !== undefined)
+            .find(
+              (candidate) =>
+                candidate.invocationId === nextWorkflowCursor.invocationId,
+            ) || input.state?.invocations.get(nextWorkflowCursor.invocationId)
+        : nextAdditionalInvocation || input.nextInvocation;
     const nextReadyAttempt =
-      nextReadyInvocation.status === InvocationStatus.RUNNING
-        ? nextReadyInvocation.invocationId === input.nextInvocation.invocationId
+      nextReadyInvocation?.status === InvocationStatus.RUNNING
+        ? input.nextInvocation &&
+          nextReadyInvocation.invocationId === input.nextInvocation.invocationId
           ? input.nextAttempt ||
-            (input.state
+            (input.state && persistedInvocation
               ? getReadyWorkAttempt(input.state, persistedInvocation)
               : undefined)
-          : undefined
+          : input.state
+            ? getReadyWorkAttempt(input.state, nextReadyInvocation)
+            : undefined
         : undefined;
-    const nextReadyWork = createLifecycleReadyWorkRecord(
-      input.nextRun,
-      nextReadyInvocation,
-      nextReadyAttempt,
-      nextWorkflowCursor,
-    );
+    const nextReadyTimer =
+      nextWorkflowCursor &&
+      Object.prototype.hasOwnProperty.call(nextWorkflowCursor, 'timerId')
+        ? [input.nextAdditionalTimer, input.nextTimer]
+            .filter((candidate) => candidate !== undefined)
+            .find(
+              (candidate) => candidate.timerId === nextWorkflowCursor.timerId,
+            ) || input.state?.timers.get(nextWorkflowCursor.timerId)
+        : undefined;
+    const nextReadyWork = nextWorkflowCursor
+      ? createWorkflowReadyWorkRecord(
+          input.nextRun,
+          nextWorkflowCursor,
+          nextReadyInvocation,
+          nextReadyAttempt,
+          nextReadyTimer,
+        )
+      : nextReadyInvocation
+        ? createLifecycleReadyWorkRecord(
+            input.nextRun,
+            nextReadyInvocation,
+            nextReadyAttempt,
+          )
+        : undefined;
 
     /** @type {import('../base.js').TransactionPutRequest[]} */
     const putRequests = [
@@ -9375,21 +11807,26 @@ export function createExecutionLedger({
           : [notExists(SORT_KEY_NAME)],
       },
     ];
-    const invocationRecord = createInvocationProjectionRecord(
-      input.runId,
-      input.nextInvocation,
-    );
-    putRequests.push({
-      keyName: KEY_NAME,
-      sortKeyName: SORT_KEY_NAME,
-      record: invocationRecord,
-      conditions: input.state
-        ? replacementConditions(
-            createInvocationProjectionRecord(input.runId, persistedInvocation),
-            [eq('generation', persistedInvocation.generation)],
-          )
-        : [notExists(SORT_KEY_NAME)],
-    });
+    if (input.nextInvocation) {
+      const invocationRecord = createInvocationProjectionRecord(
+        input.runId,
+        input.nextInvocation,
+      );
+      putRequests.push({
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: invocationRecord,
+        conditions: persistedInvocation
+          ? replacementConditions(
+              createInvocationProjectionRecord(
+                input.runId,
+                persistedInvocation,
+              ),
+              [eq('generation', persistedInvocation.generation)],
+            )
+          : [notExists(SORT_KEY_NAME)],
+      });
+    }
     if (nextAdditionalInvocation) {
       putRequests.push({
         keyName: KEY_NAME,
@@ -9398,6 +11835,67 @@ export function createExecutionLedger({
           input.runId,
           nextAdditionalInvocation,
         ),
+        conditions: [notExists(SORT_KEY_NAME)],
+      });
+    }
+    for (const [current, next, additional] of [
+      [input.currentTimer, input.nextTimer, input.nextAdditionalTimer],
+      [
+        input.currentSignalWait,
+        input.nextSignalWait,
+        input.nextAdditionalSignalWait,
+      ],
+    ]) {
+      if (next) {
+        const isTimer = Object.prototype.hasOwnProperty.call(next, 'timerId');
+        const record = isTimer
+          ? createWorkflowTimerProjectionRecord(input.runId, next)
+          : createWorkflowSignalWaitProjectionRecord(input.runId, next);
+        const priorRecord = current
+          ? isTimer
+            ? createWorkflowTimerProjectionRecord(input.runId, current)
+            : createWorkflowSignalWaitProjectionRecord(input.runId, current)
+          : undefined;
+        putRequests.push({
+          keyName: KEY_NAME,
+          sortKeyName: SORT_KEY_NAME,
+          record,
+          conditions: priorRecord
+            ? replacementConditions(priorRecord)
+            : [notExists(SORT_KEY_NAME)],
+        });
+      }
+      if (additional) {
+        const record = Object.prototype.hasOwnProperty.call(
+          additional,
+          'timerId',
+        )
+          ? createWorkflowTimerProjectionRecord(input.runId, additional)
+          : createWorkflowSignalWaitProjectionRecord(input.runId, additional);
+        putRequests.push({
+          keyName: KEY_NAME,
+          sortKeyName: SORT_KEY_NAME,
+          record,
+          conditions: [notExists(SORT_KEY_NAME)],
+        });
+      }
+    }
+    if (input.nextSignalDelivery) {
+      putRequests.push({
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: createWorkflowSignalDeliveryProjectionRecord(
+          input.runId,
+          input.nextSignalDelivery,
+        ),
+        conditions: [notExists(SORT_KEY_NAME)],
+      });
+    }
+    if (input.signalDeliveryIdentityRecord) {
+      putRequests.push({
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: input.signalDeliveryIdentityRecord,
         conditions: [notExists(SORT_KEY_NAME)],
       });
     }
@@ -9437,10 +11935,10 @@ export function createExecutionLedger({
 
     /** @type {import('../base.js').TransactionDeleteRequest[]} */
     const deleteRequests = [];
-    if (nextWorkflowCursor) {
+    if (input.nextWorkflowCursor) {
       const cursorRecord = createWorkflowCursorProjectionRecord(
         input.runId,
-        nextWorkflowCursor,
+        input.nextWorkflowCursor,
       );
       putRequests.push({
         keyName: KEY_NAME,
@@ -9454,18 +11952,6 @@ export function createExecutionLedger({
               ),
             )
           : [notExists(SORT_KEY_NAME)],
-      });
-    } else if (currentWorkflowCursor) {
-      const currentCursorRecord = createWorkflowCursorProjectionRecord(
-        input.runId,
-        currentWorkflowCursor,
-      );
-      deleteRequests.push({
-        keyName: KEY_NAME,
-        keyValue: input.runId,
-        sortKeyName: SORT_KEY_NAME,
-        sortKeyValue: currentCursorRecord[SORT_KEY_NAME],
-        conditions: workflowCursorReplacementConditions(currentCursorRecord),
       });
     }
     if (currentReadyWork && nextReadyWork) {
@@ -9654,6 +12140,8 @@ export function createExecutionLedger({
         'appId',
         'revisionId',
         'invocationId',
+        'timerId',
+        'signalWaitId',
         'activityId',
         'input',
         'callerMetadata',
@@ -9922,7 +12410,7 @@ export function createExecutionLedger({
   /**
    * @param {Record<string, any>} state - Verified workflow state.
    * @param {{planPayload: Record<string, any>, startPayload: Record<string, any>, actor: {kind: string, id: string}}} requested - Exact requested immutable work.
-   * @returns {Promise<{run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>} | undefined>} - Immutable creation snapshots, if the run is an exact duplicate.
+   * @returns {Promise<Record<string, any> | undefined>} - Immutable creation snapshots, if the run is an exact duplicate.
    */
   async function getMatchingWorkflowCreation(state, requested) {
     const creationEvent = state.events[0];
@@ -9950,19 +12438,51 @@ export function createExecutionLedger({
       ? {
           run: creation.run,
           workflowCursor: creation.workflowCursor,
-          invocation: creation.invocation,
+          ...(creation.invocation ? { invocation: creation.invocation } : {}),
+          ...(creation.timer ? { timer: creation.timer } : {}),
+          ...(creation.signalWait ? { signalWait: creation.signalWait } : {}),
         }
       : undefined;
   }
 
   /**
-   * @param {{runId: string, invocationId: string, transitionId: string, actor: {kind: string, id: string}, appId: string, revisionId: string, workflowId: string, planId: string, planRef: Record<string, any>, startRef: Record<string, any>, activityRequestRef: Record<string, any>, trigger: Record<string, any>}} input - Exact workflow creation authority.
+   * @param {{invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>}} creation - One exact initial activation.
+   * @returns {Record<string, any>} - Canonical workflow-creation digest view.
+   */
+  function workflowCreationActivationDigest(creation) {
+    if (creation.invocation) {
+      return {
+        kind: 'activity',
+        invocationId: creation.invocation.invocationId,
+        activityRequestRef: creation.invocation.requestRef,
+      };
+    }
+    if (creation.timer) {
+      return {
+        kind: 'timer',
+        timerId: creation.timer.timerId,
+        scheduledAt: creation.timer.scheduledAt,
+        dueAt: creation.timer.dueAt,
+      };
+    }
+    if (creation.signalWait) {
+      return {
+        kind: 'signal',
+        signalWaitId: creation.signalWait.signalWaitId,
+        signalId: creation.signalWait.signalId,
+      };
+    }
+    throw new TypeError('workflow creation activation is unavailable.');
+  }
+
+  /**
+   * @param {{runId: string, activation: Record<string, any>, transitionId: string, actor: {kind: string, id: string}, appId: string, revisionId: string, workflowId: string, planId: string, planRef: Record<string, any>, startRef: Record<string, any>, trigger: Record<string, any>}} input - Exact workflow creation authority.
    * @returns {string} - Canonical transition request digest.
    */
   function createWorkflowRunRequestDigest(input) {
     return createTransitionRequestDigest('workflow-run-created', {
       runId: input.runId,
-      invocationId: input.invocationId,
+      activation: input.activation,
       transitionId: input.transitionId,
       actor: input.actor,
       coordinatorEpoch: 0,
@@ -9972,7 +12492,6 @@ export function createExecutionLedger({
       planId: input.planId,
       planRef: input.planRef,
       startRef: input.startRef,
-      activityRequestRef: input.activityRequestRef,
       trigger: input.trigger,
     });
   }
@@ -9981,14 +12500,23 @@ export function createExecutionLedger({
    * @param {Record<string, any>} state - Verified workflow state.
    * @param {Record<string, any> | null} receipt - Optional creation receipt.
    * @param {boolean} applied - Whether this call won creation.
-   * @returns {{applied: boolean, receipt?: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>}} - Public workflow creation result.
+   * @returns {Record<string, any>} - Public workflow creation result.
    */
   function workflowCreationResult(state, receipt, applied) {
     const cursor = state.workflowCursor;
-    const invocation = cursor
+    const invocation = cursor?.invocationId
       ? state.invocations.get(cursor.invocationId)
       : undefined;
-    if (!cursor || !invocation) {
+    const timer = cursor?.timerId
+      ? state.timers.get(cursor.timerId)
+      : undefined;
+    const signalWait = cursor?.signalWaitId
+      ? state.signalWaits.get(cursor.signalWaitId)
+      : undefined;
+    if (
+      !cursor ||
+      [invocation, timer, signalWait].filter(Boolean).length !== 1
+    ) {
       throw new ExecutionLedgerProjectionError(
         state.run.runId,
         'workflow creation state is incomplete',
@@ -10001,17 +12529,33 @@ export function createExecutionLedger({
         : {}),
       run: cloneJsonObject(state.run, 'workflow run result'),
       workflowCursor: cloneJsonObject(cursor, 'workflow cursor result'),
-      invocation: cloneJsonObject(invocation, 'workflow invocation result'),
+      ...(invocation
+        ? {
+            invocation: cloneJsonObject(
+              invocation,
+              'workflow invocation result',
+            ),
+          }
+        : {}),
+      ...(timer
+        ? { timer: cloneJsonObject(timer, 'workflow timer result') }
+        : {}),
+      ...(signalWait
+        ? {
+            signalWait: cloneJsonObject(
+              signalWait,
+              'workflow signal-wait result',
+            ),
+          }
+        : {}),
     };
   }
 
   /**
-   * Create the first persisted continuation of one static workflow. This
-   * tranche intentionally accepts only activity-headed definitions; timer and
-   * signal starts remain closed until their own durable projections and race
-   * semantics exist.
+   * Create the first persisted continuation of one static workflow, headed by
+   * an activity, timer, or signal wait.
    * @param {{runId: string, appId: string, revisionId: string, workflowId: string, definition: Record<string, any>, input?: any, callerMetadata?: Record<string, any>, transitionId: string, actor?: {kind: string, id: string}, observedAt?: number}} options - Immutable workflow start.
-   * @returns {Promise<{applied: boolean, receipt?: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>}>} - Created or exactly deduplicated workflow.
+   * @returns {Promise<Record<string, any>>} - Created or exactly deduplicated workflow.
    */
   async function createWorkflowRun(options) {
     const value = cloneBoundedJsonObject(
@@ -10071,33 +12615,34 @@ export function createExecutionLedger({
       'createWorkflowRun.start',
     );
     const firstStep = planPayload.definition.steps[0];
-    if (firstStep.kind !== 'activity') {
-      throw new TypeError(
-        'createWorkflowRun requires an activity first step; timer and signal first steps are not implemented.',
-      );
-    }
-    if (firstStep.activity === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID) {
+    if (
+      firstStep.kind === 'activity' &&
+      firstStep.activity === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID
+    ) {
       throw new TypeError(
         'createWorkflowRun cannot use the reserved managed-effect successor activity ID.',
       );
     }
-    let preflightInput;
-    if (firstStep.input.kind === 'workflow-input') {
-      preflightInput = startPayload.input;
-    } else if (firstStep.input.kind === 'literal') {
-      preflightInput = firstStep.input.value;
-    } else {
-      throw new TypeError(
-        'createWorkflowRun first activity cannot select a prior step output.',
+    let preflightActivityRequest;
+    if (firstStep.kind === 'activity') {
+      let preflightInput;
+      if (firstStep.input.kind === 'workflow-input') {
+        preflightInput = startPayload.input;
+      } else if (firstStep.input.kind === 'literal') {
+        preflightInput = firstStep.input.value;
+      } else {
+        throw new TypeError(
+          'createWorkflowRun first activity cannot select a prior step output.',
+        );
+      }
+      preflightActivityRequest = normalizeWorkflowActivityRequest(
+        {
+          input: preflightInput,
+          callerMetadata: startPayload.callerMetadata,
+        },
+        'createWorkflowRun.activityRequest',
       );
     }
-    const preflightActivityRequest = normalizeWorkflowActivityRequest(
-      {
-        input: preflightInput,
-        callerMetadata: startPayload.callerMetadata,
-      },
-      'createWorkflowRun.activityRequest',
-    );
     const transitionId = assertOpaqueId(
       value.transitionId,
       'createWorkflowRun.transitionId',
@@ -10119,7 +12664,7 @@ export function createExecutionLedger({
       }
       const requestDigest = createWorkflowRunRequestDigest({
         runId,
-        invocationId: creation.invocation.invocationId,
+        activation: workflowCreationActivationDigest(creation),
         transitionId,
         actor,
         appId,
@@ -10128,7 +12673,6 @@ export function createExecutionLedger({
         planId: creation.workflowCursor.planId,
         planRef: creation.workflowCursor.planRef,
         startRef: creation.workflowCursor.startRef,
-        activityRequestRef: creation.invocation.requestRef,
         trigger: creation.run.trigger,
       });
       const receipt = await getTransitionReceipt(
@@ -10158,7 +12702,7 @@ export function createExecutionLedger({
       payloadSchema: WORKFLOW_START_PAYLOAD_SCHEMA,
       label: 'createWorkflowRun.startRef',
     });
-    const materialized = materializeFirstWorkflowActivity({
+    const materialized = materializeFirstWorkflowStep({
       runId,
       planPayload,
       planRef,
@@ -10166,21 +12710,24 @@ export function createExecutionLedger({
       startRef,
       observedAt,
     });
-    if (
-      !hasSameCanonicalJson(
-        materialized.activityRequest,
-        preflightActivityRequest,
-      )
-    ) {
-      throw new TypeError(
-        'createWorkflowRun activity materialization changed its preflight request.',
-      );
+    let activityRequestRef;
+    if (materialized.nextActivity) {
+      if (
+        !hasSameCanonicalJson(
+          materialized.nextActivity.activityRequest,
+          preflightActivityRequest,
+        )
+      ) {
+        throw new TypeError(
+          'createWorkflowRun activity materialization changed its preflight request.',
+        );
+      }
+      activityRequestRef = await putVerifiedPayload(payloadStore, {
+        value: materialized.nextActivity.activityRequest,
+        payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
+        label: 'createWorkflowRun.activityRequestRef',
+      });
     }
-    const activityRequestRef = await putVerifiedPayload(payloadStore, {
-      value: materialized.activityRequest,
-      payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
-      label: 'createWorkflowRun.activityRequestRef',
-    });
     const trigger = normalizeRunTrigger({
       kind: 'workflow',
       workflowId,
@@ -10201,31 +12748,56 @@ export function createExecutionLedger({
       updatedAt: observedAt,
     };
     const workflowCursor = materialized.cursor;
-    const invocation = {
-      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
-      runId,
-      invocationId: materialized.invocationId,
-      appId,
-      revisionId,
-      activityId: materialized.activityId,
-      requestRef: activityRequestRef,
-      status: InvocationStatus.RUNNABLE,
-      generation: 0,
-      version: 1,
-      lastSequence: 1,
-      createdAt: observedAt,
-      updatedAt: observedAt,
-      workflow: {
-        workflowId,
-        planId: materialized.planId,
-        continuationId: materialized.continuationId,
-        stepId: workflowCursor.stepId,
-        stepIndex: workflowCursor.stepIndex,
-      },
-    };
+    const invocation = materialized.nextActivity
+      ? {
+          schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+          runId,
+          invocationId: materialized.nextActivity.invocationId,
+          appId,
+          revisionId,
+          activityId: materialized.nextActivity.activityId,
+          requestRef: activityRequestRef,
+          status: InvocationStatus.RUNNABLE,
+          generation: 0,
+          version: 1,
+          lastSequence: 1,
+          createdAt: observedAt,
+          updatedAt: observedAt,
+          workflow: {
+            workflowId,
+            planId: materialized.planId,
+            continuationId: materialized.nextActivity.continuationId,
+            stepId: workflowCursor.stepId,
+            stepIndex: workflowCursor.stepIndex,
+          },
+        }
+      : undefined;
+    const timer = materialized.nextTimer
+      ? createWaitingWorkflowTimerSnapshot(
+          run,
+          workflowCursor,
+          materialized.nextTimer,
+          1,
+          observedAt,
+        )
+      : undefined;
+    const signalWait = materialized.nextSignalWait
+      ? createWaitingWorkflowSignalSnapshot(
+          run,
+          workflowCursor,
+          materialized.nextSignalWait,
+          1,
+          observedAt,
+        )
+      : undefined;
+    const activation = workflowCreationActivationDigest({
+      ...(invocation ? { invocation } : {}),
+      ...(timer ? { timer } : {}),
+      ...(signalWait ? { signalWait } : {}),
+    });
     const requestDigest = createWorkflowRunRequestDigest({
       runId,
-      invocationId: invocation.invocationId,
+      activation,
       transitionId,
       actor,
       appId,
@@ -10234,7 +12806,6 @@ export function createExecutionLedger({
       planId: materialized.planId,
       planRef,
       startRef,
-      activityRequestRef,
       trigger,
     });
     const event = createEventRecord(
@@ -10246,7 +12817,13 @@ export function createExecutionLedger({
       observedAt,
       actor,
       { coordinatorEpoch: 0, invocationGeneration: 0 },
-      { run, invocation, workflowCursor },
+      {
+        run,
+        workflowCursor,
+        ...(invocation ? { invocation } : {}),
+        ...(timer ? { timer } : {}),
+        ...(signalWait ? { signalWait } : {}),
+      },
     );
 
     try {
@@ -10257,7 +12834,9 @@ export function createExecutionLedger({
         requestDigest,
         event,
         nextRun: run,
-        nextInvocation: invocation,
+        ...(invocation ? { nextInvocation: invocation } : {}),
+        ...(timer ? { nextTimer: timer } : {}),
+        ...(signalWait ? { nextSignalWait: signalWait } : {}),
         nextWorkflowCursor: workflowCursor,
       });
     } catch (error) {
@@ -10270,7 +12849,7 @@ export function createExecutionLedger({
       }
       const racedRequestDigest = createWorkflowRunRequestDigest({
         runId,
-        invocationId: racedCreation.invocation.invocationId,
+        activation: workflowCreationActivationDigest(racedCreation),
         transitionId,
         actor,
         appId,
@@ -10279,7 +12858,6 @@ export function createExecutionLedger({
         planId: racedCreation.workflowCursor.planId,
         planRef: racedCreation.workflowCursor.planRef,
         startRef: racedCreation.workflowCursor.startRef,
-        activityRequestRef: racedCreation.invocation.requestRef,
         trigger: racedCreation.run.trigger,
       });
       const receipt = await getTransitionReceipt(
@@ -10321,6 +12899,630 @@ export function createExecutionLedger({
       );
     }
     return workflowCreationResult(next, receipt, true);
+  }
+
+  /**
+   * Fire one exact due workflow timer. The timer identity is also the stable
+   * transition identity, so concurrent coordinators converge on one receipt.
+   * @param {{runId: string, timerId: string, actor?: {kind: string, id: string}, observedAt?: number}} options - Exact timer fire request.
+   * @param {number} [retry] - Bounded internal CAS retry count.
+   * @returns {Promise<Record<string, any>>} - Applied, replayed, not-due, or no-longer-waiting result.
+   */
+  async function fireWorkflowTimer(options, retry = 0) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+      'fireWorkflowTimer',
+    );
+    assertSupportedKeys(
+      value,
+      ['runId', 'timerId', 'actor', 'observedAt'],
+      'fireWorkflowTimer',
+    );
+    assertWorkflowRunId(value.runId, 'fireWorkflowTimer.runId');
+    assertWorkflowTimerId(value.timerId, 'fireWorkflowTimer.timerId');
+    const runId = value.runId;
+    const timerId = value.timerId;
+    const actor = normalizeActor(value.actor);
+    const observedAt = normalizeObservedAt(
+      value.observedAt === undefined ? now() : value.observedAt,
+      'fireWorkflowTimer.observedAt',
+    );
+    const transitionId = createWorkflowTimerFireTransitionId(runId, timerId);
+    const state = await readVerifiedRun(runId);
+    if (!state) throw new ExecutionLedgerConflictError(runId);
+
+    const existing = await getTransitionReceipt(
+      db,
+      resolvedTableName,
+      runId,
+      transitionId,
+    );
+    if (existing) {
+      const event = state.events[existing.sequence - 1];
+      const snapshots = event ? eventSnapshots(event, runId) : undefined;
+      if (
+        event?.type !== 'workflow-timer-fired' ||
+        snapshots?.timer?.timerId !== timerId ||
+        !hasSameCanonicalJson(event.actor, actor)
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
+      }
+      return {
+        ...(await existingTransitionResult(state, existing)),
+        outcome: 'fired',
+      };
+    }
+
+    const cursor = state.workflowCursor;
+    const currentTimer = state.timers.get(timerId);
+    if (
+      state.run.status !== RunStatus.RUNNING ||
+      !cursor ||
+      cursor.disposition !== WorkflowCursorDisposition.TIMER_WAITING ||
+      cursor.timerId !== timerId ||
+      !currentTimer ||
+      currentTimer.status !== WorkflowTimerStatus.WAITING
+    ) {
+      return {
+        applied: false,
+        outcome: 'not-waiting',
+        run: cloneJsonObject(state.run, 'timer fire run result'),
+        ...(cursor
+          ? {
+              workflowCursor: cloneJsonObject(
+                cursor,
+                'timer fire cursor result',
+              ),
+            }
+          : {}),
+        ...(currentTimer
+          ? { timer: cloneJsonObject(currentTimer, 'timer fire timer result') }
+          : {}),
+      };
+    }
+    if (observedAt < currentTimer.dueAt) {
+      return {
+        applied: false,
+        outcome: 'not-due',
+        run: cloneJsonObject(state.run, 'timer fire run result'),
+        workflowCursor: cloneJsonObject(cursor, 'timer fire cursor result'),
+        timer: cloneJsonObject(currentTimer, 'timer fire timer result'),
+      };
+    }
+    if (
+      observedAt < state.run.updatedAt ||
+      observedAt < cursor.updatedAt ||
+      observedAt < currentTimer.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        runId,
+        'workflow timer observation precedes durable state',
+      );
+    }
+
+    const payloadReader = createLedgerPayloadReader(payloadStore, runId);
+    const planPayload = await payloadReader.readWorkflowPlan(cursor.planRef);
+    const startPayload = await payloadReader.readWorkflowStart(cursor.startRef);
+    const resolvedOutputs = await readWorkflowCursorOutputs(
+      cursor,
+      payloadReader,
+    );
+    const outputPayload = normalizeWorkflowOutputPayload(
+      {
+        schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+        kind: WORKFLOW_OUTPUT_PAYLOAD_KIND,
+        value: {
+          scheduledAt: currentTimer.scheduledAt,
+          dueAt: currentTimer.dueAt,
+          firedAt: observedAt,
+        },
+      },
+      'fireWorkflowTimer.output',
+    );
+    const outputRef = await putVerifiedPayload(payloadStore, {
+      value: outputPayload,
+      payloadSchema: WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      label: 'fireWorkflowTimer.outputRef',
+    });
+    const nextStep = planPayload.definition.steps[cursor.stepIndex + 1];
+    const selectedOutput =
+      nextStep?.kind === 'activity' &&
+      nextStep.input.kind === 'step-output' &&
+      nextStep.input.step !== cursor.stepId
+        ? selectWorkflowStepOutput(
+            nextStep,
+            resolvedOutputs,
+            'fireWorkflowTimer successor',
+          )
+        : undefined;
+    const sequence = state.head.sequence + 1;
+    const materialized = materializeWorkflowTimerFire({
+      currentCursor: cursor,
+      planPayload,
+      planRef: cursor.planRef,
+      startPayload,
+      startRef: cursor.startRef,
+      outputPayload,
+      outputRef,
+      ...(selectedOutput ? { selectedOutput } : {}),
+      sequence,
+      observedAt,
+    });
+    const successors = await createWorkflowSuccessorSnapshots(
+      materialized,
+      state,
+      sequence,
+      observedAt,
+      'fireWorkflowTimer.successor',
+    );
+    const timer = normalizeWorkflowTimerSnapshot(
+      {
+        ...cloneJsonObject(currentTimer, 'current workflow timer'),
+        status: WorkflowTimerStatus.FIRED,
+        firedAt: observedAt,
+        outputRef,
+        version: currentTimer.version + 1,
+        lastSequence: sequence,
+        updatedAt: observedAt,
+      },
+      runId,
+    );
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      status: materialized.completed ? RunStatus.COMPLETED : RunStatus.RUNNING,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: observedAt,
+    };
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-timer-fired',
+      {
+        runId,
+        timerId,
+        cursor: workflowCursorGuard(cursor),
+        expectedVersion: state.run.version,
+        expectedTimerVersion: currentTimer.version,
+        transitionId,
+        actor,
+        coordinatorEpoch: 0,
+      },
+    );
+    const event = createEventRecord(
+      runId,
+      sequence,
+      transitionId,
+      requestDigest,
+      'workflow-timer-fired',
+      observedAt,
+      actor,
+      { coordinatorEpoch: 0, invocationGeneration: 0 },
+      {
+        run: nextRun,
+        workflowCursor: materialized.cursor,
+        timer,
+        ...(successors.nextInvocation
+          ? { nextInvocation: successors.nextInvocation }
+          : {}),
+        ...(successors.nextTimer ? { nextTimer: successors.nextTimer } : {}),
+        ...(successors.nextSignalWait
+          ? { nextSignalWait: successors.nextSignalWait }
+          : {}),
+      },
+    );
+    let result;
+    try {
+      result = await appendOrReplay(
+        /** @type {any} */ ({
+          state,
+          runId,
+          transitionId,
+          requestDigest,
+          event,
+          nextRun,
+          nextInvocation: undefined,
+          nextTimer: timer,
+          currentTimer,
+          nextAdditionalInvocation: successors.nextInvocation,
+          nextAdditionalTimer: successors.nextTimer,
+          nextAdditionalSignalWait: successors.nextSignalWait,
+          nextWorkflowCursor: materialized.cursor,
+        }),
+      );
+    } catch (error) {
+      if (!(error instanceof ExecutionLedgerConflictError) || retry >= 2) {
+        throw error;
+      }
+      return await fireWorkflowTimer(options, retry + 1);
+    }
+    return { ...result, outcome: 'fired' };
+  }
+
+  /**
+   * Deliver one app-scoped signal identity. Accepted and rejected deliveries
+   * are both durable decisions; an unknown run publishes no payload and writes
+   * no identity.
+   * @param {{appId: string, runId: string, signalId: string, deliveryId: string, payload: any, actor?: {kind: string, id: string}, observedAt?: number}} options - Stable signal delivery request.
+   * @param {number} [retry] - Bounded internal CAS retry count.
+   * @returns {Promise<Record<string, any>>} - Accepted, rejected, replayed, or unknown-run result.
+   */
+  async function deliverWorkflowSignal(options, retry = 0) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'deliverWorkflowSignal',
+    );
+    assertSupportedKeys(
+      value,
+      [
+        'appId',
+        'runId',
+        'signalId',
+        'deliveryId',
+        'payload',
+        'actor',
+        'observedAt',
+      ],
+      'deliverWorkflowSignal',
+    );
+    assertLogicalId(value.appId, 'deliverWorkflowSignal.appId');
+    assertWorkflowRunId(value.runId, 'deliverWorkflowSignal.runId');
+    assertLogicalId(value.signalId, 'deliverWorkflowSignal.signalId');
+    const appId = value.appId;
+    const runId = value.runId;
+    const signalId = value.signalId;
+    const deliveryId = assertOpaqueId(
+      value.deliveryId,
+      'deliverWorkflowSignal.deliveryId',
+    );
+    const actor = normalizeActor(value.actor);
+    const observedAt = normalizeObservedAt(
+      value.observedAt === undefined ? now() : value.observedAt,
+      'deliverWorkflowSignal.observedAt',
+    );
+    const outputPayload = normalizeWorkflowOutputPayload(
+      {
+        schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+        kind: WORKFLOW_OUTPUT_PAYLOAD_KIND,
+        value: value.payload,
+      },
+      'deliverWorkflowSignal.payload',
+    );
+    const payloadId = createExecutionPayloadId(
+      encodeCanonicalJsonPayload(outputPayload),
+    );
+    const transitionId = createSignalDeliveryTransitionId(appId, deliveryId);
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-signal-delivery',
+      {
+        appId,
+        runId,
+        deliveryId,
+        signalId,
+        payloadId,
+        actor,
+        transitionId,
+      },
+    );
+    const identityInput = {
+      appId,
+      runId,
+      deliveryId,
+      signalId,
+      payloadId,
+      actor,
+      transitionId,
+      requestDigest,
+    };
+    const expectedIdentity = createSignalDeliveryIdentityRecord(identityInput);
+
+    /**
+     * Derive the public decision from the durable delivery snapshot. A losing
+     * caller may have classified the signal against a different run head than
+     * the exact-identity caller that committed the decision.
+     * @param {Record<string, any>} result - Applied or replayed transition.
+     * @returns {Record<string, any>} Durable public signal outcome.
+     */
+    function signalDecisionResult(result) {
+      const delivery = result.signalDelivery;
+      if (delivery?.status === WorkflowSignalDeliveryStatus.ACCEPTED) {
+        /** @type {Record<string, any>} */
+        const accepted = { ...result, outcome: 'accepted' };
+        delete accepted.rejectionReason;
+        return accepted;
+      }
+      if (
+        delivery?.status === WorkflowSignalDeliveryStatus.REJECTED &&
+        typeof delivery.rejectionReason === 'string'
+      ) {
+        return {
+          ...result,
+          outcome: 'rejected',
+          rejectionReason: delivery.rejectionReason,
+        };
+      }
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'signal delivery result lacks a durable decision',
+      );
+    }
+
+    const existingIdentity = await readSignalDeliveryIdentityRecord(
+      db,
+      resolvedTableName,
+      appId,
+      deliveryId,
+    );
+    if (
+      existingIdentity &&
+      !hasSameCanonicalJson(existingIdentity, expectedIdentity)
+    ) {
+      throw new ExecutionLedgerTransitionConflictError(
+        existingIdentity.target_run_id,
+        transitionId,
+      );
+    }
+
+    const state = await readVerifiedRun(runId);
+    if (!state || state.run.appId !== appId) {
+      return { applied: false, outcome: 'unknown-run' };
+    }
+    if (existingIdentity) {
+      const receipt = await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        runId,
+        transitionId,
+      );
+      if (!receipt || receipt.request_digest !== requestDigest) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'signal delivery identity lacks its run receipt',
+        );
+      }
+      const result = await existingTransitionResult(state, receipt);
+      return signalDecisionResult(result);
+    }
+
+    /**
+     * Resolve a lost transaction race through the app-scoped identity row so
+     * cross-run/content reuse reports the durable winner, while an exact race
+     * replays that winner's receipt.
+     * @param {Record<string, any>} input - Validated append input.
+     * @returns {Promise<Record<string, any>>} - Applied or replayed durable decision.
+     */
+    async function appendSignalDecision(input) {
+      try {
+        return await appendOrReplay(/** @type {any} */ (input));
+      } catch (error) {
+        if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+        const identity = await readSignalDeliveryIdentityRecord(
+          db,
+          resolvedTableName,
+          appId,
+          deliveryId,
+        );
+        if (!identity) {
+          if (retry >= 2) throw error;
+          return await deliverWorkflowSignal(options, retry + 1);
+        }
+        if (!hasSameCanonicalJson(identity, expectedIdentity)) {
+          throw new ExecutionLedgerTransitionConflictError(
+            identity.target_run_id,
+            transitionId,
+          );
+        }
+        const raced = await readVerifiedRun(runId);
+        const receipt = await getTransitionReceipt(
+          db,
+          resolvedTableName,
+          runId,
+          transitionId,
+        );
+        if (!raced || !receipt || receipt.request_digest !== requestDigest) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'signal delivery winner lacks its exact receipt',
+          );
+        }
+        return await existingTransitionResult(raced, receipt);
+      }
+    }
+
+    const cursor = state.workflowCursor;
+    if (!cursor || state.run.trigger?.kind !== 'workflow') {
+      return { applied: false, outcome: 'unknown-run' };
+    }
+    const payloadReader = createLedgerPayloadReader(payloadStore, runId);
+    const planPayload = await payloadReader.readWorkflowPlan(cursor.planRef);
+    const currentWait = cursor.signalWaitId
+      ? state.signalWaits.get(cursor.signalWaitId)
+      : undefined;
+    if (
+      observedAt < state.run.updatedAt ||
+      observedAt < cursor.updatedAt ||
+      (currentWait && observedAt < currentWait.updatedAt)
+    ) {
+      throw new ExecutionLedgerConflictError(
+        runId,
+        'workflow signal observation precedes durable state',
+      );
+    }
+    const decision = classifyWorkflowSignalDelivery(
+      state.run,
+      cursor,
+      currentWait,
+      planPayload,
+      signalId,
+    );
+    const accepts = decision.accepts;
+
+    const payloadRef = await putVerifiedPayload(payloadStore, {
+      value: outputPayload,
+      payloadSchema: WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      label: 'deliverWorkflowSignal.payloadRef',
+    });
+    if (payloadRef.payloadId !== payloadId) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'signal delivery payload publication changed identity',
+      );
+    }
+    const sequence = state.head.sequence + 1;
+    const signalDelivery = normalizeWorkflowSignalDeliverySnapshot(
+      {
+        schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+        runId,
+        deliveryId,
+        appId,
+        signalId,
+        payloadRef,
+        actor,
+        status: accepts
+          ? WorkflowSignalDeliveryStatus.ACCEPTED
+          : WorkflowSignalDeliveryStatus.REJECTED,
+        ...(accepts
+          ? {
+              signalWaitId: /** @type {Record<string, any>} */ (currentWait)
+                .signalWaitId,
+            }
+          : { rejectionReason: decision.rejectionReason }),
+        version: 1,
+        lastSequence: sequence,
+        observedAt,
+      },
+      runId,
+    );
+
+    if (!accepts) {
+      const nextRun = {
+        ...cloneJsonObject(state.run, 'current workflow run'),
+        version: state.run.version + 1,
+        lastSequence: sequence,
+        updatedAt: observedAt,
+      };
+      const event = createEventRecord(
+        runId,
+        sequence,
+        transitionId,
+        requestDigest,
+        'workflow-signal-rejected',
+        observedAt,
+        actor,
+        { coordinatorEpoch: 0, invocationGeneration: 0 },
+        { run: nextRun, signalDelivery },
+      );
+      const result = await appendSignalDecision({
+        state,
+        runId,
+        transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation: undefined,
+        nextSignalDelivery: signalDelivery,
+        signalDeliveryIdentityRecord: expectedIdentity,
+      });
+      return signalDecisionResult(result);
+    }
+
+    const wait = /** @type {Record<string, any>} */ (currentWait);
+    const startPayload = await payloadReader.readWorkflowStart(cursor.startRef);
+    const resolvedOutputs = await readWorkflowCursorOutputs(
+      cursor,
+      payloadReader,
+    );
+    const nextStep = planPayload.definition.steps[cursor.stepIndex + 1];
+    const selectedOutput =
+      nextStep?.kind === 'activity' &&
+      nextStep.input.kind === 'step-output' &&
+      nextStep.input.step !== cursor.stepId
+        ? selectWorkflowStepOutput(
+            nextStep,
+            resolvedOutputs,
+            'deliverWorkflowSignal successor',
+          )
+        : undefined;
+    const materialized = materializeWorkflowSignalAcceptance({
+      currentCursor: cursor,
+      planPayload,
+      planRef: cursor.planRef,
+      startPayload,
+      startRef: cursor.startRef,
+      outputPayload,
+      outputRef: payloadRef,
+      ...(selectedOutput ? { selectedOutput } : {}),
+      sequence,
+      observedAt,
+    });
+    const successors = await createWorkflowSuccessorSnapshots(
+      materialized,
+      state,
+      sequence,
+      observedAt,
+      'deliverWorkflowSignal.successor',
+    );
+    const consumedWait = normalizeWorkflowSignalWaitSnapshot(
+      {
+        ...cloneJsonObject(wait, 'current workflow signal wait'),
+        status: WorkflowSignalWaitStatus.CONSUMED,
+        deliveryId,
+        payloadRef,
+        acceptedAt: observedAt,
+        version: wait.version + 1,
+        lastSequence: sequence,
+        updatedAt: observedAt,
+      },
+      runId,
+    );
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      status: materialized.completed ? RunStatus.COMPLETED : RunStatus.RUNNING,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: observedAt,
+    };
+    const event = createEventRecord(
+      runId,
+      sequence,
+      transitionId,
+      requestDigest,
+      'workflow-signal-accepted',
+      observedAt,
+      actor,
+      { coordinatorEpoch: 0, invocationGeneration: 0 },
+      {
+        run: nextRun,
+        workflowCursor: materialized.cursor,
+        signalWait: consumedWait,
+        signalDelivery,
+        ...(successors.nextInvocation
+          ? { nextInvocation: successors.nextInvocation }
+          : {}),
+        ...(successors.nextTimer ? { nextTimer: successors.nextTimer } : {}),
+        ...(successors.nextSignalWait
+          ? { nextSignalWait: successors.nextSignalWait }
+          : {}),
+      },
+    );
+    const result = await appendSignalDecision({
+      state,
+      runId,
+      transitionId,
+      requestDigest,
+      event,
+      nextRun,
+      nextInvocation: undefined,
+      nextSignalWait: consumedWait,
+      currentSignalWait: wait,
+      nextAdditionalInvocation: successors.nextInvocation,
+      nextAdditionalTimer: successors.nextTimer,
+      nextAdditionalSignalWait: successors.nextSignalWait,
+      nextSignalDelivery: signalDelivery,
+      signalDeliveryIdentityRecord: expectedIdentity,
+      nextWorkflowCursor: materialized.cursor,
+    });
+    return signalDecisionResult(result);
   }
 
   /**
@@ -11277,7 +14479,7 @@ export function createExecutionLedger({
       payloadSchema: ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
       label: 'commitManagedEffectSuccessorOutcome.evidenceRef',
     });
-    const requestDigest = createTransitionRequestDigest(
+    const successorTerminalRequestDigest = createTransitionRequestDigest(
       'effect-successor-terminal',
       {
         runId: common.runId,
@@ -11304,7 +14506,7 @@ export function createExecutionLedger({
         common.runId,
         common.transitionId,
       ),
-      requestDigest,
+      successorTerminalRequestDigest,
     );
     if (existing) {
       if (
@@ -11383,7 +14585,7 @@ export function createExecutionLedger({
       common.runId,
       sequence,
       common.transitionId,
-      requestDigest,
+      successorTerminalRequestDigest,
       'effect-successor-terminal',
       common.observedAt,
       common.actor,
@@ -11402,7 +14604,7 @@ export function createExecutionLedger({
       state,
       runId: common.runId,
       transitionId: common.transitionId,
-      requestDigest,
+      requestDigest: successorTerminalRequestDigest,
       event,
       nextRun,
       nextInvocation,
@@ -11970,7 +15172,7 @@ export function createExecutionLedger({
   }
 
   /**
-   * @param {{state: Record<string, any>, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>, resultEffectIds?: string[]}} input - Fully validated existing-run transition.
+   * @param {{state: Record<string, any>, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextAdditionalTimer?: Record<string, any>, nextAdditionalSignalWait?: Record<string, any>, nextTimer?: Record<string, any>, currentTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, currentSignalWait?: Record<string, any>, nextSignalDelivery?: Record<string, any>, signalDeliveryIdentityRecord?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>, resultEffectIds?: string[]}} input - Fully validated existing-run transition.
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>}>} - Accepted or idempotently replayed transition.
    */
   async function appendOrReplay(input) {
@@ -12468,10 +15670,11 @@ export function createExecutionLedger({
 
   /**
    * Persist the one first-wins cancellation request for the current workflow
-   * activity. Runnable and claimed work terminalize immediately; begun work
-   * retains its physical state until exact protocol evidence settles it; an
-   * uncertain activation retains ambiguity while preventing any successor.
-   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, expectedVersion: number, expectedGeneration: number, transitionId: string, requestId: string, reason: {code: string, name: string, message: string, details: Record<string, any>}, attemptId?: string, fencingToken?: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded durable cancellation request.
+   * activity, timer, or signal-wait activation. Unstarted work terminalizes
+   * immediately; begun activity work retains its physical state until exact
+   * protocol evidence settles it; an uncertain activity retains ambiguity
+   * while preventing any successor.
+   * @param {{runId: string, invocationId?: string, timerId?: string, signalWaitId?: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, expectedVersion: number, expectedGeneration?: number, expectedTimerVersion?: number, expectedSignalWaitVersion?: number, transitionId: string, requestId: string, reason: {code: string, name: string, message: string, details: Record<string, any>}, attemptId?: string, fencingToken?: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded durable cancellation request with exactly one activation identity and matching version guard.
    * @returns {Promise<WorkflowCancellationResult>} - Accepted request, stable replay, or terminal authority.
    */
   async function requestWorkflowRunCancellation(options) {
@@ -12485,9 +15688,13 @@ export function createExecutionLedger({
       [
         'runId',
         'invocationId',
+        'timerId',
+        'signalWaitId',
         'cursor',
         'expectedVersion',
         'expectedGeneration',
+        'expectedTimerVersion',
+        'expectedSignalWaitVersion',
         'transitionId',
         'requestId',
         'reason',
@@ -12500,6 +15707,14 @@ export function createExecutionLedger({
       'requestWorkflowRunCancellation',
       now,
     );
+    if (
+      Object.prototype.hasOwnProperty.call(value, 'timerId') ||
+      Object.prototype.hasOwnProperty.call(value, 'signalWaitId')
+    ) {
+      return /** @type {any} */ (
+        await requestWorkflowWaitCancellation(value, common)
+      );
+    }
     const invocationId = assertOpaqueId(
       value.invocationId,
       'requestWorkflowRunCancellation.invocationId',
@@ -12631,9 +15846,12 @@ export function createExecutionLedger({
             'workflow-cancellation-requested',
             {
               runId: common.runId,
-              invocationId,
+              activation: {
+                kind: 'activity',
+                invocationId,
+                expectedGeneration,
+              },
               cursor: guard,
-              expectedGeneration,
               expectedVersion: common.expectedVersion,
               transitionId: common.transitionId,
               requestId,
@@ -12820,9 +16038,12 @@ export function createExecutionLedger({
       'workflow-cancellation-requested',
       {
         runId: common.runId,
-        invocationId,
+        activation: {
+          kind: 'activity',
+          invocationId,
+          expectedGeneration,
+        },
         cursor: guard,
-        expectedGeneration,
         expectedVersion: common.expectedVersion,
         transitionId: common.transitionId,
         requestId,
@@ -13888,10 +17109,10 @@ export function createExecutionLedger({
         : undefined;
       const persistedAttempt = snapshots?.attempt;
       const persistedCursor = snapshots?.workflowCursor;
-      const priorEvent = receiptState.events[existingReceipt.sequence - 2];
-      const priorCursor = priorEvent
-        ? eventSnapshots(priorEvent, common.runId).workflowCursor
-        : undefined;
+      const priorCursor = workflowCursorAtOrBeforeSequence(
+        receiptState,
+        existingReceipt.sequence - 1,
+      );
       if (
         !existingEvent ||
         existingEvent.event_id !== existingReceipt.event_id ||
@@ -13993,18 +17214,13 @@ export function createExecutionLedger({
             'workflow success receipt output is unavailable',
           );
         }
-        successor = snapshots.nextInvocation
-          ? {
-              continuationId: snapshots.nextInvocation.workflow?.continuationId,
-              stepId: snapshots.nextInvocation.workflow?.stepId,
-              stepIndex: snapshots.nextInvocation.workflow?.stepIndex,
-              invocationId: snapshots.nextInvocation.invocationId,
-              activityId: snapshots.nextInvocation.activityId,
-              requestRef: snapshots.nextInvocation.requestRef,
-            }
-          : null;
+        successor = workflowSuccessorDigestView(snapshots);
       } else {
-        if (snapshots.nextInvocation) {
+        if (
+          snapshots.nextInvocation ||
+          snapshots.nextTimer ||
+          snapshots.nextSignalWait
+        ) {
           throw new ExecutionLedgerProjectionError(
             common.runId,
             'workflow failure receipt retains a successor invocation',
@@ -14201,6 +17417,8 @@ export function createExecutionLedger({
       });
     }
     let nextAdditionalInvocation;
+    let nextAdditionalTimer;
+    let nextAdditionalSignalWait;
     if (materialized.nextActivity) {
       const nextRequestRef = await putVerifiedPayload(payloadStore, {
         value: materialized.nextActivity.activityRequest,
@@ -14229,6 +17447,22 @@ export function createExecutionLedger({
           stepIndex: materialized.nextActivity.stepIndex,
         },
       };
+    } else if (materialized.nextTimer) {
+      nextAdditionalTimer = createWaitingWorkflowTimerSnapshot(
+        state.run,
+        materialized.cursor,
+        materialized.nextTimer,
+        sequence,
+        common.observedAt,
+      );
+    } else if (materialized.nextSignalWait) {
+      nextAdditionalSignalWait = createWaitingWorkflowSignalSnapshot(
+        state.run,
+        materialized.cursor,
+        materialized.nextSignalWait,
+        sequence,
+        common.observedAt,
+      );
     }
     const terminalSummary = createTerminalSummary(terminal);
     const eventType =
@@ -14268,16 +17502,11 @@ export function createExecutionLedger({
       terminal: terminalSummary,
       evidenceRef,
     };
-    const successor = nextAdditionalInvocation
-      ? {
-          continuationId: nextAdditionalInvocation.workflow.continuationId,
-          stepId: nextAdditionalInvocation.workflow.stepId,
-          stepIndex: nextAdditionalInvocation.workflow.stepIndex,
-          invocationId: nextAdditionalInvocation.invocationId,
-          activityId: nextAdditionalInvocation.activityId,
-          requestRef: nextAdditionalInvocation.requestRef,
-        }
-      : null;
+    const successor = workflowSuccessorDigestView({
+      nextInvocation: nextAdditionalInvocation,
+      nextTimer: nextAdditionalTimer,
+      nextSignalWait: nextAdditionalSignalWait,
+    });
     const requestDigest = createTransitionRequestDigest(eventType, {
       runId: common.runId,
       invocationId,
@@ -14313,6 +17542,10 @@ export function createExecutionLedger({
         ...(nextAdditionalInvocation
           ? { nextInvocation: nextAdditionalInvocation }
           : {}),
+        ...(nextAdditionalTimer ? { nextTimer: nextAdditionalTimer } : {}),
+        ...(nextAdditionalSignalWait
+          ? { nextSignalWait: nextAdditionalSignalWait }
+          : {}),
       },
     );
     return /** @type {any} */ (
@@ -14325,6 +17558,8 @@ export function createExecutionLedger({
         nextRun,
         nextInvocation,
         nextAdditionalInvocation,
+        nextAdditionalTimer,
+        nextAdditionalSignalWait,
         nextWorkflowCursor: materialized.cursor,
         nextAttempt,
         currentAttempt: attempt,
@@ -14443,10 +17678,10 @@ export function createExecutionLedger({
       const uncertaintySnapshots = uncertaintyEvent
         ? eventSnapshots(uncertaintyEvent, common.runId)
         : undefined;
-      const priorEvent = receiptState.events[existingReceipt.sequence - 2];
-      const priorCursor = priorEvent
-        ? eventSnapshots(priorEvent, common.runId).workflowCursor
-        : undefined;
+      const priorCursor = workflowCursorAtOrBeforeSequence(
+        receiptState,
+        existingReceipt.sequence - 1,
+      );
       if (
         !existingEvent ||
         existingEvent.event_id !== existingReceipt.event_id ||
@@ -14547,17 +17782,12 @@ export function createExecutionLedger({
             'workflow reconciliation receipt output is unavailable',
           );
         }
-        successor = snapshots.nextInvocation
-          ? {
-              continuationId: snapshots.nextInvocation.workflow?.continuationId,
-              stepId: snapshots.nextInvocation.workflow?.stepId,
-              stepIndex: snapshots.nextInvocation.workflow?.stepIndex,
-              invocationId: snapshots.nextInvocation.invocationId,
-              activityId: snapshots.nextInvocation.activityId,
-              requestRef: snapshots.nextInvocation.requestRef,
-            }
-          : null;
-      } else if (snapshots.nextInvocation) {
+        successor = workflowSuccessorDigestView(snapshots);
+      } else if (
+        snapshots.nextInvocation ||
+        snapshots.nextTimer ||
+        snapshots.nextSignalWait
+      ) {
         throw new ExecutionLedgerProjectionError(
           common.runId,
           'failed workflow reconciliation retains a successor invocation',
@@ -14776,6 +18006,8 @@ export function createExecutionLedger({
       });
     }
     let nextAdditionalInvocation;
+    let nextAdditionalTimer;
+    let nextAdditionalSignalWait;
     if (materialized.nextActivity) {
       const nextRequestRef = await putVerifiedPayload(payloadStore, {
         value: materialized.nextActivity.activityRequest,
@@ -14804,6 +18036,22 @@ export function createExecutionLedger({
           stepIndex: materialized.nextActivity.stepIndex,
         },
       };
+    } else if (materialized.nextTimer) {
+      nextAdditionalTimer = createWaitingWorkflowTimerSnapshot(
+        state.run,
+        materialized.cursor,
+        materialized.nextTimer,
+        sequence,
+        common.observedAt,
+      );
+    } else if (materialized.nextSignalWait) {
+      nextAdditionalSignalWait = createWaitingWorkflowSignalSnapshot(
+        state.run,
+        materialized.cursor,
+        materialized.nextSignalWait,
+        sequence,
+        common.observedAt,
+      );
     }
     const terminalSummary = createTerminalSummary(terminal);
     const terminalStatuses = statusesForTerminal(terminal);
@@ -14847,16 +18095,11 @@ export function createExecutionLedger({
       },
       'reconcileUncertainWorkflowActivityAttempt.reconciliation',
     );
-    const successor = nextAdditionalInvocation
-      ? {
-          continuationId: nextAdditionalInvocation.workflow.continuationId,
-          stepId: nextAdditionalInvocation.workflow.stepId,
-          stepIndex: nextAdditionalInvocation.workflow.stepIndex,
-          invocationId: nextAdditionalInvocation.invocationId,
-          activityId: nextAdditionalInvocation.activityId,
-          requestRef: nextAdditionalInvocation.requestRef,
-        }
-      : null;
+    const successor = workflowSuccessorDigestView({
+      nextInvocation: nextAdditionalInvocation,
+      nextTimer: nextAdditionalTimer,
+      nextSignalWait: nextAdditionalSignalWait,
+    });
     const requestDigest = createTransitionRequestDigest(
       'workflow-activity-uncertainty-reconciled',
       {
@@ -14901,6 +18144,10 @@ export function createExecutionLedger({
         ...(nextAdditionalInvocation
           ? { nextInvocation: nextAdditionalInvocation }
           : {}),
+        ...(nextAdditionalTimer ? { nextTimer: nextAdditionalTimer } : {}),
+        ...(nextAdditionalSignalWait
+          ? { nextSignalWait: nextAdditionalSignalWait }
+          : {}),
       },
     );
     return /** @type {any} */ (
@@ -14913,6 +18160,8 @@ export function createExecutionLedger({
         nextRun,
         nextInvocation,
         nextAdditionalInvocation,
+        nextAdditionalTimer,
+        nextAdditionalSignalWait,
         nextWorkflowCursor: materialized.cursor,
       })
     );
@@ -18025,24 +21274,33 @@ export function createExecutionLedger({
       );
     }
     const invocations = [...state.invocations.values()];
-    const invocation =
-      state.run.trigger.kind === 'workflow' && state.workflowCursor
-        ? state.invocations.get(state.workflowCursor.invocationId)
-        : invocations.length === 1
-          ? invocations[0]
-          : undefined;
-    if (!invocation) {
+    const cursor = state.workflowCursor;
+    const invocation = cursor?.invocationId
+      ? state.invocations.get(cursor.invocationId)
+      : state.run.trigger.kind !== 'workflow' && invocations.length === 1
+        ? invocations[0]
+        : undefined;
+    if (state.run.trigger.kind !== 'workflow' && !invocation) {
       throw new ExecutionLedgerProjectionError(
         runId,
         'ready-work repair cannot identify the current invocation',
       );
     }
-    const expected = createLifecycleReadyWorkRecord(
-      state.run,
-      invocation,
-      getReadyWorkAttempt(state, invocation),
-      state.workflowCursor,
-    );
+    const expected = cursor
+      ? createWorkflowReadyWorkRecord(
+          state.run,
+          cursor,
+          invocation,
+          invocation ? getReadyWorkAttempt(state, invocation) : undefined,
+          cursor.timerId ? state.timers.get(cursor.timerId) : undefined,
+        )
+      : invocation
+        ? createLifecycleReadyWorkRecord(
+            state.run,
+            invocation,
+            getReadyWorkAttempt(state, invocation),
+          )
+        : undefined;
     const observed = Object.prototype.hasOwnProperty.call(value, 'observed')
       ? createExecutionLedgerReadyWorkRecord(value.observed)
       : undefined;
@@ -18403,6 +21661,52 @@ export function createExecutionLedger({
   }
 
   /**
+   * @param {string} runId - Run identity.
+   * @param {string} timerId - Timer identity.
+   * @returns {Promise<Record<string, any> | null>} - Verified timer snapshot.
+   */
+  async function getWorkflowTimer(runId, timerId) {
+    const normalizedRunId = assertOpaqueId(runId, 'runId');
+    assertWorkflowTimerId(timerId, 'timerId');
+    const normalizedTimerId = timerId;
+    const timer = (await readVerifiedRun(normalizedRunId))?.timers.get(
+      normalizedTimerId,
+    );
+    return timer ? cloneJsonObject(timer, 'workflow timer') : null;
+  }
+
+  /**
+   * @param {string} runId - Run identity.
+   * @param {string} signalWaitId - Signal-wait identity.
+   * @returns {Promise<Record<string, any> | null>} - Verified signal-wait snapshot.
+   */
+  async function getWorkflowSignalWait(runId, signalWaitId) {
+    const normalizedRunId = assertOpaqueId(runId, 'runId');
+    assertWorkflowSignalWaitId(signalWaitId, 'signalWaitId');
+    const normalizedWaitId = signalWaitId;
+    const wait = (await readVerifiedRun(normalizedRunId))?.signalWaits.get(
+      normalizedWaitId,
+    );
+    return wait ? cloneJsonObject(wait, 'workflow signal wait') : null;
+  }
+
+  /**
+   * @param {string} runId - Run identity.
+   * @param {string} deliveryId - Signal-delivery identity.
+   * @returns {Promise<Record<string, any> | null>} - Verified signal-delivery snapshot.
+   */
+  async function getWorkflowSignalDelivery(runId, deliveryId) {
+    const normalizedRunId = assertOpaqueId(runId, 'runId');
+    const normalizedDeliveryId = assertOpaqueId(deliveryId, 'deliveryId');
+    const delivery = (
+      await readVerifiedRun(normalizedRunId)
+    )?.signalDeliveries.get(normalizedDeliveryId);
+    return delivery
+      ? cloneJsonObject(delivery, 'workflow signal delivery')
+      : null;
+  }
+
+  /**
    * Read one manual invocation's immutable request and its exact creation
    * actor after verifying the complete event stream, every projection, and
    * the referenced request bytes. The creation actor is required when a
@@ -18607,7 +21911,7 @@ export function createExecutionLedger({
    * Verify and expose a fully rebuilt run view for recovery/inspection. A
    * projection mismatch rejects rather than authorizing any later mutation.
    * @param {string} runId - Run identity.
-   * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Record<string, any>[], attempts: Record<string, any>[], effects: Record<string, any>[], events: Record<string, any>[]}|null>} - Rebuilt run view.
+   * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Record<string, any>[], timers: Record<string, any>[], signalWaits: Record<string, any>[], signalDeliveries: Record<string, any>[], attempts: Record<string, any>[], effects: Record<string, any>[], events: Record<string, any>[]}|null>} - Rebuilt run view.
    */
   async function rebuildRun(runId) {
     const normalizedRunId = assertOpaqueId(runId, 'runId');
@@ -18633,6 +21937,19 @@ export function createExecutionLedger({
               : 0,
         )
         .map((invocation) => cloneJsonObject(invocation, 'invocation')),
+      timers: [...state.timers.values()]
+        .sort((left, right) => left.timerId.localeCompare(right.timerId))
+        .map((timer) => cloneJsonObject(timer, 'workflow timer')),
+      signalWaits: [...state.signalWaits.values()]
+        .sort((left, right) =>
+          left.signalWaitId.localeCompare(right.signalWaitId),
+        )
+        .map((wait) => cloneJsonObject(wait, 'workflow signal wait')),
+      signalDeliveries: [...state.signalDeliveries.values()]
+        .sort((left, right) => left.deliveryId.localeCompare(right.deliveryId))
+        .map((delivery) =>
+          cloneJsonObject(delivery, 'workflow signal delivery'),
+        ),
       attempts: [...state.attempts.values()]
         .sort((left, right) =>
           left.attemptId < right.attemptId
@@ -18665,11 +21982,16 @@ export function createExecutionLedger({
     commitManagedEffectOutcome,
     createManualRun,
     createWorkflowRun,
+    deliverWorkflowSignal,
+    fireWorkflowTimer,
     getAttempt,
     getEffect,
     getEvents,
     getInvocation,
     getRun,
+    getWorkflowSignalDelivery,
+    getWorkflowSignalWait,
+    getWorkflowTimer,
     listReadyWork,
     listRuns,
     markAttemptStarted,
@@ -18698,7 +22020,9 @@ export function createExecutionLedger({
 /**
  * @typedef ExecutionLedgerStore
  * @property {(...args: any[]) => Promise<any>} createManualRun - Creates one idempotent manual run.
- * @property {(...args: any[]) => Promise<any>} createWorkflowRun - Creates one idempotent activity-headed workflow run.
+ * @property {(...args: any[]) => Promise<any>} createWorkflowRun - Creates one idempotent activity-, timer-, or signal-headed workflow run.
+ * @property {(...args: any[]) => Promise<any>} fireWorkflowTimer - Fires one exact due durable workflow timer.
+ * @property {(...args: any[]) => Promise<any>} deliverWorkflowSignal - Durably accepts or rejects one app-scoped signal delivery identity.
  * @property {(...args: any[]) => Promise<any>} claimWorkflowActivity - Claims one exact cursor-bound workflow activity generation.
  * @property {(...args: any[]) => Promise<any>} markWorkflowActivityStarted - Persists the dispatch boundary for one exact workflow activity attempt.
  * @property {(...args: any[]) => Promise<any>} commitVerifiedWorkflowActivityTerminal - Atomically commits one supported verified workflow activity terminal, with output and successor only for completion.
@@ -18726,6 +22050,9 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} requestWorkflowRunCancellation - Persists one cursor-aware first-wins workflow cancellation request.
  * @property {(runId: string) => Promise<Record<string, any> | null>} getRun - Reads a verified run projection.
  * @property {(runId: string, invocationId: string) => Promise<Record<string, any> | null>} getInvocation - Reads a verified invocation projection.
+ * @property {(runId: string, timerId: string) => Promise<Record<string, any> | null>} getWorkflowTimer - Reads a verified workflow timer projection.
+ * @property {(runId: string, signalWaitId: string) => Promise<Record<string, any> | null>} getWorkflowSignalWait - Reads a verified workflow signal-wait projection.
+ * @property {(runId: string, deliveryId: string) => Promise<Record<string, any> | null>} getWorkflowSignalDelivery - Reads a verified workflow signal-delivery decision.
  * @property {(runId: string, invocationId: string, attemptId: string) => Promise<Record<string, any> | null>} getAttempt - Reads a verified attempt projection.
  * @property {(runId: string, invocationId: string, effectId: string) => Promise<Record<string, any> | null>} getEffect - Reads a verified effect projection.
  * @property {(runId: string, invocationId: string) => Promise<{run: Record<string, any>, invocation: Record<string, any>, request: {input: any, callerMetadata: Record<string, any>}, actor: {kind: string, id: string}} | null>} readManualRunRequest - Rehashes one manual request and returns its verified creation actor for identical durable replay.

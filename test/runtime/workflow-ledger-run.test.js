@@ -534,6 +534,272 @@ describe('workflow ledger activity runner', () => {
     );
   });
 
+  test('rebases an initial claim after a rejected signal advances only the run head', async () => {
+    await withLedger(
+      'claim-rejected-signal-head-churn',
+      async ({ ledger, runId, created }) => {
+        /** @type {Record<string, any>[]} */
+        const claimRequests = [];
+        let rejectionAppended = false;
+        const churnLedger = injectLedgerMethod(
+          ledger,
+          'claimWorkflowActivity',
+          async (claim, request) => {
+            claimRequests.push(structuredClone(request));
+            if (!rejectionAppended) {
+              rejectionAppended = true;
+              await expect(
+                ledger.deliverWorkflowSignal({
+                  appId: APP_ID,
+                  runId,
+                  signalId: 'approval',
+                  deliveryId: 'claim-head-churn-delivery',
+                  payload: { ignored: true },
+                  actor: ACTOR,
+                }),
+              ).resolves.toMatchObject({
+                applied: true,
+                outcome: 'rejected',
+                rejectionReason: 'unexpected-signal',
+                run: { version: 2 },
+                workflowCursor: { version: 1 },
+              });
+            }
+            return await claim(request);
+          },
+        );
+        const executeAttempt = jest.fn(
+          async (/** @type {ActivityStartFrame} */ start) =>
+            terminalEvidence(start, 'completed'),
+        );
+
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(churnLedger, created, runId, { executeAttempt }),
+        );
+
+        expect(claimRequests).toHaveLength(2);
+        expect(claimRequests.map((request) => request.expectedVersion)).toEqual(
+          [1, 2],
+        );
+        expect(claimRequests.map((request) => request.cursor)).toEqual([
+          cursorGuard(created.workflowCursor),
+          cursorGuard(created.workflowCursor),
+        ]);
+        expect(claimRequests[1]).toMatchObject({
+          invocationId: created.invocation.invocationId,
+          expectedGeneration: created.invocation.generation,
+          fencingToken: `${runId}-fence`,
+          transitionId: `workflow-claim:${created.invocation.invocationId}:1`,
+        });
+        expect(executeAttempt).toHaveBeenCalledTimes(1);
+        expect(outcome).toMatchObject({
+          disposition: 'completed',
+          reused: false,
+          dispatched: true,
+          run: { status: RunStatus.COMPLETED, version: 5 },
+          workflowCursor: { disposition: WorkflowCursorDisposition.COMPLETED },
+          invocation: { status: InvocationStatus.COMPLETED },
+          attempt: { status: AttemptStatus.COMPLETED },
+        });
+        expect(
+          (await ledger.getEvents(runId)).map(
+            (/** @type {Record<string, any>} */ event) => event.type,
+          ),
+        ).toEqual([
+          'workflow-run-created',
+          'workflow-signal-rejected',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-activity-succeeded',
+        ]);
+      },
+    );
+  });
+
+  test('returns a nonfatal reload outcome after two rejection-only claim races', async () => {
+    await withLedger(
+      'claim-two-rejected-signal-races',
+      async ({ ledger, runId, created }) => {
+        /** @type {Record<string, any>[]} */
+        const claimRequests = [];
+        const churnLedger = injectLedgerMethod(
+          ledger,
+          'claimWorkflowActivity',
+          async (claim, request) => {
+            claimRequests.push(structuredClone(request));
+            const sequence = claimRequests.length;
+            await expect(
+              ledger.deliverWorkflowSignal({
+                appId: APP_ID,
+                runId,
+                signalId: 'approval',
+                deliveryId: `claim-head-churn-delivery-${sequence}`,
+                payload: { ignored: sequence },
+                actor: ACTOR,
+              }),
+            ).resolves.toMatchObject({
+              applied: true,
+              outcome: 'rejected',
+              rejectionReason: 'unexpected-signal',
+              run: { version: sequence + 1 },
+              workflowCursor: { version: 1 },
+            });
+            return await claim(request);
+          },
+        );
+        const executeAttempt = unexpectedDispatch();
+
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(churnLedger, created, runId, { executeAttempt }),
+        );
+
+        expect(claimRequests).toHaveLength(2);
+        expect(claimRequests.map((request) => request.expectedVersion)).toEqual(
+          [1, 2],
+        );
+        expect(claimRequests.map((request) => request.cursor)).toEqual([
+          cursorGuard(created.workflowCursor),
+          cursorGuard(created.workflowCursor),
+        ]);
+        expect(executeAttempt).not.toHaveBeenCalled();
+        expect(outcome).toMatchObject({
+          disposition: 'runnable',
+          reused: true,
+          dispatched: false,
+          run: { status: RunStatus.RUNNING, version: 3 },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+            version: 1,
+          },
+          invocation: {
+            status: InvocationStatus.RUNNABLE,
+            generation: 0,
+          },
+        });
+        expect((await listReadyWork(ledger)).items).toEqual([
+          expect.objectContaining({
+            runId,
+            kind: ExecutionLedgerReadyWorkKind.ACTIVITY,
+            runVersion: 3,
+            cursorVersion: 1,
+            generation: 0,
+          }),
+        ]);
+      },
+    );
+  });
+
+  test('keeps repeated same-head claim storage failures fatal', async () => {
+    await withLedger(
+      'claim-same-head-storage-failure',
+      async ({ ledger, runId, created }) => {
+        const failure = new Error('claim storage unavailable');
+        let claimCalls = 0;
+        const failingLedger = injectLedgerMethod(
+          ledger,
+          'claimWorkflowActivity',
+          async () => {
+            claimCalls += 1;
+            throw failure;
+          },
+        );
+        const executeAttempt = unexpectedDispatch();
+
+        await expect(
+          runWorkflowLedgerActivity(
+            runOptions(failingLedger, created, runId, { executeAttempt }),
+          ),
+        ).rejects.toMatchObject({
+          message: `Could not claim workflow activity ${runId}#${created.invocation.invocationId}.`,
+          errors: [failure, failure],
+        });
+
+        expect(claimCalls).toBe(2);
+        expect(executeAttempt).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test('rebases durable start after a rejected signal advances only the run head', async () => {
+    await withLedger(
+      'start-rejected-signal-head-churn',
+      async ({ ledger, runId, created }) => {
+        /** @type {Record<string, any>[]} */
+        const startRequests = [];
+        let rejectionAppended = false;
+        const churnLedger = injectLedgerMethod(
+          ledger,
+          'markWorkflowActivityStarted',
+          async (start, request) => {
+            startRequests.push(structuredClone(request));
+            if (!rejectionAppended) {
+              rejectionAppended = true;
+              await expect(
+                ledger.deliverWorkflowSignal({
+                  appId: APP_ID,
+                  runId,
+                  signalId: 'approval',
+                  deliveryId: 'start-head-churn-delivery',
+                  payload: { ignored: true },
+                  actor: ACTOR,
+                }),
+              ).resolves.toMatchObject({
+                applied: true,
+                outcome: 'rejected',
+                rejectionReason: 'unexpected-signal',
+                run: { version: 3 },
+                workflowCursor: { version: 2 },
+              });
+            }
+            return await start(request);
+          },
+        );
+        const executeAttempt = jest.fn(
+          async (/** @type {ActivityStartFrame} */ start) =>
+            terminalEvidence(start, 'completed'),
+        );
+
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(churnLedger, created, runId, { executeAttempt }),
+        );
+
+        expect(startRequests).toHaveLength(2);
+        expect(startRequests.map((request) => request.expectedVersion)).toEqual(
+          [2, 3],
+        );
+        expect(startRequests[1]).toMatchObject({
+          invocationId: created.invocation.invocationId,
+          cursor: startRequests[0].cursor,
+          attemptId: startRequests[0].attemptId,
+          fencingToken: `${runId}-fence`,
+          generation: 1,
+          transitionId: startRequests[0].transitionId,
+        });
+        expect(executeAttempt).toHaveBeenCalledTimes(1);
+        expect(outcome).toMatchObject({
+          disposition: 'completed',
+          reused: false,
+          dispatched: true,
+          run: { status: RunStatus.COMPLETED, version: 5 },
+          workflowCursor: { disposition: WorkflowCursorDisposition.COMPLETED },
+          invocation: { status: InvocationStatus.COMPLETED },
+          attempt: { status: AttemptStatus.COMPLETED },
+        });
+        expect(
+          (await ledger.getEvents(runId)).map(
+            (/** @type {Record<string, any>} */ event) => event.type,
+          ),
+        ).toEqual([
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-signal-rejected',
+          'workflow-activity-started',
+          'workflow-activity-succeeded',
+        ]);
+      },
+    );
+  });
+
   test.each(['response-loss', 'replay'])(
     'never dispatches after a durable start %s and marks the outcome uncertain',
     async (scenario) => {

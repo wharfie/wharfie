@@ -272,6 +272,8 @@ describe('workflow execution contract', () => {
       COMPLETED: 'COMPLETED',
       FAILED: 'FAILED',
       PROTOCOL_FAILED: 'PROTOCOL_FAILED',
+      TIMER_WAITING: 'TIMER_WAITING',
+      SIGNAL_WAITING: 'SIGNAL_WAITING',
     });
     expect(Object.isFrozen(WorkflowCursorDisposition)).toBe(true);
   });
@@ -983,7 +985,7 @@ describe('workflow execution contract', () => {
       ).toThrow(/must have disposition ACTIVITY_RUNNING/i);
       expect(() =>
         materialize({ ...valid, sequence: running.lastSequence }),
-      ).toThrow(/must immediately follow/i);
+      ).toThrow(/must follow/i);
       expect(() =>
         materialize({ ...valid, observedAt: running.updatedAt - 1 }),
       ).toThrow(/must not precede/i);
@@ -1482,22 +1484,47 @@ describe('workflow execution contract', () => {
   it.each([
     ['timer', { id: 'pause', kind: 'timer', delayMs: 1_000 }],
     ['signal', { id: 'approval', kind: 'signal' }],
-  ])('rejects a %s successor without advancing the cursor', (_name, next) => {
+  ])('materializes a strict %s successor activation', (name, next) => {
     const { input, first } = firstForSteps([activityStep(), next]);
     const persistedOutput = output({ greeting: 'done' });
-    expect(() =>
-      materializeWorkflowActivitySuccess({
-        currentCursor: runningCursor(first.cursor),
-        planPayload: input.planPayload,
-        planRef: input.planRef,
-        startPayload: input.startPayload,
-        startRef: input.startRef,
-        outputPayload: persistedOutput.payload,
-        outputRef: persistedOutput.ref,
-        sequence: 3,
-        observedAt: input.observedAt + 2,
-      }),
-    ).toThrow(/timer and signal successors are not implemented/i);
+    const success = materializeWorkflowActivitySuccess({
+      currentCursor: runningCursor(first.cursor),
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: persistedOutput.payload,
+      outputRef: persistedOutput.ref,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+
+    expect(success.completed).toBe(false);
+    expect(success.cursor.outputs).toEqual([success.outputBinding]);
+    expect(success.cursor.disposition).toBe(
+      name === 'timer'
+        ? WorkflowCursorDisposition.TIMER_WAITING
+        : WorkflowCursorDisposition.SIGNAL_WAITING,
+    );
+    if (name === 'timer') {
+      expect(success.nextTimer).toMatchObject({
+        stepId: 'pause',
+        stepIndex: 1,
+        timerId: success.cursor.timerId,
+        scheduledAt: input.observedAt + 2,
+        dueAt: input.observedAt + 1_002,
+      });
+      expect(success).not.toHaveProperty('nextSignalWait');
+    } else {
+      expect(success.nextSignalWait).toMatchObject({
+        stepId: 'approval',
+        stepIndex: 1,
+        signalId: 'approval',
+        signalWaitId: success.cursor.signalWaitId,
+      });
+      expect(success).not.toHaveProperty('nextTimer');
+    }
+    expect(normalizeWorkflowCursor(success.cursor)).toEqual(success.cursor);
   });
 
   it('rejects stale or mismatched success materializations', () => {
@@ -1531,7 +1558,7 @@ describe('workflow execution contract', () => {
       ]),
     );
     const invalid = [
-      { ...base, sequence: 4 },
+      { ...base, sequence: currentCursor.lastSequence },
       { ...base, observedAt: currentCursor.updatedAt - 1 },
       { ...base, currentCursor: first.cursor },
       { ...base, outputRef: changedOutput.ref },

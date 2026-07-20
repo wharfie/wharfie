@@ -4,7 +4,7 @@
  * evidence, fencing material, or event payloads. Those need an explicit future
  * disclosure and authorization policy.
  */
-export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 6;
+export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 7;
 
 /**
  * Expose only trigger identity needed to distinguish run semantics. Payload
@@ -39,7 +39,11 @@ function workflowCursorSummary(cursor) {
     stepId: cursor.stepId,
     stepIndex: cursor.stepIndex,
     continuationId: cursor.continuationId,
-    invocationId: cursor.invocationId,
+    ...(Object.prototype.hasOwnProperty.call(cursor, 'invocationId')
+      ? { invocationId: cursor.invocationId }
+      : Object.prototype.hasOwnProperty.call(cursor, 'timerId')
+        ? { timerId: cursor.timerId }
+        : { signalWaitId: cursor.signalWaitId }),
     disposition: cursor.disposition,
     outputs: cursor.outputs.map(
       (/** @type {Record<string, any>} */ output) => ({
@@ -145,6 +149,76 @@ export function createExecutionLedgerOperatorView(view) {
         updatedAt: effect.updatedAt,
       }),
     ),
+    timers: (view.timers || []).map(
+      (/** @type {Record<string, any>} */ timer) => ({
+        timerId: timer.timerId,
+        workflowId: timer.workflowId,
+        planId: timer.planId,
+        continuationId: timer.continuationId,
+        stepId: timer.stepId,
+        stepIndex: timer.stepIndex,
+        status: timer.status,
+        scheduledAt: timer.scheduledAt,
+        dueAt: timer.dueAt,
+        ...(timer.firedAt === undefined ? {} : { firedAt: timer.firedAt }),
+        version: timer.version,
+        lastSequence: timer.lastSequence,
+        createdAt: timer.createdAt,
+        updatedAt: timer.updatedAt,
+        ...(timer.cancellationRequest
+          ? {
+              cancellationRequest: cancellationSummary(
+                timer.cancellationRequest,
+              ),
+            }
+          : {}),
+      }),
+    ),
+    signalWaits: (view.signalWaits || []).map(
+      (/** @type {Record<string, any>} */ wait) => ({
+        signalWaitId: wait.signalWaitId,
+        workflowId: wait.workflowId,
+        planId: wait.planId,
+        continuationId: wait.continuationId,
+        stepId: wait.stepId,
+        stepIndex: wait.stepIndex,
+        signalId: wait.signalId,
+        status: wait.status,
+        ...(wait.deliveryId === undefined
+          ? {}
+          : { deliveryId: wait.deliveryId }),
+        ...(wait.acceptedAt === undefined
+          ? {}
+          : { acceptedAt: wait.acceptedAt }),
+        version: wait.version,
+        lastSequence: wait.lastSequence,
+        createdAt: wait.createdAt,
+        updatedAt: wait.updatedAt,
+        ...(wait.cancellationRequest
+          ? {
+              cancellationRequest: cancellationSummary(
+                wait.cancellationRequest,
+              ),
+            }
+          : {}),
+      }),
+    ),
+    signalDeliveries: (view.signalDeliveries || []).map(
+      (/** @type {Record<string, any>} */ delivery) => ({
+        deliveryId: delivery.deliveryId,
+        signalId: delivery.signalId,
+        status: delivery.status,
+        ...(delivery.rejectionReason === undefined
+          ? {}
+          : { rejectionReason: delivery.rejectionReason }),
+        ...(delivery.signalWaitId === undefined
+          ? {}
+          : { signalWaitId: delivery.signalWaitId }),
+        version: delivery.version,
+        lastSequence: delivery.lastSequence,
+        observedAt: delivery.observedAt,
+      }),
+    ),
     history: view.events.map((/** @type {Record<string, any>} */ event) => ({
       sequence: event.sequence,
       type: event.type,
@@ -168,7 +242,7 @@ export function formatExecutionLedgerOperatorRows(view) {
       attempt,
     ]),
   );
-  return view.invocations.map(
+  const invocationRows = view.invocations.map(
     (/** @type {Record<string, any>} */ invocation) => {
       const attempt = attempts.get(
         `${invocation.invocationId}:${invocation.generation}`,
@@ -179,6 +253,7 @@ export function formatExecutionLedgerOperatorRows(view) {
         revision: view.run.revisionId,
         run_kind: view.run.trigger.kind,
         run_status: view.run.status,
+        activation_kind: 'activity',
         invocation_id: invocation.invocationId,
         activity: invocation.activityId,
         workflow: invocation.workflow?.workflowId || '',
@@ -198,6 +273,46 @@ export function formatExecutionLedgerOperatorRows(view) {
       };
     },
   );
+  const workflowRow = (
+    /** @type {Record<string, any>} */ activation,
+    /** @type {'timer'|'signal'} */ kind,
+  ) => ({
+    run_id: view.run.runId,
+    app_id: view.run.appId,
+    revision: view.run.revisionId,
+    run_kind: view.run.trigger.kind,
+    run_status: view.run.status,
+    activation_kind: kind,
+    invocation_id: '',
+    activity: '',
+    workflow: activation.workflowId,
+    workflow_plan: activation.planId,
+    workflow_step: activation.stepId,
+    workflow_step_index: activation.stepIndex,
+    cursor_disposition:
+      (kind === 'timer' &&
+        view.workflowCursor?.timerId === activation.timerId) ||
+      (kind === 'signal' &&
+        view.workflowCursor?.signalWaitId === activation.signalWaitId)
+        ? view.workflowCursor.disposition
+        : '',
+    invocation_status: '',
+    activation_status: activation.status,
+    attempt_generation: '',
+    attempt_id: '',
+    attempt_status: '',
+    cancellation_request: view.run.cancellationRequest?.requestId || '',
+    event_count: view.events.length,
+  });
+  return [
+    ...invocationRows,
+    ...(view.timers || []).map((/** @type {Record<string, any>} */ timer) =>
+      workflowRow(timer, 'timer'),
+    ),
+    ...(view.signalWaits || []).map((/** @type {Record<string, any>} */ wait) =>
+      workflowRow(wait, 'signal'),
+    ),
+  ];
 }
 
 /**

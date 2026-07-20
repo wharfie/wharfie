@@ -31,17 +31,20 @@ recovery before that block. The public worker command and hidden packaged
 service runtime share this implementation and consume an exact-revision
 transactional ready-work locator rather than scanning run history. The strict
 manifest also accepts the bounded linear workflow definition from ADR 0019.
-The resident executes exact manifest-bound ordinary activity continuations,
-persists their outputs, and conservatively releases `CLAIMED` or blocks lost
-`STARTED` workflow attempts. Source `wharfie ops start` and packaged
-`<app> wharfie start` persist activity-only workflow plans, while the shared
-exact-run inspection, confirmed recovery, and evidence-reconciliation commands
-understand their redacted workflow cursor.
+The resident executes exact manifest-bound activity continuations, fires
+persisted due timers as framework work, persists their outputs, and
+conservatively releases `CLAIMED` or blocks lost `STARTED` workflow attempts.
+Source `wharfie ops start` and packaged `<app> wharfie start` persist bounded
+activity/timer/signal workflow plans. Source `wharfie ops signal` and packaged
+`<app> wharfie signal` consume only the current declared signal wait under a
+caller-stable delivery ID. The shared exact-run inspection, confirmed recovery,
+cancellation, and evidence-reconciliation commands understand the redacted
+activation-aware workflow cursor.
 
 This is not yet a complete durable workflow engine or an installed
-operating-system service. Run-level workflow cancellation now has durable
-cursor authority and active-owner delivery; timer and signal continuations,
-managed-effect successor steps, schedules, startup-on-boot installation,
+operating-system service. Run-level workflow cancellation has durable cursor
+authority and active-owner delivery. Branches, an early-signal inbox,
+managed-effect workflow successors, schedules, startup-on-boot installation,
 provider-backed deployment, multi-host leases/heartbeats, and the trusted-node
 mesh remain roadmap work; Wharfie is not production ready.
 
@@ -55,16 +58,19 @@ wharfie ops submit --activity <activity-id> --dir ./path/to/app \
 wharfie ops start --workflow <workflow-id> --dir ./path/to/app \
   --idempotency-key <stable-key> --input '{"who":"cli-user"}'
 wharfie ops worker --dir ./path/to/app
+wharfie ops signal --run-id <run-id> --signal <signal-step-id> \
+  --delivery-id <stable-delivery-id> --payload '{"approved":true}'
 wharfie app package ./path/to/app
 ```
 
 The packaged equivalents are `<app> wharfie submit ...`, `<app> wharfie start
-...`, and `<app> wharfie worker`; they are bound to the manifest and revision
-embedded in that artifact and do not accept `--dir`. Workflow start currently
-accepts only plans composed entirely of ordinary activity steps. Exact-run
-`inspect --json` emits the shared schema-v6 redacted trigger and workflow
-cursor; confirmed `recover` and evidence-backed `reconcile` use the same safe
-view.
+...`, `<app> wharfie worker`, and `<app> wharfie signal ...`; they are bound to
+the manifest and revision embedded in that artifact and do not accept `--dir`.
+Signal delivery accepts only the current wait. `early-signal`,
+`unexpected-signal`, and `late-signal` are durable, exactly replayable
+rejections rather than a buffered inbox. Exact-run `inspect --json` emits the shared schema-v7 redacted trigger,
+activation-aware cursor, timer, signal-wait, and signal-delivery lifecycle;
+confirmed `recover` and evidence-backed `reconcile` use the same safe view.
 
 The shipped top-level CLI contains `app` and `ops`. Continue with the
 [installation guide](./guides/installation.md), [quickstart](./guides/quickstart.md),

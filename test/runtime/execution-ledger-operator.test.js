@@ -456,7 +456,7 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 6,
+      schemaVersion: 7,
       run: {
         cancellationRequest: {
           requestId: 'cancel-request-1',
@@ -566,7 +566,7 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 6,
+      schemaVersion: 7,
       run: {
         trigger: { kind: 'workflow', workflowId: 'main', planId: 'plan-1' },
       },
@@ -605,6 +605,126 @@ describe('shared execution-ledger operator boundary', () => {
     ]) {
       expect(serialized).not.toContain(secret);
     }
+  });
+
+  it('exposes timer and signal lifecycle without payload references or values', () => {
+    const view = createExecutionLedgerOperatorView({
+      run: {
+        runId: 'workflow-signal-run',
+        appId: 'application-a',
+        revisionId: RUN_REVISION_ID,
+        trigger: { kind: 'workflow', workflowId: 'main', planId: 'plan-1' },
+        status: 'RUNNING',
+        version: 3,
+        lastSequence: 3,
+        createdAt: 1,
+        updatedAt: 3,
+      },
+      workflowCursor: {
+        runId: 'workflow-signal-run',
+        appId: 'application-a',
+        revisionId: RUN_REVISION_ID,
+        workflowId: 'main',
+        planId: 'plan-1',
+        signalWaitId: 'signal-wait-1',
+        continuationId: 'continuation-2',
+        stepId: 'approval',
+        stepIndex: 1,
+        disposition: 'SIGNAL_WAITING',
+        outputs: [
+          {
+            stepId: 'pause',
+            stepIndex: 0,
+            outputRef: { payloadId: 'private-timer-output' },
+          },
+        ],
+        version: 3,
+        lastSequence: 3,
+        createdAt: 1,
+        updatedAt: 3,
+      },
+      invocations: [],
+      attempts: [],
+      effects: [],
+      timers: [
+        {
+          timerId: 'timer-1',
+          workflowId: 'main',
+          planId: 'plan-1',
+          continuationId: 'continuation-1',
+          stepId: 'pause',
+          stepIndex: 0,
+          status: 'FIRED',
+          scheduledAt: 1,
+          dueAt: 2,
+          firedAt: 2,
+          outputRef: { payloadId: 'private-timer-output' },
+          version: 2,
+          lastSequence: 2,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+      signalWaits: [
+        {
+          signalWaitId: 'signal-wait-1',
+          workflowId: 'main',
+          planId: 'plan-1',
+          continuationId: 'continuation-2',
+          stepId: 'approval',
+          stepIndex: 1,
+          signalId: 'approval',
+          status: 'WAITING',
+          payloadRef: { payloadId: 'private-signal-payload' },
+          version: 1,
+          lastSequence: 3,
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      signalDeliveries: [
+        {
+          runId: 'workflow-signal-run',
+          deliveryId: 'early-delivery',
+          signalId: 'approval',
+          status: 'REJECTED',
+          rejectionReason: 'early-signal',
+          payloadRef: { payloadId: 'private-rejected-payload' },
+          actor: { kind: 'operator', id: 'private-actor' },
+          version: 1,
+          lastSequence: 2,
+          observedAt: 2,
+        },
+      ],
+      events: [],
+    });
+
+    expect(view).toMatchObject({
+      schemaVersion: 7,
+      workflowCursor: {
+        signalWaitId: 'signal-wait-1',
+        disposition: 'SIGNAL_WAITING',
+      },
+      timers: [{ timerId: 'timer-1', status: 'FIRED', dueAt: 2 }],
+      signalWaits: [
+        {
+          signalWaitId: 'signal-wait-1',
+          signalId: 'approval',
+          status: 'WAITING',
+        },
+      ],
+      signalDeliveries: [
+        {
+          deliveryId: 'early-delivery',
+          signalId: 'approval',
+          status: 'REJECTED',
+          rejectionReason: 'early-signal',
+        },
+      ],
+    });
+    expect(JSON.stringify(view)).not.toMatch(
+      /private-timer-output|private-signal-payload|private-rejected-payload|private-actor|payloadRef/,
+    );
   });
 
   it('rejects cross-app inspection, recovery, and reconciliation before changing the run', async () => {
@@ -1283,7 +1403,7 @@ describe('shared execution-ledger operator boundary', () => {
         result.view,
       );
       expect(operatorView).toMatchObject({
-        schemaVersion: 6,
+        schemaVersion: 7,
         recovery: {
           action: 'settled-managed-effect-set',
           changed: true,
@@ -1625,7 +1745,7 @@ describe('shared execution-ledger operator boundary', () => {
           result.view,
         );
       expect(operatorView).toMatchObject({
-        schemaVersion: 6,
+        schemaVersion: 7,
         kind: 'wharfie.execution-ledger.effect-reconciliation',
         effectReconciliation: result.reconciliation,
         run: { status: RunStatus.BLOCKED },
@@ -1743,7 +1863,7 @@ describe('shared execution-ledger operator boundary', () => {
         result.targetView,
       );
       expect(operatorView).toMatchObject({
-        schemaVersion: 6,
+        schemaVersion: 7,
         kind: 'wharfie.execution-ledger.effect-successor',
         effectSuccessor: {
           successorId,

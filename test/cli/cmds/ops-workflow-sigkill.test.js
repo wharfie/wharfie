@@ -45,8 +45,12 @@ const appDir = fileURLToPath(
 );
 const APP_ID = 'workflow-crash-source';
 const WORKFLOW_ID = 'crash-chain';
+const TIMER_SIGNAL_WORKFLOW_ID = 'timer-signal-chain';
+const TIMER_STEP_ID = 'durable-delay';
+const SIGNAL_STEP_ID = 'continue';
 const CHILD_BOUNDARY_TIMEOUT_MS = 30_000;
 const CHILD_EXIT_TIMEOUT_MS = 5_000;
+const DURABLE_STATE_WAIT_TIMEOUT_MS = 60_000;
 const itOnUnix = process.platform === 'win32' ? it.skip : it;
 
 /** @typedef {{adapterName: 'lmdb', controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string}} ControlConfiguration */
@@ -115,7 +119,7 @@ function runCli(args, env) {
 function parseSuccessfulJson(result, label) {
   if (result.status !== 0) {
     throw new Error(
-      `${label} failed with ${result.status}: ${result.stderr || result.stdout}`,
+      `${label} failed with status=${result.status} signal=${result.signal || 'none'} error=${result.error?.message || 'none'}: ${result.stderr || result.stdout}`,
     );
   }
   expect(result.stderr).toBe('');
@@ -138,15 +142,19 @@ function parseSuccessfulOperatorJson(result, label) {
   return JSON.parse(result.stdout.trim().split('\n')[0]);
 }
 
-/** @param {WorkflowFixture} fixture @returns {Record<string, any>} */
-function startWorkflow(fixture) {
+/**
+ * @param {WorkflowFixture} fixture
+ * @param {string} [workflowId]
+ * @returns {Record<string, any>}
+ */
+function startWorkflow(fixture, workflowId = WORKFLOW_ID) {
   return parseSuccessfulJson(
     runCli(
       [
         'ops',
         'start',
         '--workflow',
-        WORKFLOW_ID,
+        workflowId,
         '--idempotency-key',
         fixture.idempotencyKey,
         '--dir',
@@ -159,6 +167,52 @@ function startWorkflow(fixture) {
     ),
     'ops start',
   );
+}
+
+/**
+ * @param {WorkflowFixture} fixture
+ * @param {string} deliveryId
+ * @param {unknown} payload
+ * @returns {string[]}
+ */
+function signalArgs(fixture, deliveryId, payload) {
+  return [
+    'ops',
+    'signal',
+    '--run-id',
+    fixture.runId,
+    '--signal',
+    SIGNAL_STEP_ID,
+    '--delivery-id',
+    deliveryId,
+    '--payload',
+    JSON.stringify(payload),
+    '--json',
+  ];
+}
+
+/**
+ * Parse the redacted signal row. Rejections intentionally use a nonzero exit
+ * after writing their durable decision, while accepted deliveries are normal
+ * command success.
+ * @param {import('node:child_process').SpawnSyncReturns<string>} result
+ * @param {string} label
+ * @param {number} expectedStatus
+ * @returns {Record<string, any>}
+ */
+function parseSignalJson(result, label, expectedStatus) {
+  if (result.status !== expectedStatus) {
+    throw new Error(
+      `${label} exited with ${result.status}: ${result.stderr || result.stdout}`,
+    );
+  }
+  const firstLine = result.stdout.trim().split('\n')[0];
+  if (!firstLine) {
+    throw new Error(
+      `${label} emitted no JSON row (status=${result.status} signal=${result.signal || 'none'} error=${result.error?.message || 'none'}): ${result.stderr || '<empty stderr>'}`,
+    );
+  }
+  return JSON.parse(firstLine);
 }
 
 /** @param {WorkflowFixture} fixture @returns {string[]} */
@@ -223,17 +277,20 @@ async function readState(fixture, revisionId) {
     path: fixture.configuration.controlPath,
     readOnly: true,
   });
+  const payloadStore = createLocalExecutionPayloadStore({
+    path: fixture.configuration.payloadPath,
+    storeId: fixture.configuration.payloadStoreId,
+  });
   const ledger = createExecutionLedger({
     db,
     tableName: fixture.configuration.tableName,
-    payloadStore: createLocalExecutionPayloadStore({
-      path: fixture.configuration.payloadPath,
-      storeId: fixture.configuration.payloadStoreId,
-    }),
+    payloadStore,
   });
   try {
+    const view = await ledger.rebuildRun(fixture.runId);
+    if (!view) throw new Error(`Workflow ${fixture.runId} is unavailable.`);
     return {
-      view: await ledger.rebuildRun(fixture.runId),
+      view,
       events: await ledger.getEvents(fixture.runId),
       ready: await ledger.listReadyWork({
         appId: APP_ID,
@@ -245,6 +302,12 @@ async function readState(fixture, revisionId) {
         db,
         tableName: fixture.configuration.tableName,
       }).getOwnership({ serviceId: createLedgerServiceId({ appId: APP_ID }) }),
+      outputs: await Promise.all(
+        (view.workflowCursor?.outputs || []).map(
+          (/** @type {Record<string, any>} */ binding) =>
+            payloadStore.readJson(binding.outputRef),
+        ),
+      ),
     };
   } finally {
     await db.close();
@@ -411,17 +474,27 @@ function startLiveWorker(fixture) {
 }
 
 /**
+ * @param {LiveWorker} worker
+ * @param {string} label
+ */
+async function stopLiveWorker(worker, label) {
+  expect(worker.child.kill('SIGTERM')).toBe(true);
+  const stopped = await waitForExit(worker.exited, label, 15_000);
+  expect(stopped).toMatchObject({ code: 0, signal: null, stderr: '' });
+}
+
+/**
  * @param {WorkflowFixture} fixture
  * @param {string} revisionId
  * @param {LiveWorker} worker
  */
 async function waitForCompleted(fixture, revisionId, worker) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + DURABLE_STATE_WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (worker.child.exitCode !== null || worker.child.signalCode !== null) {
       const output = worker.output();
       throw new Error(
-        `Workflow worker exited before completion: ${output.stderr || output.stdout}`,
+        `Workflow worker exited before completion: exitCode=${worker.child.exitCode} signalCode=${worker.child.signalCode || 'none'} ${output.stderr || output.stdout}`,
       );
     }
     const state = await readState(fixture, revisionId).catch(() => null);
@@ -447,12 +520,12 @@ async function waitForWorkflowState(
   predicate,
   label,
 ) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + DURABLE_STATE_WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (worker.child.exitCode !== null || worker.child.signalCode !== null) {
       const output = worker.output();
       throw new Error(
-        `Workflow worker exited before ${label}: ${output.stderr || output.stdout}`,
+        `Workflow worker exited before ${label}: exitCode=${worker.child.exitCode} signalCode=${worker.child.signalCode || 'none'} ${output.stderr || output.stdout}`,
       );
     }
     const state = await readState(fixture, revisionId).catch(() => null);
@@ -1190,6 +1263,485 @@ describe('source workflow real-process SIGKILL recovery', () => {
       }
     },
     90_000,
+  );
+
+  itOnUnix(
+    'retains one timer deadline across SIGKILL and completes from an offline signal exactly once',
+    async () => {
+      const fixture = createFixture('timer-restart-offline-signal');
+      const deliveryId = 'source-offline-signal-delivery';
+      const signalPayload = {
+        markerPath: fixture.markerPath,
+        stepIndex: 1,
+        route: 'offline',
+      };
+      /** @type {LiveWorker | undefined} */
+      let worker;
+      try {
+        const started = startWorkflow(fixture, TIMER_SIGNAL_WORKFLOW_ID);
+        const crashed = await crashChild(
+          fixture,
+          { mode: 'worker', boundary: 'terminal-committed' },
+          'terminal-committed',
+        );
+        expectKilledAt(crashed, 'terminal-committed');
+        expect(crashed.message.detail).toMatchObject({
+          cursorDisposition: WorkflowCursorDisposition.TIMER_WAITING,
+          stepId: TIMER_STEP_ID,
+          stepIndex: 1,
+        });
+        expect(markerEntries(fixture)).toEqual(['enter:0']);
+
+        const scheduled = await readState(fixture, started.revision);
+        expect(scheduled).toMatchObject({
+          view: {
+            run: { status: RunStatus.RUNNING },
+            workflowCursor: {
+              disposition: WorkflowCursorDisposition.TIMER_WAITING,
+              stepId: TIMER_STEP_ID,
+              stepIndex: 1,
+              outputs: [expect.objectContaining({ stepId: 'first' })],
+            },
+            timers: [
+              expect.objectContaining({
+                status: 'WAITING',
+                stepId: TIMER_STEP_ID,
+                stepIndex: 1,
+              }),
+            ],
+          },
+          ready: {
+            items: [
+              expect.objectContaining({
+                kind: ExecutionLedgerReadyWorkKind.TIMER,
+                stepId: TIMER_STEP_ID,
+                stepIndex: 1,
+              }),
+            ],
+          },
+        });
+        const timer = scheduled.view.timers[0];
+        expect(timer.dueAt).toBeGreaterThan(timer.scheduledAt);
+        expect(scheduled.view.workflowCursor.timerId).toBe(timer.timerId);
+        expect(scheduled.ready.items[0]).toMatchObject({
+          timerId: timer.timerId,
+          availableAt: timer.dueAt,
+        });
+
+        // readState closes and reopens the real LMDB environment every time.
+        // Neither process death nor reopening may recompute now + delay.
+        const reopened = await readState(fixture, started.revision);
+        expect(reopened.view.timers).toEqual(scheduled.view.timers);
+        expect(reopened.view.workflowCursor).toEqual(
+          scheduled.view.workflowCursor,
+        );
+        expect(reopened.ready).toEqual(scheduled.ready);
+        expect(reopened.outputs).toEqual(scheduled.outputs);
+
+        worker = startLiveWorker(fixture);
+        const waiting = await waitForWorkflowState(
+          fixture,
+          started.revision,
+          worker,
+          (state) =>
+            state.view.workflowCursor.disposition ===
+              WorkflowCursorDisposition.SIGNAL_WAITING &&
+            state.view.workflowCursor.stepId === SIGNAL_STEP_ID,
+          'persisted signal wait after timer restart',
+        );
+        expect(waiting).toMatchObject({
+          view: {
+            workflowCursor: {
+              disposition: WorkflowCursorDisposition.SIGNAL_WAITING,
+              stepId: SIGNAL_STEP_ID,
+              stepIndex: 2,
+            },
+            timers: [
+              expect.objectContaining({
+                timerId: timer.timerId,
+                status: 'FIRED',
+                scheduledAt: timer.scheduledAt,
+                dueAt: timer.dueAt,
+              }),
+            ],
+            signalWaits: [
+              expect.objectContaining({
+                status: 'WAITING',
+                signalId: SIGNAL_STEP_ID,
+                stepIndex: 2,
+              }),
+            ],
+          },
+          ready: { items: [] },
+        });
+        expect(waiting.outputs[1]).toMatchObject({
+          value: {
+            scheduledAt: timer.scheduledAt,
+            dueAt: timer.dueAt,
+            firedAt: expect.any(Number),
+          },
+        });
+        expect(waiting.outputs[1].value.firedAt).toBeGreaterThanOrEqual(
+          timer.dueAt,
+        );
+
+        await stopLiveWorker(worker, 'timer-to-signal resident worker');
+        worker = undefined;
+        const beforeOfflineSignal = await readState(fixture, started.revision);
+        expect(beforeOfflineSignal.ownership).toBeNull();
+
+        const acceptedResult = runCli(
+          signalArgs(fixture, deliveryId, signalPayload),
+          fixture.env,
+        );
+        const accepted = parseSignalJson(
+          acceptedResult,
+          'ops offline signal',
+          0,
+        );
+        expect(accepted).toMatchObject({
+          runId: fixture.runId,
+          deliveryId,
+          signalId: SIGNAL_STEP_ID,
+          outcome: 'accepted',
+          reused: false,
+        });
+        expect(acceptedResult.stderr).toBe('');
+
+        const afterAccepted = await readState(fixture, started.revision);
+        expect(afterAccepted).toMatchObject({
+          view: {
+            workflowCursor: {
+              disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+              stepId: 'last',
+              stepIndex: 3,
+            },
+            signalWaits: [
+              expect.objectContaining({
+                status: 'CONSUMED',
+                signalId: SIGNAL_STEP_ID,
+              }),
+            ],
+            signalDeliveries: [
+              expect.objectContaining({
+                deliveryId,
+                status: 'ACCEPTED',
+              }),
+            ],
+          },
+          ready: {
+            items: [
+              expect.objectContaining({
+                kind: ExecutionLedgerReadyWorkKind.ACTIVITY,
+                stepId: 'last',
+                stepIndex: 3,
+              }),
+            ],
+          },
+          ownership: null,
+        });
+        expect(afterAccepted.outputs[2]).toMatchObject({
+          value: signalPayload,
+        });
+        expect(markerEntries(fixture)).toEqual(['enter:0']);
+
+        const replayResult = runCli(
+          signalArgs(fixture, deliveryId, signalPayload),
+          fixture.env,
+        );
+        expect(
+          parseSignalJson(replayResult, 'ops offline signal replay', 0),
+        ).toMatchObject({
+          runId: fixture.runId,
+          deliveryId,
+          outcome: 'accepted',
+          reused: true,
+        });
+        await expect(readState(fixture, started.revision)).resolves.toEqual(
+          afterAccepted,
+        );
+
+        const completed = await finishWithWorker(fixture, started.revision);
+        expect(completed.view).toMatchObject({
+          run: { status: RunStatus.COMPLETED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.COMPLETED,
+            stepId: 'last',
+            stepIndex: 3,
+            outputs: expect.arrayContaining([
+              expect.objectContaining({ stepId: TIMER_STEP_ID }),
+              expect.objectContaining({ stepId: SIGNAL_STEP_ID }),
+            ]),
+          },
+          timers: [
+            expect.objectContaining({
+              timerId: timer.timerId,
+              status: 'FIRED',
+              dueAt: timer.dueAt,
+            }),
+          ],
+          signalDeliveries: [
+            expect.objectContaining({
+              deliveryId,
+              status: 'ACCEPTED',
+            }),
+          ],
+        });
+        expect(completed.outputs).toHaveLength(4);
+        expect(completed.outputs[2]).toMatchObject({ value: signalPayload });
+        expect(completed.outputs[3]).toMatchObject({
+          value: { markerPath: fixture.markerPath, stepIndex: 2 },
+        });
+        expect(
+          completed.events.filter(
+            (event) => event.type === 'workflow-timer-fired',
+          ),
+        ).toHaveLength(1);
+        expect(
+          completed.events.filter(
+            (event) => event.type === 'workflow-signal-accepted',
+          ),
+        ).toHaveLength(1);
+        expect(markerEntries(fixture)).toEqual(['enter:0', 'enter:1']);
+      } finally {
+        if (
+          worker &&
+          worker.child.exitCode === null &&
+          worker.child.signalCode === null
+        ) {
+          worker.child.kill('SIGKILL');
+        }
+        await worker?.exited.catch(() => undefined);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
+
+  itOnUnix(
+    'retains an early signal rejection and replays a resident acceptance after response loss',
+    async () => {
+      const fixture = createFixture('signal-rejection-response-loss');
+      const rejectedDeliveryId = 'source-early-signal-delivery';
+      const acceptedDeliveryId = 'source-resident-signal-delivery';
+      const signalPayload = {
+        markerPath: fixture.markerPath,
+        stepIndex: 1,
+        route: 'resident',
+      };
+      /** @type {LiveWorker | undefined} */
+      let worker;
+      try {
+        const started = startWorkflow(fixture, TIMER_SIGNAL_WORKFLOW_ID);
+        const rejectedResult = runCli(
+          signalArgs(fixture, rejectedDeliveryId, signalPayload),
+          fixture.env,
+        );
+        expect(
+          parseSignalJson(rejectedResult, 'ops early signal', 1),
+        ).toMatchObject({
+          runId: fixture.runId,
+          deliveryId: rejectedDeliveryId,
+          signalId: SIGNAL_STEP_ID,
+          outcome: 'rejected',
+          rejectionReason: 'early-signal',
+          reused: false,
+        });
+        expect(
+          `${rejectedResult.stdout}\n${rejectedResult.stderr}`,
+        ).not.toContain(fixture.markerPath);
+
+        const afterEarlyRejection = await readState(fixture, started.revision);
+        expect(afterEarlyRejection).toMatchObject({
+          view: {
+            run: { status: RunStatus.RUNNING },
+            workflowCursor: {
+              disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+              stepId: 'first',
+              stepIndex: 0,
+              outputs: [],
+            },
+            signalDeliveries: [
+              expect.objectContaining({
+                deliveryId: rejectedDeliveryId,
+                status: 'REJECTED',
+                rejectionReason: 'early-signal',
+              }),
+            ],
+          },
+          ready: {
+            items: [
+              expect.objectContaining({
+                kind: ExecutionLedgerReadyWorkKind.ACTIVITY,
+                stepIndex: 0,
+              }),
+            ],
+          },
+          ownership: null,
+        });
+        expect(
+          afterEarlyRejection.events.filter(
+            (event) => event.type === 'workflow-signal-rejected',
+          ),
+        ).toHaveLength(1);
+        expect(markerEntries(fixture)).toEqual([]);
+
+        worker = startLiveWorker(fixture);
+        const waiting = await waitForWorkflowState(
+          fixture,
+          started.revision,
+          worker,
+          (state) =>
+            state.view.workflowCursor.disposition ===
+              WorkflowCursorDisposition.SIGNAL_WAITING &&
+            state.view.workflowCursor.stepId === SIGNAL_STEP_ID,
+          'signal wait after retained early rejection',
+        );
+        expect(waiting.view.signalDeliveries).toEqual([
+          expect.objectContaining({
+            deliveryId: rejectedDeliveryId,
+            status: 'REJECTED',
+          }),
+        ]);
+
+        const rejectedReplay = await crashChild(
+          fixture,
+          {
+            mode: 'signal-response',
+            runId: fixture.runId,
+            signalId: SIGNAL_STEP_ID,
+            deliveryId: rejectedDeliveryId,
+            payload: signalPayload,
+          },
+          'signal-response-ready',
+        );
+        expectKilledAt(rejectedReplay, 'signal-response-ready');
+        expect(rejectedReplay.message.detail.response).toMatchObject({
+          runId: fixture.runId,
+          deliveryId: rejectedDeliveryId,
+          outcome: 'rejected',
+          rejectionReason: 'early-signal',
+          reused: true,
+        });
+        expect(
+          JSON.stringify(rejectedReplay.message.detail.response),
+        ).not.toContain(fixture.markerPath);
+        const afterRejectedReplay = await readState(fixture, started.revision);
+        expect(afterRejectedReplay.events).toEqual(waiting.events);
+        expect(afterRejectedReplay.view).toEqual(waiting.view);
+        expect(afterRejectedReplay.ready).toEqual(waiting.ready);
+        expect(afterRejectedReplay.outputs).toEqual(waiting.outputs);
+
+        const acceptedResponse = await crashChild(
+          fixture,
+          {
+            mode: 'signal-response',
+            runId: fixture.runId,
+            signalId: SIGNAL_STEP_ID,
+            deliveryId: acceptedDeliveryId,
+            payload: signalPayload,
+          },
+          'signal-response-ready',
+        );
+        expectKilledAt(acceptedResponse, 'signal-response-ready');
+        expect(acceptedResponse.message.detail.response).toMatchObject({
+          runId: fixture.runId,
+          deliveryId: acceptedDeliveryId,
+          signalId: SIGNAL_STEP_ID,
+          outcome: 'accepted',
+          reused: false,
+        });
+        expect(
+          JSON.stringify(acceptedResponse.message.detail.response),
+        ).not.toContain(fixture.markerPath);
+
+        const completed = await waitForCompleted(
+          fixture,
+          started.revision,
+          worker,
+        );
+        expect(completed.view).toMatchObject({
+          run: { status: RunStatus.COMPLETED },
+          workflowCursor: {
+            disposition: WorkflowCursorDisposition.COMPLETED,
+            stepId: 'last',
+            stepIndex: 3,
+          },
+          signalWaits: [
+            expect.objectContaining({
+              status: 'CONSUMED',
+              signalId: SIGNAL_STEP_ID,
+            }),
+          ],
+          signalDeliveries: expect.arrayContaining([
+            expect.objectContaining({
+              deliveryId: rejectedDeliveryId,
+              status: 'REJECTED',
+              rejectionReason: 'early-signal',
+            }),
+            expect.objectContaining({
+              deliveryId: acceptedDeliveryId,
+              status: 'ACCEPTED',
+            }),
+          ]),
+        });
+        expect(completed.view.signalDeliveries).toHaveLength(2);
+        expect(completed.outputs[2]).toMatchObject({ value: signalPayload });
+        expect(markerEntries(fixture)).toEqual(['enter:0', 'enter:1']);
+        expect(
+          completed.events.filter(
+            (event) => event.type === 'workflow-signal-rejected',
+          ),
+        ).toHaveLength(1);
+        expect(
+          completed.events.filter(
+            (event) => event.type === 'workflow-signal-accepted',
+          ),
+        ).toHaveLength(1);
+        expect(
+          completed.events.filter(
+            (event) => event.type === 'workflow-timer-fired',
+          ),
+        ).toHaveLength(1);
+
+        const acceptedReplayResult = runCli(
+          signalArgs(fixture, acceptedDeliveryId, signalPayload),
+          fixture.env,
+        );
+        expect(
+          parseSignalJson(
+            acceptedReplayResult,
+            'ops resident accepted signal replay',
+            0,
+          ),
+        ).toMatchObject({
+          runId: fixture.runId,
+          deliveryId: acceptedDeliveryId,
+          outcome: 'accepted',
+          reused: true,
+        });
+        expect(
+          `${acceptedReplayResult.stdout}\n${acceptedReplayResult.stderr}`,
+        ).not.toContain(fixture.markerPath);
+        await expect(readState(fixture, started.revision)).resolves.toEqual(
+          completed,
+        );
+
+        await stopLiveWorker(worker, 'signal response-loss resident worker');
+        worker = undefined;
+      } finally {
+        if (
+          worker &&
+          worker.child.exitCode === null &&
+          worker.child.signalCode === null
+        ) {
+          worker.child.kill('SIGKILL');
+        }
+        await worker?.exited.catch(() => undefined);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    120_000,
   );
 
   itOnUnix(

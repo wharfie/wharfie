@@ -98,18 +98,43 @@ function formatStartedRow(value, expected) {
   const outcome = result.outcome;
   const run = outcome?.run;
   const cursor = outcome?.workflowCursor;
-  const invocation = outcome?.invocation;
+  const activations = [
+    outcome?.invocation
+      ? {
+          kind: 'activity',
+          idKey: 'invocationId',
+          projection: outcome.invocation,
+        }
+      : null,
+    outcome?.timer
+      ? { kind: 'timer', idKey: 'timerId', projection: outcome.timer }
+      : null,
+    outcome?.signalWait
+      ? {
+          kind: 'signal',
+          idKey: 'signalWaitId',
+          projection: outcome.signalWait,
+        }
+      : null,
+  ].filter(Boolean);
   if (
     !outcome ||
     !run ||
     !cursor ||
-    !invocation ||
+    activations.length !== 1 ||
     typeof outcome.applied !== 'boolean'
   ) {
     throw new TypeError(
-      'Durable workflow start must return run, workflow cursor, and invocation projections.',
+      'Durable workflow start must return run, workflow cursor, and exactly one activation projection.',
     );
   }
+  const activation =
+    /** @type {{kind: string, idKey: string, projection: Record<string, any>}} */ (
+      activations[0]
+    );
+  const projection = activation.projection;
+  const workflow =
+    activation.kind === 'activity' ? projection.workflow : projection;
   if (
     result.appId !== expected.appId ||
     result.revisionId !== expected.revisionId ||
@@ -127,7 +152,15 @@ function formatStartedRow(value, expected) {
     cursor.revisionId !== expected.revisionId ||
     cursor.workflowId !== expected.workflowId ||
     cursor.planId !== result.planId ||
-    cursor.invocationId !== invocation.invocationId
+    cursor[activation.idKey] !== projection[activation.idKey] ||
+    projection.runId !== expected.runId ||
+    projection.appId !== expected.appId ||
+    projection.revisionId !== expected.revisionId ||
+    workflow?.workflowId !== expected.workflowId ||
+    workflow?.planId !== result.planId ||
+    workflow?.continuationId !== cursor.continuationId ||
+    workflow?.stepId !== cursor.stepId ||
+    workflow?.stepIndex !== cursor.stepIndex
   ) {
     throw new Error(
       'Durable workflow start returned an unexpected immutable run identity.',
@@ -142,7 +175,8 @@ function formatStartedRow(value, expected) {
     cursor_disposition: cursor.disposition,
     step: cursor.stepId,
     step_index: cursor.stepIndex,
-    invocation_status: invocation.status,
+    activation_kind: activation.kind,
+    activation_status: projection.status,
     reused: outcome.applied === false,
   };
 }

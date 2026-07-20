@@ -41,6 +41,7 @@ const staleClaims = [
   'pure TypeScript path has a clean generated-SEA release proof',
   'There is no public workflow-start command yet',
   'schema-v5 redacted run view',
+  'schema-v6 redacted run view',
 ];
 
 describe('docs command surface', () => {
@@ -134,12 +135,18 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops start --workflow <workflow-id> --dir ./path/to/app',
     );
+    expect(quickstart).toContain(
+      'wharfie ops signal --run-id <run-id> --signal <signal-step-id>',
+    );
     expect(quickstart).toContain('wharfie ops worker --dir ./path/to/app');
     expect(quickstart).toContain(
       '<app> wharfie submit --activity <activity-id>',
     );
     expect(quickstart).toContain(
       '<app> wharfie start --workflow <workflow-id>',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie signal --run-id <run-id> --signal <signal-step-id>',
     );
     expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
@@ -176,7 +183,7 @@ describe('docs command surface', () => {
     expect(quickstart).not.toContain('<app> wharfie ops start');
   });
 
-  it('documents the public activity-only workflow operator boundary', async () => {
+  it('documents the public linear workflow operator boundary', async () => {
     const documents = await Promise.all(
       [
         'README.md',
@@ -192,17 +199,28 @@ describe('docs command surface', () => {
     for (const document of documents) {
       expect(document).toContain('wharfie ops start');
       expect(document).toContain('<app> wharfie start');
-      expect(document).toMatch(/ordinary activity steps|ordinary activities/);
-      expect(document).toMatch(/workflow-aware|workflow cursor/);
-      expect(document).toMatch(/workflow cancellation|workflow `cancel`/i);
-      expect(document).toMatch(/timer|signal/);
+      expect(document).toContain('wharfie ops signal');
+      expect(document).toContain('<app> wharfie signal');
+      expect(document).toMatch(/activity[\s\S]*timer[\s\S]*signal/i);
+      expect(document).toMatch(
+        /workflow-aware|workflow cursor|activation-aware cursor/,
+      );
+      expect(document).toMatch(
+        /workflow cancellation|workflow `cancel`|run-level `cancel`/i,
+      );
+      expect(document).toContain('stable-delivery-id');
+      expect(document).toContain('early-signal');
+      expect(document).toContain('unexpected-signal');
+      expect(document).toContain('late-signal');
+      expect(document).toContain('schema-v7');
     }
 
     const quickstart = documents[2];
-    expect(quickstart).toContain('schema-v6 redacted run view');
+    expect(quickstart).toContain('schema-v7 redacted run view');
     expect(quickstart).toContain('reused: true');
     expect(quickstart).toContain('original uncertainty event');
     expect(quickstart).not.toContain('schema-v5 redacted run view');
+    expect(quickstart).not.toContain('schema-v6 redacted run view');
   });
 
   it('documents the trusted redacted effect-reconciliation contract', async () => {

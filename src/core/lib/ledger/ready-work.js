@@ -2,6 +2,7 @@ import { assertApplicationRevisionId } from '../../runtime/application-revision.
 import { createCanonicalJsonSha256Id } from '../../runtime/content-id.js';
 import { cloneBoundedJsonObject } from '../../runtime/json-value.js';
 import { assertLogicalId } from '../../runtime/logical-id.js';
+import { WORKFLOW_MAX_STEPS } from '../../runtime/workflow-definition.js';
 import {
   assertLedgerServiceId,
   createLedgerServiceId,
@@ -12,6 +13,11 @@ import {
   assertPositiveSafeInteger,
 } from './execution-ledger-contract.js';
 import { assertLedgerOpaqueId, encodeLedgerKeySegment } from './record-key.js';
+import {
+  assertWorkflowContinuationId,
+  assertWorkflowInvocationId,
+  assertWorkflowTimerId,
+} from './workflow-execution-contract.js';
 
 /**
  * The ready-work table projection is a locator, never execution authority.
@@ -365,20 +371,27 @@ export function parseExecutionLedgerReadyWorkSortKey(
  */
 function createWorkflowCursorStorageFields(value) {
   assertLogicalId(value.stepId, 'ready-work input.stepId');
+  const stepIndex = assertNonnegativeSafeInteger(
+    value.stepIndex,
+    'ready-work input.stepIndex',
+  );
+  if (stepIndex >= WORKFLOW_MAX_STEPS) {
+    throw new RangeError(
+      `ready-work input.stepIndex must be less than ${WORKFLOW_MAX_STEPS}.`,
+    );
+  }
+  assertWorkflowContinuationId(
+    value.continuationId,
+    'ready-work input.continuationId',
+  );
   return {
     cursor_version: assertPositiveSafeInteger(
       value.cursorVersion,
       'ready-work input.cursorVersion',
     ),
-    continuation_id: assertLedgerOpaqueId(
-      value.continuationId,
-      'ready-work input.continuationId',
-    ),
+    continuation_id: value.continuationId,
     step_id: value.stepId,
-    step_index: assertNonnegativeSafeInteger(
-      value.stepIndex,
-      'ready-work input.stepIndex',
-    ),
+    step_index: stepIndex,
   };
 }
 
@@ -395,11 +408,20 @@ function assertWorkflowCursorStorageFields(record) {
     record.continuation_id,
     'ready-work record.continuation_id',
   );
+  assertWorkflowContinuationId(
+    record.continuation_id,
+    'ready-work record.continuation_id',
+  );
   assertLogicalId(record.step_id, 'ready-work record.step_id');
-  assertNonnegativeSafeInteger(
+  const stepIndex = assertNonnegativeSafeInteger(
     record.step_index,
     'ready-work record.step_index',
   );
+  if (stepIndex >= WORKFLOW_MAX_STEPS) {
+    throw new RangeError(
+      `ready-work record.step_index must be less than ${WORKFLOW_MAX_STEPS}.`,
+    );
+  }
 }
 
 /**
@@ -409,6 +431,12 @@ function assertWorkflowCursorStorageFields(record) {
  */
 function createKindStorageFields(value, kind) {
   if (kind === ExecutionLedgerReadyWorkKind.ACTIVITY) {
+    if (hasAnyOwnField(value, WORKFLOW_CURSOR_INPUT_KEYS)) {
+      assertWorkflowInvocationId(
+        value.invocationId,
+        'ready-work input.invocationId',
+      );
+    }
     return {
       invocation_id: assertLedgerOpaqueId(
         value.invocationId,
@@ -424,6 +452,12 @@ function createKindStorageFields(value, kind) {
     };
   }
   if (kind === ExecutionLedgerReadyWorkKind.RECOVERY) {
+    if (hasAnyOwnField(value, WORKFLOW_CURSOR_INPUT_KEYS)) {
+      assertWorkflowInvocationId(
+        value.invocationId,
+        'ready-work input.invocationId',
+      );
+    }
     return {
       invocation_id: assertLedgerOpaqueId(
         value.invocationId,
@@ -446,10 +480,10 @@ function createKindStorageFields(value, kind) {
   return kind === ExecutionLedgerReadyWorkKind.TIMER
     ? {
         ...continuation,
-        timer_id: assertLedgerOpaqueId(
-          value.timerId,
-          'ready-work input.timerId',
-        ),
+        timer_id: (() => {
+          assertWorkflowTimerId(value.timerId, 'ready-work input.timerId');
+          return value.timerId;
+        })(),
       }
     : continuation;
 }
@@ -600,7 +634,7 @@ export function normalizeExecutionLedgerReadyWorkRecord(raw, expectedScope) {
   } else {
     assertWorkflowCursorStorageFields(record);
     if (kind === ExecutionLedgerReadyWorkKind.TIMER) {
-      assertLedgerOpaqueId(record.timer_id, 'ready-work record.timer_id');
+      assertWorkflowTimerId(record.timer_id, 'ready-work record.timer_id');
     }
   }
   return record;

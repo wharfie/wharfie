@@ -672,12 +672,7 @@ for (const adapter of getAdapterMatrix()) {
             lastSequence: 3,
           },
         });
-        expect(replayed).toMatchObject({
-          applied: false,
-          receipt: released.receipt,
-          workflowCursor: released.workflowCursor,
-          attempt: released.attempt,
-        });
+        expect(replayed).toEqual({ ...released, applied: false });
         await expect(
           ledger.abandonUnstartedWorkflowActivityAttempt({
             ...request,
@@ -727,13 +722,7 @@ for (const adapter of getAdapterMatrix()) {
         );
         const lateReleaseReplay =
           await ledger.abandonUnstartedWorkflowActivityAttempt(request);
-        expect(lateReleaseReplay).toMatchObject({
-          applied: false,
-          run: reclaimed.run,
-          invocation: reclaimed.invocation,
-          workflowCursor: released.workflowCursor,
-          attempt: released.attempt,
-        });
+        expect(lateReleaseReplay).toEqual({ ...released, applied: false });
         await expect(ledger.getEvents(runId)).resolves.toHaveLength(4);
       } finally {
         await harness.cleanup();
@@ -1179,12 +1168,7 @@ for (const adapter of getAdapterMatrix()) {
             lastSequence: 4,
           },
         });
-        expect(replayed).toMatchObject({
-          applied: false,
-          receipt: uncertain.receipt,
-          workflowCursor: uncertain.workflowCursor,
-          attempt: uncertain.attempt,
-        });
+        expect(replayed).toEqual({ ...uncertain, applied: false });
         await expect(
           ledger.markWorkflowActivityAttemptUncertain({
             ...request,
@@ -1452,12 +1436,9 @@ for (const adapter of getAdapterMatrix()) {
             workflowCursor: reconciled.workflowCursor,
             outputRef: reconciled.outputRef,
           });
-          expect(lateUncertaintyReplay).toMatchObject({
+          expect(lateUncertaintyReplay).toEqual({
+            ...uncertain,
             applied: false,
-            run: reconciled.run,
-            invocation: reconciled.invocation,
-            workflowCursor: uncertain.workflowCursor,
-            attempt: retainedAttempt,
           });
           await expect(
             ledger.reconcileUncertainWorkflowActivityAttempt({
@@ -1517,7 +1498,7 @@ for (const adapter of getAdapterMatrix()) {
                 }),
               ],
             });
-            const successorClaim = await ledger.claimWorkflowActivity({
+            await ledger.claimWorkflowActivity({
               runId,
               invocationId: reconciled.nextInvocation.invocationId,
               cursor: cursorGuard(reconciled.workflowCursor),
@@ -1530,17 +1511,7 @@ for (const adapter of getAdapterMatrix()) {
             });
             const lateReplay =
               await ledger.reconcileUncertainWorkflowActivityAttempt(request);
-            expect(lateReplay).toMatchObject({
-              applied: false,
-              run: { version: successorClaim.run.version },
-              invocation: {
-                invocationId: started.invocation.invocationId,
-                status: InvocationStatus.COMPLETED,
-              },
-              workflowCursor: reconciled.workflowCursor,
-              outputRef: reconciled.outputRef,
-              nextInvocation: reconciled.nextInvocation,
-            });
+            expect(lateReplay).toEqual({ ...reconciled, applied: false });
           } else {
             expect(reconciled).not.toHaveProperty('nextInvocation');
             await expect(listReadyWork(ledger)).resolves.toEqual({

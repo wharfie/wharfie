@@ -47,7 +47,7 @@ export const WORKFLOW_LEDGER_ACTIVE_CANCELLATION_PORT_VERSION = 1;
  */
 
 /**
- * @typedef {{applied: boolean, outcome: 'cancellation-requested'|'terminal-authoritative'|'owner-not-ready', cancellationDeliveryRequired: boolean, signalDelivered: boolean, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, receipt?: Record<string, any>}} WorkflowLedgerCancellationResult
+ * @typedef {{applied: boolean, outcome: 'cancellation-requested'|'terminal-authoritative'|'owner-not-ready', cancellationDeliveryRequired: boolean, signalDelivered: boolean, run: Record<string, any>, workflowCursor: Record<string, any>, invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>, receipt?: Record<string, any>}} WorkflowLedgerCancellationResult
  */
 
 /**
@@ -369,12 +369,13 @@ function isSameAttempt(attempt, expected) {
 
 /**
  * @param {WorkflowLedgerActiveCancellationPort | undefined} port - Candidate live port.
- * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Current workflow activation.
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>}} current - Current workflow activation.
  * @returns {boolean} - Whether the port still owns this exact STARTED attempt.
  */
 function isExactActiveCancellationPort(port, current) {
   return Boolean(
     port &&
+    current.invocation &&
     current.attempt &&
     current.attempt.status === AttemptStatus.STARTED &&
     port.runId === current.run.runId &&
@@ -410,7 +411,7 @@ function getCurrentAttempt(view, invocation) {
 /**
  * @param {import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore} ledger - Ledger store.
  * @param {string} runId - Workflow run identity.
- * @returns {Promise<{view: Record<string, any>, run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>} | null>} - Verified current workflow activation.
+ * @returns {Promise<{view: Record<string, any>, run: Record<string, any>, cursor: Record<string, any>, invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>} | null>} - Verified current workflow activation.
  */
 async function readCurrentWorkflow(ledger, runId) {
   const view = await ledger.rebuildRun(runId);
@@ -428,58 +429,128 @@ async function readCurrentWorkflow(ledger, runId) {
   ) {
     throw new Error(`Workflow run ${runId} has inconsistent cursor authority.`);
   }
-  const invocation = view.invocations.find(
-    (/** @type {Record<string, any>} */ candidate) =>
-      candidate.invocationId === cursor.invocationId,
-  );
-  if (
-    !invocation ||
-    invocation.runId !== runId ||
-    invocation.appId !== view.run.appId ||
-    invocation.revisionId !== view.run.revisionId ||
-    invocation.workflow?.workflowId !== cursor.workflowId ||
-    invocation.workflow?.planId !== cursor.planId ||
-    invocation.workflow?.continuationId !== cursor.continuationId ||
-    invocation.workflow?.stepId !== cursor.stepId ||
-    invocation.workflow?.stepIndex !== cursor.stepIndex
-  ) {
-    throw new Error(
-      `Workflow run ${runId} has no exact invocation for its current cursor.`,
+  if (Object.prototype.hasOwnProperty.call(cursor, 'invocationId')) {
+    const invocation = view.invocations.find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.invocationId === cursor.invocationId,
     );
+    if (
+      !invocation ||
+      invocation.runId !== runId ||
+      invocation.appId !== view.run.appId ||
+      invocation.revisionId !== view.run.revisionId ||
+      invocation.workflow?.workflowId !== cursor.workflowId ||
+      invocation.workflow?.planId !== cursor.planId ||
+      invocation.workflow?.continuationId !== cursor.continuationId ||
+      invocation.workflow?.stepId !== cursor.stepId ||
+      invocation.workflow?.stepIndex !== cursor.stepIndex
+    ) {
+      throw new Error(
+        `Workflow run ${runId} has no exact invocation for its current cursor.`,
+      );
+    }
+    const attempt = getCurrentAttempt(view, invocation);
+    return {
+      view,
+      run: view.run,
+      cursor,
+      invocation,
+      ...(attempt ? { attempt } : {}),
+    };
   }
-  const attempt = getCurrentAttempt(view, invocation);
+
+  if (Object.prototype.hasOwnProperty.call(cursor, 'timerId')) {
+    const timer = (view.timers || []).find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.timerId === cursor.timerId,
+    );
+    if (
+      !timer ||
+      timer.runId !== runId ||
+      timer.appId !== view.run.appId ||
+      timer.revisionId !== view.run.revisionId ||
+      timer.workflowId !== cursor.workflowId ||
+      timer.planId !== cursor.planId ||
+      timer.continuationId !== cursor.continuationId ||
+      timer.stepId !== cursor.stepId ||
+      timer.stepIndex !== cursor.stepIndex
+    ) {
+      throw new Error(
+        `Workflow run ${runId} has no exact timer for its current cursor.`,
+      );
+    }
+    return { view, run: view.run, cursor, timer };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(cursor, 'signalWaitId')) {
+    const signalWait = (view.signalWaits || []).find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.signalWaitId === cursor.signalWaitId,
+    );
+    if (
+      !signalWait ||
+      signalWait.runId !== runId ||
+      signalWait.appId !== view.run.appId ||
+      signalWait.revisionId !== view.run.revisionId ||
+      signalWait.workflowId !== cursor.workflowId ||
+      signalWait.planId !== cursor.planId ||
+      signalWait.continuationId !== cursor.continuationId ||
+      signalWait.stepId !== cursor.stepId ||
+      signalWait.stepIndex !== cursor.stepIndex
+    ) {
+      throw new Error(
+        `Workflow run ${runId} has no exact signal wait for its current cursor.`,
+      );
+    }
+    return { view, run: view.run, cursor, signalWait };
+  }
+
+  throw new Error(`Workflow run ${runId} has no current activation identity.`);
+}
+
+/**
+ * Add the exact current activation projection without inventing a common
+ * activity-shaped field for timer or signal waits.
+ * @param {Record<string, any>} target - Result under construction.
+ * @param {{invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>}} current - Current activation.
+ * @returns {Record<string, any>} - Activation-aware result.
+ */
+function withCurrentActivation(target, current) {
   return {
-    view,
-    run: view.run,
-    cursor,
-    invocation,
-    ...(attempt ? { attempt } : {}),
+    ...target,
+    ...(current.invocation ? { invocation: current.invocation } : {}),
+    ...(current.timer ? { timer: current.timer } : {}),
+    ...(current.signalWait ? { signalWait: current.signalWait } : {}),
+    ...(current.attempt ? { attempt: current.attempt } : {}),
   };
 }
 
 /**
- * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
  * @param {'terminal-authoritative'|'owner-not-ready'} outcome - Non-mutating result class.
  * @returns {WorkflowLedgerCancellationResult} - Public cancellation result.
  */
 function nonAppliedCancellationResult(current, outcome) {
-  return {
-    applied: false,
-    outcome,
-    cancellationDeliveryRequired: false,
-    signalDelivered: false,
-    run: current.run,
-    workflowCursor: current.cursor,
-    invocation: current.invocation,
-    ...(current.attempt ? { attempt: current.attempt } : {}),
-  };
+  return /** @type {WorkflowLedgerCancellationResult} */ (
+    withCurrentActivation(
+      {
+        applied: false,
+        outcome,
+        cancellationDeliveryRequired: false,
+        signalDelivered: false,
+        run: current.run,
+        workflowCursor: current.cursor,
+      },
+      current,
+    )
+  );
 }
 
 /**
  * Return a current first-wins request after a lost response without replaying
  * it against a newer cursor guard. Reusing the same public request identity
  * with changed authority remains an immutable transition conflict.
- * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
  * @param {{requestId: string, transitionId: string, actor: Record<string, any>, reason: Record<string, any>}} request - Stable caller request.
  * @returns {WorkflowLedgerCancellationResult} - Retained first-wins result.
  */
@@ -501,20 +572,23 @@ function retainedCancellationResult(current, request) {
       request.transitionId,
     );
   }
-  return /** @type {WorkflowLedgerCancellationResult} */ ({
-    applied: false,
-    outcome: 'cancellation-requested',
-    cancellationDeliveryRequired: false,
-    signalDelivered: false,
-    run: current.run,
-    workflowCursor: current.cursor,
-    invocation: current.invocation,
-    ...(current.attempt ? { attempt: current.attempt } : {}),
-  });
+  return /** @type {WorkflowLedgerCancellationResult} */ (
+    withCurrentActivation(
+      {
+        applied: false,
+        outcome: 'cancellation-requested',
+        cancellationDeliveryRequired: false,
+        signalDelivered: false,
+        run: current.run,
+        workflowCursor: current.cursor,
+      },
+      current,
+    )
+  );
 }
 
 /**
- * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>}} current - Verified workflow state.
  * @returns {boolean} - Whether the current aggregate is terminal without a retained cancellation request to replay.
  */
 function isTerminalWorkflowWithoutCancellationRequest(current) {
@@ -551,7 +625,7 @@ async function persistWorkflowLedgerRunCancellation(options) {
       current.run.status === RunStatus.RUNNING &&
       current.cursor.disposition ===
         WorkflowCursorDisposition.ACTIVITY_RUNNING &&
-      current.invocation.status === InvocationStatus.RUNNING &&
+      current.invocation?.status === InvocationStatus.RUNNING &&
       current.attempt?.status === AttemptStatus.STARTED &&
       !current.run.cancellationRequest;
     if (
@@ -562,22 +636,27 @@ async function persistWorkflowLedgerRunCancellation(options) {
     }
 
     const attempt = current.attempt;
+    const invocation = current.invocation;
     try {
       const result = await options.ledger.requestWorkflowRunCancellation({
         runId: options.runId,
-        invocationId: current.invocation.invocationId,
         cursor: cursorGuard(current.cursor),
         expectedVersion: current.run.version,
-        expectedGeneration: current.invocation.generation,
         transitionId: options.transitionId,
         requestId: options.requestId,
         reason: options.reason,
         actor: options.actor,
-        coordinatorEpoch: attempt?.coordinatorEpoch ?? 0,
-        ...(attempt
+        ...(invocation
           ? {
-              attemptId: attempt.attemptId,
-              fencingToken: attempt.fencingToken,
+              invocationId: invocation.invocationId,
+              expectedGeneration: invocation.generation,
+              coordinatorEpoch: attempt?.coordinatorEpoch ?? 0,
+              ...(attempt
+                ? {
+                    attemptId: attempt.attemptId,
+                    fencingToken: attempt.fencingToken,
+                  }
+                : {}),
             }
           : {}),
       });
@@ -676,7 +755,7 @@ export async function requestWorkflowLedgerRunCancellation(options) {
 
   if (
     current.attempt?.status === AttemptStatus.STARTED &&
-    current.invocation.status === InvocationStatus.RUNNING &&
+    current.invocation?.status === InvocationStatus.RUNNING &&
     current.cursor.disposition === WorkflowCursorDisposition.ACTIVITY_RUNNING &&
     isExactActiveCancellationPort(activeCancellationPort, current)
   ) {
@@ -704,7 +783,7 @@ export async function requestWorkflowLedgerRunCancellation(options) {
 }
 
 /**
- * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} current - Verified current state.
+ * @param {{run: Record<string, any>, cursor: Record<string, any>, invocation?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, attempt?: Record<string, any>}} current - Verified current state.
  * @param {{reused?: boolean, dispatched?: boolean}} [options] - Result flags.
  * @returns {Record<string, any>} - Compact runner outcome.
  */
@@ -721,16 +800,23 @@ function outcomeFromCurrent(current, options = {}) {
             : current.cursor.disposition ===
                 WorkflowCursorDisposition.ACTIVITY_RUNNABLE
               ? 'runnable'
-              : 'in-progress';
-  return {
-    disposition,
-    reused: options.reused ?? false,
-    dispatched: options.dispatched ?? false,
-    run: current.run,
-    workflowCursor: current.cursor,
-    invocation: current.invocation,
-    ...(current.attempt ? { attempt: current.attempt } : {}),
-  };
+              : current.cursor.disposition ===
+                  WorkflowCursorDisposition.TIMER_WAITING
+                ? 'timer-waiting'
+                : current.cursor.disposition ===
+                    WorkflowCursorDisposition.SIGNAL_WAITING
+                  ? 'signal-waiting'
+                  : 'in-progress';
+  return withCurrentActivation(
+    {
+      disposition,
+      reused: options.reused ?? false,
+      dispatched: options.dispatched ?? false,
+      run: current.run,
+      workflowCursor: current.cursor,
+    },
+    current,
+  );
 }
 
 /**
@@ -781,10 +867,13 @@ function releaseReason(attemptId, phase) {
 async function settleRetainedAttempt(options) {
   /** @type {unknown[]} */
   const errors = [];
-  for (let retry = 0; retry < 3; retry += 1) {
+  let failuresAtSameHead = 0;
+  let failedHeadVersion;
+  while (failuresAtSameHead < 3) {
     const current = await readCurrentWorkflow(options.ledger, options.runId);
     if (!current) return null;
     if (
+      !current.invocation ||
       current.invocation.invocationId !== options.attempt.invocationId ||
       !current.attempt ||
       !isSameAttempt(current.attempt, options.attempt) ||
@@ -861,6 +950,29 @@ async function settleRetainedAttempt(options) {
       };
     } catch (error) {
       errors.push(error);
+      const durable = await readCurrentWorkflow(options.ledger, options.runId);
+      if (!durable) return null;
+      if (
+        durable.invocation &&
+        durable.invocation.invocationId === options.attempt.invocationId &&
+        durable.attempt &&
+        isSameAttempt(durable.attempt, options.attempt) &&
+        durable.invocation.status === InvocationStatus.RUNNING &&
+        durable.cursor.disposition ===
+          WorkflowCursorDisposition.ACTIVITY_RUNNING &&
+        durable.run.version !== current.run.version
+      ) {
+        // A durable audit-only decision (for example, a rejected signal)
+        // advanced the run head without changing this physical attempt. It is
+        // safe to rebase and must not spend the bounded storage-failure budget.
+        continue;
+      }
+      if (failedHeadVersion === current.run.version) {
+        failuresAtSameHead += 1;
+      } else {
+        failedHeadVersion = current.run.version;
+        failuresAtSameHead = 1;
+      }
     }
   }
 
@@ -917,7 +1029,11 @@ export async function recoverWorkflowLedgerActivity(options) {
     'recoverWorkflowLedgerActivity.invocationId',
   );
   const current = await readCurrentWorkflow(options.ledger, runId);
-  if (!current || current.invocation.invocationId !== invocationId) {
+  if (
+    !current ||
+    !current.invocation ||
+    current.invocation.invocationId !== invocationId
+  ) {
     return {
       found: false,
       mayExecute: false,
@@ -1084,11 +1200,11 @@ export async function runWorkflowLedgerActivity(options) {
     );
   }
   const exactActivation =
-    current.invocation.invocationId === invocationId &&
+    current.invocation?.invocationId === invocationId &&
     current.invocation.activityId === options.activityId &&
     current.invocation.generation === options.generation &&
     isSameCursorGuard(current.cursor, expectedCursor);
-  if (!exactActivation) {
+  if (!exactActivation || !current.invocation) {
     return outcomeFromCurrent(current, { reused: true });
   }
   if (
@@ -1105,7 +1221,7 @@ export async function runWorkflowLedgerActivity(options) {
     createFencingToken(),
     'workflow fencing token',
   );
-  const claimRequest = {
+  let claimRequest = {
     runId,
     invocationId,
     cursor: expectedCursor,
@@ -1120,6 +1236,7 @@ export async function runWorkflowLedgerActivity(options) {
   let claim;
   /** @type {unknown[]} */
   const claimErrors = [];
+  let finalClaimFailureFollowedHeadAdvance = false;
   for (let retry = 0; retry < 2 && !claim; retry += 1) {
     if (admissionSignal?.aborted) {
       return outcomeFromCurrent(current, { reused: true });
@@ -1127,6 +1244,7 @@ export async function runWorkflowLedgerActivity(options) {
     try {
       claim = await options.ledger.claimWorkflowActivity(claimRequest);
     } catch (error) {
+      const attemptedExpectedVersion = claimRequest.expectedVersion;
       claimErrors.push(error);
       current = await readCurrentWorkflow(options.ledger, runId);
       if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
@@ -1139,15 +1257,37 @@ export async function runWorkflowLedgerActivity(options) {
         return outcomeFromCurrent(current, { reused: true });
       }
       if (
+        !current.invocation ||
         current.invocation.invocationId !== invocationId ||
+        current.invocation.activityId !== options.activityId ||
+        current.invocation.generation !== options.generation ||
         !isSameCursorGuard(current.cursor, expectedCursor) ||
-        current.invocation.status !== InvocationStatus.RUNNABLE
+        current.invocation.status !== InvocationStatus.RUNNABLE ||
+        current.run.status !== RunStatus.RUNNING ||
+        current.cursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_RUNNABLE
       ) {
         return outcomeFromCurrent(current, { reused: true });
       }
+      // A rejected signal is a durable audit decision that advances only the
+      // run head. Retain the exact cursor/invocation/fence authority while
+      // rebasing the bounded claim retry onto that newly verified head.
+      finalClaimFailureFollowedHeadAdvance =
+        error instanceof ExecutionLedgerConflictError &&
+        current.run.version > attemptedExpectedVersion;
+      claimRequest = {
+        ...claimRequest,
+        expectedVersion: current.run.version,
+      };
     }
   }
   if (!claim) {
+    if (finalClaimFailureFollowedHeadAdvance) {
+      // Sustained audit-only churn must not kill the resident once the bounded
+      // in-call retry is spent. Return the exact current activation so the
+      // worker can reload its transactionally refreshed locator.
+      return outcomeFromCurrent(current, { reused: true });
+    }
     throw new AggregateError(
       claimErrors,
       `Could not claim workflow activity ${runId}#${invocationId}.`,
@@ -1180,7 +1320,7 @@ export async function runWorkflowLedgerActivity(options) {
     return settled.outcome;
   }
 
-  const startRequest = {
+  let startRequest = {
     runId,
     invocationId,
     cursor: cursorGuard(claim.workflowCursor),
@@ -1201,6 +1341,7 @@ export async function runWorkflowLedgerActivity(options) {
     try {
       started = await options.ledger.markWorkflowActivityStarted(startRequest);
     } catch (error) {
+      const attemptedExpectedVersion = startRequest.expectedVersion;
       startErrors.push(error);
       current = await readCurrentWorkflow(options.ledger, runId);
       if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
@@ -1210,6 +1351,27 @@ export async function runWorkflowLedgerActivity(options) {
       if (current.attempt.status === AttemptStatus.STARTED) break;
       if (current.attempt.status !== AttemptStatus.CLAIMED) {
         return outcomeFromCurrent(current, { reused: true });
+      }
+      if (
+        !current.invocation ||
+        current.invocation.invocationId !== invocationId ||
+        current.invocation.activityId !== options.activityId ||
+        current.invocation.status !== InvocationStatus.RUNNING ||
+        current.run.status !== RunStatus.RUNNING ||
+        current.cursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+        !isSameCursorGuard(current.cursor, startRequest.cursor)
+      ) {
+        return outcomeFromCurrent(current, { reused: true });
+      }
+      if (current.run.version > attemptedExpectedVersion) {
+        // Rejected signals advance only the run head. The exact retained
+        // CLAIMED attempt, cursor, and fence remain authoritative, so rebase
+        // the bounded start retry instead of repeating a known-stale request.
+        startRequest = {
+          ...startRequest,
+          expectedVersion: current.run.version,
+        };
       }
     }
   }
@@ -1280,7 +1442,7 @@ export async function runWorkflowLedgerActivity(options) {
         result.cancellationDeliveryRequired &&
         result.outcome === 'cancellation-requested' &&
         result.run.status === RunStatus.RUNNING &&
-        result.invocation.status === InvocationStatus.RUNNING &&
+        result.invocation?.status === InvocationStatus.RUNNING &&
         result.attempt?.status === AttemptStatus.STARTED &&
         isSameAttempt(result.attempt, attempt) &&
         result.run.cancellationRequest?.requestId === requestId &&
@@ -1419,7 +1581,10 @@ export async function runWorkflowLedgerActivity(options) {
     let terminalExpectedVersion = started.run.version;
     /** @type {unknown[]} */
     const terminalErrors = [];
-    for (let retry = 0; retry < 3; retry += 1) {
+    let terminalFailuresAtSameHead = 0;
+    /** @type {number | undefined} */
+    let terminalFailedHeadVersion;
+    while (terminalFailuresAtSameHead < 3) {
       try {
         await options.ledger.commitVerifiedWorkflowActivityTerminal({
           runId,
@@ -1443,6 +1608,7 @@ export async function runWorkflowLedgerActivity(options) {
         if (!current) throw new Error(`Workflow run disappeared: ${runId}`);
         if (
           !current.attempt ||
+          !current.invocation ||
           !isSameAttempt(current.attempt, attempt) ||
           current.attempt.status !== AttemptStatus.STARTED ||
           current.invocation.status !== InvocationStatus.RUNNING ||
@@ -1455,11 +1621,21 @@ export async function runWorkflowLedgerActivity(options) {
             dispatched: true,
           });
         }
-        // A retained cancellation request advances both the run and cursor.
-        // Rebase the same terminal evidence instead of misclassifying the
-        // stale optimistic version as an unknown physical outcome.
+        const headAdvanced = current.run.version !== terminalExpectedVersion;
+        // Cancellation and audit-only rejected-signal events both advance the
+        // run and cursor while retaining the exact physical activity. Rebase
+        // the same terminal evidence without spending the storage-failure
+        // budget; otherwise sustained unrelated rejections could manufacture
+        // false activity uncertainty.
         terminalCursor = cursorGuard(current.cursor);
         terminalExpectedVersion = current.run.version;
+        if (headAdvanced) continue;
+        if (terminalFailedHeadVersion === current.run.version) {
+          terminalFailuresAtSameHead += 1;
+        } else {
+          terminalFailedHeadVersion = current.run.version;
+          terminalFailuresAtSameHead = 1;
+        }
       }
     }
 

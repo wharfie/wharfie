@@ -51,8 +51,8 @@ function digest(value) {
   };
 }
 
-/** @returns {EmbeddedExecution} - Valid packaged execution fixture. */
-function makeEmbeddedExecution() {
+/** @param {Record<string, any>[]} [steps] @returns {EmbeddedExecution} - Valid packaged execution fixture. */
+function makeEmbeddedExecution(steps) {
   const contract = {
     schemaVersion: 2,
     app: { id: APP_ID },
@@ -70,7 +70,7 @@ function makeEmbeddedExecution() {
     },
     workflows: {
       [WORKFLOW_ID]: {
-        steps: [
+        steps: steps || [
           {
             id: STEP_ID,
             kind: 'activity',
@@ -169,6 +169,7 @@ function makeStartResult(execution, idempotencyKey, applied = true) {
   const planId = createWorkflowPlanId(planPayload);
   const runId = createWorkflowRunId({ appId, idempotencyKey });
   const invocationId = 'workflow-start-invocation-1';
+  const continuationId = 'workflow-start-continuation-1';
   return {
     appId,
     revisionId,
@@ -200,6 +201,7 @@ function makeStartResult(execution, idempotencyKey, applied = true) {
         planRef: { payloadId: 'secret-plan-reference' },
         startRef: { payloadId: 'secret-start-reference' },
         invocationId,
+        continuationId,
         disposition: 'ACTIVITY_RUNNABLE',
         stepId: STEP_ID,
         stepIndex: 0,
@@ -212,6 +214,13 @@ function makeStartResult(execution, idempotencyKey, applied = true) {
         activityId: 'greet',
         requestRef: { payloadId: 'secret-activity-reference' },
         status: 'RUNNABLE',
+        workflow: {
+          workflowId: WORKFLOW_ID,
+          planId,
+          continuationId,
+          stepId: STEP_ID,
+          stepIndex: 0,
+        },
       },
     },
   };
@@ -234,7 +243,8 @@ function expectedRow(execution, idempotencyKey, reused = false) {
     cursor_disposition: 'ACTIVITY_RUNNABLE',
     step: STEP_ID,
     step_index: 0,
-    invocation_status: 'RUNNABLE',
+    activation_kind: 'activity',
+    activation_status: 'RUNNABLE',
     reused,
   };
 }
@@ -421,6 +431,123 @@ describe('durable workflow start command', () => {
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(processRef.exitCode).toBeUndefined();
   });
+
+  it.each([
+    {
+      kind: 'timer',
+      step: { id: 'pause', kind: 'timer', delayMs: 1_000 },
+      idKey: 'timerId',
+      id: 'timer-activation-1',
+      disposition: 'TIMER_WAITING',
+      status: 'WAITING',
+      resultKey: 'timer',
+    },
+    {
+      kind: 'signal',
+      step: { id: 'approval', kind: 'signal' },
+      idKey: 'signalWaitId',
+      id: 'signal-wait-activation-1',
+      disposition: 'SIGNAL_WAITING',
+      status: 'WAITING',
+      resultKey: 'signalWait',
+    },
+  ])(
+    'formats a $kind-headed start without requiring an invocation',
+    async (fixture) => {
+      const execution = makeEmbeddedExecution([fixture.step]);
+      const { appId, revisionId, manifest } = executionIdentity(execution);
+      const idempotencyKey = `${fixture.kind}-headed-start`;
+      const runId = createWorkflowRunId({ appId, idempotencyKey });
+      const planPayload = normalizeWorkflowPlanPayload({
+        schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+        kind: WORKFLOW_PLAN_PAYLOAD_KIND,
+        appId,
+        revisionId,
+        workflowId: WORKFLOW_ID,
+        definition: manifest.workflows[WORKFLOW_ID],
+      });
+      const planId = createWorkflowPlanId(planPayload);
+      const continuationId = `${fixture.kind}-continuation-1`;
+      const cursor = {
+        runId,
+        appId,
+        revisionId,
+        workflowId: WORKFLOW_ID,
+        planId,
+        continuationId,
+        stepId: fixture.step.id,
+        stepIndex: 0,
+        disposition: fixture.disposition,
+        [fixture.idKey]: fixture.id,
+      };
+      const activation = {
+        runId,
+        appId,
+        revisionId,
+        workflowId: WORKFLOW_ID,
+        planId,
+        continuationId,
+        stepId: fixture.step.id,
+        stepIndex: 0,
+        status: fixture.status,
+        [fixture.idKey]: fixture.id,
+        privateRef: { payloadId: 'never-print-activation-ref' },
+      };
+      const output = makeOutput();
+      const command = createDurableWorkflowStartCommand({
+        loadExecution: async () => ({ execution }),
+        startWorkflow: async () => ({
+          appId,
+          revisionId,
+          workflowId: WORKFLOW_ID,
+          idempotencyKey,
+          runId,
+          planId,
+          outcome: {
+            applied: true,
+            run: {
+              runId,
+              appId,
+              revisionId,
+              trigger: { kind: 'workflow', workflowId: WORKFLOW_ID, planId },
+              status: 'RUNNING',
+            },
+            workflowCursor: cursor,
+            [fixture.resultKey]: activation,
+          },
+        }),
+        output,
+        processRef: { exitCode: undefined },
+      });
+
+      await command.parseAsync(
+        nodeArgv([
+          '--workflow',
+          WORKFLOW_ID,
+          '--idempotency-key',
+          idempotencyKey,
+          '--json',
+        ]),
+      );
+
+      expect(output.json).toHaveBeenCalledWith({
+        idempotency_key: idempotencyKey,
+        run_id: runId,
+        revision: revisionId,
+        workflow: WORKFLOW_ID,
+        status: 'RUNNING',
+        cursor_disposition: fixture.disposition,
+        step: fixture.step.id,
+        step_index: 0,
+        activation_kind: fixture.kind,
+        activation_status: fixture.status,
+        reused: false,
+      });
+      expect(JSON.stringify(output.json.mock.calls)).not.toContain(
+        'never-print-activation-ref',
+      );
+    },
+  );
 
   it.each([
     [
@@ -632,7 +759,7 @@ describe('durable workflow start command', () => {
     expect(output.failure).toHaveBeenCalledWith(
       expect.objectContaining({
         message:
-          'Durable workflow start must return run, workflow cursor, and invocation projections.',
+          'Durable workflow start must return run, workflow cursor, and exactly one activation projection.',
       }),
     );
     expect(cleanup).toHaveBeenCalledTimes(1);

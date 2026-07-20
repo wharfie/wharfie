@@ -62,7 +62,7 @@ const SEA_ACTIVITY_DISPATCH_BREAKPOINT = Object.freeze({
 const SEA_WORKFLOW_CLAIMED_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/runtime/workflow-ledger-run.js',
   // The exact claim result is authoritative; no STARTED request exists yet.
-  anchor: 'const startRequest = {',
+  anchor: 'let startRequest = {',
 });
 const SEA_WORKFLOW_DISPATCH_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/runtime/durable-workflow-host.js',
@@ -135,6 +135,7 @@ const SEA_STOPPED_ATTEMPT_RECOVERY_REASON = Object.freeze({
     'The prior runner stopped after durable attempt start; its physical activity outcome is unknown.',
 });
 const SEA_WORKFLOW_ID = 'portable-linear';
+const SEA_TIMER_SIGNAL_WORKFLOW_ID = 'portable-timer-signal';
 const SEA_WORKFLOW_ACTIVITY_ID = 'workflow-step';
 const SEA_CRASH_CASES = Object.freeze([
   {
@@ -474,11 +475,12 @@ const SEA_SUCCESSOR_CRASH_CASES = Object.freeze([
     label: 'successor terminal payload publication before ledger append',
     breakpoint: {
       sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
-      // The fourth request-digest declaration belongs to the dedicated
-      // successor terminal transition. Both outcome and terminal evidence have
-      // been published, but neither is reachable until the following append.
-      anchor: 'const requestDigest = createTransitionRequestDigest(',
-      occurrence: 4,
+      // This dedicated digest declaration runs after both outcome and terminal
+      // evidence payloads have been published, but before any receipt read or
+      // ledger append. Its transition-specific name keeps the source-map
+      // boundary stable as unrelated transitions are added to this module.
+      anchor:
+        'const successorTerminalRequestDigest = createTransitionRequestDigest(',
     },
     adapterEntries: 1,
     applicationStateWrites: 1,
@@ -837,7 +839,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createWorkflowRunId: (appId: string, idempotencyKey: string) => string, createCompletedWorkflowEvidence: (runId: string, result: unknown) => Promise<Record<string, any>>, listReadyWork: (appId: string, revisionId: string) => Promise<Record<string, any>[]>, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createWorkflowRunId: (appId: string, idempotencyKey: string) => string, createCompletedWorkflowEvidence: (runId: string, result: unknown) => Promise<Record<string, any>>, listReadyWork: (appId: string, revisionId: string, observedAt?: number) => Promise<Record<string, any>[]>, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -1113,6 +1115,7 @@ async function createInstalledExecutionLedgerFixture(options) {
   const listReadyWork = async (
     /** @type {string} */ appId,
     /** @type {string} */ revisionId,
+    /** @type {number | undefined} */ observedAt = undefined,
   ) => {
     const { db, ledger } = openLedger(true);
     try {
@@ -1123,6 +1126,7 @@ async function createInstalledExecutionLedgerFixture(options) {
           appId,
           revisionId,
           limit: 100,
+          ...(observedAt === undefined ? {} : { observedAt }),
           ...(cursor === undefined ? {} : { cursor }),
         });
         items.push(...page.items);
@@ -1707,8 +1711,11 @@ function assertManagedEffectBatchInspectionView(serialized, fixture, adapter) {
     'kind',
     'run',
     'schemaVersion',
+    'signalDeliveries',
+    'signalWaits',
+    'timers',
   ]);
-  assert.equal(view.schemaVersion, 6);
+  assert.equal(view.schemaVersion, 7);
   assert.equal(view.kind, 'wharfie.execution-ledger.run');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -1758,8 +1765,11 @@ function assertManagedEffectBatchRecoveryView(serialized, fixture, expected) {
     'recovery',
     'run',
     'schemaVersion',
+    'signalDeliveries',
+    'signalWaits',
+    'timers',
   ]);
-  assert.equal(view.schemaVersion, 6);
+  assert.equal(view.schemaVersion, 7);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -2346,8 +2356,11 @@ function assertManagedEffectReconciliationView(
     'kind',
     'run',
     'schemaVersion',
+    'signalDeliveries',
+    'signalWaits',
+    'timers',
   ]);
-  assert.equal(view.schemaVersion, 6);
+  assert.equal(view.schemaVersion, 7);
   assert.equal(view.kind, 'wharfie.execution-ledger.effect-reconciliation');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, batch.runId);
@@ -3400,7 +3413,7 @@ function terminalDeliveryAuthority(delivery) {
  * @returns {void}
  */
 function assertSeaCrashRecoveryView(serialized, view, scenario, expected) {
-  assert.equal(view.schemaVersion, 6);
+  assert.equal(view.schemaVersion, 7);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, expected.runId);
@@ -5258,7 +5271,7 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
 }
 
 /**
- * Reproduce the stable schema-v6 projection used by the packaged operator so
+ * Reproduce the stable schema-v7 projection used by the packaged operator so
  * successor responses can be compared as complete JSON values, not partial
  * shapes.
  * @param {Record<string, any>} raw - Verified rebuilt ledger run.
@@ -5270,7 +5283,7 @@ function createExpectedSeaOperatorRunView(
   kind = 'wharfie.execution-ledger.run',
 ) {
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     kind,
     integrity: { verified: true },
     run: {
@@ -5346,6 +5359,68 @@ function createExpectedSeaOperatorRunView(
       createdAt: effect.createdAt,
       updatedAt: effect.updatedAt,
     })),
+    timers: (raw.timers || []).map((timer) => ({
+      timerId: timer.timerId,
+      workflowId: timer.workflowId,
+      planId: timer.planId,
+      continuationId: timer.continuationId,
+      stepId: timer.stepId,
+      stepIndex: timer.stepIndex,
+      status: timer.status,
+      scheduledAt: timer.scheduledAt,
+      dueAt: timer.dueAt,
+      ...(timer.firedAt === undefined ? {} : { firedAt: timer.firedAt }),
+      version: timer.version,
+      lastSequence: timer.lastSequence,
+      createdAt: timer.createdAt,
+      updatedAt: timer.updatedAt,
+      ...(timer.cancellationRequest
+        ? {
+            cancellationRequest: {
+              requestId: timer.cancellationRequest.requestId,
+              requestedAt: timer.cancellationRequest.requestedAt,
+            },
+          }
+        : {}),
+    })),
+    signalWaits: (raw.signalWaits || []).map((wait) => ({
+      signalWaitId: wait.signalWaitId,
+      workflowId: wait.workflowId,
+      planId: wait.planId,
+      continuationId: wait.continuationId,
+      stepId: wait.stepId,
+      stepIndex: wait.stepIndex,
+      signalId: wait.signalId,
+      status: wait.status,
+      ...(wait.deliveryId === undefined ? {} : { deliveryId: wait.deliveryId }),
+      ...(wait.acceptedAt === undefined ? {} : { acceptedAt: wait.acceptedAt }),
+      version: wait.version,
+      lastSequence: wait.lastSequence,
+      createdAt: wait.createdAt,
+      updatedAt: wait.updatedAt,
+      ...(wait.cancellationRequest
+        ? {
+            cancellationRequest: {
+              requestId: wait.cancellationRequest.requestId,
+              requestedAt: wait.cancellationRequest.requestedAt,
+            },
+          }
+        : {}),
+    })),
+    signalDeliveries: (raw.signalDeliveries || []).map((delivery) => ({
+      deliveryId: delivery.deliveryId,
+      signalId: delivery.signalId,
+      status: delivery.status,
+      ...(delivery.rejectionReason === undefined
+        ? {}
+        : { rejectionReason: delivery.rejectionReason }),
+      ...(delivery.signalWaitId === undefined
+        ? {}
+        : { signalWaitId: delivery.signalWaitId }),
+      version: delivery.version,
+      lastSequence: delivery.lastSequence,
+      observedAt: delivery.observedAt,
+    })),
     history: raw.events.map((event) => ({
       sequence: event.sequence,
       type: event.type,
@@ -5363,7 +5438,17 @@ function createExpectedSeaOperatorRunView(
             stepId: raw.workflowCursor.stepId,
             stepIndex: raw.workflowCursor.stepIndex,
             continuationId: raw.workflowCursor.continuationId,
-            invocationId: raw.workflowCursor.invocationId,
+            ...(Object.prototype.hasOwnProperty.call(
+              raw.workflowCursor,
+              'invocationId',
+            )
+              ? { invocationId: raw.workflowCursor.invocationId }
+              : Object.prototype.hasOwnProperty.call(
+                    raw.workflowCursor,
+                    'timerId',
+                  )
+                ? { timerId: raw.workflowCursor.timerId }
+                : { signalWaitId: raw.workflowCursor.signalWaitId }),
             disposition: raw.workflowCursor.disposition,
             outputs: raw.workflowCursor.outputs.map((output) => ({
               stepId: output.stepId,
@@ -5391,7 +5476,7 @@ function createExpectedSeaOperatorRunView(
 function assertSeaSuccessorOperatorView(serialized, source, target, expected) {
   const value = JSON.parse(serialized);
   assert.deepEqual(value, {
-    schemaVersion: 6,
+    schemaVersion: 7,
     kind: 'wharfie.execution-ledger.effect-successor',
     integrity: { verified: true },
     effectSuccessor: {
@@ -7084,11 +7169,14 @@ function workflowReadySummary(items) {
   return items.map((/** @type {Record<string, any>} */ item) => ({
     kind: item.kind,
     runId: item.runId,
-    invocationId: item.invocationId,
-    generation: item.generation,
     cursorVersion: item.cursorVersion,
     stepId: item.stepId,
     stepIndex: item.stepIndex,
+    ...(item.invocationId === undefined
+      ? {}
+      : { invocationId: item.invocationId }),
+    ...(item.timerId === undefined ? {} : { timerId: item.timerId }),
+    ...(item.generation === undefined ? {} : { generation: item.generation }),
     ...(item.attemptId === undefined ? {} : { attemptId: item.attemptId }),
   }));
 }
@@ -7165,7 +7253,8 @@ async function createRelocatedSeaWorkflowCase(options, boundary) {
     cursor_disposition: 'ACTIVITY_RUNNABLE',
     step: 'first',
     step_index: 0,
-    invocation_status: 'RUNNABLE',
+    activation_kind: 'activity',
+    activation_status: 'RUNNABLE',
     reused: false,
   });
   for (const privateValue of [secret, callerSecret, markerDirectory]) {
@@ -7466,6 +7555,392 @@ async function assertCompletedSeaWorkflow(
         value: `portable-workflow-step-${ordinal}`,
       },
     });
+  }
+}
+
+/**
+ * Prove that a moved SEA persists one timer decision across resident death,
+ * consumes only its current signal wait, and resumes the exact next activity.
+ * The clean environment deliberately exposes no Node executable on PATH.
+ * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string}} options - Packaged workflow inputs.
+ * @returns {Promise<void>} - Resolves after exact replay and cleanup checks.
+ */
+async function verifyRelocatedSeaTimerSignalWorkflow(options) {
+  rmSync(options.root, { recursive: true, force: true });
+  mkdirSync(options.root, { recursive: true, mode: 0o700 });
+  const controlPath = path.join(options.root, 'control');
+  const payloadPath = path.join(controlPath, 'execution-payloads');
+  const sessionPath = path.join(options.root, 'sessions');
+  const applicationStatePath = path.join(options.root, 'application-state');
+  const markerDirectory = path.join(options.root, 'workflow-markers');
+  const tableName = 'wharfie-package-sea-timer-signal-workflow';
+  mkdirSync(markerDirectory, { recursive: true, mode: 0o700 });
+  const environment = {
+    ...options.cleanEnvironment,
+    WHARFIE_CONTROL_ADAPTER: 'lmdb',
+    WHARFIE_CONTROL_PATH: controlPath,
+    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
+    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+  };
+  const fixture = await createInstalledExecutionLedgerFixture({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    payloadPath,
+    applicationStatePath,
+    revisionId: options.revisionId,
+  });
+  const lifecycle = await createInstalledLedgerLifecycleObserver({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    appId: options.appId,
+  });
+  const idempotencyKey = 'sea-timer-signal-workflow';
+  const runId = fixture.createWorkflowRunId(options.appId, idempotencyKey);
+  const secret = `private-timer-signal-${randomUUID()}`;
+  const input = { ordinal: 1, markerDirectory, secret };
+  const startText = runCommand(
+    options.artifactPath,
+    [
+      'wharfie',
+      'start',
+      '--workflow',
+      SEA_TIMER_SIGNAL_WORKFLOW_ID,
+      '--idempotency-key',
+      idempotencyKey,
+      '--input',
+      JSON.stringify(input),
+      '--json',
+    ],
+    { cwd: options.root, capture: true, env: environment },
+  ).stdout.trim();
+  assert.deepEqual(parseFinalJsonLine(startText), {
+    idempotency_key: idempotencyKey,
+    run_id: runId,
+    revision: options.revisionId,
+    workflow: SEA_TIMER_SIGNAL_WORKFLOW_ID,
+    status: 'RUNNING',
+    cursor_disposition: 'ACTIVITY_RUNNABLE',
+    step: 'first',
+    step_index: 0,
+    activation_kind: 'activity',
+    activation_status: 'RUNNABLE',
+    reused: false,
+  });
+  for (const privateValue of [secret, markerDirectory]) {
+    assert.equal(startText.includes(privateValue), false);
+  }
+
+  /** @type {ReturnType<typeof spawnResidentService> | undefined} */
+  let firstService;
+  /** @type {ReturnType<typeof spawnResidentService> | undefined} */
+  let secondService;
+  /** @type {string | undefined} */
+  let staleEndpoint;
+  try {
+    firstService = spawnResidentService(options.artifactPath, {
+      cwd: options.root,
+      env: environment,
+      args: ['wharfie', 'worker'],
+    });
+    const firstReady = await waitForResidentLifecycle(
+      lifecycle,
+      (snapshot) => snapshot?.status === 'READY' && snapshot.generation === 1,
+      firstService,
+      'timer workflow resident READY generation 1',
+    );
+    const observedWaitingTimerRun = await waitForDurableRun(
+      { read: async () => await fixture.readRun(runId) },
+      (snapshot) => snapshot?.workflowCursor?.disposition === 'TIMER_WAITING',
+      firstService,
+      'persisted TIMER_WAITING',
+    );
+    // Kill as soon as the durable wait is observed. Assertions and read-only
+    // fixture queries below can then take arbitrarily long without racing the
+    // live resident against the five-second timer deadline.
+    assert.deepEqual(await signalResidentService(firstService, 'SIGKILL'), {
+      code: null,
+      signal: 'SIGKILL',
+    });
+    firstService = undefined;
+    const waitingTimerRun = await fixture.readRun(runId);
+    assert.deepEqual(waitingTimerRun, observedWaitingTimerRun);
+    assert.ok(waitingTimerRun);
+    assert.equal(waitingTimerRun.run.status, 'RUNNING');
+    assert.equal(waitingTimerRun.timers.length, 1);
+    const waitingTimer = waitingTimerRun.timers[0];
+    assert.equal(waitingTimer.status, 'WAITING');
+    assert.equal(waitingTimer.stepId, 'pause');
+    assert.equal(waitingTimer.stepIndex, 1);
+    assert.equal(waitingTimer.dueAt - waitingTimer.scheduledAt, 5_000);
+    assert.equal(waitingTimerRun.workflowCursor.timerId, waitingTimer.timerId);
+    const futureReady = await fixture.listReadyWork(
+      options.appId,
+      options.revisionId,
+      Number.MAX_SAFE_INTEGER,
+    );
+    assert.deepEqual(workflowReadySummary(futureReady), [
+      {
+        kind: 'TIMER',
+        runId,
+        cursorVersion: waitingTimerRun.workflowCursor.version,
+        stepId: 'pause',
+        stepIndex: 1,
+        timerId: waitingTimer.timerId,
+      },
+    ]);
+    assert.equal(futureReady[0].availableAt, waitingTimer.dueAt);
+    const firstOwnership = await lifecycle.readOwnership();
+    assert.equal(firstOwnership?.ownerKind, 'resident');
+    assert.equal(firstOwnership?.appId, options.appId);
+    assert.equal(firstOwnership?.generation, firstReady.generation);
+    assert.equal(firstOwnership?.sessionId, firstReady.sessionId);
+    staleEndpoint = lifecycle.getSessionEndpoint(
+      firstReady.sessionId,
+      sessionPath,
+    );
+    assert.equal(existsSync(staleEndpoint), true);
+    secondService = spawnResidentService(options.artifactPath, {
+      cwd: options.root,
+      env: environment,
+      args: ['wharfie', 'worker'],
+    });
+    const secondReady = await waitForResidentLifecycle(
+      lifecycle,
+      (snapshot) =>
+        snapshot?.status === 'READY' &&
+        snapshot.generation === firstReady.generation + 1,
+      secondService,
+      'timer workflow resident READY generation 2',
+    );
+    assert.notEqual(secondReady.sessionId, firstReady.sessionId);
+    const waitingSignalRun = await waitForDurableRun(
+      { read: async () => await fixture.readRun(runId) },
+      (snapshot) => snapshot?.workflowCursor?.disposition === 'SIGNAL_WAITING',
+      secondService,
+      'persisted SIGNAL_WAITING after timer fire',
+    );
+    assert.equal(waitingSignalRun.run.status, 'RUNNING');
+    assert.equal(waitingSignalRun.timers.length, 1);
+    const firedTimer = waitingSignalRun.timers[0];
+    assert.equal(firedTimer.timerId, waitingTimer.timerId);
+    assert.equal(firedTimer.status, 'FIRED');
+    assert.equal(firedTimer.scheduledAt, waitingTimer.scheduledAt);
+    assert.equal(firedTimer.dueAt, waitingTimer.dueAt);
+    assert.ok(firedTimer.firedAt >= waitingTimer.dueAt);
+    assert.equal(waitingSignalRun.signalWaits.length, 1);
+    const waitingSignal = waitingSignalRun.signalWaits[0];
+    assert.equal(waitingSignal.status, 'WAITING');
+    assert.equal(waitingSignal.signalId, 'continue');
+    assert.equal(
+      waitingSignalRun.workflowCursor.signalWaitId,
+      waitingSignal.signalWaitId,
+    );
+    assert.deepEqual(
+      JSON.parse(
+        JSON.stringify(
+          await fixture.readExecutionPayload(firedTimer.outputRef),
+        ),
+      ),
+      {
+        schemaVersion: 1,
+        kind: 'workflowOutput',
+        value: {
+          scheduledAt: firedTimer.scheduledAt,
+          dueAt: firedTimer.dueAt,
+          firedAt: firedTimer.firedAt,
+        },
+      },
+    );
+
+    const deliveryId = 'sea-timer-signal-delivery';
+    const signalPayload = {
+      ordinal: 2,
+      markerDirectory,
+      secret,
+      value: 'continue-after-durable-wait',
+    };
+    const signalArgs = [
+      'wharfie',
+      'signal',
+      '--run-id',
+      runId,
+      '--signal',
+      'continue',
+      '--delivery-id',
+      deliveryId,
+      '--payload',
+      JSON.stringify(signalPayload),
+      '--json',
+    ];
+    const acceptedText = runCommand(options.artifactPath, signalArgs, {
+      cwd: options.root,
+      capture: true,
+      env: environment,
+    }).stdout.trim();
+    const accepted = parseFirstJsonLine(acceptedText);
+    assert.deepEqual(accepted, {
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.signal',
+      runId,
+      signalId: 'continue',
+      deliveryId,
+      outcome: 'accepted',
+      reused: false,
+      runStatus: 'RUNNING',
+      cursor: {
+        disposition: 'ACTIVITY_RUNNABLE',
+        stepId: 'second',
+        stepIndex: 3,
+      },
+      nextActivation: { kind: 'activity' },
+    });
+    for (const privateValue of [secret, markerDirectory, signalPayload.value]) {
+      assert.equal(acceptedText.includes(privateValue), false);
+    }
+    const completed = await waitForDurableRun(
+      { read: async () => await fixture.readRun(runId) },
+      (snapshot) =>
+        snapshot?.run?.status === 'COMPLETED' &&
+        snapshot.workflowCursor?.disposition === 'COMPLETED',
+      secondService,
+      'completed timer/signal workflow',
+    );
+    assert.deepEqual(await signalResidentService(secondService, 'SIGTERM'), {
+      code: 0,
+      signal: null,
+    });
+    secondService = undefined;
+    const stopped = await waitForDurableLifecycle(
+      lifecycle,
+      (snapshot) =>
+        snapshot?.status === 'STOPPED' &&
+        snapshot.generation === secondReady.generation,
+      'timer workflow resident STOPPED generation 2',
+    );
+    assert.equal(stopped.sessionId, secondReady.sessionId);
+    assert.equal(await lifecycle.readOwnership(), null);
+    assert.equal(existsSync(staleEndpoint), true);
+
+    assert.equal(completed.run.version, 9);
+    assert.equal(completed.run.lastSequence, 9);
+    assert.deepEqual(
+      completed.events.map(
+        (/** @type {Record<string, any>} */ event) => event.type,
+      ),
+      [
+        'workflow-run-created',
+        'workflow-activity-claimed',
+        'workflow-activity-started',
+        'workflow-activity-succeeded',
+        'workflow-timer-fired',
+        'workflow-signal-accepted',
+        'workflow-activity-claimed',
+        'workflow-activity-started',
+        'workflow-activity-succeeded',
+      ],
+    );
+    assert.deepEqual(
+      completed.workflowCursor.outputs.map(
+        (/** @type {Record<string, any>} */ output) => ({
+          stepId: output.stepId,
+          stepIndex: output.stepIndex,
+        }),
+      ),
+      [
+        { stepId: 'first', stepIndex: 0 },
+        { stepId: 'pause', stepIndex: 1 },
+        { stepId: 'continue', stepIndex: 2 },
+        { stepId: 'second', stepIndex: 3 },
+      ],
+    );
+    assert.deepEqual(
+      [...completed.invocations]
+        .sort(
+          (/** @type {Record<string, any>} */ left, right) =>
+            left.workflow.stepIndex - right.workflow.stepIndex,
+        )
+        .map((/** @type {Record<string, any>} */ invocation) => ({
+          stepId: invocation.workflow.stepId,
+          status: invocation.status,
+        })),
+      [
+        { stepId: 'first', status: 'COMPLETED' },
+        { stepId: 'second', status: 'COMPLETED' },
+      ],
+    );
+    assert.deepEqual(
+      completed.attempts.map(
+        (/** @type {Record<string, any>} */ attempt) => attempt.status,
+      ),
+      ['COMPLETED', 'COMPLETED'],
+    );
+    assert.equal(completed.timers[0].status, 'FIRED');
+    assert.equal(completed.signalWaits[0].status, 'CONSUMED');
+    assert.deepEqual(
+      completed.signalDeliveries.map(
+        (/** @type {Record<string, any>} */ delivery) => ({
+          deliveryId: delivery.deliveryId,
+          signalId: delivery.signalId,
+          status: delivery.status,
+        }),
+      ),
+      [{ deliveryId, signalId: 'continue', status: 'ACCEPTED' }],
+    );
+    const signalBinding = completed.workflowCursor.outputs.find(
+      (/** @type {Record<string, any>} */ output) =>
+        output.stepId === 'continue',
+    );
+    assert.ok(signalBinding);
+    assert.equal(
+      (await fixture.readExecutionPayload(signalBinding.outputRef)).value.value,
+      signalPayload.value,
+    );
+    assert.deepEqual(
+      await fixture.listReadyWork(options.appId, options.revisionId),
+      [],
+    );
+    assert.equal(
+      readPayloadReachability(payloadPath, completed).orphans.length,
+      0,
+    );
+    assert.deepEqual(readdirSync(markerDirectory).sort(), ['1.json', '2.json']);
+
+    const beforeReplay = JSON.parse(JSON.stringify(completed));
+    const replayText = runCommand(options.artifactPath, signalArgs, {
+      cwd: options.root,
+      capture: true,
+      env: environment,
+    }).stdout.trim();
+    assert.deepEqual(parseFirstJsonLine(replayText), {
+      ...accepted,
+      reused: true,
+    });
+    assert.deepEqual(await fixture.readRun(runId), beforeReplay);
+    for (const privateValue of [secret, markerDirectory, signalPayload.value]) {
+      assert.equal(replayText.includes(privateValue), false);
+    }
+    const inspectionText = runCommand(
+      options.artifactPath,
+      ['wharfie', 'inspect', '--run-id', runId, '--json'],
+      { cwd: options.root, capture: true, env: environment },
+    ).stdout.trim();
+    const inspection = JSON.parse(inspectionText);
+    assert.equal(inspection.run.runId, runId);
+    for (const privateValue of [secret, markerDirectory, signalPayload.value]) {
+      assert.equal(inspectionText.includes(privateValue), false);
+    }
+  } finally {
+    await Promise.all([
+      stopResidentServiceForCleanup(firstService),
+      stopResidentServiceForCleanup(secondService),
+    ]);
+    if (staleEndpoint) rmSync(staleEndpoint, { force: true });
+    rmSync(options.root, { recursive: true, force: true });
   }
 }
 
@@ -8551,6 +9026,26 @@ export default defineApp({
         input: { kind: 'step-output', step: 'first' },
       }],
     },
+    'portable-timer-signal': {
+      steps: [{
+        id: 'first',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'workflow-input' },
+      }, {
+        id: 'pause',
+        kind: 'timer',
+        delayMs: 5_000,
+      }, {
+        id: 'continue',
+        kind: 'signal',
+      }, {
+        id: 'second',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'step-output', step: 'continue' },
+      }],
+    },
   },
 });
 `,
@@ -8672,6 +9167,7 @@ export default defineApp({
   }).stdout;
   assert.match(operatorHelp, /\bretry-effect\b/);
   assert.match(operatorHelp, /\bstart\b/);
+  assert.match(operatorHelp, /\bsignal\b/);
   const workflowStartHelp = spawnSync(
     cleanArtifactPath,
     ['wharfie', 'start', '--help'],
@@ -8700,6 +9196,34 @@ export default defineApp({
     );
   }
   assert.doesNotMatch(workflowStartHelp.stdout, /\bdir\b/);
+  const workflowSignalHelp = spawnSync(
+    cleanArtifactPath,
+    ['wharfie', 'signal', '--help'],
+    {
+      cwd: cleanRunDirectory,
+      encoding: 'utf8',
+      env: cleanEnvironment,
+      maxBuffer: 20 * 1024 * 1024,
+    },
+  );
+  if (workflowSignalHelp.error) {
+    throw workflowSignalHelp.error;
+  }
+  assert.equal(workflowSignalHelp.signal, null);
+  assert.equal(workflowSignalHelp.status, 0);
+  for (const option of [
+    '--run-id',
+    '--signal',
+    '--delivery-id',
+    '--payload',
+    '--json',
+  ]) {
+    assert.match(
+      workflowSignalHelp.stdout,
+      new RegExp(`\\b${option.slice(2)}\\b`),
+    );
+  }
+  assert.doesNotMatch(workflowSignalHelp.stdout, /\bdir\b/);
   const retryEffectHelp = spawnSync(
     cleanArtifactPath,
     ['wharfie', 'retry-effect', '--help'],
@@ -8815,6 +9339,24 @@ export default defineApp({
         kind: 'activity',
         activity: 'workflow-step',
         input: { kind: 'step-output', step: 'first' },
+      },
+    ],
+  });
+  assert.deepEqual(embeddedManifest.workflows['portable-timer-signal'], {
+    steps: [
+      {
+        id: 'first',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'workflow-input' },
+      },
+      { id: 'pause', kind: 'timer', delayMs: 5_000 },
+      { id: 'continue', kind: 'signal' },
+      {
+        id: 'second',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'step-output', step: 'continue' },
       },
     ],
   });
@@ -9170,6 +9712,14 @@ export default defineApp({
     root: path.join(cleanRunDirectory, 'workflow-crash-matrix'),
     wharfieBin,
     appDirectory,
+  });
+  await verifyRelocatedSeaTimerSignalWorkflow({
+    artifactPath: cleanArtifactPath,
+    appId: embeddedManifest.app.id,
+    cleanEnvironment,
+    installedPackageRoot,
+    revisionId: packagedArtifact.revisionId,
+    root: path.join(cleanRunDirectory, 'timer-signal-workflow'),
   });
 
   const residentEffectBatch =
@@ -10136,8 +10686,15 @@ export default defineApp({
   }
 
   const artifactSize = statSync(cleanArtifactPath).size;
+  const artifactSha256 = createHash('sha256')
+    .update(readFileSync(cleanArtifactPath))
+    .digest('hex');
+  assert.equal(
+    artifactSha256,
+    Buffer.from(packagedArtifact.byteDigest.value, 'base64url').toString('hex'),
+  );
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes; sha256 ${artifactSha256})\n`,
   );
 } finally {
   packaged.cleanup();

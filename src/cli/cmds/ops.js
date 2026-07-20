@@ -2,6 +2,7 @@ import { Command } from 'commander';
 
 import { createExecutionLedgerOperatorCommands } from '../../core/runtime/operator/execution-ledger-operator.js';
 import runCommand from './ops_cmds/run.js';
+import signalCommand from './ops_cmds/signal.js';
 import startCommand from './ops_cmds/start.js';
 import submitCommand from './ops_cmds/submit.js';
 import workerCommand from './ops_cmds/worker.js';
@@ -23,6 +24,7 @@ const opsCommand = new Command('ops')
   .addCommand(reconcileEffectCommand)
   .addCommand(retryEffectCommand)
   .addCommand(cancelCommand)
+  .addCommand(signalCommand)
   .addCommand(runCommand)
   .addCommand(startCommand)
   .addCommand(submitCommand)
