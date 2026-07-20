@@ -32,5 +32,10 @@ rejects root and custom `XDG_CONFIG_HOME` topology, never accepts unit or
 environment overrides, anchors packaged durable state to the operating-system
 account instead of ambient `XDG_DATA_HOME` or `HOME`, verifies the live
 manager's effective unit, and preserves state and immutable releases on
-uninstall. Update, rollback, and source-side service management are
-intentionally absent.
+uninstall. Status schema V2 exposes verified disk/manager wiring as `managed`,
+`absent`, `orphaned`, `conflicting`, or `unknown`; human orphan status directs
+the operator to `service uninstall`. There is no `service reconcile` verb:
+`install` returns `reconciled` only when it can reconstruct a missing receipt
+from an inactive exact release, while `uninstall` returns
+`orphan-reconciled` after removing exact residual wiring. Update, rollback,
+and source-side service management are intentionally absent.

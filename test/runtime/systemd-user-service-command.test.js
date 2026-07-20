@@ -21,7 +21,7 @@ function makeOperator() {
     ACTIONS.map((action) => [
       action,
       jest.fn(async () => ({
-        schemaVersion: 1,
+        schemaVersion: action === 'status' ? 2 : 1,
         kind:
           action === 'status'
             ? 'wharfie.service.status'
@@ -32,6 +32,13 @@ function makeOperator() {
               health: 'healthy',
               installation: { state: 'installed' },
               systemd: { activeState: 'active' },
+              wiring: {
+                state: 'managed',
+                unitFile: 'managed',
+                selection: 'managed',
+                effectiveUnit: 'managed',
+                cleanupPending: false,
+              },
             }
           : { action, outcome: 'completed' }),
       })),
@@ -120,11 +127,60 @@ describe('packaged systemd user service command', () => {
     await command.parseAsync(['node', 'service', 'status']);
 
     expect(line).toHaveBeenCalledTimes(1);
-    expect(line).toHaveBeenCalledWith('status: healthy (service-demo)');
+    expect(line).toHaveBeenCalledWith(
+      'status: healthy; wiring: managed (service-demo)',
+    );
+  });
+
+  it('makes orphan cleanup actionable in human status output', async () => {
+    const operator = makeOperator();
+    operator.status.mockResolvedValue({
+      schemaVersion: 2,
+      kind: 'wharfie.service.status',
+      appId: 'service-demo',
+      health: 'degraded',
+      installation: { state: 'absent' },
+      systemd: { activeState: 'active' },
+      wiring: {
+        state: 'orphaned',
+        unitFile: 'managed',
+        selection: 'absent',
+        effectiveUnit: 'managed',
+        cleanupPending: false,
+      },
+    });
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'status']);
+
+    expect(line).toHaveBeenCalledWith(
+      'status: degraded; wiring: orphaned; run service uninstall (service-demo)',
+    );
   });
 
   it.each([
     ['status', { schemaVersion: 1, kind: 'wharfie.service.result' }],
+    [
+      'status',
+      {
+        schemaVersion: 1,
+        kind: 'wharfie.service.status',
+        appId: 'service-demo',
+        health: 'healthy',
+        wiring: {
+          state: 'managed',
+          unitFile: 'managed',
+          selection: 'managed',
+          effectiveUnit: 'managed',
+          cleanupPending: false,
+        },
+      },
+    ],
     [
       'start',
       {

@@ -387,6 +387,11 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       `~/.config/systemd/user`, reject invocation-specific XDG topology, and
       verify the live manager's `UnitPath` plus exact effective fragment before
       enable, stop, or uninstall can act on a unit name.
+- [x] Reconcile exact orphaned systemd wiring explicitly: status joins receipt
+      intent with verified disk and live-manager state, install reconstructs
+      only an inactive exact selected release, and uninstall safely converges
+      missing receipts, tombstones, and interrupted cleanup while refusing
+      cached-only, conflicting, foreign, or lower-priority unit claims.
 - [x] Prove enabled startup, crash replacement, and durable recovery across a
       real machine reboot in a disposable Linux systemd environment. The
       checksummed [V16 proof receipts](llm_artifacts/systemd-proof/0d92746384acae1aa111a271ff144f9bcf53d265/final.json)
@@ -504,8 +509,8 @@ effective unit and immutable executable, recovered from both resident
 through uninstall. The successful receipts are bound to commit `0d927463`.
 
 1. Close the remaining single-node service hardening: race-free
-   content-addressed update/rollback, explicit orphan-unit reconciliation, and
-   bounded stale native-runtime extraction after abrupt termination.
+   content-addressed update/rollback and bounded stale native-runtime
+   extraction after abrupt termination.
 2. Add the smallest provider-backed path that can create, inspect, update, and
    remove one durable node through the operator's credential chain.
 3. Begin provider-backed coordinator recovery only after the single-node

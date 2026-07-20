@@ -142,7 +142,12 @@ unit. Wharfie creates a sibling link and atomically renames it over `current`,
 then synchronizes the parent directory before treating the selection as
 published. A failed install can be retried and reconciled from the immutable
 release, current link, fixed unit, and installation receipt; it never edits an
-artifact in place.
+artifact in place. If the receipt is missing, `service install` reconstructs it
+only from an inactive `current` selection whose release record, executable
+bytes, application identity, revision, and fixed systemd wiring all verify
+exactly. That recovery returns `outcome: reconciled`. An active, conflicting,
+cached-only, or otherwise unverifiable orphan is never adopted; the operator
+must run `service uninstall` to converge its wiring first.
 
 Installing a different artifact over an existing installation is refused.
 Although the release layout and atomic link are suitable primitives for later
@@ -157,6 +162,15 @@ Lifecycle mutations are serialized with a per-UID, per-installation abstract
 Linux Unix socket. Kernel bind is the cross-process exclusion primitive and
 the address disappears automatically when the process exits, avoiding stale
 lock deletion, PID reuse, and concurrent stale-recovery races.
+
+That lock serializes Wharfie operations, not arbitrary commands from another
+process running as the same UID. Systemd's destructive unit operations are
+addressed by name and provide no compare-and-swap fence on `FragmentPath`.
+Wharfie therefore verifies immediately before mutation and again after reload,
+but a same-UID actor that concurrently rewrites and reloads the unit between
+those points is inside the trusted service-user boundary and unsupported.
+Protecting against that actor requires a distinct service principal or
+privileged broker and is not claimed by this user-service design.
 
 ### Fixed unit and stable durable paths
 
@@ -237,17 +251,46 @@ Mismatch, missing state, startup, stopped state, and failed state remain
 distinguishable. JSON output is versioned, contains no application inputs,
 payloads, credentials, raw environment, private socket paths, or systemd
 journal text, and does not parse the human `systemctl status` rendering.
+Status schema V2 also joins durable installation intent with the immutable
+executable selection, fixed unit's verified bytes, and live manager's effective
+selection in a `wiring` view. Its state is `managed`, `absent`, `orphaned`,
+`conflicting`, or `unknown`, and its redacted `selection` field distinguishes
+an exact selected release from absence or conflicting metadata;
+`orphaned` means Wharfie can see exact residual wiring without a live installed
+receipt, while `unknown` means the manager could not establish absence. Human
+status includes this state and directs an orphan to `service uninstall`.
 
 ### Uninstall preserves durable data
 
 Uninstall stops and disables the user unit, durably records that prerequisite,
 removes the unit and executable selector, reloads the user manager, and retains
-an `uninstalled` identity tombstone. A private phase marker lets retries resume
-after interruption. A retry restores the deterministic unit if an earlier
-attempt removed it, then reconverges through disable-and-stop before removing
-the wiring again. The complete `state/` subtree and immutable releases remain
-untouched. It never interprets absence of a unit as authority to delete control
-history, payloads, application state, or session namespace.
+an `uninstalled` identity tombstone whenever a receipt or verified release
+identity exists. A wiring-only orphan without either identity is removed
+without inventing a tombstone only when the app root contains no managed data;
+otherwise cleanup refuses rather than let a later artifact bypass the deferred
+update fence. A standalone private phase marker binds the
+exact layout, deterministic unit digest, principal, receipt state, and optional
+release identity so retries can resume after interruption even when the
+receipt is absent. A retry restores the deterministic unit only when a receipt
+or marker authorizes cached exact manager state, then reconverges through
+disable-and-stop before removing the wiring again. That authority decision
+happens before `daemon-reload`: an authorized missing file is restored first so
+a still-running cached service remains addressable, while a cached-only orphan
+without receipt or marker is refused without erasing manager evidence. Under
+the operation lock, a private regular temp left by an interrupted atomic marker
+publication is recognized as reserved Wharfie residue, removed, and retried;
+every other app-root entry remains potential durable application data.
+
+`service uninstall` is therefore the explicit orphan reconciler and returns
+`outcome: orphan-reconciled` when no installed receipt remained. It mutates a
+unit name only after verifying the fixed unit bytes, a fresh exact effective
+fragment with no drop-ins, and the absence of another same-name file anywhere
+in the manager's search path. Cached-only bytes without receipt or marker,
+conflicting content, foreign fragments, and lower-priority claims fail closed.
+After removal and reload, a newly exposed unit also leaves the marker in place
+and reports incomplete cleanup. The complete `state/` subtree and immutable
+releases remain untouched. Absence of a unit is never authority to delete
+control history, payloads, application state, or session namespace.
 Its result reports the retained state root so a human can make a separate,
 explicit backup or deletion decision. Reinstallation of the same application
 identity reattaches to that state and must fail closed if its durable schemas
@@ -281,8 +324,9 @@ or revision rules are incompatible.
 - Install verifies the live manager's exact unit search path before staging
   service state and verifies the loaded effective fragment, empty drop-ins,
   and a non-stale manager cache before enablement. Stop and uninstall enforce
-  the same effective-unit boundary, so manager configuration cannot redirect a
-  destructive lifecycle command.
+  the same effective-unit boundary, so observed foreign manager configuration
+  is refused rather than used for a destructive lifecycle command. The trusted
+  same-UID concurrency limitation above still applies.
 - Update and rollback remain unavailable even though releases are immutable.
   Atomic byte selection is not sufficient without a race-free maintenance and
   quiescence protocol for revision-pinned durable work.

@@ -22,6 +22,7 @@ import {
 } from '../packaged-artifact.js';
 import { probeLocalServiceSession } from '../local-service-session.js';
 import { readEmbeddedRevisionRuntimePair } from '../../resources/builds/lib/revision-runtime-assets.js';
+import { getBuildTargetId } from '../build-target.js';
 import {
   createSystemdUserServiceInstallation,
   createSystemdUserServiceLayout,
@@ -33,15 +34,18 @@ import {
 } from './systemd-user-service.js';
 
 const SERVICE_RESULT_SCHEMA_VERSION = 1;
+const SERVICE_STATUS_SCHEMA_VERSION = 2;
 const SERVICE_RESULT_KIND = 'wharfie.service.result';
 const SERVICE_STATUS_KIND = 'wharfie.service.status';
 const UNINSTALL_MARKER_KIND = 'wharfie.systemd-user-service.uninstall-marker';
+const UNINSTALL_MARKER_SCHEMA_VERSION = 2;
 const DEFAULT_START_TIMEOUT_MS = 60_000;
 const DEFAULT_STOP_TIMEOUT_MS = 50_000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
 const MAX_PROCESS_DURATION_MS = 60_000;
 const MAX_SERVICE_RECORD_BYTES = 64 * 1024;
+const ATOMIC_PUBLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
   'appId',
   'dataRoot',
@@ -568,11 +572,153 @@ function hasSameArtifactBytes(left, right) {
 }
 
 /**
+ * Read and verify the optional immutable release selected by `current` without
+ * relying on an installation receipt. This is the only authority that lets an
+ * orphan cleanup remove the selector or retain an identity tombstone.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes: typeof inspectArtifactBytes, uid: number, target: unknown}} options - Managed selection boundary.
+ * @returns {Promise<Readonly<Record<string, any>> | null>} - Verified selected release or null.
+ */
+async function readSelectedRelease(options) {
+  if (
+    !(await hasManagedServiceRoot(options.fsOps, options.layout, options.uid))
+  ) {
+    return null;
+  }
+  let before;
+  try {
+    before = await options.fsOps.lstat(options.layout.currentLink);
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return null;
+    throw error;
+  }
+  if (!before.isSymbolicLink()) {
+    throw new Error(
+      'Systemd user-service current selection must be a symbolic link.',
+    );
+  }
+  if (typeof before.uid === 'number' && before.uid !== options.uid) {
+    throw new Error(
+      'Systemd user-service current selection must be owned by the service user.',
+    );
+  }
+  const selected = await options.fsOps.readlink(options.layout.currentLink);
+  const after = await options.fsOps.lstat(options.layout.currentLink);
+  if (
+    !after.isSymbolicLink() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.mtimeMs !== after.mtimeMs ||
+    before.ctimeMs !== after.ctimeMs
+  ) {
+    throw new Error(
+      'Systemd user-service current selection changed while it was being read.',
+    );
+  }
+  if (
+    path.isAbsolute(selected) ||
+    path.dirname(selected) !== 'releases' ||
+    path.basename(selected) === '.' ||
+    path.basename(selected) === '..'
+  ) {
+    throw new Error('Systemd user-service current selection is invalid.');
+  }
+  const artifactId = path.basename(selected);
+  const releaseDirectory = path.join(options.layout.releasesRoot, artifactId);
+  if (
+    selected !== path.relative(options.layout.serviceRoot, releaseDirectory)
+  ) {
+    throw new Error('Systemd user-service current selection is invalid.');
+  }
+  const releasePath = path.join(releaseDirectory, 'release.json');
+  const releaseArtifactPath = path.join(releaseDirectory, 'app');
+  await assertRealPath(
+    options.fsOps,
+    options.layout.releasesRoot,
+    'directory',
+    'Systemd user-service releases root',
+    options.uid,
+  );
+  await assertRealPath(
+    options.fsOps,
+    releaseDirectory,
+    'directory',
+    'Systemd user-service selected release directory',
+    options.uid,
+  );
+  const release = validateSystemdUserServiceRelease(
+    JSON.parse(
+      await readManagedTextFile({
+        fsOps: options.fsOps,
+        filePath: releasePath,
+        label: 'Systemd user-service selected release receipt',
+        uid: options.uid,
+      }),
+    ),
+  );
+  if (
+    release.appId !== options.layout.appId ||
+    release.artifactId !== artifactId ||
+    release.artifactPath !== releaseArtifactPath ||
+    getBuildTargetId(release.target) !== getBuildTargetId(options.target)
+  ) {
+    throw new Error(
+      'Systemd user-service current selection disagrees with its release.',
+    );
+  }
+  await assertRealPath(
+    options.fsOps,
+    releaseArtifactPath,
+    'file',
+    'Systemd user-service selected release artifact',
+    options.uid,
+  );
+  const observed = await options.inspectBytes(releaseArtifactPath);
+  if (!hasSameArtifactBytes(observed, release)) {
+    throw new Error(
+      'Systemd user-service selected release bytes failed verification.',
+    );
+  }
+  return release;
+}
+
+/**
+ * Classify the fixed local unit without exposing its bytes in status output.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, uid: number}} options - Fixed unit boundary.
+ * @returns {Promise<Readonly<{state: 'absent'|'managed'|'conflicting', error?: unknown}>>} - Local unit state.
+ */
+async function inspectFixedUnitFile(options) {
+  try {
+    await assertManagedUnitDirectory(
+      options.fsOps,
+      options.layout,
+      options.uid,
+    );
+    const contents = await readManagedTextFile({
+      fsOps: options.fsOps,
+      filePath: options.layout.unitPath,
+      label: 'Systemd user unit',
+      uid: options.uid,
+    });
+    return Object.freeze({
+      state:
+        contents === createSystemdUserServiceUnit({ layout: options.layout })
+          ? 'managed'
+          : 'conflicting',
+    });
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) {
+      return Object.freeze({ state: 'absent' });
+    }
+    return Object.freeze({ state: 'conflicting', error });
+  }
+}
+
+/**
  * Validate the private phase marker that makes destructive manager-wiring
  * removal retryable. The marker is published only after systemd confirms the
  * unit is disabled and inactive.
  * @param {unknown} value - Parsed marker.
- * @param {{appId: string, unitName: string, uid: number, artifactId?: string, revisionId?: string}} expected - Exact installation binding.
+ * @param {{appId: string, unitName: string, uid: number, layout: Readonly<Record<string, string>>, artifactId?: string, revisionId?: string}} expected - Exact installation binding.
  * @returns {Readonly<Record<string, any>>} - Exact marker.
  */
 function validateUninstallMarker(value, expected) {
@@ -586,31 +732,66 @@ function validateUninstallMarker(value, expected) {
     'appId',
     'unitName',
     'uid',
-    'artifactId',
-    'revisionId',
+    'layout',
+    'unitDigest',
+    'receiptState',
+    'release',
   ];
+  const release = marker.release;
+  const releaseKeys = ['artifactId', 'revisionId'];
+  const validRelease =
+    release === null ||
+    (release &&
+      typeof release === 'object' &&
+      !Array.isArray(release) &&
+      Object.keys(release).length === releaseKeys.length &&
+      releaseKeys.every((key) =>
+        Object.prototype.hasOwnProperty.call(release, key),
+      ) &&
+      typeof release.artifactId === 'string' &&
+      release.artifactId.length > 0 &&
+      typeof release.revisionId === 'string' &&
+      release.revisionId.length > 0);
+  const layoutKeys = Object.keys(expected.layout);
+  const validLayout =
+    marker.layout &&
+    typeof marker.layout === 'object' &&
+    !Array.isArray(marker.layout) &&
+    Object.keys(marker.layout).length === layoutKeys.length &&
+    layoutKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(marker.layout, key) &&
+        marker.layout[key] === expected.layout[key],
+    );
+  const expectedUnitDigest = createHash('sha256')
+    .update(createSystemdUserServiceUnit({ layout: expected.layout }), 'utf8')
+    .digest('base64url');
   if (
     Object.keys(marker).length !== keys.length ||
     keys.some((key) => !Object.prototype.hasOwnProperty.call(marker, key)) ||
-    marker.schemaVersion !== 1 ||
+    marker.schemaVersion !== UNINSTALL_MARKER_SCHEMA_VERSION ||
     marker.kind !== UNINSTALL_MARKER_KIND ||
     marker.appId !== expected.appId ||
     marker.unitName !== expected.unitName ||
     marker.uid !== expected.uid ||
-    typeof marker.artifactId !== 'string' ||
-    marker.artifactId.length === 0 ||
-    typeof marker.revisionId !== 'string' ||
-    marker.revisionId.length === 0 ||
+    !validLayout ||
+    marker.unitDigest !== expectedUnitDigest ||
+    !['missing', 'installed', 'uninstalled'].includes(marker.receiptState) ||
+    !validRelease ||
     (expected.artifactId !== undefined &&
-      marker.artifactId !== expected.artifactId) ||
+      release?.artifactId !== expected.artifactId) ||
     (expected.revisionId !== undefined &&
-      marker.revisionId !== expected.revisionId)
+      release?.revisionId !== expected.revisionId)
   ) {
     throw new Error(
       'Systemd user-service uninstall marker disagrees with the installation.',
     );
   }
-  return Object.freeze({ ...marker });
+  return Object.freeze({
+    ...marker,
+    layout: Object.freeze({ ...marker.layout }),
+    release: release === null ? null : Object.freeze({ ...release }),
+  });
 }
 
 /**
@@ -669,6 +850,8 @@ async function stageRelease(options) {
     if (
       release.appId !== options.pair.runtime.appId ||
       release.revisionId !== options.pair.runtime.revisionId ||
+      getBuildTargetId(release.target) !==
+        getBuildTargetId(options.pair.runtime.target) ||
       release.artifactPath !== releaseArtifactPath ||
       !hasSameArtifactBytes(release, options.artifact)
     ) {
@@ -1342,6 +1525,30 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
+   * Refuse removal when another manager search directory already contains the
+   * same unit name. Removing Wharfie's higher-priority file must not reveal a
+   * lower-priority foreign unit after daemon-reload.
+   * @param {Readonly<Record<string, string>>} layout - Fixed service layout.
+   * @param {string[]} unitPaths - Fresh manager search path.
+   * @returns {Promise<void>} - Resolves only when no second claim exists.
+   */
+  async function assertNoOtherUnitClaims(layout, unitPaths) {
+    for (const unitDirectory of unitPaths) {
+      const candidate = path.join(unitDirectory, layout.unitName);
+      if (candidate === layout.unitPath) continue;
+      try {
+        await fsOps.lstat(candidate);
+      } catch (error) {
+        if (hasCode(error, 'ENOENT')) continue;
+        throw error;
+      }
+      throw new Error(
+        'Systemd user-service unit name is also claimed in another manager search directory.',
+      );
+    }
+  }
+
+  /**
    * Create and validate only the stable account-home unit directory, then
    * require the live manager to include it in its actual lookup path. A fresh
    * manager may omit a directory until it exists and daemon-reload recomputes
@@ -1408,19 +1615,94 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
-   * Require systemd to have loaded Wharfie's exact immutable unit source with
-   * no administrator or generator drop-ins changing its effective behavior.
+   * Require systemd to resolve the unit name from Wharfie's fixed fragment
+   * without administrator or generator drop-ins. Cache freshness is checked
+   * separately so missing local bytes can be restored before daemon-reload.
    * @param {Readonly<Record<string, any>>} systemd - Parsed manager state.
    * @param {Readonly<Record<string, string>>} layout - Expected unit layout.
-   * @returns {boolean} - Whether effective unit selection is exact.
+   * @returns {boolean} - Whether the loaded source identity is exact.
    */
-  function hasExpectedEffectiveUnit(systemd, layout) {
+  function hasExpectedUnitSource(systemd, layout) {
     return (
       systemd.loadState === 'loaded' &&
       systemd.fragmentPath === layout.unitPath &&
-      systemd.dropInPaths === '' &&
+      systemd.dropInPaths === ''
+    );
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>>} systemd - Parsed manager state.
+   * @param {Readonly<Record<string, string>>} layout - Expected unit layout.
+   * @returns {boolean} - Whether exact effective wiring is also fresh.
+   */
+  function hasExpectedEffectiveUnit(systemd, layout) {
+    return (
+      hasExpectedUnitSource(systemd, layout) &&
       systemd.needDaemonReload === false
     );
+  }
+
+  /**
+   * Join local unit bytes with the manager's effective selection. Intent from
+   * an installed receipt determines whether matching wiring is managed or an
+   * orphan that must be reconciled explicitly.
+   * @param {Readonly<{state: 'absent'|'managed'|'conflicting'}>} unitFile - Fixed local file state.
+   * @param {'absent'|'managed'|'conflicting'} selection - Immutable executable selection state.
+   * @param {Readonly<Record<string, any>>} systemd - Live or unavailable manager state.
+   * @param {Readonly<Record<string, string>>} layout - Fixed service layout.
+   * @param {boolean} installed - Whether a receipt requires wiring to exist.
+   * @param {boolean} cleanupPending - Whether an uninstall marker remains.
+   * @returns {Readonly<Record<string, any>>} - Redacted actual-wiring view.
+   */
+  function createWiringView(
+    unitFile,
+    selection,
+    systemd,
+    layout,
+    installed,
+    cleanupPending,
+  ) {
+    const effectiveUnit =
+      systemd.loadState === 'unavailable'
+        ? 'unknown'
+        : systemd.loadState === 'not-found'
+          ? 'absent'
+          : hasExpectedEffectiveUnit(systemd, layout)
+            ? 'managed'
+            : 'conflicting';
+    let state;
+    if (
+      unitFile.state === 'conflicting' ||
+      selection === 'conflicting' ||
+      effectiveUnit === 'conflicting'
+    ) {
+      state = 'conflicting';
+    } else if (effectiveUnit === 'unknown') {
+      state = 'unknown';
+    } else if (
+      unitFile.state === 'absent' &&
+      selection === 'absent' &&
+      effectiveUnit === 'absent'
+    ) {
+      state = cleanupPending ? 'orphaned' : 'absent';
+    } else if (
+      installed &&
+      unitFile.state === 'managed' &&
+      selection === 'managed' &&
+      effectiveUnit === 'managed' &&
+      !cleanupPending
+    ) {
+      state = 'managed';
+    } else {
+      state = installed ? 'conflicting' : 'orphaned';
+    }
+    return Object.freeze({
+      state,
+      unitFile: unitFile.state,
+      selection,
+      effectiveUnit,
+      cleanupPending,
+    });
   }
 
   /**
@@ -1443,9 +1725,10 @@ export function createSystemdUserServiceOperator(options = {}) {
    * @param {Readonly<Record<string, string>>} layout - Expected layout.
    * @param {number} uid - Expected principal.
    * @param {number} filesystemUid - Expected managed-file owner.
+   * @param {unknown} target - Exact packaged build target.
    * @returns {Promise<Readonly<Record<string, any>> | null>} - Installation or null.
    */
-  async function readInstallation(layout, uid, filesystemUid) {
+  async function readInstallation(layout, uid, filesystemUid, target) {
     if (!(await hasManagedServiceRoot(fsOps, layout, filesystemUid))) {
       return null;
     }
@@ -1468,6 +1751,16 @@ export function createSystemdUserServiceOperator(options = {}) {
     if (installation.principal.uid !== uid) {
       throw new Error(
         'Installed systemd user service belongs to a different local user ID.',
+      );
+    }
+    const targetId = getBuildTargetId(target);
+    if (
+      getBuildTargetId(installation.current.target) !== targetId ||
+      (installation.previous &&
+        getBuildTargetId(installation.previous.target) !== targetId)
+    ) {
+      throw new Error(
+        'Installed systemd user service belongs to a different build target.',
       );
     }
     return installation;
@@ -1495,6 +1788,7 @@ export function createSystemdUserServiceOperator(options = {}) {
       appId: context.pair.runtime.appId,
       unitName: context.layout.unitName,
       uid: context.uid,
+      layout: context.layout,
       ...(installation
         ? {
             artifactId: installation.current.artifactId,
@@ -1502,6 +1796,47 @@ export function createSystemdUserServiceOperator(options = {}) {
           }
         : {}),
     });
+  }
+
+  /**
+   * Remove only a private regular temp file left by this process's atomic
+   * uninstall-marker publication after a hard crash. The operation lock makes
+   * a matching publication stale; every other service-root entry remains
+   * potential durable application state and is never ignored.
+   * @param {{layout: Readonly<Record<string, string>>, filesystemUid: number}} context - Exact managed root.
+   * @returns {Promise<void>} - Resolves after stale marker temps are removed.
+   */
+  async function removeStaleUninstallMarkerTemps(context) {
+    if (
+      !(await hasManagedServiceRoot(
+        fsOps,
+        context.layout,
+        context.filesystemUid,
+      ))
+    ) {
+      return;
+    }
+    const prefix = `.${path.basename(context.layout.uninstallPath)}.`;
+    const suffix = '.tmp';
+    let removed = false;
+    for (const entry of await fsOps.readdir(context.layout.serviceRoot)) {
+      if (!entry.startsWith(prefix) || !entry.endsWith(suffix)) continue;
+      const token = entry.slice(prefix.length, -suffix.length);
+      if (!ATOMIC_PUBLICATION_TOKEN_PATTERN.test(token)) continue;
+      const temporary = path.join(context.layout.serviceRoot, entry);
+      await assertRealPath(
+        fsOps,
+        temporary,
+        'file',
+        'Stale systemd user-service uninstall-marker publication',
+        context.filesystemUid,
+      );
+      await fsOps.unlink(temporary);
+      removed = true;
+    }
+    if (removed) {
+      await syncDirectory(fsOps, context.layout.serviceRoot);
+    }
   }
 
   /**
@@ -1544,10 +1879,20 @@ export function createSystemdUserServiceOperator(options = {}) {
         needDaemonReload: null,
       });
     }
-    if (
-      integrity.status === 'verified' &&
-      !hasExpectedEffectiveUnit(systemd, installation.layout)
-    ) {
+    const unitFile = await inspectFixedUnitFile({
+      fsOps,
+      layout: installation.layout,
+      uid: Number(getFilesystemUid()),
+    });
+    const wiring = createWiringView(
+      unitFile,
+      integrity.status === 'verified' ? 'managed' : 'conflicting',
+      systemd,
+      installation.layout,
+      true,
+      false,
+    );
+    if (integrity.status === 'verified' && wiring.state !== 'managed') {
       integrity = Object.freeze({ status: 'invalid' });
     }
     let runtime;
@@ -1592,7 +1937,7 @@ export function createSystemdUserServiceOperator(options = {}) {
       persistence,
     );
     return {
-      schemaVersion: SERVICE_RESULT_SCHEMA_VERSION,
+      schemaVersion: SERVICE_STATUS_SCHEMA_VERSION,
       kind: SERVICE_STATUS_KIND,
       appId: installation.appId,
       unit: installation.unitName,
@@ -1605,8 +1950,90 @@ export function createSystemdUserServiceOperator(options = {}) {
       systemd,
       runtime,
       integrity,
+      wiring,
       persistence,
       health,
+    };
+  }
+
+  /**
+   * Observe actual unit wiring when durable metadata says no installation is
+   * present. Absence is established only by both disk and a reachable fresh
+   * manager; any divergence remains visible and non-healthy.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
+   * @param {Readonly<Record<string, any>> | null} installation - Missing receipt or tombstone.
+   * @param {Readonly<Record<string, any>> | null} marker - Optional cleanup marker.
+   * @returns {Promise<Record<string, any>>} - Redacted detached status.
+   */
+  async function observeDetachedInstallation(context, installation, marker) {
+    const unitFile = await inspectFixedUnitFile({
+      fsOps,
+      layout: context.layout,
+      uid: context.filesystemUid,
+    });
+    /** @type {'absent'|'managed'|'conflicting'} */
+    let selection;
+    try {
+      selection = (await readSelectedRelease({
+        fsOps,
+        layout: context.layout,
+        inspectBytes,
+        uid: context.filesystemUid,
+        target: context.pair.runtime.target,
+      }))
+        ? 'managed'
+        : 'absent';
+    } catch {
+      selection = 'conflicting';
+    }
+    let systemd;
+    try {
+      systemd = await readSystemd(context.layout);
+    } catch {
+      systemd = Object.freeze({
+        loadState: 'unavailable',
+        unitFileState: 'unknown',
+        activeState: 'unknown',
+        subState: 'unknown',
+        result: 'unknown',
+        mainPid: 0,
+        execMainStatus: 0,
+        fragmentPath: '',
+        dropInPaths: '',
+        needDaemonReload: null,
+      });
+    }
+    const wiring = createWiringView(
+      unitFile,
+      selection,
+      systemd,
+      context.layout,
+      false,
+      marker !== null,
+    );
+    return {
+      schemaVersion: SERVICE_STATUS_SCHEMA_VERSION,
+      kind: SERVICE_STATUS_KIND,
+      appId: context.pair.runtime.appId,
+      unit: context.layout.unitName,
+      installation: installation
+        ? installation.state === 'installed'
+          ? {
+              state: 'installed',
+              activeArtifactId: installation.current.artifactId,
+              activeRevisionId: installation.current.revisionId,
+              previousArtifactId: installation.previous?.artifactId || null,
+            }
+          : {
+              state: 'uninstalled',
+              lastArtifactId: installation.current.artifactId,
+              lastRevisionId: installation.current.revisionId,
+            }
+        : { state: 'absent' },
+      systemd,
+      runtime: null,
+      wiring,
+      health: wiring.state === 'absent' ? 'absent' : 'degraded',
     };
   }
 
@@ -1694,8 +2121,9 @@ export function createSystemdUserServiceOperator(options = {}) {
 
   /**
    * Resolve the unit name before any lifecycle mutation and require it to be
-   * Wharfie's exact fragment without drop-ins. This prevents stop/uninstall
-   * from acting on a higher-precedence foreign unit with the same name.
+   * Wharfie's exact fragment without drop-ins. This refuses an observed
+   * higher-precedence foreign unit; concurrent mutation by another same-UID
+   * process remains inside the documented trusted-user boundary.
    * @param {Readonly<Record<string, any>>} installation - Installed state.
    * @returns {Promise<Readonly<Record<string, any>>>} - Exact manager state.
    */
@@ -1731,7 +2159,7 @@ export function createSystemdUserServiceOperator(options = {}) {
 
   /**
    * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>}} context - App context.
-   * @param {'uninstalled'|'already-uninstalled'} outcome - Converged result.
+   * @param {'uninstalled'|'orphan-reconciled'|'already-uninstalled'} outcome - Converged result.
    * @returns {Record<string, any>} - Data-preserving uninstall receipt.
    */
   function createUninstallReceipt(context, outcome) {
@@ -1766,6 +2194,7 @@ export function createSystemdUserServiceOperator(options = {}) {
         context.layout,
         context.uid,
         context.filesystemUid,
+        context.pair.runtime.target,
       );
       if (!installation || installation.state !== 'installed') {
         throw new Error('Systemd user service is not installed.');
@@ -1793,32 +2222,65 @@ export function createSystemdUserServiceOperator(options = {}) {
     });
     try {
       await prepareManagerUnitDirectory(context.layout, context.filesystemUid);
+      const unitFile = await inspectFixedUnitFile({
+        fsOps,
+        layout: context.layout,
+        uid: context.filesystemUid,
+      });
+      if (unitFile.state === 'conflicting') {
+        throw new Error(
+          'Systemd user unit path contains unverified or different content.',
+        );
+      }
       let knownUnit = await readSystemd(context.layout);
-      if (knownUnit.needDaemonReload) {
+      const cachedWithoutLocalBytes =
+        unitFile.state === 'absent' && knownUnit.loadState !== 'not-found';
+      if (knownUnit.needDaemonReload && !cachedWithoutLocalBytes) {
         await systemctl(['daemon-reload']);
         knownUnit = await readSystemd(context.layout);
       }
-      assertNoForeignEffectiveUnit(knownUnit, context.layout);
-      const artifact = await inspectBytes(artifactPath);
+      if (cachedWithoutLocalBytes) {
+        if (!hasExpectedUnitSource(knownUnit, context.layout)) {
+          throw new Error(
+            'Systemd user-service unit name is already claimed by another effective configuration.',
+          );
+        }
+      } else {
+        assertNoForeignEffectiveUnit(knownUnit, context.layout);
+      }
       await ensureManagedServiceRoot(
         fsOps,
         context.layout,
         context.filesystemUid,
       );
-      const existing = await readInstallation(
+      let existing = await readInstallation(
         context.layout,
         context.uid,
         context.filesystemUid,
+        context.pair.runtime.target,
       );
       const uninstallMarker = await readUninstallMarker(context, existing);
-      if (uninstallMarker && existing?.state !== 'uninstalled') {
+      if (uninstallMarker) {
         throw new Error(
           'Systemd user-service uninstall is incomplete; rerun service uninstall before installing.',
         );
       }
-      if (uninstallMarker) {
-        await fsOps.unlink(context.layout.uninstallPath);
-        await syncDirectory(fsOps, context.layout.serviceRoot);
+      const selected = await readSelectedRelease({
+        fsOps,
+        layout: context.layout,
+        inspectBytes,
+        uid: context.filesystemUid,
+        target: context.pair.runtime.target,
+      });
+      const artifact = await inspectBytes(artifactPath);
+      if (
+        selected &&
+        (!hasSameArtifactBytes(selected, artifact) ||
+          selected.revisionId !== context.pair.runtime.revisionId)
+      ) {
+        throw new Error(
+          'A different artifact is selected; run service uninstall before installing.',
+        );
       }
       if (existing && existing.current.artifactId !== artifact.artifactId) {
         throw new Error(
@@ -1826,6 +2288,56 @@ export function createSystemdUserServiceOperator(options = {}) {
         );
       }
       const observedAt = now();
+      let recoveredReceipt = false;
+      if (!existing && selected) {
+        if (knownUnit.activeState !== 'inactive') {
+          throw new Error(
+            'An active orphan service cannot be adopted safely; run service uninstall before installing.',
+          );
+        }
+        if (
+          unitFile.state === 'absent' &&
+          knownUnit.loadState !== 'not-found'
+        ) {
+          throw new Error(
+            'Systemd has cached an orphan unit whose local bytes are unavailable; run service uninstall before installing.',
+          );
+        }
+        existing = createSystemdUserServiceInstallation({
+          layout: context.layout,
+          uid: context.uid,
+          current: selected,
+          state: 'installed',
+          installedAt: selected.installedAt,
+          updatedAt: Math.max(selected.installedAt, observedAt),
+        });
+        await writeFileAtomic({
+          fsOps,
+          filePath: context.layout.installationPath,
+          contents: `${JSON.stringify(existing, null, 2)}\n`,
+          mode: 0o600,
+          token,
+          uid: context.filesystemUid,
+        });
+        recoveredReceipt = true;
+      } else if (
+        !existing &&
+        (unitFile.state === 'managed' || knownUnit.loadState !== 'not-found')
+      ) {
+        throw new Error(
+          'Systemd user-service wiring is orphaned without a verified executable selection; run service uninstall before installing.',
+        );
+      }
+      if (
+        existing &&
+        selected &&
+        (!hasSameArtifactBytes(existing.current, selected) ||
+          existing.current.revisionId !== selected.revisionId)
+      ) {
+        throw new Error(
+          'Installed systemd user-service selection disagrees with its immutable release.',
+        );
+      }
       const release = await stageRelease({
         fsOps,
         layout: context.layout,
@@ -1943,11 +2455,13 @@ export function createSystemdUserServiceOperator(options = {}) {
       );
       return createReceipt(
         'install',
-        existing?.state === 'installed'
-          ? 'already-installed'
-          : existing
-            ? 'reinstalled'
-            : 'installed',
+        recoveredReceipt
+          ? 'reconciled'
+          : existing?.state === 'installed'
+            ? 'already-installed'
+            : existing
+              ? 'reinstalled'
+              : 'installed',
         status,
       );
     } finally {
@@ -1962,24 +2476,15 @@ export function createSystemdUserServiceOperator(options = {}) {
       context.layout,
       context.uid,
       context.filesystemUid,
+      context.pair.runtime.target,
     );
-    if (!installation || installation.state === 'uninstalled') {
-      return {
-        schemaVersion: SERVICE_RESULT_SCHEMA_VERSION,
-        kind: SERVICE_STATUS_KIND,
-        appId: context.pair.runtime.appId,
-        unit: context.layout.unitName,
-        installation: installation
-          ? {
-              state: 'uninstalled',
-              lastArtifactId: installation.current.artifactId,
-              lastRevisionId: installation.current.revisionId,
-            }
-          : { state: 'absent' },
-        systemd: null,
-        runtime: null,
-        health: 'absent',
-      };
+    const marker = await readUninstallMarker(context, installation);
+    if (
+      !installation ||
+      installation.state === 'uninstalled' ||
+      marker !== null
+    ) {
+      return await observeDetachedInstallation(context, installation, marker);
     }
     return await observeInstallation(installation, {
       tolerateSystemdFailure: true,
@@ -2067,45 +2572,99 @@ export function createSystemdUserServiceOperator(options = {}) {
         context.layout,
         context.uid,
         context.filesystemUid,
+        context.pair.runtime.target,
       );
       let marker = await readUninstallMarker(context, installation);
-      if (!installation) {
-        if (marker) {
-          throw new Error(
-            'Systemd user-service uninstall marker has no installation receipt.',
-          );
-        }
-        return createUninstallReceipt(context, 'already-uninstalled');
+      const selected = await readSelectedRelease({
+        fsOps,
+        layout: context.layout,
+        inspectBytes,
+        uid: context.filesystemUid,
+        target: context.pair.runtime.target,
+      });
+      if (
+        installation &&
+        selected &&
+        (!hasSameArtifactBytes(installation.current, selected) ||
+          installation.current.revisionId !== selected.revisionId)
+      ) {
+        throw new Error(
+          'Installed systemd user-service selection disagrees with its immutable release.',
+        );
       }
-      if (installation.state === 'uninstalled') {
-        if (marker) {
-          await fsOps.unlink(context.layout.uninstallPath);
-          await syncDirectory(fsOps, context.layout.serviceRoot);
-        }
-        return createUninstallReceipt(context, 'already-uninstalled');
+      if (installation?.state === 'installed' && !marker && !selected) {
+        throw new Error(
+          'Installed systemd user-service current selection is missing.',
+        );
+      }
+      if (
+        marker?.release &&
+        selected &&
+        (marker.release.artifactId !== selected.artifactId ||
+          marker.release.revisionId !== selected.revisionId)
+      ) {
+        throw new Error(
+          'Systemd user-service uninstall marker disagrees with the selected release.',
+        );
+      }
+      if (!installation && marker?.release && !selected) {
+        throw new Error(
+          'Systemd user-service uninstall marker retained a release identity but its current selection is missing.',
+        );
+      }
+      await removeStaleUninstallMarkerTemps(context);
+      if (
+        !installation &&
+        !selected &&
+        !marker &&
+        (await hasManagedServiceRoot(
+          fsOps,
+          context.layout,
+          context.filesystemUid,
+        )) &&
+        (await fsOps.readdir(context.layout.serviceRoot)).length > 0
+      ) {
+        throw new Error(
+          'Durable application state exists without a verified release identity; refusing orphan cleanup.',
+        );
       }
 
-      await assertManagedUnitDirectory(
-        fsOps,
-        context.layout,
-        context.filesystemUid,
-      );
       const expectedUnit = createSystemdUserServiceUnit({
         layout: context.layout,
       });
-      let restoredUnit = false;
-      try {
-        const installedUnit = await readManagedTextFile({
-          fsOps,
-          filePath: context.layout.unitPath,
-          label: 'Installed systemd user unit',
-          uid: context.filesystemUid,
-        });
-        if (installedUnit !== expectedUnit) {
-          throw new Error('Installed systemd user unit was changed.');
+      let unitFile = await inspectFixedUnitFile({
+        fsOps,
+        layout: context.layout,
+        uid: context.filesystemUid,
+      });
+      if (unitFile.state === 'conflicting') {
+        throw new Error(
+          'Systemd user unit path contains unverified or different content.',
+        );
+      }
+      let systemd = await readSystemd(context.layout);
+      const cachedWithoutLocalBytes =
+        unitFile.state === 'absent' && systemd.loadState !== 'not-found';
+      if (cachedWithoutLocalBytes) {
+        if (!hasExpectedUnitSource(systemd, context.layout)) {
+          throw new Error(
+            'Systemd loaded different effective service wiring; refusing orphan cleanup.',
+          );
         }
-      } catch (error) {
-        if (!marker || !hasCode(error, 'ENOENT')) throw error;
+        if (!installation && !marker) {
+          throw new Error(
+            'Systemd has cached a unit whose local bytes cannot be verified; refusing to mutate the unit name.',
+          );
+        }
+        await assertNoOtherUnitClaims(
+          context.layout,
+          await readManagerUnitPaths(),
+        );
+        await ensureManagedUnitDirectory(
+          fsOps,
+          context.layout,
+          context.filesystemUid,
+        );
         await writeFileAtomic({
           fsOps,
           filePath: context.layout.unitPath,
@@ -2114,31 +2673,94 @@ export function createSystemdUserServiceOperator(options = {}) {
           token: createToken(),
           uid: context.filesystemUid,
         });
-        restoredUnit = true;
+        unitFile = Object.freeze({ state: 'managed' });
+        await systemctl(['daemon-reload']);
+        systemd = await readSystemd(context.layout);
+        if (!hasExpectedEffectiveUnit(systemd, context.layout)) {
+          throw new Error(
+            "Systemd did not reload Wharfie's restored unit exactly; refusing orphan cleanup.",
+          );
+        }
+      } else {
+        if (systemd.needDaemonReload) {
+          await systemctl(['daemon-reload']);
+          systemd = await readSystemd(context.layout);
+        }
+        assertNoForeignEffectiveUnit(systemd, context.layout);
       }
-      if (restoredUnit) await systemctl(['daemon-reload']);
-      await assertExpectedEffectiveUnit(installation);
-      await systemctl(['disable', '--now', context.layout.unitName]);
-      await waitForSystemdInactive(installation, stopTimeoutMs);
+      const unitPaths = await readManagerUnitPaths();
+      await assertNoOtherUnitClaims(context.layout, unitPaths);
+
+      const hasDetachedWiring =
+        unitFile.state !== 'absent' ||
+        systemd.loadState !== 'not-found' ||
+        selected !== null ||
+        marker !== null;
+      if (
+        !hasDetachedWiring &&
+        (!installation || installation.state === 'uninstalled')
+      ) {
+        return createUninstallReceipt(context, 'already-uninstalled');
+      }
+
+      if (unitFile.state === 'managed' && systemd.loadState === 'not-found') {
+        await systemctl(['daemon-reload']);
+        systemd = await readSystemd(context.layout);
+        assertNoForeignEffectiveUnit(systemd, context.layout);
+      }
+
+      if (systemd.loadState === 'loaded') {
+        if (!hasExpectedEffectiveUnit(systemd, context.layout)) {
+          throw new Error(
+            'Systemd loaded different or stale effective service wiring; refusing orphan cleanup.',
+          );
+        }
+        await systemctl(['disable', '--now', context.layout.unitName]);
+        await waitForSystemdInactive({ layout: context.layout }, stopTimeoutMs);
+      } else if (systemd.loadState !== 'not-found') {
+        throw new Error(
+          'Systemd user-service state is not safe for orphan cleanup.',
+        );
+      }
 
       if (!marker) {
+        const release = installation?.current || selected;
         marker = validateUninstallMarker(
           {
-            schemaVersion: 1,
+            schemaVersion: UNINSTALL_MARKER_SCHEMA_VERSION,
             kind: UNINSTALL_MARKER_KIND,
-            appId: installation.appId,
-            unitName: installation.unitName,
+            appId: context.pair.runtime.appId,
+            unitName: context.layout.unitName,
             uid: context.uid,
-            artifactId: installation.current.artifactId,
-            revisionId: installation.current.revisionId,
+            layout: context.layout,
+            unitDigest: createHash('sha256')
+              .update(expectedUnit, 'utf8')
+              .digest('base64url'),
+            receiptState: installation?.state || 'missing',
+            release: release
+              ? {
+                  artifactId: release.artifactId,
+                  revisionId: release.revisionId,
+                }
+              : null,
           },
           {
-            appId: installation.appId,
-            unitName: installation.unitName,
+            appId: context.pair.runtime.appId,
+            unitName: context.layout.unitName,
             uid: context.uid,
-            artifactId: installation.current.artifactId,
-            revisionId: installation.current.revisionId,
+            layout: context.layout,
+            ...(release
+              ? {
+                  artifactId: release.artifactId,
+                  revisionId: release.revisionId,
+                }
+              : {}),
           },
+        );
+        await ensureManagedServiceRoot(
+          fsOps,
+          context.layout,
+          context.filesystemUid,
         );
         await writeFileAtomic({
           fsOps,
@@ -2150,46 +2772,83 @@ export function createSystemdUserServiceOperator(options = {}) {
         });
       }
 
-      await assertManagedUnitDirectory(
-        fsOps,
-        context.layout,
-        context.filesystemUid,
-      );
-      await fsOps.unlink(context.layout.unitPath).catch(
-        /** @param {unknown} error - Filesystem failure. */ (error) => {
-          if (!hasCode(error, 'ENOENT')) throw error;
-        },
-      );
-      await syncDirectory(fsOps, path.dirname(context.layout.unitPath));
-      await systemctl(['daemon-reload']);
-      await fsOps.unlink(context.layout.currentLink).catch(
-        /** @param {unknown} error - Filesystem failure. */ (error) => {
-          if (!hasCode(error, 'ENOENT')) throw error;
-        },
-      );
-      await syncDirectory(fsOps, context.layout.serviceRoot);
-      const uninstalledAt = now();
-      const retainedInstallation = createSystemdUserServiceInstallation({
-        layout: context.layout,
-        uid: context.uid,
-        current: installation.current,
-        previous: installation.previous,
-        state: 'uninstalled',
-        installedAt: installation.installedAt,
-        updatedAt: Math.max(installation.updatedAt, uninstalledAt),
-      });
-      await writeFileAtomic({
-        fsOps,
-        filePath: context.layout.installationPath,
-        contents: `${JSON.stringify(retainedInstallation, null, 2)}\n`,
-        mode: 0o600,
-        token: createToken(),
-        uid: context.filesystemUid,
-      });
+      if (unitFile.state === 'managed') {
+        const reverified = await inspectFixedUnitFile({
+          fsOps,
+          layout: context.layout,
+          uid: context.filesystemUid,
+        });
+        if (reverified.state !== 'managed') {
+          throw new Error(
+            'Systemd user unit changed before orphan cleanup could remove it.',
+          );
+        }
+        await fsOps.unlink(context.layout.unitPath);
+        await syncDirectory(fsOps, path.dirname(context.layout.unitPath));
+        await systemctl(['daemon-reload']);
+      }
+      const finalSystemd = await readSystemd(context.layout);
+      if (
+        finalSystemd.loadState !== 'not-found' ||
+        finalSystemd.needDaemonReload !== false
+      ) {
+        throw new Error(
+          'Systemd exposed another or stale unit after Wharfie removed its wiring; cleanup remains incomplete.',
+        );
+      }
+
+      const retainedRelease = installation?.current || selected;
+      if (retainedRelease && installation?.state !== 'uninstalled') {
+        const uninstalledAt = now();
+        const retainedInstallation = createSystemdUserServiceInstallation({
+          layout: context.layout,
+          uid: context.uid,
+          current: retainedRelease,
+          previous: installation?.previous,
+          state: 'uninstalled',
+          installedAt: installation?.installedAt ?? retainedRelease.installedAt,
+          updatedAt: Math.max(
+            installation?.updatedAt ?? retainedRelease.installedAt,
+            uninstalledAt,
+          ),
+        });
+        await writeFileAtomic({
+          fsOps,
+          filePath: context.layout.installationPath,
+          contents: `${JSON.stringify(retainedInstallation, null, 2)}\n`,
+          mode: 0o600,
+          token: createToken(),
+          uid: context.filesystemUid,
+        });
+      }
+      if (selected) {
+        const reselected = await readSelectedRelease({
+          fsOps,
+          layout: context.layout,
+          inspectBytes,
+          uid: context.filesystemUid,
+          target: context.pair.runtime.target,
+        });
+        if (
+          !reselected ||
+          !hasSameArtifactBytes(reselected, selected) ||
+          reselected.revisionId !== selected.revisionId
+        ) {
+          throw new Error(
+            'Systemd user-service current selection changed before cleanup.',
+          );
+        }
+        await fsOps.unlink(context.layout.currentLink);
+      }
       await syncDirectory(fsOps, context.layout.serviceRoot);
       await fsOps.unlink(context.layout.uninstallPath);
       await syncDirectory(fsOps, context.layout.serviceRoot);
-      return createUninstallReceipt(context, 'uninstalled');
+      return createUninstallReceipt(
+        context,
+        marker.receiptState === 'installed'
+          ? 'uninstalled'
+          : 'orphan-reconciled',
+      );
     } finally {
       await releaseLock();
     }

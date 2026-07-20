@@ -20,10 +20,10 @@ framework is no longer part of the product, and breaking changes are expected.
 4. Promote that executable to a persistent single-node service.
 5. Enroll more trusted nodes when placement or recovery requires them.
 
-The current implementation proves the first three steps and implements the
-first packaged Linux single-node service lifecycle; real boot/reboot proof in a
-disposable systemd environment is still required to complete step four. A
-source or packaged command can durably submit one
+The current implementation proves the first four steps on Linux, including a
+packaged single-node systemd service that recovers after process death and an
+abrupt machine reboot in a disposable Ubuntu environment. A source or packaged
+command can durably submit one
 revision-pinned activity while the worker is offline; the matching single-node
 resident later executes requests serially and recovers conservatively after a
 process restart. A stale unstarted claim can be rescheduled, while work that
@@ -44,9 +44,9 @@ cancellation, and evidence-reconciliation commands understand the redacted
 activation-aware workflow cursor.
 
 This is not yet a complete durable workflow engine. Packaged Linux artifacts
-now implement a systemd user-service lifecycle, while real boot/reboot proof in
-a disposable Linux environment remains outstanding. Workflow cancellation has
-durable cursor authority and active-owner delivery. Branches,
+implement a systemd user-service lifecycle with real reboot evidence and
+explicit orphan-wiring reconciliation. Workflow cancellation has durable
+cursor authority and active-owner delivery. Branches,
 an early-signal inbox, managed-effect workflow successors, schedules,
 provider-backed deployment, multi-host leases/heartbeats, and the trusted-node
 mesh remain roadmap work; Wharfie is not production ready.

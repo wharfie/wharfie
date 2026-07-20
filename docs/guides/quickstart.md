@@ -301,7 +301,17 @@ effective fragment without drop-ins. Packaged durable state is likewise fixed
 to the operating-system account's data root rather than ambient
 `XDG_DATA_HOME` or `HOME`. Uninstall disables the unit and removes the
 executable selector while preserving immutable releases, ledger data, payloads,
-application state, and the installation identity tombstone.
+and application state. It retains an installation identity tombstone whenever
+a receipt or verified release exists.
+
+Status schema V2 reports `wiring.state` as `managed`, `absent`, `orphaned`,
+`conflicting`, or `unknown`; `wiring.selection` separately reports the redacted
+immutable-selector state. If wiring is `orphaned`, run `service uninstall`:
+that existing command is the explicit cleanup path and returns
+`outcome: orphan-reconciled`. Do not retry `service install` against an active
+orphan. Install can safely reconstruct only a missing receipt for an inactive,
+rehashed exact `current` release, returning `outcome: reconciled`. There is no
+separate `service reconcile` command.
 Update and rollback remain unavailable until Wharfie has a race-free
 maintenance/handoff protocol. The repository's
 disposable Ubuntu proof covers crash replacement, abrupt reboot, pre-login
@@ -506,8 +516,9 @@ unavailable on `PATH`. Source-process and relocated-SEA matrices also prove
 public workflow start, persisted timer restart, current-wait signal delivery,
 recovery, reconciliation, offline cancellation, and active
 persist-before-signal response-loss behavior. Wharfie remains a single-process
-worker rather than a production workflow service: real boot/reboot proof and
-multi-host coordination are still intentionally absent.
+worker rather than a production workflow service. A disposable Ubuntu systemd
+proof now covers abrupt reboot and pre-login recovery; multi-host coordination
+is still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.

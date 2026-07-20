@@ -20,7 +20,10 @@ import {
   parseSystemdUserManagerUnitPath,
   readSystemdUserServiceRuntimeState,
 } from '../../../src/core/runtime/services/systemd-user-service-manager.js';
-import { createSystemdUserServiceLayout } from '../../../src/core/runtime/services/systemd-user-service.js';
+import {
+  createSystemdUserServiceLayout,
+  createSystemdUserServiceUnit,
+} from '../../../src/core/runtime/services/systemd-user-service.js';
 
 const REVISION_ID = `wrv1_${Buffer.alloc(32, 4).toString('base64url')}`;
 const APP_ID = 'service-demo';
@@ -44,7 +47,7 @@ afterEach(async () => {
 });
 
 /**
- * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -70,6 +73,7 @@ async function createHarness(options = {}) {
     dataRoot,
     configRoot,
   });
+  const seededForeignFragmentPath = options.managerFragmentPath ?? null;
   const state = {
     active: false,
     enabled: false,
@@ -78,7 +82,12 @@ async function createHarness(options = {}) {
     systemdMode: options.systemdMode || 'normal',
     failDaemonReloadOnce: false,
     failUnitPath: false,
-    fragmentPath: options.managerFragmentPath ?? layout.unitPath,
+    loadState: seededForeignFragmentPath ? 'loaded' : 'not-found',
+    fragmentPath: seededForeignFragmentPath || '',
+    persistentForeignFragmentPath: seededForeignFragmentPath,
+    revealForeignUnitPathAfterRemoval: /** @type {string | null} */ (null),
+    retainActiveWhenUnitMissingOnReload:
+      options.retainActiveWhenUnitMissingOnReload === true,
     dropInPaths: '',
     needDaemonReload: false,
     failUnitShow: false,
@@ -88,6 +97,44 @@ async function createHarness(options = {}) {
       : null,
     unknownUnitShows: options.unitInitiallyUnknown ? 1 : 0,
     now: 100,
+  };
+  const refreshManagerCache = async () => {
+    if (state.persistentForeignFragmentPath) {
+      state.loadState = 'loaded';
+      state.fragmentPath = state.persistentForeignFragmentPath;
+      state.needDaemonReload = false;
+      return;
+    }
+    let fixedUnitExists = false;
+    try {
+      await fsp.lstat(layout.unitPath);
+      fixedUnitExists = true;
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+    if (!fixedUnitExists && state.revealForeignUnitPathAfterRemoval) {
+      const foreignPath = state.revealForeignUnitPathAfterRemoval;
+      await fsp.mkdir(path.dirname(foreignPath), { recursive: true });
+      await fsp.writeFile(foreignPath, '[Unit]\nDescription=foreign\n', {
+        mode: 0o600,
+      });
+      state.persistentForeignFragmentPath = foreignPath;
+      state.loadState = 'loaded';
+      state.fragmentPath = foreignPath;
+      state.dropInPaths = '';
+      state.needDaemonReload = false;
+      return;
+    }
+    state.loadState = fixedUnitExists ? 'loaded' : 'not-found';
+    state.fragmentPath = fixedUnitExists ? layout.unitPath : '';
+    if (!fixedUnitExists && !state.retainActiveWhenUnitMissingOnReload) {
+      state.active = false;
+      state.enabled = false;
+      state.dropInPaths = '';
+    }
+    state.needDaemonReload = false;
   };
   /** @type {Array<{command: string, args: string[]}>} */
   const calls = [];
@@ -116,7 +163,7 @@ async function createHarness(options = {}) {
         state.unitPaths = state.unitPathsAfterReload;
         state.unitPathsAfterReload = null;
       }
-      if (operation === 'daemon-reload') state.needDaemonReload = false;
+      if (operation === 'daemon-reload') await refreshManagerCache();
       if (operation === 'enable') {
         state.enabled = true;
         state.active = true;
@@ -143,6 +190,24 @@ async function createHarness(options = {}) {
               'SubState=dead',
               'Result=success',
               'MainPID=0',
+              'ExecMainStatus=0',
+              'FragmentPath=',
+              'DropInPaths=',
+              `NeedDaemonReload=${state.needDaemonReload ? 'yes' : 'no'}`,
+              '',
+            ].join('\n'),
+            stderr: '',
+          };
+        }
+        if (state.loadState === 'not-found') {
+          return {
+            stdout: [
+              'LoadState=not-found',
+              'UnitFileState=',
+              `ActiveState=${state.active ? 'active' : 'inactive'}`,
+              `SubState=${state.active ? 'running' : 'dead'}`,
+              'Result=success',
+              `MainPID=${state.active ? 4321 : 0}`,
               'ExecMainStatus=0',
               'FragmentPath=',
               'DropInPaths=',
@@ -471,9 +536,16 @@ describe('systemd user service manager', () => {
     );
 
     await expect(harness.operator.status()).resolves.toMatchObject({
+      schemaVersion: 2,
       kind: 'wharfie.service.status',
       health: 'healthy',
       systemd: { activeState: 'active', unitFileState: 'enabled' },
+      wiring: {
+        state: 'managed',
+        unitFile: 'managed',
+        effectiveUnit: 'managed',
+        cleanupPending: false,
+      },
       runtime: {
         status: 'READY',
         revisionId: REVISION_ID,
@@ -521,16 +593,192 @@ describe('systemd user service manager', () => {
     await fsp.unlink(harness.layout.installationPath);
 
     await expect(harness.operator.install()).resolves.toMatchObject({
-      outcome: 'installed',
+      outcome: 'reconciled',
       health: 'healthy',
     });
     const installation = JSON.parse(
       await fsp.readFile(harness.layout.installationPath, 'utf8'),
     );
     expect(installation).toMatchObject({
-      installedAt: 200,
+      installedAt: 100,
       updatedAt: 200,
       current: { installedAt: 100 },
+    });
+  });
+
+  it('reports and removes active managed wiring orphaned by a missing receipt', async () => {
+    const harness = await createHarness();
+    const installed = await harness.operator.install();
+    const retainedRelease = path.join(
+      harness.layout.releasesRoot,
+      installed.activeArtifactId,
+      'app',
+    );
+    const retainedState = path.join(harness.layout.stateRoot, 'orphan-marker');
+    await fsp.writeFile(retainedState, 'durable');
+    await fsp.unlink(harness.layout.installationPath);
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'degraded',
+      installation: { state: 'absent' },
+      systemd: { activeState: 'active', fragmentPath: harness.layout.unitPath },
+      runtime: null,
+      wiring: {
+        state: 'orphaned',
+        unitFile: 'managed',
+        effectiveUnit: 'managed',
+        cleanupPending: false,
+      },
+    });
+
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      action: 'uninstall',
+      outcome: 'orphan-reconciled',
+      health: 'absent',
+    });
+    await expect(fsp.readFile(retainedRelease, 'utf8')).resolves.toBe(
+      'packaged-artifact-v1',
+    );
+    await expect(fsp.readFile(retainedState, 'utf8')).resolves.toBe('durable');
+    await expect(fsp.stat(harness.layout.unitPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.lstat(harness.layout.currentLink)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'absent',
+      installation: {
+        state: 'uninstalled',
+        lastArtifactId: installed.activeArtifactId,
+      },
+      systemd: { loadState: 'not-found' },
+      wiring: {
+        state: 'absent',
+        unitFile: 'absent',
+        effectiveUnit: 'absent',
+        cleanupPending: false,
+      },
+    });
+  });
+
+  it('does not reload a cached active orphan before directing uninstall', async () => {
+    const harness = await createHarness({
+      retainActiveWhenUnitMissingOnReload: true,
+    });
+    await harness.operator.install();
+    await fsp.unlink(harness.layout.installationPath);
+    await fsp.unlink(harness.layout.unitPath);
+    harness.state.needDaemonReload = true;
+    harness.calls.length = 0;
+
+    await expect(harness.operator.install()).rejects.toThrow(/active orphan/);
+    expect(harness.calls).not.toEqual(
+      expect.arrayContaining([
+        { command: 'systemctl', args: ['--user', 'daemon-reload'] },
+      ]),
+    );
+    expect(harness.state.active).toBe(true);
+  });
+
+  it('reports and removes a verified selector left without unit wiring or a receipt', async () => {
+    const harness = await createHarness();
+    const installed = await harness.operator.install();
+    await fsp.unlink(harness.layout.installationPath);
+    await fsp.unlink(harness.layout.unitPath);
+    await harness.execute('systemctl', ['--user', 'daemon-reload']);
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'degraded',
+      installation: { state: 'absent' },
+      systemd: { loadState: 'not-found' },
+      wiring: {
+        state: 'orphaned',
+        unitFile: 'absent',
+        selection: 'managed',
+        effectiveUnit: 'absent',
+        cleanupPending: false,
+      },
+    });
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      outcome: 'orphan-reconciled',
+      health: 'absent',
+    });
+    await expect(fsp.lstat(harness.layout.currentLink)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(
+      fsp.readFile(harness.layout.installationPath, 'utf8'),
+    ).resolves.toContain(installed.activeArtifactId);
+  });
+
+  it('refuses identity-less orphan cleanup when durable app state remains', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    const retainedState = path.join(
+      harness.layout.stateRoot,
+      'identity-required',
+    );
+    await fsp.writeFile(retainedState, 'durable');
+    await fsp.unlink(harness.layout.installationPath);
+    await fsp.unlink(harness.layout.currentLink);
+    harness.calls.length = 0;
+
+    await expect(harness.operator.uninstall()).rejects.toThrow(
+      /durable application state exists without a verified release identity/i,
+    );
+    await expect(fsp.readFile(retainedState, 'utf8')).resolves.toBe('durable');
+    await expect(fsp.stat(harness.layout.unitPath)).resolves.toBeDefined();
+    expect(harness.calls).not.toEqual(
+      expect.arrayContaining([
+        {
+          command: 'systemctl',
+          args: ['--user', 'disable', '--now', harness.layout.unitName],
+        },
+      ]),
+    );
+  });
+
+  it('removes identity-less exact unit wiring when no managed state exists', async () => {
+    const harness = await createHarness();
+    const staleMarkerTemp = path.join(
+      harness.layout.serviceRoot,
+      '..uninstalling.json.00000000-0000-4000-8000-000000000000.tmp',
+    );
+    await fsp.mkdir(harness.layout.serviceRoot, {
+      recursive: true,
+      mode: 0o700,
+    });
+    await fsp.writeFile(staleMarkerTemp, '{', { mode: 0o600 });
+    await fsp.mkdir(path.dirname(harness.layout.unitPath), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await fsp.writeFile(
+      harness.layout.unitPath,
+      createSystemdUserServiceUnit({ layout: harness.layout }),
+      { mode: 0o600 },
+    );
+    await harness.execute('systemctl', ['--user', 'daemon-reload']);
+    harness.state.active = true;
+    harness.state.enabled = true;
+
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      outcome: 'orphan-reconciled',
+      health: 'absent',
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'absent',
+      installation: { state: 'absent' },
+      wiring: {
+        state: 'absent',
+        unitFile: 'absent',
+        selection: 'absent',
+        effectiveUnit: 'absent',
+      },
+    });
+    await expect(fsp.stat(staleMarkerTemp)).rejects.toMatchObject({
+      code: 'ENOENT',
     });
   });
 
@@ -547,6 +795,25 @@ describe('systemd user service manager', () => {
 
     await expect(harness.operator.install()).rejects.toThrow(
       /bytes failed verification/,
+    );
+  });
+
+  it('rejects a selected release whose target identity was changed', async () => {
+    const harness = await createHarness();
+    const installed = await harness.operator.install();
+    const releasePath = path.join(
+      harness.layout.releasesRoot,
+      installed.activeArtifactId,
+      'release.json',
+    );
+    const release = JSON.parse(await fsp.readFile(releasePath, 'utf8'));
+    release.target.architecture = 'arm64';
+    await fsp.chmod(releasePath, 0o600);
+    await fsp.writeFile(releasePath, `${JSON.stringify(release, null, 2)}\n`);
+    await fsp.unlink(harness.layout.installationPath);
+
+    await expect(harness.operator.install()).rejects.toThrow(
+      /current selection disagrees with its release/,
     );
   });
 
@@ -721,6 +988,41 @@ describe('systemd user service manager', () => {
     );
   });
 
+  it('rejects conflicting fixed-unit bytes before selecting a release', async () => {
+    const harness = await createHarness();
+    await fsp.mkdir(path.dirname(harness.layout.unitPath), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await fsp.writeFile(
+      harness.layout.unitPath,
+      '[Unit]\nDescription=foreign unit\n',
+      { mode: 0o600 },
+    );
+    harness.state.needDaemonReload = true;
+
+    await expect(harness.operator.install()).rejects.toThrow(
+      /unverified or different content/,
+    );
+    await expect(fsp.readFile(harness.layout.unitPath, 'utf8')).resolves.toBe(
+      '[Unit]\nDescription=foreign unit\n',
+    );
+    await expect(fsp.lstat(harness.layout.currentLink)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(
+      fsp.stat(harness.layout.installationPath),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(harness.calls).not.toEqual(
+      expect.arrayContaining([
+        {
+          command: 'systemctl',
+          args: ['--user', 'enable', '--now', 'wharfie-service-demo.service'],
+        },
+      ]),
+    );
+  });
+
   it('refuses managed symlink redirection and foreign ownership', async () => {
     const linked = await createHarness();
     const redirect = path.join(linked.root, 'redirect');
@@ -750,8 +1052,14 @@ describe('systemd user service manager', () => {
     }
 
     await expect(harness.operator.status()).resolves.toMatchObject({
-      health: 'absent',
+      health: 'degraded',
       installation: { state: 'absent' },
+      wiring: {
+        state: 'conflicting',
+        unitFile: 'conflicting',
+        effectiveUnit: 'absent',
+        cleanupPending: false,
+      },
     });
 
     const managedDirectories = [
@@ -994,7 +1302,7 @@ describe('systemd user service manager', () => {
       /different unit or additional drop-ins/,
     );
     await expect(harness.operator.uninstall()).rejects.toThrow(
-      /different unit or additional drop-ins/,
+      /unit name is already claimed/,
     );
     expect(harness.state.active).toBe(true);
     await expect(fsp.stat(harness.layout.unitPath)).resolves.toMatchObject({
@@ -1005,7 +1313,7 @@ describe('systemd user service manager', () => {
     });
   });
 
-  it('never stops or uninstalls while the manager unit cache is stale', async () => {
+  it('refuses stop but reloads stale manager state before uninstall', async () => {
     const harness = await createHarness();
     await harness.operator.install();
     harness.state.needDaemonReload = true;
@@ -1013,10 +1321,16 @@ describe('systemd user service manager', () => {
     await expect(harness.operator.stop()).rejects.toThrow(
       /unit cache is stale/,
     );
-    await expect(harness.operator.uninstall()).rejects.toThrow(
-      /unit cache is stale/,
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      outcome: 'uninstalled',
+      health: 'absent',
+    });
+    expect(harness.state.active).toBe(false);
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        { command: 'systemctl', args: ['--user', 'daemon-reload'] },
+      ]),
     );
-    expect(harness.state.active).toBe(true);
   });
 
   it('uninstalls manager wiring while preserving immutable releases and durable state', async () => {
@@ -1069,6 +1383,12 @@ describe('systemd user service manager', () => {
         lastArtifactId: installed.activeArtifactId,
         lastRevisionId: REVISION_ID,
       },
+      wiring: {
+        state: 'absent',
+        unitFile: 'absent',
+        effectiveUnit: 'absent',
+        cleanupPending: false,
+      },
       health: 'absent',
     });
     await expect(harness.operator.uninstall()).resolves.toMatchObject({
@@ -1078,13 +1398,149 @@ describe('systemd user service manager', () => {
     await expect(harness.operator.start()).rejects.toThrow(/not installed/);
   });
 
-  it('serializes an absent uninstall against a concurrent first install', async () => {
+  it('reconverges a tombstone after exact managed unit wiring is resurrected', async () => {
+    const harness = await createHarness();
+    const installed = await harness.operator.install();
+    const retainedRelease = path.join(
+      harness.layout.releasesRoot,
+      installed.activeArtifactId,
+      'app',
+    );
+    const retainedState = path.join(
+      harness.layout.stateRoot,
+      'resurrection-marker',
+    );
+    await fsp.writeFile(retainedState, 'durable');
+    await harness.operator.uninstall();
+    await fsp.writeFile(
+      harness.layout.unitPath,
+      createSystemdUserServiceUnit({ layout: harness.layout }),
+      { mode: 0o600 },
+    );
+    harness.state.needDaemonReload = true;
+    await harness.execute('systemctl', ['--user', 'daemon-reload']);
+    harness.state.active = true;
+    harness.state.enabled = true;
+    harness.calls.length = 0;
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'degraded',
+      installation: { state: 'uninstalled' },
+      wiring: {
+        state: 'orphaned',
+        unitFile: 'managed',
+        effectiveUnit: 'managed',
+        cleanupPending: false,
+      },
+    });
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      outcome: 'orphan-reconciled',
+      health: 'absent',
+    });
+    await expect(fsp.readFile(retainedRelease, 'utf8')).resolves.toBe(
+      'packaged-artifact-v1',
+    );
+    await expect(fsp.readFile(retainedState, 'utf8')).resolves.toBe('durable');
+    await expect(fsp.stat(harness.layout.unitPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'absent',
+      installation: { state: 'uninstalled' },
+      systemd: { loadState: 'not-found' },
+      wiring: { state: 'absent' },
+    });
+  });
+
+  it('refuses cached managed wiring when both local unit bytes and receipt are missing', async () => {
+    const harness = await createHarness();
+    const installed = await harness.operator.install();
+    const retainedRelease = path.join(
+      harness.layout.releasesRoot,
+      installed.activeArtifactId,
+      'app',
+    );
+    await fsp.unlink(harness.layout.unitPath);
+    await fsp.unlink(harness.layout.installationPath);
+    harness.state.needDaemonReload = true;
+    harness.state.retainActiveWhenUnitMissingOnReload = true;
+    harness.calls.length = 0;
+
+    await expect(harness.operator.uninstall()).rejects.toThrow(
+      /cached a unit whose local bytes cannot be verified/,
+    );
+    expect(harness.calls).not.toEqual(
+      expect.arrayContaining([
+        { command: 'systemctl', args: ['--user', 'daemon-reload'] },
+        {
+          command: 'systemctl',
+          args: ['--user', 'disable', '--now', harness.layout.unitName],
+        },
+      ]),
+    );
+    await expect(fsp.readFile(retainedRelease, 'utf8')).resolves.toBe(
+      'packaged-artifact-v1',
+    );
+    await expect(fsp.readlink(harness.layout.currentLink)).resolves.toBe(
+      path.join('releases', installed.activeArtifactId),
+    );
+    await expect(fsp.stat(harness.layout.uninstallPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('restores authorized missing unit bytes before reloading an active service', async () => {
+    const harness = await createHarness({
+      retainActiveWhenUnitMissingOnReload: true,
+    });
+    await harness.operator.install();
+    await fsp.unlink(harness.layout.unitPath);
+    harness.state.needDaemonReload = true;
+    harness.calls.length = 0;
+
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      outcome: 'uninstalled',
+      health: 'absent',
+    });
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        { command: 'systemctl', args: ['--user', 'daemon-reload'] },
+        {
+          command: 'systemctl',
+          args: ['--user', 'disable', '--now', harness.layout.unitName],
+        },
+      ]),
+    );
+    expect(harness.state.active).toBe(false);
+  });
+
+  it('serializes clean absent uninstall and establishes disk and manager absence', async () => {
     const harness = await createHarness();
 
     await expect(harness.operator.uninstall()).resolves.toMatchObject({
       outcome: 'already-uninstalled',
     });
     expect(harness.acquireOperationLock).toHaveBeenCalledTimes(1);
+    await expect(fsp.stat(harness.layout.unitPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.lstat(harness.layout.currentLink)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(
+      fsp.stat(harness.layout.installationPath),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'absent',
+      installation: { state: 'absent' },
+      systemd: { loadState: 'not-found' },
+      wiring: {
+        state: 'absent',
+        unitFile: 'absent',
+        effectiveUnit: 'absent',
+        cleanupPending: false,
+      },
+    });
   });
 
   it('retains the last selection so uninstall cannot bypass deferred update', async () => {
@@ -1113,6 +1569,52 @@ describe('systemd user service manager', () => {
       await fsp.readFile(harness.layout.installationPath, 'utf8'),
     );
     expect(installation.updatedAt).toBe(200);
+  });
+
+  it('retains its cleanup marker when removing the fixed unit reveals a lower-priority foreign unit', async () => {
+    const harness = await createHarness();
+    const installed = await harness.operator.install();
+    const lowerPriorityDirectory = path.join(
+      harness.root,
+      'lower-priority-systemd-user',
+    );
+    const foreignPath = path.join(
+      lowerPriorityDirectory,
+      harness.layout.unitName,
+    );
+    harness.state.unitPaths.push(lowerPriorityDirectory);
+    harness.state.revealForeignUnitPathAfterRemoval = foreignPath;
+
+    await expect(harness.operator.uninstall()).rejects.toThrow(
+      /exposed another or stale unit/,
+    );
+    await expect(fsp.stat(harness.layout.unitPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.readFile(foreignPath, 'utf8')).resolves.toContain(
+      'Description=foreign',
+    );
+    await expect(fsp.stat(harness.layout.uninstallPath)).resolves.toBeDefined();
+    await expect(fsp.readlink(harness.layout.currentLink)).resolves.toBe(
+      path.join('releases', installed.activeArtifactId),
+    );
+    const installation = JSON.parse(
+      await fsp.readFile(harness.layout.installationPath, 'utf8'),
+    );
+    expect(installation.state).toBe('installed');
+    expect(harness.state.active).toBe(false);
+
+    harness.state.persistentForeignFragmentPath = null;
+    harness.state.revealForeignUnitPathAfterRemoval = null;
+    await fsp.unlink(foreignPath);
+    await harness.execute('systemctl', ['--user', 'daemon-reload']);
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      outcome: 'uninstalled',
+      health: 'absent',
+    });
+    await expect(fsp.stat(harness.layout.uninstallPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('reconverges a resumed uninstall if the worker was restarted', async () => {
@@ -1145,5 +1647,43 @@ describe('systemd user service manager', () => {
     await expect(fsp.stat(harness.layout.uninstallPath)).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('preserves installed-uninstall identity after crashing past tombstone publication', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    harness.state.now = 200;
+    const originalUnlink = fsp.unlink.bind(fsp);
+    let failCurrentUnlink = true;
+    const unlink = jest
+      .spyOn(fsp, 'unlink')
+      .mockImplementation(async (value) => {
+        if (String(value) === harness.layout.currentLink && failCurrentUnlink) {
+          failCurrentUnlink = false;
+          throw new Error('current unlink interrupted');
+        }
+        await originalUnlink(value);
+      });
+
+    await expect(harness.operator.uninstall()).rejects.toThrow(
+      /current unlink interrupted/,
+    );
+    unlink.mockRestore();
+    const interrupted = JSON.parse(
+      await fsp.readFile(harness.layout.installationPath, 'utf8'),
+    );
+    expect(interrupted).toMatchObject({ state: 'uninstalled', updatedAt: 200 });
+    await expect(fsp.stat(harness.layout.uninstallPath)).resolves.toBeDefined();
+    await expect(fsp.lstat(harness.layout.currentLink)).resolves.toBeDefined();
+
+    harness.state.now = 300;
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      outcome: 'uninstalled',
+      health: 'absent',
+    });
+    const converged = JSON.parse(
+      await fsp.readFile(harness.layout.installationPath, 'utf8'),
+    );
+    expect(converged).toMatchObject({ state: 'uninstalled', updatedAt: 200 });
   });
 });

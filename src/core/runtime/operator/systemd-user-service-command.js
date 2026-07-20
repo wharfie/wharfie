@@ -114,11 +114,31 @@ function normalizeResult(value, action) {
   }
   const expectedKind =
     action === 'status' ? 'wharfie.service.status' : 'wharfie.service.result';
+  const expectedSchemaVersion = action === 'status' ? 2 : 1;
+  const validWiring =
+    action !== 'status' ||
+    (normalized.wiring &&
+      typeof normalized.wiring === 'object' &&
+      !Array.isArray(normalized.wiring) &&
+      ['managed', 'absent', 'orphaned', 'conflicting', 'unknown'].includes(
+        normalized.wiring.state,
+      ) &&
+      ['managed', 'absent', 'conflicting'].includes(
+        normalized.wiring.unitFile,
+      ) &&
+      ['managed', 'absent', 'conflicting'].includes(
+        normalized.wiring.selection,
+      ) &&
+      ['managed', 'absent', 'conflicting', 'unknown'].includes(
+        normalized.wiring.effectiveUnit,
+      ) &&
+      typeof normalized.wiring.cleanupPending === 'boolean');
   if (
-    normalized.schemaVersion !== 1 ||
+    normalized.schemaVersion !== expectedSchemaVersion ||
     normalized.kind !== expectedKind ||
     typeof normalized.appId !== 'string' ||
     normalized.appId.length === 0 ||
+    !validWiring ||
     (action === 'status'
       ? typeof normalized.health !== 'string' || normalized.health.length === 0
       : normalized.action !== action ||
@@ -179,6 +199,11 @@ function formatHumanResult(action, result) {
     typeof result.appId === 'string' && result.appId
       ? ` (${result.appId})`
       : '';
+  if (action.name === 'status') {
+    const wiring = result.wiring.state;
+    const remediation = wiring === 'orphaned' ? '; run service uninstall' : '';
+    return `${action.name}: ${outcome}; wiring: ${wiring}${remediation}${app}`;
+  }
   return `${action.name}: ${outcome}${app}`;
 }
 
