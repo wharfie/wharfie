@@ -7,6 +7,7 @@
 - **Path-permission fix:** `d790e34`
 - **Deterministic proof implementation:** `48deb6c`
 - **Evidence-hardening receipt:** `939e0f2`
+- **Documentation and committed-evidence receipt:** `fc01048`
 - **Parent checkpoint:** [recoverable systemd release activation](2026-07-20-v17-recoverable-systemd-activation.md)
 - **Design authority:** [project charter](../../PROJECT.md),
   [roadmap](../../ROADMAP.md), and [ADR
@@ -168,7 +169,7 @@ The real-host activation matrix is complete. The next safe sequence is:
 
 > Continue Wharfie from
 > `llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md` on branch
-> `agent/strict-manifest` at or after proof commit `939e0f2`. Use only the local
+> `agent/strict-manifest` at or after evidence commit `fc01048`. Use only the local
 > git CLI; do not spend time on PRs or issues. Breaking changes are fine and
 > there are no downstream users, so optimize for the ideal v2 state. The
 > checksummed Ubuntu proof under
