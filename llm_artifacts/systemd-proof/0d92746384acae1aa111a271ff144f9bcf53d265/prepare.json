@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "kind": "wharfie.systemd-proof.prepare",
+  "commit": "0d92746384acae1aa111a271ff144f9bcf53d265",
+  "preparedAt": 1784562767626,
+  "appId": "systemd-service-proof",
+  "artifactPath": "/var/tmp/wharfie-systemd-proof/dist/systemd-service-proof-sha256-7784ec1842107dddd1f98163f9cbeb841a60965c961c5a018459c55c63035b01",
+  "artifactId": "waf1_d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE",
+  "revisionId": "wrv1_GZomiXlxFhGYx1xZH3VbBwzNkrGtg2beOWDsfI936bk",
+  "artifact": {
+    "byteDigest": {
+      "algorithm": "sha256",
+      "value": "d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE"
+    },
+    "size": 145099904,
+    "target": {
+      "nodeVersion": "24.13.1",
+      "platform": "linux",
+      "architecture": "arm64",
+      "libc": "glibc"
+    },
+    "sha256": "7784ec1842107dddd1f98163f9cbeb841a60965c961c5a018459c55c63035b01"
+  },
+  "package": {
+    "name": "@wharfie/wharfie",
+    "version": "0.0.15",
+    "tarballSha256": "28af2fce479333958c44555ebf8396641c3b222406bd4fea835ca37d3c74eae2",
+    "packedFileCount": 144
+  },
+  "toolchain": {
+    "node": "24.13.1",
+    "npm": "11.12.0"
+  },
+  "storage": {
+    "dataRoot": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs",
+    "appRoot": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof",
+    "stateRoot": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/state",
+    "controlPath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/state/control",
+    "payloadPath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/state/control/execution-payloads",
+    "applicationStatePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/state/application-state",
+    "releasesRoot": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases",
+    "unitPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service"
+  },
+  "release": {
+    "artifactPath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE/app",
+    "artifactSha256": "7784ec1842107dddd1f98163f9cbeb841a60965c961c5a018459c55c63035b01",
+    "recordPath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE/release.json",
+    "recordSha256": "7a053c153b0848afc5f2308f958343cc26308780b5d37195bb2045039055aa36"
+  },
+  "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+  "idempotencyKey": "systemd-real-reboot-proof",
+  "bootId": "c789ef14-ecaa-460a-90dc-88bf285a5352",
+  "timer": {
+    "timerId": "wft_2CBQOlSeVKTghsdaifNCs_QJntTCz1QHzQdyAq8WKHg",
+    "workflowId": "reboot-chain",
+    "planId": "wfp_iDZaUf7F_3vxHh3xzuyrw01frzK_uj6FJ4Sox7IEwok",
+    "continuationId": "wfc_D1kgunNktP3PH_43vm-NAt76HP1QALg8CvOIBIK6xKk",
+    "stepId": "cross-reboot-delay",
+    "stepIndex": 1,
+    "status": "WAITING",
+    "scheduledAt": 1784562757282,
+    "dueAt": 1784562937282,
+    "version": 1,
+    "lastSequence": 4,
+    "createdAt": 1784562757282,
+    "updatedAt": 1784562757282
+  },
+  "pendingBeforeInstall": {
+    "schemaVersion": 7,
+    "kind": "wharfie.execution-ledger.run",
+    "integrity": {
+      "verified": true
+    },
+    "run": {
+      "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+      "appId": "systemd-service-proof",
+      "revisionId": "wrv1_GZomiXlxFhGYx1xZH3VbBwzNkrGtg2beOWDsfI936bk",
+      "trigger": {
+        "kind": "workflow",
+        "workflowId": "reboot-chain",
+        "planId": "wfp_iDZaUf7F_3vxHh3xzuyrw01frzK_uj6FJ4Sox7IEwok"
+      },
+      "status": "RUNNING",
+      "version": 1,
+      "lastSequence": 1,
+      "createdAt": 1784562754772,
+      "updatedAt": 1784562754772
+    },
+    "invocations": [
+      {
+        "invocationId": "wfi_L9lu6uhMqvX_BXFvyve7x01_NcG2x4Qvi0YzYI8Du5A",
+        "activityId": "record-step",
+        "status": "RUNNABLE",
+        "generation": 0,
+        "version": 1,
+        "lastSequence": 1,
+        "createdAt": 1784562754772,
+        "updatedAt": 1784562754772,
+        "workflow": {
+          "workflowId": "reboot-chain",
+          "planId": "wfp_iDZaUf7F_3vxHh3xzuyrw01frzK_uj6FJ4Sox7IEwok",
+          "continuationId": "wfc_OyqGclYFSbh8yVyy-pr6rvQ-5w2FS0__xtsurwKKKgU",
+          "stepId": "before-reboot",
+          "stepIndex": 0
+        }
+      }
+    ],
+    "attempts": [],
+    "effects": [],
+    "timers": [],
+    "signalWaits": [],
+    "signalDeliveries": [],
+    "history": [
+      {
+        "sequence": 1,
+        "type": "workflow-run-created",
+        "observedAt": 1784562754772,
+        "actor": {
+          "kind": "workflow-operator",
+          "id": "wrv1_GZomiXlxFhGYx1xZH3VbBwzNkrGtg2beOWDsfI936bk"
+        }
+      }
+    ],
+    "workflowCursor": {
+      "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+      "appId": "systemd-service-proof",
+      "revisionId": "wrv1_GZomiXlxFhGYx1xZH3VbBwzNkrGtg2beOWDsfI936bk",
+      "workflowId": "reboot-chain",
+      "planId": "wfp_iDZaUf7F_3vxHh3xzuyrw01frzK_uj6FJ4Sox7IEwok",
+      "stepId": "before-reboot",
+      "stepIndex": 0,
+      "continuationId": "wfc_OyqGclYFSbh8yVyy-pr6rvQ-5w2FS0__xtsurwKKKgU",
+      "invocationId": "wfi_L9lu6uhMqvX_BXFvyve7x01_NcG2x4Qvi0YzYI8Du5A",
+      "disposition": "ACTIVITY_RUNNABLE",
+      "outputs": [],
+      "version": 1,
+      "lastSequence": 1,
+      "createdAt": 1784562754772,
+      "updatedAt": 1784562754772
+    }
+  },
+  "crashReplacement": {
+    "before": {
+      "processId": 8112,
+      "generation": 1
+    },
+    "after": {
+      "processId": 8256,
+      "generation": 2
+    }
+  },
+  "bootConfig": {
+    "schemaVersion": 1,
+    "kind": "wharfie.systemd-proof.boot-config",
+    "commit": "0d92746384acae1aa111a271ff144f9bcf53d265",
+    "user": "josephvandrunen",
+    "uid": 501,
+    "gid": 1000,
+    "home": "/home/josephvandrunen.guest",
+    "artifactPath": "/var/tmp/wharfie-systemd-proof/dist/systemd-service-proof-sha256-7784ec1842107dddd1f98163f9cbeb841a60965c961c5a018459c55c63035b01",
+    "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE/app",
+    "unitPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+    "xdgDataHome": "/home/josephvandrunen.guest/.local/share",
+    "appId": "systemd-service-proof",
+    "artifactId": "waf1_d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE",
+    "revisionId": "wrv1_GZomiXlxFhGYx1xZH3VbBwzNkrGtg2beOWDsfI936bk",
+    "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+    "timer": {
+      "timerId": "wft_2CBQOlSeVKTghsdaifNCs_QJntTCz1QHzQdyAq8WKHg",
+      "scheduledAt": 1784562757282,
+      "dueAt": 1784562937282
+    },
+    "previousBootId": "c789ef14-ecaa-460a-90dc-88bf285a5352",
+    "minimumGeneration": 2,
+    "receiptPath": "/var/lib/wharfie-systemd-proof/boot-receipt.json"
+  },
+  "markerEntries": [
+    {
+      "schemaVersion": 1,
+      "kind": "wharfie.systemd-proof.activity-entry",
+      "stepIndex": 0,
+      "bootId": "c789ef14-ecaa-460a-90dc-88bf285a5352",
+      "processId": 8112
+    }
+  ]
+}

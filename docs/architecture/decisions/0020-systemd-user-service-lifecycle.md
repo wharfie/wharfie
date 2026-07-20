@@ -251,8 +251,9 @@ or revision rules are incompatible.
 ## Consequences
 
 - A packaged application can be configured as a boot-persistent resident
-  without Node, containers, a root daemon, or a second Wharfie supervisor. The
-  real boot/reboot proof remains a separate required validation.
+  without Node, containers, a root daemon, or a second Wharfie supervisor. A
+  disposable Ubuntu VM proof now verifies the installed tarball and SEA across
+  process death and an abrupt machine stop/start with a changed kernel boot ID.
 - Service and interactive operators share the same UID, matching the current
   authenticated local-owner protocol without widening private socket access.
 - UID 0 and mismatched real/effective UIDs are rejected; this slice never turns
@@ -299,6 +300,8 @@ and systemd observation behind injected boundaries so tests can use:
 
 A real startup-on-boot and machine-reboot proof runs only in a disposable Linux
 VM or equivalent ephemeral systemd environment where enabling linger, writing
-the user unit, and rebooting cannot affect a contributor's host. That proof is
-required before the milestone is called complete, but it is not part of the
-default local test suite.
+the user unit, and rebooting cannot affect a contributor's host. The pinned
+Lima proof is available through `npm run verify:service:systemd:lima`; it is an
+explicit heavyweight validation and is not part of the default local test
+suite. Its proof contract and checksummed receipts are recorded in the
+[systemd reboot-proof checkpoint](../../../llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md).

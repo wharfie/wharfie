@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Linux SEA systemd user-service lifecycle is implemented; disposable boot/reboot proof and race-free update handoff are next · **Last updated:** 2026-07-20
+**Status:** Linux SEA systemd user-service crash/reboot recovery is proven; race-free update/rollback and provider-backed self-deployment are next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -382,7 +382,14 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       systemd resident now share that exact ledger, payload, session, and
       application-state authority; service management rejects explicit
       overrides that would split them.
-- [ ] Prove enabled startup, crash replacement, and durable recovery across a real machine reboot in a disposable Linux systemd environment.
+- [x] Prove enabled startup, crash replacement, and durable recovery across a
+      real machine reboot in a disposable Linux systemd environment. The
+      checksummed [V16 proof receipts](llm_artifacts/systemd-proof/0d92746384acae1aa111a271ff144f9bcf53d265/final.json)
+      bind an installed-package Linux arm64 SEA to commit `0d927463`, replace
+      its systemd `MainPID` after `SIGKILL`, force-stop and restart the VM,
+      observe a new kernel boot ID and generation before any login session,
+      complete the same persisted timer/signal workflow, exercise graceful
+      restart and stop/start, and prove uninstall preserves inspectable state.
 - [x] Make service status available as human-readable and JSON operations in the reserved packaged operator namespace.
 - [ ] Add logs, run history/listing, and any remaining operator surfaces that are still deliberately absent.
 - [x] Build one shared source/packaged foreground durable-run host. Source
@@ -484,18 +491,29 @@ responses, resident generation takeover, persisted timer firing, current-wait
 signal consumption, and evidence-backed continuation. The moved artifact
 completes the linear workflow proof with Node unavailable on `PATH`.
 
-1. Prove the implemented SEA systemd user-service lifecycle across startup,
-   crash replacement, graceful restart, and durable workflow recovery through
-   a real machine reboot in a disposable Linux environment.
+The packaged Linux service path is also proven outside the developer session.
+An installed npm tarball built the application SEA in a fresh Ubuntu 24.04 VM,
+persisted workflow work before service installation, verified the exact
+effective unit and immutable executable, recovered from both resident
+`SIGKILL` and an abrupt VM power cycle, then preserved the completed ledger
+through uninstall. The successful receipts are bound to commit `0d927463`.
+
+1. Close the remaining single-node service hardening: race-free
+   content-addressed update/rollback, explicit orphan-unit reconciliation, and
+   bounded stale native-runtime extraction after abrupt termination.
 2. Add the smallest provider-backed path that can create, inspect, update, and
    remove one durable node through the operator's credential chain.
 3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [shared packaged-storage
-checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md).
-Its parent is the [workflow timers and signals
+The current restart point is the [systemd reboot-proof
+checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md). Its parent
+is the [shared packaged-storage
+checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md), whose
+parent is the [systemd user-service foundation
+checkpoint](llm/checkpoints/2026-07-20-v14-systemd-user-service-foundation.md),
+whose parent is the [workflow timers and signals
 checkpoint](llm/checkpoints/2026-07-20-v13-workflow-timers-signals.md), whose
 parent is the [workflow cancellation
 checkpoint](llm/checkpoints/2026-07-19-v12-workflow-cancellation.md), whose

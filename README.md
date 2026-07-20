@@ -135,10 +135,12 @@ owner boundary. The shared exact-run inspection, recovery, cancellation, and
 evidence-reconciliation commands understand the activation-aware cursor and
 schema-v7 redacted timer/signal lifecycle state. Managed-effect workflow
 successors and schedules remain unfinished. Packaged Linux artifacts now have
-a systemd user-service install/start/stop/restart/status/uninstall foundation;
-the disposable-Linux boot/reboot proof is still outstanding. Multi-host leases
-and heartbeats and public run history/listing are also later work. The npm package remains deliberately
-private. It is not ready for production use.
+a systemd user-service install/start/stop/restart/status/uninstall lifecycle.
+A checksummed Ubuntu proof covers exact-unit startup, resident `SIGKILL`
+replacement, abrupt VM power loss, pre-login recovery, durable workflow
+continuation, lifecycle operations, and state-preserving uninstall. Multi-host
+leases and heartbeats and public run history/listing are still later work. The
+npm package remains deliberately private. It is not ready for production use.
 
 ## Start here
 
@@ -146,7 +148,9 @@ private. It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Systemd user-service checkpoint](llm/checkpoints/2026-07-20-v14-systemd-user-service-foundation.md) — the current implementation handoff for packaged Linux service lifecycle, immutable releases, PID-bound health, and the remaining disposable reboot proof.
+- [Systemd reboot-proof checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md) — the current handoff for checksummed real-VM crash, boot, workflow-continuation, lifecycle, and uninstall evidence.
+- [Shared packaged-storage checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md) — the preceding handoff that unified foreground and resident durable state.
+- [Systemd user-service checkpoint](llm/checkpoints/2026-07-20-v14-systemd-user-service-foundation.md) — the implementation foundation for packaged Linux service lifecycle, immutable releases, and PID-bound health.
 - [Workflow timers and signals checkpoint](llm/checkpoints/2026-07-20-v13-workflow-timers-signals.md) — the preceding handoff for persisted timers, current-wait signals, exact replay, and source/SEA crash proof.
 - [Workflow cancellation checkpoint](llm/checkpoints/2026-07-19-v12-workflow-cancellation.md) — the preceding handoff for durable run-level cancellation, active delivery, replay, and cancelled-evidence reconciliation.
 - [Workflow crash-recovery checkpoint](llm/checkpoints/2026-07-19-v11-workflow-crash-recovery.md) — the preceding handoff for public source and relocated-SEA process-death recovery.
@@ -329,12 +333,15 @@ service:
 
 These commands reject root, never invoke `sudo`, preserve durable state and
 immutable releases on uninstall, and do not yet expose update or rollback.
-Startup across a real machine reboot remains an explicit disposable-Linux
-verification item. A due timer
-remains persisted until the exact-revision resident observes and fires it;
-there is deliberately no public timer-fire command. Wharfie does not yet
-provide schedules, managed-effect workflow successors, multi-host
-reassignment, or public run-history/listing commands.
+The repository's disposable Ubuntu proof builds the app from the installed npm
+tarball, removes Node from the packaged command `PATH`, force-cycles the VM,
+requires automatic healthy startup before a login session, and completes the
+same persisted workflow after the kernel boot ID changes. Run it with
+`npm run verify:service:systemd:lima`. A due timer remains persisted until the
+exact-revision resident observes and fires it; there is deliberately no public
+timer-fire command. Wharfie does not yet provide schedules, managed-effect
+workflow successors, multi-host reassignment, or public run-history/listing
+commands.
 
 ## Reconcile one uncertain managed effect
 
@@ -432,6 +439,9 @@ audit. The parser used by the portable-module audit is a direct runtime
 dependency, and clean-install validation no longer relies on the unused
 TypeScript ESLint import preset or resolver. Native LMDB and generated-SEA
 proofs are available through `npm run test:native` and the SEA verifier.
+The destructive, disposable real-machine service gate is
+`npm run verify:service:systemd:lima`; it requires Lima on macOS and creates,
+force-cycles, verifies, and deletes an isolated Ubuntu VM.
 
 Current source is organized as follows:
 

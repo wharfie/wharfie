@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "kind": "wharfie.systemd-proof.complete",
+  "commit": "0d92746384acae1aa111a271ff144f9bcf53d265",
+  "completedAt": 1784562947660,
+  "appId": "systemd-service-proof",
+  "artifactId": "waf1_d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE",
+  "revisionId": "wrv1_GZomiXlxFhGYx1xZH3VbBwzNkrGtg2beOWDsfI936bk",
+  "artifact": {
+    "byteDigest": {
+      "algorithm": "sha256",
+      "value": "d4TsGEIQfd3R-YFj-cvrhBpgllyWHFoBhFnFXGMDWwE"
+    },
+    "size": 145099904,
+    "target": {
+      "nodeVersion": "24.13.1",
+      "platform": "linux",
+      "architecture": "arm64",
+      "libc": "glibc"
+    },
+    "sha256": "7784ec1842107dddd1f98163f9cbeb841a60965c961c5a018459c55c63035b01"
+  },
+  "package": {
+    "name": "@wharfie/wharfie",
+    "version": "0.0.15",
+    "tarballSha256": "28af2fce479333958c44555ebf8396641c3b222406bd4fea835ca37d3c74eae2",
+    "packedFileCount": 144
+  },
+  "toolchain": {
+    "node": "24.13.1",
+    "npm": "11.12.0"
+  },
+  "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+  "boot": {
+    "before": "c789ef14-ecaa-460a-90dc-88bf285a5352",
+    "after": "0cc82b78-2c8e-4ed7-acfb-8f8f4b347ba1",
+    "powerCycle": "forced-stop-start",
+    "sessionsBeforeCheck": [],
+    "automaticStart": true,
+    "processId": 810,
+    "generation": 3
+  },
+  "crashReplacement": {
+    "before": {
+      "processId": 8112,
+      "generation": 1
+    },
+    "after": {
+      "processId": 8256,
+      "generation": 2
+    }
+  },
+  "gracefulRestart": {
+    "beforeProcessId": 810,
+    "afterProcessId": 1559,
+    "beforeGeneration": 3,
+    "afterGeneration": 4
+  },
+  "stopStart": {
+    "stoppedHealth": "stopped",
+    "processId": 1639,
+    "generation": 5
+  },
+  "workflow": {
+    "status": "COMPLETED",
+    "disposition": "COMPLETED",
+    "timerStatus": "FIRED",
+    "timerId": "wft_2CBQOlSeVKTghsdaifNCs_QJntTCz1QHzQdyAq8WKHg",
+    "scheduledAt": 1784562757282,
+    "dueAt": 1784562937282,
+    "firedAt": 1784562937465,
+    "signalStatus": "CONSUMED",
+    "markerEntries": [
+      {
+        "schemaVersion": 1,
+        "kind": "wharfie.systemd-proof.activity-entry",
+        "stepIndex": 0,
+        "bootId": "c789ef14-ecaa-460a-90dc-88bf285a5352",
+        "processId": 8112
+      },
+      {
+        "schemaVersion": 1,
+        "kind": "wharfie.systemd-proof.activity-entry",
+        "stepIndex": 1,
+        "bootId": "0cc82b78-2c8e-4ed7-acfb-8f8f4b347ba1",
+        "processId": 810
+      }
+    ]
+  },
+  "uninstall": {
+    "status": "uninstalled",
+    "preserved": {
+      "releases": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases",
+      "state": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/state"
+    },
+    "inspectableAfterUninstall": true,
+    "release": {
+      "artifactSha256": "7784ec1842107dddd1f98163f9cbeb841a60965c961c5a018459c55c63035b01",
+      "recordSha256": "7a053c153b0848afc5f2308f958343cc26308780b5d37195bb2045039055aa36"
+    },
+    "systemd": {
+      "show": {
+        "MainPID": "0",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "FragmentPath": "",
+        "DropInPaths": "",
+        "UnitFileState": ""
+      },
+      "isActive": {
+        "status": 4,
+        "output": "inactive"
+      },
+      "isEnabled": {
+        "status": 4,
+        "output": "not-found"
+      }
+    }
+  }
+}
