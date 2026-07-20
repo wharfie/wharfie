@@ -59,6 +59,40 @@ const SEA_ACTIVITY_DISPATCH_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/runtime/durable-activity-host.js',
   anchor: 'return await invokeManifestActivityAttemptWithStart({',
 });
+const SEA_WORKFLOW_CLAIMED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/workflow-ledger-run.js',
+  // The exact claim result is authoritative; no STARTED request exists yet.
+  anchor: 'const startRequest = {',
+});
+const SEA_WORKFLOW_DISPATCH_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/durable-workflow-host.js',
+  // STARTED is durably readable before this authored-activity handoff.
+  anchor: 'await invokeManifestActivityAttemptWithStart({',
+});
+const SEA_WORKFLOW_EVIDENCE_RETURNED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/workflow-ledger-run.js',
+  // A complete component transcript is in host memory, but the workflow
+  // terminal transition has not published or referenced it yet.
+  anchor: 'const terminalRequest = {',
+});
+const SEA_WORKFLOW_TERMINAL_COMMITTED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/workflow-ledger-run.js',
+  // The compound terminal and its verified readback are complete; the
+  // resident loop cannot observe or claim the successor until this returns.
+  anchor: 'return outcomeFromCurrent(current, { dispatched: true });',
+});
+const SEA_WORKFLOW_RECOVERY_RETURNED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
+  // The mutating service has closed and relinquished ownership; the public
+  // command has not yet constructed or emitted its redacted response.
+  anchor: 'createExecutionLedgerRecoveryOperatorView(',
+});
+const SEA_WORKFLOW_RECONCILIATION_RETURNED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
+  // The mutating service has closed and relinquished ownership; the public
+  // command has not yet constructed or emitted its redacted response.
+  anchor: 'createExecutionLedgerReconciliationOperatorView(',
+});
 const SEA_APP_CLI_DISPATCH_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/resources/builds/packaged-app-entry.js',
   anchor: 'await runDeveloperCli(developerCliModule, {',
@@ -100,6 +134,8 @@ const SEA_STOPPED_ATTEMPT_RECOVERY_REASON = Object.freeze({
   message:
     'The prior runner stopped after durable attempt start; its physical activity outcome is unknown.',
 });
+const SEA_WORKFLOW_ID = 'portable-linear';
+const SEA_WORKFLOW_ACTIVITY_ID = 'workflow-step';
 const SEA_CRASH_CASES = Object.freeze([
   {
     boundary: 'request-payload-published',
@@ -801,7 +837,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createWorkflowRunId: (appId: string, idempotencyKey: string) => string, createCompletedWorkflowEvidence: (runId: string, result: unknown) => Promise<Record<string, any>>, listReadyWork: (appId: string, revisionId: string) => Promise<Record<string, any>[]>, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -824,6 +860,8 @@ async function createInstalledExecutionLedgerFixture(options) {
     successorContractModule,
     executionPayloadModule,
     recordKeyModule,
+    workflowContractModule,
+    activityProtocolModule,
   ] = await Promise.all([
     installedModule('src/core/lib/db/adapters/lmdb.js'),
     installedModule('src/core/lib/db/tables/execution-ledger.js'),
@@ -840,6 +878,8 @@ async function createInstalledExecutionLedgerFixture(options) {
     installedModule('src/core/lib/ledger/managed-effect-successor-contract.js'),
     installedModule('src/core/runtime/execution-payload.js'),
     installedModule('src/core/lib/ledger/record-key.js'),
+    installedModule('src/core/lib/ledger/workflow-execution-contract.js'),
+    installedModule('src/core/runtime/activity-protocol.js'),
   ]);
   const payloadStoreId = `payload-${createHash('sha256')
     .update(path.resolve(options.payloadPath), 'utf8')
@@ -871,6 +911,8 @@ async function createInstalledExecutionLedgerFixture(options) {
 
   const createRunId = (appId, idempotencyKey) =>
     manualModule.createManualLedgerRunId({ appId, idempotencyKey });
+  const createWorkflowRunId = (appId, idempotencyKey) =>
+    workflowContractModule.createWorkflowRunId({ appId, idempotencyKey });
   const seedClaimedRun = async (
     /** @type {Record<string, any>} */ ledger,
     /** @type {{appId: string, idempotencyKey: string, inputSecret: string, callerSecret: string, fencingToken: string, actor?: {kind: string, id: string}}} */ seed,
@@ -1068,6 +1110,131 @@ async function createInstalledExecutionLedgerFixture(options) {
       await db.close();
     }
   };
+  const listReadyWork = async (
+    /** @type {string} */ appId,
+    /** @type {string} */ revisionId,
+  ) => {
+    const { db, ledger } = openLedger(true);
+    try {
+      const items = [];
+      let cursor;
+      do {
+        const page = await ledger.listReadyWork({
+          appId,
+          revisionId,
+          limit: 100,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        items.push(...page.items);
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+      return items;
+    } finally {
+      await db.close();
+    }
+  };
+  const createCompletedWorkflowEvidence = async (
+    /** @type {string} */ runId,
+    /** @type {unknown} */ result,
+  ) => {
+    const beforeRun = await (async () => {
+      const { db, ledger } = openLedger(true);
+      try {
+        return await ledger.rebuildRun(runId);
+      } finally {
+        await db.close();
+      }
+    })();
+    assert.ok(beforeRun, `Workflow evidence run is unavailable: ${runId}`);
+    const startedEvents = beforeRun.events.filter(
+      (/** @type {Record<string, any>} */ event) =>
+        event.type === 'workflow-activity-started',
+    );
+    assert.equal(
+      startedEvents.length,
+      1,
+      'Workflow evidence fixture requires one exact STARTED event.',
+    );
+    const startedEvent = startedEvents[0];
+    const claimEvent = beforeRun.events[startedEvent.sequence - 2];
+    const startedAttempt = startedEvent.payload?.attempt;
+    const claimCursor = claimEvent?.payload?.workflowCursor;
+    assert.equal(claimEvent?.type, 'workflow-activity-claimed');
+    assert.ok(startedAttempt && claimCursor);
+    const beforeReady = await listReadyWork(
+      beforeRun.run.appId,
+      beforeRun.run.revisionId,
+    );
+    const beforeRows = await readRawLedgerRunRows(runId);
+    const { db, ledger } = openLedger(true);
+    /** @type {Record<string, any> | undefined} */
+    let replay;
+    try {
+      replay = await ledger.markWorkflowActivityStarted({
+        runId,
+        invocationId: startedAttempt.invocationId,
+        cursor: {
+          version: claimCursor.version,
+          continuationId: claimCursor.continuationId,
+          stepId: claimCursor.stepId,
+          stepIndex: claimCursor.stepIndex,
+        },
+        attemptId: startedAttempt.attemptId,
+        fencingToken: startedAttempt.fencingToken,
+        generation: startedAttempt.generation,
+        expectedVersion: startedEvent.payload.run.version - 1,
+        transitionId: startedEvent.transition_id,
+        actor: startedEvent.actor,
+        coordinatorEpoch: startedAttempt.coordinatorEpoch,
+        observedAt: startedEvent.observed_at,
+      });
+    } finally {
+      await db.close();
+    }
+    assert.ok(replay, 'STARTED receipt replay returned no durable receipt.');
+    assert.equal(replay.applied, false);
+    assert.equal(replay.dispatchAuthorized, false);
+    assert.deepEqual(
+      await (async () => {
+        const { db: readDb, ledger: readLedger } = openLedger(true);
+        try {
+          return await readLedger.rebuildRun(runId);
+        } finally {
+          await readDb.close();
+        }
+      })(),
+      beforeRun,
+      'STARTED receipt replay changed workflow state.',
+    );
+    assert.deepEqual(
+      await listReadyWork(beforeRun.run.appId, beforeRun.run.revisionId),
+      beforeReady,
+      'STARTED receipt replay changed workflow ready work.',
+    );
+    assert.deepEqual(
+      await readRawLedgerRunRows(runId),
+      beforeRows,
+      'STARTED receipt replay changed physical workflow rows.',
+    );
+    const transcript =
+      new activityProtocolModule.ActivityProtocolTranscriptValidator();
+    const acceptedStart = transcript.acceptHostFrame(replay.startFrame);
+    const terminal = transcript.acceptComponentFrame({
+      protocol: activityProtocolModule.ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: activityProtocolModule.ACTIVITY_PROTOCOL_VERSION,
+      type: 'completed',
+      attemptId: acceptedStart.attemptId,
+      sequence: 1,
+      result,
+    });
+    return {
+      status: terminal.type,
+      start: acceptedStart,
+      terminal,
+      frames: [acceptedStart, terminal],
+      transcript: transcript.snapshot(),
+    };
+  };
   return {
     payloadStoreId,
     createDestinationEffectId: (appId, runId, effectId) =>
@@ -1078,6 +1245,9 @@ async function createInstalledExecutionLedgerFixture(options) {
         effectId,
       }),
     createRunId,
+    createWorkflowRunId,
+    createCompletedWorkflowEvidence,
+    listReadyWork,
     createClaimedRun: async (appId, idempotencyKey) => {
       const { db, ledger } = openLedger(false);
       try {
@@ -2856,6 +3026,151 @@ async function resumeToSeaSuccessorCrashBoundary(
     `${scenario.label} moved SEA exited before its crash boundary`,
   );
   return { adapterEntries, applicationStateWrites };
+}
+
+/**
+ * Spawn one relocated SEA command and leave it paused at an exact workflow or
+ * operator response boundary. The workflow host handoff is counted separately
+ * from the target so claim/recovery cases can prove that authored code never
+ * became reachable.
+ * @param {string} artifactPath - Relocated standalone SEA.
+ * @param {string[]} args - Packaged command arguments.
+ * @param {{cwd: string, env: Record<string, string>, installedPackageRoot: string, label: string, target: Record<string, any>, expectedWorkflowDispatches: number}} options - Exact boundary request.
+ * @returns {Promise<{service: ReturnType<typeof spawnInspectorPausedProcess>, inspector: Record<string, any>, workflowDispatchObserved: boolean}>} - Paused process and dispatch evidence.
+ */
+async function pauseRelocatedSeaAtWorkflowBoundary(
+  artifactPath,
+  args,
+  options,
+) {
+  assert.ok(
+    options.expectedWorkflowDispatches === 0 ||
+      options.expectedWorkflowDispatches === 1,
+    `${options.label} requires a boolean workflow-dispatch expectation.`,
+  );
+  const service = spawnInspectorPausedProcess(artifactPath, args, {
+    cwd: options.cwd,
+    env: options.env,
+    timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+  });
+  /** @type {Record<string, any> | undefined} */
+  let inspector;
+  try {
+    inspector = await attachSeaInspector(service, {
+      timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+    });
+    const target = await inspector.setSourceBreakpoint(
+      options.label,
+      bindInstalledBreakpointSource(
+        options.installedPackageRoot,
+        options.target,
+      ),
+    );
+    const targetIsDispatch =
+      options.target.sourceSuffix ===
+        SEA_WORKFLOW_DISPATCH_BREAKPOINT.sourceSuffix &&
+      options.target.anchor === SEA_WORKFLOW_DISPATCH_BREAKPOINT.anchor &&
+      (options.target.occurrence || 1) === 1;
+    const workflowDispatch = targetIsDispatch
+      ? target
+      : await inspector.setSourceBreakpoint(
+          'workflow-activity-dispatch',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_WORKFLOW_DISPATCH_BREAKPOINT,
+          ),
+        );
+    const forbidden = await Promise.all(
+      [
+        {
+          name: 'manual-activity-dispatch',
+          target: SEA_ACTIVITY_DISPATCH_BREAKPOINT,
+        },
+        {
+          name: 'developer-cli-dispatch',
+          target: SEA_APP_CLI_DISPATCH_BREAKPOINT,
+        },
+        {
+          name: 'managed-effect-adapter',
+          target: SEA_CRASH_ADAPTER_BREAKPOINT,
+        },
+      ].map(
+        async (item) =>
+          await inspector.setSourceBreakpoint(
+            item.name,
+            bindInstalledBreakpointSource(
+              options.installedPackageRoot,
+              item.target,
+            ),
+          ),
+      ),
+    );
+    const isHit = (
+      /** @type {Record<string, any>} */ pause,
+      /** @type {Record<string, any>} */ breakpoint,
+    ) => {
+      const ids = new Set(
+        breakpoint.breakpointIds || [breakpoint.breakpointId],
+      );
+      return (pause.hitBreakpoints || []).some((id) => ids.has(id));
+    };
+    let workflowDispatchObserved = false;
+    await inspector.resume();
+    for (;;) {
+      let pause;
+      try {
+        pause = await inspector.waitForPause();
+      } catch (error) {
+        throw residentServiceError(
+          service,
+          `${options.label} did not reach its exact breakpoint: ${error instanceof Error ? error.message : String(error)}.`,
+        );
+      }
+      if (isHit(pause, target)) {
+        assertExactInspectorPause(pause, target, options.label);
+        break;
+      }
+      const forbiddenHit = forbidden.find((breakpoint) =>
+        isHit(pause, breakpoint),
+      );
+      if (forbiddenHit) {
+        assertExactInspectorPause(pause, forbiddenHit, options.label);
+        throw residentServiceError(
+          service,
+          `${options.label} entered forbidden ${forbiddenHit.name}.`,
+        );
+      }
+      if (!targetIsDispatch && isHit(pause, workflowDispatch)) {
+        assertExactInspectorPause(pause, workflowDispatch, options.label);
+        assert.equal(
+          options.expectedWorkflowDispatches,
+          1,
+          `${options.label} entered an unexpected workflow activity dispatch.`,
+        );
+        // One source-mapped await expression can expose multiple generated
+        // breakpoint locations. Durable wx markers remain the physical
+        // exactly-once oracle; this guard records only whether dispatch became
+        // reachable before the requested later boundary.
+        workflowDispatchObserved = true;
+        await inspector.resume();
+        continue;
+      }
+      assert.fail(
+        `${options.label} paused outside its exact breakpoint set: ${JSON.stringify(pause.hitBreakpoints || [])}`,
+      );
+    }
+    assert.equal(
+      Number(workflowDispatchObserved),
+      options.expectedWorkflowDispatches,
+      `${options.label} reached the wrong workflow dispatch surface.`,
+    );
+    assert.equal(service.getExit(), null);
+    return { service, inspector, workflowDispatchObserved };
+  } catch (error) {
+    inspector?.close();
+    await stopResidentServiceForCleanup(service);
+    throw error;
+  }
 }
 
 /**
@@ -6738,6 +7053,1017 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
   }
 }
 
+/**
+ * Parse the final nonempty JSON line emitted by a CLI command.
+ * @param {unknown} value - Captured command output.
+ * @returns {Record<string, any>} - Parsed final JSON object.
+ */
+function parseFinalJsonLine(value) {
+  const line = String(value).trim().split('\n').filter(Boolean).at(-1);
+  if (!line) throw new Error('Expected one JSON command response.');
+  return JSON.parse(line);
+}
+
+/**
+ * Return one compact exact-ready-work projection for workflow assertions.
+ * @param {Record<string, any>[]} items - Durable ready-work records.
+ * @returns {Record<string, any>[]} - Stable assertion projection.
+ */
+function workflowReadySummary(items) {
+  return items.map((/** @type {Record<string, any>} */ item) => ({
+    kind: item.kind,
+    runId: item.runId,
+    invocationId: item.invocationId,
+    generation: item.generation,
+    cursorVersion: item.cursorVersion,
+    stepId: item.stepId,
+    stepIndex: item.stepIndex,
+    ...(item.attemptId === undefined ? {} : { attemptId: item.attemptId }),
+  }));
+}
+
+/**
+ * Create one isolated public workflow run through the relocated SEA.
+ * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string}} options - Shared matrix inputs.
+ * @param {string} boundary - Stable case identity.
+ * @returns {Promise<Record<string, any>>} - Isolated workflow case.
+ */
+async function createRelocatedSeaWorkflowCase(options, boundary) {
+  const caseRoot = path.join(options.root, boundary);
+  const controlPath = path.join(caseRoot, 'control');
+  const payloadPath = path.join(controlPath, 'execution-payloads');
+  const sessionPath = path.join(caseRoot, 'sessions');
+  const applicationStatePath = path.join(caseRoot, 'application-state');
+  const markerDirectory = path.join(caseRoot, 'workflow-markers');
+  const tableName = 'wharfie-package-sea-workflow-crash-matrix';
+  mkdirSync(markerDirectory, { recursive: true, mode: 0o700 });
+  const environment = {
+    ...options.cleanEnvironment,
+    WHARFIE_CONTROL_ADAPTER: 'lmdb',
+    WHARFIE_CONTROL_PATH: controlPath,
+    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
+    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+  };
+  const fixture = await createInstalledExecutionLedgerFixture({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    payloadPath,
+    applicationStatePath,
+    revisionId: options.revisionId,
+  });
+  const lifecycle = await createInstalledLedgerLifecycleObserver({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    appId: options.appId,
+  });
+  const idempotencyKey = `sea-workflow-${boundary}`;
+  const runId = fixture.createWorkflowRunId(options.appId, idempotencyKey);
+  const secret = `private-workflow-${boundary}-${randomUUID()}`;
+  const callerSecret = `private-workflow-caller-${boundary}`;
+  const input = { ordinal: 1, markerDirectory, secret };
+  const startArgs = [
+    'wharfie',
+    'start',
+    '--workflow',
+    SEA_WORKFLOW_ID,
+    '--idempotency-key',
+    idempotencyKey,
+    '--input',
+    JSON.stringify(input),
+    '--caller-metadata',
+    JSON.stringify({ requestId: callerSecret, boundary }),
+    '--json',
+  ];
+  const startText = runCommand(options.artifactPath, startArgs, {
+    cwd: caseRoot,
+    capture: true,
+    env: environment,
+  }).stdout.trim();
+  const start = parseFinalJsonLine(startText);
+  assert.deepEqual(start, {
+    idempotency_key: idempotencyKey,
+    run_id: runId,
+    revision: options.revisionId,
+    workflow: SEA_WORKFLOW_ID,
+    status: 'RUNNING',
+    cursor_disposition: 'ACTIVITY_RUNNABLE',
+    step: 'first',
+    step_index: 0,
+    invocation_status: 'RUNNABLE',
+    reused: false,
+  });
+  for (const privateValue of [secret, callerSecret, markerDirectory]) {
+    assert.equal(startText.includes(privateValue), false);
+  }
+  const initial = await fixture.readRun(runId);
+  assert.ok(initial);
+  assert.equal(initial.run.version, 1);
+  assert.equal(initial.run.trigger.kind, 'workflow');
+  assert.equal(initial.run.trigger.workflowId, SEA_WORKFLOW_ID);
+  assert.equal(initial.workflowCursor.disposition, 'ACTIVITY_RUNNABLE');
+  assert.equal(initial.workflowCursor.stepId, 'first');
+  assert.equal(initial.invocations[0].activityId, SEA_WORKFLOW_ACTIVITY_ID);
+  assert.equal(initial.invocations[0].status, 'RUNNABLE');
+  assert.deepEqual(
+    initial.events.map((event) => event.type),
+    ['workflow-run-created'],
+  );
+  assert.deepEqual(initial.events[0].actor, {
+    kind: 'workflow-operator',
+    id: options.revisionId,
+  });
+  const ready = await fixture.listReadyWork(options.appId, options.revisionId);
+  assert.deepEqual(workflowReadySummary(ready), [
+    {
+      kind: 'ACTIVITY',
+      runId,
+      invocationId: initial.invocations[0].invocationId,
+      generation: 0,
+      cursorVersion: 1,
+      stepId: 'first',
+      stepIndex: 0,
+    },
+  ]);
+  return {
+    boundary,
+    caseRoot,
+    controlPath,
+    payloadPath,
+    sessionPath,
+    applicationStatePath,
+    markerDirectory,
+    environment,
+    fixture,
+    lifecycle,
+    idempotencyKey,
+    runId,
+    secret,
+    callerSecret,
+    input,
+    startArgs,
+    initial,
+  };
+}
+
+/**
+ * Kill one exact inspected boundary and retain stale ownership evidence.
+ * @param {Record<string, any>} paused - Paused inspector and child process.
+ * @param {Record<string, any>} lifecycle - Installed lifecycle observer.
+ * @param {string} sessionPath - Ledger-service session directory.
+ * @returns {Promise<Record<string, any>>} - Retained ownership and endpoint.
+ */
+async function killPausedWorkflowBoundary(paused, lifecycle, sessionPath) {
+  const ownership = await lifecycle.readOwnership();
+  assert.ok(ownership);
+  const endpoint = lifecycle.getSessionEndpoint(
+    ownership.sessionId,
+    sessionPath,
+  );
+  assert.equal(existsSync(endpoint), true);
+  const killed = await signalResidentService(paused.service, 'SIGKILL');
+  assert.deepEqual(killed, { code: null, signal: 'SIGKILL' });
+  paused.inspector.close();
+  assert.deepEqual(await lifecycle.readOwnership(), ownership);
+  assert.equal(existsSync(endpoint), true);
+  return { ownership, endpoint };
+}
+
+/**
+ * Kill a public command after its mutation service released local ownership
+ * but before its JSON response was constructed.
+ * @param {Record<string, any>} paused - Paused inspector and child process.
+ * @param {Record<string, any>} lifecycle - Installed lifecycle observer.
+ * @returns {Promise<void>} - Resolves after the owner-free SIGKILL.
+ */
+async function killPausedWorkflowResponse(paused, lifecycle) {
+  assert.equal(await lifecycle.readOwnership(), null);
+  assert.equal(paused.service.getOutput().stdout, '');
+  const killed = await signalResidentService(paused.service, 'SIGKILL');
+  assert.deepEqual(killed, { code: null, signal: 'SIGKILL' });
+  paused.inspector.close();
+  assert.equal(await lifecycle.readOwnership(), null);
+}
+
+/**
+ * Run a public packaged recovery while forbidding every authored path.
+ * @param {{artifactPath: string, installedPackageRoot: string}} options - SEA inputs.
+ * @param {Record<string, any>} context - Isolated workflow case.
+ * @param {string} label - Inspector assertion label.
+ * @returns {Promise<Record<string, any>>} - Guarded command result.
+ */
+async function runSeaWorkflowRecovery(options, context, label) {
+  return await runInspectorGuardedSeaJson(
+    options.artifactPath,
+    [
+      'wharfie',
+      'recover',
+      '--run-id',
+      context.runId,
+      '--confirm-runner-stopped',
+      '--json',
+    ],
+    {
+      cwd: context.caseRoot,
+      env: context.environment,
+      installedPackageRoot: options.installedPackageRoot,
+      label,
+      forbiddenTargets: [
+        {
+          name: 'workflow-activity-dispatch',
+          target: SEA_WORKFLOW_DISPATCH_BREAKPOINT,
+        },
+        {
+          name: 'manual-activity-dispatch',
+          target: SEA_ACTIVITY_DISPATCH_BREAKPOINT,
+        },
+        {
+          name: 'developer-cli-dispatch',
+          target: SEA_APP_CLI_DISPATCH_BREAKPOINT,
+        },
+      ],
+    },
+  );
+}
+
+/**
+ * Start a public packaged worker, wait for workflow completion, and drain it.
+ * @param {{artifactPath: string, appId: string}} options - SEA inputs.
+ * @param {Record<string, any>} context - Isolated workflow case.
+ * @param {string} label - Lifecycle assertion label.
+ * @returns {Promise<Record<string, any>>} - Completed durable run.
+ */
+async function completeSeaWorkflow(options, context, label) {
+  const previousLifecycle = await context.lifecycle.read();
+  const previousGeneration = previousLifecycle?.generation ?? 0;
+  const previousSessionId = previousLifecycle?.sessionId;
+  const service = spawnResidentService(options.artifactPath, {
+    cwd: context.caseRoot,
+    env: context.environment,
+    args: ['wharfie', 'worker'],
+  });
+  try {
+    const ready = await waitForResidentLifecycle(
+      context.lifecycle,
+      (snapshot) =>
+        snapshot?.status === 'READY' &&
+        snapshot.generation === previousGeneration + 1,
+      service,
+      `${label} resident READY`,
+    );
+    assert.notEqual(ready.sessionId, previousSessionId);
+    const ownership = await context.lifecycle.readOwnership();
+    assert.equal(ownership?.ownerKind, 'resident');
+    assert.equal(ownership?.sessionId, ready.sessionId);
+    assert.equal(ownership?.appId, options.appId);
+    assert.ok(
+      Number.isSafeInteger(ownership?.generation) && ownership.generation > 0,
+    );
+    const completed = await waitForDurableRun(
+      { read: async () => await context.fixture.readRun(context.runId) },
+      (snapshot) =>
+        snapshot?.run.status === 'COMPLETED' &&
+        snapshot.workflowCursor?.disposition === 'COMPLETED',
+      service,
+      `${label} workflow completion`,
+    );
+    const exit = await signalResidentService(service, 'SIGTERM');
+    assert.deepEqual(exit, { code: 0, signal: null });
+    const stopped = await waitForDurableLifecycle(
+      context.lifecycle,
+      (snapshot) =>
+        snapshot?.status === 'STOPPED' &&
+        snapshot.generation === ready.generation,
+      `${label} resident STOPPED`,
+    );
+    assert.equal(stopped.sessionId, ready.sessionId);
+    return completed;
+  } finally {
+    await stopResidentServiceForCleanup(service);
+  }
+}
+
+/**
+ * Assert one completed two-step workflow has exact linear authority.
+ * @param {{artifactPath: string, appId: string, revisionId: string}} options - SEA inputs.
+ * @param {Record<string, any>} context - Isolated workflow case.
+ * @param {Record<string, any>} run - Completed durable run.
+ * @param {{firstGeneration?: number, abandonedAttempts?: number, completedAttempts?: number, eventTypes?: string[]}} [expectations] - Recovery-specific retained history.
+ * @returns {Promise<void>} - Resolves after exact durable assertions.
+ */
+async function assertCompletedSeaWorkflow(
+  options,
+  context,
+  run,
+  expectations = {},
+) {
+  const expectedEventTypes = expectations.eventTypes ?? [
+    'workflow-run-created',
+    'workflow-activity-claimed',
+    'workflow-activity-started',
+    'workflow-activity-succeeded',
+    'workflow-activity-claimed',
+    'workflow-activity-started',
+    'workflow-activity-succeeded',
+  ];
+  const expectedFirstGeneration = expectations.firstGeneration ?? 1;
+  const expectedAbandonedAttempts = expectations.abandonedAttempts ?? 0;
+  const expectedCompletedAttempts = expectations.completedAttempts ?? 2;
+  assert.equal(run.run.status, 'COMPLETED');
+  assert.equal(run.run.version, expectedEventTypes.length);
+  assert.equal(run.run.lastSequence, expectedEventTypes.length);
+  assert.equal(run.workflowCursor.disposition, 'COMPLETED');
+  assert.deepEqual(
+    run.events.map((/** @type {Record<string, any>} */ event) => event.type),
+    expectedEventTypes,
+  );
+  assert.deepEqual(
+    run.workflowCursor.outputs.map(
+      (/** @type {Record<string, any>} */ output) => ({
+        stepId: output.stepId,
+        stepIndex: output.stepIndex,
+      }),
+    ),
+    [
+      { stepId: 'first', stepIndex: 0 },
+      { stepId: 'second', stepIndex: 1 },
+    ],
+  );
+  assert.deepEqual(
+    [...run.invocations]
+      .sort((left, right) => left.workflow.stepIndex - right.workflow.stepIndex)
+      .map((/** @type {Record<string, any>} */ invocation) => ({
+        stepId: invocation.workflow.stepId,
+        status: invocation.status,
+        generation: invocation.generation,
+      })),
+    [
+      {
+        stepId: 'first',
+        status: 'COMPLETED',
+        generation: expectedFirstGeneration,
+      },
+      { stepId: 'second', status: 'COMPLETED', generation: 1 },
+    ],
+  );
+  assert.equal(
+    run.attempts.filter(
+      (/** @type {Record<string, any>} */ attempt) =>
+        attempt.status === 'ABANDONED',
+    ).length,
+    expectedAbandonedAttempts,
+  );
+  assert.equal(
+    run.attempts.filter(
+      (/** @type {Record<string, any>} */ attempt) =>
+        attempt.status === 'COMPLETED',
+    ).length,
+    expectedCompletedAttempts,
+  );
+  assert.equal(
+    run.attempts.length,
+    expectedAbandonedAttempts + expectedCompletedAttempts,
+  );
+  assert.deepEqual(
+    await context.fixture.listReadyWork(options.appId, options.revisionId),
+    [],
+  );
+  assert.equal(run.effects.length, 0);
+  assert.equal(
+    readPayloadReachability(context.payloadPath, run).orphans.length,
+    0,
+  );
+  for (const ordinal of [1, 2]) {
+    const marker = JSON.parse(
+      readFileSync(
+        path.join(context.markerDirectory, `${ordinal}.json`),
+        'utf8',
+      ),
+    );
+    assert.deepEqual(marker, {
+      kind: 'packaged-workflow-step',
+      ordinal,
+      executable: realpathSync(options.artifactPath),
+      result: {
+        ordinal: ordinal + 1,
+        markerDirectory: context.markerDirectory,
+        secret: context.secret,
+        value: `portable-workflow-step-${ordinal}`,
+      },
+    });
+  }
+}
+
+/**
+ * Prove public workflow start, resident execution, conservative recovery, and
+ * response-loss reconciliation through one relocated SEA with no Node on PATH.
+ * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string, wharfieBin: string, appDirectory: string}} options - Matrix inputs.
+ * @returns {Promise<void>} - Resolves after every exact boundary converges.
+ */
+async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
+  rmSync(options.root, { recursive: true, force: true });
+  mkdirSync(options.root, { recursive: true, mode: 0o700 });
+  try {
+    // Source public start and packaged public replay share one stable request
+    // identity. The relocated SEA then consumes that source-created run.
+    const cross = await createRelocatedSeaWorkflowCase(
+      options,
+      'cross-surface-public-start',
+    );
+    try {
+      rmSync(cross.controlPath, { recursive: true, force: true });
+      const sourceEnvironment = {
+        ...process.env,
+        WHARFIE_CONTROL_ADAPTER: 'lmdb',
+        WHARFIE_CONTROL_PATH: cross.controlPath,
+        WHARFIE_EXECUTION_LEDGER_TABLE:
+          cross.environment.WHARFIE_EXECUTION_LEDGER_TABLE,
+        WHARFIE_EXECUTION_PAYLOAD_PATH: cross.payloadPath,
+        WHARFIE_LEDGER_SERVICE_SESSION_PATH: cross.sessionPath,
+        WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+        WHARFIE_APPLICATION_STATE_PATH: cross.applicationStatePath,
+      };
+      const sourceText = runCommand(
+        process.execPath,
+        [
+          options.wharfieBin,
+          'ops',
+          'start',
+          '--dir',
+          options.appDirectory,
+          ...cross.startArgs.slice(2),
+        ],
+        {
+          cwd: cross.caseRoot,
+          capture: true,
+          env: sourceEnvironment,
+        },
+      ).stdout.trim();
+      const sourceStart = parseFinalJsonLine(sourceText);
+      assert.equal(sourceStart.run_id, cross.runId);
+      assert.equal(sourceStart.revision, options.revisionId);
+      assert.equal(sourceStart.reused, false);
+      const sourceRun = await cross.fixture.readRun(cross.runId);
+      assert.ok(sourceRun);
+      const packagedReplay = parseFinalJsonLine(
+        runCommand(options.artifactPath, cross.startArgs, {
+          cwd: cross.caseRoot,
+          capture: true,
+          env: cross.environment,
+        }).stdout,
+      );
+      assert.equal(packagedReplay.reused, true);
+      assert.deepEqual(await cross.fixture.readRun(cross.runId), sourceRun);
+      const completed = await completeSeaWorkflow(
+        options,
+        cross,
+        'cross-surface public workflow',
+      );
+      await assertCompletedSeaWorkflow(options, cross, completed);
+    } finally {
+      rmSync(cross.caseRoot, { recursive: true, force: true });
+    }
+
+    const claim = await createRelocatedSeaWorkflowCase(
+      options,
+      'claim-committed',
+    );
+    try {
+      const paused = await pauseRelocatedSeaAtWorkflowBoundary(
+        options.artifactPath,
+        ['wharfie', 'worker'],
+        {
+          cwd: claim.caseRoot,
+          env: claim.environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: 'workflow claim committed',
+          target: SEA_WORKFLOW_CLAIMED_BREAKPOINT,
+          expectedWorkflowDispatches: 0,
+        },
+      );
+      const before = await claim.fixture.readRun(claim.runId);
+      assert.ok(before);
+      assert.equal(before.run.version, 2);
+      assert.equal(before.workflowCursor.disposition, 'ACTIVITY_RUNNING');
+      assert.equal(before.invocations[0].status, 'RUNNING');
+      assert.equal(before.invocations[0].generation, 1);
+      assert.equal(before.attempts[0].status, 'CLAIMED');
+      assert.deepEqual(
+        before.events.map((event) => event.type),
+        ['workflow-run-created', 'workflow-activity-claimed'],
+      );
+      assert.equal(
+        existsSync(path.join(claim.markerDirectory, '1.json')),
+        false,
+      );
+      await killPausedWorkflowBoundary(
+        paused,
+        claim.lifecycle,
+        claim.sessionPath,
+      );
+      const recovery = await runSeaWorkflowRecovery(
+        options,
+        claim,
+        'claimed workflow recovery',
+      );
+      assert.deepEqual(recovery.value.recovery, {
+        action: 'released-unstarted-claim',
+        changed: true,
+      });
+      const recovered = await claim.fixture.readRun(claim.runId);
+      assert.ok(recovered);
+      assert.equal(recovered.run.version, 3);
+      assert.equal(recovered.workflowCursor.disposition, 'ACTIVITY_RUNNABLE');
+      assert.equal(recovered.invocations[0].status, 'RUNNABLE');
+      assert.equal(recovered.attempts[0].status, 'ABANDONED');
+      const abandonedClaimAttempt = JSON.parse(
+        JSON.stringify(recovered.attempts[0]),
+      );
+      assert.deepEqual(
+        recovered.events.map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+        [
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-abandoned-before-start',
+        ],
+      );
+      assert.deepEqual(
+        workflowReadySummary(
+          await claim.fixture.listReadyWork(options.appId, options.revisionId),
+        ).map(({ kind, generation, stepId }) => ({ kind, generation, stepId })),
+        [{ kind: 'ACTIVITY', generation: 1, stepId: 'first' }],
+      );
+      const replay = await runSeaWorkflowRecovery(
+        options,
+        claim,
+        'claimed workflow recovery replay',
+      );
+      assert.deepEqual(replay.value.recovery, {
+        action: 'none',
+        changed: false,
+      });
+      assert.deepEqual(await claim.fixture.readRun(claim.runId), recovered);
+      const completed = await completeSeaWorkflow(
+        options,
+        claim,
+        'released workflow claim',
+      );
+      assert.deepEqual(
+        completed.attempts.find(
+          (/** @type {Record<string, any>} */ attempt) =>
+            attempt.attemptId === abandonedClaimAttempt.attemptId,
+        ),
+        abandonedClaimAttempt,
+      );
+      await assertCompletedSeaWorkflow(options, claim, completed, {
+        firstGeneration: 2,
+        abandonedAttempts: 1,
+        completedAttempts: 2,
+        eventTypes: [
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-abandoned-before-start',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-activity-succeeded',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-activity-succeeded',
+        ],
+      });
+    } finally {
+      rmSync(claim.caseRoot, { recursive: true, force: true });
+    }
+
+    const started = await createRelocatedSeaWorkflowCase(
+      options,
+      'start-committed',
+    );
+    try {
+      const paused = await pauseRelocatedSeaAtWorkflowBoundary(
+        options.artifactPath,
+        ['wharfie', 'worker'],
+        {
+          cwd: started.caseRoot,
+          env: started.environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: 'workflow STARTED committed',
+          target: SEA_WORKFLOW_DISPATCH_BREAKPOINT,
+          expectedWorkflowDispatches: 0,
+        },
+      );
+      const before = await started.fixture.readRun(started.runId);
+      assert.ok(before);
+      assert.equal(before.run.version, 3);
+      assert.equal(before.workflowCursor.disposition, 'ACTIVITY_RUNNING');
+      assert.equal(before.attempts[0].status, 'STARTED');
+      assert.deepEqual(
+        before.events.map((event) => event.type),
+        [
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+        ],
+      );
+      assert.equal(
+        existsSync(path.join(started.markerDirectory, '1.json')),
+        false,
+      );
+      await killPausedWorkflowBoundary(
+        paused,
+        started.lifecycle,
+        started.sessionPath,
+      );
+      const recovery = await runSeaWorkflowRecovery(
+        options,
+        started,
+        'started workflow recovery',
+      );
+      assert.deepEqual(recovery.value.recovery, {
+        action: 'marked-started-uncertain',
+        changed: true,
+      });
+      const blocked = await started.fixture.readRun(started.runId);
+      assert.ok(blocked);
+      assert.equal(blocked.run.status, 'BLOCKED');
+      assert.equal(blocked.run.version, 4);
+      assert.equal(blocked.workflowCursor.disposition, 'ACTIVITY_UNCERTAIN');
+      assert.equal(blocked.invocations[0].status, 'UNCERTAIN');
+      assert.equal(blocked.attempts[0].status, 'ABANDONED');
+      assert.deepEqual(
+        blocked.events.map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+        [
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-activity-became-uncertain',
+        ],
+      );
+      assert.deepEqual(
+        await started.fixture.listReadyWork(options.appId, options.revisionId),
+        [],
+      );
+      const previousLifecycle = await started.lifecycle.read();
+      const previousGeneration = previousLifecycle?.generation ?? 0;
+      const parkedWorker = spawnResidentService(options.artifactPath, {
+        cwd: started.caseRoot,
+        env: started.environment,
+        args: ['wharfie', 'worker'],
+      });
+      try {
+        const parkedReady = await waitForResidentLifecycle(
+          started.lifecycle,
+          (snapshot) =>
+            snapshot?.status === 'READY' &&
+            snapshot.generation === previousGeneration + 1,
+          parkedWorker,
+          'blocked workflow worker READY',
+        );
+        assert.notEqual(parkedReady.sessionId, previousLifecycle?.sessionId);
+        const parkedOwnership = await started.lifecycle.readOwnership();
+        assert.equal(parkedOwnership?.ownerKind, 'resident');
+        assert.equal(parkedOwnership?.sessionId, parkedReady.sessionId);
+        assert.equal(parkedOwnership?.appId, options.appId);
+        assert.ok(
+          Number.isSafeInteger(parkedOwnership?.generation) &&
+            parkedOwnership.generation > 0,
+        );
+        await delay(250);
+        assert.deepEqual(await started.fixture.readRun(started.runId), blocked);
+        assert.equal(
+          existsSync(path.join(started.markerDirectory, '1.json')),
+          false,
+        );
+        assert.deepEqual(await signalResidentService(parkedWorker, 'SIGTERM'), {
+          code: 0,
+          signal: null,
+        });
+        const parkedStopped = await waitForDurableLifecycle(
+          started.lifecycle,
+          (snapshot) =>
+            snapshot?.status === 'STOPPED' &&
+            snapshot.generation === parkedReady.generation,
+          'blocked workflow worker STOPPED',
+        );
+        assert.equal(parkedStopped.sessionId, parkedReady.sessionId);
+        assert.equal(await started.lifecycle.readOwnership(), null);
+      } finally {
+        await stopResidentServiceForCleanup(parkedWorker);
+      }
+    } finally {
+      rmSync(started.caseRoot, { recursive: true, force: true });
+    }
+
+    const terminal = await createRelocatedSeaWorkflowCase(
+      options,
+      'terminal-committed',
+    );
+    try {
+      const paused = await pauseRelocatedSeaAtWorkflowBoundary(
+        options.artifactPath,
+        ['wharfie', 'worker'],
+        {
+          cwd: terminal.caseRoot,
+          env: terminal.environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: 'workflow terminal committed',
+          target: SEA_WORKFLOW_TERMINAL_COMMITTED_BREAKPOINT,
+          expectedWorkflowDispatches: 1,
+        },
+      );
+      const firstMarkerText = readFileSync(
+        path.join(terminal.markerDirectory, '1.json'),
+        'utf8',
+      );
+      assert.deepEqual(readdirSync(terminal.markerDirectory).sort(), [
+        '1.json',
+      ]);
+      const before = await terminal.fixture.readRun(terminal.runId);
+      assert.ok(before);
+      assert.equal(before.run.version, 4);
+      assert.equal(before.run.status, 'RUNNING');
+      assert.equal(before.workflowCursor.disposition, 'ACTIVITY_RUNNABLE');
+      assert.equal(before.workflowCursor.stepId, 'second');
+      assert.deepEqual(
+        before.workflowCursor.outputs.map((output) => ({
+          stepId: output.stepId,
+          stepIndex: output.stepIndex,
+        })),
+        [{ stepId: 'first', stepIndex: 0 }],
+      );
+      assert.deepEqual(
+        [...before.invocations]
+          .sort(
+            (left, right) => left.workflow.stepIndex - right.workflow.stepIndex,
+          )
+          .map(
+            (/** @type {Record<string, any>} */ invocation) =>
+              invocation.status,
+          ),
+        ['COMPLETED', 'RUNNABLE'],
+      );
+      assert.deepEqual(
+        before.attempts.map((attempt) => attempt.status),
+        ['COMPLETED'],
+      );
+      assert.equal(
+        readPayloadReachability(terminal.payloadPath, before).orphans.length,
+        0,
+      );
+      await killPausedWorkflowBoundary(
+        paused,
+        terminal.lifecycle,
+        terminal.sessionPath,
+      );
+      const completed = await completeSeaWorkflow(
+        options,
+        terminal,
+        'terminal successor workflow',
+      );
+      assert.equal(
+        readFileSync(path.join(terminal.markerDirectory, '1.json'), 'utf8'),
+        firstMarkerText,
+      );
+      await assertCompletedSeaWorkflow(options, terminal, completed);
+    } finally {
+      rmSync(terminal.caseRoot, { recursive: true, force: true });
+    }
+
+    // One auxiliary pre-terminal crash retains an honestly completed authored
+    // result for the public recovery/reconciliation response-loss boundaries.
+    const response = await createRelocatedSeaWorkflowCase(
+      options,
+      'operator-response-loss',
+    );
+    try {
+      const evidencePaused = await pauseRelocatedSeaAtWorkflowBoundary(
+        options.artifactPath,
+        ['wharfie', 'worker'],
+        {
+          cwd: response.caseRoot,
+          env: response.environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: 'workflow terminal evidence returned',
+          target: SEA_WORKFLOW_EVIDENCE_RETURNED_BREAKPOINT,
+          expectedWorkflowDispatches: 1,
+        },
+      );
+      const markerPath = path.join(response.markerDirectory, '1.json');
+      const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+      assert.deepEqual(readdirSync(response.markerDirectory).sort(), [
+        '1.json',
+      ]);
+      const startedBeforeRecovery = await response.fixture.readRun(
+        response.runId,
+      );
+      assert.ok(startedBeforeRecovery);
+      assert.equal(startedBeforeRecovery.run.version, 3);
+      assert.equal(startedBeforeRecovery.attempts[0].status, 'STARTED');
+      await killPausedWorkflowBoundary(
+        evidencePaused,
+        response.lifecycle,
+        response.sessionPath,
+      );
+
+      const recoveryArgs = [
+        'wharfie',
+        'recover',
+        '--run-id',
+        response.runId,
+        '--confirm-runner-stopped',
+        '--json',
+      ];
+      const recoveryPaused = await pauseRelocatedSeaAtWorkflowBoundary(
+        options.artifactPath,
+        recoveryArgs,
+        {
+          cwd: response.caseRoot,
+          env: response.environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: 'workflow recovery response returned',
+          target: SEA_WORKFLOW_RECOVERY_RETURNED_BREAKPOINT,
+          expectedWorkflowDispatches: 0,
+        },
+      );
+      const blocked = await response.fixture.readRun(response.runId);
+      assert.ok(blocked);
+      assert.equal(blocked.run.version, 4);
+      assert.equal(blocked.run.status, 'BLOCKED');
+      assert.equal(blocked.workflowCursor.disposition, 'ACTIVITY_UNCERTAIN');
+      const retainedAttempt = JSON.parse(JSON.stringify(blocked.attempts[0]));
+      await killPausedWorkflowResponse(recoveryPaused, response.lifecycle);
+      const recoveryReplay = await runSeaWorkflowRecovery(
+        options,
+        response,
+        'workflow recovery response replay',
+      );
+      assert.deepEqual(recoveryReplay.value.recovery, {
+        action: 'none',
+        changed: false,
+      });
+      assert.deepEqual(await response.fixture.readRun(response.runId), blocked);
+      assert.deepEqual(JSON.parse(readFileSync(markerPath, 'utf8')), marker);
+
+      const evidence = await response.fixture.createCompletedWorkflowEvidence(
+        response.runId,
+        marker.result,
+      );
+      const evidencePath = path.join(
+        response.caseRoot,
+        'workflow-evidence.json',
+      );
+      writeFileSync(evidencePath, `${JSON.stringify(evidence)}\n`, {
+        mode: 0o600,
+      });
+      const reconciliationId = 'sea-workflow-response-loss';
+      const reconcileArgs = [
+        'wharfie',
+        'reconcile',
+        '--run-id',
+        response.runId,
+        '--reconciliation-id',
+        reconciliationId,
+        '--evidence-file',
+        evidencePath,
+        '--confirm-runner-stopped',
+        '--json',
+      ];
+      const reconciliationPaused = await pauseRelocatedSeaAtWorkflowBoundary(
+        options.artifactPath,
+        reconcileArgs,
+        {
+          cwd: response.caseRoot,
+          env: response.environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: 'workflow reconciliation response returned',
+          target: SEA_WORKFLOW_RECONCILIATION_RETURNED_BREAKPOINT,
+          expectedWorkflowDispatches: 0,
+        },
+      );
+      const reconciled = await response.fixture.readRun(response.runId);
+      assert.ok(reconciled);
+      assert.equal(reconciled.run.version, 5);
+      assert.equal(reconciled.run.status, 'RUNNING');
+      assert.equal(reconciled.workflowCursor.disposition, 'ACTIVITY_RUNNABLE');
+      assert.equal(reconciled.workflowCursor.stepId, 'second');
+      assert.deepEqual(reconciled.attempts, [retainedAttempt]);
+      assert.deepEqual(
+        reconciled.events.map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+        [
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-activity-became-uncertain',
+          'workflow-activity-uncertainty-reconciled',
+        ],
+      );
+      assert.deepEqual(
+        workflowReadySummary(
+          await response.fixture.listReadyWork(
+            options.appId,
+            options.revisionId,
+          ),
+        ).map(({ kind, generation, stepId }) => ({ kind, generation, stepId })),
+        [{ kind: 'ACTIVITY', generation: 0, stepId: 'second' }],
+      );
+      assert.equal(
+        readPayloadReachability(response.payloadPath, reconciled).orphans
+          .length,
+        0,
+      );
+      await killPausedWorkflowResponse(
+        reconciliationPaused,
+        response.lifecycle,
+      );
+      const reconciliationReplay = await runInspectorGuardedSeaJson(
+        options.artifactPath,
+        reconcileArgs,
+        {
+          cwd: response.caseRoot,
+          env: response.environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: 'workflow reconciliation response replay',
+          forbiddenTargets: [
+            {
+              name: 'workflow-activity-dispatch',
+              target: SEA_WORKFLOW_DISPATCH_BREAKPOINT,
+            },
+            {
+              name: 'manual-activity-dispatch',
+              target: SEA_ACTIVITY_DISPATCH_BREAKPOINT,
+            },
+            {
+              name: 'developer-cli-dispatch',
+              target: SEA_APP_CLI_DISPATCH_BREAKPOINT,
+            },
+          ],
+        },
+      );
+      assert.deepEqual(reconciliationReplay.value.reconciliation, {
+        reconciliationId,
+        changed: false,
+      });
+      assert.deepEqual(
+        await response.fixture.readRun(response.runId),
+        reconciled,
+      );
+      for (const privateValue of [
+        response.secret,
+        response.callerSecret,
+        response.markerDirectory,
+        retainedAttempt.fencingToken,
+        marker.result.value,
+      ]) {
+        assert.equal(
+          reconciliationReplay.serialized.includes(privateValue),
+          false,
+        );
+      }
+      const completed = await completeSeaWorkflow(
+        options,
+        response,
+        'reconciled workflow successor',
+      );
+      assert.deepEqual(JSON.parse(readFileSync(markerPath, 'utf8')), marker);
+      assert.deepEqual(
+        completed.attempts.find(
+          (/** @type {Record<string, any>} */ attempt) =>
+            attempt.attemptId === retainedAttempt.attemptId,
+        ),
+        retainedAttempt,
+      );
+      await assertCompletedSeaWorkflow(options, response, completed, {
+        abandonedAttempts: 1,
+        completedAttempts: 1,
+        eventTypes: [
+          'workflow-run-created',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-activity-became-uncertain',
+          'workflow-activity-uncertainty-reconciled',
+          'workflow-activity-claimed',
+          'workflow-activity-started',
+          'workflow-activity-succeeded',
+        ],
+      });
+    } finally {
+      rmSync(response.caseRoot, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(options.root, { recursive: true, force: true });
+  }
+}
+
 if (!['darwin', 'linux'].includes(process.platform)) {
   throw new Error('The real package SEA smoke test requires macOS or Linux');
 }
@@ -6864,11 +8190,16 @@ try {
   writeFileSync(
     path.join(sourceDirectory, 'activity.ts'),
     `import { closeSync, fsyncSync, openSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { open } from 'lmdb';
 
 type GreetInput = { name?: string };
 type GreetRuntime = { caller?: { metadata?: { requestId?: string } } };
+type WorkflowStepInput = {
+  ordinal?: number;
+  markerDirectory?: string;
+  secret?: string;
+};
 type PersistInput = {
   key?: string;
   value?: unknown;
@@ -6940,6 +8271,26 @@ export async function greet(
   } finally {
     await database.close();
   }
+}
+
+export async function workflowStep(input: WorkflowStepInput = {}) {
+  const ordinal = Number.isSafeInteger(input.ordinal) ? input.ordinal! : 1;
+  if (ordinal < 1 || !input.markerDirectory) {
+    throw new Error('workflowStep requires a positive ordinal and markerDirectory');
+  }
+  const result = {
+    ordinal: ordinal + 1,
+    markerDirectory: input.markerDirectory,
+    secret: input.secret || null,
+    value: 'portable-workflow-step-' + ordinal,
+  };
+  writeDurableMarker(join(input.markerDirectory, ordinal + '.json'), {
+    kind: 'packaged-workflow-step',
+    ordinal,
+    executable: process.execPath,
+    result,
+  });
+  return result;
 }
 
 export async function persistOnce(
@@ -7064,6 +8415,32 @@ export default defineApp({
       externalPackages: [{
         name: 'lmdb',
         version: ${JSON.stringify(installedLmdbMetadata.version)},
+      }],
+    },
+    'workflow-step': {
+      entrypoint: {
+        kind: 'node',
+        path: './src/activity.ts',
+        export: 'workflowStep',
+      },
+      externalPackages: [{
+        name: 'lmdb',
+        version: ${JSON.stringify(installedLmdbMetadata.version)},
+      }],
+    },
+  },
+  workflows: {
+    'portable-linear': {
+      steps: [{
+        id: 'first',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'workflow-input' },
+      }, {
+        id: 'second',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'step-output', step: 'first' },
       }],
     },
   },
@@ -7305,6 +8682,32 @@ export default defineApp({
     },
     externalPackages: [
       { name: 'lmdb', version: installedLmdbMetadata.version },
+    ],
+  });
+  assert.deepEqual(embeddedManifest.activities['workflow-step'], {
+    entrypoint: {
+      kind: 'node',
+      path: 'src/activity.ts',
+      export: 'workflowStep',
+    },
+    externalPackages: [
+      { name: 'lmdb', version: installedLmdbMetadata.version },
+    ],
+  });
+  assert.deepEqual(embeddedManifest.workflows['portable-linear'], {
+    steps: [
+      {
+        id: 'first',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'workflow-input' },
+      },
+      {
+        id: 'second',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'step-output', step: 'first' },
+      },
     ],
   });
 
@@ -7649,6 +9052,16 @@ export default defineApp({
     installedPackageRoot,
     revisionId: packagedArtifact.revisionId,
     root: path.join(cleanRunDirectory, 'managed-effect-successor-crash-matrix'),
+  });
+  await verifyRelocatedSeaWorkflowCrashMatrix({
+    artifactPath: cleanArtifactPath,
+    appId: embeddedManifest.app.id,
+    cleanEnvironment,
+    installedPackageRoot,
+    revisionId: packagedArtifact.revisionId,
+    root: path.join(cleanRunDirectory, 'workflow-crash-matrix'),
+    wharfieBin,
+    appDirectory,
   });
 
   const residentEffectBatch =
@@ -8616,7 +10029,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();
