@@ -707,7 +707,34 @@ for (const adapter of getAdapterMatrix()) {
           target: RELEASE_C,
         });
         const abandonedChangeId = result.activation.transition.transitionId;
+        await expect(
+          activation.beginSourceRestore({
+            appId: APP_ID,
+            transitionId: abandonedChangeId,
+          }),
+        ).rejects.toBeInstanceOf(LocalApplicationActivationConflictError);
         result = await activation.markQuiescent({
+          appId: APP_ID,
+          transitionId: abandonedChangeId,
+        });
+        await expect(
+          activation.beginSourceRestore({
+            appId: APP_ID,
+            transitionId: abandonedChangeId,
+          }),
+        ).rejects.toBeInstanceOf(LocalApplicationActivationConflictError);
+        result = await activation.markSelected({
+          appId: APP_ID,
+          transitionId: abandonedChangeId,
+          destination: LocalApplicationActivationDestination.TARGET,
+        });
+        await expect(
+          activation.beginSourceRestore({
+            appId: APP_ID,
+            transitionId: abandonedChangeId,
+          }),
+        ).rejects.toBeInstanceOf(LocalApplicationActivationConflictError);
+        result = await activation.markActivating({
           appId: APP_ID,
           transitionId: abandonedChangeId,
         });

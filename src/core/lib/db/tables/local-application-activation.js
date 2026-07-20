@@ -564,6 +564,34 @@ function normalizeStorageRecord(raw, appId) {
       if (!sameRelease(desired, source) && !sameRelease(desired, target)) {
         throw new TypeError('desired transition release');
       }
+      if (action !== LocalApplicationActivationAction.INSTALL) {
+        const beforeSelection =
+          record.phase === LocalApplicationActivationPhase.QUIESCING ||
+          record.phase === LocalApplicationActivationPhase.QUIESCENT;
+        const selectingTarget = sameRelease(desired, target);
+        const expectedSelected = selectingTarget
+          ? beforeSelection
+            ? source
+            : target
+          : beforeSelection
+            ? target
+            : source;
+        const expectedSelectionGeneration =
+          sourceSelectionGeneration +
+          (selectingTarget
+            ? beforeSelection
+              ? 0
+              : 1
+            : beforeSelection
+              ? 1
+              : 2);
+        if (
+          !sameRelease(selected, expectedSelected) ||
+          selectionGeneration !== expectedSelectionGeneration
+        ) {
+          throw new TypeError('change transition direction');
+        }
+      }
       if (
         (record.phase === LocalApplicationActivationPhase.SELECTED ||
           record.phase === LocalApplicationActivationPhase.ACTIVATING) &&
@@ -572,15 +600,6 @@ function normalizeStorageRecord(raw, appId) {
           !sameRelease(selected, desired))
       ) {
         throw new TypeError('selected transition release');
-      }
-      if (
-        action !== LocalApplicationActivationAction.INSTALL &&
-        (record.phase === LocalApplicationActivationPhase.QUIESCING ||
-          record.phase === LocalApplicationActivationPhase.QUIESCENT) &&
-        sameRelease(selected, target) &&
-        sameRelease(desired, target)
-      ) {
-        throw new TypeError('unrecorded target selection');
       }
     }
   } catch (error) {
@@ -1133,6 +1152,24 @@ export function createLocalApplicationActivation({
         'transition is already complete',
       );
     }
+    if (
+      context.snapshot.phase !== LocalApplicationActivationPhase.ACTIVATING ||
+      !sameRelease(
+        context.snapshot.selected,
+        context.snapshot.transition.target,
+      ) ||
+      !sameRelease(
+        context.snapshot.desired,
+        context.snapshot.transition.target,
+      ) ||
+      context.snapshot.selectionGeneration !==
+        context.snapshot.transition.sourceSelectionGeneration + 1
+    ) {
+      throw new LocalApplicationActivationConflictError(
+        context.options.appId,
+        'source restoration requires the exact activating target selection',
+      );
+    }
     const record = replaceRecord(
       context.current,
       {
@@ -1244,6 +1281,14 @@ export function createLocalApplicationActivation({
       throw new LocalApplicationActivationConflictError(
         context.options.appId,
         'selected release is outside the transition',
+      );
+    }
+    const expectedSelectionGeneration =
+      transition.sourceSelectionGeneration + (targetActive ? 1 : 2);
+    if (context.snapshot.selectionGeneration !== expectedSelectionGeneration) {
+      throw new LocalApplicationActivationConflictError(
+        context.options.appId,
+        'selected release generation does not prove the activation outcome',
       );
     }
     const rollbackCandidate = targetActive
