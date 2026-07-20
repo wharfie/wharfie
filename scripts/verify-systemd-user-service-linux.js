@@ -1658,7 +1658,18 @@ async function prepare(repoRoot) {
   announce('packaged-consumer-seas');
   const storage = proofStorageLayout();
   const absent = readServiceStatus(packaged.artifactPath);
-  assert.equal(absent.health, 'absent');
+  if (absent.health !== 'absent') {
+    captureServiceFailure(
+      packaged.artifactPath,
+      'fresh-service-status',
+      new Error(`Fresh service status is ${JSON.stringify(absent)}`),
+    );
+  }
+  assert.equal(
+    absent.health,
+    'absent',
+    `fresh service status: ${JSON.stringify(absent)}`,
+  );
   const idempotencyKey = 'systemd-real-reboot-proof';
   const started = runArtifactJson(
     packaged.artifactPath,
