@@ -2,7 +2,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTANCE="${WHARFIE_SYSTEMD_PROOF_INSTANCE:-wharfie-systemd-proof}"
+DEFAULT_INSTANCE="wharfie-systemd-proof-$$"
+INSTANCE="${WHARFIE_SYSTEMD_PROOF_INSTANCE:-${DEFAULT_INSTANCE}}"
 KEEP_VM="${WHARFIE_SYSTEMD_PROOF_KEEP_VM:-0}"
 OUTPUT_ROOT="${WHARFIE_SYSTEMD_PROOF_OUTPUT_DIR:-${REPO_ROOT}/llm_artifacts/systemd-proof}"
 CONFIG_PATH="${REPO_ROOT}/test/systemd/lima.yaml"

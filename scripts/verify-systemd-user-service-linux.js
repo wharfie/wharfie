@@ -137,6 +137,16 @@ function wait(duration) {
 }
 
 /**
+ * Publish a non-sensitive phase marker so a host/VM transport failure can be
+ * distinguished from an assertion inside the disposable proof.
+ * @param {string} phase - Stable proof phase.
+ * @returns {void} - Returns after writing the marker.
+ */
+function announce(phase) {
+  process.stderr.write(`[wharfie-systemd-proof] ${phase}\n`);
+}
+
+/**
  * Poll one async observation until its predicate matches.
  * @param {() => Promise<any> | any} observe - Observation callback.
  * @param {(value: any) => boolean} matches - Success predicate.
@@ -780,6 +790,7 @@ async function prepare(repoRoot) {
   );
 
   const packaged = packageProofArtifact(repoRoot);
+  announce('packaged-consumer-sea');
   const storage = proofStorageLayout();
   const absent = readServiceStatus(packaged.artifactPath);
   assert.equal(absent.health, 'absent');
@@ -804,6 +815,7 @@ async function prepare(repoRoot) {
   assert.match(started.run_id, /^wfr_[A-Za-z0-9_-]{43}$/);
   const runId = started.run_id;
   const pendingBeforeInstall = inspectRun(packaged.artifactPath, runId);
+  announce('persisted-work-before-install');
   assert.equal(pendingBeforeInstall.run?.status, 'RUNNING');
   assert.equal(
     pendingBeforeInstall.workflowCursor?.disposition,
@@ -840,6 +852,7 @@ async function prepare(repoRoot) {
   assert.equal(install.health, 'healthy');
   const installed = readServiceStatus(packaged.artifactPath);
   assertHealthy(installed);
+  announce('healthy-systemd-service');
   assert.equal(
     installed.installation.activeArtifactId,
     packaged.artifact.artifactId,
@@ -886,6 +899,7 @@ async function prepare(repoRoot) {
     readMarkers().map((entry) => entry.stepIndex),
     [0],
   );
+  announce('durable-timer-waiting');
 
   const beforeCrash = readServiceStatus(packaged.artifactPath);
   assertHealthy(beforeCrash);
@@ -904,6 +918,7 @@ async function prepare(repoRoot) {
   assert.equal(afterCrashRun.workflowCursor?.disposition, 'TIMER_WAITING');
   assertSameTimer(afterCrashRun.timers?.[0], timerWaiting.timers[0], 'WAITING');
   assertRunningRelease(afterCrash, releasePath);
+  announce('systemd-crash-replacement');
   assert.deepEqual(
     readMarkers().map((entry) => entry.stepIndex),
     [0],
@@ -919,6 +934,7 @@ async function prepare(repoRoot) {
     afterCrashRun.timers[0],
     releasePath,
   );
+  announce('boot-observer-installed');
   const receipt = {
     schemaVersion: 1,
     kind: 'wharfie.systemd-proof.prepare',
