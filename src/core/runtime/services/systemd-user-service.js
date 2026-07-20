@@ -555,8 +555,7 @@ export function parseSystemdUserServiceStatus(text) {
       parsed.mainPid !== 0 ||
       parsed.execMainStatus !== 0 ||
       parsed.fragmentPath !== '' ||
-      parsed.dropInPaths !== '' ||
-      parsed.needDaemonReload !== false
+      parsed.dropInPaths !== ''
     ) {
       throw new TypeError(
         'systemd user service not-found status is inconsistent.',

@@ -144,7 +144,7 @@ async function createHarness(options = {}) {
               'ExecMainStatus=0',
               'FragmentPath=',
               'DropInPaths=',
-              'NeedDaemonReload=no',
+              `NeedDaemonReload=${state.needDaemonReload ? 'yes' : 'no'}`,
               '',
             ].join('\n'),
             stderr: '',
@@ -292,6 +292,12 @@ describe('systemd user service manager', () => {
       String.raw`/home/example\user/systemd/user`,
       '/run/example"user/systemd/user',
     ]);
+    const nonBreakingSpacePath = '/home/example\u00a0user/.config/systemd/user';
+    expect(
+      parseSystemdUserManagerUnitPath(
+        `${nonBreakingSpacePath} /run/systemd/user`,
+      ),
+    ).toEqual([nonBreakingSpacePath, '/run/systemd/user']);
     expect(() => parseSystemdUserManagerUnitPath('relative/path')).toThrow(
       /invalid UnitPath/,
     );
@@ -613,6 +619,21 @@ describe('systemd user service manager', () => {
       action: 'install',
       health: 'healthy',
     });
+  });
+
+  it('reloads a stale manager cache while the unit name is still unknown', async () => {
+    const harness = await createHarness({ unitInitiallyUnknown: true });
+    harness.state.needDaemonReload = true;
+
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      action: 'install',
+      health: 'healthy',
+    });
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        { command: 'systemctl', args: ['--user', 'daemon-reload'] },
+      ]),
+    );
   });
 
   it('fails closed when exact unit preflight loses the manager', async () => {

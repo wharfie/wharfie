@@ -199,7 +199,7 @@ export function parseSystemdUserManagerUnitPath(value) {
   let started = false;
   for (let offset = 0; offset < text.length; offset += 1) {
     const character = text[offset];
-    if (!quoted && /\s/.test(character)) {
+    if (!quoted && character === ' ') {
       if (started) entries.push(entry);
       entry = '';
       started = false;
