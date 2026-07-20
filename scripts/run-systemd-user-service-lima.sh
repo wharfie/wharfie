@@ -118,7 +118,7 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   scripts/verify-systemd-user-service-linux.js \
   prepare \
   "${GUEST_REPO}" > "${PREPARE_LOG}"
-echo "Prepared offline work, installed the SEA service, and verified process replacement."
+echo "Prepared three SEA revisions, installed the source service, and verified process replacement."
 limactl copy --backend=scp \
   "${INSTANCE}:${GUEST_PROOF_ROOT}/prepare.json" \
   "${PREPARE_CAPTURE}"
@@ -133,7 +133,7 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   scripts/verify-systemd-user-service-linux.js \
   verify \
   "${GUEST_REPO}" > "${VERIFY_LOG}"
-echo "Verified automatic boot recovery, durable workflow completion, and uninstall preservation."
+echo "Verified boot recovery, two-release activation crash recovery, source restoration, and uninstall preservation."
 
 RECEIPT_DIRECTORY="${OUTPUT_ROOT}/${COMMIT}"
 if [[ -e "${RECEIPT_DIRECTORY}" ]]; then
@@ -157,5 +157,5 @@ popd >/dev/null
 mv "${RECEIPT_STAGING}" "${RECEIPT_DIRECTORY}"
 RECEIPT_STAGING=""
 
-echo "Verified Wharfie systemd user-service reboot proof for ${COMMIT}."
+echo "Verified Wharfie systemd reboot and two-release activation proof for ${COMMIT}."
 echo "Receipts: ${RECEIPT_DIRECTORY}"

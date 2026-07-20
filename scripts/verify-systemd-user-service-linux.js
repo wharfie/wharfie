@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   closeSync,
@@ -19,6 +19,12 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { createPackageTarball, readJson } from './package-verification.js';
+import { createControlDBClient } from '../src/core/lib/config/db.js';
+import {
+  LocalApplicationActivationPhase,
+  createLocalApplicationActivation,
+} from '../src/core/lib/db/tables/local-application-activation.js';
+import { LOCAL_APP_EXECUTION_LEDGER_TABLE } from '../src/core/runtime/local-app-storage.js';
 
 const APP_ID = 'systemd-service-proof';
 const WORKFLOW_ID = 'reboot-chain';
@@ -36,12 +42,29 @@ const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 const STATUS_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 250;
 const EXPECTED_TIMER_DELAY_MS = 180_000;
+const ACTIVATION_OBSERVATION_TIMEOUT_MS = 120_000;
+const ACTIVATION_POLL_INTERVAL_MS = 2;
+const CHILD_EXIT_TIMEOUT_MS = 30_000;
+const CHILD_OUTPUT_BYTES = 128 * 1024;
+const ACTIVATION_CRASH_PHASES = Object.freeze([
+  LocalApplicationActivationPhase.QUIESCING,
+  LocalApplicationActivationPhase.QUIESCENT,
+  LocalApplicationActivationPhase.SELECTED,
+  LocalApplicationActivationPhase.ACTIVATING,
+]);
 
 /**
  * @typedef CommandResult
  * @property {number} status - Exit status.
  * @property {string} stdout - Standard output.
  * @property {string} stderr - Standard error.
+ */
+
+/**
+ * @typedef ProofPackageArtifact
+ * @property {string} artifactPath - Packaged SEA path.
+ * @property {Record<string, any>} artifact - Package artifact receipt.
+ * @property {Record<string, any>} revision - Embedded revision receipt.
  */
 
 /**
@@ -80,8 +103,7 @@ function run(command, args, options = {}) {
  * @param {string} label - Boundary label.
  * @returns {Record<string, any>} - Parsed object.
  */
-function parseJsonResult(result, label) {
-  assert.equal(result.status, 0, `${label} exited unsuccessfully`);
+function parseJsonOutput(result, label) {
   const text = result.stdout.trim();
   assert.ok(text, `${label} emitted no JSON`);
   const finalLine = text
@@ -100,6 +122,17 @@ function parseJsonResult(result, label) {
   }
   assert.ok(value && typeof value === 'object' && !Array.isArray(value));
   return value;
+}
+
+/**
+ * Parse one successful command's final JSON line.
+ * @param {CommandResult} result - Successful command result.
+ * @param {string} label - Boundary label.
+ * @returns {Record<string, any>} - Parsed object.
+ */
+function parseJsonResult(result, label) {
+  assert.equal(result.status, 0, `${label} exited unsuccessfully`);
+  return parseJsonOutput(result, label);
 }
 
 /**
@@ -221,6 +254,8 @@ function proofStorageLayout() {
     payloadPath: path.join(controlPath, 'execution-payloads'),
     applicationStatePath: path.join(stateRoot, 'application-state'),
     releasesRoot: path.join(appRoot, 'releases'),
+    currentLink: path.join(appRoot, 'current'),
+    installationPath: path.join(appRoot, 'installation.json'),
     unitPath: path.join(homedir(), '.config', 'systemd', 'user', UNIT_NAME),
   });
 }
@@ -372,11 +407,13 @@ function readBootId() {
 }
 
 /**
- * Build the current-target proof SEA from the committed fixture.
+ * Build distinct source, healthy-target, and resident-failing-target SEAs from
+ * one installed Wharfie tarball. All three keep the same application identity
+ * and target while embedding different immutable revisions.
  * @param {string} repoRoot - Extracted repository root.
- * @returns {{artifactPath: string, artifact: Record<string, any>, revision: Record<string, any>, package: Readonly<Record<string, any>>}} - Package result.
+ * @returns {{source: ProofPackageArtifact, target: ProofPackageArtifact, failingTarget: ProofPackageArtifact, package: Readonly<Record<string, any>>}} - Package results.
  */
-function packageProofArtifact(repoRoot) {
+function packageProofArtifacts(repoRoot) {
   const sourceFixture = path.join(
     repoRoot,
     'test',
@@ -385,8 +422,6 @@ function packageProofArtifact(repoRoot) {
     'systemd-service',
   );
   const consumerRoot = path.join(PROOF_ROOT, 'package-consumer');
-  const fixture = path.join(consumerRoot, 'app');
-  const outputDirectory = path.join(PROOF_ROOT, 'dist');
   const target = `linux/${process.arch}/glibc`;
   mkdirSync(consumerRoot, { recursive: true, mode: 0o700 });
   writeFileSync(
@@ -398,18 +433,92 @@ function packageProofArtifact(repoRoot) {
       type: 'module',
     })}\n`,
   );
-  cpSync(sourceFixture, fixture, { recursive: true });
-  const fixtureManifestPath = path.join(fixture, 'wharfie.app.js');
-  const fixtureManifest = readFileSync(fixtureManifestPath, 'utf8');
-  const installedFixtureManifest = fixtureManifest.replace(
-    '../../../../src/app.js',
-    '@wharfie/wharfie/app',
-  );
-  assert.notEqual(installedFixtureManifest, fixtureManifest);
-  writeFileSync(fixtureManifestPath, installedFixtureManifest);
   const packaged = createPackageTarball();
-  let result;
+  /** @type {ProofPackageArtifact | undefined} */
+  let source;
+  /** @type {ProofPackageArtifact | undefined} */
+  let healthyTarget;
+  /** @type {ProofPackageArtifact | undefined} */
+  let failingTarget;
   let packageEvidence;
+
+  /**
+   * Package one fixture variant after the installed consumer exists.
+   * @param {string} label - Stable release label.
+   * @param {{failResident?: boolean}} [options] - Resident behavior.
+   * @returns {ProofPackageArtifact} - Exact artifact.
+   */
+  function buildFixture(label, options = {}) {
+    const fixture = path.join(consumerRoot, `app-${label}`);
+    const outputDirectory = path.join(PROOF_ROOT, 'dist', label);
+    cpSync(sourceFixture, fixture, { recursive: true });
+    const fixtureManifestPath = path.join(fixture, 'wharfie.app.js');
+    const fixtureManifest = readFileSync(fixtureManifestPath, 'utf8');
+    let installedFixtureManifest = fixtureManifest.replace(
+      '../../../../src/app.js',
+      '@wharfie/wharfie/app',
+    );
+    assert.notEqual(installedFixtureManifest, fixtureManifest);
+    if (options.failResident === true) {
+      const exportAnchor = 'export default defineApp({';
+      assert.ok(installedFixtureManifest.includes(exportAnchor));
+      installedFixtureManifest = installedFixtureManifest.replace(
+        exportAnchor,
+        [
+          "if (process.env.WHARFIE_RUNTIME_COMMAND === 'ledger-service') {",
+          "  throw new Error('intentional systemd activation proof target failure');",
+          '}',
+          '',
+          exportAnchor,
+        ].join('\n'),
+      );
+    }
+    writeFileSync(fixtureManifestPath, installedFixtureManifest);
+    const activityPath = path.join(fixture, 'activity.js');
+    writeFileSync(
+      activityPath,
+      `${readFileSync(activityPath, 'utf8').trimEnd()}\n\nexport const systemdProofRelease = ${JSON.stringify(label)};\n`,
+    );
+    const wharfieBin = path.join(
+      consumerRoot,
+      'node_modules',
+      '.bin',
+      'wharfie',
+    );
+    const result = parseJsonResult(
+      run(
+        process.execPath,
+        [
+          wharfieBin,
+          'app',
+          'package',
+          fixture,
+          '--output-dir',
+          outputDirectory,
+          '--target',
+          target,
+          '--no-pretty',
+        ],
+        { cwd: consumerRoot, env: process.env, timeoutMs: 600_000 },
+      ),
+      `installed-package ${label} proof artifact package`,
+    );
+    assert.equal(result.artifacts?.length, 1);
+    const artifact = result.artifacts[0];
+    assert.equal(artifact.target?.platform, 'linux');
+    assert.equal(artifact.target?.architecture, process.arch);
+    assert.equal(artifact.target?.nodeVersion, process.versions.node);
+    assert.equal(artifact.target?.libc, 'glibc');
+    assert.equal(existsSync(artifact.path), true);
+    assert.equal((statSync(artifact.path).mode & 0o111) !== 0, true);
+    assert.equal(artifact.revisionId, result.revision?.revisionId);
+    return {
+      artifactPath: artifact.path,
+      artifact,
+      revision: result.revision,
+    };
+  }
+
   try {
     run(
       path.join(path.dirname(process.execPath), 'npm'),
@@ -439,47 +548,456 @@ function packageProofArtifact(repoRoot) {
       'wharfie',
     );
     assert.equal(existsSync(wharfieBin), true);
-    result = parseJsonResult(
-      run(
-        process.execPath,
-        [
-          wharfieBin,
-          'app',
-          'package',
-          fixture,
-          '--output-dir',
-          outputDirectory,
-          '--target',
-          target,
-          '--no-pretty',
-        ],
-        { cwd: consumerRoot, env: process.env, timeoutMs: 600_000 },
-      ),
-      'installed-package proof artifact package',
-    );
     packageEvidence = Object.freeze({
       name: installedMetadata.name,
       version: installedMetadata.version,
       tarballSha256: sha256File(packaged.tarballPath),
       packedFileCount: packaged.manifest.files.length,
     });
+    source = buildFixture('source');
+    healthyTarget = buildFixture('target');
+    failingTarget = buildFixture('failing-target', { failResident: true });
   } finally {
     packaged.cleanup();
   }
-  assert.equal(result.artifacts?.length, 1);
-  const artifact = result.artifacts[0];
-  assert.equal(artifact.target?.platform, 'linux');
-  assert.equal(artifact.target?.architecture, process.arch);
-  assert.equal(artifact.target?.nodeVersion, process.versions.node);
-  assert.equal(artifact.target?.libc, 'glibc');
-  assert.equal(existsSync(artifact.path), true);
-  assert.equal((statSync(artifact.path).mode & 0o111) !== 0, true);
+  assert.ok(source);
+  assert.ok(healthyTarget);
+  assert.ok(failingTarget);
+  assert.ok(packageEvidence);
+  assert.equal(
+    new Set([
+      source.artifact.artifactId,
+      healthyTarget.artifact.artifactId,
+      failingTarget.artifact.artifactId,
+    ]).size,
+    3,
+  );
+  assert.equal(
+    new Set([
+      source.artifact.revisionId,
+      healthyTarget.artifact.revisionId,
+      failingTarget.artifact.revisionId,
+    ]).size,
+    3,
+  );
   return {
-    artifactPath: artifact.path,
-    artifact,
-    revision: result.revision,
+    source,
+    target: healthyTarget,
+    failingTarget,
     package: packageEvidence,
   };
+}
+
+/**
+ * Reduce one package result to durable, non-secret proof evidence.
+ * @param {{artifactPath: string, artifact: Record<string, any>}} packaged - Package result.
+ * @returns {Readonly<Record<string, any>>} - Exact artifact evidence.
+ */
+function createArtifactEvidence(packaged) {
+  return Object.freeze({
+    artifactPath: packaged.artifactPath,
+    artifactId: packaged.artifact.artifactId,
+    revisionId: packaged.artifact.revisionId,
+    byteDigest: packaged.artifact.byteDigest,
+    size: packaged.artifact.size,
+    target: packaged.artifact.target,
+    sha256: sha256File(packaged.artifactPath),
+  });
+}
+
+/** @typedef {{code: number | null, signal: NodeJS.Signals | null}} ChildExit */
+
+/**
+ * Spawn one packaged operator command while retaining bounded diagnostics.
+ * @param {string} artifactPath - SEA path.
+ * @param {string[]} args - Exact command arguments.
+ * @param {{captureStdout?: boolean}} [options] - Output policy.
+ * @returns {{child: import('node:child_process').ChildProcess, exited: Promise<ChildExit>, getExit: () => ChildExit | null, getOutput: () => {stdout: string, stderr: string}}} - Running command.
+ */
+function spawnArtifactCommand(artifactPath, args, options = {}) {
+  const child = spawn(artifactPath, args, {
+    cwd: PROOF_ROOT,
+    env: packagedEnvironment(),
+    stdio: [
+      'ignore',
+      options.captureStdout === false ? 'ignore' : 'pipe',
+      'pipe',
+    ],
+  });
+  let stdout = '';
+  let stderr = '';
+  /** @type {ChildExit | null} */
+  let exitResult = null;
+  child.stdout?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk) => {
+    stdout = `${stdout}${String(chunk)}`.slice(-CHILD_OUTPUT_BYTES);
+  });
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk) => {
+    stderr = `${stderr}${String(chunk)}`.slice(-CHILD_OUTPUT_BYTES);
+  });
+  const exited = new Promise((resolve) => {
+    child.once('error', (error) => {
+      stderr =
+        `${stderr}${error instanceof Error ? error.message : String(error)}`.slice(
+          -CHILD_OUTPUT_BYTES,
+        );
+      exitResult = { code: null, signal: null };
+      resolve(exitResult);
+    });
+    child.once('exit', (code, signal) => {
+      exitResult = { code, signal: signal || null };
+      resolve(exitResult);
+    });
+  });
+  return {
+    child,
+    exited,
+    getExit: () => exitResult,
+    getOutput: () => ({ stdout, stderr }),
+  };
+}
+
+/**
+ * Add command output to one bounded lifecycle failure.
+ * @param {{getOutput: () => {stdout: string, stderr: string}}} command - Child command.
+ * @param {string} message - Failure context.
+ * @returns {Error} - Diagnostic error.
+ */
+function childCommandError(command, message) {
+  const output = command.getOutput();
+  return new Error(
+    [
+      message,
+      output.stdout ? `stdout:\n${output.stdout}` : '',
+      output.stderr ? `stderr:\n${output.stderr}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+}
+
+/**
+ * Bound one child or control-store operation.
+ * @template T
+ * @param {Promise<T>} promise - Pending operation.
+ * @param {number} timeoutMs - Maximum duration.
+ * @param {string} label - Timeout label.
+ * @returns {Promise<T>} - Completed value.
+ */
+async function waitWithTimeout(promise, timeoutMs, label) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Best-effort child cleanup without replacing the verifier's primary error.
+ * @param {{child: import('node:child_process').ChildProcess, exited: Promise<ChildExit>, getExit: () => ChildExit | null} | undefined} command - Optional child.
+ * @returns {Promise<void>} - Resolves after cleanup attempt.
+ */
+async function cleanupArtifactCommand(command) {
+  if (!command || command.getExit()) return;
+  try {
+    command.child.kill('SIGCONT');
+    command.child.kill('SIGKILL');
+    await waitWithTimeout(
+      command.exited,
+      CHILD_EXIT_TIMEOUT_MS,
+      'packaged activation command cleanup',
+    );
+  } catch {
+    // The caller's assertion is the useful failure.
+  }
+}
+
+/**
+ * @param {Record<string, any> | null} actual - Observed release.
+ * @param {Record<string, any>} expected - Artifact evidence.
+ * @param {string} label - Boundary label.
+ * @returns {void} - Resolves for one exact reference.
+ */
+function assertReleaseReference(actual, expected, label) {
+  assert.equal(actual?.artifactId, expected.artifactId, `${label} artifact`);
+  assert.equal(actual?.revisionId, expected.revisionId, `${label} revision`);
+}
+
+/**
+ * Assert the exact durable direction represented by one frozen phase.
+ * @param {Record<string, any>} activation - Durable snapshot.
+ * @param {{action: 'update'|'rollback', source: Record<string, any>, target: Record<string, any>}} expected - Direction.
+ * @returns {void} - Resolves for an exact transition.
+ */
+function assertActivationDirection(activation, expected) {
+  assert.ok(ACTIVATION_CRASH_PHASES.includes(activation.phase));
+  assert.equal(activation.transition?.action, expected.action);
+  assertReleaseReference(
+    activation.transition?.source,
+    expected.source,
+    'activation source',
+  );
+  assertReleaseReference(
+    activation.transition?.target,
+    expected.target,
+    'activation target',
+  );
+  assertReleaseReference(activation.desired, expected.target, 'desired');
+  const selected =
+    activation.phase === LocalApplicationActivationPhase.QUIESCING ||
+    activation.phase === LocalApplicationActivationPhase.QUIESCENT
+      ? expected.source
+      : expected.target;
+  assertReleaseReference(activation.selected, selected, 'selected');
+}
+
+/**
+ * Read systemd independently without taking Wharfie's operation lock.
+ * @returns {Readonly<Record<string, string>>} - Exact manager properties.
+ */
+function readIndependentServiceState() {
+  const properties = [
+    'LoadState',
+    'UnitFileState',
+    'ActiveState',
+    'SubState',
+    'Result',
+    'MainPID',
+    'FragmentPath',
+    'DropInPaths',
+    'NeedDaemonReload',
+  ];
+  const shown = run(
+    '/usr/bin/systemctl',
+    [
+      '--user',
+      'show',
+      UNIT_NAME,
+      '--no-pager',
+      `--property=${properties.join(',')}`,
+    ],
+    { env: packagedEnvironment(), allowFailure: true },
+  );
+  assert.equal(shown.status, 0, shown.stderr || shown.stdout);
+  const parsed = {};
+  for (const line of shown.stdout.trimEnd().split('\n')) {
+    const separator = line.indexOf('=');
+    assert.ok(separator > 0, `malformed systemd property: ${line}`);
+    const key = line.slice(0, separator);
+    assert.ok(properties.includes(key), `unexpected systemd property: ${key}`);
+    assert.equal(
+      Object.hasOwn(parsed, key),
+      false,
+      `duplicate property: ${key}`,
+    );
+    parsed[key] = line.slice(separator + 1);
+  }
+  assert.deepEqual(Object.keys(parsed).sort(), [...properties].sort());
+  return Object.freeze(parsed);
+}
+
+/**
+ * Capture the selector, receipt, and live manager while an operator is frozen.
+ * @param {Readonly<Record<string, string>>} storage - Proof layout.
+ * @returns {Readonly<Record<string, any>>} - Physical state.
+ */
+function captureActivationPhysicalState(storage) {
+  const installation = existsSync(storage.installationPath)
+    ? JSON.parse(readFileSync(storage.installationPath, 'utf8'))
+    : null;
+  return Object.freeze({
+    selector: existsSync(storage.currentLink)
+      ? readlinkSync(storage.currentLink)
+      : null,
+    installation: installation
+      ? Object.freeze({
+          state: installation.state,
+          current: Object.freeze({
+            artifactId: installation.current.artifactId,
+            revisionId: installation.current.revisionId,
+          }),
+          previous: installation.previous
+            ? Object.freeze({
+                artifactId: installation.previous.artifactId,
+                revisionId: installation.previous.revisionId,
+              })
+            : null,
+        })
+      : null,
+    systemd: readIndependentServiceState(),
+  });
+}
+
+/**
+ * Assert phase-specific real-host projection ordering.
+ * @param {Readonly<Record<string, any>>} physical - Physical snapshot.
+ * @param {string} phase - Durable phase.
+ * @param {Record<string, any>} source - Source evidence.
+ * @param {Record<string, any>} target - Target evidence.
+ * @returns {void} - Resolves for an authorized projection.
+ */
+function assertFrozenPhysicalState(physical, phase, source, target) {
+  assert.equal(physical.systemd.LoadState, 'loaded');
+  assert.equal(physical.systemd.UnitFileState, 'enabled');
+  assert.equal(physical.systemd.FragmentPath, proofStorageLayout().unitPath);
+  assert.equal(physical.systemd.DropInPaths, '');
+  if (phase === LocalApplicationActivationPhase.QUIESCENT) {
+    assert.ok(['yes', 'no'].includes(physical.systemd.NeedDaemonReload));
+  } else {
+    assert.equal(physical.systemd.NeedDaemonReload, 'no');
+  }
+  const references =
+    phase === LocalApplicationActivationPhase.QUIESCENT
+      ? [source, target]
+      : phase === LocalApplicationActivationPhase.QUIESCING
+        ? [source]
+        : [target];
+  assert.ok(physical.installation);
+  assert.equal(physical.installation.state, 'installed');
+  assert.ok(
+    references.some(
+      (reference) =>
+        physical.installation.current.artifactId === reference.artifactId &&
+        physical.installation.current.revisionId === reference.revisionId,
+    ),
+    `phase ${phase} installation is outside durable authority`,
+  );
+  assert.ok(
+    references.some(
+      (reference) =>
+        physical.selector === path.join('releases', reference.artifactId),
+    ),
+    `phase ${phase} selector is outside durable authority`,
+  );
+  if (
+    phase === LocalApplicationActivationPhase.QUIESCENT ||
+    phase === LocalApplicationActivationPhase.SELECTED
+  ) {
+    assert.equal(physical.systemd.ActiveState, 'inactive');
+    assert.equal(physical.systemd.MainPID, '0');
+  }
+}
+
+/**
+ * Crash one public activation command at the next uncovered durable phase.
+ * Direct read-only LMDB observation never takes or bypasses Wharfie's kernel
+ * operation lock; it only tells the external verifier when to send signals.
+ * @param {{artifactPath: string, action: 'update'|'rollback', source: Record<string, any>, target: Record<string, any>, remainingPhases: Set<string>, storage: Readonly<Record<string, string>>}} options - Crash direction.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Crash or completion evidence.
+ */
+async function crashActivationCommandAtNextPhase(options) {
+  const db = await createControlDBClient('lmdb', {
+    path: options.storage.controlPath,
+    readOnly: true,
+  });
+  const activationStore = createLocalApplicationActivation({
+    db,
+    tableName: LOCAL_APP_EXECUTION_LEDGER_TABLE,
+  });
+  /** @type {ReturnType<typeof spawnArtifactCommand> | undefined} */
+  let command;
+  try {
+    command = spawnArtifactCommand(options.artifactPath, [
+      'wharfie',
+      'service',
+      options.action,
+      '--json',
+    ]);
+    const deadline = Date.now() + ACTIVATION_OBSERVATION_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const exited = command.getExit();
+      if (exited) {
+        if (exited.code !== 0) {
+          throw childCommandError(
+            command,
+            `${options.action} exited before an uncovered phase: ${JSON.stringify(exited)}`,
+          );
+        }
+        await wait(10);
+        return Object.freeze({
+          crashed: false,
+          exit: exited,
+          result: parseJsonOutput(
+            {
+              status: exited.code,
+              ...command.getOutput(),
+            },
+            `${options.action} completion while seeking crash phase`,
+          ),
+        });
+      }
+      const observed = await activationStore.get({ appId: APP_ID });
+      if (
+        observed?.transition?.action === options.action &&
+        options.remainingPhases.has(observed.phase)
+      ) {
+        const stopped = command.child.kill('SIGSTOP');
+        if (!stopped && !command.getExit()) {
+          throw childCommandError(
+            command,
+            `could not freeze ${options.action} at ${observed.phase}`,
+          );
+        }
+        await wait(25);
+        const frozen = await activationStore.get({ appId: APP_ID });
+        if (
+          frozen?.transition?.action === options.action &&
+          options.remainingPhases.has(frozen.phase)
+        ) {
+          assertActivationDirection(frozen, options);
+          const physical = captureActivationPhysicalState(options.storage);
+          assertFrozenPhysicalState(
+            physical,
+            frozen.phase,
+            options.source,
+            options.target,
+          );
+          const killed = command.child.kill('SIGKILL');
+          if (!killed && !command.getExit()) {
+            throw childCommandError(
+              command,
+              `could not kill frozen ${options.action} at ${frozen.phase}`,
+            );
+          }
+          const exit = await waitWithTimeout(
+            command.exited,
+            CHILD_EXIT_TIMEOUT_MS,
+            `${options.action} SIGKILL at ${frozen.phase}`,
+          );
+          assert.equal(exit.signal, 'SIGKILL');
+          const afterKill = await activationStore.get({ appId: APP_ID });
+          assert.deepEqual(afterKill, frozen);
+          return Object.freeze({
+            crashed: true,
+            phase: frozen.phase,
+            activation: frozen,
+            physical,
+            exit,
+          });
+        }
+        command.child.kill('SIGCONT');
+      }
+      await wait(ACTIVATION_POLL_INTERVAL_MS);
+    }
+    throw childCommandError(
+      command,
+      `${options.action} exposed no uncovered activation phase within ${ACTIVATION_OBSERVATION_TIMEOUT_MS}ms`,
+    );
+  } finally {
+    await cleanupArtifactCommand(command);
+    await db.close();
+  }
 }
 
 /**
@@ -677,6 +1195,347 @@ function assertRunningRelease(status, releasePath) {
 }
 
 /**
+ * Keep the durable activation fields needed in a portable proof receipt.
+ * @param {Record<string, any>} activation - Full activation snapshot.
+ * @returns {Readonly<Record<string, any>>} - Bounded activation evidence.
+ */
+function createActivationEvidence(activation) {
+  return Object.freeze({
+    recordVersion: activation.recordVersion,
+    selectionGeneration: activation.selectionGeneration,
+    phase: activation.phase,
+    selected: activation.selected,
+    desired: activation.desired,
+    rollbackCandidate: activation.rollbackCandidate,
+    transition: activation.transition,
+    lastTransition: activation.lastTransition,
+  });
+}
+
+/**
+ * Assert one healthy immutable release and return bounded host evidence.
+ * @param {Record<string, any>} status - Packaged status.
+ * @param {Record<string, any>} current - Expected current artifact evidence.
+ * @param {Record<string, any> | null} rollback - Expected retained candidate.
+ * @param {Readonly<Record<string, string>>} storage - Proof layout.
+ * @returns {Readonly<Record<string, any>>} - Healthy selection evidence.
+ */
+function assertActiveArtifact(status, current, rollback, storage) {
+  const releasePath = path.join(
+    storage.releasesRoot,
+    current.artifactId,
+    'app',
+  );
+  assertRunningRelease(status, releasePath);
+  assert.equal(status.installation?.activeArtifactId, current.artifactId);
+  assert.equal(status.installation?.activeRevisionId, current.revisionId);
+  assert.equal(
+    status.installation?.previousArtifactId || null,
+    rollback?.artifactId || null,
+  );
+  assert.equal(
+    status.installation?.previousRevisionId || null,
+    rollback?.revisionId || null,
+  );
+  assert.equal(
+    status.activation?.phase,
+    LocalApplicationActivationPhase.ACTIVE,
+  );
+  assertReleaseReference(
+    status.activation?.selected,
+    current,
+    'status selected',
+  );
+  if (rollback) {
+    assertReleaseReference(
+      status.activation?.rollback,
+      rollback,
+      'status rollback',
+    );
+  } else {
+    assert.equal(status.activation?.rollback, null);
+  }
+  assert.equal(sha256File(releasePath), current.sha256);
+  return Object.freeze({
+    artifactId: current.artifactId,
+    revisionId: current.revisionId,
+    releasePath,
+    releaseSha256: sha256File(releasePath),
+    processId: status.systemd.mainPid,
+    generation: status.runtime.generation,
+    lastOutcome: status.activation.lastOutcome,
+  });
+}
+
+/**
+ * Assert one successful public activation command receipt.
+ * @param {Record<string, any>} receipt - Public JSON receipt.
+ * @param {string} action - Command action.
+ * @param {Record<string, any>} current - Expected selected release.
+ * @param {Record<string, any> | null} rollback - Expected candidate.
+ * @returns {void} - Resolves for exact public output.
+ */
+function assertSuccessfulActivationReceipt(receipt, action, current, rollback) {
+  assert.equal(receipt.schemaVersion, 1);
+  assert.equal(receipt.kind, 'wharfie.service.result');
+  assert.equal(receipt.action, action);
+  assert.equal(receipt.requestStatus, 'fulfilled');
+  assert.equal(receipt.outcome, 'target-active');
+  assert.equal(receipt.health, 'healthy');
+  assert.equal(receipt.activeArtifactId, current.artifactId);
+  assert.equal(receipt.activeRevisionId, current.revisionId);
+  assert.equal(receipt.rollbackArtifactId, rollback?.artifactId || null);
+  assert.equal(receipt.rollbackRevisionId, rollback?.revisionId || null);
+}
+
+/**
+ * Execute and independently verify one ordinary update, rollback, or recovery.
+ * @param {{artifactPath: string, action: 'update'|'rollback'|'recover', current: Record<string, any>, rollback: Record<string, any> | null, storage: Readonly<Record<string, string>>, label: string}} options - Expected result.
+ * @returns {Readonly<Record<string, any>>} - Public and host evidence.
+ */
+function runSuccessfulActivationCommand(options) {
+  const receipt = runArtifactJson(
+    options.artifactPath,
+    ['wharfie', 'service', options.action, '--json'],
+    options.label,
+  );
+  assertSuccessfulActivationReceipt(
+    receipt,
+    options.action,
+    options.current,
+    options.rollback,
+  );
+  const status = readServiceStatus(options.artifactPath);
+  const active = assertActiveArtifact(
+    status,
+    options.current,
+    options.rollback,
+    options.storage,
+  );
+  return Object.freeze({ receipt, active });
+}
+
+/**
+ * Collect SIGKILL/recovery evidence for every in-flight phase of one public
+ * direction, resetting to the same source after every attempt.
+ * @param {{action: 'update'|'rollback', commandArtifact: Record<string, any>, recoveryArtifact: Record<string, any>, source: Record<string, any>, target: Record<string, any>, storage: Readonly<Record<string, string>>, reset: () => Readonly<Record<string, any>>}} options - Matrix direction.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Ordered phase evidence.
+ */
+async function proveActivationCrashDirection(options) {
+  const remainingPhases = new Set(ACTIVATION_CRASH_PHASES);
+  const cases = new Map();
+  let attempts = 0;
+  while (remainingPhases.size > 0 && attempts < 16) {
+    attempts += 1;
+    const crash = await crashActivationCommandAtNextPhase({
+      artifactPath: options.commandArtifact.artifactPath,
+      action: options.action,
+      source: options.source,
+      target: options.target,
+      remainingPhases,
+      storage: options.storage,
+    });
+    if (crash.crashed) {
+      remainingPhases.delete(crash.phase);
+      const recovered = runSuccessfulActivationCommand({
+        artifactPath: options.recoveryArtifact.artifactPath,
+        action: 'recover',
+        current: options.target,
+        rollback: options.source,
+        storage: options.storage,
+        label: `${options.action} recovery from ${crash.phase}`,
+      });
+      cases.set(
+        crash.phase,
+        Object.freeze({
+          phase: crash.phase,
+          activation: createActivationEvidence(crash.activation),
+          physical: crash.physical,
+          processExit: crash.exit,
+          recovery: recovered,
+        }),
+      );
+      announce(
+        `${options.action}-${String(crash.phase).toLowerCase()}-recovered`,
+      );
+    } else {
+      assertSuccessfulActivationReceipt(
+        crash.result,
+        options.action,
+        options.target,
+        options.source,
+      );
+      assertActiveArtifact(
+        readServiceStatus(options.commandArtifact.artifactPath),
+        options.target,
+        options.source,
+        options.storage,
+      );
+    }
+    options.reset();
+  }
+  assert.deepEqual(
+    [...remainingPhases],
+    [],
+    `${options.action} did not expose every durable phase after ${attempts} attempts`,
+  );
+  return Object.freeze({
+    attempts,
+    cases: ACTIVATION_CRASH_PHASES.map((phase) => cases.get(phase)),
+  });
+}
+
+/**
+ * Prove two-release update/rollback recovery, rollback response ambiguity, and
+ * definitive target-failure source restoration on real systemd.
+ * @param {{source: Record<string, any>, target: Record<string, any>, failingTarget: Record<string, any>, storage: Readonly<Record<string, string>>}} options - Artifact evidence.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Activation proof receipt.
+ */
+async function proveActivationEvolution(options) {
+  const { source, target, failingTarget, storage } = options;
+  const before = assertActiveArtifact(
+    readServiceStatus(source.artifactPath),
+    source,
+    null,
+    storage,
+  );
+  const update = await proveActivationCrashDirection({
+    action: 'update',
+    commandArtifact: target,
+    recoveryArtifact: target,
+    source,
+    target,
+    storage,
+    reset: () =>
+      runSuccessfulActivationCommand({
+        artifactPath: target.artifactPath,
+        action: 'rollback',
+        current: source,
+        rollback: target,
+        storage,
+        label: 'update crash-matrix reset rollback',
+      }),
+  });
+
+  runSuccessfulActivationCommand({
+    artifactPath: target.artifactPath,
+    action: 'update',
+    current: target,
+    rollback: source,
+    storage,
+    label: 'rollback crash-matrix source update',
+  });
+  const rollback = await proveActivationCrashDirection({
+    action: 'rollback',
+    commandArtifact: target,
+    recoveryArtifact: target,
+    source: target,
+    target: source,
+    storage,
+    reset: () =>
+      runSuccessfulActivationCommand({
+        artifactPath: target.artifactPath,
+        action: 'update',
+        current: target,
+        rollback: source,
+        storage,
+        label: 'rollback crash-matrix reset update',
+      }),
+  });
+
+  const lostResponse = spawnArtifactCommand(
+    target.artifactPath,
+    ['wharfie', 'service', 'rollback', '--json'],
+    { captureStdout: false },
+  );
+  let lostExit;
+  try {
+    lostExit = await waitWithTimeout(
+      lostResponse.exited,
+      ACTIVATION_OBSERVATION_TIMEOUT_MS,
+      'rollback with discarded response',
+    );
+  } finally {
+    await cleanupArtifactCommand(lostResponse);
+  }
+  if (lostExit.code !== 0) {
+    throw childCommandError(
+      lostResponse,
+      `rollback with discarded response failed: ${JSON.stringify(lostExit)}`,
+    );
+  }
+  const afterDiscard = assertActiveArtifact(
+    readServiceStatus(source.artifactPath),
+    source,
+    target,
+    storage,
+  );
+  const ambiguityRecovery = runSuccessfulActivationCommand({
+    artifactPath: target.artifactPath,
+    action: 'recover',
+    current: source,
+    rollback: target,
+    storage,
+    label: 'ambiguous rollback response recovery',
+  });
+  announce('rollback-response-loss-recovered');
+
+  const failed = runArtifact(
+    failingTarget.artifactPath,
+    ['wharfie', 'service', 'update', '--json'],
+    { allowFailure: true },
+  );
+  assert.equal(
+    failed.status,
+    1,
+    'failing target update must exit unsuccessfully',
+  );
+  const failedReceipt = parseJsonOutput(failed, 'failing target update');
+  assert.equal(failedReceipt.action, 'update');
+  assert.equal(failedReceipt.requestStatus, 'failed');
+  assert.equal(failedReceipt.outcome, 'source-restored');
+  assert.equal(failedReceipt.health, 'healthy');
+  assert.equal(failedReceipt.activeArtifactId, source.artifactId);
+  assert.equal(failedReceipt.activeRevisionId, source.revisionId);
+  assert.equal(failedReceipt.rollbackArtifactId, target.artifactId);
+  assert.equal(failedReceipt.rollbackRevisionId, target.revisionId);
+  const afterFailure = assertActiveArtifact(
+    readServiceStatus(source.artifactPath),
+    source,
+    target,
+    storage,
+  );
+  const failedReleasePath = path.join(
+    storage.releasesRoot,
+    failingTarget.artifactId,
+    'app',
+  );
+  assert.equal(sha256File(failedReleasePath), failingTarget.sha256);
+  announce('failed-target-source-restored');
+
+  return Object.freeze({
+    artifacts: Object.freeze({ source, target, failingTarget }),
+    before,
+    update,
+    rollback,
+    ambiguousRollbackResponse: Object.freeze({
+      discarded: true,
+      exit: lostExit,
+      activeBeforeRecovery: afterDiscard,
+      recovery: ambiguityRecovery,
+    }),
+    sourceRestoration: Object.freeze({
+      failedTargetArtifactId: failingTarget.artifactId,
+      failedTargetRevisionId: failingTarget.revisionId,
+      failedTargetReleasePath: failedReleasePath,
+      failedTargetReleaseSha256: sha256File(failedReleasePath),
+      receipt: failedReceipt,
+      active: afterFailure,
+    }),
+  });
+}
+
+/**
  * Read systemd directly after Wharfie removes its installation wiring. This
  * deliberately does not trust the packaged command's uninstall tombstone.
  * @returns {Readonly<Record<string, any>>} - Independent absence evidence.
@@ -789,8 +1648,14 @@ async function prepare(repoRoot) {
     'packaged PATH unexpectedly exposes Node',
   );
 
-  const packaged = packageProofArtifact(repoRoot);
-  announce('packaged-consumer-sea');
+  const packagedSet = packageProofArtifacts(repoRoot);
+  const packaged = packagedSet.source;
+  const sourceArtifact = createArtifactEvidence(packagedSet.source);
+  const targetArtifact = createArtifactEvidence(packagedSet.target);
+  const failingTargetArtifact = createArtifactEvidence(
+    packagedSet.failingTarget,
+  );
+  announce('packaged-consumer-seas');
   const storage = proofStorageLayout();
   const absent = readServiceStatus(packaged.artifactPath);
   assert.equal(absent.health, 'absent');
@@ -936,7 +1801,7 @@ async function prepare(repoRoot) {
   );
   announce('boot-observer-installed');
   const receipt = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'wharfie.systemd-proof.prepare',
     commit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
     preparedAt: Date.now(),
@@ -950,7 +1815,12 @@ async function prepare(repoRoot) {
       target: packaged.artifact.target,
       sha256: sha256File(packaged.artifactPath),
     },
-    package: packaged.package,
+    activationArtifacts: {
+      source: sourceArtifact,
+      target: targetArtifact,
+      failingTarget: failingTargetArtifact,
+    },
+    package: packagedSet.package,
     toolchain: {
       node: process.versions.node,
       npm: run(path.join(path.dirname(process.execPath), 'npm'), [
@@ -1004,6 +1874,7 @@ async function verify() {
     'proof must use the declared abrupt VM power cycle',
   );
   const prepared = JSON.parse(readFileSync(PREPARE_PATH, 'utf8'));
+  assert.equal(prepared.schemaVersion, 2);
   assert.equal(prepared.kind, 'wharfie.systemd-proof.prepare');
   assert.match(prepared.commit, /^[0-9a-f]{40}$/);
   assert.equal(process.env.WHARFIE_SYSTEMD_PROOF_COMMIT, prepared.commit);
@@ -1087,6 +1958,20 @@ async function verify() {
   );
   assert.equal(completedMarkers[0].bootId, prepared.bootId);
   assert.equal(completedMarkers[1].bootId, bootReceipt.bootId);
+
+  let activation;
+  try {
+    activation = await proveActivationEvolution({
+      source: prepared.activationArtifacts.source,
+      target: prepared.activationArtifacts.target,
+      failingTarget: prepared.activationArtifacts.failingTarget,
+      storage: prepared.storage,
+    });
+  } catch (error) {
+    captureServiceFailure(artifactPath, 'activation-evolution', error);
+    throw error;
+  }
+  announce('activation-evolution-complete');
 
   const beforeRestart = readServiceStatus(artifactPath);
   assertHealthy(beforeRestart);
@@ -1183,7 +2068,7 @@ async function verify() {
 
   removeBootObserver();
   const receipt = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'wharfie.systemd-proof.complete',
     commit: prepared.commit,
     completedAt: Date.now(),
@@ -1204,6 +2089,7 @@ async function verify() {
       generation: bootReceipt.status.runtime.generation,
     },
     crashReplacement: prepared.crashReplacement,
+    activation,
     gracefulRestart: {
       beforeProcessId: beforeRestart.systemd.mainPid,
       afterProcessId: afterRestart.systemd.mainPid,
