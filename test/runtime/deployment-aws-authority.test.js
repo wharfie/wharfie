@@ -52,10 +52,12 @@ const NETWORK_RESOURCE_METHODS = Object.freeze([
   'createInternetGateway',
   'createRoute',
   'createRouteTable',
+  'createSecurityGroup',
   'createSubnet',
   'createVpc',
   'describeInternetGateways',
   'describeRouteTables',
+  'describeSecurityGroups',
   'describeSubnets',
   'describeVpcs',
   'describeVpcAttribute',
@@ -64,6 +66,7 @@ const NETWORK_RESOURCE_METHODS = Object.freeze([
   'deleteInternetGateway',
   'deleteRoute',
   'deleteRouteTable',
+  'deleteSecurityGroup',
   'deleteSubnet',
   'deleteVpc',
 ]);
@@ -166,6 +169,9 @@ async function loadHarness({
           input,
         };
       }
+      if (method === 'createSecurityGroup') {
+        return { GroupId: 'sg-00000000000000001', input };
+      }
       if (method === 'createSubnet') {
         return { Subnet: { SubnetId: 'subnet-00000000000000001' }, input };
       }
@@ -176,6 +182,9 @@ async function loadHarness({
         return { InternetGateways: [], input };
       }
       if (method === 'describeRouteTables') return { RouteTables: [], input };
+      if (method === 'describeSecurityGroups') {
+        return { SecurityGroups: [], input };
+      }
       if (method === 'describeSubnets') return { Subnets: [], input };
       if (method === 'describeVpcs') return { Vpcs: [], input };
       if (method === 'describeVpcAttribute') {
@@ -194,6 +203,7 @@ async function loadHarness({
       if (method === 'deleteInternetGateway') return { input };
       if (method === 'deleteRoute') return { Return: true, input };
       if (method === 'deleteRouteTable') return { input };
+      if (method === 'deleteSecurityGroup') return { input };
       if (method === 'deleteSubnet') return { input };
       if (method === 'deleteVpc') return { input };
       throw new Error(`Unexpected EC2 method: ${method}`);
@@ -348,6 +358,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    CreateSecurityGroupCommand: class CreateSecurityGroupCommand {
+      input;
+      operation = 'createSecurityGroup';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateSubnetCommand: class CreateSubnetCommand {
       input;
       operation = 'createSubnet';
@@ -404,6 +422,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    DescribeSecurityGroupsCommand: class DescribeSecurityGroupsCommand {
+      input;
+      operation = 'describeSecurityGroups';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     DescribeSubnetsCommand: class DescribeSubnetsCommand {
       input;
       operation = 'describeSubnets';
@@ -455,6 +481,14 @@ async function loadHarness({
     DeleteRouteTableCommand: class DeleteRouteTableCommand {
       input;
       operation = 'deleteRouteTable';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DeleteSecurityGroupCommand: class DeleteSecurityGroupCommand {
+      input;
+      operation = 'deleteSecurityGroup';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -1144,6 +1178,17 @@ describe('AWS deployment invocation authority', () => {
         RouteTable: { RouteTableId: 'rtb-00000000000000001' },
         input: createRouteTableInput,
       });
+      const createSecurityGroupInput = {
+        Description: 'Wharfie application security group',
+        GroupName: 'wharfie-application',
+        VpcId: 'vpc-00000000000000001',
+      };
+      await expect(
+        client.createSecurityGroup(createSecurityGroupInput),
+      ).resolves.toEqual({
+        GroupId: 'sg-00000000000000001',
+        input: createSecurityGroupInput,
+      });
       const createSubnetInput = {
         AvailabilityZoneId: 'use1-az1',
         CidrBlock: '10.42.1.0/24',
@@ -1172,6 +1217,15 @@ describe('AWS deployment invocation authority', () => {
       ).resolves.toMatchObject({
         RouteTables: [],
         input: describeRouteTablesInput,
+      });
+      const describeSecurityGroupsInput = {
+        GroupIds: ['sg-00000000000000001'],
+      };
+      await expect(
+        client.describeSecurityGroups(describeSecurityGroupsInput),
+      ).resolves.toMatchObject({
+        SecurityGroups: [],
+        input: describeSecurityGroupsInput,
       });
       const describeSubnetsInput = {
         SubnetIds: ['subnet-00000000000000001'],
@@ -1233,6 +1287,12 @@ describe('AWS deployment invocation authority', () => {
       await expect(
         client.deleteRouteTable(deleteRouteTableInput),
       ).resolves.toEqual({ input: deleteRouteTableInput });
+      const deleteSecurityGroupInput = {
+        GroupId: 'sg-00000000000000001',
+      };
+      await expect(
+        client.deleteSecurityGroup(deleteSecurityGroupInput),
+      ).resolves.toEqual({ input: deleteSecurityGroupInput });
       const deleteSubnetInput = {
         SubnetId: 'subnet-00000000000000001',
       };
@@ -1250,9 +1310,11 @@ describe('AWS deployment invocation authority', () => {
         ['createRoute', createRouteInput],
         ['createVpc', createInput],
         ['createRouteTable', createRouteTableInput],
+        ['createSecurityGroup', createSecurityGroupInput],
         ['createSubnet', createSubnetInput],
         ['describeInternetGateways', describeInternetGatewaysInput],
         ['describeRouteTables', describeRouteTablesInput],
+        ['describeSecurityGroups', describeSecurityGroupsInput],
         ['describeSubnets', describeSubnetsInput],
         ['describeVpcs', describeInput],
         ['describeVpcAttribute', attributeInput],
@@ -1261,6 +1323,7 @@ describe('AWS deployment invocation authority', () => {
         ['deleteInternetGateway', deleteInternetGatewayInput],
         ['deleteRoute', deleteRouteInput],
         ['deleteRouteTable', deleteRouteTableInput],
+        ['deleteSecurityGroup', deleteSecurityGroupInput],
         ['deleteSubnet', deleteSubnetInput],
         ['deleteVpc', deleteInput],
       ]);
@@ -1293,6 +1356,10 @@ describe('AWS deployment invocation authority', () => {
     ['InvalidSubnetID.NotFound', 'describeSubnets', 404],
     ['InvalidSubnetId.NotFound', 'describeSubnets', 404],
     ['InvalidAssociationID.NotFound', 'disassociateRouteTable', 404],
+    ['InvalidGroup.Duplicate', 'createSecurityGroup', 400],
+    ['InvalidGroup.NotFound', 'describeSecurityGroups', 404],
+    ['InvalidGroup.InUse', 'deleteSecurityGroup', 400],
+    ['InvalidSecurityGroupID.NotFound', 'describeSecurityGroups', 404],
     ['IdempotentParameterMismatch', 'createRouteTable', 400],
     ['DependencyViolation', 'deleteVpc', 400],
     ['IncorrectState', 'deleteVpc', 400],

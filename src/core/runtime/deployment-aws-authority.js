@@ -7,12 +7,14 @@ import {
   CreateInternetGatewayCommand,
   CreateRouteCommand,
   CreateRouteTableCommand,
+  CreateSecurityGroupCommand,
   CreateSubnetCommand,
   CreateVpcCommand,
   CreateVolumeCommand,
   DeleteInternetGatewayCommand,
   DeleteRouteCommand,
   DeleteRouteTableCommand,
+  DeleteSecurityGroupCommand,
   DeleteSubnetCommand,
   DeleteVpcCommand,
   DescribeAvailabilityZonesCommand,
@@ -20,6 +22,7 @@ import {
   DescribeInternetGatewaysCommand,
   DescribeInstanceTypeOfferingsCommand,
   DescribeRouteTablesCommand,
+  DescribeSecurityGroupsCommand,
   DescribeSubnetsCommand,
   DescribeVpcAttributeCommand,
   DescribeVpcsCommand,
@@ -113,11 +116,15 @@ const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'IncorrectState',
   'InvalidAssociationID.NotFound',
   'InvalidGatewayID.NotFound',
+  'InvalidGroup.Duplicate',
+  'InvalidGroup.InUse',
+  'InvalidGroup.NotFound',
   'InvalidInternetGatewayID.NotFound',
   'InvalidRoute.NotFound',
   'InvalidRouteTableID.NotFound',
   'InvalidSubnetID.NotFound',
   'InvalidSubnetId.NotFound',
+  'InvalidSecurityGroupID.NotFound',
   'InvalidVpcID.NotFound',
   'Resource.AlreadyAssociated',
   'RouteAlreadyExists',
@@ -157,10 +164,12 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput) => Promise<any>} createInternetGateway - Create one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').CreateRouteCommandInput) => Promise<any>} createRoute - Create one exact route.
  * @property {(input: import('@aws-sdk/client-ec2').CreateRouteTableCommandInput) => Promise<any>} createRouteTable - Create one exact route table.
+ * @property {(input: import('@aws-sdk/client-ec2').CreateSecurityGroupCommandInput) => Promise<any>} createSecurityGroup - Create one exact security group.
  * @property {(input: import('@aws-sdk/client-ec2').CreateSubnetCommandInput) => Promise<any>} createSubnet - Create one exact subnet.
  * @property {(input: import('@aws-sdk/client-ec2').CreateVpcCommandInput) => Promise<any>} createVpc - Create one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeInternetGatewaysCommandInput) => Promise<any>} describeInternetGateways - Read exact internet-gateway state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeRouteTablesCommandInput) => Promise<any>} describeRouteTables - Read exact route-table state.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeSecurityGroupsCommandInput) => Promise<any>} describeSecurityGroups - Read exact security-group state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeSubnetsCommandInput) => Promise<any>} describeSubnets - Read exact subnet state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcsCommandInput) => Promise<any>} describeVpcs - Read exact VPC state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput) => Promise<any>} describeVpcAttribute - Read one exact VPC attribute.
@@ -169,6 +178,7 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput) => Promise<any>} deleteInternetGateway - Delete one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteRouteCommandInput) => Promise<any>} deleteRoute - Delete one exact route.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteRouteTableCommandInput) => Promise<any>} deleteRouteTable - Delete one exact route table.
+ * @property {(input: import('@aws-sdk/client-ec2').DeleteSecurityGroupCommandInput) => Promise<any>} deleteSecurityGroup - Delete one exact security group.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteSubnetCommandInput) => Promise<any>} deleteSubnet - Delete one exact subnet.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteVpcCommandInput) => Promise<any>} deleteVpc - Delete one exact VPC.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
@@ -914,6 +924,9 @@ export async function createAwsDeploymentAuthority(options) {
       createRouteTable: (
         /** @type {import('@aws-sdk/client-ec2').CreateRouteTableCommandInput} */ input,
       ) => call(() => client.send(new CreateRouteTableCommand(input))),
+      createSecurityGroup: (
+        /** @type {import('@aws-sdk/client-ec2').CreateSecurityGroupCommandInput} */ input,
+      ) => call(() => client.send(new CreateSecurityGroupCommand(input))),
       createSubnet: (
         /** @type {import('@aws-sdk/client-ec2').CreateSubnetCommandInput} */ input,
       ) => call(() => client.send(new CreateSubnetCommand(input))),
@@ -926,6 +939,9 @@ export async function createAwsDeploymentAuthority(options) {
       describeRouteTables: (
         /** @type {import('@aws-sdk/client-ec2').DescribeRouteTablesCommandInput} */ input,
       ) => call(() => client.send(new DescribeRouteTablesCommand(input))),
+      describeSecurityGroups: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeSecurityGroupsCommandInput} */ input,
+      ) => call(() => client.send(new DescribeSecurityGroupsCommand(input))),
       describeSubnets: (
         /** @type {import('@aws-sdk/client-ec2').DescribeSubnetsCommandInput} */ input,
       ) => call(() => client.send(new DescribeSubnetsCommand(input))),
@@ -950,6 +966,9 @@ export async function createAwsDeploymentAuthority(options) {
       deleteRouteTable: (
         /** @type {import('@aws-sdk/client-ec2').DeleteRouteTableCommandInput} */ input,
       ) => call(() => client.send(new DeleteRouteTableCommand(input))),
+      deleteSecurityGroup: (
+        /** @type {import('@aws-sdk/client-ec2').DeleteSecurityGroupCommandInput} */ input,
+      ) => call(() => client.send(new DeleteSecurityGroupCommand(input))),
       deleteSubnet: (
         /** @type {import('@aws-sdk/client-ec2').DeleteSubnetCommandInput} */ input,
       ) => call(() => client.send(new DeleteSubnetCommand(input))),
