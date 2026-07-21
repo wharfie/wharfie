@@ -264,20 +264,24 @@ instance termination](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preser
 ### Direct VPC creation is a recoverable logical effect
 
 Network mutation uses a separate caller-owned authority with only the fixed
-VPC, internet-gateway, and subnet create, describe, and delete operations;
-gateway attach and detach; `DescribeVpcAttribute`; and `close`. The SDK client
-is configured for one transport attempt because the direct create operations
-expose no provider idempotency token; for example,
+VPC, internet-gateway, subnet, and route-table create, describe, and delete
+operations; gateway attach and detach; `DescribeVpcAttribute`; and `close`.
+The SDK client is configured for one transport attempt so the resource drivers
+retain retry authority. The VPC, gateway, and subnet creates expose no provider
+idempotency token; for example,
 [`CreateVpc`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateVpc.html)
 and
 [`CreateSubnet`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateSubnet.html)
-have no client-token parameter. Driver-controlled retries first inspect the
-exact logical resource instead of allowing the SDK to hide a second create.
-Errors preserve only `InvalidVpcID.NotFound`,
+have no client-token parameter. The route-table driver instead supplies the
+durable token supported by
+[`CreateRouteTable`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateRouteTable.html)
+on every identical driver-controlled retry. Errors preserve only
+`InvalidVpcID.NotFound`,
 `InvalidInternetGatewayID.NotFound`, both `InvalidSubnetID.NotFound` and
-`InvalidSubnetId.NotFound`, `DependencyViolation`, `IncorrectState`,
-`Gateway.NotAttached`, `Resource.AlreadyAssociated`, and a bounded HTTP
-status; raw provider details never cross the authority boundary.
+`InvalidSubnetId.NotFound`, `InvalidRouteTableID.NotFound`,
+`IdempotentParameterMismatch`, `DependencyViolation`, `IncorrectState`,
+`Gateway.NotAttached`, `Resource.AlreadyAssociated`, and a bounded HTTP status;
+raw provider details never cross the authority boundary.
 
 `createAwsSingleNodeVpcResource` accepts only the fixed managed
 `network-vpc` role. Its state digest binds the provider specification's exact
@@ -416,14 +420,17 @@ lifecycle claim.
 
 ### Tagged direct-resource recovery shares identity mechanics, not lifecycle
 
-The VPC, internet-gateway, and subnet drivers use one internal tagged
-direct-EC2 recovery kernel. It owns the common schema-2 ownership envelope,
-sorted atomic create tags, eight stable discovery filters, bounded singleton
-pagination, broad/exact identity correlation, and the in-process create fence
-keyed by action ID plus ownership nonce. A successful create response
-contributes only an ephemeral candidate locator. Clearing that candidate after
-settlement never clears the attempted-effect fence, so a malformed or failed
-non-idempotent create cannot be replayed by the same driver instance.
+The VPC, internet-gateway, subnet, and route-table drivers use one internal
+tagged direct-EC2 recovery kernel. It owns the common schema-2 ownership
+envelope, sorted atomic create tags, eight stable discovery filters, bounded
+singleton pagination, broad/exact identity correlation, and an optional
+in-process create fence and candidate locator keyed by action ID plus ownership
+nonce. The three non-token creates claim that fence so a malformed or failed
+mutation cannot be replayed by the same driver instance. The route table
+reuses the identity mechanics but keeps its response candidate role-local; it
+does not use the local replay prohibition and deliberately replays only the
+same durable provider token and identical request parameters. A successful
+create response remains only an ephemeral candidate locator in either case.
 
 The kernel deliberately does not own AWS response-envelope decoding, typed
 not-found interpretation, resource state validation, delete eligibility,
@@ -431,12 +438,14 @@ mutation requests, bindings, or retry outcomes. Those are role contracts. The
 VPC therefore preserves its fresh-process discovery-only recovery path and
 separate DNS-attribute reads, while the gateway explicitly promotes a sole
 discovery ID into an independent exact-ID read. The subnet also promotes a
-sole discovery ID and adds its separate VPC/CIDR natural-slot read. Once a
-candidate or durable binding exists, all three roles require broad and exact
-identity agreement and validate every present record before treating one-sided
-visibility as transitional. Sharing these mechanics prevents later tagged
-resources from copying the recovery protocol without turning the kernel into
-general-purpose cloud infrastructure machinery.
+sole discovery ID and adds its separate VPC/CIDR natural-slot read. The route
+table promotes a sole discovery ID, requires independent exact-ID
+corroboration, and adds its durable provider token plus route, association, and
+propagation evidence. Once a candidate or durable binding exists, every role's
+configured views must agree and validate all present records before treating
+one-sided visibility as transitional. Sharing these mechanics prevents later
+tagged resources from copying the recovery protocol without turning the kernel
+into general-purpose cloud infrastructure machinery.
 
 ### Subnet identity adds a natural VPC/CIDR slot
 
@@ -504,6 +513,78 @@ discovery and natural-slot discovery are empty and the independent exact read
 returns one of AWS's typed subnet not-found classifications. Delete success,
 not-found, dependency, and incorrect-state outcomes all require fresh readback
 rather than settling the action themselves.
+
+### Route-table create has durable provider idempotency
+
+The fixed managed `network-route-table` role is a directly owned, purged child
+of the exact `network-vpc` binding. Apply and reconcile accept only the earlier
+settled VPC dependency; reverse destroy accepts only the later pending,
+still-intact VPC dependency. Its binding records that exact VPC binding ID as
+immutable lineage. The plan-time state digest contains only one active local
+IPv4 route for the ProviderSpec's VPC CIDR, `GatewayId=local`,
+`Origin=CreateRouteTable`, nonmain identity, no propagating virtual gateways,
+and purge lifecycle. The dynamically allocated VPC provider ID remains in
+dependency lineage rather than changing the content-addressed target state.
+
+Create sends one exact
+[`CreateRouteTable`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateRouteTable.html)
+request containing only the dependency VPC ID, one complete sorted schema-2
+`route-table` tag specification, and a durable 64-character lowercase
+hexadecimal `ClientToken`. Wharfie derives that token by domain-separated
+SHA-256 over the exact action ID and ownership nonce. The same durable intent
+therefore reproduces byte-identical parameters across an ambiguous response,
+process loss, and a fresh driver factory; a changed nonce produces a different
+effect identity.
+
+AWS documents that `ClientToken` makes the request idempotent. Its general
+[EC2 idempotency contract](https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-idempotency.html)
+says that retrying a successful request with the same token and parameters
+performs no further action, while changing parameters produces
+`IdempotentParameterMismatch`. Wharfie consequently claims provider-enforced
+at-most-one successful route-table create effect for that token in the Region.
+It does not claim that one API call executes exactly once, and AWS does not
+document the token-retention horizon. Atomic ownership tags and provider
+readback therefore remain necessary durable evidence rather than treating the
+token or a mutation response as settlement.
+
+Unlike the subnet, a custom route table has no unique natural VPC slot because
+one VPC may contain several route tables. Settlement instead correlates
+complete, bounded logical discovery through the shared eight ownership-tag
+filters with an independent exact-ID
+[`DescribeRouteTables`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeRouteTables.html)
+read chosen from the durable binding, create-response candidate, or sole
+logical match. Both views must agree on one account-owned, atomically tagged
+route table in the exact VPC. A successful create response and its echoed
+token are only an ephemeral locator. Duplicate owners, different IDs, a main
+association, foreign ownership or VPC lineage, unexpected route forms, and
+virtual-gateway propagation block rather than being adopted or repaired.
+One-sided visibility is transitional; malformed or inaccessible evidence is
+unknown.
+
+Fresh create settlement is intentionally pristine: exactly one active local
+IPv4 VPC-CIDR route, no association, no default route, and no propagation.
+That fence prevents a pre-existing logical match with unmodeled descendants
+from being mistaken for a newly created intrinsic resource. No-op re-proves
+the same identity and local route but permits only the fixed later graph
+descendants: at most one well-formed nonmain subnet association and at most one
+well-formed `0.0.0.0/0` route created toward an internet gateway. It permits no
+other route or association shape and no virtual-gateway propagation. The
+later derived actions retain authority for the exact descendant endpoint
+lineage; this earlier route-table binding does not absorb those relationships.
+
+Reverse destroy reaches the derived subnet association and default route
+before the directly owned route table. The route-table driver keeps reading
+while any association, nonlocal route, or virtual-gateway propagation remains
+and sends
+[`DeleteRouteTable`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DeleteRouteTable.html)
+only after both logical and exact views re-prove the exact owned, nonmain table
+with its local route and no deletion blockers. Delete success, typed not-found,
+dependency, and incorrect-state outcomes remain nonauthoritative and trigger
+fresh readback. A null binding settles only after complete logical discovery
+is empty and the exact bound read returns typed route-table not-found. This
+matches AWS's requirement that subnet associations be removed before a
+nonmain route table can be deleted without using provider refusal as Wharfie's
+destroy-order authority.
 
 The portable capability model expands through one immutable, content-addressed
 `AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
@@ -940,6 +1021,20 @@ later node ENI owns its explicit public address. Reverse destroy preserves
 identity, ownership, VPC, nondefault, and available-state fences while
 allowing mutable configuration drift. The route table is the next graph role.
 
+The fifteenth slice extends the single-attempt network authority with the
+three route-table operations and the bounded route-table errors, then
+implements the directly owned application route table beneath exact VPC
+lineage. Its stable action-plus-nonce token is the first fixed network create
+with provider-enforced idempotency: identical token and parameters permit
+response-loss replay without another successful create effect in the Region,
+while a mismatch blocks. Logical tag discovery and independent exact-ID
+readback still provide settlement because token retention is undocumented and
+mutation results are not durable evidence. Create requires the pristine local
+route; no-op accepts only the fixed later default-route and subnet-association
+shapes; reverse destroy waits for both plus any virtual-gateway propagation to
+disappear. The default IPv4 route is the next graph role, followed by the
+subnet association and application security group.
+
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or
 version deletion; otherwise a delete marker could hide the semantic
@@ -948,7 +1043,7 @@ current version at every retired incarnation/node key until a future explicit
 retained-state collector proves it may remove that history.
 
 The remaining independently recoverable resource drivers, starting with the
-route table and its derived route and association, source and packaged
+route table's derived default route and subnet association, source and packaged
 deployment commands, production composition, and clean-account lifecycle proof
 remain unfinished. A document, bucket/table tag,
 SSM result, EC2 description, or content ID still never proves that an

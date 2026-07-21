@@ -49,14 +49,17 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
 const NETWORK_RESOURCE_METHODS = Object.freeze([
   'attachInternetGateway',
   'createInternetGateway',
+  'createRouteTable',
   'createSubnet',
   'createVpc',
   'describeInternetGateways',
+  'describeRouteTables',
   'describeSubnets',
   'describeVpcs',
   'describeVpcAttribute',
   'detachInternetGateway',
   'deleteInternetGateway',
+  'deleteRouteTable',
   'deleteSubnet',
   'deleteVpc',
 ]);
@@ -152,6 +155,12 @@ async function loadHarness({
           input,
         };
       }
+      if (method === 'createRouteTable') {
+        return {
+          RouteTable: { RouteTableId: 'rtb-00000000000000001' },
+          input,
+        };
+      }
       if (method === 'createSubnet') {
         return { Subnet: { SubnetId: 'subnet-00000000000000001' }, input };
       }
@@ -161,6 +170,7 @@ async function loadHarness({
       if (method === 'describeInternetGateways') {
         return { InternetGateways: [], input };
       }
+      if (method === 'describeRouteTables') return { RouteTables: [], input };
       if (method === 'describeSubnets') return { Subnets: [], input };
       if (method === 'describeVpcs') return { Vpcs: [], input };
       if (method === 'describeVpcAttribute') {
@@ -169,6 +179,7 @@ async function loadHarness({
       if (method === 'attachInternetGateway') return { input };
       if (method === 'detachInternetGateway') return { input };
       if (method === 'deleteInternetGateway') return { input };
+      if (method === 'deleteRouteTable') return { input };
       if (method === 'deleteSubnet') return { input };
       if (method === 'deleteVpc') return { input };
       throw new Error(`Unexpected EC2 method: ${method}`);
@@ -299,6 +310,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    CreateRouteTableCommand: class CreateRouteTableCommand {
+      input;
+      operation = 'createRouteTable';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateSubnetCommand: class CreateSubnetCommand {
       input;
       operation = 'createSubnet';
@@ -347,6 +366,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    DescribeRouteTablesCommand: class DescribeRouteTablesCommand {
+      input;
+      operation = 'describeRouteTables';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     DescribeSubnetsCommand: class DescribeSubnetsCommand {
       input;
       operation = 'describeSubnets';
@@ -382,6 +409,14 @@ async function loadHarness({
     DeleteInternetGatewayCommand: class DeleteInternetGatewayCommand {
       input;
       operation = 'deleteInternetGateway';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DeleteRouteTableCommand: class DeleteRouteTableCommand {
+      input;
+      operation = 'deleteRouteTable';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -1032,6 +1067,17 @@ describe('AWS deployment invocation authority', () => {
         Vpc: { VpcId: 'vpc-00000000000000001' },
         input: createInput,
       });
+      const createRouteTableInput = {
+        ClientToken:
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        VpcId: 'vpc-00000000000000001',
+      };
+      await expect(
+        client.createRouteTable(createRouteTableInput),
+      ).resolves.toMatchObject({
+        RouteTable: { RouteTableId: 'rtb-00000000000000001' },
+        input: createRouteTableInput,
+      });
       const createSubnetInput = {
         AvailabilityZoneId: 'use1-az1',
         CidrBlock: '10.42.1.0/24',
@@ -1051,6 +1097,15 @@ describe('AWS deployment invocation authority', () => {
       ).resolves.toMatchObject({
         InternetGateways: [],
         input: describeInternetGatewaysInput,
+      });
+      const describeRouteTablesInput = {
+        RouteTableIds: ['rtb-00000000000000001'],
+      };
+      await expect(
+        client.describeRouteTables(describeRouteTablesInput),
+      ).resolves.toMatchObject({
+        RouteTables: [],
+        input: describeRouteTablesInput,
       });
       const describeSubnetsInput = {
         SubnetIds: ['subnet-00000000000000001'],
@@ -1089,6 +1144,12 @@ describe('AWS deployment invocation authority', () => {
       await expect(
         client.deleteInternetGateway(deleteInternetGatewayInput),
       ).resolves.toEqual({ input: deleteInternetGatewayInput });
+      const deleteRouteTableInput = {
+        RouteTableId: 'rtb-00000000000000001',
+      };
+      await expect(
+        client.deleteRouteTable(deleteRouteTableInput),
+      ).resolves.toEqual({ input: deleteRouteTableInput });
       const deleteSubnetInput = {
         SubnetId: 'subnet-00000000000000001',
       };
@@ -1103,13 +1164,16 @@ describe('AWS deployment invocation authority', () => {
         ['attachInternetGateway', attachmentInput],
         ['createInternetGateway', createInternetGatewayInput],
         ['createVpc', createInput],
+        ['createRouteTable', createRouteTableInput],
         ['createSubnet', createSubnetInput],
         ['describeInternetGateways', describeInternetGatewaysInput],
+        ['describeRouteTables', describeRouteTablesInput],
         ['describeSubnets', describeSubnetsInput],
         ['describeVpcs', describeInput],
         ['describeVpcAttribute', attributeInput],
         ['detachInternetGateway', detachInput],
         ['deleteInternetGateway', deleteInternetGatewayInput],
+        ['deleteRouteTable', deleteRouteTableInput],
         ['deleteSubnet', deleteSubnetInput],
         ['deleteVpc', deleteInput],
       ]);
@@ -1138,8 +1202,10 @@ describe('AWS deployment invocation authority', () => {
   it.each([
     ['InvalidVpcID.NotFound', 'describeVpcs', 404],
     ['InvalidInternetGatewayID.NotFound', 'describeInternetGateways', 404],
+    ['InvalidRouteTableID.NotFound', 'describeRouteTables', 404],
     ['InvalidSubnetID.NotFound', 'describeSubnets', 404],
     ['InvalidSubnetId.NotFound', 'describeSubnets', 404],
+    ['IdempotentParameterMismatch', 'createRouteTable', 400],
     ['DependencyViolation', 'deleteVpc', 400],
     ['IncorrectState', 'deleteVpc', 400],
     ['Gateway.NotAttached', 'detachInternetGateway', 400],

@@ -101,17 +101,22 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [direct EC2 subnet resource
+The current restart handoff is the [direct EC2 route-table resource
+checkpoint](../llm/checkpoints/2026-07-21-v33-direct-ec2-route-table-resource.md).
+The managed route table reuses the schema-2 tagged direct-resource recovery
+kernel beneath the exact VPC binding and adds a durable 64-hex EC2
+`ClientToken` derived from the action ID and ownership nonce. Its fixed state
+is one nonmain, unassociated route table with the active local VPC-CIDR route,
+no virtual-gateway propagation, and purge lifecycle. Create must observe that
+pristine state; no-op accepts only the fixed later default-route and
+subnet-association descendants, and reverse destroy waits for them to
+disappear before deletion. AWS documents that an identical token-and-parameter
+retry performs no further action and a mismatch fails, so Wharfie claims at
+most one successful create effect in the Region, not API-call exactly-once
+execution; AWS does not document the token-retention horizon. The
+retained-volume, VPC, gateway, gateway-attachment, subnet, and route-table
+drivers are implemented. The default IPv4 route is next, followed by the
+subnet association and security group before the remaining identity, node,
+attachment, and complete AWS driver composition. Its parent is the [direct EC2
+subnet resource
 checkpoint](../llm/checkpoints/2026-07-21-v32-direct-ec2-subnet-resource.md).
-The managed subnet reuses the schema-2 tagged direct-resource recovery kernel,
-then independently correlates logical-tag discovery, its exact VPC/CIDR
-natural slot, and exact provider-ID readback beneath the settled VPC binding.
-It keeps subnet-wide public IPv4 assignment and IPv6 disabled, leaves the later
-node's primary ENI to request its public address, and proves exact ownership
-before a drift-tolerant purge. CIDR uniqueness prevents a second successful
-desired-slot allocation, but Wharfie does not claim that an EC2 API call
-executes exactly once. The retained-volume, VPC, gateway, gateway-attachment,
-and subnet drivers are implemented; the route table is next before the
-remaining network, identity, node, attachment, and complete AWS driver
-composition. Its parent is the [tagged direct-EC2 recovery kernel
-checkpoint](../llm/checkpoints/2026-07-21-v31-tagged-direct-ec2-recovery-kernel.md).
