@@ -19,6 +19,7 @@ import {
 } from '../../src/core/runtime/deployment-aws-volume-resource.js';
 import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
 import { createDeploymentPlan } from '../../src/core/runtime/deployment-plan.js';
+import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from '../../src/core/runtime/deployment-resource-graph.js';
 import {
   createAwsSingleNodeProvider,
   createDeploymentProfile,
@@ -46,46 +47,6 @@ const VOLUME_IDS = Object.freeze({
 });
 const INSTANCE_ID = 'i-00000000000000001';
 const CREATE_TIME = new Date('2026-07-21T12:00:00.000Z');
-const ATTACH_TIME = new Date('2026-07-21T12:01:00.000Z');
-
-const RESOURCES = Object.freeze([
-  {
-    resourceKey: 'substrate',
-    capability: 'resident-node',
-    providerType: 'ec2-instance',
-    retained: false,
-  },
-  {
-    resourceKey: 'application-state',
-    capability: 'application-state',
-    providerType: 'ebs-volume',
-    retained: true,
-  },
-  {
-    resourceKey: 'control-state',
-    capability: 'control-state',
-    providerType: 'ebs-volume',
-    retained: true,
-  },
-  {
-    resourceKey: 'artifact',
-    capability: 'artifact-storage',
-    providerType: 's3-object',
-    retained: false,
-  },
-  {
-    resourceKey: 'runtime-identity',
-    capability: 'runtime-identity',
-    providerType: 'instance-profile',
-    retained: false,
-  },
-  {
-    resourceKey: 'network',
-    capability: 'networking',
-    providerType: 'vpc',
-    retained: false,
-  },
-]);
 
 /** @param {string} value @returns {{algorithm: 'sha256', value: string}} */
 function digest(value) {
@@ -205,28 +166,31 @@ function makeBase(overrides = {}) {
   });
 }
 
-/** @param {string} capability @returns {string} */
-function providerResourceId(capability) {
-  if (capability === 'resident-node') return INSTANCE_ID;
-  if (capability === 'application-state') return VOLUME_IDS.application;
-  if (capability === 'control-state') return VOLUME_IDS.control;
-  return `provider-resource-${capability}`;
+/** @param {Readonly<Record<string, any>>} resourceDefinition @returns {string} */
+function providerResourceId(resourceDefinition) {
+  if (resourceDefinition.resourceKey === 'substrate') return INSTANCE_ID;
+  if (resourceDefinition.resourceKey === 'application-state') {
+    return VOLUME_IDS.application;
+  }
+  if (resourceDefinition.resourceKey === 'control-state') {
+    return VOLUME_IDS.control;
+  }
+  return `provider-resource-${resourceDefinition.resourceKey}`;
 }
 
-/** @param {Readonly<Record<string, any>>} base @param {string} capability @param {Readonly<Record<string, any>>|undefined} override */
-function desiredState(base, capability, override) {
-  const resource = RESOURCES.find((item) => item.capability === capability);
-  if (resource === undefined) {
-    throw new Error(`Unsupported test capability '${capability}'.`);
-  }
+/** @param {Readonly<Record<string, any>>} base @param {Readonly<Record<string, any>>} resourceDefinition @param {Readonly<Record<string, any>>|undefined} override */
+function desiredState(base, resourceDefinition, override) {
   return {
-    providerType: resource.providerType,
+    providerType: resourceDefinition.providerType,
     providerResourceId: null,
     stateDigest:
       override ??
-      (capability === 'application-state' || capability === 'control-state'
-        ? getAwsSingleNodeVolumeStateDigest(base.providerSpec, capability)
-        : digest(`${capability} desired`)),
+      (resourceDefinition.role.kind === 'volume'
+        ? getAwsSingleNodeVolumeStateDigest(
+            base.providerSpec,
+            resourceDefinition.capability.kind,
+          )
+        : digest(`${resourceDefinition.resourceKey} desired`)),
   };
 }
 
@@ -235,56 +199,65 @@ function desiredState(base, capability, override) {
  * @param {{operation: 'apply'|'reconcile'|'destroy', volumeDigestOverride?: Readonly<Record<string, any>>, actionOverride?: (action: Record<string, any>, resource: Readonly<Record<string, any>>) => Record<string, any>}} options
  */
 function makePlan(base, options) {
-  const actions = RESOURCES.map((resource) => {
-    const desired = desiredState(
-      base,
-      resource.capability,
-      resource.capability === 'application-state' ||
-        resource.capability === 'control-state'
-        ? options.volumeDigestOverride
-        : undefined,
-    );
-    const existing = {
-      ...desired,
-      providerResourceId: providerResourceId(resource.capability),
-    };
-    let action;
-    if (options.operation === 'apply') {
-      action = {
-        resourceKey: resource.resourceKey,
-        capability: { kind: resource.capability, version: 1 },
-        management: 'managed',
-        action: 'create',
-        destructive: false,
-        reason: 'missing',
-        before: null,
-        after: desired,
+  const resourceDefinitions =
+    options.operation === 'destroy'
+      ? [...AWS_SINGLE_NODE_RESOURCE_GRAPH.resources].reverse()
+      : AWS_SINGLE_NODE_RESOURCE_GRAPH.resources;
+  const actions = resourceDefinitions.map(
+    (/** @type {Readonly<AnyRecord>} */ resourceDefinition) => {
+      const desired = desiredState(
+        base,
+        resourceDefinition,
+        resourceDefinition.role.kind === 'volume'
+          ? options.volumeDigestOverride
+          : undefined,
+      );
+      const existing = {
+        ...desired,
+        providerResourceId: providerResourceId(resourceDefinition),
       };
-    } else if (options.operation === 'reconcile') {
-      action = {
-        resourceKey: resource.resourceKey,
-        capability: { kind: resource.capability, version: 1 },
+      const resourceContract = {
+        resourceKey: resourceDefinition.resourceKey,
+        capability: resourceDefinition.capability,
+        role: resourceDefinition.role,
         management: 'managed',
-        action: 'noop',
-        destructive: false,
-        reason: 'already-converged',
-        before: existing,
-        after: existing,
+        ownershipMode: resourceDefinition.ownershipMode,
+        dependsOn: resourceDefinition.dependsOn,
+        onDestroy: resourceDefinition.onDestroy,
       };
-    } else {
-      action = {
-        resourceKey: resource.resourceKey,
-        capability: { kind: resource.capability, version: 1 },
-        management: 'managed',
-        action: resource.retained ? 'noop' : 'delete',
-        destructive: !resource.retained,
-        reason: resource.retained ? 'retained-data' : 'destroy-requested',
-        before: existing,
-        after: resource.retained ? existing : null,
-      };
-    }
-    return options.actionOverride?.(action, resource) ?? action;
-  });
+      let action;
+      if (options.operation === 'apply') {
+        action = {
+          ...resourceContract,
+          action: 'create',
+          destructive: false,
+          reason: 'missing',
+          before: null,
+          after: desired,
+        };
+      } else if (options.operation === 'reconcile') {
+        action = {
+          ...resourceContract,
+          action: 'noop',
+          destructive: false,
+          reason: 'already-converged',
+          before: existing,
+          after: existing,
+        };
+      } else {
+        const retained = resourceDefinition.onDestroy === 'retain';
+        action = {
+          ...resourceContract,
+          action: retained ? 'noop' : 'delete',
+          destructive: !retained,
+          reason: retained ? 'retained-data' : 'destroy-requested',
+          before: existing,
+          after: retained ? existing : null,
+        };
+      }
+      return options.actionOverride?.(action, resourceDefinition) ?? action;
+    },
+  );
   return createDeploymentPlan(
     {
       operation: options.operation,
@@ -299,7 +272,7 @@ function makePlan(base, options) {
           options.operation === 'apply'
             ? null
             : base.deploymentRevision.deploymentRevisionId,
-        inspectionId: semanticId('win3', 'wharfie:test:volume-inspection:v1', {
+        inspectionId: semanticId('win4', 'wharfie:test:volume-inspection:v1', {
           operation: options.operation,
         }),
       },
@@ -311,25 +284,36 @@ function makePlan(base, options) {
 
 /** @param {Readonly<Record<string, any>>} base @param {Readonly<Record<string, any>>} action @param {{providerResourceId?: string, ownershipNonce?: string, createdByActionId?: string}} [overrides] */
 function makeBinding(base, action, overrides = {}) {
+  const resourceDefinition = AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.find(
+    (/** @type {Readonly<AnyRecord>} */ candidate) =>
+      candidate.resourceKey === action.resourceKey,
+  );
+  if (resourceDefinition === undefined) {
+    throw new Error(`Missing graph definition for '${action.resourceKey}'.`);
+  }
   return createDeploymentResourceBinding({
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'deploymentResourceBinding',
     deploymentInstanceId: base.deploymentInstanceId,
     incarnationId: base.incarnationId,
     resourceKey: action.resourceKey,
     capability: action.capability,
+    role: action.role,
     management: 'managed',
-    providerType: action.before?.providerType ?? action.after.providerType,
+    ownershipMode: action.ownershipMode,
+    onDestroy: action.onDestroy,
+    dependencyBindings: [],
+    providerType: action.after?.providerType ?? action.before.providerType,
     providerResourceId:
       overrides.providerResourceId ??
       action.before?.providerResourceId ??
-      providerResourceId(action.capability.kind),
+      providerResourceId(resourceDefinition),
     providerScopeId: base.providerScope.providerScopeId,
     ownershipNonce: overrides.ownershipNonce ?? nonce(91),
     createdByActionId:
       overrides.createdByActionId ??
-      semanticId('wda2', 'wharfie:test:volume-create-action:v1', {
-        capability: action.capability.kind,
+      semanticId('wda3', 'wharfie:test:volume-create-action:v1', {
+        resourceKey: action.resourceKey,
       }),
   });
 }
@@ -344,9 +328,13 @@ function makeFixture(options = {}) {
   const plan = makePlan(base, { operation, ...(options.planOptions ?? {}) });
   const actions = /** @type {Readonly<AnyRecord>[]} */ (plan.actions);
   const actionIndex = actions.findIndex(
-    (action) => action.capability.kind === capability,
+    (action) =>
+      action.capability.kind === capability && action.role.kind === 'volume',
   );
   const action = actions[actionIndex];
+  if (action === undefined) {
+    throw new Error(`Missing ${capability} volume action.`);
+  }
   const ownershipNonce = nonce(capability === 'application-state' ? 71 : 72);
   /** @type {Readonly<AnyRecord>[]} */
   const resourceBindings = [];
@@ -361,16 +349,17 @@ function makeFixture(options = {}) {
   let nodeBinding = null;
   if (options.withNode) {
     const nodeIndex = actions.findIndex(
-      (candidate) => candidate.capability.kind === 'resident-node',
+      (candidate) => candidate.resourceKey === 'substrate',
     );
     const nodeAction = actions[nodeIndex];
+    if (nodeAction === undefined) throw new Error('Missing substrate action.');
     nodeBinding = makeBinding(base, nodeAction, {
       providerResourceId: INSTANCE_ID,
       ownershipNonce: nonce(70),
       createdByActionId:
         operation === 'apply'
           ? nodeAction.actionId
-          : semanticId('wda2', 'wharfie:test:node-create-action:v1', {
+          : semanticId('wda3', 'wharfie:test:node-create-action:v1', {
               operation,
             }),
     });
@@ -400,7 +389,7 @@ function makeFixture(options = {}) {
   if (lastIntents.length === 0 && operation !== 'apply') {
     lastIntents.push({
       actionId: semanticId(
-        'wda2',
+        'wda3',
         'wharfie:test:empty-last-operation-action:v1',
         { operation },
       ),
@@ -440,7 +429,7 @@ function makeFixture(options = {}) {
         ? null
         : {
             kind: 'create',
-            planId: semanticId('wpl2', 'wharfie:test:volume-last-plan:v1', {
+            planId: semanticId('wpl3', 'wharfie:test:volume-last-plan:v1', {
               operation,
             }),
             intents: lastIntents,
@@ -506,8 +495,9 @@ function expectedTags(fixture) {
     'wharfie:managed-by': 'wharfie',
     'wharfie:resource-kind': 'single-node-state-volume',
     'wharfie:retention': 'retain',
-    'wharfie:schema-version': '1',
+    'wharfie:schema-version': '2',
     'wharfie:capability': fixture.action.capability.kind,
+    'wharfie:role': fixture.action.role.kind,
     'wharfie:provider-scope-id': fixture.base.providerScope.providerScopeId,
     'wharfie:deployment-instance-id': fixture.base.deploymentInstanceId,
     'wharfie:incarnation-id': fixture.base.incarnationId,
@@ -829,6 +819,10 @@ describe('AWS single-node retained EBS volume discovery and exact-ID recovery', 
         {
           Name: 'tag:wharfie:capability',
           Values: ['application-state'],
+        },
+        {
+          Name: 'tag:wharfie:role',
+          Values: ['volume'],
         },
         {
           Name: 'tag:wharfie:provider-scope-id',
@@ -1158,23 +1152,6 @@ describe('AWS single-node retained EBS volume contradictory evidence', () => {
       ['terminal error state', (volume) => ({ ...volume, State: 'error' })],
       ['unknown state', (volume) => ({ ...volume, State: 'mystery' })],
       [
-        'unexpected create attachment',
-        (volume) => ({
-          ...volume,
-          State: 'in-use',
-          Attachments: [
-            {
-              VolumeId: volume.VolumeId,
-              InstanceId: INSTANCE_ID,
-              Device: '/dev/sdf',
-              State: 'attached',
-              DeleteOnTermination: false,
-              AttachTime: new Date(ATTACH_TIME),
-            },
-          ],
-        }),
-      ],
-      [
         'AWS-managed operator',
         (volume) => ({
           ...volume,
@@ -1224,7 +1201,7 @@ describe('AWS single-node retained EBS volume contradictory evidence', () => {
               ? {
                   ...tag,
                   Value: semanticId(
-                    'wda2',
+                    'wda3',
                     'wharfie:test:tampered-create-action:v1',
                     {},
                   ),
@@ -1315,12 +1292,6 @@ describe('AWS single-node retained EBS volume unknown provider state', () => {
         },
       ],
       [
-        'malformed Attachments',
-        (volume) => {
-          volume.Attachments = {};
-        },
-      ],
-      [
         'malformed Tags',
         (volume) => {
           volume.Tags = 'secret-tags';
@@ -1394,6 +1365,223 @@ describe('AWS single-node retained EBS volume unknown provider state', () => {
   });
 });
 
+describe('AWS single-node retained EBS volume graph independence', () => {
+  it.each(
+    /** @type {Array<[string, (volume: AnyRecord) => AnyRecord]>} */ ([
+      [
+        'omitted attachment evidence while in use',
+        (volume) => {
+          /** @type {AnyRecord} */
+          const result = { ...volume, State: 'in-use' };
+          delete result.Attachments;
+          return result;
+        },
+      ],
+      [
+        'malformed attachment evidence while available',
+        (volume) => ({ ...volume, Attachments: { provider: 'opaque' } }),
+      ],
+      [
+        'attachment evidence that must not be read',
+        (volume) => {
+          Object.defineProperty(volume, 'Attachments', {
+            configurable: true,
+            enumerable: true,
+            get() {
+              throw new Error('attachment evidence was read');
+            },
+          });
+          return volume;
+        },
+      ],
+      [
+        'contradictory downstream attachment evidence while in use',
+        (volume) => ({
+          ...volume,
+          State: 'in-use',
+          Attachments: [
+            {
+              VolumeId: VOLUME_IDS.duplicate,
+              InstanceId: 'not-an-instance-id',
+              Device: '/dev/contradictory',
+              State: 'detaching',
+              DeleteOnTermination: true,
+              AttachTime: 'not-a-date',
+            },
+          ],
+        }),
+      ],
+    ]),
+  )(
+    'settles an unbound create from intrinsic volume evidence with %s',
+    async (_label, mutate) => {
+      const fixture = makeFixture();
+      const { client, waitForRetry, resource } = makePorts(fixture, {
+        maxAttempts: 2,
+      });
+      client.createVolume.mockResolvedValue({
+        VolumeId: VOLUME_IDS.application,
+      });
+      client.describeVolumes.mockResolvedValue({
+        Volumes: [mutate(makeVolume(fixture))],
+      });
+
+      await resource.executeAction(fixture.context);
+      await expect(resource.verifySettlement(fixture.context)).resolves.toEqual(
+        {
+          status: 'converged',
+          binding: expect.objectContaining({
+            resourceKey: fixture.action.resourceKey,
+            providerResourceId: VOLUME_IDS.application,
+          }),
+        },
+      );
+      expect(client.describeVolumes).toHaveBeenCalledTimes(1);
+      expect(waitForRetry).not.toHaveBeenCalled();
+    },
+  );
+
+  it('recovers a missing-volume reconcile create after response loss without reading attachment state', async () => {
+    const fixture = makeFixture({
+      operation: 'reconcile',
+      planOptions: {
+        actionOverride(
+          /** @type {AnyRecord} */ action,
+          /** @type {Readonly<AnyRecord>} */ resource,
+        ) {
+          if (resource.resourceKey !== 'application-state') return action;
+          return {
+            ...action,
+            action: 'create',
+            reason: 'missing',
+            before: null,
+            after: { ...action.after, providerResourceId: null },
+          };
+        },
+      },
+    });
+    const { client, waitForRetry, resource } = makePorts(fixture, {
+      maxAttempts: 2,
+    });
+    client.createVolume.mockRejectedValue(
+      new Error('ambiguous CreateVolume response'),
+    );
+    client.describeVolumes.mockResolvedValue({
+      Volumes: [
+        makeVolume(fixture, {
+          State: 'in-use',
+          Attachments: { lifecycle: 'owned-by-attachment-resource' },
+        }),
+      ],
+    });
+
+    expect(fixture.action).toMatchObject({
+      resourceKey: 'application-state',
+      action: 'create',
+      before: null,
+      role: { kind: 'volume', version: 1 },
+      ownershipMode: 'direct',
+      onDestroy: 'retain',
+      dependsOn: [],
+    });
+    expect(fixture.head.activeOperation.kind).toBe('reconcile');
+    expect(fixture.priorBinding).toBeNull();
+    await expect(
+      resource.executeAction(fixture.context),
+    ).rejects.toBeInstanceOf(AwsSingleNodeVolumeResourceUnknownError);
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'converged',
+      binding: expect.objectContaining({
+        schemaVersion: 2,
+        resourceKey: fixture.action.resourceKey,
+        role: fixture.action.role,
+        ownershipMode: 'direct',
+        onDestroy: 'retain',
+        dependencyBindings: [],
+        providerResourceId: VOLUME_IDS.application,
+        ownershipNonce: fixture.ownershipNonce,
+        createdByActionId: fixture.action.actionId,
+      }),
+    });
+
+    expect(client.createVolume).toHaveBeenCalledTimes(1);
+    expect(client.describeVolumes).toHaveBeenCalledTimes(1);
+    const request = client.describeVolumes.mock.calls[0][0];
+    expect(request).toEqual(
+      expect.objectContaining({ Filters: expect.any(Array), MaxResults: 500 }),
+    );
+    expect(request).not.toHaveProperty('VolumeIds');
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    /** @type {Array<[string, Parameters<typeof makeFixture>[0], (volume: AnyRecord) => AnyRecord]>} */ ([
+      [
+        'reconcile before a node binding exists',
+        { operation: 'reconcile' },
+        (volume) => ({
+          ...volume,
+          State: 'in-use',
+          Attachments: { lifecycle: 'owned-by-attachment-resource' },
+        }),
+      ],
+      [
+        'reconcile while a node binding exists',
+        { operation: 'reconcile', withNode: true },
+        (volume) => ({
+          ...volume,
+          State: 'in-use',
+          Attachments: [
+            {
+              VolumeId: VOLUME_IDS.duplicate,
+              InstanceId: 'i-00000000000000002',
+              Device: '/dev/wrong',
+              State: 'busy',
+            },
+          ],
+        }),
+      ],
+      [
+        'retained destroy after the node binding is removed',
+        { operation: 'destroy' },
+        (volume) => ({
+          ...volume,
+          State: 'in-use',
+          Attachments: [{ State: 'detaching' }],
+        }),
+      ],
+    ]),
+  )(
+    'settles %s without reading downstream state',
+    async (_label, options, mutate) => {
+      const fixture = makeFixture(options);
+      const priorBinding = requireBinding(
+        fixture.priorBinding,
+        'prior binding',
+      );
+      const { client, waitForRetry, resource } = makePorts(fixture, {
+        maxAttempts: 2,
+      });
+      client.describeVolumes.mockResolvedValue({
+        Volumes: [mutate(makeVolume(fixture))],
+      });
+
+      await expect(resource.executeAction(fixture.context)).resolves.toBe(
+        undefined,
+      );
+      await expect(resource.verifySettlement(fixture.context)).resolves.toEqual(
+        {
+          status: 'converged',
+          binding: priorBinding,
+        },
+      );
+      expect(client.createVolume).not.toHaveBeenCalled();
+      expect(client.describeVolumes).toHaveBeenCalledTimes(1);
+      expect(waitForRetry).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('AWS single-node retained EBS volume noop settlement', () => {
   it('reads the retained binding by exact ID and preserves its original creation receipt', async () => {
     const fixture = makeFixture({ operation: 'reconcile' });
@@ -1442,211 +1630,6 @@ describe('AWS single-node retained EBS volume noop settlement', () => {
     expect(client.describeVolumes).toHaveBeenCalledWith({
       VolumeIds: [priorBinding.providerResourceId],
     });
-  });
-
-  it.each(['detaching', 'attached'])(
-    'waits for a retired-node %s attachment to become available during destroy',
-    async (attachmentState) => {
-      const fixture = makeFixture({ operation: 'destroy' });
-      const priorBinding = requireBinding(
-        fixture.priorBinding,
-        'prior binding',
-      );
-      const { client, waitForRetry, resource } = makePorts(fixture, {
-        maxAttempts: 2,
-      });
-      const configuration =
-        fixture.base.providerSpec.capabilities.applicationState;
-      client.describeVolumes
-        .mockResolvedValueOnce({
-          Volumes: [
-            makeVolume(fixture, {
-              State: 'in-use',
-              Attachments: [
-                {
-                  VolumeId: priorBinding.providerResourceId,
-                  InstanceId: INSTANCE_ID,
-                  Device: configuration.deviceName,
-                  State: attachmentState,
-                  DeleteOnTermination: false,
-                  AttachTime: new Date(ATTACH_TIME),
-                },
-              ],
-            }),
-          ],
-        })
-        .mockResolvedValueOnce({ Volumes: [makeVolume(fixture)] });
-
-      await expect(resource.verifySettlement(fixture.context)).resolves.toEqual(
-        {
-          status: 'converged',
-          binding: priorBinding,
-        },
-      );
-      expect(waitForRetry).toHaveBeenCalledWith(1);
-    },
-  );
-
-  it('requires an exact resident-node attachment for an attached noop', async () => {
-    const fixture = makeFixture({
-      operation: 'reconcile',
-      withNode: true,
-    });
-    const priorBinding = requireBinding(fixture.priorBinding, 'prior binding');
-    const nodeBinding = requireBinding(fixture.nodeBinding, 'node binding');
-    const { client, resource } = makePorts(fixture);
-    const configuration =
-      fixture.base.providerSpec.capabilities.applicationState;
-    client.describeVolumes.mockResolvedValue({
-      Volumes: [
-        makeVolume(fixture, {
-          State: 'in-use',
-          Attachments: [
-            {
-              VolumeId: priorBinding.providerResourceId,
-              InstanceId: nodeBinding.providerResourceId,
-              Device: configuration.deviceName,
-              State: 'attached',
-              DeleteOnTermination: configuration.deleteOnTermination,
-              AttachTime: new Date(ATTACH_TIME),
-            },
-          ],
-        }),
-      ],
-    });
-
-    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
-      status: 'converged',
-      binding: priorBinding,
-    });
-  });
-
-  it.each(
-    /** @type {Array<[string, (attachment: AnyRecord) => AnyRecord]>} */ ([
-      [
-        'instance',
-        (attachment) => ({ ...attachment, InstanceId: 'i-00000000000000002' }),
-      ],
-      ['device', (attachment) => ({ ...attachment, Device: '/dev/sdz' })],
-      [
-        'DeleteOnTermination',
-        (attachment) => ({ ...attachment, DeleteOnTermination: true }),
-      ],
-      [
-        'volume ID',
-        (attachment) => ({
-          ...attachment,
-          VolumeId: VOLUME_IDS.duplicate,
-        }),
-      ],
-      ['settled state', (attachment) => ({ ...attachment, State: 'detached' })],
-    ]),
-  )('blocks a contradictory attached noop %s', async (_label, mutate) => {
-    const fixture = makeFixture({
-      operation: 'reconcile',
-      withNode: true,
-    });
-    const priorBinding = requireBinding(fixture.priorBinding, 'prior binding');
-    const nodeBinding = requireBinding(fixture.nodeBinding, 'node binding');
-    const { client, resource } = makePorts(fixture);
-    const configuration =
-      fixture.base.providerSpec.capabilities.applicationState;
-    const attachment = mutate({
-      VolumeId: priorBinding.providerResourceId,
-      InstanceId: nodeBinding.providerResourceId,
-      Device: configuration.deviceName,
-      State: 'attached',
-      DeleteOnTermination: configuration.deleteOnTermination,
-      AttachTime: new Date(ATTACH_TIME),
-    });
-    client.describeVolumes.mockResolvedValue({
-      Volumes: [
-        makeVolume(fixture, {
-          State: 'in-use',
-          Attachments: [attachment],
-        }),
-      ],
-    });
-
-    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
-      status: 'blocked',
-    });
-  });
-
-  it('blocks multiple attachments instead of guessing ownership', async () => {
-    const fixture = makeFixture({
-      operation: 'reconcile',
-      withNode: true,
-    });
-    const priorBinding = requireBinding(fixture.priorBinding, 'prior binding');
-    const nodeBinding = requireBinding(fixture.nodeBinding, 'node binding');
-    const { client, resource } = makePorts(fixture);
-    const configuration =
-      fixture.base.providerSpec.capabilities.applicationState;
-    const attachment = {
-      VolumeId: priorBinding.providerResourceId,
-      InstanceId: nodeBinding.providerResourceId,
-      Device: configuration.deviceName,
-      State: 'attached',
-      DeleteOnTermination: configuration.deleteOnTermination,
-      AttachTime: new Date(ATTACH_TIME),
-    };
-    client.describeVolumes.mockResolvedValue({
-      Volumes: [
-        makeVolume(fixture, {
-          State: 'in-use',
-          Attachments: [attachment, { ...attachment }],
-        }),
-      ],
-    });
-
-    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
-      status: 'blocked',
-    });
-  });
-
-  it('retries a matching transitional attachment before accepting it', async () => {
-    const fixture = makeFixture({
-      operation: 'reconcile',
-      withNode: true,
-    });
-    const priorBinding = requireBinding(fixture.priorBinding, 'prior binding');
-    const nodeBinding = requireBinding(fixture.nodeBinding, 'node binding');
-    const { client, waitForRetry, resource } = makePorts(fixture, {
-      maxAttempts: 2,
-    });
-    const configuration =
-      fixture.base.providerSpec.capabilities.applicationState;
-    const attachment = {
-      VolumeId: priorBinding.providerResourceId,
-      InstanceId: nodeBinding.providerResourceId,
-      Device: configuration.deviceName,
-      DeleteOnTermination: configuration.deleteOnTermination,
-      AttachTime: new Date(ATTACH_TIME),
-    };
-    client.describeVolumes
-      .mockResolvedValueOnce({
-        Volumes: [
-          makeVolume(fixture, {
-            State: 'in-use',
-            Attachments: [{ ...attachment, State: 'attaching' }],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({
-        Volumes: [
-          makeVolume(fixture, {
-            State: 'in-use',
-            Attachments: [{ ...attachment, State: 'attached' }],
-          }),
-        ],
-      });
-
-    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
-      status: 'converged',
-      binding: fixture.priorBinding,
-    });
-    expect(waitForRetry).toHaveBeenCalledWith(1);
   });
 
   it('blocks missing immutable tags after a binding already exists', async () => {
@@ -1899,7 +1882,12 @@ describe('AWS single-node retained EBS volume controller authority', () => {
           /** @type {AnyRecord} */ action,
           /** @type {Readonly<AnyRecord>} */ resource,
         ) {
-          if (resource.capability !== 'application-state') return action;
+          if (
+            resource.capability.kind !== 'application-state' ||
+            resource.role.kind !== 'volume'
+          ) {
+            return action;
+          }
           return {
             ...action,
             action: 'update',

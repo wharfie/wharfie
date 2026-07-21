@@ -207,6 +207,13 @@ describe('AWS deployment control bucket', () => {
     expect(DEPLOYMENT_CONTROL_BUCKET_VERSIONING_PROPAGATION_MS).toBe(900_000);
   });
 
+  it('scopes noncurrent health retention to the V2 transport namespace', () => {
+    expect(DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_PREFIX).toBe('health/v2/');
+    expect(DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_LIFECYCLE_RULE_ID).toBe(
+      'wharfie-expire-noncurrent-service-health-v2',
+    );
+  });
+
   it('reports authoritative absence after only an owner-bound head request', async () => {
     const client = createClient({
       headBucket: async () => {
@@ -490,6 +497,16 @@ describe('AWS deployment control bucket', () => {
 
   it.each([
     ['a disabled rule', lifecycleResponse({ Status: 'Disabled' })],
+    [
+      'the V1 rule identity',
+      lifecycleResponse({
+        ID: 'wharfie-expire-noncurrent-service-health-v1',
+      }),
+    ],
+    [
+      'the V1 object prefix',
+      lifecycleResponse({ Filter: { Prefix: 'health/v1/' } }),
+    ],
     [
       'a different expiration',
       lifecycleResponse({

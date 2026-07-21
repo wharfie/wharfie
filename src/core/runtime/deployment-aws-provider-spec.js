@@ -15,15 +15,16 @@ import {
   PROVIDER_SCOPE_ID_PREFIX,
   validateProviderScope,
 } from './deployment-provider-scope.js';
+import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from './deployment-resource-graph.js';
 import { DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS } from './deployment-service-health-contract.js';
 import { cloneJsonObject } from './json-value.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 2;
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 3;
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_KIND = 'awsSingleNodeProviderSpec';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN =
-  'wharfie:aws-single-node-provider-spec:v2';
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap2';
+  'wharfie:aws-single-node-provider-spec:v3';
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap3';
 export const AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION = 3;
 
 export const AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS = Object.freeze({
@@ -48,6 +49,7 @@ const PAYLOAD_KEYS = new Set([
   'providerScopeId',
   'profileRevisionId',
   'targetId',
+  'resourceGraphId',
   'machineImage',
   'placement',
   'storage',
@@ -452,7 +454,7 @@ function validatePayload(value, path) {
   const payload = cloneJsonObject(value, path);
   assertAllKeys(payload, PAYLOAD_KEYS, path);
   if (payload.schemaVersion !== AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION) {
-    throw new TypeError(`${path}.schemaVersion must be the integer 2.`);
+    throw new TypeError(`${path}.schemaVersion must be the integer 3.`);
   }
   if (payload.kind !== AWS_SINGLE_NODE_PROVIDER_SPEC_KIND) {
     throw new TypeError(
@@ -485,6 +487,13 @@ function validatePayload(value, path) {
       `${path}.targetId must be a canonical supported Linux build target ID.`,
     );
   }
+  if (
+    payload.resourceGraphId !== AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId
+  ) {
+    throw new TypeError(
+      `${path}.resourceGraphId must identify the exact AWS single-node resource graph.`,
+    );
+  }
   const machineImage = validateMachineImage(
     payload.machineImage,
     `${path}.machineImage`,
@@ -506,6 +515,7 @@ function validatePayload(value, path) {
     providerScopeId: payload.providerScopeId,
     profileRevisionId: payload.profileRevisionId,
     targetId: payload.targetId,
+    resourceGraphId: payload.resourceGraphId,
     machineImage,
     placement,
     storage,
@@ -626,6 +636,7 @@ export function createAwsSingleNodeProviderSpec(value) {
       providerScopeId: providerScope.providerScopeId,
       profileRevisionId: profile.profileRevisionId,
       targetId: getBuildTargetId(profile.target),
+      resourceGraphId: AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId,
       machineImage,
       placement,
       storage,

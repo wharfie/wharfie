@@ -20,6 +20,7 @@ import {
   createDeploymentProfile,
 } from '../../src/core/runtime/deployment-profile.js';
 import { createAwsProviderScope } from '../../src/core/runtime/deployment-provider-scope.js';
+import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from '../../src/core/runtime/deployment-resource-graph.js';
 
 /** @param {string} value @returns {{algorithm: 'sha256', value: string}} */
 function digest(value) {
@@ -107,13 +108,14 @@ describe('AWS single-node provider specifications', () => {
     const { providerSpecId: _providerSpecId, ...payload } = spec;
 
     expect(spec).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: 'awsSingleNodeProviderSpec',
-      providerSpecId: expect.stringMatching(/^wap2_[A-Za-z0-9_-]{43}$/),
+      providerSpecId: expect.stringMatching(/^wap3_[A-Za-z0-9_-]{43}$/),
       providerContractVersion: 3,
       providerScopeId: fixture.providerScope.providerScopeId,
       profileRevisionId: fixture.profile.profileRevisionId,
       targetId: 'node-v24.13.1-linux-x64-glibc',
+      resourceGraphId: AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId,
       machineImage: makeMachineImage('x86_64'),
       placement: { availabilityZoneId: 'use1-az2' },
       storage: {
@@ -196,19 +198,19 @@ describe('AWS single-node provider specifications', () => {
     });
     expect(spec.providerSpecId).toBe(
       createCanonicalJsonSha256Id({
-        domain: 'wharfie:aws-single-node-provider-spec:v2',
-        prefix: 'wap2',
+        domain: 'wharfie:aws-single-node-provider-spec:v3',
+        prefix: 'wap3',
         value: payload,
       }),
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(2);
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(3);
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_KIND).toBe(
       'awsSingleNodeProviderSpec',
     );
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN).toBe(
-      'wharfie:aws-single-node-provider-spec:v2',
+      'wharfie:aws-single-node-provider-spec:v3',
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap2');
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap3');
     expect(AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION).toBe(3);
     expect(Object.isFrozen(spec)).toBe(true);
     expect(Object.isFrozen(spec.machineImage.sourceParameter)).toBe(true);
@@ -433,6 +435,12 @@ describe('AWS single-node provider specifications', () => {
     placementDrift.placement.availabilityZoneId = 'use1-az3';
     expect(() => validateAwsSingleNodeProviderSpec(placementDrift)).toThrow(
       /providerSpecId does not match/i,
+    );
+
+    const resourceGraphDrift = /** @type {any} */ (clone(original));
+    resourceGraphDrift.resourceGraphId = `wrg1_${'A'.repeat(43)}`;
+    expect(() => validateAwsSingleNodeProviderSpec(resourceGraphDrift)).toThrow(
+      /exact AWS single-node resource graph/i,
     );
 
     const publicationDrift = clone(original);

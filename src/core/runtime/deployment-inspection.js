@@ -22,15 +22,24 @@ import {
   DEPLOYMENT_CAPABILITY_IDS,
   validateDeploymentProfile,
 } from './deployment-profile.js';
+import { validateDeploymentHead } from './deployment-head.js';
 import {
   AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX,
   validateAwsSingleNodeProviderSpecContext,
 } from './deployment-aws-provider-spec.js';
 import {
   DEPLOYMENT_CAPABILITIES,
+  DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
   assertDeploymentIncarnationId,
+  validateDeploymentResourceBinding,
+  validateDeploymentResourceRole,
   validateProviderResourceId,
 } from './deployment-resource-binding.js';
+import {
+  AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES,
+  getAwsSingleNodeResourceApplyOrder,
+  getAwsSingleNodeResourceDefinition,
+} from './deployment-resource-graph.js';
 import { validateDeploymentRevision } from './deployment-revision.js';
 import {
   getDeploymentServiceHealthObjectLocation,
@@ -44,11 +53,11 @@ import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 3;
+export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 4;
 export const DEPLOYMENT_INSPECTION_KIND = 'deploymentInspection';
 export const DEPLOYMENT_INSPECTION_ID_DOMAIN =
-  'wharfie:deployment-inspection:v3';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win3';
+  'wharfie:deployment-inspection:v4';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win4';
 export const DEPLOYMENT_INSPECTION_STATUSES = Object.freeze([
   'absent',
   'converged',
@@ -76,8 +85,15 @@ const DOCUMENT_KEYS = new Set(['inspectionId', ...PAYLOAD_KEYS]);
 const RESOURCE_KEYS = new Set([
   'resourceKey',
   'capability',
+  'role',
   'management',
+  'ownershipMode',
+  'dependsOn',
+  'onDestroy',
+  'bindingId',
+  'dependencyBindings',
   'presence',
+  'presenceEvidence',
   'ownership',
   'providerIdentity',
   'desiredDigest',
@@ -87,6 +103,7 @@ const RESOURCE_KEYS = new Set([
 ]);
 const CAPABILITY_KEYS = new Set(['kind', 'version']);
 const PROVIDER_IDENTITY_KEYS = new Set(['providerType', 'providerResourceId']);
+const DEPENDENCY_BINDING_KEYS = new Set(['resourceKey', 'bindingId']);
 const SERVICE_KEYS = new Set([
   'health',
   'artifactId',
@@ -101,6 +118,11 @@ const CONTROL_STATE_EVIDENCE = Object.freeze({
   conflict: 'identity-conflict',
 });
 const PRESENCE_VALUES = new Set(['present', 'absent', 'unknown']);
+const PRESENCE_EVIDENCE = Object.freeze({
+  present: 'exact-read',
+  absent: 'authoritative-not-found',
+  unknown: 'access-failure',
+});
 const OWNERSHIP_VALUES = new Set([
   'verified',
   'external',
@@ -118,7 +140,7 @@ const HEALTH_VALUES = new Set([
   'unknown',
   'not-applicable',
 ]);
-const MAX_INSPECTION_RESOURCES = 16;
+const MAX_INSPECTION_RESOURCES = AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES;
 
 /** @param {Record<string, any>} value @param {Set<string>} keys @param {string} path @returns {void} */
 function assertAllKeys(value, keys, path) {
@@ -253,6 +275,62 @@ function validateService(value, path) {
   });
 }
 
+/**
+ * @param {unknown} value - Candidate exact dependency binding lineage.
+ * @param {string} ownerResourceKey - Resource carrying the lineage.
+ * @param {string} path - Human-readable value path.
+ * @returns {Readonly<Array<{resourceKey: string, bindingId: string}>>|null} - Canonical lineage.
+ */
+function validateDependencyBindings(value, ownerResourceKey, path) {
+  if (value === null) return null;
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${path} must be null or an array.`);
+  }
+  if (value.length > MAX_INSPECTION_RESOURCES) {
+    throw new TypeError(
+      `${path} must contain at most ${MAX_INSPECTION_RESOURCES} references.`,
+    );
+  }
+  /** @type {string|null} */
+  let previousResourceKey = null;
+  return value.map((candidate, index) => {
+    const valuePath = `${path}[${index}]`;
+    const dependency = cloneJsonObject(candidate, valuePath);
+    assertAllKeys(dependency, DEPENDENCY_BINDING_KEYS, valuePath);
+    assertLogicalId(dependency.resourceKey, `${valuePath}.resourceKey`);
+    if (dependency.resourceKey === ownerResourceKey) {
+      throw new Error(`${path} cannot reference its own resourceKey.`);
+    }
+    if (
+      previousResourceKey !== null &&
+      compareCanonicalStrings(previousResourceKey, dependency.resourceKey) >= 0
+    ) {
+      throw new Error(`${path} must be strictly sorted by unique resourceKey.`);
+    }
+    previousResourceKey = dependency.resourceKey;
+    assertDomainSeparatedSha256Id(
+      dependency.bindingId,
+      DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
+      `${valuePath}.bindingId`,
+    );
+    return Object.freeze({
+      resourceKey: dependency.resourceKey,
+      bindingId: dependency.bindingId,
+    });
+  });
+}
+
+/** @param {unknown} value @param {string} path @returns {string|null} */
+function validateBindingId(value, path) {
+  if (value === null) return null;
+  assertDomainSeparatedSha256Id(
+    value,
+    DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
+    path,
+  );
+  return value;
+}
+
 /** @param {unknown} value @param {string} path @returns {Readonly<Record<string, any>>} */
 function validateResource(value, path) {
   const resource = cloneJsonObject(value, path);
@@ -262,11 +340,66 @@ function validateResource(value, path) {
     resource.capability,
     `${path}.capability`,
   );
+  const role = validateDeploymentResourceRole(resource.role, `${path}.role`);
+  const resourceDefinition = getAwsSingleNodeResourceDefinition(
+    resource.resourceKey,
+  );
+  if (resourceDefinition === null) {
+    throw new TypeError(
+      `${path}.resourceKey is not supported by the AWS single-node resource graph.`,
+    );
+  }
   if (resource.management !== 'managed' && resource.management !== 'external') {
     throw new TypeError(`${path}.management must be 'managed' or 'external'.`);
   }
+  if (
+    resource.ownershipMode !== 'direct' &&
+    resource.ownershipMode !== 'derived'
+  ) {
+    throw new TypeError(`${path}.ownershipMode must be 'direct' or 'derived'.`);
+  }
+  if (!Array.isArray(resource.dependsOn)) {
+    throw new TypeError(`${path}.dependsOn must be an array.`);
+  }
+  const dependencyKeys = new Set();
+  const dependsOn = resource.dependsOn.map((dependency, index) => {
+    assertLogicalId(dependency, `${path}.dependsOn[${index}]`);
+    if (dependencyKeys.has(dependency)) {
+      throw new Error(`${path}.dependsOn must contain unique resource keys.`);
+    }
+    dependencyKeys.add(dependency);
+    return dependency;
+  });
+  if (resource.onDestroy !== 'retain' && resource.onDestroy !== 'purge') {
+    throw new TypeError(`${path}.onDestroy must be 'retain' or 'purge'.`);
+  }
+  if (
+    capability.kind !== resourceDefinition.capability.kind ||
+    capability.version !== resourceDefinition.capability.version ||
+    role.kind !== resourceDefinition.role.kind ||
+    role.version !== resourceDefinition.role.version ||
+    resource.ownershipMode !== resourceDefinition.ownershipMode ||
+    resource.onDestroy !== resourceDefinition.onDestroy ||
+    dependsOn.length !== resourceDefinition.dependsOn.length ||
+    dependsOn.some(
+      (dependency, index) => dependency !== resourceDefinition.dependsOn[index],
+    )
+  ) {
+    throw new Error(
+      `${path} does not match the exact AWS single-node resource graph role.`,
+    );
+  }
   if (!PRESENCE_VALUES.has(resource.presence)) {
     throw new TypeError(`${path}.presence is not supported.`);
+  }
+  const expectedPresenceEvidence =
+    /** @type {Readonly<Record<string, string>>} */ (PRESENCE_EVIDENCE)[
+      resource.presence
+    ];
+  if (resource.presenceEvidence !== expectedPresenceEvidence) {
+    throw new TypeError(
+      `${path}.presenceEvidence must be '${expectedPresenceEvidence}' when presence is '${resource.presence}'.`,
+    );
   }
   if (!OWNERSHIP_VALUES.has(resource.ownership)) {
     throw new TypeError(`${path}.ownership is not supported.`);
@@ -284,10 +417,69 @@ function validateResource(value, path) {
       `${path} managed resources cannot report external ownership.`,
     );
   }
+  if (
+    resource.management === 'managed' &&
+    resource.presence === 'absent' &&
+    resource.ownership !== 'missing'
+  ) {
+    throw new Error(
+      `${path} absent managed resources must report missing ownership.`,
+    );
+  }
+  if (
+    resource.management === 'managed' &&
+    resource.presence === 'unknown' &&
+    resource.ownership !== 'unknown'
+  ) {
+    throw new Error(
+      `${path} unknown managed resources must report unknown ownership.`,
+    );
+  }
   const providerIdentity = validateProviderIdentity(
     resource.providerIdentity,
     `${path}.providerIdentity`,
   );
+  if (
+    providerIdentity !== null &&
+    providerIdentity.providerType !== resourceDefinition.providerType
+  ) {
+    throw new Error(
+      `${path}.providerIdentity.providerType does not match resource graph role '${role.kind}'.`,
+    );
+  }
+  const dependencyBindings = validateDependencyBindings(
+    resource.dependencyBindings,
+    resource.resourceKey,
+    `${path}.dependencyBindings`,
+  );
+  const bindingId = validateBindingId(resource.bindingId, `${path}.bindingId`);
+  const hasExactBindingEvidence =
+    resource.presence === 'present' &&
+    ((resource.management === 'managed' && resource.ownership === 'verified') ||
+      (resource.management === 'external' &&
+        resource.ownership === 'external'));
+  if (
+    (hasExactBindingEvidence &&
+      (bindingId === null || dependencyBindings === null)) ||
+    (!hasExactBindingEvidence &&
+      (bindingId !== null || dependencyBindings !== null))
+  ) {
+    throw new Error(
+      `${path} exact present ownership evidence requires bindingId and dependencyBindings; other evidence requires both to be null.`,
+    );
+  }
+  if (
+    dependencyBindings !== null &&
+    (dependencyBindings.length !== resourceDefinition.dependsOn.length ||
+      dependencyBindings.some(
+        (dependency) =>
+          !resourceDefinition.dependsOn.includes(dependency.resourceKey),
+      ))
+  ) {
+    throw new Error(
+      `${path}.dependencyBindings does not match the exact graph dependencies.`,
+    );
+  }
   const desiredDigest =
     resource.desiredDigest === null
       ? null
@@ -297,8 +489,10 @@ function validateResource(value, path) {
       ? null
       : validateSha256Digest(resource.observedDigest, `${path}.observedDigest`);
   const service = validateService(resource.service, `${path}.service`);
-  if (resource.capability.kind !== 'resident-node' && service !== null) {
-    throw new Error(`${path}.service is supported only for the resident node.`);
+  if (resource.resourceKey !== 'substrate' && service !== null) {
+    throw new Error(
+      `${path}.service is supported only for the substrate node.`,
+    );
   }
   if (service !== null && resource.health !== service.health) {
     throw new Error(`${path}.health must match the resident service proof.`);
@@ -325,8 +519,15 @@ function validateResource(value, path) {
   return deepFreeze({
     resourceKey: resource.resourceKey,
     capability,
+    role,
     management: resource.management,
+    ownershipMode: resource.ownershipMode,
+    dependsOn,
+    onDestroy: resource.onDestroy,
+    bindingId,
+    dependencyBindings,
     presence: resource.presence,
+    presenceEvidence: expectedPresenceEvidence,
     ownership: resource.ownership,
     providerIdentity,
     desiredDigest,
@@ -436,7 +637,7 @@ function assertStatusEvidence(
           resource.desiredDigest === null ||
           resource.observedDigest === null ||
           !digestsEqual(resource.desiredDigest, resource.observedDigest) ||
-          (resource.capability.kind === 'resident-node'
+          (resource.resourceKey === 'substrate'
             ? resource.health !== 'healthy' || resource.service === null
             : resource.health !== 'healthy' &&
               resource.health !== 'not-applicable'),
@@ -480,6 +681,7 @@ function assertStatusEvidence(
  * @param {Readonly<Record<string, any>>} profile - Exact deployment profile.
  * @param {unknown} providerSpec - Exact resolved provider specification.
  * @param {unknown} head - Optional exact durable head for full receipt lineage validation.
+ * @param {unknown} pendingBinding - Optional just-settled binding not yet published in the durable head.
  * @param {unknown} now - Explicit sampled epoch milliseconds for health freshness validation.
  * @param {string} path - Human-readable value path.
  * @returns {void}
@@ -489,9 +691,27 @@ function assertInspectionContext(
   profile,
   providerSpec,
   head,
+  pendingBinding,
   now,
   path,
 ) {
+  const canonicalHead =
+    head === undefined || head === null
+      ? head
+      : validateDeploymentHead(head, `${path} context.head`);
+  if (
+    canonicalHead !== undefined &&
+    canonicalHead !== null &&
+    (canonicalHead.deploymentInstanceId !== payload.deploymentInstanceId ||
+      canonicalHead.providerScope.providerScopeId !==
+        payload.providerScope.providerScopeId ||
+      canonicalHead.incarnationId !== payload.incarnationId ||
+      canonicalHead.generation !== payload.headGeneration)
+  ) {
+    throw new Error(
+      `${path} context.head does not match the exact inspection authority.`,
+    );
+  }
   const canonicalProviderSpec = validateAwsSingleNodeProviderSpecContext(
     providerSpec,
     { profile, providerScope: payload.providerScope },
@@ -523,21 +743,146 @@ function assertInspectionContext(
       key,
     ]),
   );
-  const expectedCapabilities = new Set();
-  for (const [capability, configurationKey] of configurationKeyByCapability) {
+
+  const bindingByResourceKey =
+    canonicalHead !== undefined && canonicalHead !== null
+      ? new Map(
+          canonicalHead.resourceBindings.map(
+            (/** @type {Readonly<Record<string, any>>} */ binding) => [
+              binding.resourceKey,
+              binding,
+            ],
+          ),
+        )
+      : null;
+  const canonicalPendingBinding =
+    pendingBinding === undefined || pendingBinding === null
+      ? null
+      : validateDeploymentResourceBinding(
+          pendingBinding,
+          `${path} context.pendingBinding`,
+        );
+  if (canonicalPendingBinding !== null) {
+    if (canonicalHead === undefined || canonicalHead === null) {
+      throw new Error(
+        `${path} context.pendingBinding requires an exact durable head.`,
+      );
+    }
+    const operation = canonicalHead.activeOperation;
+    const currentIntent =
+      operation !== null && operation.nextActionIndex < operation.intents.length
+        ? operation.intents[operation.nextActionIndex]
+        : null;
+    if (currentIntent === null || currentIntent.status !== 'intended') {
+      throw new Error(
+        `${path} context.pendingBinding requires an active intended current intent.`,
+      );
+    }
     if (
-      profile.provider.configuration[configurationKey].management !== 'none'
+      canonicalPendingBinding.deploymentInstanceId !==
+        payload.deploymentInstanceId ||
+      canonicalPendingBinding.providerScopeId !==
+        payload.providerScope.providerScopeId ||
+      canonicalPendingBinding.incarnationId !== payload.incarnationId
     ) {
-      expectedCapabilities.add(capability);
+      throw new Error(
+        `${path} context.pendingBinding does not match the inspection deployment, provider scope, and incarnation.`,
+      );
+    }
+    if (
+      bindingByResourceKey === null ||
+      bindingByResourceKey.has(canonicalPendingBinding.resourceKey)
+    ) {
+      throw new Error(
+        `${path} context.pendingBinding resourceKey must not already exist in the durable head.`,
+      );
+    }
+    if (
+      canonicalPendingBinding.management !== 'managed' ||
+      canonicalPendingBinding.ownershipNonce !== currentIntent.ownershipNonce ||
+      canonicalPendingBinding.createdByActionId !== currentIntent.actionId
+    ) {
+      throw new Error(
+        `${path} context.pendingBinding does not match the current intent ownership authority.`,
+      );
+    }
+    for (const dependency of canonicalPendingBinding.dependencyBindings) {
+      if (
+        bindingByResourceKey.get(dependency.resourceKey)?.bindingId !==
+        dependency.bindingId
+      ) {
+        throw new Error(
+          `${path} context.pendingBinding dependency '${dependency.resourceKey}' does not resolve to the exact durable head binding.`,
+        );
+      }
+    }
+    bindingByResourceKey.set(
+      canonicalPendingBinding.resourceKey,
+      canonicalPendingBinding,
+    );
+  }
+
+  if (bindingByResourceKey !== null) {
+    for (const binding of bindingByResourceKey.values()) {
+      const resourceDefinition = getAwsSingleNodeResourceDefinition(
+        binding.resourceKey,
+      );
+      const configurationKey =
+        resourceDefinition === null
+          ? undefined
+          : configurationKeyByCapability.get(
+              resourceDefinition.capability.kind,
+            );
+      const configuration =
+        configurationKey === undefined
+          ? undefined
+          : profile.provider.configuration[configurationKey];
+      const expectedDependencyKeys =
+        resourceDefinition === null
+          ? []
+          : [...resourceDefinition.dependsOn].sort(compareCanonicalStrings);
+      if (
+        resourceDefinition === null ||
+        !configuration ||
+        configuration.management === 'none' ||
+        binding.management !== configuration.management ||
+        JSON.stringify(binding.capability) !==
+          JSON.stringify(resourceDefinition.capability) ||
+        JSON.stringify(binding.role) !==
+          JSON.stringify(resourceDefinition.role) ||
+        binding.ownershipMode !==
+          (binding.management === 'external'
+            ? 'external'
+            : resourceDefinition.ownershipMode) ||
+        binding.onDestroy !== resourceDefinition.onDestroy ||
+        binding.providerType !== resourceDefinition.providerType ||
+        binding.dependencyBindings.length !== expectedDependencyKeys.length ||
+        binding.dependencyBindings.some(
+          (
+            /** @type {Readonly<Record<string, any>>} */ dependency,
+            /** @type {number} */ index,
+          ) => dependency.resourceKey !== expectedDependencyKeys[index],
+        )
+      ) {
+        throw new Error(
+          `${path} binding '${binding.resourceKey}' does not match the exact AWS single-node resource graph and profile.`,
+        );
+      }
     }
   }
 
   if (payload.controlState.status !== 'present') {
     return;
   }
-
-  const observedCapabilities = new Set();
   for (const resource of payload.resources) {
+    const resourceDefinition = getAwsSingleNodeResourceDefinition(
+      resource.resourceKey,
+    );
+    if (resourceDefinition === null) {
+      throw new Error(
+        `${path} resource '${resource.resourceKey}' is absent from the exact provider graph.`,
+      );
+    }
     const configurationKey = configurationKeyByCapability.get(
       resource.capability.kind,
     );
@@ -555,15 +900,9 @@ function assertInspectionContext(
         `${path} resource '${resource.resourceKey}' management does not match the profile.`,
       );
     }
-    if (observedCapabilities.has(resource.capability.kind)) {
-      throw new Error(
-        `${path} must report each profile capability exactly once.`,
-      );
-    }
-    observedCapabilities.add(resource.capability.kind);
 
     if (payload.status === 'destroyed') {
-      const retained = configuration.onDestroy === 'retain';
+      const retained = resource.onDestroy === 'retain';
       if (
         retained &&
         (resource.presence !== 'present' ||
@@ -582,17 +921,82 @@ function assertInspectionContext(
         );
       }
     }
-  }
-  for (const capability of expectedCapabilities) {
-    if (!observedCapabilities.has(capability)) {
-      throw new Error(
-        `${path} does not report required capability '${capability}'.`,
+
+    const hasExactBindingEvidence =
+      resource.presence === 'present' &&
+      ((resource.management === 'managed' &&
+        resource.ownership === 'verified') ||
+        (resource.management === 'external' &&
+          resource.ownership === 'external'));
+    if (
+      hasExactBindingEvidence &&
+      canonicalHead !== undefined &&
+      canonicalHead !== null
+    ) {
+      const exactBinding = bindingByResourceKey?.get(resource.resourceKey);
+      if (
+        bindingByResourceKey === null ||
+        exactBinding === undefined ||
+        resource.bindingId === null ||
+        resource.dependencyBindings === null
+      ) {
+        throw new Error(
+          `${path} present owned resource '${resource.resourceKey}' requires exact binding evidence.`,
+        );
+      }
+      const expectedDependencyKeys = [...resourceDefinition.dependsOn].sort(
+        compareCanonicalStrings,
       );
+      if (
+        exactBinding.bindingId !== resource.bindingId ||
+        JSON.stringify(exactBinding.capability) !==
+          JSON.stringify(resource.capability) ||
+        JSON.stringify(exactBinding.role) !== JSON.stringify(resource.role) ||
+        exactBinding.management !== resource.management ||
+        exactBinding.ownershipMode !==
+          (resource.management === 'external'
+            ? 'external'
+            : resource.ownershipMode) ||
+        exactBinding.onDestroy !== resource.onDestroy ||
+        exactBinding.providerType !== resource.providerIdentity?.providerType ||
+        exactBinding.providerResourceId !==
+          resource.providerIdentity?.providerResourceId ||
+        JSON.stringify(exactBinding.dependencyBindings) !==
+          JSON.stringify(resource.dependencyBindings) ||
+        resource.dependencyBindings.length !== expectedDependencyKeys.length ||
+        resource.dependencyBindings.some(
+          (
+            /** @type {Readonly<Record<string, any>>} */ dependency,
+            /** @type {number} */ index,
+          ) =>
+            dependency.resourceKey !== expectedDependencyKeys[index] ||
+            bindingByResourceKey.get(dependency.resourceKey)?.bindingId !==
+              dependency.bindingId,
+        )
+      ) {
+        throw new Error(
+          `${path} resource '${resource.resourceKey}' binding evidence does not match the exact head.`,
+        );
+      }
     }
+  }
+  const expectedResourceOrder = getAwsSingleNodeResourceApplyOrder();
+  if (
+    payload.resources.length !== expectedResourceOrder.length ||
+    payload.resources.some(
+      (
+        /** @type {Readonly<Record<string, any>>} */ resource,
+        /** @type {number} */ index,
+      ) => resource.resourceKey !== expectedResourceOrder[index],
+    )
+  ) {
+    throw new Error(
+      `${path} must report the complete AWS single-node resource graph in topological apply order.`,
+    );
   }
   const resident = payload.resources.find(
     (/** @type {Readonly<Record<string, any>>} */ resource) =>
-      resource.capability.kind === 'resident-node',
+      resource.resourceKey === 'substrate',
   );
   const healthObservation = resident?.service?.healthReceipt ?? null;
   if (healthObservation !== null) {
@@ -621,7 +1025,7 @@ function assertInspectionContext(
         `${path} resident health receipt does not match the exact inspection authority.`,
       );
     }
-    if (head !== undefined) {
+    if (canonicalHead !== undefined && canonicalHead !== null) {
       validateDeploymentServiceHealthReceiptContext(
         receipt,
         {
@@ -629,7 +1033,7 @@ function assertInspectionContext(
           profile,
           providerScope: payload.providerScope,
           providerSpec: canonicalProviderSpec,
-          head,
+          head: canonicalHead,
         },
         `${path}.residentHealthReceipt`,
       );
@@ -712,16 +1116,28 @@ function createPayload(value, path) {
       `${path}.resources must contain at most ${MAX_INSPECTION_RESOURCES} resources.`,
     );
   }
-  const resources = input.resources
-    .map((resource, index) =>
-      validateResource(resource, `${path}.resources[${index}]`),
-    )
-    .sort((left, right) =>
-      compareCanonicalStrings(left.resourceKey, right.resourceKey),
-    );
-  for (let index = 1; index < resources.length; index += 1) {
-    if (resources[index - 1].resourceKey === resources[index].resourceKey) {
+  const resources = input.resources.map((resource, index) =>
+    validateResource(resource, `${path}.resources[${index}]`),
+  );
+  const seenResourceKeys = new Set();
+  for (const resource of resources) {
+    if (seenResourceKeys.has(resource.resourceKey)) {
       throw new Error(`${path}.resources must have unique resourceKey values.`);
+    }
+    seenResourceKeys.add(resource.resourceKey);
+  }
+  if (controlState.status === 'present') {
+    const expectedResourceOrder = getAwsSingleNodeResourceApplyOrder();
+    if (
+      resources.length !== expectedResourceOrder.length ||
+      resources.some(
+        (resource, index) =>
+          resource.resourceKey !== expectedResourceOrder[index],
+      )
+    ) {
+      throw new Error(
+        `${path}.resources must report the complete AWS single-node resource graph in topological apply order.`,
+      );
     }
   }
   assertStatusEvidence(
@@ -750,7 +1166,7 @@ function createPayload(value, path) {
 /**
  * Create a deterministic redacted provider inspection.
  * @param {unknown} value - Inspection evidence without derived ID.
- * @param {{profile?: unknown, providerSpec?: unknown, head?: unknown, now?: unknown}} [context] - Exact immutable profile, resolved provider context, optional durable head, and explicit sampled time when health evidence is present.
+ * @param {{profile?: unknown, providerSpec?: unknown, head?: unknown, pendingBinding?: unknown, now?: unknown}} [context] - Exact immutable profile, resolved provider context, optional durable/pending binding authority, and explicit sampled time when health evidence is present.
  * @returns {Readonly<Record<string, any>>} - Canonical inspection.
  */
 export function createDeploymentInspection(value, context = {}) {
@@ -776,6 +1192,7 @@ export function createDeploymentInspection(value, context = {}) {
     profile,
     context.providerSpec,
     context.head,
+    context.pendingBinding,
     context.now,
     'deploymentInspection',
   );
@@ -800,7 +1217,7 @@ export function validateDeploymentInspection(
   const document = cloneJsonObject(value, valuePath);
   assertAllKeys(document, DOCUMENT_KEYS, valuePath);
   if (document.schemaVersion !== DEPLOYMENT_INSPECTION_SCHEMA_VERSION) {
-    throw new TypeError(`${valuePath}.schemaVersion must be the integer 3.`);
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 4.`);
   }
   if (document.kind !== DEPLOYMENT_INSPECTION_KIND) {
     throw new TypeError(
@@ -848,7 +1265,7 @@ export function validateDeploymentInspection(
 /**
  * Re-resolve the immutable profile before using inspection evidence to mutate.
  * @param {unknown} value - Candidate inspection.
- * @param {{profile: unknown, providerSpec: unknown, head?: unknown, now?: unknown}} context - Exact immutable profile, resolved provider specification, optional durable head, and explicit sampled time when health evidence is present.
+ * @param {{profile: unknown, providerSpec: unknown, head?: unknown, pendingBinding?: unknown, now?: unknown}} context - Exact immutable profile, resolved provider specification, optional durable/pending binding authority, and explicit sampled time when health evidence is present.
  * @returns {Readonly<Record<string, any>>} - Fully cross-checked inspection.
  */
 export function validateDeploymentInspectionContext(value, context) {
@@ -862,6 +1279,7 @@ export function validateDeploymentInspectionContext(value, context) {
     profile,
     context?.providerSpec,
     context?.head,
+    context?.pendingBinding,
     context?.now,
     'deploymentInspection',
   );

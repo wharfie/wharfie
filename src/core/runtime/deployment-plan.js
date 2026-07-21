@@ -15,8 +15,15 @@ import {
   DEPLOYMENT_ACTION_ID_PREFIX,
   DEPLOYMENT_CAPABILITIES,
   assertDeploymentIncarnationId,
+  validateDeploymentResourceRole,
   validateProviderResourceId as validateExactProviderResourceId,
 } from './deployment-resource-binding.js';
+import {
+  AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES,
+  getAwsSingleNodeResourceApplyOrder,
+  getAwsSingleNodeResourceDefinition,
+  getAwsSingleNodeResourceDestroyOrder,
+} from './deployment-resource-graph.js';
 import {
   DEPLOYMENT_CAPABILITY_IDS,
   validateDeploymentProfile,
@@ -33,12 +40,12 @@ import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const DEPLOYMENT_PLAN_SCHEMA_VERSION = 2;
+export const DEPLOYMENT_PLAN_SCHEMA_VERSION = 3;
 export const DEPLOYMENT_PLAN_KIND = 'deploymentPlan';
-export const DEPLOYMENT_PLAN_ID_DOMAIN = 'wharfie:deployment-plan:v2';
-export const DEPLOYMENT_PLAN_ID_PREFIX = 'wpl2';
-export const DEPLOYMENT_ACTION_ID_DOMAIN = 'wharfie:deployment-action:v2';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win3';
+export const DEPLOYMENT_PLAN_ID_DOMAIN = 'wharfie:deployment-plan:v3';
+export const DEPLOYMENT_PLAN_ID_PREFIX = 'wpl3';
+export const DEPLOYMENT_ACTION_ID_DOMAIN = 'wharfie:deployment-action:v3';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win4';
 
 export const DEPLOYMENT_PLAN_OPERATIONS = Object.freeze([
   'apply',
@@ -87,7 +94,11 @@ const BASIS_KEYS = new Set([
 const ACTION_INPUT_KEYS = new Set([
   'resourceKey',
   'capability',
+  'role',
   'management',
+  'ownershipMode',
+  'dependsOn',
+  'onDestroy',
   'action',
   'destructive',
   'reason',
@@ -109,17 +120,7 @@ const SUMMARY_KEYS = new Set([
   'noop',
   'destructive',
 ]);
-const MAX_PLAN_ACTIONS = 16;
-/** @type {Readonly<Record<string, string>>} */
-const PROVIDER_TYPE_BY_CAPABILITY = Object.freeze({
-  'resident-node': 'ec2-instance',
-  'application-state': 'ebs-volume',
-  'control-state': 'ebs-volume',
-  'artifact-storage': 's3-object',
-  'runtime-identity': 'instance-profile',
-  networking: 'vpc',
-  ingress: 'security-group',
-});
+const MAX_PLAN_ACTIONS = AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES;
 
 /** @param {Record<string, any>} value @param {Set<string>} keys @param {string} path @param {boolean} [required] @returns {void} */
 function assertKeys(value, keys, path, required = true) {
@@ -223,8 +224,51 @@ function validateActionInput(value, operation, path) {
     action.capability,
     `${path}.capability`,
   );
+  const role = validateDeploymentResourceRole(action.role, `${path}.role`);
+  const resourceDefinition = getAwsSingleNodeResourceDefinition(
+    action.resourceKey,
+  );
+  if (resourceDefinition === null) {
+    throw new TypeError(
+      `${path}.resourceKey is not supported by the AWS single-node resource graph.`,
+    );
+  }
   if (action.management !== 'managed' && action.management !== 'external') {
     throw new TypeError(`${path}.management must be 'managed' or 'external'.`);
+  }
+  if (action.ownershipMode !== 'direct' && action.ownershipMode !== 'derived') {
+    throw new TypeError(`${path}.ownershipMode must be 'direct' or 'derived'.`);
+  }
+  if (!Array.isArray(action.dependsOn)) {
+    throw new TypeError(`${path}.dependsOn must be an array.`);
+  }
+  const dependencyKeys = new Set();
+  const dependsOn = action.dependsOn.map((dependency, index) => {
+    assertLogicalId(dependency, `${path}.dependsOn[${index}]`);
+    if (dependencyKeys.has(dependency)) {
+      throw new Error(`${path}.dependsOn must contain unique resource keys.`);
+    }
+    dependencyKeys.add(dependency);
+    return dependency;
+  });
+  if (action.onDestroy !== 'retain' && action.onDestroy !== 'purge') {
+    throw new TypeError(`${path}.onDestroy must be 'retain' or 'purge'.`);
+  }
+  if (
+    capability.kind !== resourceDefinition.capability.kind ||
+    capability.version !== resourceDefinition.capability.version ||
+    role.kind !== resourceDefinition.role.kind ||
+    role.version !== resourceDefinition.role.version ||
+    action.ownershipMode !== resourceDefinition.ownershipMode ||
+    action.onDestroy !== resourceDefinition.onDestroy ||
+    dependsOn.length !== resourceDefinition.dependsOn.length ||
+    dependsOn.some(
+      (dependency, index) => dependency !== resourceDefinition.dependsOn[index],
+    )
+  ) {
+    throw new Error(
+      `${path} does not match the exact AWS single-node resource graph role.`,
+    );
   }
   if (!DEPLOYMENT_PLAN_ACTIONS.includes(action.action)) {
     throw new TypeError(`${path}.action is not supported.`);
@@ -248,7 +292,7 @@ function validateActionInput(value, operation, path) {
   /** @type {Record<string, Set<string>>} */
   const allowedByOperation = {
     apply: new Set(['verify', 'create', 'update', 'noop']),
-    reconcile: new Set(['verify', 'update', 'noop']),
+    reconcile: new Set(['verify', 'create', 'update', 'noop']),
     destroy: new Set(['verify', 'delete', 'noop']),
   };
   if (!allowedByOperation[operation]?.has(action.action)) {
@@ -256,15 +300,33 @@ function validateActionInput(value, operation, path) {
       `${path}.action '${action.action}' is not allowed during ${operation}.`,
     );
   }
+  if (operation === 'destroy' && action.management === 'managed') {
+    if (
+      action.onDestroy === 'retain' &&
+      (action.action !== 'noop' || action.reason !== 'retained-data')
+    ) {
+      throw new Error(
+        `${path} managed retained resources require noop with reason 'retained-data' during destroy.`,
+      );
+    }
+    if (
+      action.onDestroy === 'purge' &&
+      (action.action !== 'delete' || action.reason !== 'destroy-requested')
+    ) {
+      throw new Error(
+        `${path} managed purge resources require delete with reason 'destroy-requested' during destroy.`,
+      );
+    }
+  }
   const before = validateResourceState(action.before, `${path}.before`);
   const after = validateResourceState(action.after, `${path}.after`);
-  const expectedProviderType = PROVIDER_TYPE_BY_CAPABILITY[capability.kind];
   if (
-    (before !== null && before.providerType !== expectedProviderType) ||
-    (after !== null && after.providerType !== expectedProviderType)
+    (before !== null &&
+      before.providerType !== resourceDefinition.providerType) ||
+    (after !== null && after.providerType !== resourceDefinition.providerType)
   ) {
     throw new Error(
-      `${path} provider type does not implement capability '${capability.kind}'.`,
+      `${path} provider type does not match resource graph role '${role.kind}'.`,
     );
   }
   if (action.action === 'create' && before !== null) {
@@ -305,7 +367,11 @@ function validateActionInput(value, operation, path) {
   return {
     resourceKey: action.resourceKey,
     capability,
+    role,
     management: action.management,
+    ownershipMode: action.ownershipMode,
+    dependsOn,
+    onDestroy: action.onDestroy,
     action: action.action,
     destructive,
     reason: action.reason,
@@ -399,11 +465,6 @@ function assertPlanContext(
         `${path} action '${action.resourceKey}' management does not match its profile capability.`,
       );
     }
-    if (covered.has(action.capability.kind)) {
-      throw new Error(
-        `${path} must plan each profile capability exactly once.`,
-      );
-    }
     covered.add(action.capability.kind);
   }
   for (const [configurationKey, capability] of capabilityEntries) {
@@ -472,6 +533,15 @@ function createPlanPayload(input, path, context = {}) {
       `${path}.actions must contain between 1 and ${MAX_PLAN_ACTIONS} actions.`,
     );
   }
+  const expectedResourceOrder =
+    input.operation === 'destroy'
+      ? getAwsSingleNodeResourceDestroyOrder()
+      : getAwsSingleNodeResourceApplyOrder();
+  if (input.actions.length !== expectedResourceOrder.length) {
+    throw new Error(
+      `${path}.actions must cover the complete AWS single-node resource graph.`,
+    );
+  }
   const seenResourceKeys = new Set();
   const actions = input.actions.map((candidate, index) => {
     const actionPath = `${path}.actions[${index}]`;
@@ -492,6 +562,11 @@ function createPlanPayload(input, path, context = {}) {
     if (seenResourceKeys.has(action.resourceKey)) {
       throw new Error(
         `${path}.actions must name each resourceKey at most once.`,
+      );
+    }
+    if (action.resourceKey !== expectedResourceOrder[index]) {
+      throw new Error(
+        `${path}.actions must follow the exact ${input.operation === 'destroy' ? 'reverse destroy' : 'topological apply'} resource graph order.`,
       );
     }
     seenResourceKeys.add(action.resourceKey);
@@ -583,7 +658,7 @@ export function validateDeploymentPlan(value, valuePath = 'deploymentPlan') {
   const document = cloneJsonObject(value, valuePath);
   assertKeys(document, PLAN_DOCUMENT_KEYS, valuePath);
   if (document.schemaVersion !== DEPLOYMENT_PLAN_SCHEMA_VERSION) {
-    throw new TypeError(`${valuePath}.schemaVersion must be the integer 2.`);
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 3.`);
   }
   if (document.kind !== DEPLOYMENT_PLAN_KIND) {
     throw new TypeError(`${valuePath}.kind must be '${DEPLOYMENT_PLAN_KIND}'.`);

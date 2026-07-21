@@ -45,14 +45,13 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
 ]);
 const VOLUME_CAPABILITIES = new Set(['application-state', 'control-state']);
 const VOLUME_ID_PATTERN = /^vol-[0-9a-f]{8,32}$/;
-const INSTANCE_ID_PATTERN = /^i-[0-9a-f]{8,32}$/;
 const MAX_VOLUME_TAGS = 50;
 
 const BASE_RESERVED_TAGS = Object.freeze({
   'wharfie:managed-by': 'wharfie',
   'wharfie:resource-kind': 'single-node-state-volume',
   'wharfie:retention': 'retain',
-  'wharfie:schema-version': '1',
+  'wharfie:schema-version': '2',
 });
 
 /** Exact controller authority or present provider evidence is contradictory. */
@@ -200,6 +199,7 @@ function requiredTags(authority) {
   return deepFreeze({
     ...BASE_RESERVED_TAGS,
     'wharfie:capability': authority.action.capability.kind,
+    'wharfie:role': authority.action.role.kind,
     'wharfie:provider-scope-id': authority.plan.providerScope.providerScopeId,
     'wharfie:deployment-instance-id': authority.plan.deploymentInstanceId,
     'wharfie:incarnation-id': authority.plan.incarnationId,
@@ -249,6 +249,7 @@ function discoveryFilters(authority) {
     'wharfie:managed-by',
     'wharfie:resource-kind',
     'wharfie:capability',
+    'wharfie:role',
     'wharfie:provider-scope-id',
     'wharfie:deployment-instance-id',
     'wharfie:incarnation-id',
@@ -332,6 +333,10 @@ function validateActionContext(value, providerScope) {
     intent?.actionId !== action.actionId ||
     intent.status !== 'intended' ||
     action.management !== 'managed' ||
+    action.role.kind !== 'volume' ||
+    action.ownershipMode !== 'direct' ||
+    action.onDestroy !== 'retain' ||
+    action.dependsOn.length !== 0 ||
     action.after?.providerType !== 'ebs-volume' ||
     !VOLUME_CAPABILITIES.has(action.capability.kind)
   ) {
@@ -361,7 +366,7 @@ function validateActionContext(value, providerScope) {
   );
   if (action.action === 'create') {
     if (
-      plan.operation !== 'apply' ||
+      plan.operation === 'destroy' ||
       action.before !== null ||
       action.after.providerResourceId !== null ||
       priorBinding !== undefined
@@ -383,6 +388,10 @@ function validateActionContext(value, providerScope) {
       priorBinding.providerScopeId !== providerScope.providerScopeId ||
       priorBinding.incarnationId !== plan.incarnationId ||
       !sameJson(priorBinding.capability, action.capability) ||
+      !sameJson(priorBinding.role, action.role) ||
+      priorBinding.ownershipMode !== action.ownershipMode ||
+      priorBinding.onDestroy !== action.onDestroy ||
+      priorBinding.dependencyBindings.length !== 0 ||
       priorBinding.ownershipNonce !== ownershipNonce
     ) {
       throw new AwsSingleNodeVolumeResourceConflictError();
@@ -522,34 +531,15 @@ function validateOperator(operator) {
   }
 }
 
-/** @param {unknown} value @param {string} expectedInstanceId @param {Readonly<Record<string, any>>} volume @param {Readonly<Record<string, any>>} configuration @returns {string} */
-function validateAttachment(value, expectedInstanceId, volume, configuration) {
-  if (!isPlainObject(value)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    typeof value.State !== 'string' ||
-    typeof value.VolumeId !== 'string' ||
-    typeof value.InstanceId !== 'string' ||
-    typeof value.Device !== 'string' ||
-    typeof value.DeleteOnTermination !== 'boolean' ||
-    !(value.AttachTime instanceof Date) ||
-    !Number.isFinite(value.AttachTime.getTime())
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    value.VolumeId !== volume.VolumeId ||
-    value.InstanceId !== expectedInstanceId ||
-    value.Device !== configuration.deviceName ||
-    value.DeleteOnTermination !== configuration.deleteOnTermination
-  ) {
-    throw new VolumeEvidenceConflictError();
-  }
-  return value.State;
-}
-
-/** @param {Readonly<Record<string, any>>} volume @param {Readonly<Record<string, any>>} authority @returns {'ready'|'transient'} */
+/**
+ * Validate only the retained volume's intrinsic identity, ownership, and
+ * lifecycle. Attachment evidence belongs to the separate attachment resource;
+ * coupling it here would make the earlier volume action depend on a downstream
+ * graph effect.
+ * @param {Readonly<Record<string, any>>} volume - Exact DescribeVolumes item.
+ * @param {Readonly<Record<string, any>>} authority - Canonical action authority.
+ * @returns {void}
+ */
 function validateVolumeEvidence(volume, authority) {
   const configuration = authority.volumeConfiguration;
   const expectedTags = requiredTags(authority);
@@ -564,8 +554,7 @@ function validateVolumeEvidence(volume, authority) {
     typeof volume.KmsKeyId !== 'string' ||
     typeof volume.State !== 'string' ||
     !(volume.CreateTime instanceof Date) ||
-    !Number.isFinite(volume.CreateTime.getTime()) ||
-    !Array.isArray(volume.Attachments)
+    !Number.isFinite(volume.CreateTime.getTime())
   ) {
     throw new ProviderResponseUnknownError();
   }
@@ -611,84 +600,9 @@ function validateVolumeEvidence(volume, authority) {
   if (volume.State === 'creating') {
     throw new VolumeEvidenceTransientError();
   }
-  if (
-    volume.State === 'deleting' ||
-    volume.State === 'deleted' ||
-    volume.State === 'error'
-  ) {
+  if (volume.State !== 'available' && volume.State !== 'in-use') {
     throw new VolumeEvidenceConflictError();
   }
-
-  const nodeBinding = authority.head.resourceBindings.find(
-    (/** @type {Readonly<Record<string, any>>} */ binding) =>
-      binding.capability.kind === 'resident-node',
-  );
-  if (authority.action.action === 'create') {
-    if (volume.State !== 'available' || volume.Attachments.length !== 0) {
-      throw new VolumeEvidenceConflictError();
-    }
-    return 'ready';
-  }
-
-  if (nodeBinding === undefined) {
-    if (volume.State === 'available' && volume.Attachments.length === 0) {
-      return 'ready';
-    }
-    const retiredNodeState = authority.plan.actions.find(
-      (/** @type {Readonly<Record<string, any>>} */ action) =>
-        action.capability.kind === 'resident-node',
-    )?.before;
-    if (
-      authority.head.activeOperation.kind !== 'destroy' ||
-      retiredNodeState?.providerType !== 'ec2-instance' ||
-      typeof retiredNodeState.providerResourceId !== 'string' ||
-      !INSTANCE_ID_PATTERN.test(retiredNodeState.providerResourceId) ||
-      (volume.State !== 'in-use' && volume.State !== 'available') ||
-      volume.Attachments.length !== 1
-    ) {
-      throw new VolumeEvidenceConflictError();
-    }
-    const attachmentState = validateAttachment(
-      volume.Attachments[0],
-      retiredNodeState.providerResourceId,
-      volume,
-      configuration,
-    );
-    if (
-      attachmentState === 'attaching' ||
-      attachmentState === 'attached' ||
-      attachmentState === 'detaching' ||
-      attachmentState === 'detached' ||
-      attachmentState === 'busy'
-    ) {
-      throw new VolumeEvidenceTransientError();
-    }
-    throw new VolumeEvidenceConflictError();
-  }
-
-  if (
-    !INSTANCE_ID_PATTERN.test(nodeBinding.providerResourceId) ||
-    volume.Attachments.length !== 1
-  ) {
-    throw new VolumeEvidenceConflictError();
-  }
-  const attachmentState = validateAttachment(
-    volume.Attachments[0],
-    nodeBinding.providerResourceId,
-    volume,
-    configuration,
-  );
-  if (
-    attachmentState === 'attaching' ||
-    attachmentState === 'detaching' ||
-    attachmentState === 'busy'
-  ) {
-    throw new VolumeEvidenceTransientError();
-  }
-  if (volume.State !== 'in-use' || attachmentState !== 'attached') {
-    throw new VolumeEvidenceConflictError();
-  }
-  return 'ready';
 }
 
 /**
@@ -848,13 +762,17 @@ export function createAwsSingleNodeVolumeResource(options) {
           const binding =
             authority.priorBinding ??
             createDeploymentResourceBinding({
-              schemaVersion: 1,
+              schemaVersion: 2,
               kind: 'deploymentResourceBinding',
               deploymentInstanceId: authority.plan.deploymentInstanceId,
               incarnationId: authority.plan.incarnationId,
               resourceKey: authority.action.resourceKey,
               capability: authority.action.capability,
+              role: authority.action.role,
               management: 'managed',
+              ownershipMode: authority.action.ownershipMode,
+              onDestroy: authority.action.onDestroy,
+              dependencyBindings: [],
               providerType: 'ebs-volume',
               providerResourceId: volume.VolumeId,
               providerScopeId: providerScope.providerScopeId,

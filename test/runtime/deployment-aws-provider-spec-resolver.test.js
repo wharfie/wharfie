@@ -1393,7 +1393,7 @@ describe('AWS single-node provider-spec resolver', () => {
   it('permits a fresh incarnation over a DESTROYED head with retained old-incarnation bindings', async () => {
     const fixture = makeFixture();
     const oldIncarnationId = createDeploymentIncarnationId(Buffer.alloc(32, 8));
-    const actionId = semanticId('wda2', 'wharfie:test:action:v1', {
+    const actionId = semanticId('wda3', 'wharfie:test:action:v1', {
       action: 1,
     });
     const head = createDeploymentHead({
@@ -1406,13 +1406,17 @@ describe('AWS single-node provider-spec resolver', () => {
       targetDeploymentRevisionId: null,
       resourceBindings: [
         createDeploymentResourceBinding({
-          schemaVersion: 1,
+          schemaVersion: 2,
           kind: 'deploymentResourceBinding',
           deploymentInstanceId: fixture.deploymentInstanceId,
           incarnationId: oldIncarnationId,
           resourceKey: 'application-state',
           capability: { kind: 'application-state', version: 1 },
+          role: { kind: 'volume', version: 1 },
           management: 'external',
+          ownershipMode: 'external',
+          onDestroy: 'retain',
+          dependencyBindings: [],
           providerType: 'ebs-volume',
           providerResourceId: 'vol-0123456789abcdef0',
           providerScopeId: fixture.providerScope.providerScopeId,
@@ -1421,7 +1425,7 @@ describe('AWS single-node provider-spec resolver', () => {
       activeOperation: null,
       lastOperation: {
         kind: 'destroy',
-        planId: semanticId('wpl2', 'wharfie:test:plan:v1', { plan: 1 }),
+        planId: semanticId('wpl3', 'wharfie:test:plan:v1', { plan: 1 }),
         intents: [{ actionId, status: 'settled', ownershipNonce: null }],
       },
     });
@@ -1439,7 +1443,7 @@ describe('AWS single-node provider-spec resolver', () => {
 
   it('preflights accepted or same-incarnation heads without provider reads', async () => {
     const fixture = makeFixture();
-    const actionId = semanticId('wda2', 'wharfie:test:action:v1', {
+    const actionId = semanticId('wda3', 'wharfie:test:action:v1', {
       action: 2,
     });
     const destroyed = createDeploymentHead({
@@ -1454,7 +1458,7 @@ describe('AWS single-node provider-spec resolver', () => {
       activeOperation: null,
       lastOperation: {
         kind: 'destroy',
-        planId: semanticId('wpl2', 'wharfie:test:plan:v1', { plan: 2 }),
+        planId: semanticId('wpl3', 'wharfie:test:plan:v1', { plan: 2 }),
         intents: [{ actionId, status: 'settled', ownershipNonce: null }],
       },
     });

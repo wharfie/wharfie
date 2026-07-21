@@ -4,6 +4,7 @@ import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import { compareCanonicalStrings } from '../../src/core/runtime/canonical-order.js';
 import {
   DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_DOMAIN,
   DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_PREFIX,
@@ -33,6 +34,7 @@ import {
   createDeploymentResourceBinding,
   createOwnershipNonce,
 } from '../../src/core/runtime/deployment-resource-binding.js';
+import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from '../../src/core/runtime/deployment-resource-graph.js';
 import { createLedgerServiceId } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 
 /** @template T @param {T} value @returns {T} */
@@ -52,12 +54,20 @@ function semanticId(prefix, domain, value) {
 
 /** @param {number} seed @returns {string} */
 function actionId(seed) {
-  return semanticId('wda2', 'wharfie:test:health-action:v1', { seed });
+  return semanticId('wda3', 'wharfie:test:health-action:v1', { seed });
+}
+
+/** @param {number} seed @param {number} index @returns {string} */
+function bindingActionId(seed, index) {
+  return semanticId('wda3', 'wharfie:test:health-binding-action:v1', {
+    seed,
+    index,
+  });
 }
 
 /** @param {number} seed @returns {string} */
 function planId(seed) {
-  return semanticId('wpl2', 'wharfie:test:health-plan:v1', { seed });
+  return semanticId('wpl3', 'wharfie:test:health-plan:v1', { seed });
 }
 
 /** @param {number} seed @returns {string} */
@@ -67,12 +77,12 @@ function sessionId(seed) {
 
 /** @param {number} seed @returns {string} */
 function headId(seed) {
-  return semanticId('wdh1', 'wharfie:test:health-head:v1', { seed });
+  return semanticId('wdh2', 'wharfie:test:health-head:v1', { seed });
 }
 
 /** @param {number} seed @returns {string} */
 function operationId(seed) {
-  return semanticId('wdo1', 'wharfie:test:health-operation:v1', { seed });
+  return semanticId('wdo2', 'wharfie:test:health-operation:v1', { seed });
 }
 
 /** @returns {Readonly<Record<string, any>>} */
@@ -145,16 +155,94 @@ function makeProviderSpec(profile, providerScope) {
   });
 }
 
+/**
+ * @param {Readonly<Record<string, any>>} fixture
+ * @param {number} [seed]
+ * @param {Readonly<string[]>|null} [substrateDependencyKeys]
+ * @param {Readonly<Record<string, string>>} [providerTypeOverrides]
+ * @returns {Readonly<Record<string, any>>[]}
+ */
+function makeResourceBindings(
+  fixture,
+  seed = 1,
+  substrateDependencyKeys = null,
+  providerTypeOverrides = {},
+) {
+  /** @type {Readonly<Record<string, any>>[]} */
+  const bindings = [];
+  for (
+    let index = 0;
+    index < AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.length;
+    index += 1
+  ) {
+    const resource = AWS_SINGLE_NODE_RESOURCE_GRAPH.resources[index];
+    const dependencyKeys =
+      resource.resourceKey === 'substrate' && substrateDependencyKeys !== null
+        ? substrateDependencyKeys
+        : resource.dependsOn;
+    const dependencyBindings = dependencyKeys
+      .map((/** @type {string} */ resourceKey) => {
+        const dependency = bindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === resourceKey,
+        );
+        if (dependency === undefined) {
+          throw new Error(
+            `Health fixture lacks dependency binding '${resourceKey}'.`,
+          );
+        }
+        return { resourceKey, bindingId: dependency.bindingId };
+      })
+      .sort(
+        (
+          /** @type {{resourceKey: string}} */ left,
+          /** @type {{resourceKey: string}} */ right,
+        ) => compareCanonicalStrings(left.resourceKey, right.resourceKey),
+      );
+    bindings.push(
+      createDeploymentResourceBinding({
+        schemaVersion: 2,
+        kind: 'deploymentResourceBinding',
+        deploymentInstanceId: fixture.deploymentInstanceId,
+        incarnationId: fixture.incarnationId,
+        resourceKey: resource.resourceKey,
+        capability: resource.capability,
+        role: resource.role,
+        management: 'managed',
+        ownershipMode: resource.ownershipMode,
+        onDestroy: resource.onDestroy,
+        dependencyBindings,
+        providerType:
+          providerTypeOverrides[resource.resourceKey] ?? resource.providerType,
+        providerResourceId:
+          resource.resourceKey === 'substrate'
+            ? `i-0123456789abcde${seed}`
+            : `provider-resource-${resource.resourceKey}-${seed}`,
+        providerScopeId: fixture.providerScope.providerScopeId,
+        ownershipNonce: createOwnershipNonce(
+          Buffer.alloc(32, ((seed + index) % 255) + 1),
+        ),
+        createdByActionId: bindingActionId(seed, index),
+      }),
+    );
+  }
+  return bindings;
+}
+
 /** @param {Readonly<Record<string, any>>} fixture @param {number} [seed] @param {string} [resourceKey] @returns {Readonly<Record<string, any>>} */
-function makeNodeBinding(fixture, seed = 1, resourceKey = 'node') {
+function makeNodeBinding(fixture, seed = 1, resourceKey = 'substrate') {
   return createDeploymentResourceBinding({
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'deploymentResourceBinding',
     deploymentInstanceId: fixture.deploymentInstanceId,
     incarnationId: fixture.incarnationId,
     resourceKey,
     capability: { kind: 'resident-node', version: 1 },
+    role: { kind: 'node', version: 1 },
     management: 'managed',
+    ownershipMode: 'direct',
+    onDestroy: 'purge',
+    dependencyBindings: fixture.node.dependencyBindings,
     providerType: 'ec2-instance',
     providerResourceId: `i-0123456789abcde${seed}`,
     providerScopeId: fixture.providerScope.providerScopeId,
@@ -163,18 +251,27 @@ function makeNodeBinding(fixture, seed = 1, resourceKey = 'node') {
   });
 }
 
-/** @param {number} seed @param {'create'|'update'|'reconcile'|'destroy'} [kind] @returns {Record<string, any>} */
-function completedOperation(seed, kind = 'create') {
+/** @param {number} seed @param {'create'|'update'|'reconcile'|'destroy'} [kind] @param {Readonly<Record<string, any>>[]|null} [bindings] @returns {Record<string, any>} */
+function completedOperation(seed, kind = 'create', bindings = null) {
   return {
     kind,
     planId: planId(seed),
-    intents: [
-      {
-        actionId: actionId(seed),
-        status: 'settled',
-        ownershipNonce: createOwnershipNonce(Buffer.alloc(32, seed)),
-      },
-    ],
+    intents:
+      bindings === null
+        ? [
+            {
+              actionId: actionId(seed),
+              status: 'settled',
+              ownershipNonce: createOwnershipNonce(Buffer.alloc(32, seed)),
+            },
+          ]
+        : bindings.map(
+            (/** @type {Readonly<Record<string, any>>} */ binding) => ({
+              actionId: binding.createdByActionId,
+              status: 'settled',
+              ownershipNonce: binding.ownershipNonce,
+            }),
+          ),
   };
 }
 
@@ -200,7 +297,12 @@ function makeFixture() {
     deploymentInstanceId,
     incarnationId: createDeploymentIncarnationId(Buffer.alloc(32, 9)),
   };
-  const node = makeNodeBinding(base);
+  const bindings = makeResourceBindings(base);
+  const node = bindings.find(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.resourceKey === 'substrate',
+  );
+  if (node === undefined) throw new Error('Health fixture lacks substrate.');
   const head = createDeploymentHead({
     deploymentInstanceId,
     providerScope,
@@ -209,11 +311,11 @@ function makeFixture() {
     phase: 'READY',
     settledDeploymentRevisionId: deploymentRevision.deploymentRevisionId,
     targetDeploymentRevisionId: deploymentRevision.deploymentRevisionId,
-    resourceBindings: [node],
+    resourceBindings: bindings,
     activeOperation: null,
-    lastOperation: completedOperation(1),
+    lastOperation: completedOperation(1, 'create', bindings),
   });
-  return Object.freeze({ ...base, node, head });
+  return Object.freeze({ ...base, bindings, node, head });
 }
 
 /** @param {ReturnType<typeof makeFixture>} fixture @param {Record<string, any>} [overrides] @returns {Readonly<Record<string, any>>} */
@@ -280,9 +382,9 @@ describe('deployment service-health receipt', () => {
     const { receiptId, ...payload } = receipt;
 
     expect(receipt).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'deploymentServiceHealthReceipt',
-      receiptId: expect.stringMatching(/^whr1_[A-Za-z0-9_-]{43}$/),
+      receiptId: expect.stringMatching(/^whr2_[A-Za-z0-9_-]{43}$/),
       health: 'healthy',
       nodeBindingId: fixture.node.bindingId,
       nodeProviderResourceId: fixture.node.providerResourceId,
@@ -305,7 +407,7 @@ describe('deployment service-health receipt', () => {
   it('derives the only current-object key and canonical control bucket', () => {
     const fixture = makeFixture();
     const receipt = makeReceipt(fixture);
-    const key = `health/v1/${fixture.deploymentInstanceId}/${fixture.incarnationId}/${fixture.node.bindingId}`;
+    const key = `health/v2/${fixture.deploymentInstanceId}/${fixture.incarnationId}/${fixture.node.bindingId}`;
 
     expect(getDeploymentServiceHealthObjectKey(receipt)).toBe(key);
     const location = getDeploymentServiceHealthObjectLocation(
@@ -326,12 +428,16 @@ describe('deployment service-health receipt', () => {
     const receipt = makeReceipt(fixture);
     const unsupported = { ...clone(receipt), observedAt: 1 };
     const changed = { ...clone(receipt), sequence: 2 };
+    const legacy = { ...clone(receipt), schemaVersion: 1 };
 
     expect(() => validateDeploymentServiceHealthReceipt(unsupported)).toThrow(
       /observedAt is not supported/,
     );
     expect(() => validateDeploymentServiceHealthReceipt(changed)).toThrow(
       /receiptId does not match/,
+    );
+    expect(() => validateDeploymentServiceHealthReceipt(legacy)).toThrow(
+      /schemaVersion must be the integer 2/,
     );
     expect(() => makeReceipt(fixture, { health: 'starting' })).toThrow(
       /health must be 'healthy'/,
@@ -379,6 +485,87 @@ describe('deployment service-health receipt', () => {
     ).toThrow(/deploymentOperationId is not current non-destroy authority/);
   });
 
+  it.each([
+    [
+      'missing one',
+      [
+        'network-subnet',
+        'network-default-ipv4-route',
+        'network-subnet-route-table-association',
+        'network-security-group',
+        'runtime-identity',
+      ],
+    ],
+    [
+      'substituted',
+      [
+        'application-state',
+        'network-subnet',
+        'network-default-ipv4-route',
+        'network-subnet-route-table-association',
+        'network-security-group',
+        'runtime-identity',
+      ],
+    ],
+  ])(
+    'rejects %s substrate dependency lineage even when every reference resolves in the head',
+    (_description, dependencyKeys) => {
+      const fixture = makeFixture();
+      const bindings = makeResourceBindings(fixture, 20, dependencyKeys);
+      const head = createDeploymentHead({
+        deploymentInstanceId: fixture.deploymentInstanceId,
+        providerScope: fixture.providerScope,
+        incarnationId: fixture.incarnationId,
+        generation: 8,
+        phase: 'READY',
+        settledDeploymentRevisionId:
+          fixture.deploymentRevision.deploymentRevisionId,
+        targetDeploymentRevisionId:
+          fixture.deploymentRevision.deploymentRevisionId,
+        resourceBindings: bindings,
+        activeOperation: null,
+        lastOperation: completedOperation(20, 'create', bindings),
+      });
+
+      expect(() =>
+        validateDeploymentServiceHealthReceiptContext(
+          makeReceipt(fixture),
+          context(fixture, head),
+        ),
+      ).toThrow(
+        /substrate dependency bindings must name all six exact graph dependencies/i,
+      );
+    },
+  );
+
+  it('rejects a substrate dependency whose binding resolves but does not match its graph definition', () => {
+    const fixture = makeFixture();
+    const bindings = makeResourceBindings(fixture, 21, null, {
+      artifact: 's3-bucket',
+    });
+    const head = createDeploymentHead({
+      deploymentInstanceId: fixture.deploymentInstanceId,
+      providerScope: fixture.providerScope,
+      incarnationId: fixture.incarnationId,
+      generation: 8,
+      phase: 'READY',
+      settledDeploymentRevisionId:
+        fixture.deploymentRevision.deploymentRevisionId,
+      targetDeploymentRevisionId:
+        fixture.deploymentRevision.deploymentRevisionId,
+      resourceBindings: bindings,
+      activeOperation: null,
+      lastOperation: completedOperation(21, 'create', bindings),
+    });
+
+    expect(() =>
+      validateDeploymentServiceHealthReceiptContext(
+        makeReceipt(fixture),
+        context(fixture, head),
+      ),
+    ).toThrow(/substrate dependency 'artifact'.*exact graph definition/i);
+  });
+
   it('accepts an older head authorization only while current lineage retains its operation', () => {
     const fixture = makeFixture();
     const older = makeReceipt(fixture, {
@@ -403,33 +590,28 @@ describe('deployment service-health receipt', () => {
     ).toThrow(/cannot exceed the current head generation/);
   });
 
-  it('requires exactly one profile-conforming resident-node binding', () => {
+  it('rejects a second binding for the resident-node role', () => {
     const fixture = makeFixture();
     const second = makeNodeBinding(fixture, 2, 'replacement-node');
-    const head = createDeploymentHead({
-      deploymentInstanceId: fixture.deploymentInstanceId,
-      providerScope: fixture.providerScope,
-      incarnationId: fixture.incarnationId,
-      generation: 8,
-      phase: 'READY',
-      settledDeploymentRevisionId:
-        fixture.deploymentRevision.deploymentRevisionId,
-      targetDeploymentRevisionId:
-        fixture.deploymentRevision.deploymentRevisionId,
-      resourceBindings: [fixture.node, second],
-      activeOperation: null,
-      lastOperation: completedOperation(1),
-    });
-
     expect(() =>
-      validateDeploymentServiceHealthReceiptContext(
-        makeReceipt(fixture, {
-          authorizedHeadId: head.headId,
-          authorizedHeadGeneration: head.generation,
-        }),
-        context(fixture, head),
-      ),
-    ).toThrow(/exactly one resident-node binding/);
+      createDeploymentHead({
+        deploymentInstanceId: fixture.deploymentInstanceId,
+        providerScope: fixture.providerScope,
+        incarnationId: fixture.incarnationId,
+        generation: 8,
+        phase: 'READY',
+        settledDeploymentRevisionId:
+          fixture.deploymentRevision.deploymentRevisionId,
+        targetDeploymentRevisionId:
+          fixture.deploymentRevision.deploymentRevisionId,
+        resourceBindings: [...fixture.bindings, second],
+        activeOperation: null,
+        lastOperation: completedOperation(2, 'create', [
+          ...fixture.bindings,
+          second,
+        ]),
+      }),
+    ).toThrow(/bind each capability role at most once/);
   });
 
   it('allows target and settled non-destroy lineage but rejects destroy authority', () => {
@@ -458,9 +640,9 @@ describe('deployment service-health receipt', () => {
         fixture.deploymentRevision.deploymentRevisionId,
       targetDeploymentRevisionId:
         fixture.deploymentRevision.deploymentRevisionId,
-      resourceBindings: [fixture.node],
+      resourceBindings: fixture.bindings,
       activeOperation: active,
-      lastOperation: completedOperation(1),
+      lastOperation: completedOperation(1, 'create', fixture.bindings),
     });
     const activeReceipt = makeReceipt(fixture, {
       deploymentOperationId: reconciling.activeOperation.operationId,
@@ -494,7 +676,7 @@ describe('deployment service-health receipt', () => {
       settledDeploymentRevisionId:
         fixture.deploymentRevision.deploymentRevisionId,
       targetDeploymentRevisionId: null,
-      resourceBindings: [fixture.node],
+      resourceBindings: fixture.bindings,
       activeOperation: {
         kind: 'destroy',
         planId: planId(4),
@@ -508,7 +690,7 @@ describe('deployment service-health receipt', () => {
           },
         ],
       },
-      lastOperation: completedOperation(1),
+      lastOperation: completedOperation(1, 'create', fixture.bindings),
     });
     expect(() =>
       validateDeploymentServiceHealthReceiptContext(

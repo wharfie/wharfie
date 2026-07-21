@@ -1,14 +1,13 @@
 # Wharfie roadmap
 
-**Status:** The strict single-node deployment protocol now has an exact
-credential-bound AWS authority, retained DynamoDB/control-bucket lifecycles,
-portable control records, recovery-safe executable staging, and
-freshness-bounded provider-visible service health under focused mocks. Its
-provider-spec schema V2 now also pins one stable standard Availability Zone ID
-that offers the machine type, the exact default EBS KMS key ARN, and the full
-retained-volume performance/attachment contract. The first controller-shaped
-retained EBS volume capability is response-loss recoverable; action expansion,
-the rest of the fixed driver, commands, and clean-account proof are next ·
+**Status:** The strict single-node deployment protocol now expands its small
+portable capability model into one fixed 15-role AWS resource graph. Provider
+specification V3 pins that graph; Plan/Action V3, Inspection V4, Binding V2,
+and Head/Operation V2 give each physical resource or relationship its own
+recoverable action, exact dependency-binding lineage, ownership mode, and
+destroy policy. The retained EBS volume effect is response-loss recoverable;
+the remaining fixed drivers, provider composition, commands, and clean-account
+proof are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -543,6 +542,21 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       is an explicit no-op. This is deterministic-mock proof for volume
       provisioning only, not an attached service node or a composed production
       driver.
+- [x] Expand the provider action model through one content-addressed, fixed
+      15-role AWS resource graph. ProviderSpec V3 pins the graph identity;
+      Plan/Action V3 requires canonical apply order or exact reverse destroy
+      order, while Inspection V4 always reports canonical apply order.
+      Binding/Head V2 record exact dependency lineage and role-level lifecycle.
+      Reconcile can repair an authoritatively missing role only when no durable
+      binding exists, derived relationships are rooted in directly owned
+      bindings, and destroy retains volumes while purging their attachments.
+      Dependent creates re-prove earlier settled dependency intent, identity,
+      and planned state; every later destroy frontier re-proves prior purges
+      remain absent; finalization binds every role to its exact plan target.
+      Health receipts advance to V2/`whr2` and require a substrate binding
+      rooted in its six exact graph dependencies. This is strict deterministic
+      contract/controller proof, not implementation of the remaining AWS
+      resource drivers.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -635,32 +649,34 @@ receipts remain bound to `0d927463`.
 The regional provider specification now pins its exact image, stable placement,
 instance-type availability, default EBS KMS key ARN, and volume/attachment
 contract. A first retained-volume resource can create and inspect one exact EBS
-volume through a controller-shaped interface under deterministic mocks. It is
-not yet composed into a driver and does not attach, format, mount, or fulfill a
-service capability.
+volume through a controller-shaped interface under deterministic mocks. The
+portable capability model now expands into a fixed 15-role graph, with one
+recoverable action per modeled resource or relationship, exact binding
+lineage, canonical apply/reverse-destroy ordering, and retained-volume versus
+purged-attachment lifecycle. Only the retained-volume resource driver exists;
+it is not yet composed into a complete provider and does not attach, format,
+mount, or fulfill a service capability.
 
-1. Expand the plan/action model before adding the fixed network and attachment
-   paths. Network fulfillment needs several independently inspectable provider
-   effects, and attaching each retained volume must be a separate action with
-   its own response-loss recovery and `DeleteOnTermination=false` evidence;
-   neither fits the current one-logical-action/one-effect settlement shortcut.
-2. Implement the remaining independently recoverable AWS network, identity,
-   node, volume-attachment, managed-artifact, and resident-service resources;
-   then build the provider router, inspection, `createPlan`, and complete
-   controller composition. Mount source and packaged `plan`, `apply`,
+1. Implement the remaining independently recoverable AWS network, identity,
+   node, volume-attachment, and managed-artifact resources; then build the
+   provider router, inspection, `createPlan`, and complete controller
+   composition and wire resident-service activation and host observation.
+   Mount source and packaged `plan`, `apply`,
    `inspect`, `reconcile`, and `destroy` commands, requiring apply and
    reconcile to re-observe the currently running SEA.
-3. Install and wire the privileged host observer outside the application UID,
+2. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
    recovery.
-4. Begin provider-backed coordinator recovery only after the single-node
+3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [retained EBS volume resource
-checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md).
-Its parent is the [exact AWS provider-spec resolution
+The current restart point is the [multi-effect resource graph
+checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md).
+Its parent is the [retained EBS volume resource
+checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md),
+whose parent is the [exact AWS provider-spec resolution
 checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md),
 whose parent is the [provider-visible service-health
 checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md),

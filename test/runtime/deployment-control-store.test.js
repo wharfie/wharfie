@@ -30,14 +30,8 @@ import {
   sha256Base64Url,
 } from '../../src/core/runtime/content-id.js';
 import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
-import {
-  createDeploymentPlan,
-  DEPLOYMENT_ACTION_ID_DOMAIN,
-  DEPLOYMENT_PLAN_ID_DOMAIN,
-  DEPLOYMENT_PLAN_ID_PREFIX,
-  DEPLOYMENT_PLAN_SCHEMA_VERSION,
-  validateDeploymentPlan,
-} from '../../src/core/runtime/deployment-plan.js';
+import { createDeploymentPlan } from '../../src/core/runtime/deployment-plan.js';
+import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from '../../src/core/runtime/deployment-resource-graph.js';
 import {
   createAwsSingleNodeProvider,
   createDeploymentProfile,
@@ -50,7 +44,6 @@ import {
   createDeploymentResourceBinding,
   createDeploymentIncarnationId,
   createOwnershipNonce,
-  DEPLOYMENT_ACTION_ID_PREFIX,
   DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES,
 } from '../../src/core/runtime/deployment-resource-binding.js';
 import {
@@ -59,15 +52,6 @@ import {
 } from '../helpers/db-adapters.js';
 
 const TABLE_NAME = 'deployment-control';
-
-const RESOURCES = Object.freeze([
-  ['substrate', 'resident-node', 'ec2-instance'],
-  ['application-state', 'application-state', 'ebs-volume'],
-  ['control-state', 'control-state', 'ebs-volume'],
-  ['artifact', 'artifact-storage', 's3-object'],
-  ['runtime-identity', 'runtime-identity', 'instance-profile'],
-  ['network', 'networking', 'vpc'],
-]);
 
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
@@ -166,25 +150,31 @@ function makeDocuments() {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win3',
-          'wharfie:test:deployment-inspection:v3',
+          'win4',
+          'wharfie:test:deployment-inspection:v4',
           { inspection: 1 },
         ),
       },
-      actions: RESOURCES.map(([resourceKey, capability, providerType]) => ({
-        resourceKey,
-        capability: { kind: capability, version: 1 },
-        management: 'managed',
-        action: 'create',
-        destructive: false,
-        reason: 'missing',
-        before: null,
-        after: {
-          providerType,
-          providerResourceId: null,
-          stateDigest: digest(resourceKey),
-        },
-      })),
+      actions: AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.map(
+        (/** @type {Readonly<Record<string, any>>} */ resource) => ({
+          resourceKey: resource.resourceKey,
+          capability: resource.capability,
+          role: resource.role,
+          management: 'managed',
+          ownershipMode: resource.ownershipMode,
+          dependsOn: resource.dependsOn,
+          onDestroy: resource.onDestroy,
+          action: 'create',
+          destructive: false,
+          reason: 'missing',
+          before: null,
+          after: {
+            providerType: resource.providerType,
+            providerResourceId: null,
+            stateDigest: digest(resource.resourceKey),
+          },
+        }),
+      ),
     },
     { profile },
   );
@@ -256,101 +246,97 @@ function makeArtifactStageDocuments(
 
 /** @returns {{plan: Readonly<Record<string, any>>, head: Readonly<Record<string, any>>, planEnvelopeBytes: number, headEnvelopeBytes: number}} */
 function makeMaximumDocuments() {
-  const { plan: basePlan } = makeDocuments();
-  const operation = 'reconcile';
+  const { profile, plan: basePlan } = makeDocuments();
   const providerResourceId = 'R'.repeat(
     DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES,
   );
-  const actions = Array.from({ length: 16 }, (_unused, index) => {
-    const [, capability, providerType] = RESOURCES[index % RESOURCES.length];
-    const action = {
-      resourceKey: `max-resource-${String(index).padStart(2, '0')}`,
-      capability: { kind: capability, version: 1 },
-      management: 'managed',
-      action: 'update',
-      destructive: false,
-      reason: 'drift',
-      before: {
-        providerType,
-        providerResourceId,
-        stateDigest: digest(`max-resource-before-${index}`),
+  const plan = createDeploymentPlan(
+    {
+      operation: 'reconcile',
+      deploymentRevision: basePlan.deploymentRevision,
+      providerScope: basePlan.providerScope,
+      providerSpec: basePlan.providerSpec,
+      deploymentInstanceId: basePlan.deploymentInstanceId,
+      incarnationId: basePlan.incarnationId,
+      basis: {
+        headGeneration: 1,
+        settledDeploymentRevisionId:
+          basePlan.deploymentRevision.deploymentRevisionId,
+        inspectionId: basePlan.basis.inspectionId,
       },
-      after: {
-        providerType,
-        providerResourceId,
-        stateDigest: digest(`max-resource-after-${index}`),
-      },
-    };
-    return {
-      ...action,
-      actionId: createCanonicalJsonSha256Id({
-        domain: DEPLOYMENT_ACTION_ID_DOMAIN,
-        prefix: DEPLOYMENT_ACTION_ID_PREFIX,
-        value: {
-          operation,
-          deploymentRevisionId:
-            basePlan.deploymentRevision.deploymentRevisionId,
-          deploymentInstanceId: basePlan.deploymentInstanceId,
-          incarnationId: basePlan.incarnationId,
-          providerSpecId: basePlan.providerSpec.providerSpecId,
-          action,
-        },
-      }),
-    };
-  });
-  const planPayload = {
-    schemaVersion: DEPLOYMENT_PLAN_SCHEMA_VERSION,
-    kind: 'deploymentPlan',
-    operation,
-    deploymentRevision: basePlan.deploymentRevision,
-    providerScope: basePlan.providerScope,
-    providerSpec: basePlan.providerSpec,
-    deploymentInstanceId: basePlan.deploymentInstanceId,
-    incarnationId: basePlan.incarnationId,
-    basis: {
-      headGeneration: 1,
-      settledDeploymentRevisionId:
-        basePlan.deploymentRevision.deploymentRevisionId,
-      inspectionId: basePlan.basis.inspectionId,
+      actions: AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.map(
+        (
+          /** @type {Readonly<Record<string, any>>} */ resource,
+          /** @type {number} */ index,
+        ) => ({
+          resourceKey: resource.resourceKey,
+          capability: resource.capability,
+          role: resource.role,
+          management: 'managed',
+          ownershipMode: resource.ownershipMode,
+          dependsOn: resource.dependsOn,
+          onDestroy: resource.onDestroy,
+          action: 'update',
+          destructive: false,
+          reason: 'drift',
+          before: {
+            providerType: resource.providerType,
+            providerResourceId,
+            stateDigest: digest(`max-resource-before-${index}`),
+          },
+          after: {
+            providerType: resource.providerType,
+            providerResourceId,
+            stateDigest: digest(`max-resource-after-${index}`),
+          },
+        }),
+      ),
     },
-    actions,
-    summary: {
-      create: 0,
-      update: 16,
-      delete: 0,
-      verify: 0,
-      noop: 0,
-      destructive: false,
-    },
-  };
-  const plan = validateDeploymentPlan({
-    ...planPayload,
-    planId: createCanonicalJsonSha256Id({
-      domain: DEPLOYMENT_PLAN_ID_DOMAIN,
-      prefix: DEPLOYMENT_PLAN_ID_PREFIX,
-      value: planPayload,
-    }),
-  });
+    { profile },
+  );
   const nonces = plan.actions.map(
     (/** @type {Record<string, any>} */ _action, /** @type {number} */ index) =>
       createOwnershipNonce(Buffer.alloc(64, index + 1)),
   );
+  /** @type {Map<string, Readonly<Record<string, any>>>} */
+  const bindingByResourceKey = new Map();
   const bindings = plan.actions.map(
-    (/** @type {Record<string, any>} */ action, /** @type {number} */ index) =>
-      createDeploymentResourceBinding({
-        schemaVersion: 1,
+    (
+      /** @type {Record<string, any>} */ action,
+      /** @type {number} */ index,
+    ) => {
+      const binding = createDeploymentResourceBinding({
+        schemaVersion: 2,
         kind: 'deploymentResourceBinding',
         deploymentInstanceId: plan.deploymentInstanceId,
         incarnationId: plan.incarnationId,
         resourceKey: action.resourceKey,
         capability: action.capability,
+        role: action.role,
         management: 'managed',
+        ownershipMode: action.ownershipMode,
+        onDestroy: action.onDestroy,
+        dependencyBindings: action.dependsOn.map(
+          (/** @type {string} */ resourceKey) => {
+            const dependency = bindingByResourceKey.get(resourceKey);
+            if (dependency === undefined) {
+              throw new Error(`Missing graph dependency '${resourceKey}'.`);
+            }
+            return {
+              resourceKey,
+              bindingId: dependency.bindingId,
+            };
+          },
+        ),
         providerType: action.after.providerType,
         providerResourceId: action.after.providerResourceId,
         providerScopeId: plan.providerScope.providerScopeId,
         ownershipNonce: nonces[index],
         createdByActionId: action.actionId,
-      }),
+      });
+      bindingByResourceKey.set(binding.resourceKey, binding);
+      return binding;
+    },
   );
   const head = createDeploymentHead({
     deploymentInstanceId: plan.deploymentInstanceId,
@@ -884,7 +870,7 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
     }
   });
 
-  it('stores maximum 16-action and 16-binding envelopes below the byte limit', async () => {
+  it('stores complete 15-role graph envelopes with maximum provider IDs below the byte limit', async () => {
     const harness = await create();
     try {
       const store = createDeploymentControlStore({
@@ -894,11 +880,18 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
       const { plan, head, planEnvelopeBytes, headEnvelopeBytes } =
         makeMaximumDocuments();
 
-      expect(plan.actions).toHaveLength(16);
-      expect(head.resourceBindings).toHaveLength(16);
+      expect(plan.actions).toHaveLength(15);
+      expect(head.resourceBindings).toHaveLength(15);
+      expect(plan.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
+      expect(plan.basis.inspectionId).toMatch(/^win4_[A-Za-z0-9_-]{43}$/);
+      expect(head.headId).toMatch(/^wdh2_[A-Za-z0-9_-]{43}$/);
+      expect(head.lastOperation.operationId).toMatch(
+        /^wdo2_[A-Za-z0-9_-]{43}$/,
+      );
       expect(
         plan.actions.every(
           (/** @type {Record<string, any>} */ action) =>
+            /^wda3_[A-Za-z0-9_-]{43}$/.test(action.actionId) &&
             action.before.providerResourceId.length ===
               DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES &&
             action.after.providerResourceId.length ===
@@ -908,8 +901,27 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
       expect(
         head.resourceBindings.every(
           (/** @type {Record<string, any>} */ binding) =>
+            /^wrb2_[A-Za-z0-9_-]{43}$/.test(binding.bindingId) &&
             binding.providerResourceId.length ===
-            DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES,
+              DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES,
+        ),
+      ).toBe(true);
+      expect(
+        head.resourceBindings.every(
+          (/** @type {Record<string, any>} */ binding) => {
+            const resource = AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.find(
+              (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+                candidate.resourceKey === binding.resourceKey,
+            );
+            return (
+              resource !== undefined &&
+              binding.dependencyBindings.length === resource.dependsOn.length &&
+              binding.dependencyBindings.every(
+                (/** @type {Readonly<Record<string, any>>} */ dependency) =>
+                  resource.dependsOn.includes(dependency.resourceKey),
+              )
+            );
+          },
         ),
       ).toBe(true);
       expect(planEnvelopeBytes).toBeLessThan(
@@ -1022,7 +1034,7 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
         tableName: TABLE_NAME,
       });
       const oversizedPlanId = semanticId(
-        'wpl2',
+        'wpl3',
         'wharfie:test:oversized-plan:v1',
         { plan: 1 },
       );

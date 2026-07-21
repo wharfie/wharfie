@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import { createDeploymentController } from '../../src/core/runtime/deployment-controller.js';
 import { createAwsSingleNodeProviderSpecResolver } from '../../src/core/runtime/deployment-aws-provider-spec-resolver.js';
+import { compareCanonicalStrings } from '../../src/core/runtime/canonical-order.js';
 import {
   createCanonicalJsonSha256Id,
   createSha256Id,
@@ -16,10 +17,16 @@ import {
   createDeploymentArtifactStageReceipt,
 } from '../../src/core/runtime/deployment-artifact-stage.js';
 import {
+  DEPLOYMENT_OPERATION_ID_PREFIX,
   createDeploymentHead,
   validateDeploymentHead,
 } from '../../src/core/runtime/deployment-head.js';
 import { createDeploymentInspection } from '../../src/core/runtime/deployment-inspection.js';
+import {
+  AWS_SINGLE_NODE_RESOURCE_GRAPH,
+  getAwsSingleNodeResourceApplyOrder,
+  getAwsSingleNodeResourceDestroyOrder,
+} from '../../src/core/runtime/deployment-resource-graph.js';
 import {
   createDeploymentServiceHealthReceipt,
   getDeploymentServiceHealthObjectLocation,
@@ -40,6 +47,7 @@ import {
   validateProviderScope,
 } from '../../src/core/runtime/deployment-provider-scope.js';
 import {
+  DEPLOYMENT_ACTION_ID_PREFIX,
   createDeploymentIncarnationId,
   createDeploymentResourceBinding,
   createOwnershipNonce,
@@ -64,44 +72,23 @@ function semanticId(prefix, domain, value) {
 
 const HEALTH_NOW = 1_700_000_000_000;
 
-const RESOURCES = Object.freeze([
-  {
-    resourceKey: 'substrate',
-    capability: 'resident-node',
-    providerType: 'ec2-instance',
-    retained: false,
-  },
-  {
-    resourceKey: 'application-state',
-    capability: 'application-state',
-    providerType: 'ebs-volume',
-    retained: true,
-  },
-  {
-    resourceKey: 'control-state',
-    capability: 'control-state',
-    providerType: 'ebs-volume',
-    retained: true,
-  },
-  {
-    resourceKey: 'artifact',
-    capability: 'artifact-storage',
-    providerType: 's3-object',
-    retained: false,
-  },
-  {
-    resourceKey: 'runtime-identity',
-    capability: 'runtime-identity',
-    providerType: 'instance-profile',
-    retained: false,
-  },
-  {
-    resourceKey: 'network',
-    capability: 'networking',
-    providerType: 'vpc',
-    retained: false,
-  },
-]);
+const RESOURCE_BY_KEY = new Map(
+  AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.map(
+    (/** @type {Readonly<Record<string, any>>} */ resource) => [
+      resource.resourceKey,
+      resource,
+    ],
+  ),
+);
+const RESOURCES = Object.freeze(
+  getAwsSingleNodeResourceApplyOrder().map((resourceKey) => {
+    const resource = RESOURCE_BY_KEY.get(resourceKey);
+    if (resource === undefined) {
+      throw new Error(`Missing test resource graph entry '${resourceKey}'.`);
+    }
+    return resource;
+  }),
+);
 
 /** @param {string} resourceKey @returns {string} */
 function providerResourceId(resourceKey) {
@@ -239,50 +226,70 @@ function makeArtifactStageBundle(
  * @param {string} [variant]
  */
 function makePlan(base, inspection, operation, variant = 'original') {
-  const actions = RESOURCES.map((resource, index) => {
-    const resourceKey =
-      index === 0 && variant === 'changed'
-        ? 'replacement-substrate'
-        : resource.resourceKey;
+  const orderedResourceKeys =
+    operation === 'destroy'
+      ? getAwsSingleNodeResourceDestroyOrder()
+      : getAwsSingleNodeResourceApplyOrder();
+  const actions = orderedResourceKeys.map((resourceKey, index) => {
+    const resource = RESOURCE_BY_KEY.get(resourceKey);
+    if (resource === undefined) {
+      throw new Error(`Missing test resource graph entry '${resourceKey}'.`);
+    }
+    const observation = inspection.resources.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === resourceKey,
+    );
+    const create =
+      operation === 'apply' ||
+      (operation === 'reconcile' && observation?.presence === 'absent');
     const state = {
       providerType: resource.providerType,
-      providerResourceId:
-        operation === 'apply' ? null : providerResourceId(resource.resourceKey),
+      providerResourceId: create ? null : providerResourceId(resourceKey),
       stateDigest: digest(resource.resourceKey),
     };
-    if (operation === 'apply') {
+    const graphFields = {
+      resourceKey,
+      capability: resource.capability,
+      role: resource.role,
+      management: 'managed',
+      ownershipMode: resource.ownershipMode,
+      dependsOn: resource.dependsOn,
+      onDestroy: resource.onDestroy,
+    };
+    if (create) {
       return {
-        resourceKey,
-        capability: { kind: resource.capability, version: 1 },
-        management: 'managed',
+        ...graphFields,
         action: 'create',
         destructive: false,
-        reason: 'missing',
+        reason:
+          index === 0 && variant === 'changed'
+            ? 'deployment-change'
+            : 'missing',
         before: null,
         after: state,
       };
     }
     if (operation === 'reconcile') {
       return {
-        resourceKey,
-        capability: { kind: resource.capability, version: 1 },
-        management: 'managed',
+        ...graphFields,
         action: 'noop',
         destructive: false,
-        reason: 'already-converged',
+        reason:
+          index === 0 && variant === 'changed'
+            ? 'deployment-change'
+            : 'already-converged',
         before: state,
         after: state,
       };
     }
+    const retained = resource.onDestroy === 'retain';
     return {
-      resourceKey,
-      capability: { kind: resource.capability, version: 1 },
-      management: 'managed',
-      action: resource.retained ? 'noop' : 'delete',
-      destructive: !resource.retained,
-      reason: resource.retained ? 'retained-data' : 'destroy-requested',
+      ...graphFields,
+      action: retained ? 'noop' : 'delete',
+      destructive: !retained,
+      reason: retained ? 'retained-data' : 'destroy-requested',
       before: state,
-      after: resource.retained ? state : null,
+      after: retained ? state : null,
     };
   });
   return createDeploymentPlan(
@@ -313,6 +320,8 @@ function makePlan(base, inspection, operation, variant = 'original') {
  * @param {string} ownershipNonce
  * @param {string} [resourceId]
  * @param {string} [createdByActionId]
+ * @param {Readonly<Record<string, any>>[]} [resourceBindings]
+ * @param {Readonly<Record<string, any>>[]|null} [dependencyBindingsOverride]
  */
 function makeBinding(
   base,
@@ -320,15 +329,42 @@ function makeBinding(
   ownershipNonce,
   resourceId = providerResourceId(action.resourceKey),
   createdByActionId = action.actionId,
+  resourceBindings = [],
+  dependencyBindingsOverride = null,
 ) {
+  const dependencyBindings =
+    dependencyBindingsOverride ||
+    action.dependsOn
+      .map((/** @type {string} */ resourceKey) => {
+        const dependency = resourceBindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === resourceKey,
+        );
+        if (dependency === undefined) {
+          throw new Error(
+            `Test binding '${action.resourceKey}' lacks dependency '${resourceKey}'.`,
+          );
+        }
+        return { resourceKey, bindingId: dependency.bindingId };
+      })
+      .sort(
+        (
+          /** @type {{resourceKey: string}} */ left,
+          /** @type {{resourceKey: string}} */ right,
+        ) => compareCanonicalStrings(left.resourceKey, right.resourceKey),
+      );
   return createDeploymentResourceBinding({
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'deploymentResourceBinding',
     deploymentInstanceId: base.deploymentInstanceId,
     incarnationId: base.incarnationId,
     resourceKey: action.resourceKey,
     capability: action.capability,
+    role: action.role,
     management: 'managed',
+    ownershipMode: action.ownershipMode,
+    onDestroy: action.onDestroy,
+    dependencyBindings,
     providerType: action.before?.providerType || action.after?.providerType,
     providerResourceId: resourceId,
     providerScopeId: base.providerScope.providerScopeId,
@@ -424,6 +460,8 @@ function makeAbsentInspection(base) {
  * @param {'conflict'|'missing'|'unknown'|null} [inspectionEvidence]
  * @param {string|null} [inspectionStateDriftResourceKey]
  * @param {Record<string, any>|null} [healthReceiptOverrides]
+ * @param {string|null} [reappearedResourceKey]
+ * @param {string|null} [finalDigestOverrideResourceKey]
  */
 function makeLiveInspection(
   base,
@@ -432,15 +470,36 @@ function makeLiveInspection(
   inspectionEvidence = null,
   inspectionStateDriftResourceKey = null,
   healthReceiptOverrides = {},
+  reappearedResourceKey = null,
+  finalDigestOverrideResourceKey = null,
 ) {
-  const destroying = head.activeOperation?.kind === 'destroy';
+  const durableResourceKeys = new Set(
+    head.resourceBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ binding) =>
+        binding.resourceKey,
+    ),
+  );
+  const pendingBindings = [...physical.values()].filter(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      !durableResourceKeys.has(binding.resourceKey),
+  );
+  if (pendingBindings.length > 1) {
+    throw new Error(
+      'A controller inspection may expose only one pending binding.',
+    );
+  }
+  const pendingBinding = pendingBindings[0];
+  const destroying =
+    head.activeOperation?.kind === 'destroy' || head.phase === 'DESTROYED';
   const allPresent = RESOURCES.every(({ resourceKey }) =>
     physical.has(resourceKey),
   );
   const destroyed =
     destroying &&
-    RESOURCES.every(({ resourceKey, retained }) =>
-      retained ? physical.has(resourceKey) : !physical.has(resourceKey),
+    RESOURCES.every(({ resourceKey, onDestroy }) =>
+      onDestroy === 'retain'
+        ? physical.has(resourceKey)
+        : !physical.has(resourceKey),
     );
   const finalReadinessEligible =
     head.phase === 'READY' ||
@@ -468,7 +527,7 @@ function makeLiveInspection(
                   : 'in-flight';
   const durableNodeBinding = head.resourceBindings.find(
     (/** @type {Readonly<Record<string, any>>} */ binding) =>
-      binding.capability.kind === 'resident-node',
+      binding.resourceKey === 'substrate',
   );
   const claimsHealthy = status === 'converged';
   const healthReceipt =
@@ -482,45 +541,82 @@ function makeLiveInspection(
           healthReceiptOverrides,
         )
       : null;
+  const evidenceResourceKey = physical.has('substrate')
+    ? 'substrate'
+    : RESOURCES.find(({ resourceKey }) => physical.has(resourceKey))
+        ?.resourceKey;
   const resources = RESOURCES.map((resource) => {
     const binding = physical.get(resource.resourceKey);
-    const present = binding !== undefined;
+    const reappeared = resource.resourceKey === reappearedResourceKey;
+    const present = binding !== undefined || reappeared;
+    const hasExactBinding = binding !== undefined && !reappeared;
+    const finalDigestOverride =
+      resource.resourceKey === finalDigestOverrideResourceKey;
     return {
       resourceKey: resource.resourceKey,
-      capability: { kind: resource.capability, version: 1 },
+      capability: resource.capability,
+      role: resource.role,
       management: 'managed',
+      ownershipMode: resource.ownershipMode,
+      dependsOn: resource.dependsOn,
+      onDestroy: resource.onDestroy,
+      bindingId:
+        hasExactBinding &&
+        !(
+          resource.resourceKey === evidenceResourceKey &&
+          inspectionEvidence !== null
+        )
+          ? binding.bindingId
+          : null,
+      dependencyBindings:
+        hasExactBinding &&
+        !(
+          resource.resourceKey === evidenceResourceKey &&
+          inspectionEvidence !== null
+        )
+          ? binding.dependencyBindings
+          : null,
       presence: present ? 'present' : 'absent',
+      presenceEvidence: present ? 'exact-read' : 'authoritative-not-found',
       ownership:
         present &&
-        resource.resourceKey === 'substrate' &&
+        resource.resourceKey === evidenceResourceKey &&
         inspectionEvidence !== null
           ? inspectionEvidence
-          : present
+          : hasExactBinding
             ? 'verified'
             : 'missing',
       providerIdentity: present
         ? {
-            providerType: binding.providerType,
-            providerResourceId: binding.providerResourceId,
+            providerType: binding?.providerType || resource.providerType,
+            providerResourceId:
+              binding?.providerResourceId ||
+              providerResourceId(resource.resourceKey),
           }
         : null,
-      desiredDigest: digest(resource.resourceKey),
+      desiredDigest: digest(
+        finalDigestOverride
+          ? `${resource.resourceKey}-wrong-final-target`
+          : resource.resourceKey,
+      ),
       observedDigest: present
         ? digest(
-            resource.resourceKey === inspectionStateDriftResourceKey
-              ? `${resource.resourceKey}-drifted`
-              : resource.resourceKey,
+            finalDigestOverride
+              ? `${resource.resourceKey}-wrong-final-target`
+              : resource.resourceKey === inspectionStateDriftResourceKey
+                ? `${resource.resourceKey}-drifted`
+                : resource.resourceKey,
           )
         : null,
       health: present
-        ? resource.capability === 'resident-node'
+        ? resource.resourceKey === 'substrate'
           ? claimsHealthy
             ? 'healthy'
             : 'starting'
           : 'not-applicable'
         : 'absent',
       service:
-        present && resource.capability === 'resident-node'
+        present && resource.resourceKey === 'substrate'
           ? {
               health: claimsHealthy ? 'healthy' : 'starting',
               artifactId: base.deploymentRevision.artifactId,
@@ -549,6 +645,7 @@ function makeLiveInspection(
       profile: base.profile,
       providerSpec: base.providerSpec,
       head,
+      pendingBinding,
       now: HEALTH_NOW,
     },
   );
@@ -621,6 +718,10 @@ function makeStore(initialHead = null, initialPlans = [], events = []) {
     /** @param {null|((previous: Readonly<Record<string, any>>|null, next: Readonly<Record<string, any>>) => void|Promise<void>)} hook */
     setAfterCas(hook) {
       afterCas = hook;
+    },
+    /** @param {Readonly<Record<string, any>>} value */
+    replaceHeadForTest(value) {
+      head = validateDeploymentHead(clone(value));
     },
   };
 }
@@ -698,10 +799,20 @@ function makeProvider(base, store, physical, events = []) {
   let resolvedScope = base.providerScope;
   /** @type {'conflict'|'missing'|'unknown'|null} */
   let inspectionEvidence = null;
+  /** @type {{actionId: string, resourceKey: string|null}|null} */
+  let driftAfterEffect = null;
+  /** @type {{actionId: string, resourceKey: string}|null} */
+  let removePhysicalAfterEffect = null;
   /** @type {string|null} */
-  let driftAfterEffectActionId = null;
+  let wrongDependencySettlementActionId = null;
   /** @type {string|null} */
   let inspectionStateDriftResourceKey = null;
+  /** @type {string|null} */
+  let reappearedResourceKey = null;
+  /** @type {{actionId: string, resourceKey: string}|null} */
+  let reappearAfterEffect = null;
+  /** @type {string|null} */
+  let finalDigestOverrideResourceKey = null;
   /** @type {Record<string, any>|null} */
   let healthReceiptOverrides = {};
   /** @type {Map<string, number>} */
@@ -743,6 +854,8 @@ function makeProvider(base, store, physical, events = []) {
             inspectionEvidence,
             inspectionStateDriftResourceKey,
             healthReceiptOverrides,
+            reappearedResourceKey,
+            finalDigestOverrideResourceKey,
           );
     },
     /** @param {Record<string, any>} context */
@@ -774,15 +887,37 @@ function makeProvider(base, store, physical, events = []) {
         !physical.has(action.resourceKey)
       ) {
         const nonce = context.ownershipNonce || context.intent?.ownershipNonce;
-        physical.set(action.resourceKey, makeBinding(base, action, nonce));
+        physical.set(
+          action.resourceKey,
+          makeBinding(
+            base,
+            action,
+            nonce,
+            undefined,
+            undefined,
+            context.head.resourceBindings,
+          ),
+        );
       }
       if (crashAfterEffectActionId === action.actionId) {
         crashAfterEffectActionId = null;
         throw new Error('injected crash after physical effect');
       }
-      if (driftAfterEffectActionId === action.actionId) {
-        driftAfterEffectActionId = null;
-        inspectionStateDriftResourceKey = action.resourceKey;
+      const drift = driftAfterEffect;
+      if (drift !== null && drift.actionId === action.actionId) {
+        inspectionStateDriftResourceKey =
+          drift.resourceKey ?? action.resourceKey;
+        driftAfterEffect = null;
+      }
+      const removal = removePhysicalAfterEffect;
+      if (removal !== null && removal.actionId === action.actionId) {
+        physical.delete(removal.resourceKey);
+        removePhysicalAfterEffect = null;
+      }
+      const reappearance = reappearAfterEffect;
+      if (reappearance !== null && reappearance.actionId === action.actionId) {
+        reappearedResourceKey = reappearance.resourceKey;
+        reappearAfterEffect = null;
       }
     },
     /** @param {Record<string, any>} context */
@@ -796,6 +931,30 @@ function makeProvider(base, store, physical, events = []) {
           : { status: 'converged', binding: null };
       }
       const binding = physical.get(action.resourceKey);
+      if (
+        binding !== undefined &&
+        wrongDependencySettlementActionId === action.actionId
+      ) {
+        wrongDependencySettlementActionId = null;
+        const dependencies = clone(binding.dependencyBindings);
+        const wrongBinding = context.head.resourceBindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+            candidate.bindingId !== dependencies[0]?.bindingId,
+        );
+        if (dependencies.length === 0 || wrongBinding === undefined) {
+          throw new Error(
+            'test wrong dependency settlement requires a dependency and alternate binding',
+          );
+        }
+        dependencies[0].bindingId = wrongBinding.bindingId;
+        const corrupted = /** @type {Record<string, any>} */ (clone(binding));
+        delete corrupted.bindingId;
+        corrupted.dependencyBindings = dependencies;
+        return {
+          status: 'converged',
+          binding: createDeploymentResourceBinding(corrupted),
+        };
+      }
       return binding === undefined
         ? { status: 'not-converged' }
         : { status: 'converged', binding: clone(binding) };
@@ -836,9 +995,29 @@ function makeProvider(base, store, physical, events = []) {
     crashAfterPhysicalEffect(actionId) {
       crashAfterEffectActionId = actionId;
     },
+    /** @param {string} actionId @param {string|null} [resourceKey] */
+    driftAfterPhysicalEffect(actionId, resourceKey = null) {
+      driftAfterEffect = { actionId, resourceKey };
+    },
+    /** @param {string} actionId @param {string} resourceKey */
+    removePhysicalDependencyAfterEffect(actionId, resourceKey) {
+      removePhysicalAfterEffect = { actionId, resourceKey };
+    },
+    /** @param {string|null} resourceKey */
+    setReappearedResource(resourceKey) {
+      reappearedResourceKey = resourceKey;
+    },
+    /** @param {string} actionId @param {string} resourceKey */
+    reappearAfterPhysicalEffect(actionId, resourceKey) {
+      reappearAfterEffect = { actionId, resourceKey };
+    },
+    /** @param {string|null} resourceKey */
+    setFinalDigestOverride(resourceKey) {
+      finalDigestOverrideResourceKey = resourceKey;
+    },
     /** @param {string} actionId */
-    driftAfterPhysicalEffect(actionId) {
-      driftAfterEffectActionId = actionId;
+    returnWrongDependencySettlement(actionId) {
+      wrongDependencySettlementActionId = actionId;
     },
   };
 }
@@ -847,17 +1026,21 @@ function makeProvider(base, store, physical, events = []) {
 function makeReadyState(corruption = null) {
   const base = makeContext();
   const applyPlan = makePlan(base, makeAbsentInspection(base), 'apply');
-  const bindings = applyPlan.actions.map(
-    (
-      /** @type {Readonly<Record<string, any>>} */ action,
-      /** @type {number} */ index,
-    ) =>
+  /** @type {Readonly<Record<string, any>>[]} */
+  const bindings = [];
+  for (let index = 0; index < applyPlan.actions.length; index += 1) {
+    const action = applyPlan.actions[index];
+    bindings.push(
       makeBinding(
         base,
         action,
         createOwnershipNonce(Buffer.alloc(32, index + 1)),
+        undefined,
+        undefined,
+        bindings,
       ),
-  );
+    );
+  }
   const physical = new Map(
     bindings.map((/** @type {Readonly<Record<string, any>>} */ binding) => [
       binding.resourceKey,
@@ -868,18 +1051,26 @@ function makeReadyState(corruption = null) {
   if (corruption === 'missing') {
     durableBindings = bindings.filter(
       (/** @type {Readonly<Record<string, any>>} */ { resourceKey }) =>
-        resourceKey !== 'substrate',
+        resourceKey !== 'control-state-attachment',
     );
   } else if (corruption === 'wrong') {
+    const targetAction = applyPlan.actions.find(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === 'control-state-attachment',
+    );
+    if (targetAction === undefined) {
+      throw new Error('Missing control-state attachment test action.');
+    }
     durableBindings = bindings.map(
       (/** @type {Readonly<Record<string, any>>} */ binding) =>
-        binding.resourceKey === 'substrate'
+        binding.resourceKey === 'control-state-attachment'
           ? makeBinding(
               base,
-              applyPlan.actions[0],
+              targetAction,
               binding.ownershipNonce,
-              'wrong-provider-resource-substrate',
+              'wrong-provider-resource-control-state-attachment',
               binding.createdByActionId,
+              bindings,
             )
           : binding,
     );
@@ -910,6 +1101,85 @@ function makeReadyState(corruption = null) {
     },
   });
   return { base, physical, head, applyPlan };
+}
+
+/**
+ * @param {ReturnType<typeof makeReadyState>} ready
+ * @param {Readonly<Record<string, any>>[]} resourceBindings
+ */
+function replaceReadyBindings(ready, resourceBindings) {
+  return createDeploymentHead({
+    deploymentInstanceId: ready.head.deploymentInstanceId,
+    providerScope: ready.head.providerScope,
+    incarnationId: ready.head.incarnationId,
+    generation: ready.head.generation,
+    phase: 'READY',
+    settledDeploymentRevisionId: ready.head.settledDeploymentRevisionId,
+    targetDeploymentRevisionId: ready.head.targetDeploymentRevisionId,
+    resourceBindings,
+    activeOperation: null,
+    lastOperation: {
+      kind: ready.head.lastOperation.kind,
+      planId: ready.head.lastOperation.planId,
+      intents: ready.head.lastOperation.intents.map(
+        (/** @type {Readonly<Record<string, any>>} */ intent) => ({
+          actionId: intent.actionId,
+          status: intent.status,
+          ownershipNonce: intent.ownershipNonce,
+        }),
+      ),
+    },
+  });
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} head
+ * @param {Readonly<Record<string, any>>[]} resourceBindings
+ */
+function replaceActiveBindings(head, resourceBindings) {
+  if (head.activeOperation === null) {
+    throw new Error('Test head must contain an active operation.');
+  }
+  const copyOperation = (
+    /** @type {Readonly<Record<string, any>>} */ operation,
+  ) => ({
+    kind: operation.kind,
+    planId: operation.planId,
+    status: operation.status,
+    nextActionIndex: operation.nextActionIndex,
+    intents: operation.intents.map(
+      (/** @type {Readonly<Record<string, any>>} */ intent) => ({
+        actionId: intent.actionId,
+        status: intent.status,
+        ownershipNonce: intent.ownershipNonce,
+      }),
+    ),
+  });
+  return createDeploymentHead({
+    deploymentInstanceId: head.deploymentInstanceId,
+    providerScope: head.providerScope,
+    incarnationId: head.incarnationId,
+    generation: head.generation,
+    phase: head.phase,
+    settledDeploymentRevisionId: head.settledDeploymentRevisionId,
+    targetDeploymentRevisionId: head.targetDeploymentRevisionId,
+    resourceBindings,
+    activeOperation: copyOperation(head.activeOperation),
+    lastOperation:
+      head.lastOperation === null
+        ? null
+        : {
+            kind: head.lastOperation.kind,
+            planId: head.lastOperation.planId,
+            intents: head.lastOperation.intents.map(
+              (/** @type {Readonly<Record<string, any>>} */ intent) => ({
+                actionId: intent.actionId,
+                status: intent.status,
+                ownershipNonce: intent.ownershipNonce,
+              }),
+            ),
+          },
+  });
 }
 
 /**
@@ -1611,6 +1881,42 @@ describe('deployment controller crash recovery', () => {
     }
   });
 
+  it('blocks READY when final provider state agrees on a digest outside the exact plan target', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const wrongResourceKey = 'network-vpc';
+    harness.store.setAfterCas((_previous, next) => {
+      if (
+        next.activeOperation?.nextActionIndex === plan.actions.length &&
+        next.activeOperation.intents.every(
+          (/** @type {Readonly<Record<string, any>>} */ { status }) =>
+            status === 'settled',
+        )
+      ) {
+        harness.provider.setFinalDigestOverride(wrongResourceKey);
+      }
+    });
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(head).toMatchObject({
+      phase: 'CONVERGING',
+      activeOperation: {
+        nextActionIndex: plan.actions.length,
+        status: 'blocked',
+      },
+    });
+    expect(
+      head.activeOperation.intents.every(
+        (/** @type {Readonly<Record<string, any>>} */ { status }) =>
+          status === 'settled',
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     ['missing proof', null],
     [
@@ -1625,8 +1931,8 @@ describe('deployment controller crash recovery', () => {
       'another operation',
       {
         deploymentOperationId: semanticId(
-          'wdo1',
-          'wharfie:test:foreign-health-operation:v1',
+          DEPLOYMENT_OPERATION_ID_PREFIX,
+          'wharfie:test:foreign-health-operation:v2',
           { operation: 1 },
         ),
       },
@@ -1747,9 +2053,463 @@ describe('deployment controller crash recovery', () => {
       expect(harness.provider.executeCount.get(action.actionId) || 0).toBe(0);
     }
   });
+
+  it('blocks a dependent create when a settled dependency disappears before execution', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const dependencyResourceKey = 'network-vpc';
+    const dependentResourceKey = 'network-internet-gateway-attachment';
+    const actionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === dependentResourceKey,
+    );
+    if (actionIndex < 0) throw new Error('Missing dependent create action.');
+    const action = plan.actions[actionIndex];
+    let removed = false;
+    harness.store.setAfterCas((_previous, next) => {
+      if (
+        !removed &&
+        next.activeOperation?.nextActionIndex === actionIndex &&
+        next.activeOperation.intents[actionIndex]?.status === 'pending'
+      ) {
+        harness.physical.delete(dependencyResourceKey);
+        removed = true;
+      }
+    });
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(removed).toBe(true);
+    expect(head).toMatchObject({
+      phase: 'CONVERGING',
+      activeOperation: {
+        nextActionIndex: actionIndex,
+        status: 'blocked',
+      },
+    });
+    expect(head.activeOperation.intents[actionIndex].status).toBe('intended');
+    expect(
+      head.resourceBindings.some(
+        (/** @type {Readonly<Record<string, any>>} */ binding) =>
+          binding.resourceKey === dependencyResourceKey,
+      ),
+    ).toBe(true);
+    expect(harness.physical.has(dependencyResourceKey)).toBe(false);
+    expect(harness.physical.has(dependentResourceKey)).toBe(false);
+    expect(harness.provider.executeCount.get(action.actionId) || 0).toBe(0);
+  });
+
+  it('blocks a dependent create when durable dependency creation lineage is replaced after settlement', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const dependencyResourceKey = 'network-vpc';
+    const dependentResourceKey = 'network-internet-gateway-attachment';
+    const actionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === dependentResourceKey,
+    );
+    if (actionIndex < 0) throw new Error('Missing dependent create action.');
+    const action = plan.actions[actionIndex];
+    let replaced = false;
+    harness.store.setAfterCas((_previous, next) => {
+      if (
+        !replaced &&
+        next.activeOperation?.nextActionIndex === actionIndex &&
+        next.activeOperation.intents[actionIndex]?.status === 'pending'
+      ) {
+        const dependency = next.resourceBindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === dependencyResourceKey,
+        );
+        if (dependency === undefined) {
+          throw new Error('Missing settled dependency binding.');
+        }
+        const replacementInput = /** @type {Record<string, any>} */ (
+          clone(dependency)
+        );
+        delete replacementInput.bindingId;
+        replacementInput.ownershipNonce = createOwnershipNonce(
+          Buffer.alloc(32, 99),
+        );
+        replacementInput.createdByActionId = semanticId(
+          DEPLOYMENT_ACTION_ID_PREFIX,
+          'wharfie:test:foreign-create-lineage:v3',
+          { resourceKey: dependencyResourceKey },
+        );
+        const replacement = createDeploymentResourceBinding(replacementInput);
+        harness.physical.set(dependencyResourceKey, replacement);
+        harness.store.replaceHeadForTest(
+          replaceActiveBindings(
+            next,
+            next.resourceBindings.map(
+              (/** @type {Readonly<Record<string, any>>} */ binding) =>
+                binding.resourceKey === dependencyResourceKey
+                  ? replacement
+                  : binding,
+            ),
+          ),
+        );
+        replaced = true;
+        throw new Error('injected crash after dependency lineage replacement');
+      }
+    });
+
+    await expect(
+      harness.controller.converge({
+        plan,
+        profile: harness.base.profile,
+      }),
+    ).rejects.toThrow(/progress frontier|lineage replacement/i);
+    harness.store.setAfterCas(null);
+
+    const head = await harness.controller.resume({
+      deploymentInstanceId: harness.base.deploymentInstanceId,
+    });
+
+    expect(replaced).toBe(true);
+    expect(head).toMatchObject({
+      phase: 'CONVERGING',
+      activeOperation: {
+        nextActionIndex: actionIndex,
+        status: 'blocked',
+      },
+    });
+    expect(head.activeOperation.intents[actionIndex].status).toBe('intended');
+    expect(harness.provider.executeCount.get(action.actionId) || 0).toBe(0);
+  });
+
+  it.each(['disappears', 'drifts'])(
+    'does not publish a dependent binding when its dependency %s at settlement',
+    async (dependencyChange) => {
+      const harness = makeHarness();
+      const plan = await planWith(harness, 'apply');
+      const dependencyResourceKey = 'network-vpc';
+      const dependentResourceKey = 'network-internet-gateway-attachment';
+      const actionIndex = plan.actions.findIndex(
+        (/** @type {Readonly<Record<string, any>>} */ action) =>
+          action.resourceKey === dependentResourceKey,
+      );
+      if (actionIndex < 0) throw new Error('Missing dependent create action.');
+      const action = plan.actions[actionIndex];
+      if (dependencyChange === 'disappears') {
+        harness.provider.removePhysicalDependencyAfterEffect(
+          action.actionId,
+          dependencyResourceKey,
+        );
+      } else {
+        harness.provider.driftAfterPhysicalEffect(
+          action.actionId,
+          dependencyResourceKey,
+        );
+      }
+
+      const head = await harness.controller.converge({
+        plan,
+        profile: harness.base.profile,
+      });
+
+      expect(head).toMatchObject({
+        phase: 'CONVERGING',
+        activeOperation: {
+          nextActionIndex: actionIndex,
+          status: 'blocked',
+        },
+      });
+      expect(head.activeOperation.intents[actionIndex].status).toBe('intended');
+      expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+      expect(harness.physical.has(dependencyResourceKey)).toBe(
+        dependencyChange === 'drifts',
+      );
+      expect(harness.physical.has(dependentResourceKey)).toBe(true);
+      expect(
+        head.resourceBindings.some(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === dependentResourceKey,
+        ),
+      ).toBe(false);
+      for (const laterAction of plan.actions.slice(actionIndex + 1)) {
+        expect(
+          harness.provider.executeCount.get(laterAction.actionId) || 0,
+        ).toBe(0);
+      }
+    },
+  );
+
+  it('recreates one missing leaf resource during reconcile with exact dependency lineage', async () => {
+    const missingResourceKey = 'control-state-attachment';
+    const ready = makeReadyState('missing');
+    ready.physical.delete(missingResourceKey);
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'reconcile');
+    const action = plan.actions.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === missingResourceKey,
+    );
+
+    expect(action).toMatchObject({
+      action: 'create',
+      ownershipMode: 'derived',
+      onDestroy: 'purge',
+    });
+    expect(
+      plan.actions
+        .filter(
+          (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+            candidate.resourceKey !== missingResourceKey,
+        )
+        .every(
+          (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+            candidate.action === 'noop',
+        ),
+    ).toBe(true);
+    for (const dependencyResourceKey of action.dependsOn) {
+      const historicalBinding = ready.head.resourceBindings.find(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === dependencyResourceKey,
+      );
+      const historicalAction = ready.applyPlan.actions.find(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === dependencyResourceKey,
+      );
+      const currentNoop = plan.actions.find(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === dependencyResourceKey,
+      );
+      expect(historicalBinding?.createdByActionId).toBe(
+        historicalAction?.actionId,
+      );
+      expect(historicalBinding?.createdByActionId).not.toBe(
+        currentNoop?.actionId,
+      );
+    }
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+    const binding = head.resourceBindings.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === missingResourceKey,
+    );
+    const expectedDependencyBindings = action.dependsOn
+      .map((/** @type {string} */ resourceKey) => {
+        const dependency = head.resourceBindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+            candidate.resourceKey === resourceKey,
+        );
+        return { resourceKey, bindingId: dependency?.bindingId };
+      })
+      .sort(
+        (
+          /** @type {{resourceKey: string}} */ left,
+          /** @type {{resourceKey: string}} */ right,
+        ) => compareCanonicalStrings(left.resourceKey, right.resourceKey),
+      );
+
+    expect(head.phase).toBe('READY');
+    expect(binding).toMatchObject({
+      role: action.role,
+      ownershipMode: action.ownershipMode,
+      onDestroy: action.onDestroy,
+      createdByActionId: action.actionId,
+    });
+    expect(binding?.dependencyBindings).toEqual(expectedDependencyBindings);
+    expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+  });
+
+  it('rejects a created binding that settles against the wrong dependency binding', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const actionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === 'network-internet-gateway-attachment',
+    );
+    const action = plan.actions[actionIndex];
+    harness.provider.returnWrongDependencySettlement(action.actionId);
+
+    await expect(
+      harness.controller.converge({
+        plan,
+        profile: harness.base.profile,
+      }),
+    ).rejects.toThrow(/does not match the exact action/i);
+
+    expect(harness.store.head).toMatchObject({
+      phase: 'CONVERGING',
+      activeOperation: {
+        nextActionIndex: actionIndex,
+        status: 'running',
+      },
+    });
+    expect(
+      harness.store.head?.activeOperation?.intents[actionIndex].status,
+    ).toBe('intended');
+    expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+    for (const laterAction of plan.actions.slice(actionIndex + 1)) {
+      expect(harness.provider.executeCount.get(laterAction.actionId) || 0).toBe(
+        0,
+      );
+    }
+
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: harness.base.deploymentInstanceId,
+      }),
+    ).resolves.toMatchObject({ phase: 'READY' });
+    expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+  });
 });
 
 describe('deployment controller fencing', () => {
+  it('rejects an extra valid generic durable binding before staging, effects, or a starting CAS', async () => {
+    const ready = makeReadyState();
+    const reconcilePlan = makePlan(
+      ready.base,
+      makeLiveInspection(ready.base, ready.head, ready.physical),
+      'reconcile',
+    );
+    const extraBinding = createDeploymentResourceBinding({
+      schemaVersion: 2,
+      kind: 'deploymentResourceBinding',
+      deploymentInstanceId: ready.base.deploymentInstanceId,
+      incarnationId: ready.base.incarnationId,
+      resourceKey: 'unplanned-transit-gateway',
+      capability: { kind: 'networking', version: 1 },
+      role: { kind: 'transit-gateway', version: 1 },
+      management: 'managed',
+      ownershipMode: 'direct',
+      onDestroy: 'purge',
+      dependencyBindings: [],
+      providerType: 'ec2-transit-gateway',
+      providerResourceId: 'tgw-unplanned',
+      providerScopeId: ready.base.providerScope.providerScopeId,
+      ownershipNonce: createOwnershipNonce(Buffer.alloc(32, 97)),
+      createdByActionId: semanticId(
+        DEPLOYMENT_ACTION_ID_PREFIX,
+        'wharfie:test:unplanned-deployment-action:v3',
+        { resourceKey: 'unplanned-transit-gateway' },
+      ),
+    });
+    const head = replaceReadyBindings(ready, [
+      ...ready.head.resourceBindings,
+      extraBinding,
+    ]);
+    const harness = makeHarness({
+      head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+
+    await expect(
+      harness.controller.converge({
+        plan: reconcilePlan,
+        profile: ready.base.profile,
+      }),
+    ).rejects.toThrow(/exact AWS single-node resource graph/i);
+
+    expect(harness.store.head?.headId).toBe(head.headId);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+    expect(harness.artifactStager.stageCount).toBe(0);
+    expect(harness.provider.executeCount.size).toBe(0);
+  });
+
+  it('rejects a mismatched fixed-role durable binding before staging, effects, or a starting CAS', async () => {
+    const ready = makeReadyState();
+    const reconcilePlan = makePlan(
+      ready.base,
+      makeLiveInspection(ready.base, ready.head, ready.physical),
+      'reconcile',
+    );
+    const originalBinding = ready.head.resourceBindings.find(
+      (/** @type {Readonly<Record<string, any>>} */ binding) =>
+        binding.resourceKey === 'control-state-attachment',
+    );
+    if (originalBinding === undefined) {
+      throw new Error('Missing control-state attachment test binding.');
+    }
+    const mismatchedPayload = /** @type {Record<string, any>} */ (
+      clone(originalBinding)
+    );
+    delete mismatchedPayload.bindingId;
+    mismatchedPayload.role = { kind: 'wrong-attachment', version: 1 };
+    const mismatchedBinding =
+      createDeploymentResourceBinding(mismatchedPayload);
+    const head = replaceReadyBindings(
+      ready,
+      ready.head.resourceBindings.map(
+        (/** @type {Readonly<Record<string, any>>} */ binding) =>
+          binding.resourceKey === mismatchedBinding.resourceKey
+            ? mismatchedBinding
+            : binding,
+      ),
+    );
+    const harness = makeHarness({
+      head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+
+    await expect(
+      harness.controller.converge({
+        plan: reconcilePlan,
+        profile: ready.base.profile,
+      }),
+    ).rejects.toThrow(/exact AWS single-node resource graph/i);
+
+    expect(harness.store.head?.headId).toBe(head.headId);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+    expect(harness.artifactStager.stageCount).toBe(0);
+    expect(harness.provider.executeCount.size).toBe(0);
+  });
+
+  it('rejects an existing reconcile inspection with a missing resource role', async () => {
+    const ready = makeReadyState();
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const inspect = harness.provider.api.inspect;
+    harness.provider.api.inspect = async (context) => {
+      const inspection = /** @type {Record<string, any>} */ (
+        clone(await inspect(context))
+      );
+      const resource = inspection.resources.find(
+        (/** @type {Record<string, any>} */ candidate) =>
+          candidate.resourceKey === 'network-vpc',
+      );
+      delete resource.role;
+      return inspection;
+    };
+
+    await expect(planWith(harness, 'reconcile')).rejects.toThrow(
+      /role is required/i,
+    );
+
+    expect(harness.store.head?.headId).toBe(ready.head.headId);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+    expect(harness.provider.executeCount.size).toBe(0);
+  });
+
   it('refuses a valid alternate provider spec that bypasses READY planning', async () => {
     const ready = makeReadyState();
     const store = makeStore(ready.head, [ready.applyPlan]);
@@ -1826,8 +2586,8 @@ describe('deployment controller fencing', () => {
             action.actionId,
         );
         corruptedActionIds[0] = semanticId(
-          'wda2',
-          'wharfie:test:foreign-deployment-action:v2',
+          DEPLOYMENT_ACTION_ID_PREFIX,
+          'wharfie:test:foreign-deployment-action:v3',
           { action: 1 },
         );
         actionIds = corruptedActionIds;
@@ -1994,16 +2754,19 @@ describe('deployment controller fencing', () => {
       activeOperation: {
         status: 'running',
         nextActionIndex: 1,
-        intents: [
-          { status: 'settled' },
-          { status: 'pending' },
-          { status: 'pending' },
-          { status: 'pending' },
-          { status: 'pending' },
-          { status: 'pending' },
-        ],
       },
     });
+    expect(harness.store.head?.activeOperation?.intents[0].status).toBe(
+      'settled',
+    );
+    expect(
+      harness.store.head?.activeOperation?.intents
+        .slice(1)
+        .every(
+          (/** @type {Readonly<Record<string, any>>} */ intent) =>
+            intent.status === 'pending',
+        ),
+    ).toBe(true);
   });
 
   it('re-inspects ownership between actions before the next physical effect', async () => {
@@ -2127,6 +2890,149 @@ describe('deployment controller destroy ownership', () => {
       expect(provider.executeCount.size).toBe(0);
     },
   );
+
+  it('settles an already absent delete without repeating the provider effect', async () => {
+    const ready = makeReadyState();
+    ready.physical.delete('control-state-attachment');
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'destroy');
+    const action = plan.actions[0];
+
+    expect(action).toMatchObject({
+      resourceKey: 'control-state-attachment',
+      action: 'delete',
+      onDestroy: 'purge',
+    });
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(head.phase).toBe('DESTROYED');
+    expect(harness.provider.executeCount.get(action.actionId) || 0).toBe(0);
+    expect(
+      harness.provider.verifyContexts.some(
+        (context) => context.action.actionId === action.actionId,
+      ),
+    ).toBe(true);
+    expect(
+      head.resourceBindings.map(
+        (/** @type {Readonly<Record<string, any>>} */ binding) =>
+          binding.resourceKey,
+      ),
+    ).toEqual(['application-state', 'control-state']);
+  });
+
+  it.each([
+    ['before the later effect', 'execution'],
+    ['after the later effect and before settlement', 'settlement'],
+  ])(
+    'blocks destroy when a settled purge reappears %s',
+    async (_description, reappearancePoint) => {
+      const ready = makeReadyState();
+      const harness = makeHarness({
+        head: ready.head,
+        plans: [ready.applyPlan],
+        physical: ready.physical,
+      });
+      const plan = await planWith(harness, 'destroy');
+      const priorResourceKey = 'control-state-attachment';
+      const currentResourceKey = 'substrate';
+      const actionIndex = plan.actions.findIndex(
+        (/** @type {Readonly<Record<string, any>>} */ action) =>
+          action.resourceKey === currentResourceKey,
+      );
+      if (actionIndex < 0) throw new Error('Missing later destroy action.');
+      const action = plan.actions[actionIndex];
+      if (reappearancePoint === 'execution') {
+        harness.store.setAfterCas((_previous, next) => {
+          if (
+            next.activeOperation?.nextActionIndex === actionIndex &&
+            next.activeOperation.intents[actionIndex]?.status === 'pending'
+          ) {
+            harness.provider.setReappearedResource(priorResourceKey);
+          }
+        });
+      } else {
+        harness.provider.reappearAfterPhysicalEffect(
+          action.actionId,
+          priorResourceKey,
+        );
+      }
+
+      const head = await harness.controller.converge({
+        plan,
+        profile: harness.base.profile,
+      });
+
+      expect(head).toMatchObject({
+        phase: 'DESTROYING',
+        activeOperation: {
+          nextActionIndex: actionIndex,
+          status: 'blocked',
+        },
+      });
+      expect(head.activeOperation.intents[actionIndex].status).toBe('intended');
+      expect(
+        head.resourceBindings.some(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === priorResourceKey,
+        ),
+      ).toBe(false);
+      expect(harness.provider.executeCount.get(action.actionId) || 0).toBe(
+        reappearancePoint === 'settlement' ? 1 : 0,
+      );
+      expect(harness.physical.has(currentResourceKey)).toBe(
+        reappearancePoint === 'execution',
+      );
+    },
+  );
+
+  it('blocks DESTROYED when a retained resource final digest misses its exact plan target', async () => {
+    const ready = makeReadyState();
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'destroy');
+    const retainedResourceKey = 'control-state';
+    harness.store.setAfterCas((_previous, next) => {
+      if (
+        next.activeOperation?.nextActionIndex === plan.actions.length &&
+        next.activeOperation.intents.every(
+          (/** @type {Readonly<Record<string, any>>} */ { status }) =>
+            status === 'settled',
+        )
+      ) {
+        harness.provider.setFinalDigestOverride(retainedResourceKey);
+      }
+    });
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(head).toMatchObject({
+      phase: 'DESTROYING',
+      activeOperation: {
+        nextActionIndex: plan.actions.length,
+        status: 'blocked',
+      },
+    });
+    expect(
+      head.activeOperation.intents.every(
+        (/** @type {Readonly<Record<string, any>>} */ { status }) =>
+          status === 'settled',
+      ),
+    ).toBe(true);
+  });
 
   it('refuses a fresh apply while a destroyed tombstone retains resource bindings', async () => {
     const ready = makeReadyState();

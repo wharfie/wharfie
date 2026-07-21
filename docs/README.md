@@ -101,11 +101,11 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [retained EBS volume resource
+The current restart handoff is the [multi-effect resource graph
+checkpoint](../llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md).
+It records ProviderSpec V3's exact fixed 15-role graph plus Plan/Action V3,
+Inspection V4, Binding V2, and Head/Operation V2 dependency, ownership, and
+role-level lifecycle contracts. Only the retained-volume resource driver is
+implemented; network, identity, node, attachment, and complete AWS driver
+composition remain unfinished. Its parent is the [retained EBS volume resource
 checkpoint](../llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md).
-It records provider-spec V2's exact placement, instance-offering, EBS KMS key,
-and volume/attachment contract plus the first response-loss-recoverable retained
-volume resource under deterministic mocks; attachment and the complete AWS
-driver remain unfinished.
-Its parent is the [exact AWS provider-spec resolution
-checkpoint](../llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md).

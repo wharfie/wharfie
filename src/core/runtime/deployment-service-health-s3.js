@@ -25,7 +25,7 @@ export const DEPLOYMENT_SERVICE_HEALTH_CONTENT_TYPE =
   'application/vnd.wharfie.deployment-service-health+json';
 export const DEPLOYMENT_SERVICE_HEALTH_CACHE_CONTROL = 'no-store';
 export const DEPLOYMENT_SERVICE_HEALTH_METADATA_SCHEMA =
-  'deployment-service-health-v1';
+  'deployment-service-health-v2';
 export { DEPLOYMENT_SERVICE_HEALTH_DOCUMENT_MAX_BYTES };
 export const DEPLOYMENT_SERVICE_HEALTH_DEFAULT_MAX_ATTEMPTS = 3;
 

@@ -9,6 +9,7 @@ import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
 import {
   createDeploymentInspection,
   validateDeploymentInspection,
@@ -24,6 +25,10 @@ import {
   validateDeploymentPlan,
   validateDeploymentPlanContext,
 } from '../../src/core/runtime/deployment-plan.js';
+import {
+  AWS_SINGLE_NODE_RESOURCE_GRAPH,
+  getAwsSingleNodeResourceApplyOrder,
+} from '../../src/core/runtime/deployment-resource-graph.js';
 import {
   createAwsSingleNodeProvider,
   createDeploymentProfile,
@@ -134,8 +139,8 @@ function makeProviderSpec(profile, providerScope) {
   });
 }
 
-/** @returns {ReturnType<typeof createDeploymentPlan>} */
-function makePlan() {
+/** @returns {Readonly<Record<string, any>>} */
+function makeBase() {
   const profile = makeProfile();
   const deploymentRevision = makeDeploymentRevision(profile);
   const providerScope = createAwsProviderScope({
@@ -143,162 +148,219 @@ function makePlan() {
     accountId: '123456789012',
     region: 'us-east-1',
   });
-  const deploymentInstanceId = getDeploymentInstanceId({
+  return Object.freeze({
+    profile,
     deploymentRevision,
     providerScope,
-  });
-  const providerSpec = makeProviderSpec(profile, providerScope);
-  return createDeploymentPlan(
-    {
-      operation: 'apply',
+    providerSpec: makeProviderSpec(profile, providerScope),
+    deploymentInstanceId: getDeploymentInstanceId({
       deploymentRevision,
       providerScope,
-      providerSpec,
-      deploymentInstanceId,
-      incarnationId: createDeploymentIncarnationId(Buffer.alloc(32, 1)),
-      basis: {
-        headGeneration: 0,
-        settledDeploymentRevisionId: null,
-        inspectionId: semanticId('win3', 'wharfie:test:inspection:v3', {
-          absent: true,
-        }),
-      },
-      actions: [
-        {
-          resourceKey: 'substrate',
-          capability: { kind: 'resident-node', version: 1 },
-          management: 'managed',
-          action: 'create',
-          destructive: false,
-          reason: 'missing',
-          before: null,
-          after: {
-            providerType: 'ec2-instance',
-            providerResourceId: null,
-            stateDigest: digest('desired fixed stack'),
-          },
-        },
-        {
-          resourceKey: 'artifact',
-          capability: { kind: 'artifact-storage', version: 1 },
-          management: 'managed',
-          action: 'create',
-          destructive: false,
-          reason: 'missing',
-          before: null,
-          after: {
-            providerType: 's3-object',
-            providerResourceId: null,
-            stateDigest: digest('exact artifact object'),
-          },
-        },
-        {
-          resourceKey: 'application-state',
-          capability: { kind: 'application-state', version: 1 },
-          management: 'managed',
-          action: 'create',
-          destructive: false,
-          reason: 'missing',
-          before: null,
-          after: {
-            providerType: 'ebs-volume',
-            providerResourceId: null,
-            stateDigest: digest('application state volume'),
-          },
-        },
-        {
-          resourceKey: 'control-state',
-          capability: { kind: 'control-state', version: 1 },
-          management: 'managed',
-          action: 'create',
-          destructive: false,
-          reason: 'missing',
-          before: null,
-          after: {
-            providerType: 'ebs-volume',
-            providerResourceId: null,
-            stateDigest: digest('control state namespace'),
-          },
-        },
-        {
-          resourceKey: 'runtime-identity',
-          capability: { kind: 'runtime-identity', version: 1 },
-          management: 'managed',
-          action: 'create',
-          destructive: false,
-          reason: 'missing',
-          before: null,
-          after: {
-            providerType: 'instance-profile',
-            providerResourceId: null,
-            stateDigest: digest('host SSM artifact read health write identity'),
-          },
-        },
-        {
-          resourceKey: 'network',
-          capability: { kind: 'networking', version: 1 },
-          management: 'managed',
-          action: 'create',
-          destructive: false,
-          reason: 'missing',
-          before: null,
-          after: {
-            providerType: 'vpc',
-            providerResourceId: null,
-            stateDigest: digest('public egress no ingress'),
-          },
-        },
-      ],
-    },
-    { profile },
-  );
+    }),
+    incarnationId: createDeploymentIncarnationId(Buffer.alloc(32, 1)),
+  });
+}
+
+/** @param {string} resourceKey @returns {string} */
+function providerResourceId(resourceKey) {
+  if (resourceKey === 'substrate') return 'i-0123456789abcdef0';
+  if (resourceKey === 'application-state') return 'vol-0123456789abcdef0';
+  if (resourceKey === 'control-state') return 'vol-0fedcba9876543210';
+  if (resourceKey === 'artifact') {
+    return 'arn:aws:s3:::wharfie-artifacts/exact-artifact';
+  }
+  if (resourceKey === 'runtime-identity') {
+    return 'arn:aws:iam::123456789012:instance-profile/wharfie-host';
+  }
+  return `provider-resource-${resourceKey}`;
+}
+
+/** @param {Readonly<Record<string, any>>} resourceDefinition @param {boolean} existing */
+function resourceState(resourceDefinition, existing) {
+  return {
+    providerType: resourceDefinition.providerType,
+    providerResourceId: existing
+      ? providerResourceId(resourceDefinition.resourceKey)
+      : null,
+    stateDigest: digest(`${resourceDefinition.resourceKey} desired`),
+  };
 }
 
 /**
- * @param {Readonly<Record<string, any>>} deploymentRevision
- * @param {Readonly<Record<string, any>>} providerScope
- * @param {Readonly<Record<string, any>>} providerSpec
- * @param {string} incarnationId
- * @param {string} nodeProviderResourceId
- * @param {Record<string, any>} [overrides]
+ * @param {'apply'|'reconcile'|'destroy'} [operation]
+ * @param {Readonly<Record<string, any>>} [base]
+ * @returns {ReturnType<typeof createDeploymentPlan>}
  */
-function makeHealthObservation(
-  deploymentRevision,
-  providerScope,
-  providerSpec,
-  incarnationId,
-  nodeProviderResourceId,
-  overrides = {},
-) {
-  const deploymentInstanceId = getDeploymentInstanceId({
-    deploymentRevision,
-    providerScope,
+function makePlan(operation = 'apply', base = makeBase()) {
+  const definitions =
+    operation === 'destroy'
+      ? [...AWS_SINGLE_NODE_RESOURCE_GRAPH.resources].reverse()
+      : AWS_SINGLE_NODE_RESOURCE_GRAPH.resources;
+  const actions = definitions.map(
+    (/** @type {Readonly<Record<string, any>>} */ definition) => {
+      const contract = {
+        resourceKey: definition.resourceKey,
+        capability: definition.capability,
+        role: definition.role,
+        management: 'managed',
+        ownershipMode: definition.ownershipMode,
+        dependsOn: definition.dependsOn,
+        onDestroy: definition.onDestroy,
+      };
+      const desired = resourceState(definition, false);
+      const existing = resourceState(definition, true);
+      if (operation === 'apply') {
+        return {
+          ...contract,
+          action: 'create',
+          destructive: false,
+          reason: 'missing',
+          before: null,
+          after: desired,
+        };
+      }
+      if (operation === 'reconcile') {
+        return {
+          ...contract,
+          action: 'noop',
+          destructive: false,
+          reason: 'already-converged',
+          before: existing,
+          after: existing,
+        };
+      }
+      const retained = definition.onDestroy === 'retain';
+      return {
+        ...contract,
+        action: retained ? 'noop' : 'delete',
+        destructive: !retained,
+        reason: retained ? 'retained-data' : 'destroy-requested',
+        before: existing,
+        after: retained ? existing : null,
+      };
+    },
+  );
+  return createDeploymentPlan(
+    {
+      operation,
+      deploymentRevision: base.deploymentRevision,
+      providerScope: base.providerScope,
+      providerSpec: base.providerSpec,
+      deploymentInstanceId: base.deploymentInstanceId,
+      incarnationId: base.incarnationId,
+      basis: {
+        headGeneration: operation === 'apply' ? 0 : 3,
+        settledDeploymentRevisionId:
+          operation === 'apply'
+            ? null
+            : base.deploymentRevision.deploymentRevisionId,
+        inspectionId: semanticId('win4', 'wharfie:test:inspection:v4', {
+          operation,
+        }),
+      },
+      actions,
+    },
+    { profile: base.profile },
+  );
+}
+
+/** @param {Readonly<Record<string, any>>} base @param {Readonly<Record<string, any>>} plan */
+function makeBindings(base, plan) {
+  const bindingByResourceKey = new Map();
+  for (let index = 0; index < plan.actions.length; index += 1) {
+    const action = plan.actions[index];
+    const dependencyBindings = action.dependsOn.map(
+      (/** @type {string} */ resourceKey) => {
+        const dependency = bindingByResourceKey.get(resourceKey);
+        if (dependency === undefined) {
+          throw new Error(`Missing fixture dependency '${resourceKey}'.`);
+        }
+        return { resourceKey, bindingId: dependency.bindingId };
+      },
+    );
+    const binding = createDeploymentResourceBinding({
+      schemaVersion: 2,
+      kind: 'deploymentResourceBinding',
+      deploymentInstanceId: base.deploymentInstanceId,
+      incarnationId: base.incarnationId,
+      resourceKey: action.resourceKey,
+      capability: action.capability,
+      role: action.role,
+      management: action.management,
+      ownershipMode: action.ownershipMode,
+      onDestroy: action.onDestroy,
+      dependencyBindings,
+      providerType: action.after.providerType,
+      providerResourceId: providerResourceId(action.resourceKey),
+      providerScopeId: base.providerScope.providerScopeId,
+      ownershipNonce: createOwnershipNonce(Buffer.alloc(32, index + 2)),
+      createdByActionId: action.actionId,
+    });
+    bindingByResourceKey.set(action.resourceKey, binding);
+  }
+  return bindingByResourceKey;
+}
+
+/** @returns {Readonly<Record<string, any>>} */
+function makeReadyAuthority() {
+  const base = makeBase();
+  const plan = makePlan('apply', base);
+  const bindingByResourceKey = makeBindings(base, plan);
+  const bindings = [...bindingByResourceKey.values()];
+  const head = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: 3,
+    phase: 'READY',
+    settledDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    targetDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    resourceBindings: bindings,
+    activeOperation: null,
+    lastOperation: {
+      kind: 'create',
+      planId: plan.planId,
+      intents: plan.actions.map(
+        (/** @type {Readonly<Record<string, any>>} */ action) => {
+          const binding = bindingByResourceKey.get(action.resourceKey);
+          if (binding === undefined) {
+            throw new Error(`Missing fixture binding '${action.resourceKey}'.`);
+          }
+          return {
+            actionId: action.actionId,
+            status: 'settled',
+            ownershipNonce: binding.ownershipNonce,
+          };
+        },
+      ),
+    },
   });
+  return Object.freeze({ ...base, plan, bindingByResourceKey, head });
+}
+
+/** @param {Readonly<Record<string, any>>} authority @param {Record<string, any>} [overrides] */
+function makeHealthObservation(authority, overrides = {}) {
+  const nodeBinding = authority.bindingByResourceKey.get('substrate');
+  if (nodeBinding === undefined || authority.head.lastOperation === null) {
+    throw new Error('Fixture requires node and completed operation authority.');
+  }
   const receipt = createDeploymentServiceHealthReceipt({
-    providerScopeId: providerScope.providerScopeId,
-    providerSpecId: providerSpec.providerSpecId,
-    deploymentInstanceId,
-    incarnationId,
-    deploymentOperationId: semanticId(
-      'wdo1',
-      'wharfie:test:health-operation:v1',
-      { deploymentInstanceId },
-    ),
-    authorizedHeadId: semanticId('wdh1', 'wharfie:test:health-head:v1', {
-      deploymentInstanceId,
-      generation: 3,
+    providerScopeId: authority.providerScope.providerScopeId,
+    providerSpecId: authority.providerSpec.providerSpecId,
+    deploymentInstanceId: authority.deploymentInstanceId,
+    incarnationId: authority.incarnationId,
+    deploymentOperationId: authority.head.lastOperation.operationId,
+    authorizedHeadId: authority.head.headId,
+    authorizedHeadGeneration: authority.head.generation,
+    nodeBindingId: nodeBinding.bindingId,
+    nodeProviderResourceId: nodeBinding.providerResourceId,
+    deploymentRevisionId: authority.deploymentRevision.deploymentRevisionId,
+    appId: authority.deploymentRevision.appId,
+    artifactId: authority.deploymentRevision.artifactId,
+    revisionId: authority.deploymentRevision.revisionId,
+    serviceId: createLedgerServiceId({
+      appId: authority.deploymentRevision.appId,
     }),
-    authorizedHeadGeneration: 3,
-    nodeBindingId: semanticId('wrb1', 'wharfie:test:health-binding:v1', {
-      deploymentInstanceId,
-      nodeProviderResourceId,
-    }),
-    nodeProviderResourceId,
-    deploymentRevisionId: deploymentRevision.deploymentRevisionId,
-    appId: deploymentRevision.appId,
-    artifactId: deploymentRevision.artifactId,
-    revisionId: deploymentRevision.revisionId,
-    serviceId: createLedgerServiceId({ appId: deploymentRevision.appId }),
     sessionId: `wss_${Buffer.alloc(32, 5).toString('base64url')}`,
     lifecycleGeneration: 1,
     ownerGeneration: 1,
@@ -310,7 +372,7 @@ function makeHealthObservation(
     ...overrides,
   });
   const location = getDeploymentServiceHealthObjectLocation(
-    providerScope,
+    authority.providerScope,
     receipt,
   );
   return validateDeploymentServiceHealthObservation({
@@ -325,105 +387,102 @@ function makeHealthObservation(
   });
 }
 
-/** @param {Record<string, any>} [healthReceiptOverrides] @returns {Array<Record<string, any>>} */
-function makeConvergedResources(healthReceiptOverrides = {}) {
-  const profile = makeProfile();
-  const deploymentRevision = makeDeploymentRevision(profile);
-  const providerScope = createAwsProviderScope({
-    partition: 'aws',
-    accountId: '123456789012',
-    region: 'us-east-1',
-  });
-  const providerSpec = makeProviderSpec(profile, providerScope);
-  const incarnationId = createDeploymentIncarnationId(Buffer.alloc(32, 1));
-  const nodeProviderResourceId = 'i-0123456789abcdef0';
+/**
+ * @param {Record<string, any>} [healthReceiptOverrides]
+ * @returns {Readonly<Record<string, any>>}
+ */
+function makeInspectionAuthority(healthReceiptOverrides = {}) {
+  const authority = makeReadyAuthority();
   const healthReceipt = makeHealthObservation(
-    deploymentRevision,
-    providerScope,
-    providerSpec,
-    incarnationId,
-    nodeProviderResourceId,
+    authority,
     healthReceiptOverrides,
   );
-  return [
-    ['substrate', 'resident-node', 'ec2-instance', nodeProviderResourceId],
-    [
-      'application-state',
-      'application-state',
-      'ebs-volume',
-      'vol-0123456789abcdef0',
-    ],
-    ['control-state', 'control-state', 'ebs-volume', 'vol-0123456789abcdef0'],
-    [
-      'artifact',
-      'artifact-storage',
-      's3-object',
-      'arn:aws:s3:::wharfie-artifacts/exact-artifact',
-    ],
-    [
-      'runtime-identity',
-      'runtime-identity',
-      'instance-profile',
-      'arn:aws:iam::123456789012:instance-profile/wharfie-host',
-    ],
-    ['network', 'networking', 'vpc', 'vpc-0123456789abcdef0'],
-  ].map(([resourceKey, capability, providerType, providerResourceId]) => ({
-    resourceKey,
-    capability: { kind: capability, version: 1 },
-    management: 'managed',
-    presence: 'present',
-    ownership: 'verified',
-    providerIdentity: { providerType, providerResourceId },
-    desiredDigest: digest(`${resourceKey} desired`),
-    observedDigest: digest(`${resourceKey} desired`),
-    health: capability === 'resident-node' ? 'healthy' : 'not-applicable',
-    service:
-      capability === 'resident-node'
-        ? {
-            health: 'healthy',
-            artifactId: deploymentRevision.artifactId,
-            revisionId: deploymentRevision.revisionId,
-            healthReceipt,
-          }
-        : null,
-  }));
+  const resources = AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.map(
+    (/** @type {Readonly<Record<string, any>>} */ definition) => {
+      const binding = authority.bindingByResourceKey.get(
+        definition.resourceKey,
+      );
+      if (binding === undefined) {
+        throw new Error(`Missing fixture binding '${definition.resourceKey}'.`);
+      }
+      const resident = definition.resourceKey === 'substrate';
+      return {
+        resourceKey: definition.resourceKey,
+        capability: definition.capability,
+        role: definition.role,
+        management: 'managed',
+        ownershipMode: definition.ownershipMode,
+        dependsOn: definition.dependsOn,
+        onDestroy: definition.onDestroy,
+        bindingId: binding.bindingId,
+        dependencyBindings: binding.dependencyBindings,
+        presence: 'present',
+        presenceEvidence: 'exact-read',
+        ownership: 'verified',
+        providerIdentity: {
+          providerType: definition.providerType,
+          providerResourceId: binding.providerResourceId,
+        },
+        desiredDigest: digest(`${definition.resourceKey} desired`),
+        observedDigest: digest(`${definition.resourceKey} desired`),
+        health: resident ? 'healthy' : 'not-applicable',
+        service: resident
+          ? {
+              health: 'healthy',
+              artifactId: authority.deploymentRevision.artifactId,
+              revisionId: authority.deploymentRevision.revisionId,
+              healthReceipt,
+            }
+          : null,
+      };
+    },
+  );
+  return Object.freeze({ ...authority, resources });
+}
+
+/** @param {Record<string, any>} [healthReceiptOverrides] @returns {Array<Record<string, any>>} */
+function makeConvergedResources(healthReceiptOverrides = {}) {
+  return clone(makeInspectionAuthority(healthReceiptOverrides).resources);
+}
+
+/** @param {Array<Record<string, any>>} resources @param {string} resourceKey */
+function requireResource(resources, resourceKey) {
+  const resource = resources.find(
+    (candidate) => candidate.resourceKey === resourceKey,
+  );
+  if (resource === undefined) {
+    throw new Error(`Missing fixture resource '${resourceKey}'.`);
+  }
+  return resource;
 }
 
 /**
  * @param {string} status
  * @param {Array<Record<string, any>>} [resources]
  */
-function makeInspection(status, resources = makeConvergedResources()) {
-  const profile = makeProfile();
-  const deploymentRevision = makeDeploymentRevision(profile);
-  const providerScope = createAwsProviderScope({
-    partition: 'aws',
-    accountId: '123456789012',
-    region: 'us-east-1',
-  });
-  const providerSpec = makeProviderSpec(profile, providerScope);
+function makeInspection(status, resources) {
+  const authority = makeInspectionAuthority();
+  const absent = status === 'absent';
   return createDeploymentInspection(
     {
-      deploymentRevision,
-      providerScope,
-      providerSpecId: providerSpec.providerSpecId,
-      deploymentInstanceId: getDeploymentInstanceId({
-        deploymentRevision,
-        providerScope,
-      }),
-      controlState:
-        status === 'absent'
-          ? { status: 'absent', evidence: 'authoritative-not-found' }
-          : { status: 'present', evidence: 'provider-head-read' },
-      incarnationId:
-        status === 'absent'
-          ? null
-          : createDeploymentIncarnationId(Buffer.alloc(32, 1)),
-      headGeneration: status === 'absent' ? 0 : 3,
+      deploymentRevision: authority.deploymentRevision,
+      providerScope: authority.providerScope,
+      providerSpecId: authority.providerSpec.providerSpecId,
+      deploymentInstanceId: authority.deploymentInstanceId,
+      controlState: absent
+        ? { status: 'absent', evidence: 'authoritative-not-found' }
+        : { status: 'present', evidence: 'provider-head-read' },
+      incarnationId: absent ? null : authority.incarnationId,
+      headGeneration: absent ? 0 : authority.head.generation,
       status,
-      resources: status === 'absent' ? [] : resources,
+      resources: absent ? [] : (resources ?? clone(authority.resources)),
     },
-    { profile, providerSpec, now: HEALTH_NOW },
+    {
+      profile: authority.profile,
+      providerSpec: authority.providerSpec,
+      ...(absent ? {} : { head: authority.head }),
+      now: HEALTH_NOW,
+    },
   );
 }
 
@@ -499,13 +558,24 @@ describe('deployment plans', () => {
     const second = makePlan();
 
     expect(second).toEqual(first);
-    expect(first.planId).toMatch(/^wpl2_[A-Za-z0-9_-]{43}$/);
-    expect(first.actions).toHaveLength(6);
+    expect(first.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
+    expect(first.providerSpec).toMatchObject({
+      schemaVersion: 3,
+      providerSpecId: expect.stringMatching(/^wap3_[A-Za-z0-9_-]{43}$/),
+      resourceGraphId: AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId,
+    });
+    expect(first.actions).toHaveLength(15);
+    expect(
+      first.actions.map(
+        (/** @type {Readonly<Record<string, any>>} */ action) =>
+          action.resourceKey,
+      ),
+    ).toEqual(getAwsSingleNodeResourceApplyOrder());
     for (const action of first.actions) {
-      expect(action.actionId).toMatch(/^wda2_[A-Za-z0-9_-]{43}$/);
+      expect(action.actionId).toMatch(/^wda3_[A-Za-z0-9_-]{43}$/);
     }
     expect(first.summary).toEqual({
-      create: 6,
+      create: 15,
       delete: 0,
       destructive: false,
       noop: 0,
@@ -545,6 +615,11 @@ describe('deployment plans', () => {
 
   it('never permits a mutation action against an external resource', () => {
     const plan = makePlan();
+    const actions = /** @type {Array<Record<string, any>>} */ (
+      clone(plan.actions)
+    );
+    for (const action of actions) delete action.actionId;
+    actions[0].management = 'external';
     const input = {
       operation: plan.operation,
       deploymentRevision: plan.deploymentRevision,
@@ -553,21 +628,27 @@ describe('deployment plans', () => {
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
       basis: plan.basis,
-      actions: [
-        {
-          ...clone(plan.actions[0]),
-          management: 'external',
-        },
-      ],
+      actions,
     };
-    delete input.actions[0].actionId;
     expect(() =>
       createDeploymentPlan(input, { profile: makeProfile() }),
     ).toThrow(/cannot mutate an external resource/i);
   });
 
   it('limits each operation to its safe initial action set', () => {
-    const plan = makePlan();
+    const plan = makePlan('destroy');
+    const destroyActions = /** @type {Array<Record<string, any>>} */ (
+      clone(plan.actions)
+    );
+    for (const action of destroyActions) delete action.actionId;
+    destroyActions[0] = {
+      ...destroyActions[0],
+      action: 'create',
+      destructive: false,
+      reason: 'missing',
+      before: null,
+      after: destroyActions[0].before,
+    };
     const destroyCreate = {
       operation: 'destroy',
       deploymentRevision: plan.deploymentRevision,
@@ -576,20 +657,27 @@ describe('deployment plans', () => {
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
       basis: plan.basis,
-      actions: [clone(plan.actions[0])],
+      actions: destroyActions,
     };
-    delete destroyCreate.actions[0].actionId;
     expect(() =>
       createDeploymentPlan(destroyCreate, { profile: makeProfile() }),
     ).toThrow(/not allowed during destroy/i);
 
+    const applyPlan = makePlan();
+    const duplicateActions = /** @type {Array<Record<string, any>>} */ (
+      clone(applyPlan.actions)
+    );
+    for (const action of duplicateActions) delete action.actionId;
+    duplicateActions[1] = clone(duplicateActions[0]);
     const duplicate = {
-      ...destroyCreate,
       operation: 'apply',
-      actions: [
-        clone(destroyCreate.actions[0]),
-        clone(destroyCreate.actions[0]),
-      ],
+      deploymentRevision: applyPlan.deploymentRevision,
+      providerScope: applyPlan.providerScope,
+      providerSpec: applyPlan.providerSpec,
+      deploymentInstanceId: applyPlan.deploymentInstanceId,
+      incarnationId: applyPlan.incarnationId,
+      basis: applyPlan.basis,
+      actions: duplicateActions,
     };
     expect(() =>
       createDeploymentPlan(duplicate, { profile: makeProfile() }),
@@ -693,18 +781,18 @@ describe('deployment plans', () => {
     ).toThrow(/providerSpec.*exact provider scope/i);
   });
 
-  it('does not permit duplicate capabilities or arbitrary provider types', () => {
+  it('rejects missing, duplicate, or swapped graph roles and arbitrary provider types', () => {
     const plan = makePlan();
-    const duplicateCapability = /** @type {Record<string, any>[]} */ (
-      clone(plan.actions)
-    ).map((action) => {
-      delete action.actionId;
-      return action;
-    });
-    duplicateCapability[1].capability = {
-      ...duplicateCapability[0].capability,
-    };
-    duplicateCapability[1].after.providerType = 'ec2-instance';
+    const withoutActionIds = () =>
+      /** @type {Record<string, any>[]} */ (clone(plan.actions)).map(
+        (action) => {
+          delete action.actionId;
+          return action;
+        },
+      );
+
+    const missingRole = withoutActionIds();
+    delete missingRole[1].role;
     expect(() =>
       createDeploymentPlan(
         {
@@ -715,11 +803,50 @@ describe('deployment plans', () => {
           deploymentInstanceId: plan.deploymentInstanceId,
           incarnationId: plan.incarnationId,
           basis: plan.basis,
-          actions: duplicateCapability,
+          actions: missingRole,
         },
         { profile: makeProfile() },
       ),
-    ).toThrow(/each profile capability exactly once/i);
+    ).toThrow(/role is required/i);
+
+    const duplicateRole = withoutActionIds();
+    duplicateRole[2].capability = clone(duplicateRole[1].capability);
+    expect(() =>
+      createDeploymentPlan(
+        {
+          operation: plan.operation,
+          deploymentRevision: plan.deploymentRevision,
+          providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
+          deploymentInstanceId: plan.deploymentInstanceId,
+          incarnationId: plan.incarnationId,
+          basis: plan.basis,
+          actions: duplicateRole,
+        },
+        { profile: makeProfile() },
+      ),
+    ).toThrow(/exact AWS single-node resource graph role/i);
+
+    const swappedVolumes = withoutActionIds();
+    [swappedVolumes[1].capability, swappedVolumes[2].capability] = [
+      swappedVolumes[2].capability,
+      swappedVolumes[1].capability,
+    ];
+    expect(() =>
+      createDeploymentPlan(
+        {
+          operation: plan.operation,
+          deploymentRevision: plan.deploymentRevision,
+          providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
+          deploymentInstanceId: plan.deploymentInstanceId,
+          incarnationId: plan.incarnationId,
+          basis: plan.basis,
+          actions: swappedVolumes,
+        },
+        { profile: makeProfile() },
+      ),
+    ).toThrow(/exact AWS single-node resource graph role/i);
 
     const wrongProviderType = /** @type {Record<string, any>[]} */ (
       clone(plan.actions)
@@ -742,34 +869,33 @@ describe('deployment plans', () => {
         },
         { profile: makeProfile() },
       ),
-    ).toThrow(/provider type does not implement capability/i);
+    ).toThrow(/provider type does not match resource graph role/i);
   });
 
   it('requires exact delete identity and rejects credential-bearing plan state', () => {
-    const plan = makePlan();
-    const deletion = clone(plan.actions[0]);
-    delete deletion.actionId;
-    deletion.action = 'delete';
-    deletion.destructive = true;
-    deletion.reason = 'destroy-requested';
-    deletion.before = deletion.after;
-    deletion.after = null;
+    const destroyPlan = makePlan('destroy');
+    const deletion = /** @type {Array<Record<string, any>>} */ (
+      clone(destroyPlan.actions)
+    );
+    for (const action of deletion) delete action.actionId;
+    deletion[0].before.providerResourceId = null;
     expect(() =>
       createDeploymentPlan(
         {
           operation: 'destroy',
-          deploymentRevision: plan.deploymentRevision,
-          providerScope: plan.providerScope,
-          providerSpec: plan.providerSpec,
-          deploymentInstanceId: plan.deploymentInstanceId,
-          incarnationId: plan.incarnationId,
-          basis: plan.basis,
-          actions: [deletion],
+          deploymentRevision: destroyPlan.deploymentRevision,
+          providerScope: destroyPlan.providerScope,
+          providerSpec: destroyPlan.providerSpec,
+          deploymentInstanceId: destroyPlan.deploymentInstanceId,
+          incarnationId: destroyPlan.incarnationId,
+          basis: destroyPlan.basis,
+          actions: deletion,
         },
         { profile: makeProfile() },
       ),
     ).toThrow(/identify the exact existing provider resource/i);
 
+    const plan = makePlan();
     const secret = 'plan-password-sentinel';
     const credentialState = /** @type {Record<string, any>[]} */ (
       clone(plan.actions)
@@ -803,53 +929,63 @@ describe('deployment plans', () => {
 });
 
 describe('deployment inspections', () => {
-  it('creates deterministic exact evidence and sorts resources', () => {
-    const resources = makeConvergedResources().reverse();
+  it('creates deterministic exact evidence in canonical graph order', () => {
+    const resources = makeConvergedResources();
     const first = makeInspection('converged', resources);
     const second = makeInspection('converged', resources);
+    const authority = makeInspectionAuthority();
 
     expect(second).toEqual(first);
-    expect(first.inspectionId).toMatch(/^win3_[A-Za-z0-9_-]{43}$/);
+    expect(first.inspectionId).toMatch(/^win4_[A-Za-z0-9_-]{43}$/);
+    expect(authority.head.headId).toMatch(/^wdh2_[A-Za-z0-9_-]{43}$/);
+    expect(authority.head.lastOperation.operationId).toMatch(
+      /^wdo2_[A-Za-z0-9_-]{43}$/,
+    );
     expect(
       first.resources.map(
         (/** @type {Record<string, any>} */ resource) => resource.resourceKey,
       ),
-    ).toEqual([
-      'application-state',
-      'artifact',
-      'control-state',
-      'network',
-      'runtime-identity',
-      'substrate',
-    ]);
+    ).toEqual(getAwsSingleNodeResourceApplyOrder());
+    for (const resource of first.resources) {
+      expect(resource).toMatchObject({
+        presenceEvidence: 'exact-read',
+        bindingId: expect.stringMatching(/^wrb2_[A-Za-z0-9_-]{43}$/),
+        dependencyBindings: expect.any(Array),
+      });
+    }
+    expect(() => makeInspection('converged', [...resources].reverse())).toThrow(
+      /topological apply order/i,
+    );
     expect(validateDeploymentInspection(clone(first))).toEqual(first);
-    const profile = makeProfile();
-    const providerSpec = makeProviderSpec(profile, first.providerScope);
     expect(
       validateDeploymentInspectionContext(clone(first), {
-        profile,
-        providerSpec,
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: authority.head,
         now: HEALTH_NOW,
       }),
     ).toEqual(first);
     expect(() =>
       validateDeploymentInspectionContext(clone(first), {
-        profile,
-        providerSpec,
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: authority.head,
         now: HEALTH_NOW + 65_001,
       }),
     ).toThrow(/stale/i);
     expect(() =>
       validateDeploymentInspectionContext(clone(first), {
-        profile,
-        providerSpec,
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: authority.head,
         now: HEALTH_NOW - 5_001,
       }),
     ).toThrow(/conflict/i);
     expect(() =>
       validateDeploymentInspectionContext(clone(first), {
-        profile,
-        providerSpec,
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: authority.head,
       }),
     ).toThrow(/freshness context\.now/i);
     expect(Object.isFrozen(first)).toBe(true);
@@ -913,37 +1049,40 @@ describe('deployment inspections', () => {
     ).toThrow(/not supported|authoritative head absence/i);
   });
 
-  it('requires exact capability coverage before claiming convergence', () => {
+  it('requires exact graph-role coverage before claiming convergence', () => {
     const resources = makeConvergedResources();
     resources.pop();
     expect(() => makeInspection('converged', resources)).toThrow(
-      /does not report required capability/i,
+      /complete AWS single-node resource graph/i,
     );
 
     const mismatched = makeConvergedResources();
-    mismatched[0].observedDigest = digest('drifted node');
+    requireResource(mismatched, 'substrate').observedDigest =
+      digest('drifted node');
     expect(() => makeInspection('converged', mismatched)).toThrow(
       /converged status requires exact/i,
     );
 
     const noServiceProof = makeConvergedResources();
-    noServiceProof[0].health = 'not-applicable';
-    noServiceProof[0].service = null;
+    requireResource(noServiceProof, 'substrate').health = 'not-applicable';
+    requireResource(noServiceProof, 'substrate').service = null;
     expect(() => makeInspection('converged', noServiceProof)).toThrow(
       /converged status requires exact/i,
     );
 
     const missingProviderReceipt = makeConvergedResources();
-    missingProviderReceipt[0].service.healthReceipt = null;
+    requireResource(missingProviderReceipt, 'substrate').service.healthReceipt =
+      null;
     expect(() => makeInspection('converged', missingProviderReceipt)).toThrow(
       /healthReceipt is required/i,
     );
 
     const wrongRelease = makeConvergedResources();
-    wrongRelease[0].service.artifactId = createSha256Id({
-      prefix: 'waf1',
-      payload: 'different artifact',
-    });
+    requireResource(wrongRelease, 'substrate').service.artifactId =
+      createSha256Id({
+        prefix: 'waf1',
+        payload: 'different artifact',
+      });
     expect(() => makeInspection('converged', wrongRelease)).toThrow(
       /exact reported health and release|exact deployment artifact and revision/i,
     );
@@ -951,23 +1090,25 @@ describe('deployment inspections', () => {
 
   it('accepts provider health only for the exact S3 location and healthy service state', () => {
     const wrongBucket = makeConvergedResources();
-    wrongBucket[0].service.healthReceipt = clone(
-      wrongBucket[0].service.healthReceipt,
+    const wrongBucketNode = requireResource(wrongBucket, 'substrate');
+    wrongBucketNode.service.healthReceipt = clone(
+      wrongBucketNode.service.healthReceipt,
     );
-    wrongBucket[0].service.healthReceipt.object.bucketName =
+    wrongBucketNode.service.healthReceipt.object.bucketName =
       'wharfie-dc-v1-210987654321-aaaaaaaaaaaaaaaaaaaa';
     expect(() => makeInspection('converged', wrongBucket)).toThrow(
       /exact inspection authority/i,
     );
 
     const startingWithProof = makeConvergedResources();
-    startingWithProof[0].health = 'starting';
-    startingWithProof[0].service.health = 'starting';
+    const startingNode = requireResource(startingWithProof, 'substrate');
+    startingNode.health = 'starting';
+    startingNode.service.health = 'starting';
     expect(() => makeInspection('in-flight', startingWithProof)).toThrow(
       /can prove only provider-visible healthy status/i,
     );
 
-    startingWithProof[0].service.healthReceipt = null;
+    startingNode.service.healthReceipt = null;
     expect(makeInspection('in-flight', startingWithProof).status).toBe(
       'in-flight',
     );
@@ -978,7 +1119,10 @@ describe('deployment inspections', () => {
     resources[0] = {
       ...resources[0],
       presence: 'unknown',
+      presenceEvidence: 'access-failure',
       ownership: 'unknown',
+      bindingId: null,
+      dependencyBindings: null,
       providerIdentity: null,
       observedDigest: null,
       health: 'unknown',
@@ -1005,15 +1149,14 @@ describe('deployment inspections', () => {
 
   it('keeps retained state while proving the remaining deployment is destroyed', () => {
     const resources = makeConvergedResources().map((resource) => {
-      if (
-        resource.capability.kind === 'application-state' ||
-        resource.capability.kind === 'control-state'
-      ) {
-        return resource;
-      }
+      if (resource.onDestroy === 'retain') return resource;
       return {
         ...resource,
         presence: 'absent',
+        presenceEvidence: 'authoritative-not-found',
+        bindingId: null,
+        dependencyBindings: null,
+        ownership: 'missing',
         providerIdentity: null,
         observedDigest: null,
         health: 'absent',
@@ -1032,11 +1175,15 @@ describe('deployment inspections', () => {
 
     const missingRetainedState = clone(resources);
     const retainedIndex = missingRetainedState.findIndex(
-      ({ capability }) => capability.kind === 'application-state',
+      ({ resourceKey }) => resourceKey === 'application-state',
     );
     missingRetainedState[retainedIndex] = {
       ...missingRetainedState[retainedIndex],
       presence: 'absent',
+      presenceEvidence: 'authoritative-not-found',
+      bindingId: null,
+      dependencyBindings: null,
+      ownership: 'missing',
       providerIdentity: null,
       observedDigest: null,
       health: 'absent',
@@ -1048,14 +1195,69 @@ describe('deployment inspections', () => {
 
     const unownedRetainedState = clone(resources);
     const unownedIndex = unownedRetainedState.findIndex(
-      ({ capability }) => capability.kind === 'application-state',
+      ({ resourceKey }) => resourceKey === 'application-state',
     );
     unownedRetainedState[unownedIndex] = {
       ...unownedRetainedState[unownedIndex],
       ownership: 'missing',
+      bindingId: null,
+      dependencyBindings: null,
     };
     expect(() => makeInspection('destroyed', unownedRetainedState)).toThrow(
       /retained capability.*exact ownership evidence/i,
+    );
+  });
+
+  it('rejects duplicate, missing, and swapped volume role projections', () => {
+    const missing = makeConvergedResources();
+    delete requireResource(missing, 'application-state').role;
+    expect(() => makeInspection('converged', missing)).toThrow(
+      /role is required/i,
+    );
+
+    const duplicate = makeConvergedResources();
+    requireResource(duplicate, 'control-state').capability = clone(
+      requireResource(duplicate, 'application-state').capability,
+    );
+    expect(() => makeInspection('converged', duplicate)).toThrow(
+      /exact AWS single-node resource graph role/i,
+    );
+
+    const swapped = makeConvergedResources();
+    const applicationVolume = requireResource(swapped, 'application-state');
+    const controlVolume = requireResource(swapped, 'control-state');
+    [applicationVolume.capability, controlVolume.capability] = [
+      controlVolume.capability,
+      applicationVolume.capability,
+    ];
+    expect(() => makeInspection('converged', swapped)).toThrow(
+      /exact AWS single-node resource graph role/i,
+    );
+  });
+
+  it('rejects wrong head binding lineage, attachment retention, and service on a non-substrate role', () => {
+    const wrongLineage = makeConvergedResources();
+    requireResource(wrongLineage, 'application-state').bindingId =
+      requireResource(wrongLineage, 'control-state').bindingId;
+    expect(() => makeInspection('converged', wrongLineage)).toThrow(
+      /binding evidence does not match the exact head/i,
+    );
+
+    const retainedAttachment = makeConvergedResources();
+    requireResource(
+      retainedAttachment,
+      'application-state-attachment',
+    ).onDestroy = 'retain';
+    expect(() => makeInspection('converged', retainedAttachment)).toThrow(
+      /exact AWS single-node resource graph role/i,
+    );
+
+    const misplacedService = makeConvergedResources();
+    requireResource(misplacedService, 'network-vpc').service = clone(
+      requireResource(misplacedService, 'substrate').service,
+    );
+    expect(() => makeInspection('converged', misplacedService)).toThrow(
+      /service is supported only for the substrate node/i,
     );
   });
 
@@ -1071,27 +1273,50 @@ describe('deployment inspections', () => {
 
 describe('deployment resource bindings', () => {
   it('records immutable provider identity and independently random ownership evidence', () => {
-    const plan = makePlan();
-    const binding = createDeploymentResourceBinding({
-      schemaVersion: 1,
-      kind: 'deploymentResourceBinding',
-      deploymentInstanceId: plan.deploymentInstanceId,
-      incarnationId: plan.incarnationId,
-      resourceKey: 'substrate',
-      capability: { kind: 'resident-node', version: 1 },
-      management: 'managed',
-      providerType: 'ec2-instance',
-      providerResourceId:
-        'arn:aws:cloudformation:us-east-1:123456789012:stack/wharfie-demo/stack-id',
-      providerScopeId: plan.providerScope.providerScopeId,
-      ownershipNonce: createOwnershipNonce(Buffer.alloc(32, 2)),
-      createdByActionId: plan.actions[0].actionId,
-    });
-
-    expect(binding.bindingId).toMatch(/^wrb1_[A-Za-z0-9_-]{43}$/);
-    expect(binding.ownershipNonce).toBe(
-      Buffer.alloc(32, 2).toString('base64url'),
+    const authority = makeReadyAuthority();
+    const binding = authority.bindingByResourceKey.get('substrate');
+    const attachment = authority.bindingByResourceKey.get(
+      'application-state-attachment',
     );
+    if (binding === undefined || attachment === undefined) {
+      throw new Error('Fixture requires node and attachment bindings.');
+    }
+
+    expect(binding).toMatchObject({
+      schemaVersion: 2,
+      bindingId: expect.stringMatching(/^wrb2_[A-Za-z0-9_-]{43}$/),
+      role: { kind: 'node', version: 1 },
+      ownershipMode: 'direct',
+      onDestroy: 'purge',
+    });
+    expect(binding.ownershipNonce).toBe(
+      Buffer.alloc(32, 14).toString('base64url'),
+    );
+    expect(
+      binding.dependencyBindings.map(
+        (/** @type {Readonly<Record<string, any>>} */ dependency) =>
+          dependency.resourceKey,
+      ),
+    ).toEqual(
+      [
+        ...requireResource(makeConvergedResources(), 'substrate').dependsOn,
+      ].sort(),
+    );
+    expect(attachment).toMatchObject({
+      role: { kind: 'attachment', version: 1 },
+      ownershipMode: 'derived',
+      onDestroy: 'purge',
+      dependencyBindings: [
+        {
+          resourceKey: 'application-state',
+          bindingId: expect.stringMatching(/^wrb2_/),
+        },
+        {
+          resourceKey: 'substrate',
+          bindingId: expect.stringMatching(/^wrb2_/),
+        },
+      ],
+    });
     expect(validateDeploymentResourceBinding(clone(binding))).toEqual(binding);
     expect(Object.isFrozen(binding)).toBe(true);
   });
@@ -1099,14 +1324,18 @@ describe('deployment resource bindings', () => {
   it('supports read-only external references without manufacturing ownership', () => {
     const plan = makePlan();
     const binding = createDeploymentResourceBinding({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'deploymentResourceBinding',
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
-      resourceKey: 'network',
+      resourceKey: 'network-vpc',
       capability: { kind: 'networking', version: 1 },
+      role: { kind: 'vpc', version: 1 },
       management: 'external',
-      providerType: 'vpc',
+      ownershipMode: 'external',
+      onDestroy: 'purge',
+      dependencyBindings: [],
+      providerType: 'ec2-vpc',
       providerResourceId: 'vpc-0123456789abcdef0',
       providerScopeId: plan.providerScope.providerScopeId,
     });
@@ -1122,25 +1351,40 @@ describe('deployment resource bindings', () => {
     );
 
     const plan = makePlan();
+    const networkAction = plan.actions.find(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === 'network-vpc',
+    );
+    if (networkAction === undefined) {
+      throw new Error('Fixture requires network VPC action.');
+    }
     const externalClaim = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'deploymentResourceBinding',
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
-      resourceKey: 'network',
+      resourceKey: 'network-vpc',
       capability: { kind: 'networking', version: 1 },
+      role: { kind: 'vpc', version: 1 },
       management: 'external',
-      providerType: 'vpc',
+      ownershipMode: 'external',
+      onDestroy: 'purge',
+      dependencyBindings: [],
+      providerType: 'ec2-vpc',
       providerResourceId: 'vpc-0123456789abcdef0',
       providerScopeId: plan.providerScope.providerScopeId,
       ownershipNonce: createOwnershipNonce(Buffer.alloc(32, 3)),
-      createdByActionId: plan.actions[0].actionId,
+      createdByActionId: networkAction.actionId,
     };
     expect(() => createDeploymentResourceBinding(externalClaim)).toThrow(
       /ownershipNonce is not supported for external/i,
     );
 
-    const managed = { ...externalClaim, management: 'managed' };
+    const managed = {
+      ...externalClaim,
+      management: 'managed',
+      ownershipMode: 'direct',
+    };
     const binding = /** @type {Record<string, any>} */ (
       clone(createDeploymentResourceBinding(managed))
     );
@@ -1154,14 +1398,18 @@ describe('deployment resource bindings', () => {
     const plan = makePlan();
     const secret = 'resource-id-password-sentinel';
     const value = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'deploymentResourceBinding',
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
       resourceKey: 'artifact',
       capability: { kind: 'artifact-storage', version: 1 },
+      role: { kind: 'object', version: 1 },
       management: 'external',
-      providerType: 'object',
+      ownershipMode: 'external',
+      onDestroy: 'purge',
+      dependencyBindings: [],
+      providerType: 's3-object',
       providerResourceId: `https://user:${secret}@example.invalid/artifact`,
       providerScopeId: plan.providerScope.providerScopeId,
     };

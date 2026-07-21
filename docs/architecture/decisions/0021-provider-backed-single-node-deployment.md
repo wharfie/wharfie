@@ -107,19 +107,20 @@ invocation.
 
 Mutable regional prerequisites are resolved only while previewing a new
 incarnation and reduced to one secret-free, content-addressed
-`AwsSingleNodeProviderSpecV2` in the fresh `wap2` identity namespace. It pins
+`AwsSingleNodeProviderSpecV3` in the fresh `wap3` identity namespace. It pins
 the exact SSM public-parameter name and version, AMI ID/owner/architecture,
 one standard Availability Zone ID that offers the fixed instance type, the
 account's exact regional default EBS KMS key ARN, bootstrap and runtime-policy
 digests, instance and metadata shape, retained-volume and attachment behavior,
-fixed network, and service-health timing, publication, and retention. Each
+fixed network, service-health timing, publication, and retention, plus the
+content ID of the exact finite physical-resource graph. Each
 application and control volume is explicitly `gp3`, 8 GiB, 3,000 IOPS, 125
 MiB/s, encrypted, single-attach, retained on destroy, and attached with
 `DeleteOnTermination=false`; their fixed guest device requests are `/dev/sdf`
 and `/dev/sdg`, respectively.
-`DeploymentPlanV2` embeds the complete
+`DeploymentPlanV3` embeds the complete
 specification; every action ID binds its `providerSpecId`, and
-`DeploymentInspectionV3` binds the same ID and carries the complete
+`DeploymentInspectionV4` binds the same ID and carries the complete
 provider-visible service-health observation when one exists.
 
 Converge and recovery validate the submitted or stored specification and never
@@ -259,12 +260,36 @@ that
 [delete-on-termination controls whether an attached EBS volume survives
 instance termination](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preserving-volumes-on-termination.html).
 
-The current action frontier assumes one provider effect per logical action.
-Attachment must remain distinct from creation, while the fixed network
-capability requires several independently observable effects. Before the
-complete driver can represent either honestly, planning must expand one
-capability into multiple durable actions or define a bounded partial-execution
-protocol with an independently recoverable frontier for every physical effect.
+The portable capability model expands through one immutable, content-addressed
+`AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
+roles are the artifact object; two retained volumes; VPC; internet gateway and
+attachment; subnet; route table, default IPv4 route, and subnet association;
+security group; runtime instance profile; resident node; and two volume
+attachments. `AwsSingleNodeProviderSpecV3` pins the graph's `wrg1` identity, so
+changing topology or lifecycle cannot reinterpret an existing specification.
+
+`DeploymentPlanV3` contains exactly one independently recoverable action for
+each graph role. Apply and reconcile use the graph's one canonical topological
+order; destroy uses its exact reverse. Reconcile may create an authoritatively
+missing role with no durable binding in an existing deployment. Each action
+repeats the exact role, provider type, ownership mode, dependencies, and
+role-level destroy policy. The volumes are retained while their attachment
+relationships are purged.
+
+`DeploymentResourceBindingV2` records the same role metadata plus exact
+dependency binding IDs. Direct resources prove provider-visible ownership;
+untaggable relationships use derived ownership rooted transitively in directly
+owned resources. `DeploymentHeadV2` accepts no dangling, stale, self-referential,
+or cyclic lineage, and a retained binding may not depend on a role that destroy
+purges. `DeploymentInspectionV4` distinguishes exact reads, authoritative
+not-found results, and access failures, and names the exact binding and
+dependency lineage behind present ownership evidence. Present evidence must
+reproduce the referenced binding's provider identity, graph role, ownership,
+lifecycle, and dependency binding IDs; an extra or graph-inconsistent head
+binding is refused. A newly created binding may be supplied only as
+context-only pending settlement authority for the head's exact current
+intended action; it is not serialized into the inspection or accepted as
+durable before compare-and-set settlement.
 
 Each create-to-destroy lifetime has a fresh unpredictable incarnation ID.
 Managed resource bindings contain an immutable provider ID, provider scope,
@@ -345,10 +370,17 @@ attempt, the controller re-resolves scope and re-inspects current absence or
 the exact bound provider identity, ownership, and state. After the effect, it
 re-inspects again and requires exact desired/observed state before one CAS may
 store the binding or verified absence, mark the intent `settled`, and advance
-the cursor. Provider execution receives the same action ID and nonce on every
-retry. Every non-create action identifies one exact existing provider resource,
-and update, verify, and no-op actions preserve that identity; node replacement
-is not smuggled through settlement.
+the cursor. Before a dependent create executes or settles, every dependency
+must still be freshly present under its exact durable binding and provider
+identity, must bind back to an earlier settled intent, and must still match
+that dependency action's planned state digest. During destroy, every later
+frontier re-proves that all earlier purges remain authoritatively absent and
+unbound. Finalization branches on each action's exact target: deleted roles
+must be absent, while present roles—including retained volumes—must reproduce
+the planned desired and observed digest. Provider execution receives the same
+action ID and nonce on every retry. Every non-create action identifies one
+exact existing provider resource, and update, verify, and no-op actions
+preserve that identity; node replacement is not smuggled through settlement.
 
 An error, timeout, permission failure, unreachable node, incomplete listing,
 or lost response is never converted into absence. The intended action remains
@@ -376,15 +408,17 @@ and `conflict` are first-class results even when no head or incarnation can be
 read. `absent` requires an authoritative provider-locator not-found result;
 an empty caller-supplied array is not absence.
 
-One host-owned `DeploymentServiceHealthReceiptV1` may be published to the
+One host-owned `DeploymentServiceHealthReceiptV2` may be published to the
 deterministic current object
-`health/v1/<deployment-instance>/<incarnation>/<node-binding>`. It binds the
+`health/v2/<deployment-instance>/<incarnation>/<node-binding>`. It binds the
 provider scope and specification, deployment instance and incarnation, one
 stable non-destroy operation plus the head ID/generation that authorized it,
 the exact resident-node binding and provider resource ID, deployment and
 application revisions, artifact, service and process session, lifecycle and
 owner generations, activation record and selection generations, process ID,
-and a positive sequence. It can assert only `healthy`. The authorizing head is
+and a positive sequence. Its substrate binding must resolve all six exact
+artifact, network, and runtime-identity dependency bindings in the current
+head. It can assert only `healthy`. The authorizing head is
 not required to remain the exact latest mutable head: a later head may retain
 the same target or settled deployment lineage and operation authority.
 
@@ -413,18 +447,18 @@ Freshness comes from S3's `LastModified`, never a host-authored timestamp. The
 pinned provider contract publishes every 15 seconds and admits a receipt only
 through 60 seconds of age plus 5 seconds of clock-skew allowance; a provider
 timestamp more than 5 seconds in the coordinator's future is conflict. The
-inspection `win3` namespace carries the complete receipt and current object
+inspection `win4` namespace carries the complete receipt and current object
 VersionId/ETag/`LastModified` observation. Only an exact, fresh, context-bound
 observation can make the resident service healthy, and only that healthy
 resident observation can make the whole inspection `converged` or authorize
 final readiness.
 
-`converged` requires complete provider-defined capability coverage, verified
-ownership, exact desired/observed state, and a resident service status proving
-the target artifact and revision healthy. `reconcile` repairs only
-non-destructive drift in this version. Missing retained state, unverifiable
-ownership, or infrastructure drift that would require node replacement is
-blocked rather than recreated automatically.
+`converged` requires complete provider-defined resource-graph coverage,
+verified ownership, exact desired/observed state, and a resident service status
+proving the target artifact and revision healthy. `reconcile` may create an
+authoritatively absent role only when no durable binding exists; missing
+retained state that still has a binding, unverifiable ownership, or
+infrastructure drift that would require node replacement remains blocked.
 
 Destroy regenerates its plan from the current head and fresh inspection,
 deletes only exact managed bindings whose ownership is re-proven, never mutates
@@ -592,6 +626,18 @@ later attachment evidence but cannot create it, and no complete provider
 router, inspection, `createPlan`, controller composition, command surface, or
 live AWS path exists yet.
 
+The ninth slice introduces the fixed 15-role resource graph and advances the
+strict namespaces to provider-spec V3/`wap3`, plan/action V3, inspection V4,
+binding V2, and head/operation V2. The existing linear action cursor now
+intends, verifies, and settles every physical resource or relationship
+independently. Exact dependency-binding lineage protects derived ownership,
+apply/reconcile and destroy use canonical opposite orders, and role-level
+lifecycle retains volumes while purging attachments. The retained-volume
+resource adopts the new action and tag envelope. Deterministic contract and
+controller tests prove this expansion; none of the newly named network,
+identity, node, or attachment roles has a production AWS resource
+implementation yet.
+
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or
 version deletion; otherwise a delete marker could hide the semantic
@@ -599,8 +645,8 @@ predecessor. Noncurrent lifecycle retention also deliberately leaves one
 current version at every retired incarnation/node key until a future explicit
 retained-state collector proves it may remove that history.
 
-The remaining independently recoverable resource driver, action expansion,
-source and packaged deployment commands, production composition, and
-clean-account lifecycle proof remain unfinished. A document, bucket/table tag,
+The remaining independently recoverable resource drivers, source and packaged
+deployment commands, production composition, and clean-account lifecycle proof
+remain unfinished. A document, bucket/table tag,
 SSM result, EC2 description, or content ID still never proves that an
 application resource effect occurred.

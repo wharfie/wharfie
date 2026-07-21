@@ -14,6 +14,7 @@ import {
   validateProviderScope,
 } from './deployment-provider-scope.js';
 import {
+  DEPLOYMENT_RESOURCE_BINDING_LIMIT,
   assertDeploymentActionId,
   assertDeploymentIncarnationId,
   validateDeploymentResourceBinding,
@@ -22,12 +23,12 @@ import {
 import { DEPLOYMENT_REVISION_ID_PREFIX } from './deployment-revision.js';
 import { cloneJsonObject } from './json-value.js';
 
-export const DEPLOYMENT_HEAD_SCHEMA_VERSION = 1;
+export const DEPLOYMENT_HEAD_SCHEMA_VERSION = 2;
 export const DEPLOYMENT_HEAD_KIND = 'deploymentHead';
-export const DEPLOYMENT_HEAD_ID_DOMAIN = 'wharfie:deployment-head:v1';
-export const DEPLOYMENT_HEAD_ID_PREFIX = 'wdh1';
-export const DEPLOYMENT_OPERATION_ID_DOMAIN = 'wharfie:deployment-operation:v1';
-export const DEPLOYMENT_OPERATION_ID_PREFIX = 'wdo1';
+export const DEPLOYMENT_HEAD_ID_DOMAIN = 'wharfie:deployment-head:v2';
+export const DEPLOYMENT_HEAD_ID_PREFIX = 'wdh2';
+export const DEPLOYMENT_OPERATION_ID_DOMAIN = 'wharfie:deployment-operation:v2';
+export const DEPLOYMENT_OPERATION_ID_PREFIX = 'wdo2';
 export const DEPLOYMENT_HEAD_PHASES = Object.freeze([
   'CONVERGING',
   'READY',
@@ -148,7 +149,7 @@ function validateIntent(value, path) {
  * blocking state are deliberately excluded; the exact ordered action set and
  * preallocated ownership nonces remain part of the identity.
  * @param {{deploymentInstanceId: unknown, incarnationId: unknown, kind: unknown, planId: unknown, intents: unknown}} value - Immutable operation identity fields.
- * @returns {string} - `wdo1_` operation identity.
+ * @returns {string} - `wdo2_` operation identity.
  */
 export function getDeploymentOperationId(value) {
   assertDeploymentInstanceId(
@@ -170,9 +171,13 @@ export function getDeploymentOperationId(value) {
     throw new TypeError('deploymentOperation.kind is not supported.');
   }
   assertDeploymentPlanId(value?.planId, 'deploymentOperation.planId');
-  if (!Array.isArray(value?.intents) || value.intents.length === 0) {
+  if (
+    !Array.isArray(value?.intents) ||
+    value.intents.length === 0 ||
+    value.intents.length > DEPLOYMENT_RESOURCE_BINDING_LIMIT
+  ) {
     throw new TypeError(
-      'deploymentOperation.intents must be a nonempty array.',
+      `deploymentOperation.intents must contain between 1 and ${DEPLOYMENT_RESOURCE_BINDING_LIMIT} actions.`,
     );
   }
   const intents = value.intents.map((intent, index) =>
@@ -222,8 +227,10 @@ function validateOperation(value, context, path, requireOperationId) {
   if (!Array.isArray(operation.intents) || operation.intents.length === 0) {
     throw new TypeError(`${path}.intents must be a nonempty array.`);
   }
-  if (operation.intents.length > 16) {
-    throw new TypeError(`${path}.intents must contain at most 16 actions.`);
+  if (operation.intents.length > DEPLOYMENT_RESOURCE_BINDING_LIMIT) {
+    throw new TypeError(
+      `${path}.intents must contain at most ${DEPLOYMENT_RESOURCE_BINDING_LIMIT} actions.`,
+    );
   }
   const seenActions = new Set();
   const seenNonces = new Set();
@@ -331,10 +338,10 @@ function validateSettledOperation(value, context, path, requireOperationId) {
   if (
     !Array.isArray(operation.intents) ||
     operation.intents.length === 0 ||
-    operation.intents.length > 16
+    operation.intents.length > DEPLOYMENT_RESOURCE_BINDING_LIMIT
   ) {
     throw new TypeError(
-      `${path}.intents must contain between 1 and 16 actions.`,
+      `${path}.intents must contain between 1 and ${DEPLOYMENT_RESOURCE_BINDING_LIMIT} actions.`,
     );
   }
   const seenActions = new Set();
@@ -378,6 +385,134 @@ function validateSettledOperation(value, context, path, requireOperationId) {
 }
 
 /**
+ * Validate the content-addressed dependency DAG carried by current bindings.
+ * Every dependency must resolve inside the same head, and retained resources
+ * must remain meaningful after all purge resources have been removed.
+ * @param {Readonly<Record<string, any>>[]} bindings - Canonical head bindings.
+ * @param {string} path - Human-readable bindings path.
+ * @returns {void}
+ */
+function assertBindingGraph(bindings, path) {
+  const bindingByResourceKey = new Map(
+    bindings.map((binding) => [binding.resourceKey, binding]),
+  );
+  const seenRoles = new Set();
+  for (const binding of bindings) {
+    const roleKey = JSON.stringify([
+      binding.capability.kind,
+      binding.capability.version,
+      binding.role.kind,
+      binding.role.version,
+    ]);
+    if (seenRoles.has(roleKey)) {
+      throw new Error(`${path} must bind each capability role at most once.`);
+    }
+    seenRoles.add(roleKey);
+    for (const dependencyReference of binding.dependencyBindings) {
+      const dependency = bindingByResourceKey.get(
+        dependencyReference.resourceKey,
+      );
+      if (dependency === undefined) {
+        throw new Error(
+          `${path} binding '${binding.resourceKey}' has a dangling dependency '${dependencyReference.resourceKey}'.`,
+        );
+      }
+      if (dependency.bindingId !== dependencyReference.bindingId) {
+        throw new Error(
+          `${path} binding '${binding.resourceKey}' does not reference the exact dependency binding '${dependencyReference.resourceKey}'.`,
+        );
+      }
+    }
+  }
+
+  const visitState = new Map();
+  /** @param {string} resourceKey @returns {void} */
+  function visit(resourceKey) {
+    const state = visitState.get(resourceKey) || 'unvisited';
+    if (state === 'visiting') {
+      throw new Error(`${path} dependency bindings must be acyclic.`);
+    }
+    if (state === 'visited') return;
+    visitState.set(resourceKey, 'visiting');
+    const binding = bindingByResourceKey.get(resourceKey);
+    if (binding === undefined) {
+      throw new Error(`${path} contains an unresolved dependency binding.`);
+    }
+    for (const dependency of binding.dependencyBindings) {
+      visit(dependency.resourceKey);
+    }
+    visitState.set(resourceKey, 'visited');
+  }
+  for (const binding of bindings) visit(binding.resourceKey);
+
+  for (const binding of bindings) {
+    if (
+      binding.management !== 'managed' ||
+      binding.ownershipMode !== 'derived'
+    ) {
+      continue;
+    }
+    /** @type {string[]} */
+    const pending = binding.dependencyBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ dependency) =>
+        dependency.resourceKey,
+    );
+    const visited = new Set();
+    let hasManagedDirectAnchor = false;
+    while (pending.length > 0) {
+      const dependencyResourceKey = pending.pop();
+      if (visited.has(dependencyResourceKey)) continue;
+      visited.add(dependencyResourceKey);
+      const dependency = bindingByResourceKey.get(dependencyResourceKey);
+      if (dependency === undefined) {
+        throw new Error(`${path} contains an unresolved dependency binding.`);
+      }
+      if (
+        dependency.management === 'managed' &&
+        dependency.ownershipMode === 'direct'
+      ) {
+        hasManagedDirectAnchor = true;
+      }
+      for (const transitive of dependency.dependencyBindings) {
+        pending.push(transitive.resourceKey);
+      }
+    }
+    if (!hasManagedDirectAnchor) {
+      throw new Error(
+        `${path} derived binding '${binding.resourceKey}' must transitively reach a managed direct ownership anchor.`,
+      );
+    }
+  }
+
+  for (const binding of bindings) {
+    if (binding.onDestroy !== 'retain') continue;
+    /** @type {string[]} */
+    const pending = binding.dependencyBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ dependency) =>
+        dependency.resourceKey,
+    );
+    const visited = new Set();
+    while (pending.length > 0) {
+      const dependencyResourceKey = pending.pop();
+      if (visited.has(dependencyResourceKey)) continue;
+      visited.add(dependencyResourceKey);
+      const dependency = bindingByResourceKey.get(dependencyResourceKey);
+      if (dependency === undefined) {
+        throw new Error(`${path} contains an unresolved dependency binding.`);
+      }
+      if (dependency.onDestroy === 'purge') {
+        throw new Error(
+          `${path} retained binding '${binding.resourceKey}' cannot depend on purge binding '${dependency.resourceKey}'.`,
+        );
+      }
+      for (const transitive of dependency.dependencyBindings) {
+        pending.push(transitive.resourceKey);
+      }
+    }
+  }
+}
+
+/**
  * @param {Readonly<Record<string, any>>} payload - Canonical head payload.
  * @param {string} path - Human-readable value path.
  * @returns {void} - Returns after all phase invariants hold.
@@ -410,6 +545,16 @@ function assertPhaseInvariants(payload, path) {
     ) {
       throw new Error(
         `${path} DESTROYED requires a completed destroy operation and no settled or target revision.`,
+      );
+    }
+    if (
+      payload.resourceBindings.some(
+        (/** @type {Readonly<Record<string, any>>} */ binding) =>
+          binding.onDestroy !== 'retain',
+      )
+    ) {
+      throw new Error(
+        `${path} DESTROYED can retain only bindings with retain destroy policy.`,
       );
     }
     return;
@@ -467,7 +612,7 @@ function createPayload(value, path, options) {
   assertRequiredKeys(input, expectedKeys, path);
   if (options.serialized) {
     if (input.schemaVersion !== DEPLOYMENT_HEAD_SCHEMA_VERSION) {
-      throw new TypeError(`${path}.schemaVersion must be the integer 1.`);
+      throw new TypeError(`${path}.schemaVersion must be the integer 2.`);
     }
     if (input.kind !== DEPLOYMENT_HEAD_KIND) {
       throw new TypeError(`${path}.kind must be '${DEPLOYMENT_HEAD_KIND}'.`);
@@ -499,9 +644,9 @@ function createPayload(value, path, options) {
   if (!Array.isArray(input.resourceBindings)) {
     throw new TypeError(`${path}.resourceBindings must be an array.`);
   }
-  if (input.resourceBindings.length > 16) {
+  if (input.resourceBindings.length > DEPLOYMENT_RESOURCE_BINDING_LIMIT) {
     throw new TypeError(
-      `${path}.resourceBindings must contain at most 16 bindings.`,
+      `${path}.resourceBindings must contain at most ${DEPLOYMENT_RESOURCE_BINDING_LIMIT} bindings.`,
     );
   }
   /** @type {string[]} */
@@ -549,6 +694,7 @@ function createPayload(value, path, options) {
       );
     }
   }
+  assertBindingGraph(resourceBindings, `${path}.resourceBindings`);
   const activeOperation =
     input.activeOperation === null
       ? null
@@ -595,7 +741,7 @@ function createPayload(value, path, options) {
 /**
  * Create one immutable, content-addressed deployment-head generation.
  * @param {unknown} value - Exact head fields without schema/kind/head ID.
- * @returns {Readonly<Record<string, any>>} - Canonical DeploymentHeadV1.
+ * @returns {Readonly<Record<string, any>>} - Canonical DeploymentHeadV2.
  */
 export function createDeploymentHead(value) {
   const payload = deepFreeze(
@@ -613,10 +759,10 @@ export function createDeploymentHead(value) {
 }
 
 /**
- * Validate, cross-check, and freeze one serialized DeploymentHeadV1.
+ * Validate, cross-check, and freeze one serialized DeploymentHeadV2.
  * @param {unknown} value - Candidate serialized head.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {Readonly<Record<string, any>>} - Canonical DeploymentHeadV1.
+ * @returns {Readonly<Record<string, any>>} - Canonical DeploymentHeadV2.
  */
 export function validateDeploymentHead(value, valuePath = 'deploymentHead') {
   const document = cloneJsonObject(value, valuePath);

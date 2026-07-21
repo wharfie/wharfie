@@ -5,6 +5,7 @@ import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import { compareCanonicalStrings } from '../../src/core/runtime/canonical-order.js';
 import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
 import {
   createAwsSingleNodeProvider,
@@ -19,6 +20,7 @@ import {
   createDeploymentResourceBinding,
   createOwnershipNonce,
 } from '../../src/core/runtime/deployment-resource-binding.js';
+import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from '../../src/core/runtime/deployment-resource-graph.js';
 import {
   DEPLOYMENT_SERVICE_HEALTH_CACHE_CONTROL,
   DEPLOYMENT_SERVICE_HEALTH_CONTENT_TYPE,
@@ -55,6 +57,69 @@ function digest(value) {
 /** @param {string} prefix @param {string} domain @param {unknown} value @returns {string} */
 function semanticId(prefix, domain, value) {
   return createCanonicalJsonSha256Id({ prefix, domain, value });
+}
+
+/** @param {number} index @returns {string} */
+function bindingActionId(index) {
+  return semanticId('wda3', 'wharfie:test:health-s3-binding-action:v1', {
+    index,
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} fixture @returns {Readonly<Record<string, any>>[]} */
+function makeResourceBindings(fixture) {
+  /** @type {Readonly<Record<string, any>>[]} */
+  const bindings = [];
+  for (
+    let index = 0;
+    index < AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.length;
+    index += 1
+  ) {
+    const resource = AWS_SINGLE_NODE_RESOURCE_GRAPH.resources[index];
+    const dependencyBindings = resource.dependsOn
+      .map((/** @type {string} */ resourceKey) => {
+        const dependency = bindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === resourceKey,
+        );
+        if (dependency === undefined) {
+          throw new Error(
+            `Health S3 fixture lacks dependency binding '${resourceKey}'.`,
+          );
+        }
+        return { resourceKey, bindingId: dependency.bindingId };
+      })
+      .sort(
+        (
+          /** @type {{resourceKey: string}} */ left,
+          /** @type {{resourceKey: string}} */ right,
+        ) => compareCanonicalStrings(left.resourceKey, right.resourceKey),
+      );
+    bindings.push(
+      createDeploymentResourceBinding({
+        schemaVersion: 2,
+        kind: 'deploymentResourceBinding',
+        deploymentInstanceId: fixture.deploymentInstanceId,
+        incarnationId: fixture.incarnationId,
+        resourceKey: resource.resourceKey,
+        capability: resource.capability,
+        role: resource.role,
+        management: 'managed',
+        ownershipMode: resource.ownershipMode,
+        onDestroy: resource.onDestroy,
+        dependencyBindings,
+        providerType: resource.providerType,
+        providerResourceId:
+          resource.resourceKey === 'substrate'
+            ? 'i-0123456789abcdef0'
+            : `provider-resource-${resource.resourceKey}`,
+        providerScopeId: fixture.providerScope.providerScopeId,
+        ownershipNonce: createOwnershipNonce(Buffer.alloc(32, index + 1)),
+        createdByActionId: bindingActionId(index),
+      }),
+    );
+  }
+  return bindings;
 }
 
 /** @returns {Readonly<Record<string, any>>} */
@@ -127,23 +192,16 @@ function makeFixture() {
     providerScope,
   });
   const incarnationId = createDeploymentIncarnationId(Buffer.alloc(32, 17));
-  const actionId = semanticId('wda2', 'wharfie:test:health-s3-action:v1', {
-    seed: 1,
-  });
-  const node = createDeploymentResourceBinding({
-    schemaVersion: 1,
-    kind: 'deploymentResourceBinding',
+  const bindings = makeResourceBindings({
     deploymentInstanceId,
     incarnationId,
-    resourceKey: 'node',
-    capability: { kind: 'resident-node', version: 1 },
-    management: 'managed',
-    providerType: 'ec2-instance',
-    providerResourceId: 'i-0123456789abcdef0',
-    providerScopeId: providerScope.providerScopeId,
-    ownershipNonce: createOwnershipNonce(Buffer.alloc(32, 19)),
-    createdByActionId: actionId,
+    providerScope,
   });
+  const node = bindings.find(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.resourceKey === 'substrate',
+  );
+  if (node === undefined) throw new Error('Health S3 fixture lacks substrate.');
   const head = createDeploymentHead({
     deploymentInstanceId,
     providerScope,
@@ -152,20 +210,20 @@ function makeFixture() {
     phase: 'READY',
     settledDeploymentRevisionId: deploymentRevision.deploymentRevisionId,
     targetDeploymentRevisionId: deploymentRevision.deploymentRevisionId,
-    resourceBindings: [node],
+    resourceBindings: bindings,
     activeOperation: null,
     lastOperation: {
       kind: 'create',
-      planId: semanticId('wpl2', 'wharfie:test:health-s3-plan:v1', {
+      planId: semanticId('wpl3', 'wharfie:test:health-s3-plan:v1', {
         seed: 1,
       }),
-      intents: [
-        {
-          actionId,
+      intents: bindings.map(
+        (/** @type {Readonly<Record<string, any>>} */ binding) => ({
+          actionId: binding.createdByActionId,
           status: 'settled',
-          ownershipNonce: node.ownershipNonce,
-        },
-      ],
+          ownershipNonce: binding.ownershipNonce,
+        }),
+      ),
     },
   });
   const context = {
@@ -182,6 +240,7 @@ function makeFixture() {
     providerSpec,
     deploymentInstanceId,
     incarnationId,
+    bindings,
     node,
     head,
     context,
@@ -250,7 +309,7 @@ function makeStoredObject(receipt, version, lastModifiedAt) {
     ContentType: DEPLOYMENT_SERVICE_HEALTH_CONTENT_TYPE,
     CacheControl: DEPLOYMENT_SERVICE_HEALTH_CACHE_CONTROL,
     Metadata: {
-      'wharfie-schema': 'deployment-service-health-v1',
+      'wharfie-schema': 'deployment-service-health-v2',
       'wharfie-receipt': receipt.receiptId,
     },
   };
@@ -362,7 +421,7 @@ describe('deployment service-health S3 transport', () => {
       CacheControl: 'no-store',
       ExpectedBucketOwner: fixture.providerScope.accountId,
       Metadata: {
-        'wharfie-schema': 'deployment-service-health-v1',
+        'wharfie-schema': 'deployment-service-health-v2',
         'wharfie-receipt': receipt.receiptId,
       },
       IfNoneMatch: '*',
@@ -410,9 +469,16 @@ describe('deployment service-health S3 transport', () => {
     });
     const future = makeClient({ receipt, lastModifiedAt: NOW + 5_001 });
     const corrupted = makeClient({ receipt });
+    const legacy = makeClient({ receipt });
     const corruptedObject = corrupted.current;
     if (corruptedObject === null) throw new Error('Expected seeded object.');
     corruptedObject.Metadata = { ...corruptedObject.Metadata, extra: 'x' };
+    const legacyObject = legacy.current;
+    if (legacyObject === null) throw new Error('Expected seeded object.');
+    legacyObject.Metadata = {
+      ...legacyObject.Metadata,
+      'wharfie-schema': 'deployment-service-health-v1',
+    };
 
     /** @param {Record<string, any>} client */
     const options = (client) => ({
@@ -437,6 +503,11 @@ describe('deployment service-health S3 transport', () => {
     ).rejects.toBeInstanceOf(DeploymentServiceHealthConflictError);
     await expect(
       createDeploymentServiceHealthS3(options(corrupted.client)).inspect(
+        fixture.context,
+      ),
+    ).rejects.toBeInstanceOf(DeploymentServiceHealthConflictError);
+    await expect(
+      createDeploymentServiceHealthS3(options(legacy.client)).inspect(
         fixture.context,
       ),
     ).rejects.toBeInstanceOf(DeploymentServiceHealthConflictError);
@@ -590,7 +661,7 @@ describe('deployment service-health S3 transport', () => {
     const future = successor(candidate, {
       authorizedHeadGeneration: fixture.head.generation + 1,
       authorizedHeadId: semanticId(
-        'wdh1',
+        'wdh2',
         'wharfie:test:health-s3-future-head:v1',
         { seed: 1 },
       ),
@@ -614,7 +685,7 @@ describe('deployment service-health S3 transport', () => {
     const olderHeadReceipt = makeReceipt(fixture, {
       authorizedHeadGeneration: fixture.head.generation - 1,
       authorizedHeadId: semanticId(
-        'wdh1',
+        'wdh2',
         'wharfie:test:health-s3-older-head:v1',
         { seed: 1 },
       ),

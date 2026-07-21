@@ -153,15 +153,22 @@ work. The npm package remains deliberately private. It is not ready for
 production use.
 
 The first provider deployment authority is now defined. A strict AWS-shaped
-one-node profile now resolves one schema-V2, `wap2` content-addressed provider
+one-node profile now resolves one schema-V3, `wap3` content-addressed provider
 specification that pins the exact regional AMI and parameter version, a stable
 standard Availability Zone ID that offers the fixed instance type, the exact
 regional/account default EBS KMS key ARN, bootstrap and identity policy
 digests, instance shape, metadata controls, explicit retained-volume
-performance and attachment contracts, network, and service-health timing.
-DeploymentPlanV2 embeds that specification and
-DeploymentInspectionV3 binds its ID and the provider/profile contract is now
-version 3. Only a fresh incarnation resolves mutable
+performance and attachment contracts, network, service-health timing, and the
+content ID of one fixed 15-role physical-resource graph. DeploymentPlanV3
+expands the small portable capability model into one independently recoverable
+action per graph role, while DeploymentInspectionV4 binds present ownership to
+exact BindingV2 dependency lineage and distinguishes authoritative absence from
+access failure. Apply and reconcile use one canonical topological order;
+destroy reverses it, retaining state volumes while purging their attachments.
+Dependent creates re-prove earlier settled dependency authority, destroy
+re-proves prior purges at every later frontier, and finalization requires each
+role's exact planned state or absence.
+The provider/profile contract remains version 3. Only a fresh incarnation resolves mutable
 provider prerequisites; converge, resume, and resident update/destroy reuse
 the pinned document. Running-SEA deployment identity, exact provider scope and
 ownership bindings, and a CAS deployment head support crash-resumable
@@ -189,8 +196,8 @@ does not require it. A host-owned provider-visible health receipt now binds the
 exact deployment/node, operation/head lineage, running release, service
 session, durable generations, process, and heartbeat sequence. Its conditional
 current S3 object supplies version and `LastModified` freshness evidence, and
-only a fresh context-bound receipt can make Inspection V3 converged. The exact
-`health/v1/` bucket lifecycle makes noncurrent health versions eligible for
+only a fresh context-bound receipt can make Inspection V4 converged. The exact
+`health/v2/` bucket lifecycle makes noncurrent health versions eligible for
 asynchronous expiration after one day without collecting the current receipt
 or staged artifacts. This boundary is
 proved under deterministic mocks. The first controller-compatible resource
@@ -199,8 +206,8 @@ module can create one exact retained `gp3` volume with a stable EC2
 controller replay or bounded tagged discovery plus strict `DescribeVolumes`
 readback, and make retention an explicit no-op.
 It does not yet attach, format, mount, or fulfill the volume capability. The
-privileged host observer, network multi-effect/action-expansion model, volume
-attachment, complete AWS driver/router/inspection/`createPlan`, operator
+privileged host observer, network/identity/node/attachment resource drivers,
+complete AWS driver/router/inspection/`createPlan`, operator
 commands, production composition, and clean-account proof remain unfinished.
 
 ## Start here
@@ -209,7 +216,8 @@ commands, production composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Retained EBS volume resource checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md) — the current handoff for provider-spec V2 placement and encryption pinning plus the first controller-compatible, response-loss-safe retained resource capability.
+- [Multi-effect resource graph checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md) — the current handoff for the fixed 15-role graph, strict role/dependency/lifecycle contracts, and recoverable multi-effect controller frontier.
+- [Retained EBS volume resource checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md) — the preceding handoff for provider-spec V2 placement and encryption pinning plus the first controller-compatible, response-loss-safe retained resource capability.
 - [Exact AWS provider-spec resolution checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md) — the preceding handoff for frozen latest resolution, exact-version validation, strict SSM/EC2 image evidence, and typed bounded failure handling.
 - [Provider-visible service-health checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md) — the preceding handoff for strict health receipts, conditional S3 publication, provider-owned freshness, final Inspection V3 readiness, and bounded noncurrent-version retention.
 - [Recovery-safe artifact-staging checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md) — the preceding handoff for the retained versioned control bucket, held-source upload, and exact object-version recovery evidence.

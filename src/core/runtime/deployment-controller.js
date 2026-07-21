@@ -4,6 +4,7 @@ import {
   createDeploymentHead,
   validateDeploymentHead,
 } from './deployment-head.js';
+import { compareCanonicalStrings } from './canonical-order.js';
 import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import {
   validateDeploymentArtifactStageIntentContext,
@@ -26,6 +27,7 @@ import {
   validateDeploymentResourceBinding,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
+import { getAwsSingleNodeResourceDefinition } from './deployment-resource-graph.js';
 import { validateDeploymentProfile } from './deployment-profile.js';
 import { validateDeploymentRevision } from './deployment-revision.js';
 
@@ -100,6 +102,43 @@ function exactObject(value, keys, path) {
 /** @param {unknown} left @param {unknown} right @returns {boolean} */
 function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * Fence the generic durable binding schema to the finite AWS single-node
+ * physical-resource contract before a controller trusts the head as mutation
+ * authority. A partial graph is valid while reconcile recreates an
+ * authoritatively absent resource, but every binding that does exist must be
+ * one exact graph role with its complete dependency-key lineage.
+ * @param {Readonly<Record<string, any>>} head - Canonical durable head.
+ * @returns {void}
+ */
+function assertAwsSingleNodeHeadResourceGraph(head) {
+  for (const binding of head.resourceBindings) {
+    const resource = getAwsSingleNodeResourceDefinition(binding.resourceKey);
+    const dependencyKeys = binding.dependencyBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ dependency) =>
+        dependency.resourceKey,
+    );
+    const expectedDependencyKeys =
+      resource === null
+        ? []
+        : [...resource.dependsOn].sort(compareCanonicalStrings);
+    if (
+      resource === null ||
+      binding.resourceKey !== resource.resourceKey ||
+      !sameJson(binding.role, resource.role) ||
+      !sameJson(binding.capability, resource.capability) ||
+      binding.providerType !== resource.providerType ||
+      binding.ownershipMode !== resource.ownershipMode ||
+      binding.onDestroy !== resource.onDestroy ||
+      !sameJson(dependencyKeys, expectedDependencyKeys)
+    ) {
+      throw new DeploymentOwnershipError(
+        `Durable binding '${binding.resourceKey}' does not match the exact AWS single-node resource graph.`,
+      );
+    }
+  }
 }
 
 /** @param {Record<string, any>} value @returns {Record<string, any>} */
@@ -233,6 +272,7 @@ export function createDeploymentController(dependencies) {
         'deploymentController store returned a head for another deployment instance.',
       );
     }
+    assertAwsSingleNodeHeadResourceGraph(head);
     return head;
   }
 
@@ -658,26 +698,34 @@ export function createDeploymentController(dependencies) {
     for (const action of plan.actions) {
       const resource = resources.get(action.resourceKey);
       const binding = bindings.get(action.resourceKey);
+      if (resource !== undefined) {
+        assertResourceMatchesAction(action, resource);
+      }
       if (action.action === 'create') {
-        if (head !== null && head.phase !== 'DESTROYED') {
-          throw new DeploymentOwnershipError(
-            `Create for '${action.resourceKey}' would replace an existing deployment resource.`,
-          );
-        }
-        if (binding !== undefined || resource?.presence === 'present') {
+        if (
+          binding !== undefined ||
+          (resource !== undefined &&
+            (resource.presence !== 'absent' ||
+              resource.presenceEvidence !== 'authoritative-not-found'))
+        ) {
           throw new DeploymentOwnershipError(
             `Create for '${action.resourceKey}' conflicts with existing provider evidence.`,
           );
         }
         continue;
       }
-      if (binding === undefined || resource === undefined) {
+      if (head === null || binding === undefined || resource === undefined) {
         throw new DeploymentOwnershipError(
           `Action '${action.resourceKey}' lacks exact durable and provider evidence.`,
         );
       }
-      assertBindingMatchesAction(action, binding);
+      assertBindingMatchesAction(action, binding, head);
       if (action.action === 'delete' && resource.presence === 'absent') {
+        if (resource.presenceEvidence !== 'authoritative-not-found') {
+          throw new DeploymentOwnershipError(
+            `Delete for '${action.resourceKey}' lacks authoritative absence evidence.`,
+          );
+        }
         continue;
       }
       if (
@@ -688,6 +736,8 @@ export function createDeploymentController(dependencies) {
         resource.providerIdentity.providerType !== binding.providerType ||
         resource.providerIdentity.providerResourceId !==
           binding.providerResourceId ||
+        resource.bindingId !== binding.bindingId ||
+        !sameJson(resource.dependencyBindings, binding.dependencyBindings) ||
         resource.observedDigest === null ||
         !sameJson(resource.observedDigest, action.before.stateDigest)
       ) {
@@ -698,8 +748,13 @@ export function createDeploymentController(dependencies) {
     }
   }
 
-  /** @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} profile @param {Readonly<Record<string, any>>} head @returns {Promise<Readonly<Record<string, any>>>} */
-  async function inspectCurrentOperation(plan, profile, head) {
+  /** @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} profile @param {Readonly<Record<string, any>>} head @param {Readonly<Record<string, any>>|undefined} [pendingBinding] @returns {Promise<Readonly<Record<string, any>>>} */
+  async function inspectCurrentOperation(
+    plan,
+    profile,
+    head,
+    pendingBinding = undefined,
+  ) {
     await assertPlanProviderScope(plan, profile);
     const request = {
       operation: plan.operation,
@@ -717,14 +772,15 @@ export function createDeploymentController(dependencies) {
       profile,
       providerSpec: plan.providerSpec,
       head,
+      pendingBinding,
       now: sampleInspectionNow(),
     });
     assertInspectionAuthority(inspection, request, head);
     return inspection;
   }
 
-  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} inspection @param {Readonly<Record<string, any>>} head @returns {void} */
-  function assertActionExecutionEvidence(action, inspection, head) {
+  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} inspection @param {Readonly<Record<string, any>>} head @param {Readonly<Record<string, any>>} plan @returns {boolean} */
+  function assertActionExecutionEvidence(action, inspection, head, plan) {
     const resource = inspection.resources.find(
       (/** @type {Readonly<Record<string, any>>} */ candidate) =>
         candidate.resourceKey === action.resourceKey,
@@ -733,12 +789,15 @@ export function createDeploymentController(dependencies) {
       (/** @type {Readonly<Record<string, any>>} */ candidate) =>
         candidate.resourceKey === action.resourceKey,
     );
+    if (resource !== undefined) {
+      assertResourceMatchesAction(action, resource);
+    }
     if (action.action === 'create') {
       if (
-        head.activeOperation?.kind !== 'create' ||
         binding !== undefined ||
         resource === undefined ||
         resource.presence !== 'absent' ||
+        resource.presenceEvidence !== 'authoritative-not-found' ||
         resource.desiredDigest === null ||
         !sameJson(resource.desiredDigest, action.after.stateDigest)
       ) {
@@ -746,9 +805,21 @@ export function createDeploymentController(dependencies) {
           `Create for '${action.resourceKey}' lacks fresh authoritative absence and desired-state evidence.`,
         );
       }
-      return;
+      assertCreateDependencyEvidence(action, inspection, head, plan);
+      return true;
     }
-    assertBindingMatchesAction(action, binding);
+    assertBindingMatchesAction(action, binding, head);
+    if (plan.operation === 'destroy') {
+      assertPriorDeleteAbsenceEvidence(action, inspection, head, plan);
+    }
+    if (
+      action.action === 'delete' &&
+      resource !== undefined &&
+      resource.presence === 'absent' &&
+      resource.presenceEvidence === 'authoritative-not-found'
+    ) {
+      return false;
+    }
     if (
       resource === undefined ||
       resource.presence !== 'present' ||
@@ -758,6 +829,8 @@ export function createDeploymentController(dependencies) {
       resource.providerIdentity.providerType !== binding.providerType ||
       resource.providerIdentity.providerResourceId !==
         binding.providerResourceId ||
+      resource.bindingId !== binding.bindingId ||
+      !sameJson(resource.dependencyBindings, binding.dependencyBindings) ||
       resource.observedDigest === null ||
       !sameJson(resource.observedDigest, action.before.stateDigest)
     ) {
@@ -765,19 +838,33 @@ export function createDeploymentController(dependencies) {
         `Action '${action.resourceKey}' lacks fresh exact provider ownership and state evidence.`,
       );
     }
+    return true;
   }
 
-  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} inspection @param {Readonly<Record<string, any>>|null} binding @returns {void} */
-  function assertActionSettlementEvidence(action, inspection, binding) {
+  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} inspection @param {Readonly<Record<string, any>>|null} binding @param {Readonly<Record<string, any>>} head @param {Readonly<Record<string, any>>} plan @returns {void} */
+  function assertActionSettlementEvidence(
+    action,
+    inspection,
+    binding,
+    head,
+    plan,
+  ) {
     const resource = inspection.resources.find(
       (/** @type {Readonly<Record<string, any>>} */ candidate) =>
         candidate.resourceKey === action.resourceKey,
     );
+    if (resource !== undefined) {
+      assertResourceMatchesAction(action, resource);
+    }
+    if (plan.operation === 'destroy') {
+      assertPriorDeleteAbsenceEvidence(action, inspection, head, plan);
+    }
     if (action.after === null) {
       if (
         binding !== null ||
         resource === undefined ||
-        resource.presence !== 'absent'
+        resource.presence !== 'absent' ||
+        resource.presenceEvidence !== 'authoritative-not-found'
       ) {
         throw new DeploymentOwnershipError(
           `Settlement for '${action.resourceKey}' lacks fresh authoritative absence evidence.`,
@@ -795,6 +882,8 @@ export function createDeploymentController(dependencies) {
       resource.providerIdentity.providerType !== binding.providerType ||
       resource.providerIdentity.providerResourceId !==
         binding.providerResourceId ||
+      resource.bindingId !== binding.bindingId ||
+      !sameJson(resource.dependencyBindings, binding.dependencyBindings) ||
       resource.desiredDigest === null ||
       resource.observedDigest === null ||
       !sameJson(resource.desiredDigest, action.after.stateDigest) ||
@@ -803,6 +892,9 @@ export function createDeploymentController(dependencies) {
       throw new DeploymentOwnershipError(
         `Settlement for '${action.resourceKey}' lacks fresh exact ownership and desired-state evidence.`,
       );
+    }
+    if (action.action === 'create') {
+      assertCreateDependencyEvidence(action, inspection, head, plan);
     }
   }
 
@@ -841,9 +933,200 @@ export function createDeploymentController(dependencies) {
       : 'update';
   }
 
-  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>|undefined} binding @returns {void} */
-  function assertBindingMatchesAction(action, binding) {
-    if (!binding) {
+  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} resource @returns {void} */
+  function assertResourceMatchesAction(action, resource) {
+    if (
+      resource.resourceKey !== action.resourceKey ||
+      !sameJson(resource.capability, action.capability) ||
+      !sameJson(resource.role, action.role) ||
+      resource.management !== action.management ||
+      resource.ownershipMode !== action.ownershipMode ||
+      resource.onDestroy !== action.onDestroy ||
+      !sameJson(resource.dependsOn, action.dependsOn)
+    ) {
+      throw new DeploymentOwnershipError(
+        `Provider evidence for '${action.resourceKey}' does not match the exact action role.`,
+      );
+    }
+  }
+
+  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} head @returns {ReadonlyArray<{resourceKey: string, bindingId: string}>} */
+  function expectedDependencyBindings(action, head) {
+    return action.dependsOn
+      .map((/** @type {string} */ resourceKey) => {
+        const dependency = head.resourceBindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === resourceKey,
+        );
+        if (dependency === undefined) {
+          throw new DeploymentOwnershipError(
+            `Action '${action.resourceKey}' lacks dependency binding '${resourceKey}'.`,
+          );
+        }
+        return { bindingId: dependency.bindingId, resourceKey };
+      })
+      .sort(
+        (
+          /** @type {{resourceKey: string}} */ left,
+          /** @type {{resourceKey: string}} */ right,
+        ) => compareCanonicalStrings(left.resourceKey, right.resourceKey),
+      );
+  }
+
+  /**
+   * A durable dependency binding proves lineage, not continued physical
+   * existence. Before executing or publishing a dependent create, require the
+   * same fresh inspection to prove every dependency still exists under its
+   * exact current binding, action state, and fixed graph role.
+   * @param {Readonly<Record<string, any>>} action - Dependent create action.
+   * @param {Readonly<Record<string, any>>} inspection - Fresh provider evidence.
+   * @param {Readonly<Record<string, any>>} head - Exact durable authority.
+   * @param {Readonly<Record<string, any>>} plan - Exact action and state authority.
+   * @returns {void}
+   */
+  function assertCreateDependencyEvidence(action, inspection, head, plan) {
+    const expectedDependencies = expectedDependencyBindings(action, head);
+    const actionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.actionId === action.actionId,
+    );
+    for (const expectedDependency of expectedDependencies) {
+      const definition = getAwsSingleNodeResourceDefinition(
+        expectedDependency.resourceKey,
+      );
+      const dependencyActionIndex = plan.actions.findIndex(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === expectedDependency.resourceKey,
+      );
+      const dependencyAction = plan.actions[dependencyActionIndex];
+      const dependencyIntent =
+        head.activeOperation?.intents[dependencyActionIndex];
+      const binding = head.resourceBindings.find(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === expectedDependency.resourceKey,
+      );
+      const resource = inspection.resources.find(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === expectedDependency.resourceKey,
+      );
+      if (
+        definition === null ||
+        actionIndex < 0 ||
+        dependencyActionIndex < 0 ||
+        dependencyActionIndex >= actionIndex ||
+        dependencyAction === undefined ||
+        dependencyAction.after === null ||
+        dependencyIntent === undefined ||
+        dependencyIntent.actionId !== dependencyAction.actionId ||
+        dependencyIntent.status !== 'settled' ||
+        dependencyAction.resourceKey !== definition.resourceKey ||
+        !sameJson(dependencyAction.capability, definition.capability) ||
+        !sameJson(dependencyAction.role, definition.role) ||
+        dependencyAction.ownershipMode !== definition.ownershipMode ||
+        dependencyAction.onDestroy !== definition.onDestroy ||
+        !sameJson(dependencyAction.dependsOn, definition.dependsOn) ||
+        dependencyAction.after.providerType !== definition.providerType ||
+        binding === undefined ||
+        binding.bindingId !== expectedDependency.bindingId ||
+        binding.resourceKey !== definition.resourceKey ||
+        !sameJson(binding.capability, definition.capability) ||
+        !sameJson(binding.role, definition.role) ||
+        binding.management !== dependencyAction.management ||
+        binding.providerType !== definition.providerType ||
+        binding.ownershipMode !== definition.ownershipMode ||
+        binding.onDestroy !== definition.onDestroy ||
+        dependencyIntent.ownershipNonce !==
+          (binding.management === 'managed' ? binding.ownershipNonce : null) ||
+        (dependencyAction.action === 'create' &&
+          (binding.management !== 'managed' ||
+            binding.createdByActionId !== dependencyAction.actionId)) ||
+        (dependencyAction.after.providerResourceId !== null &&
+          binding.providerResourceId !==
+            dependencyAction.after.providerResourceId) ||
+        resource === undefined ||
+        resource.resourceKey !== definition.resourceKey ||
+        !sameJson(resource.capability, definition.capability) ||
+        !sameJson(resource.role, definition.role) ||
+        resource.management !== dependencyAction.management ||
+        resource.ownershipMode !== definition.ownershipMode ||
+        resource.onDestroy !== definition.onDestroy ||
+        !sameJson(resource.dependsOn, definition.dependsOn) ||
+        resource.presence !== 'present' ||
+        resource.presenceEvidence !== 'exact-read' ||
+        resource.ownership !==
+          (binding.management === 'managed' ? 'verified' : 'external') ||
+        resource.bindingId !== binding.bindingId ||
+        !sameJson(resource.dependencyBindings, binding.dependencyBindings) ||
+        resource.providerIdentity === null ||
+        resource.providerIdentity.providerType !== binding.providerType ||
+        resource.providerIdentity.providerResourceId !==
+          binding.providerResourceId ||
+        resource.desiredDigest === null ||
+        resource.observedDigest === null ||
+        !sameJson(resource.desiredDigest, dependencyAction.after.stateDigest) ||
+        !sameJson(resource.observedDigest, dependencyAction.after.stateDigest)
+      ) {
+        throw new DeploymentOwnershipError(
+          `Create for '${action.resourceKey}' lacks fresh exact dependency evidence for '${expectedDependency.resourceKey}'.`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Delete order is the reverse dependency order. Once an earlier purge has
+   * settled, every later destroy step must freshly re-prove that the removed
+   * resource remains authoritatively absent and unbound.
+   * @param {Readonly<Record<string, any>>} action - Current destroy action.
+   * @param {Readonly<Record<string, any>>} inspection - Fresh provider evidence.
+   * @param {Readonly<Record<string, any>>} head - Exact durable authority.
+   * @param {Readonly<Record<string, any>>} plan - Exact destroy plan authority.
+   * @returns {void}
+   */
+  function assertPriorDeleteAbsenceEvidence(action, inspection, head, plan) {
+    const actionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.actionId === action.actionId,
+    );
+    if (actionIndex < 0) {
+      throw new DeploymentOwnershipError(
+        `Destroy action '${action.resourceKey}' is not present in its persisted plan.`,
+      );
+    }
+    for (let index = 0; index < actionIndex; index += 1) {
+      const priorAction = plan.actions[index];
+      if (priorAction.after !== null) continue;
+      const priorIntent = head.activeOperation?.intents[index];
+      const priorBinding = head.resourceBindings.find(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === priorAction.resourceKey,
+      );
+      const priorResource = inspection.resources.find(
+        (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+          candidate.resourceKey === priorAction.resourceKey,
+      );
+      if (priorResource !== undefined) {
+        assertResourceMatchesAction(priorAction, priorResource);
+      }
+      if (
+        priorIntent === undefined ||
+        priorIntent.actionId !== priorAction.actionId ||
+        priorIntent.status !== 'settled' ||
+        priorBinding !== undefined ||
+        priorResource === undefined ||
+        priorResource.presence !== 'absent' ||
+        priorResource.presenceEvidence !== 'authoritative-not-found'
+      ) {
+        throw new DeploymentOwnershipError(
+          `Destroy action '${action.resourceKey}' cannot proceed because prior purge '${priorAction.resourceKey}' is not authoritatively absent and unbound.`,
+        );
+      }
+    }
+  }
+
+  /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>|undefined} binding @param {Readonly<Record<string, any>>|null} head @returns {void} */
+  function assertBindingMatchesAction(action, binding, head) {
+    if (!binding || head === null) {
       throw new DeploymentOwnershipError(
         `No durable binding exists for '${action.resourceKey}'.`,
       );
@@ -852,7 +1135,17 @@ export function createDeploymentController(dependencies) {
     if (
       binding.resourceKey !== action.resourceKey ||
       !sameJson(binding.capability, action.capability) ||
+      !sameJson(binding.role, action.role) ||
       binding.management !== action.management ||
+      binding.ownershipMode !==
+        (action.management === 'external'
+          ? 'external'
+          : action.ownershipMode) ||
+      binding.onDestroy !== action.onDestroy ||
+      !sameJson(
+        binding.dependencyBindings,
+        expectedDependencyBindings(action, head),
+      ) ||
       state === null ||
       binding.providerType !== state.providerType ||
       binding.providerResourceId !== state.providerResourceId
@@ -881,7 +1174,7 @@ export function createDeploymentController(dependencies) {
       /** @type {string|null} */
       let ownershipNonce = null;
       if (plan.operation === 'destroy') {
-        assertBindingMatchesAction(action, binding);
+        assertBindingMatchesAction(action, binding, head);
       }
       if (action.management === 'managed') {
         if (action.action === 'create') {
@@ -895,7 +1188,7 @@ export function createDeploymentController(dependencies) {
             `ownership nonce for '${action.resourceKey}'`,
           );
         } else {
-          assertBindingMatchesAction(action, binding);
+          assertBindingMatchesAction(action, binding, head);
           ownershipNonce = binding.ownershipNonce;
         }
         if (seenNonces.has(ownershipNonce)) {
@@ -1021,7 +1314,17 @@ export function createDeploymentController(dependencies) {
       binding.providerScopeId !== head.providerScope.providerScopeId ||
       binding.resourceKey !== action.resourceKey ||
       !sameJson(binding.capability, action.capability) ||
+      !sameJson(binding.role, action.role) ||
       binding.management !== action.management ||
+      binding.ownershipMode !==
+        (action.management === 'external'
+          ? 'external'
+          : action.ownershipMode) ||
+      binding.onDestroy !== action.onDestroy ||
+      !sameJson(
+        binding.dependencyBindings,
+        expectedDependencyBindings(action, head),
+      ) ||
       binding.providerType !== action.after.providerType ||
       (action.after.providerResourceId !== null &&
         binding.providerResourceId !== action.after.providerResourceId)
@@ -1146,7 +1449,9 @@ export function createDeploymentController(dependencies) {
     if (expectedStatus === 'converged') {
       const resident = inspection.resources.find(
         (/** @type {Readonly<Record<string, any>>} */ resource) =>
-          resource.capability.kind === 'resident-node',
+          resource.resourceKey === 'substrate' &&
+          resource.capability.kind === 'resident-node' &&
+          resource.role.kind === 'node',
       );
       if (
         resident?.service?.healthReceipt?.receipt.deploymentOperationId !==
@@ -1165,26 +1470,62 @@ export function createDeploymentController(dependencies) {
         ],
       ),
     );
+    const actionByResource = new Map(
+      plan.actions.map(
+        (/** @type {Readonly<Record<string, any>>} */ action) => [
+          action.resourceKey,
+          action,
+        ],
+      ),
+    );
     for (const resource of inspection.resources) {
+      const action = actionByResource.get(resource.resourceKey);
+      if (action === undefined) {
+        throw new DeploymentOwnershipError(
+          `Final inspection contains unplanned resource '${resource.resourceKey}'.`,
+        );
+      }
+      assertResourceMatchesAction(action, resource);
       const binding = bindingByResource.get(resource.resourceKey);
-      if (resource.presence === 'present') {
+      if (action.after === null) {
         if (
+          resource.presence !== 'absent' ||
+          resource.presenceEvidence !== 'authoritative-not-found'
+        ) {
+          throw new DeploymentOwnershipError(
+            `Deleted resource '${resource.resourceKey}' lacks authoritative final absence evidence.`,
+          );
+        }
+        if (binding !== undefined) {
+          throw new DeploymentOwnershipError(
+            `Deleted resource '${resource.resourceKey}' still has a durable binding.`,
+          );
+        }
+      } else {
+        if (
+          resource.presence !== 'present' ||
           !binding ||
           resource.ownership !==
             (binding.management === 'managed' ? 'verified' : 'external') ||
           resource.providerIdentity === null ||
           binding.providerType !== resource.providerIdentity.providerType ||
           binding.providerResourceId !==
-            resource.providerIdentity.providerResourceId
+            resource.providerIdentity.providerResourceId ||
+          resource.bindingId !== binding.bindingId ||
+          !sameJson(resource.role, binding.role) ||
+          resource.onDestroy !== binding.onDestroy ||
+          !sameJson(resource.dependencyBindings, binding.dependencyBindings) ||
+          resource.desiredDigest === null ||
+          resource.observedDigest === null ||
+          !sameJson(resource.desiredDigest, action.after.stateDigest) ||
+          !sameJson(resource.observedDigest, action.after.stateDigest) ||
+          (action.after.providerResourceId !== null &&
+            binding.providerResourceId !== action.after.providerResourceId)
         ) {
           throw new DeploymentOwnershipError(
-            `Final inspection for '${resource.resourceKey}' does not match its durable binding.`,
+            `Final inspection for '${resource.resourceKey}' does not match its exact plan target and durable binding.`,
           );
         }
-      } else if (binding !== undefined) {
-        throw new DeploymentOwnershipError(
-          `Absent resource '${resource.resourceKey}' still has a durable binding.`,
-        );
       }
     }
     const inspectedResourceKeys = new Set(
@@ -1194,13 +1535,17 @@ export function createDeploymentController(dependencies) {
       ),
     );
     if (
+      plan.actions.some(
+        (/** @type {Readonly<Record<string, any>>} */ action) =>
+          !inspectedResourceKeys.has(action.resourceKey),
+      ) ||
       head.resourceBindings.some(
         (/** @type {Readonly<Record<string, any>>} */ binding) =>
           !inspectedResourceKeys.has(binding.resourceKey),
       )
     ) {
       throw new DeploymentOwnershipError(
-        'A durable binding is absent from the final provider inspection.',
+        'A plan target or durable binding is absent from the final provider inspection.',
       );
     }
   }
@@ -1311,14 +1656,22 @@ export function createDeploymentController(dependencies) {
           profile,
           head,
         );
+        let shouldExecute;
         try {
-          assertActionExecutionEvidence(action, executionInspection, head);
+          shouldExecute = assertActionExecutionEvidence(
+            action,
+            executionInspection,
+            head,
+            plan,
+          );
         } catch {
           return (await compareAndSet(head, createBlockedHead(head))).head;
         }
-        await provider.executeAction(
-          actionContext(plan, profile, head, actionIndex, artifactStage),
-        );
+        if (shouldExecute) {
+          await provider.executeAction(
+            actionContext(plan, profile, head, actionIndex, artifactStage),
+          );
+        }
         settlement = validateSettlement(
           await provider.verifySettlement(
             actionContext(plan, profile, head, actionIndex, artifactStage),
@@ -1342,14 +1695,22 @@ export function createDeploymentController(dependencies) {
             profile,
             head,
           );
+          let shouldExecute;
           try {
-            assertActionExecutionEvidence(action, executionInspection, head);
+            shouldExecute = assertActionExecutionEvidence(
+              action,
+              executionInspection,
+              head,
+              plan,
+            );
           } catch {
             return (await compareAndSet(head, createBlockedHead(head))).head;
           }
-          await provider.executeAction(
-            actionContext(plan, profile, head, actionIndex, artifactStage),
-          );
+          if (shouldExecute) {
+            await provider.executeAction(
+              actionContext(plan, profile, head, actionIndex, artifactStage),
+            );
+          }
           settlement = validateSettlement(
             await provider.verifySettlement(
               actionContext(plan, profile, head, actionIndex, artifactStage),
@@ -1378,12 +1739,17 @@ export function createDeploymentController(dependencies) {
         plan,
         profile,
         head,
+        action.action === 'create' && settlement.binding !== null
+          ? settlement.binding
+          : undefined,
       );
       try {
         assertActionSettlementEvidence(
           action,
           settlementInspection,
           settlement.binding,
+          head,
+          plan,
         );
       } catch {
         return (await compareAndSet(head, createBlockedHead(head))).head;

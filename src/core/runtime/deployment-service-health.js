@@ -2,7 +2,10 @@
 
 import { assertApplicationRevisionId } from './application-revision.js';
 import { assertArtifactId } from './artifact-record.js';
-import { sortCanonicalJsonValue } from './canonical-order.js';
+import {
+  compareCanonicalStrings,
+  sortCanonicalJsonValue,
+} from './canonical-order.js';
 import {
   assertDomainSeparatedSha256Id,
   createCanonicalJsonSha256Id,
@@ -21,6 +24,7 @@ import {
   DEPLOYMENT_CAPABILITY_IDS,
   validateDeploymentProfile,
 } from './deployment-profile.js';
+import { getAwsSingleNodeResourceDefinition } from './deployment-resource-graph.js';
 import {
   assertDeploymentInstanceId,
   getDeploymentInstanceId,
@@ -49,12 +53,12 @@ import {
   DEPLOYMENT_SERVICE_HEALTH_OBJECT_PREFIX,
 } from './deployment-service-health-contract.js';
 
-export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_SCHEMA_VERSION = 1;
+export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_SCHEMA_VERSION = 2;
 export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_KIND =
   'deploymentServiceHealthReceipt';
 export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_DOMAIN =
-  'wharfie:deployment-service-health-receipt:v1';
-export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_PREFIX = 'whr1';
+  'wharfie:deployment-service-health-receipt:v2';
+export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_PREFIX = 'whr2';
 export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_MAX_BYTES =
   DEPLOYMENT_SERVICE_HEALTH_DOCUMENT_MAX_BYTES;
 export const DEPLOYMENT_SERVICE_HEALTH_CONTEXT_MAX_BYTES = 128 * 1024;
@@ -110,8 +114,8 @@ const SUCCESSOR_REVISION_KEYS = Object.freeze([
 ]);
 
 /**
- * @typedef DeploymentServiceHealthReceiptV1
- * @property {1} schemaVersion - Schema version.
+ * @typedef DeploymentServiceHealthReceiptV2
+ * @property {2} schemaVersion - Schema version.
  * @property {'deploymentServiceHealthReceipt'} kind - Document kind.
  * @property {string} receiptId - Immutable content identity.
  * @property {string} providerScopeId - Exact provider credential scope.
@@ -217,14 +221,14 @@ export function getDeploymentServiceHealthObjectLocation(providerScope, value) {
   });
 }
 
-/** @param {unknown} value @param {string} path @returns {Omit<DeploymentServiceHealthReceiptV1, 'receiptId'>} */
+/** @param {unknown} value @param {string} path @returns {Omit<DeploymentServiceHealthReceiptV2, 'receiptId'>} */
 function validatePayload(value, path) {
   const receipt = cloneReceipt(value, path);
   assertAllKeys(receipt, PAYLOAD_KEYS, path);
   if (
     receipt.schemaVersion !== DEPLOYMENT_SERVICE_HEALTH_RECEIPT_SCHEMA_VERSION
   ) {
-    throw new TypeError(`${path}.schemaVersion must be the integer 1.`);
+    throw new TypeError(`${path}.schemaVersion must be the integer 2.`);
   }
   if (receipt.kind !== DEPLOYMENT_SERVICE_HEALTH_RECEIPT_KIND) {
     throw new TypeError(
@@ -319,7 +323,7 @@ function validatePayload(value, path) {
     throw new TypeError(`${path}.health must be 'healthy'.`);
   }
   assertManifestIsSecretFree(normalized, path);
-  return /** @type {Omit<DeploymentServiceHealthReceiptV1, 'receiptId'>} */ (
+  return /** @type {Omit<DeploymentServiceHealthReceiptV2, 'receiptId'>} */ (
     deepFreeze(sortCanonicalJsonValue(normalized))
   );
 }
@@ -329,7 +333,7 @@ function validatePayload(value, path) {
  * deliberately not part of these host-authored bytes; the object store's
  * version and LastModified observation supply that independent evidence.
  * @param {unknown} value - Exact receipt fields without schema, kind, or ID.
- * @returns {Readonly<DeploymentServiceHealthReceiptV1>} - Canonical receipt.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Canonical receipt.
  */
 export function createDeploymentServiceHealthReceipt(value) {
   const input = cloneReceipt(value, 'deploymentServiceHealthReceipt');
@@ -355,7 +359,7 @@ export function createDeploymentServiceHealthReceipt(value) {
  * Validate, reidentify, and freeze one serialized health receipt.
  * @param {unknown} value - Candidate receipt.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {Readonly<DeploymentServiceHealthReceiptV1>} - Canonical receipt.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Canonical receipt.
  */
 export function validateDeploymentServiceHealthReceipt(
   value,
@@ -396,7 +400,7 @@ export function validateDeploymentServiceHealthReceipt(
  * @param {unknown} value - Candidate receipt.
  * @param {unknown} context - Exact deployment, provider, and head authority.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {Readonly<DeploymentServiceHealthReceiptV1>} - Context-bound receipt.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Context-bound receipt.
  */
 export function validateDeploymentServiceHealthReceiptContext(
   value,
@@ -453,22 +457,114 @@ export function validateDeploymentServiceHealthReceiptContext(
     throw new Error(`${valuePath} cannot authorize health during destroy.`);
   }
 
-  const residentNodes = head.resourceBindings.filter(
+  const substrateBindings = head.resourceBindings.filter(
     (/** @type {Readonly<Record<string, any>>} */ binding) =>
-      binding.capability.kind === DEPLOYMENT_CAPABILITY_IDS.node,
+      binding.resourceKey === 'substrate',
   );
-  if (residentNodes.length !== 1) {
+  if (substrateBindings.length !== 1) {
     throw new Error(
-      `${valuePath}.context head must contain exactly one resident-node binding.`,
+      `${valuePath}.context head must contain exactly one substrate binding.`,
     );
   }
-  const node = residentNodes[0];
+  const node = substrateBindings[0];
+  const nodeDefinition = getAwsSingleNodeResourceDefinition('substrate');
+  if (nodeDefinition === null) {
+    throw new Error(
+      `${valuePath}.context AWS single-node graph lacks the substrate definition.`,
+    );
+  }
+  const bindingByResourceKey = new Map(
+    head.resourceBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ binding) => [
+        binding.resourceKey,
+        binding,
+      ],
+    ),
+  );
+  const configurationKeyByCapability = new Map(
+    Object.entries(DEPLOYMENT_CAPABILITY_IDS).map(([key, capability]) => [
+      capability,
+      key,
+    ]),
+  );
+  /** @param {Readonly<Record<string, any>>} binding @param {Readonly<Record<string, any>>} definition @param {string} path @returns {void} */
+  function assertExactGraphBinding(binding, definition, path) {
+    const configurationKey = configurationKeyByCapability.get(
+      definition.capability.kind,
+    );
+    const configuration =
+      configurationKey === undefined
+        ? undefined
+        : profile.provider.configuration[configurationKey];
+    const expectedDependencyKeys = [...definition.dependsOn].sort(
+      compareCanonicalStrings,
+    );
+    if (
+      binding.resourceKey !== definition.resourceKey ||
+      binding.capability.kind !== definition.capability.kind ||
+      binding.capability.version !== definition.capability.version ||
+      binding.role.kind !== definition.role.kind ||
+      binding.role.version !== definition.role.version ||
+      configuration === undefined ||
+      configuration.management === 'none' ||
+      binding.management !== configuration.management ||
+      binding.ownershipMode !== definition.ownershipMode ||
+      binding.onDestroy !== definition.onDestroy ||
+      binding.providerType !== definition.providerType ||
+      binding.dependencyBindings.length !== expectedDependencyKeys.length ||
+      binding.dependencyBindings.some(
+        (
+          /** @type {Readonly<Record<string, any>>} */ dependency,
+          /** @type {number} */ index,
+        ) =>
+          dependency.resourceKey !== expectedDependencyKeys[index] ||
+          bindingByResourceKey.get(dependency.resourceKey)?.bindingId !==
+            dependency.bindingId,
+      )
+    ) {
+      throw new Error(
+        `${path} does not match its exact graph definition, profile management, and head dependency bindings.`,
+      );
+    }
+  }
+  const expectedNodeDependencyKeys = [...nodeDefinition.dependsOn].sort(
+    compareCanonicalStrings,
+  );
   if (
-    node.management !== profile.provider.configuration.node.management ||
-    node.providerType !== 'ec2-instance'
+    node.dependencyBindings.length !== expectedNodeDependencyKeys.length ||
+    node.dependencyBindings.some(
+      (
+        /** @type {Readonly<Record<string, any>>} */ dependency,
+        /** @type {number} */ index,
+      ) =>
+        dependency.resourceKey !== expectedNodeDependencyKeys[index] ||
+        bindingByResourceKey.get(dependency.resourceKey)?.bindingId !==
+          dependency.bindingId,
+    )
   ) {
     throw new Error(
-      `${valuePath}.context resident-node binding does not match the profile.`,
+      `${valuePath}.context substrate dependency bindings must name all six exact graph dependencies and resolve to the exact head binding IDs.`,
+    );
+  }
+  assertExactGraphBinding(
+    node,
+    nodeDefinition,
+    `${valuePath}.context substrate binding`,
+  );
+  for (const dependency of node.dependencyBindings) {
+    const binding = bindingByResourceKey.get(dependency.resourceKey);
+    const definition = getAwsSingleNodeResourceDefinition(
+      dependency.resourceKey,
+    );
+    if (binding === undefined || definition === null) {
+      throw new Error(
+        `${valuePath}.context substrate dependency '${dependency.resourceKey}' lacks exact graph and head authority.`,
+      );
+    }
+    assertExactGraphBinding(
+      binding,
+      definition,
+      `${valuePath}.context substrate dependency '${dependency.resourceKey}'`,
     );
   }
 
@@ -537,7 +633,7 @@ export function validateDeploymentServiceHealthReceiptContext(
   return receipt;
 }
 
-/** @param {DeploymentServiceHealthReceiptV1} previous @param {DeploymentServiceHealthReceiptV1} next @param {string} path @returns {void} */
+/** @param {DeploymentServiceHealthReceiptV2} previous @param {DeploymentServiceHealthReceiptV2} next @param {string} path @returns {void} */
 function assertSuccessor(previous, next, path) {
   const previousRecord = /** @type {Readonly<Record<string, any>>} */ (
     previous
@@ -658,7 +754,7 @@ function assertSuccessor(previous, next, path) {
  * @param {unknown} previousValue - Current receipt.
  * @param {unknown} nextValue - Proposed replacement receipt.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {Readonly<DeploymentServiceHealthReceiptV1>} - Canonical successor.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Canonical successor.
  */
 export function validateDeploymentServiceHealthReceiptSuccessor(
   previousValue,
