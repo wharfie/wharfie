@@ -202,9 +202,10 @@ asynchronous expiration after one day without collecting the current receipt
 or staged artifacts. This boundary is
 proved under deterministic mocks. The first controller-compatible resource
 module can create one exact retained `gp3` volume with a stable EC2
-`ClientToken` and atomic ownership tags, recover an ambiguous response through
-controller replay or bounded tagged discovery plus strict `DescribeVolumes`
-readback, and make retention an explicit no-op.
+`ClientToken` derived from the durable action and exact ownership nonce, apply
+atomic ownership tags, recover an ambiguous response through controller replay
+or bounded tagged discovery plus strict `DescribeVolumes` readback, and make
+retention an explicit no-op.
 It does not yet attach, format, mount, or fulfill the volume capability. The
 privileged host observer, network/identity/node/attachment resource drivers,
 complete AWS driver/router/inspection/`createPlan`, operator

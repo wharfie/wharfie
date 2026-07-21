@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 
 import { sortCanonicalJsonValue } from '../../src/core/runtime/canonical-order.js';
 import {
@@ -11,10 +12,12 @@ import {
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
 import {
+  AWS_SINGLE_NODE_VOLUME_CREATE_CLIENT_TOKEN_DOMAIN,
   AWS_SINGLE_NODE_VOLUME_STATE_DIGEST_DOMAIN,
   AwsSingleNodeVolumeResourceConflictError,
   AwsSingleNodeVolumeResourceUnknownError,
   createAwsSingleNodeVolumeResource,
+  getAwsSingleNodeVolumeCreateClientToken,
   getAwsSingleNodeVolumeStateDigest,
 } from '../../src/core/runtime/deployment-aws-volume-resource.js';
 import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
@@ -650,6 +653,68 @@ describe('AWS single-node retained EBS volume state digest', () => {
   });
 });
 
+describe('AWS single-node retained EBS volume create client token', () => {
+  it('is canonical, domain separated, deterministic, and Cloud Control compatible', () => {
+    const fixture = makeFixture();
+    const payload = JSON.stringify(
+      sortCanonicalJsonValue({
+        actionId: fixture.action.actionId,
+        ownershipNonce: fixture.ownershipNonce,
+      }),
+    );
+    const expected = createHash('sha256')
+      .update(AWS_SINGLE_NODE_VOLUME_CREATE_CLIENT_TOKEN_DOMAIN, 'utf8')
+      .update('\0', 'utf8')
+      .update(payload, 'utf8')
+      .digest('hex');
+
+    expect(
+      getAwsSingleNodeVolumeCreateClientToken(
+        fixture.action.actionId,
+        fixture.ownershipNonce,
+      ),
+    ).toBe(expected);
+    expect(expected).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it('is stable for one replay and changes with the nonce for an identical action', () => {
+    const fixture = makeFixture();
+    const first = getAwsSingleNodeVolumeCreateClientToken(
+      fixture.action.actionId,
+      fixture.ownershipNonce,
+    );
+
+    expect(
+      getAwsSingleNodeVolumeCreateClientToken(
+        fixture.action.actionId,
+        fixture.ownershipNonce,
+      ),
+    ).toBe(first);
+    expect(
+      getAwsSingleNodeVolumeCreateClientToken(
+        fixture.action.actionId,
+        nonce(73),
+      ),
+    ).not.toBe(first);
+  });
+
+  it('rejects malformed action and ownership identities', () => {
+    const fixture = makeFixture();
+    expect(() =>
+      getAwsSingleNodeVolumeCreateClientToken(
+        'not-an-action',
+        fixture.ownershipNonce,
+      ),
+    ).toThrow();
+    expect(() =>
+      getAwsSingleNodeVolumeCreateClientToken(
+        fixture.action.actionId,
+        'not-a-nonce',
+      ),
+    ).toThrow();
+  });
+});
+
 describe('AWS single-node retained EBS volume execution', () => {
   it('submits one exact deeply frozen CreateVolume request with atomic tags', async () => {
     const fixture = makeFixture();
@@ -669,7 +734,10 @@ describe('AWS single-node retained EBS volume execution', () => {
     expect(request).toEqual({
       AvailabilityZoneId:
         fixture.base.providerSpec.placement.availabilityZoneId,
-      ClientToken: fixture.action.actionId,
+      ClientToken: getAwsSingleNodeVolumeCreateClientToken(
+        fixture.action.actionId,
+        fixture.ownershipNonce,
+      ),
       Encrypted: configuration.encrypted,
       Iops: configuration.iops,
       KmsKeyId: fixture.base.providerSpec.storage.ebsKmsKeyArn,
@@ -695,7 +763,12 @@ describe('AWS single-node retained EBS volume execution', () => {
     await resource.executeAction(fixture.context);
 
     const request = client.createVolume.mock.calls[0][0];
-    expect(request.ClientToken).toBe(fixture.action.actionId);
+    expect(request.ClientToken).toBe(
+      getAwsSingleNodeVolumeCreateClientToken(
+        fixture.action.actionId,
+        fixture.ownershipNonce,
+      ),
+    );
     expect(request.TagSpecifications[0].Tags).toContainEqual({
       Key: 'wharfie:capability',
       Value: 'control-state',
@@ -725,7 +798,10 @@ describe('AWS single-node retained EBS volume execution', () => {
       client.createVolume.mock.calls[0][0],
     );
     expect(client.createVolume.mock.calls[1][0].ClientToken).toBe(
-      fixture.action.actionId,
+      getAwsSingleNodeVolumeCreateClientToken(
+        fixture.action.actionId,
+        fixture.ownershipNonce,
+      ),
     );
     expectDeepFrozen(client.createVolume.mock.calls[0][0]);
     expectDeepFrozen(client.createVolume.mock.calls[1][0]);

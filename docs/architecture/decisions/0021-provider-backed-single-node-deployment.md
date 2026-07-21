@@ -212,9 +212,12 @@ state digest, and ownership nonce. Its
 request carries the exact pinned zone ID, KMS key ARN, type, size, IOPS,
 throughput, and encryption contract. It omits `MultiAttachEnabled` because AWS
 supports that create parameter only for `io1` and `io2`; strict readback still
-requires the fixed `gp3` volume to report multi-attach disabled. The durable
-action identity supplies the stable `ClientToken`, and the complete
-ownership/contract tags are included atomically through the `volume`
+requires the fixed `gp3` volume to report multi-attach disabled. A
+domain-separated SHA-256 digest of the durable action identity and that exact
+intent's independently persisted ownership nonce supplies the stable
+`ClientToken`; a later logically identical action therefore cannot reuse an
+earlier incarnation's provider token. The complete ownership/contract tags are
+included atomically through the `volume`
 [`TagSpecification`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TagSpecification.html).
 Wharfie does not create an untagged volume and attempt to adopt or repair it
 later.

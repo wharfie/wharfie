@@ -534,10 +534,12 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       volume's size, IOPS, throughput, multi-attach, device,
       delete-on-termination, encryption, and destroy policy explicit.
 - [x] Implement the first controller-compatible retained EBS volume resource.
-      Create uses the durable action ID as the EC2 `ClientToken`, applies the
+      Create derives the EC2 `ClientToken` from the durable action ID and that
+      exact intent's independently persisted ownership nonce, applies the
       complete ownership/contract tags atomically, and accepts only strict
       `DescribeVolumes` readback. Ambiguous create responses leave the intended
-      action recoverable; controller retry reuses the token, while fresh-process
+      action recoverable; controller retry reuses the token, while a later
+      logically identical action receives a distinct token and fresh-process
       settlement can locate the one exact atomically tagged volume. Retention
       is an explicit no-op. This is deterministic-mock proof for volume
       provisioning only, not an attached service node or a composed production

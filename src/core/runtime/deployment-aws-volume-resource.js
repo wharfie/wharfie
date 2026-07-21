@@ -1,7 +1,10 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
 import { sortCanonicalJsonValue } from './canonical-order.js';
-import { sha256Base64Url } from './content-id.js';
+import {
+  assertDomainSeparatedSha256Id,
+  sha256Base64Url,
+} from './content-id.js';
 import {
   validateAwsSingleNodeProviderSpec,
   validateAwsSingleNodeProviderSpecContext,
@@ -11,6 +14,7 @@ import { validateDeploymentPlanContext } from './deployment-plan.js';
 import { validateDeploymentProfile } from './deployment-profile.js';
 import { validateProviderScope } from './deployment-provider-scope.js';
 import {
+  DEPLOYMENT_ACTION_ID_PREFIX,
   createDeploymentResourceBinding,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
@@ -21,6 +25,8 @@ export const AWS_SINGLE_NODE_VOLUME_MAX_DISCOVERY_PAGES = 16;
 export const AWS_SINGLE_NODE_VOLUME_DISCOVERY_MAX_RESULTS = 500;
 export const AWS_SINGLE_NODE_VOLUME_STATE_DIGEST_DOMAIN =
   'wharfie:aws-single-node-ebs-volume-state:v1';
+export const AWS_SINGLE_NODE_VOLUME_CREATE_CLIENT_TOKEN_DOMAIN =
+  'wharfie:aws-single-node-ebs-volume-create-client-token:v1';
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -220,13 +226,53 @@ function sortedTags(tags) {
   );
 }
 
+/**
+ * Give each durable create intent its own replay-stable provider token. An
+ * action ID can recur across identical reconcile plans, while the persisted
+ * unpredictable ownership nonce is unique to the exact intended effect.
+ * Lowercase hexadecimal is accepted by both EC2 and Cloud Control token
+ * grammars and preserves all 256 digest bits in 64 ASCII characters.
+ * @param {unknown} actionId - Exact deployment action identity.
+ * @param {unknown} ownershipNonce - Exact durable effect nonce.
+ * @returns {string} - Domain-separated lowercase SHA-256 token.
+ */
+export function getAwsSingleNodeVolumeCreateClientToken(
+  actionId,
+  ownershipNonce,
+) {
+  assertDomainSeparatedSha256Id(
+    actionId,
+    DEPLOYMENT_ACTION_ID_PREFIX,
+    'awsSingleNodeVolume clientToken actionId',
+  );
+  const canonicalOwnershipNonce = validateOwnershipNonce(
+    ownershipNonce,
+    'awsSingleNodeVolume clientToken ownershipNonce',
+  );
+  const payload = JSON.stringify(
+    sortCanonicalJsonValue({
+      actionId,
+      ownershipNonce: canonicalOwnershipNonce,
+    }),
+  );
+  return Buffer.from(
+    sha256Base64Url(
+      `${AWS_SINGLE_NODE_VOLUME_CREATE_CLIENT_TOKEN_DOMAIN}\0${payload}`,
+    ),
+    'base64url',
+  ).toString('hex');
+}
+
 /** @param {Readonly<Record<string, any>>} authority @returns {Readonly<import('@aws-sdk/client-ec2').CreateVolumeCommandInput>} */
 function createVolumeRequest(authority) {
   const configuration = authority.volumeConfiguration;
   return deepFreeze({
     AvailabilityZoneId:
       authority.plan.providerSpec.placement.availabilityZoneId,
-    ClientToken: authority.action.actionId,
+    ClientToken: getAwsSingleNodeVolumeCreateClientToken(
+      authority.action.actionId,
+      authority.ownershipNonce,
+    ),
     Encrypted: configuration.encrypted,
     Iops: configuration.iops,
     KmsKeyId: authority.plan.providerSpec.storage.ebsKmsKeyArn,
@@ -818,9 +864,11 @@ export default {
   AWS_SINGLE_NODE_VOLUME_DISCOVERY_MAX_RESULTS,
   AWS_SINGLE_NODE_VOLUME_MAX_ATTEMPTS,
   AWS_SINGLE_NODE_VOLUME_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_VOLUME_CREATE_CLIENT_TOKEN_DOMAIN,
   AWS_SINGLE_NODE_VOLUME_STATE_DIGEST_DOMAIN,
   AwsSingleNodeVolumeResourceConflictError,
   AwsSingleNodeVolumeResourceUnknownError,
   createAwsSingleNodeVolumeResource,
+  getAwsSingleNodeVolumeCreateClientToken,
   getAwsSingleNodeVolumeStateDigest,
 };
