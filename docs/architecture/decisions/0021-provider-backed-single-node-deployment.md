@@ -264,16 +264,16 @@ instance termination](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preser
 ### Direct VPC creation is a recoverable logical effect
 
 Network mutation uses a separate caller-owned authority with only the fixed
-VPC and internet-gateway create, describe, delete operations plus
-`DescribeVpcAttribute` and `close`. The SDK client is configured for one
-transport attempt because
+VPC and internet-gateway create, describe, delete, attach, and detach
+operations plus `DescribeVpcAttribute` and `close`. The SDK client is
+configured for one transport attempt because
 [`CreateVpc`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateVpc.html)
 has no provider idempotency token. Driver-controlled retries first inspect the
 exact logical resource instead of allowing the SDK to hide a second create.
 Errors preserve only `InvalidVpcID.NotFound`,
 `InvalidInternetGatewayID.NotFound`, `DependencyViolation`, `IncorrectState`,
-and a bounded HTTP status; raw provider details never cross the authority
-boundary.
+`Gateway.NotAttached`, `Resource.AlreadyAssociated`, and a bounded HTTP status;
+raw provider details never cross the authority boundary.
 
 `createAwsSingleNodeVpcResource` accepts only the fixed managed
 `network-vpc` role. Its state digest binds the provider specification's exact
@@ -331,9 +331,9 @@ ownership of those AWS defaults.
 ### Internet-gateway identity is separate from VPC attachment
 
 The fixed `network-internet-gateway` role uses the same caller-owned network
-authority, extended only with EC2 `CreateInternetGateway`,
-`DescribeInternetGateways`, and `DeleteInternetGateway`. The SDK remains capped
-at one attempt because
+authority's EC2 `CreateInternetGateway`, `DescribeInternetGateways`, and
+`DeleteInternetGateway` operations. The SDK remains capped at one attempt
+because
 [`CreateInternetGateway`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateInternetGateway.html)
 accepts atomic tag specifications but no durable client token. Its intrinsic
 state digest binds only the fixed gateway kind and purge policy; VPC identity,
@@ -353,10 +353,10 @@ is visibly convergent reconciliation rather than provider exactly-once
 execution.
 
 Create and no-op deliberately ignore the gateway's `Attachments` collection.
-After the later derived attachment role settles, an attached gateway is the
-normal intrinsic observation; making the gateway binding depend on that later
-effect would invert the graph. The separate
-`network-internet-gateway-attachment` role will own `AttachInternetGateway`,
+After the derived attachment role settles, an attached gateway is the normal
+intrinsic observation; making the gateway binding depend on that later effect
+would invert the graph. The separate
+`network-internet-gateway-attachment` role owns `AttachInternetGateway`,
 `DetachInternetGateway`, VPC identity, relationship state, and dependency
 lineage.
 
@@ -368,6 +368,47 @@ delete authority; missing or malformed attachment evidence is unknown.
 Dependency/state races remain retryable, while only exact typed not-found plus
 zero complete logical discoveries can settle absence. Duplicate evidence never
 triggers implicit detachment, deletion, or winner selection.
+
+### Gateway attachment is an exact derived relationship
+
+The fixed `network-internet-gateway-attachment` role has derived ownership and
+depends on the exact settled `network-vpc` and `network-internet-gateway`
+bindings in graph order. Its state digest binds only the constant relationship
+kind, `available` target state, and purge policy. The relationship has no
+provider-assigned ID or tags, so its `wia1` synthetic provider-resource ID is
+content-addressed from the exact VPC and gateway provider IDs. That ID is a
+receipt locator, not provider evidence; every action must re-prove both
+dependency bindings and the relationship itself.
+
+Settlement performs complete bounded
+[`DescribeInternetGateways`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeInternetGateways.html)
+discovery filtered by the exact VPC and an independent exact-ID read for the
+gateway. Both observations must identify the one expected gateway attached to
+the expected VPC in `available` state. One-sided visibility or a nonavailable
+state is transitional. An attachment to another endpoint, multiple matching
+gateways, duplicate attachment rows, or any other impossible one-to-one
+cardinality is a conflict. Missing or malformed evidence is never converted
+into ownership or absence.
+
+Create may call
+[`AttachInternetGateway`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AttachInternetGateway.html)
+only for the exact dependency endpoints after readback shows the relationship
+is absent without conflicting occupancy. No-op performs only the same strict
+readback. Destroy calls
+[`DetachInternetGateway`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DetachInternetGateway.html)
+for that exact pair and settles a null binding only after both independent
+reads prove it absent. Canonical reverse graph order therefore detaches the
+relationship before either directly owned endpoint can be purged.
+
+EC2's one-to-one gateway/VPC cardinality makes retrying an identical pair
+logically idempotent: after an ambiguous call, exact readback can prove either
+the intended relationship or its absence before another mutation. Wharfie
+still makes no claim that an attach or detach API call executes exactly once.
+Mutation responses, malformed responses, and sanitized
+`Resource.AlreadyAssociated` or `Gateway.NotAttached` errors are never
+settlement evidence; only the complete independent reads can settle the
+action. This is deterministic mock-backed protocol proof, not a live-account
+lifecycle claim.
 
 The portable capability model expands through one immutable, content-addressed
 `AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
@@ -768,6 +809,18 @@ roles are still unfinished. The same slice also makes the VPC driver's
 one-sided-visibility fence validate every present ownership record first, so a
 contradictory visible VPC cannot hide behind a temporarily absent corroborating
 read.
+
+The twelfth slice implements the derived internet-gateway attachment as its
+own recoverable effect. Exact VPC and gateway dependency-binding lineage plus
+the endpoint-derived `wia1` identity replace direct tags. Complete bounded
+VPC-filtered discovery and an independent exact gateway read must corroborate
+the same pair before create, no-op, or destroy can settle. Same-pair attach and
+detach retries exploit the provider's one-to-one cardinality for logical
+idempotence without claiming API-call exactly-once execution; responses and
+typed errors remain nonauthoritative. Reverse destroy detaches the
+relationship before gateway or VPC purge. The next implementation slice
+extracts and migrates only the narrow common tagged direct-EC2 recovery kernel
+before continuing with the subnet and remaining fixed graph.
 
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or

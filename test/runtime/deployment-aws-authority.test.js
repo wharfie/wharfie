@@ -47,11 +47,13 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
   'describeVolumes',
 ]);
 const NETWORK_RESOURCE_METHODS = Object.freeze([
+  'attachInternetGateway',
   'createInternetGateway',
   'createVpc',
   'describeInternetGateways',
   'describeVpcs',
   'describeVpcAttribute',
+  'detachInternetGateway',
   'deleteInternetGateway',
   'deleteVpc',
 ]);
@@ -157,6 +159,8 @@ async function loadHarness({
       if (method === 'describeVpcAttribute') {
         return { EnableDnsSupport: { Value: true }, input };
       }
+      if (method === 'attachInternetGateway') return { input };
+      if (method === 'detachInternetGateway') return { input };
       if (method === 'deleteInternetGateway') return { input };
       if (method === 'deleteVpc') return { input };
       throw new Error(`Unexpected EC2 method: ${method}`);
@@ -271,6 +275,14 @@ async function loadHarness({
     },
   }));
   jest.unstable_mockModule('@aws-sdk/client-ec2', () => ({
+    AttachInternetGatewayCommand: class AttachInternetGatewayCommand {
+      input;
+      operation = 'attachInternetGateway';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateInternetGatewayCommand: class CreateInternetGatewayCommand {
       input;
       operation = 'createInternetGateway';
@@ -346,6 +358,14 @@ async function loadHarness({
     DeleteInternetGatewayCommand: class DeleteInternetGatewayCommand {
       input;
       operation = 'deleteInternetGateway';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DetachInternetGatewayCommand: class DetachInternetGatewayCommand {
+      input;
+      operation = 'detachInternetGateway';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -952,6 +972,13 @@ describe('AWS deployment invocation authority', () => {
       expect(client).not.toHaveProperty('send');
       expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
 
+      const attachmentInput = {
+        InternetGatewayId: 'igw-00000000000000001',
+        VpcId: 'vpc-00000000000000001',
+      };
+      await expect(
+        client.attachInternetGateway(attachmentInput),
+      ).resolves.toEqual({ input: attachmentInput });
       const createInternetGatewayInput = {
         TagSpecifications: [
           {
@@ -997,6 +1024,13 @@ describe('AWS deployment invocation authority', () => {
         EnableDnsSupport: { Value: true },
         input: attributeInput,
       });
+      const detachInput = {
+        InternetGatewayId: 'igw-00000000000000001',
+        VpcId: 'vpc-00000000000000001',
+      };
+      await expect(client.detachInternetGateway(detachInput)).resolves.toEqual({
+        input: detachInput,
+      });
       const deleteInternetGatewayInput = {
         InternetGatewayId: 'igw-00000000000000001',
       };
@@ -1008,11 +1042,13 @@ describe('AWS deployment invocation authority', () => {
         input: deleteInput,
       });
       expect(harness.ec2Send.mock.calls).toEqual([
+        ['attachInternetGateway', attachmentInput],
         ['createInternetGateway', createInternetGatewayInput],
         ['createVpc', createInput],
         ['describeInternetGateways', describeInternetGatewaysInput],
         ['describeVpcs', describeInput],
         ['describeVpcAttribute', attributeInput],
+        ['detachInternetGateway', detachInput],
         ['deleteInternetGateway', deleteInternetGatewayInput],
         ['deleteVpc', deleteInput],
       ]);
@@ -1043,6 +1079,8 @@ describe('AWS deployment invocation authority', () => {
     ['InvalidInternetGatewayID.NotFound', 'describeInternetGateways', 404],
     ['DependencyViolation', 'deleteVpc', 400],
     ['IncorrectState', 'deleteVpc', 400],
+    ['Gateway.NotAttached', 'detachInternetGateway', 400],
+    ['Resource.AlreadyAssociated', 'attachInternetGateway', 400],
   ])(
     'preserves only the %s network resource classification',
     async (name, method, status) => {

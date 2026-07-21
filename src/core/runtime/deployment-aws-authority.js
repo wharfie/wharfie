@@ -2,6 +2,7 @@
 
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import {
+  AttachInternetGatewayCommand,
   CreateInternetGatewayCommand,
   CreateVpcCommand,
   CreateVolumeCommand,
@@ -14,6 +15,7 @@ import {
   DescribeVpcAttributeCommand,
   DescribeVpcsCommand,
   DescribeVolumesCommand,
+  DetachInternetGatewayCommand,
   EC2Client,
   GetEbsDefaultKmsKeyIdCommand,
 } from '@aws-sdk/client-ec2';
@@ -96,9 +98,11 @@ const VOLUME_RESOURCE_ERROR_NAMES = new Set([
 ]);
 const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'DependencyViolation',
+  'Gateway.NotAttached',
   'IncorrectState',
   'InvalidInternetGatewayID.NotFound',
   'InvalidVpcID.NotFound',
+  'Resource.AlreadyAssociated',
 ]);
 const S3_CONTROL_ERROR_NAMES = new Set([
   'ConditionalRequestConflict',
@@ -130,11 +134,13 @@ const S3_CONTROL_ERROR_NAMES = new Set([
 
 /**
  * @typedef NetworkResourceClient
+ * @property {(input: import('@aws-sdk/client-ec2').AttachInternetGatewayCommandInput) => Promise<any>} attachInternetGateway - Attach one exact internet gateway to one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput) => Promise<any>} createInternetGateway - Create one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').CreateVpcCommandInput) => Promise<any>} createVpc - Create one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeInternetGatewaysCommandInput) => Promise<any>} describeInternetGateways - Read exact internet-gateway state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcsCommandInput) => Promise<any>} describeVpcs - Read exact VPC state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput) => Promise<any>} describeVpcAttribute - Read one exact VPC attribute.
+ * @property {(input: import('@aws-sdk/client-ec2').DetachInternetGatewayCommandInput) => Promise<any>} detachInternetGateway - Detach one exact internet gateway from one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput) => Promise<any>} deleteInternetGateway - Delete one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteVpcCommandInput) => Promise<any>} deleteVpc - Delete one exact VPC.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
@@ -826,9 +832,9 @@ export async function createAwsDeploymentAuthority(options) {
     let client;
     try {
       client = new EC2Client({
-        // These network creates have no provider idempotency token. Keep SDK
-        // transport retries from turning one authorized call into multiple
-        // resources; each driver owns explicit recovery through exact readback.
+        // These network mutations have no provider idempotency token. Keep SDK
+        // transport retries from multiplying one authorized effect; each
+        // driver owns explicit recovery through exact readback.
         ...BaseAWS.config({ maxAttempts: 1 }),
         region,
         credentials,
@@ -865,6 +871,9 @@ export async function createAwsDeploymentAuthority(options) {
     }
 
     return Object.freeze({
+      attachInternetGateway: (
+        /** @type {import('@aws-sdk/client-ec2').AttachInternetGatewayCommandInput} */ input,
+      ) => call(() => client.send(new AttachInternetGatewayCommand(input))),
       createInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new CreateInternetGatewayCommand(input))),
@@ -880,6 +889,9 @@ export async function createAwsDeploymentAuthority(options) {
       describeVpcAttribute: (
         /** @type {import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput} */ input,
       ) => call(() => client.send(new DescribeVpcAttributeCommand(input))),
+      detachInternetGateway: (
+        /** @type {import('@aws-sdk/client-ec2').DetachInternetGatewayCommandInput} */ input,
+      ) => call(() => client.send(new DetachInternetGatewayCommand(input))),
       deleteInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new DeleteInternetGatewayCommand(input))),

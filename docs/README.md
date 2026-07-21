@@ -101,14 +101,16 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [direct EC2 internet-gateway resource
+The current restart handoff is the [derived internet-gateway attachment
+checkpoint](../llm/checkpoints/2026-07-21-v30-derived-internet-gateway-attachment.md).
+It gives the separate VPC/gateway relationship exact derived dependency
+lineage, a `wia1` synthetic identity bound to both endpoint IDs, and complete
+bounded VPC-filtered plus independent exact-gateway readback. Same-pair
+attach/detach retries are logically idempotent under EC2's one-to-one
+cardinality, but provider responses and typed errors are never settlement
+evidence and Wharfie makes no API-call exactly-once claim. The retained-volume,
+VPC, gateway, and gateway-attachment drivers are implemented; a narrow shared
+tagged-effect kernel is next before the subnet and remaining network,
+identity, node, attachment, and complete AWS driver composition. Its parent is
+the [direct EC2 internet-gateway resource
 checkpoint](../llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md).
-It adds the standalone gateway lifecycle to the single-attempt network
-authority while keeping the gateway's VPC attachment in its own later derived
-role. Atomic ownership tags, strict dual readback, unique response-loss
-recovery, visible duplicate blocking, and attachment-fenced purge preserve the
-same honest no-token boundary as the VPC. The retained-volume, VPC, and gateway
-drivers are implemented; remaining network, identity, node, attachment, and
-complete AWS driver composition remain unfinished. Its parent is the [direct
-EC2 VPC resource
-checkpoint](../llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md).
