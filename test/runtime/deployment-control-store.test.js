@@ -18,6 +18,13 @@ import {
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
 import {
+  createDeploymentArtifactStageIntent,
+  createDeploymentArtifactStageReceipt,
+  DEPLOYMENT_ARTIFACT_STAGE_RECEIPT_ID_DOMAIN,
+  DEPLOYMENT_ARTIFACT_STAGE_RECEIPT_ID_PREFIX,
+  validateDeploymentArtifactStageReceipt,
+} from '../../src/core/runtime/deployment-artifact-stage.js';
+import {
   createCanonicalJsonSha256Id,
   createSha256Id,
   sha256Base64Url,
@@ -204,6 +211,42 @@ function makeDocuments() {
     lastOperation: null,
   });
   return { profile, plan, head };
+}
+
+/** @param {string} [artifactBytes] @param {number} [nonceByte] @param {string} [versionId] @returns {{artifact: Readonly<Record<string, any>>, intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}} */
+function makeArtifactStageDocuments(
+  artifactBytes = 'control store artifact',
+  nonceByte = 23,
+  versionId = 'stage-version-1',
+) {
+  const { profile, plan } = makeDocuments();
+  const byteDigest = digest(artifactBytes);
+  const artifact = Object.freeze({
+    artifactId: `waf1_${byteDigest.value}`,
+    byteDigest,
+    size: Buffer.byteLength(artifactBytes),
+    appId: plan.deploymentRevision.appId,
+    revisionId: plan.deploymentRevision.revisionId,
+    target: profile.target,
+  });
+  const intent = createDeploymentArtifactStageIntent({
+    providerScope: plan.providerScope,
+    artifact,
+    ownershipNonce: createOwnershipNonce(Buffer.alloc(32, nonceByte)),
+  });
+  const receipt = createDeploymentArtifactStageReceipt({
+    intent,
+    object: {
+      bucketName: intent.object.bucketName,
+      key: intent.object.key,
+      versionId,
+      contentLength: artifact.size,
+      checksum: artifact.byteDigest,
+      serverSideEncryption: 'AES256',
+      storageClass: 'STANDARD',
+    },
+  });
+  return { artifact, intent, receipt };
 }
 
 /** @returns {{plan: Readonly<Record<string, any>>, head: Readonly<Record<string, any>>, planEnvelopeBytes: number, headEnvelopeBytes: number}} */
@@ -425,6 +468,412 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
       expect(Object.isFrozen(storedProfile)).toBe(true);
       expect(Object.isFrozen(storedPlan)).toBe(true);
       expect(Object.isFrozen(storedPlan.actions)).toBe(true);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('stores immutable artifact-stage intent and receipt envelopes with strong reads', async () => {
+    const harness = await create();
+    try {
+      /** @type {Array<Record<string, any>>} */
+      const reads = [];
+      const db = {
+        ...harness.db,
+        async get(/** @type {any} */ params) {
+          reads.push(params);
+          return await harness.db.get(params);
+        },
+      };
+      const store = createDeploymentControlStore({ db, tableName: TABLE_NAME });
+      const { artifact, intent, receipt } = makeArtifactStageDocuments();
+      const intentKey = `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageIntent}${intent.providerScope.providerScopeId}/${artifact.artifactId}`;
+      const receiptKey = `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageReceipt}${intent.stageIntentId}`;
+
+      expect(DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent).toBe(
+        'deployment-artifact-stage-intent',
+      );
+      expect(DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt).toBe(
+        'deployment-artifact-stage-receipt',
+      );
+      expect(DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageIntent).toBe(
+        'artifact-stage-intent/v1/',
+      );
+      expect(DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageReceipt).toBe(
+        'artifact-stage-receipt/v1/',
+      );
+      await expect(
+        store.readArtifactStageIntent(
+          intent.providerScope.providerScopeId,
+          artifact.artifactId,
+        ),
+      ).resolves.toBeNull();
+      await expect(
+        store.readArtifactStageReceipt(intent),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+
+      await expect(store.putArtifactStageIntentIfAbsent(intent)).resolves.toBe(
+        true,
+      );
+      await expect(store.readArtifactStageReceipt(intent)).resolves.toBeNull();
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(intent, receipt),
+      ).resolves.toBe(true);
+      const storedIntent = await store.readArtifactStageIntent(
+        intent.providerScope.providerScopeId,
+        artifact.artifactId,
+      );
+      const storedReceipt = await store.readArtifactStageReceipt(intent);
+
+      expect(storedIntent).toEqual(intent);
+      expect(storedReceipt).toEqual(receipt);
+      expect(storedIntent).not.toBe(intent);
+      expect(storedReceipt).not.toBe(receipt);
+      expect(Object.isFrozen(storedIntent)).toBe(true);
+      expect(Object.isFrozen(storedReceipt)).toBe(true);
+      expect(reads.every((read) => read.consistentRead === true)).toBe(true);
+
+      await expect(
+        store.putArtifactStageIntentIfAbsent(clone(intent)),
+      ).resolves.toBe(false);
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(clone(intent), clone(receipt)),
+      ).resolves.toBe(false);
+
+      await expect(
+        harness.db.get({
+          tableName: TABLE_NAME,
+          keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+          keyValue: intentKey,
+          consistentRead: true,
+        }),
+      ).resolves.toEqual({
+        record_key: intentKey,
+        storage_schema_version: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+        record_kind: DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent,
+        document_id: intent.stageIntentId,
+        document: intent,
+      });
+      await expect(
+        harness.db.get({
+          tableName: TABLE_NAME,
+          keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+          keyValue: receiptKey,
+          consistentRead: true,
+        }),
+      ).resolves.toEqual({
+        record_key: receiptKey,
+        storage_schema_version: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+        record_kind: DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt,
+        document_id: receipt.stageReceiptId,
+        document: receipt,
+      });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('refuses orphan and context-mismatched artifact-stage receipts before writing', async () => {
+    const harness = await create();
+    try {
+      let receiptWrites = 0;
+      const db = {
+        ...harness.db,
+        async transactionWrite(/** @type {any} */ params) {
+          if (
+            params.putRequests?.[0]?.record?.record_kind ===
+            DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt
+          ) {
+            receiptWrites += 1;
+          }
+          return await harness.db.transactionWrite(params);
+        },
+      };
+      const store = createDeploymentControlStore({ db, tableName: TABLE_NAME });
+      const expected = makeArtifactStageDocuments();
+      const mismatched = makeArtifactStageDocuments(
+        'control store artifact',
+        24,
+      );
+
+      expect(
+        validateDeploymentArtifactStageReceipt(mismatched.receipt),
+      ).toEqual(mismatched.receipt);
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(
+          expected.intent,
+          expected.receipt,
+        ),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+      await expect(
+        store.readArtifactStageReceipt(expected.intent),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+      expect(receiptWrites).toBe(0);
+
+      await store.putArtifactStageIntentIfAbsent(expected.intent);
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(
+          expected.intent,
+          mismatched.receipt,
+        ),
+      ).rejects.toThrow(/stageIntentId does not match context/);
+      expect(receiptWrites).toBe(0);
+      await expect(
+        store.readArtifactStageReceipt(expected.intent),
+      ).resolves.toBeNull();
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('requires the supplied artifact-stage intent to exactly equal the persisted intent', async () => {
+    const harness = await create();
+    try {
+      let receiptWrites = 0;
+      const db = {
+        ...harness.db,
+        async transactionWrite(/** @type {any} */ params) {
+          if (
+            params.putRequests?.[0]?.record?.record_kind ===
+            DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt
+          ) {
+            receiptWrites += 1;
+          }
+          return await harness.db.transactionWrite(params);
+        },
+      };
+      const store = createDeploymentControlStore({ db, tableName: TABLE_NAME });
+      const persisted = makeArtifactStageDocuments();
+      const supplied = makeArtifactStageDocuments('control store artifact', 24);
+      expect(supplied.artifact).toEqual(persisted.artifact);
+      expect(supplied.intent.stageIntentId).not.toBe(
+        persisted.intent.stageIntentId,
+      );
+
+      await store.putArtifactStageIntentIfAbsent(persisted.intent);
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(
+          supplied.intent,
+          supplied.receipt,
+        ),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+      expect(receiptWrites).toBe(0);
+      await expect(
+        store.readArtifactStageReceipt(supplied.intent),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('rejects artifact-stage identity collisions with different immutable content', async () => {
+    const harness = await create();
+    try {
+      const store = createDeploymentControlStore({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const first = makeArtifactStageDocuments();
+      const competing = makeArtifactStageDocuments(
+        'control store artifact',
+        24,
+      );
+      const competingReceipt = createDeploymentArtifactStageReceipt({
+        intent: first.intent,
+        object: {
+          ...clone(first.receipt.object),
+          versionId: 'stage-version-2',
+        },
+      });
+
+      expect(competing.intent.stageIntentId).not.toBe(
+        first.intent.stageIntentId,
+      );
+      expect(competingReceipt.stageReceiptId).not.toBe(
+        first.receipt.stageReceiptId,
+      );
+      await store.putArtifactStageIntentIfAbsent(first.intent);
+      await store.putArtifactStageReceiptIfAbsent(first.intent, first.receipt);
+
+      await expect(
+        store.putArtifactStageIntentIfAbsent(competing.intent),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(first.intent, competingReceipt),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+      expect(
+        await store.readArtifactStageIntent(
+          first.intent.providerScope.providerScopeId,
+          first.artifact.artifactId,
+        ),
+      ).toEqual(first.intent);
+      expect(await store.readArtifactStageReceipt(first.intent)).toEqual(
+        first.receipt,
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('fails closed for malformed and cross-key artifact-stage records', async () => {
+    const harness = await create();
+    try {
+      const store = createDeploymentControlStore({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const requested = makeArtifactStageDocuments();
+      const other = makeArtifactStageDocuments('different artifact bytes', 31);
+      const intentKey = `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageIntent}${requested.intent.providerScope.providerScopeId}/${requested.artifact.artifactId}`;
+      const receiptKey = `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageReceipt}${requested.intent.stageIntentId}`;
+
+      await store.putArtifactStageIntentIfAbsent(requested.intent);
+      await harness.db.put({
+        tableName: TABLE_NAME,
+        keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+        record: {
+          record_key: receiptKey,
+          storage_schema_version: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+          record_kind: DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt,
+          document_id: other.receipt.stageReceiptId,
+          document: other.receipt,
+        },
+      });
+
+      await expect(
+        store.readArtifactStageIntent(
+          requested.intent.providerScope.providerScopeId,
+          requested.artifact.artifactId,
+        ),
+      ).resolves.toEqual(requested.intent);
+      await expect(
+        store.readArtifactStageReceipt(requested.intent),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+
+      const contextMismatchedPayload = {
+        schemaVersion: requested.receipt.schemaVersion,
+        kind: requested.receipt.kind,
+        stageIntentId: requested.intent.stageIntentId,
+        artifactId: other.receipt.artifactId,
+        object: other.receipt.object,
+      };
+      const contextMismatchedReceipt = {
+        ...contextMismatchedPayload,
+        stageReceiptId: createCanonicalJsonSha256Id({
+          domain: DEPLOYMENT_ARTIFACT_STAGE_RECEIPT_ID_DOMAIN,
+          prefix: DEPLOYMENT_ARTIFACT_STAGE_RECEIPT_ID_PREFIX,
+          value: contextMismatchedPayload,
+        }),
+      };
+      expect(
+        validateDeploymentArtifactStageReceipt(contextMismatchedReceipt),
+      ).toEqual(contextMismatchedReceipt);
+      await harness.db.put({
+        tableName: TABLE_NAME,
+        keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+        record: {
+          record_key: receiptKey,
+          storage_schema_version: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+          record_kind: DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt,
+          document_id: contextMismatchedReceipt.stageReceiptId,
+          document: contextMismatchedReceipt,
+        },
+      });
+      await expect(
+        store.readArtifactStageReceipt(requested.intent),
+      ).rejects.toMatchObject({
+        name: 'DeploymentControlStoreIntegrityError',
+        cause: expect.objectContaining({
+          message: expect.stringContaining('artifactId does not match context'),
+        }),
+      });
+
+      await harness.db.put({
+        tableName: TABLE_NAME,
+        keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+        record: {
+          record_key: intentKey,
+          storage_schema_version: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+          record_kind: DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent,
+          document_id: other.intent.stageIntentId,
+          document: other.intent,
+        },
+      });
+      await expect(
+        store.readArtifactStageIntent(
+          requested.intent.providerScope.providerScopeId,
+          requested.artifact.artifactId,
+        ),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+      await expect(
+        store.readArtifactStageReceipt(requested.intent),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+
+      await harness.db.put({
+        tableName: TABLE_NAME,
+        keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+        record: {
+          record_key: intentKey,
+          storage_schema_version: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+          record_kind: DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent,
+          document_id: requested.intent.stageIntentId,
+          document: requested.intent,
+          unsupported: true,
+        },
+      });
+      await expect(
+        store.readArtifactStageIntent(
+          requested.intent.providerScope.providerScopeId,
+          requested.artifact.artifactId,
+        ),
+      ).rejects.toBeInstanceOf(DeploymentControlStoreIntegrityError);
+      await expect(
+        store.readArtifactStageIntent(
+          'wps1_not-a-canonical-identity',
+          requested.artifact.artifactId,
+        ),
+      ).rejects.toThrow(/canonical wps1/);
+      await expect(
+        store.readArtifactStageReceipt('wsi1_not-a-canonical-identity'),
+      ).rejects.toThrow(/must be a JSON object/);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('propagates artifact-stage receipt response loss and converges on exact replay', async () => {
+    const harness = await create();
+    try {
+      const ambiguous = new Error('artifact receipt outcome is ambiguous');
+      let loseReceiptResponse = true;
+      const db = {
+        ...harness.db,
+        async transactionWrite(/** @type {any} */ params) {
+          const result = await harness.db.transactionWrite(params);
+          if (
+            loseReceiptResponse &&
+            params.putRequests?.[0]?.record?.record_kind ===
+              DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt
+          ) {
+            loseReceiptResponse = false;
+            throw ambiguous;
+          }
+          return result;
+        },
+      };
+      const store = createDeploymentControlStore({ db, tableName: TABLE_NAME });
+      const { intent, receipt } = makeArtifactStageDocuments();
+      await store.putArtifactStageIntentIfAbsent(intent);
+
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(intent, receipt),
+      ).rejects.toBe(ambiguous);
+      await expect(store.readArtifactStageReceipt(intent)).resolves.toEqual(
+        receipt,
+      );
+      await expect(
+        store.putArtifactStageReceiptIfAbsent(clone(intent), clone(receipt)),
+      ).resolves.toBe(false);
     } finally {
       await harness.cleanup();
     }

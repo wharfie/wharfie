@@ -164,9 +164,19 @@ ownership bindings, and a CAS deployment head support crash-resumable
 convergence against a deterministic fake. The AWS boundary also resolves one
 ordinary credential-chain snapshot for an explicit region and bootstraps the
 fixed retained DynamoDB control table. These AWS calls are proven under
-focused mocks, not a live account. Recovery-safe artifact staging, the
-provider-visible health receipt, fixed AWS resource driver, operator commands,
-and clean-account proof remain unfinished.
+focused mocks, not a live account. The same credential snapshot now exposes a
+narrow caller-owned S3 capability. Wharfie can bootstrap one retained,
+versioned control bucket with no bucket policy, wait through S3's documented
+first-enable propagation interval, persist an immutable stage intent before
+streaming the running SEA through a held descriptor, and accept only exact
+checksum, encryption, metadata, and non-`null` object-version readback. The
+held bytes are also cross-checked against the SEA's embedded app, revision, and
+runtime target. Converge requires that receipt and regenerates provider
+authority after staging before accepting a plan; resume revalidates the
+retained version without historical local bytes, while destroy deliberately
+does not require it. The provider-visible health receipt, fixed AWS resource
+driver, operator commands, composition, and clean-account proof remain
+unfinished.
 
 ## Start here
 
@@ -174,7 +184,8 @@ and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Pinned AWS provider-spec checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md) — the current handoff for immutable regional prerequisites and recovery-stable Plan/Inspection V2 authority.
+- [Recovery-safe artifact-staging checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md) — the current handoff for the retained versioned control bucket, held-source upload, and exact object-version recovery evidence.
+- [Pinned AWS provider-spec checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md) — the preceding handoff for immutable regional prerequisites and recovery-stable Plan/Inspection V2 authority.
 - [AWS deployment-control checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md) — the preceding handoff for credential-bound AWS scope, retained DynamoDB bootstrap, and the durable deployment store.
 - [Recoverable deployment-controller checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md) — the preceding handoff for strict single-node deployment identity, planning, ownership, and provider-neutral crash recovery.
 - [Bounded runtime extraction checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md) — the preceding handoff for crash-safe packaged native extraction cleanup and the provider-backed next vertical.

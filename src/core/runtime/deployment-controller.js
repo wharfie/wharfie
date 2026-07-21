@@ -5,6 +5,10 @@ import {
   validateDeploymentHead,
 } from './deployment-head.js';
 import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
+import {
+  validateDeploymentArtifactStageIntentContext,
+  validateDeploymentArtifactStageReceiptContext,
+} from './deployment-artifact-stage.js';
 import { validateDeploymentInspectionContext } from './deployment-inspection.js';
 import {
   validateDeploymentPlan,
@@ -34,6 +38,7 @@ const CONVERGE_REQUEST_KEYS = new Set(['plan', 'profile']);
 const RESUME_REQUEST_KEYS = new Set(['deploymentInstanceId']);
 const SETTLEMENT_KEYS = new Set(['status', 'binding']);
 const STATUS_ONLY_SETTLEMENT_KEYS = new Set(['status']);
+const ARTIFACT_STAGE_KEYS = new Set(['intent', 'receipt']);
 
 /** A durable compare-and-set lost to a different controller transition. */
 export class DeploymentControllerConflictError extends Error {
@@ -133,7 +138,7 @@ function nextHead(head, changes) {
  * Provider calls receive immutable validated documents plus the current head;
  * credentials remain private to the provider implementation.
  *
- * @param {{store: Record<string, Function>, provider: Record<string, Function>, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports.
+ * @param {{store: Record<string, Function>, provider: Record<string, Function>, artifactStager: Record<string, Function>, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports.
  * @returns {Readonly<{plan: (input: unknown) => Promise<Readonly<Record<string, any>>>, converge: (input: unknown) => Promise<Readonly<Record<string, any>>>, resume: (input: unknown) => Promise<Readonly<Record<string, any>>>}>} - Controller API.
  */
 export function createDeploymentController(dependencies) {
@@ -144,7 +149,7 @@ export function createDeploymentController(dependencies) {
   ) {
     throw new TypeError('deploymentController dependencies must be an object.');
   }
-  const { store, provider } = dependencies;
+  const { store, provider, artifactStager } = dependencies;
   const nonceFactory =
     dependencies.createOwnershipNonce || createRandomOwnershipNonce;
   const incarnationFactory =
@@ -176,6 +181,11 @@ export function createDeploymentController(dependencies) {
         'executeAction',
         'verifySettlement',
       ],
+    ],
+    [
+      'deploymentController.artifactStager',
+      artifactStager,
+      ['stageRunningArtifact', 'validateStagedArtifact'],
     ],
   ];
   for (const [path, owner, methods] of ports) {
@@ -505,6 +515,52 @@ export function createDeploymentController(dependencies) {
       providerSpec: request.providerSpec,
       head,
     });
+  }
+
+  /**
+   * Independently validate the stager's exact intent/receipt bundle against
+   * the immutable plan authority. The controller never trusts the stager to
+   * perform these cross-document checks on its behalf.
+   * @param {unknown} value - Candidate stage bundle.
+   * @param {Readonly<Record<string, any>>} plan - Exact accepted plan.
+   * @param {Readonly<Record<string, any>>} profile - Exact plan profile.
+   * @param {string} path - Human-readable boundary path.
+   * @returns {Readonly<{intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}>} - Canonical stage evidence.
+   */
+  function validateArtifactStage(value, plan, profile, path) {
+    const bundle = exactObject(value, ARTIFACT_STAGE_KEYS, path);
+    const intent = validateDeploymentArtifactStageIntentContext(
+      bundle.intent,
+      {
+        deploymentRevision: plan.deploymentRevision,
+        profile,
+        providerScope: plan.providerScope,
+      },
+      `${path}.intent`,
+    );
+    const receipt = validateDeploymentArtifactStageReceiptContext(
+      bundle.receipt,
+      { intent },
+      `${path}.receipt`,
+    );
+    return Object.freeze({ intent, receipt });
+  }
+
+  /** @param {'stageRunningArtifact'|'validateStagedArtifact'} method @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} profile @returns {Promise<Readonly<{intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}>|null>} */
+  async function resolveArtifactStage(method, plan, profile) {
+    if (plan.operation === 'destroy') return null;
+    return validateArtifactStage(
+      await artifactStager[method](
+        Object.freeze({
+          deploymentRevision: plan.deploymentRevision,
+          profile,
+          providerScope: plan.providerScope,
+        }),
+      ),
+      plan,
+      profile,
+      `deploymentController.artifactStager.${method} result`,
+    );
   }
 
   /** @param {Readonly<Record<string, any>>} inspection @param {Record<string, any>} request @param {Readonly<Record<string, any>>|null} head @returns {void} */
@@ -986,8 +1042,8 @@ export function createDeploymentController(dependencies) {
     return { status: 'converged', binding };
   }
 
-  /** @param {Readonly<Record<string, any>>} plan @param {Record<string, any>} profile @param {Readonly<Record<string, any>>} head @param {number} actionIndex @returns {Readonly<Record<string, any>>} */
-  function actionContext(plan, profile, head, actionIndex) {
+  /** @param {Readonly<Record<string, any>>} plan @param {Record<string, any>} profile @param {Readonly<Record<string, any>>} head @param {number} actionIndex @param {Readonly<Record<string, any>>|null} artifactStage @returns {Readonly<Record<string, any>>} */
+  function actionContext(plan, profile, head, actionIndex, artifactStage) {
     return Object.freeze({
       operation: plan.operation,
       plan,
@@ -996,6 +1052,7 @@ export function createDeploymentController(dependencies) {
       ownershipNonce: head.activeOperation.intents[actionIndex].ownershipNonce,
       head,
       profile,
+      artifactStage,
     });
   }
 
@@ -1163,8 +1220,8 @@ export function createDeploymentController(dependencies) {
     return (await compareAndSet(head, successor)).head;
   }
 
-  /** @param {Readonly<Record<string, any>>} plan @param {Record<string, any>} profile @param {Readonly<Record<string, any>>} initialHead @returns {Promise<Readonly<Record<string, any>>>} */
-  async function runOperation(plan, profile, initialHead) {
+  /** @param {Readonly<Record<string, any>>} plan @param {Record<string, any>} profile @param {Readonly<Record<string, any>>} initialHead @param {Readonly<Record<string, any>>|null} artifactStage @returns {Promise<Readonly<Record<string, any>>>} */
+  async function runOperation(plan, profile, initialHead, artifactStage) {
     let head = initialHead;
     await assertPlanProviderScope(plan, profile);
     if (head.activeOperation.status === 'blocked') {
@@ -1223,11 +1280,11 @@ export function createDeploymentController(dependencies) {
           return (await compareAndSet(head, createBlockedHead(head))).head;
         }
         await provider.executeAction(
-          actionContext(plan, profile, head, actionIndex),
+          actionContext(plan, profile, head, actionIndex, artifactStage),
         );
         settlement = validateSettlement(
           await provider.verifySettlement(
-            actionContext(plan, profile, head, actionIndex),
+            actionContext(plan, profile, head, actionIndex, artifactStage),
           ),
           action,
           head.activeOperation.intents[actionIndex],
@@ -1236,7 +1293,7 @@ export function createDeploymentController(dependencies) {
       } else if (intent.status === 'intended') {
         settlement = validateSettlement(
           await provider.verifySettlement(
-            actionContext(plan, profile, head, actionIndex),
+            actionContext(plan, profile, head, actionIndex, artifactStage),
           ),
           action,
           intent,
@@ -1254,11 +1311,11 @@ export function createDeploymentController(dependencies) {
             return (await compareAndSet(head, createBlockedHead(head))).head;
           }
           await provider.executeAction(
-            actionContext(plan, profile, head, actionIndex),
+            actionContext(plan, profile, head, actionIndex, artifactStage),
           );
           settlement = validateSettlement(
             await provider.verifySettlement(
-              actionContext(plan, profile, head, actionIndex),
+              actionContext(plan, profile, head, actionIndex, artifactStage),
             ),
             action,
             intent,
@@ -1440,12 +1497,41 @@ export function createDeploymentController(dependencies) {
       await assertProviderSpecValid(request, head);
     }
 
-    // This is the authority boundary: re-read above, then re-inspect and
-    // regenerate immediately before the first durable mutation.
-    const freshPlan = await createFreshPlan(request, head);
-    if (freshPlan.planId !== submittedPlan.planId) {
+    // Reject an already-stale preview before the potentially large upload.
+    // Stage intent/receipt records deliberately precede controller plan,
+    // profile, and head state, then a second head read and provider plan close
+    // the upload window before controller-state acceptance.
+    const preflightPlan = await createFreshPlan(request, head);
+    if (!sameJson(preflightPlan, submittedPlan)) {
       throw new StaleDeploymentPlanError(
         'Submitted deployment plan no longer matches the fresh provider plan.',
+      );
+    }
+    const artifactStage = await resolveArtifactStage(
+      'stageRunningArtifact',
+      submittedPlan,
+      profile,
+    );
+    const headAfterStaging = await readHead(submittedPlan.deploymentInstanceId);
+    if (!sameJson(headAfterStaging, head)) {
+      throw new StaleDeploymentPlanError(
+        'Durable deployment head changed during artifact staging.',
+      );
+    }
+    if (head !== null && head.phase === 'READY') {
+      const settledProviderSpec = await selectProviderSpec(request, head);
+      if (!sameJson(settledProviderSpec, submittedPlan.providerSpec)) {
+        throw new StaleDeploymentPlanError(
+          'Submitted deployment plan no longer uses the last settled provider specification.',
+        );
+      }
+    } else {
+      await assertProviderSpecValid(request, head);
+    }
+    const acceptancePlan = await createFreshPlan(request, head);
+    if (!sameJson(acceptancePlan, submittedPlan)) {
+      throw new StaleDeploymentPlanError(
+        'Submitted deployment plan changed while its artifact was staged.',
       );
     }
     const intents = await createIntents(submittedPlan, head);
@@ -1454,7 +1540,7 @@ export function createDeploymentController(dependencies) {
     const initial = createInitialHead(submittedPlan, head, intents);
     const transition = await compareAndSet(head, initial);
     head = transition.head;
-    return await runOperation(submittedPlan, profile, head);
+    return await runOperation(submittedPlan, profile, head, artifactStage);
   }
 
   /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
@@ -1507,6 +1593,11 @@ export function createDeploymentController(dependencies) {
       },
       storedPlan.providerScope,
     );
+    const artifactStage = await resolveArtifactStage(
+      'validateStagedArtifact',
+      storedPlan,
+      profile,
+    );
     if (head.activeOperation.status === 'running') {
       const claimable = createBlockedHead(head);
       const transition = await compareAndSet(head, claimable);
@@ -1517,7 +1608,7 @@ export function createDeploymentController(dependencies) {
       }
       head = transition.head;
     }
-    return await runOperation(storedPlan, profile, head);
+    return await runOperation(storedPlan, profile, head, artifactStage);
   }
 
   return Object.freeze({ plan, converge, resume });

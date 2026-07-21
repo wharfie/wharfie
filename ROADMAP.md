@@ -1,9 +1,10 @@
 # Wharfie roadmap
 
 **Status:** The strict single-node deployment protocol now has an exact
-credential-bound AWS authority, portable control store, and retained DynamoDB
-table lifecycle under focused mocks; artifact staging, the fixed driver,
-commands, and clean-account proof are next · **Last updated:** 2026-07-20
+credential-bound AWS authority, retained DynamoDB/control-bucket lifecycles,
+portable control records, and recovery-safe executable staging under focused
+mocks; provider health evidence, the fixed driver, commands, and clean-account
+proof are next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -499,6 +500,14 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       instance/metadata shape, storage, network, and health timing. Only a new
       incarnation resolves mutable prerequisites; converge and recovery use the
       content-addressed provider specification already embedded in the plan.
+- [x] Add the retained, versioned S3 control bucket and immutable artifact-stage
+      intent/object-version receipt protocol. Converge hashes and streams the
+      running SEA through one held descriptor only after persisting intent,
+      requires exact SHA-256/SSE/metadata/version readback before accepting the
+      plan, and recovery revalidates that exact retained version without local
+      historical bytes. Bucket bootstrap rejects bucket policies, waits the
+      documented first-enable propagation interval, then proves versioned
+      object-write readiness before staging.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -588,11 +597,9 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Define recovery-safe provider artifact staging and its retained control
-   bucket, then add the provider-visible read-only service-health receipt. The
-   exact regional provider specification and narrow
-   SSM/artifact-read/health-write identity are now pinned by the immutable
-   plan.
+1. Add the provider-visible read-only service-health receipt. The exact
+   regional provider specification, retained artifact-stage version, and narrow
+   SSM/artifact-read/health-write identity are now pinned or durably evidenced.
 2. Implement the fixed AWS driver as independently recoverable resource
    capabilities, then compose it and the retained table with the strict
    recovery protocol. Mount source and packaged `plan`, `apply`, `inspect`,
@@ -604,8 +611,10 @@ receipts remain bound to `0d927463`.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [pinned AWS provider-spec
-checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md). Its
+The current restart point is the [recovery-safe artifact-staging
+checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md).
+Its parent is the [pinned AWS provider-spec
+checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md), whose
 parent is the [AWS deployment-control
 checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md), whose
 parent is the [recoverable deployment-controller

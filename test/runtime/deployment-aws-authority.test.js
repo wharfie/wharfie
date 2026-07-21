@@ -14,15 +14,37 @@ const IDENTITY = Object.freeze({
   Arn: 'arn:aws:sts::123456789012:assumed-role/wharfie/test-session',
   UserId: 'AROATEST:test-session',
 });
+const S3_CONTROL_METHODS = Object.freeze([
+  'createBucket',
+  'headBucket',
+  'getBucketEncryption',
+  'getBucketLifecycleConfiguration',
+  'getBucketLocation',
+  'getBucketOwnershipControls',
+  'getBucketPolicy',
+  'getBucketReplication',
+  'getBucketTagging',
+  'getBucketVersioning',
+  'getPublicAccessBlock',
+  'putBucketEncryption',
+  'putBucketOwnershipControls',
+  'putBucketVersioning',
+  'putPublicAccessBlock',
+  'putObject',
+  'headObject',
+]);
 
 /**
  * Install isolated AWS SDK doubles before importing the authority module.
- * @param {{credentials?: unknown, identities?: unknown[]}} [options] - Mock outcomes.
+ * @param {{credentials?: unknown, identities?: unknown[], s3ConstructionError?: unknown, s3MethodError?: unknown, s3CloseError?: unknown}} [options] - Mock outcomes.
  * @returns {Promise<Record<string, any>>} - Module and SDK observations.
  */
 async function loadHarness({
   credentials = CREDENTIALS,
   identities = [],
+  s3ConstructionError,
+  s3MethodError,
+  s3CloseError,
 } = {}) {
   jest.resetModules();
   const credentialProvider = jest.fn(async () => {
@@ -34,6 +56,8 @@ async function loadHarness({
   const stsConfigs = [];
   /** @type {Record<string, any>[]} */
   const dynamoConfigs = [];
+  /** @type {Record<string, any>[]} */
+  const s3Configs = [];
   const stsDestroy = jest.fn();
   const dynamoDestroy = jest.fn();
   const dynamoSend = jest.fn(
@@ -43,6 +67,15 @@ async function loadHarness({
     ) => ({}),
   );
   const documentDestroy = jest.fn();
+  const s3Destroy = jest.fn(() => {
+    if (s3CloseError) throw s3CloseError;
+  });
+  const s3Send = jest.fn(
+    async (/** @type {string} */ _method, /** @type {unknown} */ _input) => {
+      if (s3MethodError) throw s3MethodError;
+      return {};
+    },
+  );
   const responses = [...identities];
   const stsSend = jest.fn(async (/** @type {unknown} */ _command) => {
     const response = responses.length > 0 ? responses.shift() : IDENTITY;
@@ -111,6 +144,23 @@ async function loadHarness({
     ResourceNotFoundException: class extends Error {},
     ReturnValue: { NONE: 'NONE' },
   }));
+  jest.unstable_mockModule('@aws-sdk/client-s3', () => ({
+    S3: class S3 {
+      constructor(/** @type {Record<string, any>} */ config) {
+        if (s3ConstructionError) throw s3ConstructionError;
+        s3Configs.push(config);
+        for (const method of S3_CONTROL_METHODS) {
+          /** @type {Record<string, any>} */ (this)[method] = (
+            /** @type {unknown} */ input,
+          ) => s3Send(method, input);
+        }
+      }
+
+      destroy() {
+        s3Destroy();
+      }
+    },
+  }));
   const documentClient = {
     query: jest.fn(),
     put: jest.fn(),
@@ -132,16 +182,19 @@ async function loadHarness({
     fromNodeProviderChain,
     stsConfigs,
     dynamoConfigs,
+    s3Configs,
     stsSend,
     stsDestroy,
     dynamoDestroy,
     dynamoSend,
     documentDestroy,
+    s3Destroy,
+    s3Send,
   };
 }
 
 describe('AWS deployment invocation authority', () => {
-  it('pins explicit region and one credential snapshot across STS and DynamoDB', async () => {
+  it('pins explicit region and one credential snapshot across STS, DynamoDB, and S3', async () => {
     const previousRegion = process.env.AWS_REGION;
     process.env.AWS_REGION = 'eu-west-1';
     const harness = await loadHarness();
@@ -169,15 +222,24 @@ describe('AWS deployment invocation authority', () => {
 
       const db = authority.createDynamoDB({ readOnly: true });
       const controlClient = authority.createDynamoDBControlClient();
+      const s3ControlClient = authority.createS3ControlClient();
       expect(harness.dynamoConfigs[0].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[0].credentials).toBe(credentials);
       expect(harness.dynamoConfigs[1].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[1].credentials).toBe(credentials);
+      expect(harness.s3Configs[0].region).toBe('us-east-1');
+      expect(harness.s3Configs[0].credentials).toBe(credentials);
       expect(Object.isFrozen(controlClient)).toBe(true);
+      expect(Object.isFrozen(s3ControlClient)).toBe(true);
       expect(controlClient).not.toHaveProperty('config');
+      expect(s3ControlClient).not.toHaveProperty('config');
       await controlClient.describeTable({ TableName: 'control-table' });
       expect(harness.dynamoSend).toHaveBeenCalledWith('describeTable', {
         TableName: 'control-table',
+      });
+      await s3ControlClient.headBucket({ Bucket: 'control-bucket' });
+      expect(harness.s3Send).toHaveBeenCalledWith('headBucket', {
+        Bucket: 'control-bucket',
       });
       await expect(authority.resolveScope()).resolves.toEqual(
         authority.providerScope,
@@ -186,11 +248,98 @@ describe('AWS deployment invocation authority', () => {
       expect(JSON.stringify(authority)).not.toMatch(/AKIA|never-print/);
       await db.close();
       await controlClient.close();
+      await s3ControlClient.close();
       await authority.close();
     } finally {
       if (previousRegion === undefined) delete process.env.AWS_REGION;
       else process.env.AWS_REGION = previousRegion;
     }
+  });
+
+  it('exposes only the exact narrow S3 control surface', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createS3ControlClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...S3_CONTROL_METHODS, 'close'].sort(),
+      );
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      for (const method of S3_CONTROL_METHODS) {
+        const input = { operationMarker: method };
+        await expect(client[method](input)).resolves.toEqual({});
+        expect(harness.s3Send).toHaveBeenLastCalledWith(method, input);
+      }
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it('normalizes S3 failures while preserving only allowlisted operation identity', async () => {
+    const constructionHarness = await loadHarness({
+      s3ConstructionError: new Error('construction-secret'),
+    });
+    const constructionAuthority =
+      await constructionHarness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+    expect(() => constructionAuthority.createS3ControlClient()).toThrow(
+      'AWS deployment S3 control client creation failed.',
+    );
+    await constructionAuthority.close();
+
+    const operationError = new Error('provider detail');
+    operationError.name = 'NoSuchBucketPolicy';
+    /** @type {any} */ (operationError).$metadata = {
+      httpStatusCode: 404,
+      requestId: 'provider-request-secret',
+    };
+    const operationHarness = await loadHarness({
+      s3MethodError: operationError,
+      s3CloseError: new Error('close-secret'),
+    });
+    const operationAuthority =
+      await operationHarness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+    const client = operationAuthority.createS3ControlClient();
+
+    const observed = await client
+      .getBucketPolicy({
+        Bucket: 'control',
+        ExpectedBucketOwner: IDENTITY.Account,
+      })
+      .catch((/** @type {unknown} */ error) => error);
+    expect(observed).not.toBe(operationError);
+    expect(observed).toMatchObject({
+      name: 'NoSuchBucketPolicy',
+      code: 'AWS_DEPLOYMENT_S3_CONTROL_OPERATION',
+      message: 'AWS deployment S3 control operation failed.',
+      $metadata: { httpStatusCode: 404 },
+    });
+    expect(JSON.stringify(observed)).not.toMatch(
+      /provider detail|provider-request-secret/,
+    );
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment S3 control client close failed.',
+    );
+    expect(operationHarness.s3Destroy).toHaveBeenCalledTimes(1);
+    await expect(
+      client.headObject({ Bucket: 'control', Key: 'stage' }),
+    ).rejects.toThrow('AWS deployment S3 control client is closed.');
+    await operationAuthority.close();
   });
 
   it.each([
@@ -288,19 +437,23 @@ describe('AWS deployment invocation authority', () => {
     );
   });
 
-  it('closes STS idempotently, leaves issued DB ownership to the caller, and refuses reuse', async () => {
+  it('closes STS idempotently, leaves issued DB and S3 ownership to callers, and refuses reuse', async () => {
     const harness = await loadHarness();
     const authority = await harness.createAwsDeploymentAuthority({
       region: 'us-east-1',
     });
     const db = authority.createDynamoDB();
     const controlClient = authority.createDynamoDBControlClient();
+    const s3ControlClient = /** @type {Record<string, any>} */ (
+      authority.createS3ControlClient()
+    );
 
     await authority.close();
     await authority.close();
     expect(harness.stsDestroy).toHaveBeenCalledTimes(1);
     expect(harness.documentDestroy).not.toHaveBeenCalled();
     expect(harness.dynamoDestroy).not.toHaveBeenCalled();
+    expect(harness.s3Destroy).not.toHaveBeenCalled();
     await expect(authority.resolveScope()).rejects.toThrow(
       'AWS deployment authority is closed.',
     );
@@ -310,6 +463,12 @@ describe('AWS deployment invocation authority', () => {
     expect(() => authority.createDynamoDBControlClient()).toThrow(
       'AWS deployment authority is closed.',
     );
+    expect(() => authority.createS3ControlClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
+    await expect(
+      s3ControlClient.headBucket({ Bucket: 'still-caller-owned' }),
+    ).resolves.toEqual({});
 
     await db.close();
     await controlClient.close();
@@ -317,7 +476,16 @@ describe('AWS deployment invocation authority', () => {
     expect(() =>
       controlClient.describeTable({ TableName: 'not-contacted' }),
     ).toThrow('AWS deployment DynamoDB control client is closed.');
+    const firstS3Close = s3ControlClient.close();
+    expect(s3ControlClient.close()).toBe(firstS3Close);
+    await firstS3Close;
+    for (const method of S3_CONTROL_METHODS) {
+      await expect(s3ControlClient[method]({})).rejects.toThrow(
+        'AWS deployment S3 control client is closed.',
+      );
+    }
     expect(harness.documentDestroy).toHaveBeenCalledTimes(1);
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
+    expect(harness.s3Destroy).toHaveBeenCalledTimes(1);
   });
 });

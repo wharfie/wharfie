@@ -11,6 +11,10 @@ import {
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
 import {
+  createDeploymentArtifactStageIntent,
+  createDeploymentArtifactStageReceipt,
+} from '../../src/core/runtime/deployment-artifact-stage.js';
+import {
   createDeploymentHead,
   validateDeploymentHead,
 } from '../../src/core/runtime/deployment-head.js';
@@ -177,6 +181,41 @@ function makeContext() {
     }),
     incarnationId: createDeploymentIncarnationId(Buffer.alloc(32, 7)),
   });
+}
+
+/** @param {Readonly<Record<string, any>>} base @param {number} [nonceByte] @param {string} [versionId] */
+function makeArtifactStageBundle(
+  base,
+  nonceByte = 41,
+  versionId = 'controller-stage-version-1',
+) {
+  const byteDigest = digest('controller artifact');
+  const artifact = {
+    artifactId: base.deploymentRevision.artifactId,
+    byteDigest,
+    size: Buffer.byteLength('controller artifact'),
+    appId: base.deploymentRevision.appId,
+    revisionId: base.deploymentRevision.revisionId,
+    target: base.profile.target,
+  };
+  const intent = createDeploymentArtifactStageIntent({
+    providerScope: base.providerScope,
+    artifact,
+    ownershipNonce: createOwnershipNonce(Buffer.alloc(32, nonceByte)),
+  });
+  const receipt = createDeploymentArtifactStageReceipt({
+    intent,
+    object: {
+      bucketName: intent.object.bucketName,
+      key: intent.object.key,
+      versionId,
+      contentLength: artifact.size,
+      checksum: byteDigest,
+      serverSideEncryption: 'AES256',
+      storageClass: 'STANDARD',
+    },
+  });
+  return Object.freeze({ intent, receipt });
 }
 
 /**
@@ -406,8 +445,8 @@ function makeLiveInspection(
   );
 }
 
-/** @param {Readonly<Record<string, any>>|null} [initialHead] @param {Readonly<Record<string, any>>[]} [initialPlans] */
-function makeStore(initialHead = null, initialPlans = []) {
+/** @param {Readonly<Record<string, any>>|null} [initialHead] @param {Readonly<Record<string, any>>[]} [initialPlans] @param {string[]} [events] */
+function makeStore(initialHead = null, initialPlans = [], events = []) {
   let head =
     initialHead === null ? null : validateDeploymentHead(clone(initialHead));
   /** @type {Map<string, Readonly<Record<string, any>>>} */
@@ -428,6 +467,7 @@ function makeStore(initialHead = null, initialPlans = []) {
     },
     /** @param {{expectedHeadId: string|null, nextHead: unknown}} input */
     async compareAndSetHead({ expectedHeadId, nextHead }) {
+      events.push('head-cas');
       stats.casAttempts += 1;
       if ((head?.headId || null) !== expectedHeadId) return false;
       const previous = head;
@@ -438,6 +478,7 @@ function makeStore(initialHead = null, initialPlans = []) {
     },
     /** @param {unknown} plan */
     async putPlanIfAbsent(plan) {
+      events.push('plan-put');
       stats.puts += 1;
       const canonical = validateDeploymentPlan(clone(plan));
       if (!plans.has(canonical.planId)) plans.set(canonical.planId, canonical);
@@ -449,6 +490,7 @@ function makeStore(initialHead = null, initialPlans = []) {
     },
     /** @param {unknown} profile */
     async putProfileIfAbsent(profile) {
+      events.push('profile-put');
       stats.puts += 1;
       const canonical = validateDeploymentProfile(clone(profile));
       if (!profiles.has(canonical.profileRevisionId)) {
@@ -474,12 +516,71 @@ function makeStore(initialHead = null, initialPlans = []) {
   };
 }
 
+/** @param {Readonly<Record<string, any>>} base @param {string[]} [events] */
+function makeArtifactStager(base, events = []) {
+  const bundle = makeArtifactStageBundle(base);
+  /** @type {unknown} */
+  let stageResult = bundle;
+  /** @type {unknown} */
+  let validationResult = bundle;
+  let stageCount = 0;
+  let validationCount = 0;
+  /** @type {null|(() => void|Promise<void>)} */
+  let afterStage = null;
+  /** @type {Record<string, any>[]} */
+  const stageContexts = [];
+  /** @type {Record<string, any>[]} */
+  const validationContexts = [];
+  const api = {
+    /** @param {Record<string, any>} context */
+    async stageRunningArtifact(context) {
+      events.push('artifact-stage');
+      stageCount += 1;
+      stageContexts.push(context);
+      if (afterStage) await afterStage();
+      return stageResult;
+    },
+    /** @param {Record<string, any>} context */
+    async validateStagedArtifact(context) {
+      events.push('artifact-validate');
+      validationCount += 1;
+      validationContexts.push(context);
+      return validationResult;
+    },
+  };
+  return {
+    api,
+    bundle,
+    stageContexts,
+    validationContexts,
+    get stageCount() {
+      return stageCount;
+    },
+    get validationCount() {
+      return validationCount;
+    },
+    /** @param {unknown} value */
+    setStageResult(value) {
+      stageResult = value;
+    },
+    /** @param {null|(() => void|Promise<void>)} hook */
+    setAfterStage(hook) {
+      afterStage = hook;
+    },
+    /** @param {unknown} value */
+    setValidationResult(value) {
+      validationResult = value;
+    },
+  };
+}
+
 /**
  * @param {Readonly<Record<string, any>>} base
  * @param {ReturnType<typeof makeStore>} store
  * @param {Map<string, Readonly<Record<string, any>>>} physical
+ * @param {string[]} [events]
  */
-function makeProvider(base, store, physical) {
+function makeProvider(base, store, physical, events = []) {
   /** @type {'original'|'changed'} */
   let variant = 'original';
   /** @type {string|null} */
@@ -494,6 +595,10 @@ function makeProvider(base, store, physical) {
   let inspectionStateDriftResourceKey = null;
   /** @type {Map<string, number>} */
   const executeCount = new Map();
+  /** @type {Record<string, any>[]} */
+  const executeContexts = [];
+  /** @type {Record<string, any>[]} */
+  const verifyContexts = [];
   let providerSpecResolutionCount = 0;
   let providerSpecValidationCount = 0;
   /** @type {Readonly<Record<string, any>>|null} */
@@ -542,6 +647,8 @@ function makeProvider(base, store, physical) {
     },
     /** @param {Record<string, any>} context */
     async executeAction(context) {
+      events.push('action-execute');
+      executeContexts.push(context);
       const { action } = context;
       executeCount.set(
         action.actionId,
@@ -567,6 +674,8 @@ function makeProvider(base, store, physical) {
     },
     /** @param {Record<string, any>} context */
     async verifySettlement(context) {
+      events.push('action-verify');
+      verifyContexts.push(context);
       const { action } = context;
       if (action.action === 'delete') {
         return physical.has(action.resourceKey)
@@ -582,6 +691,8 @@ function makeProvider(base, store, physical) {
   return {
     api,
     executeCount,
+    executeContexts,
+    verifyContexts,
     get providerSpecResolutionCount() {
       return providerSpecResolutionCount;
     },
@@ -723,19 +834,31 @@ function replaceReadySettledPlan(
 /** @param {{head?: Readonly<Record<string, any>>|null, physical?: Map<string, Readonly<Record<string, any>>>}} [options] */
 function makeHarness(options = {}) {
   const base = makeContext();
+  /** @type {string[]} */
+  const events = [];
   const physical = options.physical || new Map();
-  const store = makeStore(options.head || null);
-  const provider = makeProvider(base, store, physical);
+  const store = makeStore(options.head || null, [], events);
+  const provider = makeProvider(base, store, physical, events);
+  const artifactStager = makeArtifactStager(base, events);
   const controller = createDeploymentController({
     store: store.api,
     provider: provider.api,
+    artifactStager: artifactStager.api,
     createOwnershipNonce: (() => {
       let index = 20;
       return () => createOwnershipNonce(Buffer.alloc(32, index++));
     })(),
     createDeploymentIncarnationId: () => base.incarnationId,
   });
-  return { base, physical, store, provider, controller };
+  return {
+    base,
+    physical,
+    store,
+    provider,
+    artifactStager,
+    events,
+    controller,
+  };
 }
 
 /** @param {ReturnType<typeof makeHarness>} harness @param {'apply'|'destroy'} operation */
@@ -746,6 +869,212 @@ async function planWith(harness, operation) {
     profile: harness.base.profile,
   });
 }
+
+describe('deployment controller artifact staging', () => {
+  it('stages before controller persistence and passes one exact bundle to every action call', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const submittedSnapshot = clone(plan);
+
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).resolves.toMatchObject({ phase: 'READY' });
+
+    expect(harness.artifactStager.stageCount).toBe(1);
+    expect(harness.artifactStager.validationCount).toBe(0);
+    expect(harness.artifactStager.stageContexts[0]).toEqual({
+      deploymentRevision: plan.deploymentRevision,
+      profile: harness.base.profile,
+      providerScope: plan.providerScope,
+    });
+    expect(Object.isFrozen(harness.artifactStager.stageContexts[0])).toBe(true);
+    const stageIndex = harness.events.indexOf('artifact-stage');
+    expect(stageIndex).toBeGreaterThanOrEqual(0);
+    expect(stageIndex).toBeLessThan(harness.events.indexOf('profile-put'));
+    expect(stageIndex).toBeLessThan(harness.events.indexOf('plan-put'));
+    expect(stageIndex).toBeLessThan(harness.events.indexOf('head-cas'));
+    expect(plan).toEqual(submittedSnapshot);
+
+    const actionContexts = [
+      ...harness.provider.executeContexts,
+      ...harness.provider.verifyContexts,
+    ];
+    expect(actionContexts.length).toBeGreaterThan(0);
+    const artifactStage = actionContexts[0].artifactStage;
+    expect(artifactStage).toEqual(harness.artifactStager.bundle);
+    expect(Object.isFrozen(artifactStage)).toBe(true);
+    expect(Object.isFrozen(artifactStage.intent)).toBe(true);
+    expect(Object.isFrozen(artifactStage.receipt)).toBe(true);
+    expect(
+      actionContexts.every(
+        (context) => context.artifactStage === artifactStage,
+      ),
+    ).toBe(true);
+  });
+
+  it.each(['malformed bundle', 'mismatched receipt'])(
+    'refuses %s before plan, head, or action mutation',
+    async (corruption) => {
+      const harness = makeHarness();
+      const plan = await planWith(harness, 'apply');
+      if (corruption === 'malformed bundle') {
+        harness.artifactStager.setStageResult({
+          ...harness.artifactStager.bundle,
+          unsupported: true,
+        });
+      } else {
+        const other = makeArtifactStageBundle(
+          harness.base,
+          42,
+          'controller-stage-version-2',
+        );
+        harness.artifactStager.setStageResult({
+          intent: harness.artifactStager.bundle.intent,
+          receipt: other.receipt,
+        });
+      }
+
+      await expect(
+        harness.controller.converge({ plan, profile: harness.base.profile }),
+      ).rejects.toThrow();
+
+      expect(harness.artifactStager.stageCount).toBe(1);
+      expect(harness.store.stats).toEqual({
+        puts: 0,
+        casAttempts: 0,
+        casSuccesses: 0,
+      });
+      expect(harness.store.head).toBeNull();
+      expect(harness.provider.executeContexts).toHaveLength(0);
+      expect(harness.provider.verifyContexts).toHaveLength(0);
+      expect(harness.events).not.toContain('profile-put');
+      expect(harness.events).not.toContain('plan-put');
+      expect(harness.events).not.toContain('head-cas');
+    },
+  );
+
+  it('regenerates the provider plan after staging before accepting controller state', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    harness.artifactStager.setAfterStage(() => {
+      harness.provider.setVariant('changed');
+    });
+
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).rejects.toThrow(/changed while its artifact was staged/i);
+
+    expect(harness.artifactStager.stageCount).toBe(1);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+    expect(harness.store.head).toBeNull();
+    expect(harness.provider.executeContexts).toHaveLength(0);
+    expect(harness.provider.verifyContexts).toHaveLength(0);
+    expect(harness.events).not.toContain('profile-put');
+    expect(harness.events).not.toContain('plan-put');
+    expect(harness.events).not.toContain('head-cas');
+  });
+
+  it('validates staged evidence before any recovery CAS', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    harness.store.setAfterCas((_previous, next) => {
+      if (next.activeOperation?.intents[0].status === 'intended') {
+        throw new Error('injected crash after intent');
+      }
+    });
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).rejects.toThrow();
+    harness.store.setAfterCas(null);
+    harness.artifactStager.setValidationResult({
+      ...harness.artifactStager.bundle,
+      unsupported: true,
+    });
+    const statsBeforeResume = { ...harness.store.stats };
+    const headBeforeResume = harness.store.head;
+    const executionCountBeforeResume = harness.provider.executeContexts.length;
+    harness.events.length = 0;
+
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: harness.base.deploymentInstanceId,
+      }),
+    ).rejects.toThrow();
+
+    expect(harness.events).toEqual(['artifact-validate']);
+    expect(harness.artifactStager.validationCount).toBe(1);
+    expect(harness.store.stats).toEqual(statsBeforeResume);
+    expect(harness.store.head?.headId).toBe(headBeforeResume?.headId);
+    expect(harness.provider.executeContexts).toHaveLength(
+      executionCountBeforeResume,
+    );
+  });
+
+  it('does not restage a plan that is already active', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    harness.provider.crashAfterPhysicalEffect(plan.actions[0].actionId);
+
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).rejects.toThrow('injected crash after physical effect');
+    expect(harness.artifactStager.stageCount).toBe(1);
+
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).rejects.toThrow(/already active|recover it through resume/i);
+    expect(harness.artifactStager.stageCount).toBe(1);
+    expect(harness.artifactStager.validationCount).toBe(0);
+  });
+
+  it('bypasses staging and validation for destroy and passes null to every action call', async () => {
+    const ready = makeReadyState();
+    /** @type {string[]} */
+    const events = [];
+    const store = makeStore(ready.head, [ready.applyPlan], events);
+    const provider = makeProvider(ready.base, store, ready.physical, events);
+    const artifactStager = makeArtifactStager(ready.base, events);
+    const controller = createDeploymentController({
+      store: store.api,
+      provider: provider.api,
+      artifactStager: artifactStager.api,
+      createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
+      createDeploymentIncarnationId: () => ready.base.incarnationId,
+    });
+    const plan = await controller.plan({
+      operation: 'destroy',
+      deploymentRevision: ready.base.deploymentRevision,
+      profile: ready.base.profile,
+    });
+    provider.crashAfterPhysicalEffect(plan.actions[0].actionId);
+
+    await expect(
+      controller.converge({ plan, profile: ready.base.profile }),
+    ).rejects.toThrow('injected crash after physical effect');
+    await expect(
+      controller.resume({
+        deploymentInstanceId: ready.base.deploymentInstanceId,
+      }),
+    ).resolves.toMatchObject({ phase: 'DESTROYED' });
+
+    expect(artifactStager.stageCount).toBe(0);
+    expect(artifactStager.validationCount).toBe(0);
+    expect(events).not.toContain('artifact-stage');
+    expect(events).not.toContain('artifact-validate');
+    const actionContexts = [
+      ...provider.executeContexts,
+      ...provider.verifyContexts,
+    ];
+    expect(actionContexts.length).toBeGreaterThan(0);
+    expect(
+      actionContexts.every((context) => context.artifactStage === null),
+    ).toBe(true);
+  });
+});
 
 describe('deployment controller crash recovery', () => {
   it('resumes after the durable intent CAS and executes each logical action once', async () => {
@@ -773,13 +1102,39 @@ describe('deployment controller crash recovery', () => {
     ).toBe(0);
 
     harness.store.setAfterCas(null);
+    harness.events.length = 0;
     const head = await harness.controller.resume({
       deploymentInstanceId: harness.base.deploymentInstanceId,
     });
 
     expect(head.phase).toBe('READY');
     expect(harness.provider.providerSpecResolutionCount).toBe(1);
-    expect(harness.provider.providerSpecValidationCount).toBe(1);
+    expect(harness.provider.providerSpecValidationCount).toBe(2);
+    expect(harness.artifactStager.stageCount).toBe(1);
+    expect(harness.artifactStager.validationCount).toBe(1);
+    expect(harness.events[0]).toBe('artifact-validate');
+    expect(harness.events.indexOf('artifact-validate')).toBeLessThan(
+      harness.events.indexOf('head-cas'),
+    );
+    expect(harness.artifactStager.validationContexts[0]).toEqual({
+      deploymentRevision: plan.deploymentRevision,
+      profile: harness.base.profile,
+      providerScope: plan.providerScope,
+    });
+    expect(Object.isFrozen(harness.artifactStager.validationContexts[0])).toBe(
+      true,
+    );
+    const actionContexts = [
+      ...harness.provider.executeContexts,
+      ...harness.provider.verifyContexts,
+    ];
+    const resumedArtifactStage = actionContexts[0].artifactStage;
+    expect(resumedArtifactStage).toEqual(harness.artifactStager.bundle);
+    expect(
+      actionContexts.every(
+        (context) => context.artifactStage === resumedArtifactStage,
+      ),
+    ).toBe(true);
     for (const action of plan.actions) {
       expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
     }
@@ -955,6 +1310,7 @@ describe('deployment controller fencing', () => {
     const controller = createDeploymentController({
       store: store.api,
       provider: provider.api,
+      artifactStager: makeArtifactStager(ready.base).api,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => ready.base.incarnationId,
     });
@@ -1073,6 +1429,7 @@ describe('deployment controller fencing', () => {
       const controller = createDeploymentController({
         store: store.api,
         provider: provider.api,
+        artifactStager: makeArtifactStager(ready.base).api,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
       });
@@ -1264,6 +1621,7 @@ describe('deployment controller destroy ownership', () => {
       const controller = createDeploymentController({
         store: store.api,
         provider: provider.api,
+        artifactStager: makeArtifactStager(ready.base).api,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
       });
@@ -1299,6 +1657,7 @@ describe('deployment controller destroy ownership', () => {
       const controller = createDeploymentController({
         store: store.api,
         provider: provider.api,
+        artifactStager: makeArtifactStager(ready.base).api,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
       });
@@ -1328,6 +1687,7 @@ describe('deployment controller destroy ownership', () => {
     const controller = createDeploymentController({
       store: store.api,
       provider: provider.api,
+      artifactStager: makeArtifactStager(ready.base).api,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => freshIncarnationId,
     });

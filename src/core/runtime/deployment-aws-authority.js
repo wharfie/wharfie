@@ -1,6 +1,7 @@
 /* eslint-disable jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact internal boundary helpers keep their complete types inline. */
 
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
+import { S3 } from '@aws-sdk/client-s3';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
@@ -38,6 +39,28 @@ const DYNAMODB_CONTROL_CLOSED_ERROR =
   'AWS deployment DynamoDB control client is closed.';
 const DYNAMODB_CONTROL_CLOSE_ERROR =
   'AWS deployment DynamoDB control client close failed.';
+const S3_CONTROL_CREATION_ERROR =
+  'AWS deployment S3 control client creation failed.';
+const S3_CONTROL_OPERATION_ERROR =
+  'AWS deployment S3 control operation failed.';
+const S3_CONTROL_CLOSED_ERROR = 'AWS deployment S3 control client is closed.';
+const S3_CONTROL_CLOSE_ERROR = 'AWS deployment S3 control client close failed.';
+const S3_CONTROL_ERROR_NAMES = new Set([
+  'ConditionalRequestConflict',
+  'NoSuchBucket',
+  'NoSuchKey',
+  'NoSuchLifecycleConfiguration',
+  'NoSuchBucketPolicy',
+  'NoSuchOwnershipControls',
+  'NoSuchPublicAccessBlockConfiguration',
+  'NoSuchTagSet',
+  'NoSuchVersion',
+  'NotFound',
+  'OwnershipControlsNotFoundError',
+  'PreconditionFailed',
+  'ReplicationConfigurationNotFoundError',
+  'ServerSideEncryptionConfigurationNotFoundError',
+]);
 
 /**
  * @typedef DynamoDBControlClient
@@ -47,6 +70,28 @@ const DYNAMODB_CONTROL_CLOSE_ERROR =
  * @property {(input: import('@aws-sdk/client-dynamodb').DescribeTimeToLiveCommandInput) => Promise<any>} describeTimeToLive - Read TTL state.
  * @property {(input: import('@aws-sdk/client-dynamodb').ListTagsOfResourceCommandInput) => Promise<any>} listTagsOfResource - Read table tags.
  * @property {(input: import('@aws-sdk/client-dynamodb').UpdateContinuousBackupsCommandInput) => Promise<any>} updateContinuousBackups - Strengthen backup state.
+ * @property {() => Promise<void>} close - Close the caller-owned SDK client.
+ */
+
+/**
+ * @typedef S3ControlClient
+ * @property {(input: import('@aws-sdk/client-s3').CreateBucketCommandInput) => Promise<any>} createBucket - Create one exact bucket.
+ * @property {(input: import('@aws-sdk/client-s3').HeadBucketCommandInput) => Promise<any>} headBucket - Read bucket existence and access.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketEncryptionCommandInput) => Promise<any>} getBucketEncryption - Read encryption state.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketLifecycleConfigurationCommandInput) => Promise<any>} getBucketLifecycleConfiguration - Read lifecycle state.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketLocationCommandInput) => Promise<any>} getBucketLocation - Read bucket location.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketOwnershipControlsCommandInput) => Promise<any>} getBucketOwnershipControls - Read ownership controls.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketPolicyCommandInput) => Promise<any>} getBucketPolicy - Read bucket-policy state.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketReplicationCommandInput) => Promise<any>} getBucketReplication - Read replication state.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketTaggingCommandInput) => Promise<any>} getBucketTagging - Read bucket tags.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketVersioningCommandInput) => Promise<any>} getBucketVersioning - Read versioning state.
+ * @property {(input: import('@aws-sdk/client-s3').GetPublicAccessBlockCommandInput) => Promise<any>} getPublicAccessBlock - Read public-access state.
+ * @property {(input: import('@aws-sdk/client-s3').PutBucketEncryptionCommandInput) => Promise<any>} putBucketEncryption - Set exact encryption state.
+ * @property {(input: import('@aws-sdk/client-s3').PutBucketOwnershipControlsCommandInput) => Promise<any>} putBucketOwnershipControls - Set exact ownership controls.
+ * @property {(input: import('@aws-sdk/client-s3').PutBucketVersioningCommandInput) => Promise<any>} putBucketVersioning - Set exact versioning state.
+ * @property {(input: import('@aws-sdk/client-s3').PutPublicAccessBlockCommandInput) => Promise<any>} putPublicAccessBlock - Set exact public-access state.
+ * @property {(input: import('@aws-sdk/client-s3').PutObjectCommandInput) => Promise<any>} putObject - Put one exact object.
+ * @property {(input: import('@aws-sdk/client-s3').HeadObjectCommandInput) => Promise<any>} headObject - Read exact object metadata.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
 
@@ -66,6 +111,33 @@ function isPlainObject(value) {
     !Array.isArray(value) &&
     Object.getPrototypeOf(value) === Object.prototype
   );
+}
+
+/**
+ * Preserve only the provider classifications required for authoritative
+ * readback. Raw SDK messages, request IDs, credential-bearing configuration,
+ * and causes never cross the narrow authority boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeS3ControlError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(S3_CONTROL_OPERATION_ERROR)
+    );
+  error.name = S3_CONTROL_ERROR_NAMES.has(candidate.name)
+    ? candidate.name
+    : 'AwsDeploymentS3ControlError';
+  error.code = 'AWS_DEPLOYMENT_S3_CONTROL_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
 }
 
 /** @param {Record<string, any>} value @param {Set<string>} keys @returns {boolean} */
@@ -165,14 +237,15 @@ function scopeFromCallerIdentity(value, region) {
 
 /**
  * Resolve one invocation's ordinary AWS credentials into a non-exposed
- * capability. Every STS check and DynamoDB adapter issued by the capability
- * uses the same static credential object and explicit region.
+ * capability. Every STS check and DynamoDB or S3 client issued by the
+ * capability uses the same static credential object and explicit region.
  * @param {{region: string}} options - Exact explicit invocation region.
  * @returns {Promise<Readonly<{
  *   providerScope: Readonly<import('./deployment-provider-scope.js').AwsProviderScope>,
  *   resolveScope: () => Promise<Readonly<import('./deployment-provider-scope.js').AwsProviderScope>>,
  *   createDynamoDB: (options?: {readOnly?: boolean}) => import('../lib/db/base.js').DBClient,
  *   createDynamoDBControlClient: () => Readonly<DynamoDBControlClient>,
+ *   createS3ControlClient: () => Readonly<S3ControlClient>,
  *   close: () => Promise<void>,
  * }>>} - Credential-bound AWS authority.
  */
@@ -318,6 +391,108 @@ export async function createAwsDeploymentAuthority(options) {
     });
   }
 
+  /** @returns {Readonly<S3ControlClient>} - Caller-owned narrow control-plane client. */
+  function createS3ControlClient() {
+    assertOpen();
+    /** @type {S3} */
+    let client;
+    try {
+      client = new S3({
+        ...BaseAWS.config(),
+        region,
+        credentials,
+      });
+    } catch {
+      throw new Error(S3_CONTROL_CREATION_ERROR);
+    }
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) throw new Error(S3_CONTROL_CLOSED_ERROR);
+      // Lifecycle and staging consumers must distinguish authoritative AWS
+      // outcomes such as NoSuchBucket, NoSuchLifecycleConfiguration, and a
+      // conditional PutObject collision. Preserve only those allowlisted
+      // classifications while stripping the raw provider failure.
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeS3ControlError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        try {
+          client.destroy();
+        } catch {
+          throw new Error(S3_CONTROL_CLOSE_ERROR);
+        }
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      createBucket: (
+        /** @type {import('@aws-sdk/client-s3').CreateBucketCommandInput} */ input,
+      ) => call(() => client.createBucket(input)),
+      headBucket: (
+        /** @type {import('@aws-sdk/client-s3').HeadBucketCommandInput} */ input,
+      ) => call(() => client.headBucket(input)),
+      getBucketEncryption: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketEncryptionCommandInput} */ input,
+      ) => call(() => client.getBucketEncryption(input)),
+      getBucketLifecycleConfiguration: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketLifecycleConfigurationCommandInput} */ input,
+      ) => call(() => client.getBucketLifecycleConfiguration(input)),
+      getBucketLocation: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketLocationCommandInput} */ input,
+      ) => call(() => client.getBucketLocation(input)),
+      getBucketOwnershipControls: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketOwnershipControlsCommandInput} */ input,
+      ) => call(() => client.getBucketOwnershipControls(input)),
+      getBucketPolicy: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketPolicyCommandInput} */ input,
+      ) => call(() => client.getBucketPolicy(input)),
+      getBucketReplication: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketReplicationCommandInput} */ input,
+      ) => call(() => client.getBucketReplication(input)),
+      getBucketTagging: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketTaggingCommandInput} */ input,
+      ) => call(() => client.getBucketTagging(input)),
+      getBucketVersioning: (
+        /** @type {import('@aws-sdk/client-s3').GetBucketVersioningCommandInput} */ input,
+      ) => call(() => client.getBucketVersioning(input)),
+      getPublicAccessBlock: (
+        /** @type {import('@aws-sdk/client-s3').GetPublicAccessBlockCommandInput} */ input,
+      ) => call(() => client.getPublicAccessBlock(input)),
+      putBucketEncryption: (
+        /** @type {import('@aws-sdk/client-s3').PutBucketEncryptionCommandInput} */ input,
+      ) => call(() => client.putBucketEncryption(input)),
+      putBucketOwnershipControls: (
+        /** @type {import('@aws-sdk/client-s3').PutBucketOwnershipControlsCommandInput} */ input,
+      ) => call(() => client.putBucketOwnershipControls(input)),
+      putBucketVersioning: (
+        /** @type {import('@aws-sdk/client-s3').PutBucketVersioningCommandInput} */ input,
+      ) => call(() => client.putBucketVersioning(input)),
+      putPublicAccessBlock: (
+        /** @type {import('@aws-sdk/client-s3').PutPublicAccessBlockCommandInput} */ input,
+      ) => call(() => client.putPublicAccessBlock(input)),
+      putObject: (
+        /** @type {import('@aws-sdk/client-s3').PutObjectCommandInput} */ input,
+      ) => call(() => client.putObject(input)),
+      headObject: (
+        /** @type {import('@aws-sdk/client-s3').HeadObjectCommandInput} */ input,
+      ) => call(() => client.headObject(input)),
+      close: closeClient,
+    });
+  }
+
   /** @returns {Promise<void>} */
   async function close() {
     if (closed) return;
@@ -334,6 +509,7 @@ export async function createAwsDeploymentAuthority(options) {
     resolveScope,
     createDynamoDB,
     createDynamoDBControlClient,
+    createS3ControlClient,
     close,
   });
 }

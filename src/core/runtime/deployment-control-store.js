@@ -1,7 +1,13 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact internal helpers and assertion signatures are not understood cleanly by the current JSDoc lint parser. */
 
 import { CONDITION_TYPE, readDBClientAdapterIdentity } from '../lib/db/base.js';
+import { assertArtifactId } from './artifact-record.js';
 import { assertDomainSeparatedSha256Id } from './content-id.js';
+import {
+  validateDeploymentArtifactStageIntent,
+  validateDeploymentArtifactStageReceipt,
+  validateDeploymentArtifactStageReceiptContext,
+} from './deployment-artifact-stage.js';
 import {
   assertDeploymentHeadId,
   validateDeploymentHead,
@@ -10,7 +16,10 @@ import {
   assertDeploymentPlanId,
   validateDeploymentPlan,
 } from './deployment-plan.js';
-import { assertDeploymentInstanceId } from './deployment-provider-scope.js';
+import {
+  assertDeploymentInstanceId,
+  PROVIDER_SCOPE_ID_PREFIX,
+} from './deployment-provider-scope.js';
 import {
   DEPLOYMENT_PROFILE_ID_PREFIX,
   validateDeploymentProfile,
@@ -22,12 +31,16 @@ export const DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION = 1;
 export const DEPLOYMENT_CONTROL_MAX_RECORD_BYTES = 128 * 1024;
 
 export const DEPLOYMENT_CONTROL_RECORD_TYPES = Object.freeze({
+  artifactStageIntent: 'deployment-artifact-stage-intent',
+  artifactStageReceipt: 'deployment-artifact-stage-receipt',
   head: 'deployment-head',
   plan: 'deployment-plan',
   profile: 'deployment-profile',
 });
 
 export const DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES = Object.freeze({
+  artifactStageIntent: 'artifact-stage-intent/v1/',
+  artifactStageReceipt: 'artifact-stage-receipt/v1/',
   head: 'head/v1/',
   plan: 'plan/v2/',
   profile: 'profile/v2/',
@@ -76,8 +89,26 @@ function isNormalizedConditionalFailure(error) {
 }
 
 /**
- * @typedef {'deployment-head'|'deployment-plan'|'deployment-profile'} DeploymentControlRecordType
+ * @typedef {'deployment-artifact-stage-intent'|'deployment-artifact-stage-receipt'|'deployment-head'|'deployment-plan'|'deployment-profile'} DeploymentControlRecordType
  */
+
+/**
+ * Validate and compose the complete logical identity used by the intent's
+ * physical key. Both components are slash-free canonical content IDs.
+ * @param {unknown} providerScopeId - Exact provider-scope identity.
+ * @param {unknown} artifactId - Exact artifact identity.
+ * @param {string} path - Boundary label.
+ * @returns {string} - `<providerScopeId>/<artifactId>` lookup identity.
+ */
+function createArtifactStageIntentLogicalId(providerScopeId, artifactId, path) {
+  assertDomainSeparatedSha256Id(
+    providerScopeId,
+    PROVIDER_SCOPE_ID_PREFIX,
+    `${path}.providerScopeId`,
+  );
+  assertArtifactId(artifactId, `${path}.artifactId`);
+  return `${providerScopeId}/${artifactId}`;
+}
 
 /**
  * @param {DeploymentControlRecordType} recordType - Exact wrapper type.
@@ -124,6 +155,32 @@ function canonicalRecordComponents(recordType, document, path) {
       document: canonical,
     };
   }
+  if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent) {
+    const canonical = validateDeploymentArtifactStageIntent(
+      boundedDocument,
+      `${path}.document`,
+    );
+    return {
+      logicalId: createArtifactStageIntentLogicalId(
+        canonical.providerScope.providerScopeId,
+        canonical.artifact.artifactId,
+        `${path}.document`,
+      ),
+      documentId: canonical.stageIntentId,
+      document: canonical,
+    };
+  }
+  if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt) {
+    const canonical = validateDeploymentArtifactStageReceipt(
+      boundedDocument,
+      `${path}.document`,
+    );
+    return {
+      logicalId: canonical.stageIntentId,
+      documentId: canonical.stageReceiptId,
+      document: canonical,
+    };
+  }
   throw new TypeError(`${path}.record_kind is not supported.`);
 }
 
@@ -133,6 +190,12 @@ function canonicalRecordComponents(recordType, document, path) {
  * @returns {string} - Distributed, type-versioned physical key.
  */
 function createRecordKey(recordType, logicalId) {
+  if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent) {
+    return `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageIntent}${logicalId}`;
+  }
+  if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt) {
+    return `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageReceipt}${logicalId}`;
+  }
   if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.head) {
     return `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.head}${logicalId}`;
   }
@@ -440,6 +503,108 @@ export function createDeploymentControlStore(options) {
     );
   }
 
+  /** @param {unknown} intent @returns {Promise<boolean>} */
+  async function putArtifactStageIntentIfAbsent(intent) {
+    return putImmutableIfAbsent(
+      DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent,
+      intent,
+    );
+  }
+
+  /** @param {string} providerScopeId @param {string} artifactId @returns {Promise<Readonly<Record<string, any>>|null>} */
+  async function readArtifactStageIntent(providerScopeId, artifactId) {
+    const logicalId = createArtifactStageIntentLogicalId(
+      providerScopeId,
+      artifactId,
+      'deploymentControlStore artifactStageIntent',
+    );
+    return readRecord(
+      DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent,
+      logicalId,
+    );
+  }
+
+  /**
+   * Strongly prove that a canonical full intent is already durable at its one
+   * canonical artifact key. Stage intents are immutable and never deleted, so
+   * this proof remains valid for the following receipt operation.
+   * @param {Readonly<Record<string, any>>} canonicalIntent - Validated full intent.
+   * @returns {Promise<void>}
+   */
+  async function requireExactPersistedArtifactStageIntent(canonicalIntent) {
+    const persistedIntent = await readRecord(
+      DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageIntent,
+      createArtifactStageIntentLogicalId(
+        canonicalIntent.providerScope.providerScopeId,
+        canonicalIntent.artifact.artifactId,
+        'deploymentControlStore artifactStageReceipt.intent',
+      ),
+    );
+    if (
+      persistedIntent === null ||
+      !exactJsonEqual(persistedIntent, canonicalIntent)
+    ) {
+      throw new DeploymentControlStoreIntegrityError(
+        'deploymentControlStore artifact-stage receipt requires its exact persisted intent.',
+      );
+    }
+  }
+
+  /**
+   * Persist exact object-version evidence only after proving that its complete
+   * immutable intent is already durable at the artifact's canonical key.
+   * @param {unknown} intent - Exact full stage intent.
+   * @param {unknown} receipt - Exact receipt for that intent.
+   * @returns {Promise<boolean>} - True only for the first write; false for an exact replay.
+   */
+  async function putArtifactStageReceiptIfAbsent(intent, receipt) {
+    const canonicalIntent = validateDeploymentArtifactStageIntent(
+      intent,
+      'deploymentControlStore artifactStageReceipt.intent',
+    );
+    const canonicalReceipt = validateDeploymentArtifactStageReceiptContext(
+      receipt,
+      { intent: canonicalIntent },
+      'deploymentControlStore artifactStageReceipt',
+    );
+    await requireExactPersistedArtifactStageIntent(canonicalIntent);
+    return putImmutableIfAbsent(
+      DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt,
+      canonicalReceipt,
+    );
+  }
+
+  /**
+   * Read exact object-version evidence only in the context of its complete
+   * immutable intent.
+   * @param {unknown} intent - Exact full stage intent.
+   * @returns {Promise<Readonly<Record<string, any>>|null>} - Context-bound receipt or absence.
+   */
+  async function readArtifactStageReceipt(intent) {
+    const canonicalIntent = validateDeploymentArtifactStageIntent(
+      intent,
+      'deploymentControlStore artifactStageReceipt.intent',
+    );
+    await requireExactPersistedArtifactStageIntent(canonicalIntent);
+    const receipt = await readRecord(
+      DEPLOYMENT_CONTROL_RECORD_TYPES.artifactStageReceipt,
+      canonicalIntent.stageIntentId,
+    );
+    if (receipt === null) return null;
+    try {
+      return validateDeploymentArtifactStageReceiptContext(
+        receipt,
+        { intent: canonicalIntent },
+        'deploymentControlStore artifactStageReceipt',
+      );
+    } catch (error) {
+      throw new DeploymentControlStoreIntegrityError(
+        'deploymentControlStore artifact-stage receipt does not match its supplied intent.',
+        { cause: error },
+      );
+    }
+  }
+
   return Object.freeze({
     readHead,
     compareAndSetHead,
@@ -447,6 +612,10 @@ export function createDeploymentControlStore(options) {
     readPlan,
     putProfileIfAbsent,
     readProfile,
+    putArtifactStageIntentIfAbsent,
+    readArtifactStageIntent,
+    putArtifactStageReceiptIfAbsent,
+    readArtifactStageReceipt,
   });
 }
 

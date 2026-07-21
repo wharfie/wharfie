@@ -95,10 +95,12 @@ re-resolves the scope and refuses account or region drift.
 One invocation resolves the ordinary credential chain exactly once for its
 explicit region and copies only the signing identity into an immutable,
 invocation-local snapshot that is never returned or persisted. STS scope
-checks, portable DynamoDB data access, and the narrow DynamoDB control
-capability all use that same snapshot. The public authority exposes neither
-credentials nor the SDK client's credential-bearing configuration, and
-repeated scope checks fail closed if the caller identity changes during the
+checks, portable DynamoDB data access, and the narrow DynamoDB and S3 control
+capabilities all use that same snapshot. The public authority exposes neither
+credentials nor the SDK client's credential-bearing configuration. S3
+failures retain only the allowlisted classifications and HTTP status needed
+for authoritative readback, never raw messages, request IDs, or causes.
+Repeated scope checks fail closed if the caller identity changes during the
 invocation.
 
 Mutable regional prerequisites are resolved only while previewing a new
@@ -287,17 +289,20 @@ partition key is `record_key`. It stores exact bounded envelopes:
 ```text
 record_key
 storage_schema_version: 1
-record_kind: deployment-head | deployment-plan | deployment-profile
+record_kind: deployment-head | deployment-plan | deployment-profile |
+             deployment-artifact-stage-intent |
+             deployment-artifact-stage-receipt
 document_id
 document
 ```
 
-Head, plan, and profile keys use distinct versioned namespaces. Every read is
-strongly consistent. Immutable profiles and plans use conditional insertion;
-head creation and replacement use conditional transactional writes with the
-complete prior head identity as the fence. Conditional collisions are checked
-against the exact stored envelope, while ambiguous or system failures remain
-errors for caller-driven recovery.
+Head, plan, profile, stage-intent, and stage-receipt keys use distinct
+versioned namespaces. Every read is strongly consistent. Immutable profiles,
+plans, intents, and receipts use conditional insertion; head creation and
+replacement use conditional transactional writes with the complete prior head
+identity as the fence. Conditional collisions are checked against the exact
+stored envelope, while ambiguous or system failures remain errors for
+caller-driven recovery.
 
 Record inputs and reads are capped at 128 KiB before document validation.
 Provider resource IDs are at most 1,024 bytes of JSON-stable printable ASCII,
@@ -322,7 +327,40 @@ and controller tests prove that only initial preview resolves provider
 prerequisites while converge, crash recovery, and resident destroy reuse the
 stored specification.
 
-The retained control bucket, fixed artifact-staging and service-health receipt
-boundaries, AWS resource driver, source and packaged deployment commands, and
-clean-account lifecycle proof remain unfinished. A document, table tag, or
-content ID still never proves that an application resource effect occurred.
+The fifth slice adds one deterministic retained S3 control bucket per provider
+scope. Atomic creation tags bind the complete scope; read-only inspection and
+explicit bootstrap require the exact owner, region, reserved tags, versioning,
+public-access block, bucket-owner-enforced ownership, AES256 default
+encryption, and absence of lifecycle, bucket policy, and replication. Before
+the first sentinel write, each bootstrap invocation that lacks ready evidence
+waits the full 15-minute first-enable propagation interval documented in
+[Amazon S3's versioning guidance](https://docs.aws.amazon.com/AmazonS3/latest/userguide/manage-versioning-examples.html)
+and reinspects the complete bucket contract. A retained fixed sentinel must then
+prove that object writes actually receive a non-`null` version ID before any
+artifact key is used. Bucket state is never weakened or deleted.
+
+Artifact staging has two fresh immutable documents. `wsi1` binds full provider
+scope, running artifact digest/size/app/revision/target, deterministic bucket
+and `stage/v1/<artifactId>` key, and a fresh ownership nonce. `wsr1` binds that
+intent to one exact S3 version, length, SHA-256 checksum, AES256 encryption, and
+STANDARD storage. Both use context-bound, conditional portable-store records;
+a receipt cannot be written or read without its exact already-persisted intent.
+
+Converge opens and hashes the running executable, cross-checks that held
+observation against the SEA's embedded application revision and runtime target,
+retains the same descriptor for the sole checksum-protected conditional
+`PutObject`, persists intent first, and accepts a receipt only after exact
+`HeadObject` readback. Concurrent intent nonces adopt the first complete
+semantic intent; ambiguous upload/write responses are resolved through strong
+readback. After staging, converge rereads the durable head, revalidates the
+pinned provider specification, and regenerates the exact provider plan before
+accepting controller state. Recovery needs no local old bytes: it reloads
+intent/receipt and revalidates the exact immutable version before claiming the
+active head. Destroy deliberately skips staging. Every non-destroy provider
+action receives the independently revalidated stage bundle, while a stale or
+malformed bundle causes no plan/profile/head mutation.
+
+The fixed service-health receipt boundary, AWS resource driver, source and
+packaged deployment commands, production composition, and clean-account
+lifecycle proof remain unfinished. A document, bucket/table tag, or content ID
+still never proves that an application resource effect occurred.
