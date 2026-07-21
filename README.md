@@ -152,15 +152,19 @@ Multi-host leases and heartbeats and public run history/listing are still later
 work. The npm package remains deliberately private. It is not ready for
 production use.
 
-The first provider deployment authority is now defined in pure core. A strict
-AWS-shaped one-node profile, running-SEA deployment identity, exact provider
-scope and ownership bindings, deterministic plans and inspections, and a CAS
-deployment head support crash-resumable convergence against a deterministic
-fake. An exact control-store adapter now persists head, plan, and profile
-envelopes through strong reads and conditional writes against an explicit,
-already-created single-partition-key portable DB table. DynamoDB composition is
-the production AWS target. Table bootstrap, AWS account/scope binding, the
-fixed AWS driver, operator commands, and clean-account proof remain unfinished.
+The first provider deployment authority is now defined. A strict AWS-shaped
+one-node profile, running-SEA deployment identity, exact provider scope and
+ownership bindings, deterministic plans and inspections, and a CAS deployment
+head support crash-resumable convergence against a deterministic fake. An
+exact control-store adapter persists head, plan, and profile envelopes through
+strong reads and conditional writes. The AWS boundary resolves one ordinary
+credential-chain snapshot for an explicit region, verifies its exact account
+and partition through STS, and uses that same hidden snapshot for data and
+control access. An explicit bootstrap creates or verifies the fixed retained
+single-key DynamoDB table, deletion protection, AWS-owned encryption, disabled
+TTL, and 35-day point-in-time recovery. These AWS calls are proven under
+focused mocks, not a live account. Artifact staging, the fixed AWS resource
+driver, operator commands, and clean-account proof remain unfinished.
 
 ## Start here
 
@@ -168,7 +172,8 @@ fixed AWS driver, operator commands, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Recoverable deployment-controller checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md) — the current handoff for strict single-node deployment identity, planning, ownership, and provider-neutral crash recovery.
+- [AWS deployment-control checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md) — the current handoff for credential-bound AWS scope, retained DynamoDB bootstrap, and the durable deployment store.
+- [Recoverable deployment-controller checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md) — the preceding handoff for strict single-node deployment identity, planning, ownership, and provider-neutral crash recovery.
 - [Bounded runtime extraction checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md) — the preceding handoff for crash-safe packaged native extraction cleanup and the provider-backed next vertical.
 - [Real-host activation proof checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md) — the preceding handoff for checksummed two-release update, rollback, response-loss, and failed-target source-restoration evidence.
 - [Recoverable systemd activation checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md) — the preceding handoff for durable single-node release activation and manager/CLI integration.

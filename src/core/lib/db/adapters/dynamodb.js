@@ -29,6 +29,7 @@ const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
  * @typedef CreateDynamoDBOptions
  * @property {string} [region] AWS region to use. Defaults to `process.env.AWS_REGION`.
  * @property {boolean} [readOnly] Reject every mutation before contacting DynamoDB.
+ * @property {import('@aws-sdk/client-dynamodb').DynamoDBClientConfig['credentials']} [credentials] Explicit credentials or credential provider. Defaults to the ordinary Node provider chain.
  */
 
 /**
@@ -45,8 +46,8 @@ const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
 export default function createDynamoDB({
   region = process.env.AWS_REGION,
   readOnly = false,
+  credentials = fromNodeProviderChain(),
 } = {}) {
-  const credentials = fromNodeProviderChain();
   const docClient = DynamoDBDocument.from(
     new DynamoDB({
       ...BaseAWS.config({

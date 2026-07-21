@@ -91,6 +91,15 @@ instance identity includes that scope, so the same logical deployment in a
 different account or region is a different instance. Every mutation
 re-resolves the scope and refuses account or region drift.
 
+One invocation resolves the ordinary credential chain exactly once for its
+explicit region and copies only the signing identity into an immutable,
+invocation-local snapshot that is never returned or persisted. STS scope
+checks, portable DynamoDB data access, and the narrow DynamoDB control
+capability all use that same snapshot. The public authority exposes neither
+credentials nor the SDK client's credential-bearing configuration, and
+repeated scope checks fail closed if the caller identity changes during the
+invocation.
+
 Each create-to-destroy lifetime has a fresh unpredictable incarnation ID.
 Managed resource bindings contain an immutable provider ID, provider scope,
 incarnation, logical resource key, creating action ID, and an independently
@@ -279,9 +288,18 @@ Provider resource IDs are at most 1,024 bytes of JSON-stable printable ASCII,
 keeping every structurally valid head and plan well below that bound and
 DynamoDB's item limit.
 
-The production AWS path will compose this portable boundary with the DynamoDB
-adapter. This slice does not create the table, resolve or bind an AWS account,
-or prove that a provider effect occurred merely because a document or content
-ID validates. Table bootstrap, provider-scope binding, the fixed AWS driver,
-source and packaged deployment commands, and clean-account lifecycle proof
-remain unfinished.
+The third slice composes this portable boundary with one credential-bound AWS
+invocation authority and a fixed retained DynamoDB table named
+`wharfie-deployment-control-v1`. Read-only inspection admits only the exact
+account, region, ARN, String `record_key` schema, required reserved tags,
+on-demand standard class, deletion protection, AWS-owned encryption, no
+indexes/replicas/stream, disabled TTL, and exact 35-day point-in-time recovery.
+Explicit bootstrap is the sole mutator: it may create the table or strengthen
+PITR, resolves ambiguous responses through bounded exact readback, never
+adopts incompatible state, and never deletes the table. Focused SDK mocks prove
+the request and recovery boundary; no live AWS resource claim is made.
+
+The fixed artifact-staging boundary and AWS resource driver, source and
+packaged deployment commands, and clean-account lifecycle proof remain
+unfinished. A document, table tag, or content ID still never proves that an
+application resource effect occurred.

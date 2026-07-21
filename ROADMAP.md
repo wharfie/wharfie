@@ -1,7 +1,8 @@
 # Wharfie roadmap
 
 **Status:** The strict single-node deployment protocol now has an exact
-portable-DB control-store adapter; AWS table bootstrap, scope binding, driver,
+credential-bound AWS authority, portable control store, and retained DynamoDB
+table lifecycle under focused mocks; artifact staging, the fixed driver,
 commands, and clean-account proof are next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -483,17 +484,23 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       CAS races, response-loss recovery, and exact final inspection without
       claiming that cloud resources exist.
 - [x] Bind exact deployment-head, plan, and profile envelopes to an explicit
-      already-created portable DB table with one String partition key, strong
-      reads, conditional immutable inserts, and full-record head CAS writes.
-      DynamoDB composition is the production AWS target; table bootstrap and
-      AWS account/scope binding remain open.
+      portable DB table with one String partition key, strong reads,
+      conditional immutable inserts, and full-record head CAS writes.
+- [x] Resolve one immutable ordinary-chain AWS credential snapshot for an
+      explicit region, verify its partition and account through STS, and issue
+      narrow data/control capabilities from that same non-serialized snapshot.
+- [x] Add read-only admission and explicit bootstrap for the fixed retained
+      DynamoDB control table: exact scope/schema/tags, on-demand standard class,
+      deletion protection, AWS-owned encryption, disabled TTL, and 35-day
+      point-in-time recovery. Focused mocks prove transitional reads and lost
+      create/update response recovery; a live-account proof remains open.
 
 - [ ] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, runtime identity/secret references, networking, and optional ingress.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
 - [ ] Define the provider contract for `plan`, `apply`, `inspect`, `reconcile`, and `destroy`.
 - [ ] Separate portable requirements from provider-specific deployment profiles.
 - [ ] Implement local/external-host fulfillment and one cloud provider golden path.
-- [ ] Use provider credential chains without embedding operator credentials.
+- [x] Use provider credential chains without embedding operator credentials.
 - [ ] Record managed/external ownership, resource receipts, and narrowly scoped node identities.
 - [ ] Make reconciliation and destroy idempotent and ownership-safe.
 - [ ] Expose provider-backed plan, deploy, inspect, and destroy in the reserved
@@ -576,23 +583,26 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Bootstrap the explicit single-key DynamoDB control table, bind every access
-   to the resolved AWS account and region, and implement the fixed AWS driver
-   that can create, inspect, update, and remove one durable node through the
-   operator's credential chain.
-2. Compose that driver and table with the strict recovery protocol, then mount
-   source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
-   `destroy` commands, requiring apply and reconcile to re-observe the
-   currently running SEA.
+1. Define recovery-safe provider artifact staging and pin the exact regional
+   machine-image/provider specification in the immutable plan. Define the
+   narrow artifact-read/status-write runtime identity and provider-visible
+   read-only service-health receipt at the same boundary.
+2. Implement the fixed AWS driver as independently recoverable resource
+   capabilities, then compose it and the retained table with the strict
+   recovery protocol. Mount source and packaged `plan`, `apply`, `inspect`,
+   `reconcile`, and `destroy` commands, requiring apply and reconcile to
+   re-observe the currently running SEA.
 3. Prove the complete lifecycle in a clean account through the user's ordinary
    credential chain, including interruption and response-loss recovery.
 4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [recoverable deployment-controller
-checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md).
-Its parent is the [bounded packaged-runtime extraction
+The current restart point is the [AWS deployment-control
+checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md). Its
+parent is the [recoverable deployment-controller
+checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md),
+whose parent is the [bounded packaged-runtime extraction
 checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md), whose
 parent is the [real-host activation proof
 checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md), whose
