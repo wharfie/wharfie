@@ -47,6 +47,7 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
   'describeVolumes',
 ]);
 const NETWORK_RESOURCE_METHODS = Object.freeze([
+  'associateRouteTable',
   'attachInternetGateway',
   'createInternetGateway',
   'createRoute',
@@ -58,6 +59,7 @@ const NETWORK_RESOURCE_METHODS = Object.freeze([
   'describeSubnets',
   'describeVpcs',
   'describeVpcAttribute',
+  'disassociateRouteTable',
   'detachInternetGateway',
   'deleteInternetGateway',
   'deleteRoute',
@@ -179,7 +181,15 @@ async function loadHarness({
       if (method === 'describeVpcAttribute') {
         return { EnableDnsSupport: { Value: true }, input };
       }
+      if (method === 'associateRouteTable') {
+        return {
+          AssociationId: 'rtbassoc-00000000000000001',
+          AssociationState: { State: 'associated' },
+          input,
+        };
+      }
       if (method === 'attachInternetGateway') return { input };
+      if (method === 'disassociateRouteTable') return { Return: true, input };
       if (method === 'detachInternetGateway') return { input };
       if (method === 'deleteInternetGateway') return { input };
       if (method === 'deleteRoute') return { Return: true, input };
@@ -298,6 +308,14 @@ async function loadHarness({
     },
   }));
   jest.unstable_mockModule('@aws-sdk/client-ec2', () => ({
+    AssociateRouteTableCommand: class AssociateRouteTableCommand {
+      input;
+      operation = 'associateRouteTable';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     AttachInternetGatewayCommand: class AttachInternetGatewayCommand {
       input;
       operation = 'attachInternetGateway';
@@ -445,6 +463,14 @@ async function loadHarness({
     DeleteSubnetCommand: class DeleteSubnetCommand {
       input;
       operation = 'deleteSubnet';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DisassociateRouteTableCommand: class DisassociateRouteTableCommand {
+      input;
+      operation = 'disassociateRouteTable';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -1059,6 +1085,17 @@ describe('AWS deployment invocation authority', () => {
       expect(client).not.toHaveProperty('send');
       expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
 
+      const associateRouteTableInput = {
+        RouteTableId: 'rtb-00000000000000001',
+        SubnetId: 'subnet-00000000000000001',
+      };
+      await expect(
+        client.associateRouteTable(associateRouteTableInput),
+      ).resolves.toEqual({
+        AssociationId: 'rtbassoc-00000000000000001',
+        AssociationState: { State: 'associated' },
+        input: associateRouteTableInput,
+      });
       const attachmentInput = {
         InternetGatewayId: 'igw-00000000000000001',
         VpcId: 'vpc-00000000000000001',
@@ -1160,6 +1197,15 @@ describe('AWS deployment invocation authority', () => {
         EnableDnsSupport: { Value: true },
         input: attributeInput,
       });
+      const disassociateRouteTableInput = {
+        AssociationId: 'rtbassoc-00000000000000001',
+      };
+      await expect(
+        client.disassociateRouteTable(disassociateRouteTableInput),
+      ).resolves.toEqual({
+        Return: true,
+        input: disassociateRouteTableInput,
+      });
       const detachInput = {
         InternetGatewayId: 'igw-00000000000000001',
         VpcId: 'vpc-00000000000000001',
@@ -1198,6 +1244,7 @@ describe('AWS deployment invocation authority', () => {
         input: deleteInput,
       });
       expect(harness.ec2Send.mock.calls).toEqual([
+        ['associateRouteTable', associateRouteTableInput],
         ['attachInternetGateway', attachmentInput],
         ['createInternetGateway', createInternetGatewayInput],
         ['createRoute', createRouteInput],
@@ -1209,6 +1256,7 @@ describe('AWS deployment invocation authority', () => {
         ['describeSubnets', describeSubnetsInput],
         ['describeVpcs', describeInput],
         ['describeVpcAttribute', attributeInput],
+        ['disassociateRouteTable', disassociateRouteTableInput],
         ['detachInternetGateway', detachInput],
         ['deleteInternetGateway', deleteInternetGatewayInput],
         ['deleteRoute', deleteRouteInput],
@@ -1244,6 +1292,7 @@ describe('AWS deployment invocation authority', () => {
     ['InvalidRouteTableID.NotFound', 'describeRouteTables', 404],
     ['InvalidSubnetID.NotFound', 'describeSubnets', 404],
     ['InvalidSubnetId.NotFound', 'describeSubnets', 404],
+    ['InvalidAssociationID.NotFound', 'disassociateRouteTable', 404],
     ['IdempotentParameterMismatch', 'createRouteTable', 400],
     ['DependencyViolation', 'deleteVpc', 400],
     ['IncorrectState', 'deleteVpc', 400],

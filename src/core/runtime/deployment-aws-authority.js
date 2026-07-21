@@ -2,6 +2,7 @@
 
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import {
+  AssociateRouteTableCommand,
   AttachInternetGatewayCommand,
   CreateInternetGatewayCommand,
   CreateRouteCommand,
@@ -23,6 +24,7 @@ import {
   DescribeVpcAttributeCommand,
   DescribeVpcsCommand,
   DescribeVolumesCommand,
+  DisassociateRouteTableCommand,
   DetachInternetGatewayCommand,
   EC2Client,
   GetEbsDefaultKmsKeyIdCommand,
@@ -109,6 +111,7 @@ const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'Gateway.NotAttached',
   'IdempotentParameterMismatch',
   'IncorrectState',
+  'InvalidAssociationID.NotFound',
   'InvalidGatewayID.NotFound',
   'InvalidInternetGatewayID.NotFound',
   'InvalidRoute.NotFound',
@@ -149,6 +152,7 @@ const S3_CONTROL_ERROR_NAMES = new Set([
 
 /**
  * @typedef NetworkResourceClient
+ * @property {(input: import('@aws-sdk/client-ec2').AssociateRouteTableCommandInput) => Promise<any>} associateRouteTable - Associate one exact subnet with one exact route table.
  * @property {(input: import('@aws-sdk/client-ec2').AttachInternetGatewayCommandInput) => Promise<any>} attachInternetGateway - Attach one exact internet gateway to one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput) => Promise<any>} createInternetGateway - Create one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').CreateRouteCommandInput) => Promise<any>} createRoute - Create one exact route.
@@ -160,6 +164,7 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-ec2').DescribeSubnetsCommandInput) => Promise<any>} describeSubnets - Read exact subnet state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcsCommandInput) => Promise<any>} describeVpcs - Read exact VPC state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput) => Promise<any>} describeVpcAttribute - Read one exact VPC attribute.
+ * @property {(input: import('@aws-sdk/client-ec2').DisassociateRouteTableCommandInput) => Promise<any>} disassociateRouteTable - Disassociate one exact route-table association.
  * @property {(input: import('@aws-sdk/client-ec2').DetachInternetGatewayCommandInput) => Promise<any>} detachInternetGateway - Detach one exact internet gateway from one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput) => Promise<any>} deleteInternetGateway - Delete one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteRouteCommandInput) => Promise<any>} deleteRoute - Delete one exact route.
@@ -894,6 +899,9 @@ export async function createAwsDeploymentAuthority(options) {
     }
 
     return Object.freeze({
+      associateRouteTable: (
+        /** @type {import('@aws-sdk/client-ec2').AssociateRouteTableCommandInput} */ input,
+      ) => call(() => client.send(new AssociateRouteTableCommand(input))),
       attachInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').AttachInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new AttachInternetGatewayCommand(input))),
@@ -927,6 +935,9 @@ export async function createAwsDeploymentAuthority(options) {
       describeVpcAttribute: (
         /** @type {import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput} */ input,
       ) => call(() => client.send(new DescribeVpcAttributeCommand(input))),
+      disassociateRouteTable: (
+        /** @type {import('@aws-sdk/client-ec2').DisassociateRouteTableCommandInput} */ input,
+      ) => call(() => client.send(new DisassociateRouteTableCommand(input))),
       detachInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').DetachInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new DetachInternetGatewayCommand(input))),
