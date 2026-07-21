@@ -255,7 +255,33 @@ initial proof.
 
 The first repository slice implements strict V2 profile, deployment revision,
 provider scope, binding, plan, inspection, head, and crash-resumable controller
-contracts against a deterministic fake provider. The AWS driver, provider
-control-store adapter, packaged commands, and clean-account proof follow that
-state-machine test. No contract in the pure slice should imply that a provider
-effect has occurred merely because a content ID validates.
+contracts against a deterministic fake provider. The second slice binds the
+controller to an explicit, already-created portable DB table whose sole String
+partition key is `record_key`. It stores exact bounded envelopes:
+
+```text
+record_key
+storage_schema_version: 1
+record_kind: deployment-head | deployment-plan | deployment-profile
+document_id
+document
+```
+
+Head, plan, and profile keys use distinct versioned namespaces. Every read is
+strongly consistent. Immutable profiles and plans use conditional insertion;
+head creation and replacement use conditional transactional writes with the
+complete prior head identity as the fence. Conditional collisions are checked
+against the exact stored envelope, while ambiguous or system failures remain
+errors for caller-driven recovery.
+
+Record inputs and reads are capped at 128 KiB before document validation.
+Provider resource IDs are at most 1,024 bytes of JSON-stable printable ASCII,
+keeping every structurally valid head and plan well below that bound and
+DynamoDB's item limit.
+
+The production AWS path will compose this portable boundary with the DynamoDB
+adapter. This slice does not create the table, resolve or bind an AWS account,
+or prove that a provider effect occurred merely because a document or content
+ID validates. Table bootstrap, provider-scope binding, the fixed AWS driver,
+source and packaged deployment commands, and clean-account lifecycle proof
+remain unfinished.

@@ -27,6 +27,7 @@ export const DEPLOYMENT_RESOURCE_BINDING_ID_DOMAIN =
   'wharfie:deployment-resource-binding:v1';
 export const DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX = 'wrb1';
 export const DEPLOYMENT_CAPABILITIES = DEPLOYMENT_CAPABILITY_KINDS;
+export const DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES = 1024;
 
 const PAYLOAD_KEYS = new Set([
   'schemaVersion',
@@ -45,6 +46,8 @@ const PAYLOAD_KEYS = new Set([
 const DOCUMENT_KEYS = new Set(['bindingId', ...PAYLOAD_KEYS]);
 const CAPABILITY_KEYS = new Set(['kind', 'version']);
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
+const JSON_STABLE_PRINTABLE_ASCII_PATTERN =
+  /^[\u0021\u0023-\u005b\u005d-\u007e]+$/u;
 
 /**
  * @typedef DeploymentResourceBinding
@@ -88,21 +91,13 @@ export function validateProviderResourceId(
   value,
   valuePath = 'providerResourceId',
 ) {
-  const containsControlCharacter =
-    typeof value === 'string' &&
-    [...value].some((character) => {
-      const codePoint = character.codePointAt(0);
-      return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
-    });
   if (
     typeof value !== 'string' ||
-    value.length === 0 ||
-    value.length > 2048 ||
-    value.trim() !== value ||
-    containsControlCharacter
+    value.length > DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES ||
+    !JSON_STABLE_PRINTABLE_ASCII_PATTERN.test(value)
   ) {
     throw new TypeError(
-      `${valuePath} must be a nonempty canonical provider resource ID.`,
+      `${valuePath} must be a nonempty JSON-stable printable ASCII provider resource ID without spaces, quotes, or backslashes and must not exceed ${DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES} bytes.`,
     );
   }
   assertManifestIsSecretFree({ providerResourceId: value }, valuePath);
@@ -374,6 +369,7 @@ export default {
   DEPLOYMENT_CAPABILITIES,
   DEPLOYMENT_INCARNATION_ID_DOMAIN,
   DEPLOYMENT_INCARNATION_ID_PREFIX,
+  DEPLOYMENT_PROVIDER_RESOURCE_ID_MAX_BYTES,
   DEPLOYMENT_RESOURCE_BINDING_ID_DOMAIN,
   DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
   DEPLOYMENT_RESOURCE_BINDING_KIND,

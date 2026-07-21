@@ -1,9 +1,8 @@
 # Wharfie roadmap
 
-**Status:** The strict single-node deployment identity, inspection, planning,
-and crash-recovery protocol is proven against a deterministic provider; the
-provider-backed AWS control store and driver are next · **Last updated:**
-2026-07-20
+**Status:** The strict single-node deployment protocol now has an exact
+portable-DB control-store adapter; AWS table bootstrap, scope binding, driver,
+commands, and clean-account proof are next · **Last updated:** 2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -483,6 +482,11 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       controller contracts. A deterministic fake proves stale-plan refusal,
       CAS races, response-loss recovery, and exact final inspection without
       claiming that cloud resources exist.
+- [x] Bind exact deployment-head, plan, and profile envelopes to an explicit
+      already-created portable DB table with one String partition key, strong
+      reads, conditional immutable inserts, and full-record head CAS writes.
+      DynamoDB composition is the production AWS target; table bootstrap and
+      AWS account/scope binding remain open.
 
 - [ ] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, runtime identity/secret references, networking, and optional ingress.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -572,11 +576,12 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Implement the smallest provider-backed control store and fixed AWS driver
+1. Bootstrap the explicit single-key DynamoDB control table, bind every access
+   to the resolved AWS account and region, and implement the fixed AWS driver
    that can create, inspect, update, and remove one durable node through the
-   operator's credential chain, reusing the strict recovery protocol already
-   proven against the deterministic provider.
-2. Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
+   operator's credential chain.
+2. Compose that driver and table with the strict recovery protocol, then mount
+   source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
 3. Prove the complete lifecycle in a clean account through the user's ordinary

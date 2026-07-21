@@ -156,8 +156,11 @@ The first provider deployment authority is now defined in pure core. A strict
 AWS-shaped one-node profile, running-SEA deployment identity, exact provider
 scope and ownership bindings, deterministic plans and inspections, and a CAS
 deployment head support crash-resumable convergence against a deterministic
-fake. The provider-backed store, AWS driver, operator commands, and
-clean-account proof remain unfinished.
+fake. An exact control-store adapter now persists head, plan, and profile
+envelopes through strong reads and conditional writes against an explicit,
+already-created single-partition-key portable DB table. DynamoDB composition is
+the production AWS target. Table bootstrap, AWS account/scope binding, the
+fixed AWS driver, operator commands, and clean-account proof remain unfinished.
 
 ## Start here
 
