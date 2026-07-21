@@ -158,7 +158,8 @@ production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Real-host activation proof checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md) — the current handoff for checksummed two-release update, rollback, response-loss, and failed-target source-restoration evidence.
+- [Bounded runtime extraction checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md) — the current handoff for crash-safe packaged native extraction cleanup and the provider-backed next vertical.
+- [Real-host activation proof checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md) — the preceding handoff for checksummed two-release update, rollback, response-loss, and failed-target source-restoration evidence.
 - [Recoverable systemd activation checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md) — the preceding handoff for durable single-node release activation and manager/CLI integration.
 - [Systemd reboot-proof checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md) — the preceding handoff for checksummed real-VM crash, boot, workflow-continuation, lifecycle, and uninstall evidence.
 - [Shared packaged-storage checkpoint](llm/checkpoints/2026-07-20-v15-shared-packaged-storage.md) — the preceding handoff that unified foreground and resident durable state.

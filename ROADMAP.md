@@ -568,9 +568,11 @@ receipts remain bound to `0d927463`.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [real-host activation proof
-checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md).
-Its parent is the [recoverable systemd activation
+The current restart point is the [bounded packaged-runtime extraction
+checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md).
+Its parent is the [real-host activation proof
+checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md), whose
+parent is the [recoverable systemd activation
 checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md),
 whose parent is the [systemd reboot-proof
 checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md), whose parent
