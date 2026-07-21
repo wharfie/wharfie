@@ -3,9 +3,10 @@
 **Status:** The strict single-node deployment protocol now has an exact
 credential-bound AWS authority, retained DynamoDB/control-bucket lifecycles,
 portable control records, recovery-safe executable staging, and
-freshness-bounded provider-visible service health under focused mocks; the
-exact AWS resolver/validator, fixed driver, commands, and clean-account proof
-are next · **Last updated:** 2026-07-21
+freshness-bounded provider-visible service health under focused mocks. Its
+exact SSM/EC2 provider-spec resolver now freezes and validates one admissible,
+available AL2023 image; the fixed driver, commands, and clean-account proof are next ·
+**Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -518,6 +519,12 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       for asynchronous expiration after one day. Deterministic mocks prove
       this boundary, not a privileged host observer, real driver, or live
       resource.
+- [x] Implement the credential-bound AWS provider-spec resolver and validator.
+      Only a new incarnation may resolve the architecture-specific AL2023
+      public parameter's latest value. Converge validates the pinned positive
+      parameter version and exact AMI again without selecting a newer default;
+      bounded retries retain one frozen candidate and strict SSM/EC2 evidence
+      classifies missing, contradictory, and unresolved reads separately.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -607,26 +614,30 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Implement the exact AWS provider-spec SSM/EC2 resolver and validator. The
-   regional provider specification, retained artifact-stage version, and
-   host-owned freshness-bounded health protocol are now pinned or durably
-   evidenced under deterministic mocks.
-2. Implement the fixed AWS driver as independently recoverable resource
+The regional provider specification now has a concrete credential-bound
+SSM/EC2 resolver and exact-version validator. Together with the retained
+artifact-stage version and host-owned freshness-bounded health protocol, its
+complete pre-driver authority is pinned or durably evidenced under
+deterministic mocks.
+
+1. Implement the fixed AWS driver as independently recoverable resource
    capabilities, then compose it, the retained table/bucket, artifact stager,
    health boundary, and strict controller recovery protocol. Mount source and
    packaged `plan`, `apply`, `inspect`, `reconcile`, and `destroy` commands,
    requiring apply and reconcile to re-observe the currently running SEA.
-3. Install and wire the privileged host observer outside the application UID,
+2. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
    recovery.
-4. Begin provider-backed coordinator recovery only after the single-node
+3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [provider-visible service-health
-checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md).
-Its parent is the [recovery-safe artifact-staging
+The current restart point is the [exact AWS provider-spec resolution
+checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md).
+Its parent is the [provider-visible service-health
+checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md),
+whose parent is the [recovery-safe artifact-staging
 checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md),
 whose parent is the [pinned AWS provider-spec
 checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md), whose

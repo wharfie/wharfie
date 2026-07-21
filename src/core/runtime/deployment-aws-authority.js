@@ -1,7 +1,9 @@
 /* eslint-disable jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact internal boundary helpers keep their complete types inline. */
 
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
+import { DescribeImagesCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { S3 } from '@aws-sdk/client-s3';
+import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
@@ -45,6 +47,18 @@ const S3_CONTROL_OPERATION_ERROR =
   'AWS deployment S3 control operation failed.';
 const S3_CONTROL_CLOSED_ERROR = 'AWS deployment S3 control client is closed.';
 const S3_CONTROL_CLOSE_ERROR = 'AWS deployment S3 control client close failed.';
+const PROVIDER_SPEC_READ_CREATION_ERROR =
+  'AWS deployment provider-spec read client creation failed.';
+const PROVIDER_SPEC_READ_OPERATION_ERROR =
+  'AWS deployment provider-spec read operation failed.';
+const PROVIDER_SPEC_READ_CLOSED_ERROR =
+  'AWS deployment provider-spec read client is closed.';
+const PROVIDER_SPEC_READ_CLOSE_ERROR =
+  'AWS deployment provider-spec read client close failed.';
+const PROVIDER_SPEC_READ_ERROR_NAMES = new Set([
+  'ParameterNotFound',
+  'ParameterVersionNotFound',
+]);
 const S3_CONTROL_ERROR_NAMES = new Set([
   'ConditionalRequestConflict',
   'NoSuchBucket',
@@ -71,6 +85,13 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-dynamodb').ListTagsOfResourceCommandInput) => Promise<any>} listTagsOfResource - Read table tags.
  * @property {(input: import('@aws-sdk/client-dynamodb').UpdateContinuousBackupsCommandInput) => Promise<any>} updateContinuousBackups - Strengthen backup state.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
+ */
+
+/**
+ * @typedef ProviderSpecReadClient
+ * @property {(input: import('@aws-sdk/client-ssm').GetParameterCommandInput) => Promise<any>} getParameter - Read one exact parameter.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeImagesCommandInput) => Promise<any>} describeImages - Resolve exact image metadata.
+ * @property {() => Promise<void>} close - Close both caller-owned SDK clients.
  */
 
 /**
@@ -135,6 +156,33 @@ function sanitizeS3ControlError(value) {
     ? candidate.name
     : 'AwsDeploymentS3ControlError';
   error.code = 'AWS_DEPLOYMENT_S3_CONTROL_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
+}
+
+/**
+ * Preserve only the SSM missing classifications required by the provider-spec
+ * resolver. Raw SDK messages, request IDs, access classifications, causes,
+ * and credential-bearing configuration never cross this boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeProviderSpecReadError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(PROVIDER_SPEC_READ_OPERATION_ERROR)
+    );
+  error.name = PROVIDER_SPEC_READ_ERROR_NAMES.has(candidate.name)
+    ? candidate.name
+    : 'AwsDeploymentProviderSpecReadError';
+  error.code = 'AWS_DEPLOYMENT_PROVIDER_SPEC_READ_OPERATION';
   const status = candidate.$metadata?.httpStatusCode;
   if (Number.isInteger(status) && status >= 400 && status <= 599) {
     error.$metadata = Object.freeze({ httpStatusCode: status });
@@ -239,8 +287,8 @@ function scopeFromCallerIdentity(value, region) {
 
 /**
  * Resolve one invocation's ordinary AWS credentials into a non-exposed
- * capability. Every STS check and DynamoDB or S3 client issued by the
- * capability uses the same static credential object and explicit region.
+ * capability. Every STS check and DynamoDB, S3, SSM, or EC2 client issued by
+ * the capability uses the same static credential object and explicit region.
  * @param {{region: string}} options - Exact explicit invocation region.
  * @returns {Promise<Readonly<{
  *   providerScope: Readonly<import('./deployment-provider-scope.js').AwsProviderScope>,
@@ -248,6 +296,7 @@ function scopeFromCallerIdentity(value, region) {
  *   createDynamoDB: (options?: {readOnly?: boolean}) => import('../lib/db/base.js').DBClient,
  *   createDynamoDBControlClient: () => Readonly<DynamoDBControlClient>,
  *   createS3ControlClient: () => Readonly<S3ControlClient>,
+ *   createProviderSpecReadClient: () => Readonly<ProviderSpecReadClient>,
  *   close: () => Promise<void>,
  * }>>} - Credential-bound AWS authority.
  */
@@ -501,6 +550,88 @@ export async function createAwsDeploymentAuthority(options) {
     });
   }
 
+  /** @returns {Readonly<ProviderSpecReadClient>} - Caller-owned narrow provider-spec read client. */
+  function createProviderSpecReadClient() {
+    assertOpen();
+    /** @type {SSMClient | undefined} */
+    let ssm;
+    /** @type {EC2Client | undefined} */
+    let ec2;
+    try {
+      ssm = new SSMClient({
+        ...BaseAWS.config(),
+        region,
+        credentials,
+      });
+      ec2 = new EC2Client({
+        ...BaseAWS.config(),
+        region,
+        credentials,
+      });
+    } catch {
+      try {
+        ssm?.destroy();
+      } catch {
+        // Construction failure remains the fixed boundary error.
+      }
+      try {
+        ec2?.destroy();
+      } catch {
+        // Construction failure remains the fixed boundary error.
+      }
+      throw new Error(PROVIDER_SPEC_READ_CREATION_ERROR);
+    }
+    if (ssm === undefined || ec2 === undefined) {
+      throw new Error(PROVIDER_SPEC_READ_CREATION_ERROR);
+    }
+    const ssmClient = ssm;
+    const ec2Client = ec2;
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) throw new Error(PROVIDER_SPEC_READ_CLOSED_ERROR);
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeProviderSpecReadError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        let failed = false;
+        try {
+          ssmClient.destroy();
+        } catch {
+          failed = true;
+        }
+        try {
+          ec2Client.destroy();
+        } catch {
+          failed = true;
+        }
+        if (failed) throw new Error(PROVIDER_SPEC_READ_CLOSE_ERROR);
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      getParameter: (
+        /** @type {import('@aws-sdk/client-ssm').GetParameterCommandInput} */ input,
+      ) => call(() => ssmClient.send(new GetParameterCommand(input))),
+      describeImages: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeImagesCommandInput} */ input,
+      ) => call(() => ec2Client.send(new DescribeImagesCommand(input))),
+      close: closeClient,
+    });
+  }
+
   /** @returns {Promise<void>} */
   async function close() {
     if (closed) return;
@@ -518,6 +649,7 @@ export async function createAwsDeploymentAuthority(options) {
     createDynamoDB,
     createDynamoDBControlClient,
     createS3ControlClient,
+    createProviderSpecReadClient,
     close,
   });
 }

@@ -122,6 +122,47 @@ from its last settled plan for update, reconcile, and destroy. Changing the
 profile or target inside an incarnation is refused; a fresh apply after destroy
 may resolve a new specification.
 
+### Credential-bound provider-spec resolution
+
+The AWS authority exposes one caller-owned read capability containing only SSM
+`GetParameter` and EC2 `DescribeImages`. Both clients use the same immutable
+ordinary-credential snapshot, explicit region, and provider scope already used
+by the rest of the invocation; neither SDK client nor credentials cross the
+authority boundary.
+
+Only `resolveProviderSpec` for a new incarnation may read the fixed
+architecture-specific AL2023 public parameter without a version selector. AWS
+publishes AL2023 AMI aliases under
+[`/aws/service/ami-amazon-linux-latest`](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-public-parameters-ami.html),
+and `GetParameter` returns both the selected value and positive parameter
+version. Unknown SSM failures retry only the identical request; an authoritative
+missing result fails immediately. The first well-formed response is frozen as
+one candidate before EC2 inspection begins, and later retries never switch to
+a newer value during that resolution.
+
+`validateProviderSpec` reads `name:version`, which is AWS's documented exact
+[`GetParameter` version selector](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html),
+and requires it to reproduce the pinned name, version, and AMI ID before the
+new-incarnation controller performs its first mutation. It does not ask for
+latest. Both resolve and validate then use
+[`DescribeImages`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeImages.html)
+for the one frozen AMI ID with Amazon ownership scoped in the request.
+
+One candidate is admissible only when the unique EC2 image is the exact
+architecture-specific AL2023 image associated back to the same public SSM
+parameter and is Amazon-owned, public, available, Linux, machine-image, EBS
+rooted, HVM virtualized, and ENA capable. These checks use the provider's
+documented
+[`Image` fields](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Image.html),
+not its identifier or SSM value alone. An authoritatively missing SSM
+parameter/version is typed `missing`; present but contradictory, multiple, or
+paginated evidence is typed `conflict`; and access, throttling, service,
+malformed successful envelopes without usable evidence, empty or transitional
+EC2 state, or another unresolved read is typed `unknown`. The resolver bounds
+each read stage to three attempts by default, with an explicit range of one
+through ten attempts. None of these reads creates a resource or grants later
+mutation authority by itself.
+
 Each create-to-destroy lifetime has a fresh unpredictable incarnation ID.
 Managed resource bindings contain an immutable provider ID, provider scope,
 incarnation, logical resource key, creating action ID, and an independently
@@ -421,6 +462,19 @@ control objects remain untouched. As with the preceding slices, deterministic
 mocks prove the contract; the privileged host observer is not yet installed or
 wired, and no real AWS driver or live resource is claimed.
 
+The seventh slice implements the abstract provider-spec ports with
+`createAwsSingleNodeProviderSpecResolver`. Its `resolveProviderSpec` performs
+the only unversioned AL2023 public-parameter read permitted for one new
+incarnation, retries only an identical SSM request until it has one successful
+candidate, freezes that candidate, and proves its exact EC2 image metadata.
+Its `validateProviderSpec` instead reads the pinned positive parameter version
+and must reproduce the complete content-addressed specification before first
+mutation. Both paths use the authority's narrow
+`createProviderSpecReadClient`, bounded frozen-candidate retries, strict
+Amazon/public/available/Linux/EBS/HVM/ENA/SSM association, and typed
+missing/conflict/unknown outcomes. Deterministic SDK mocks prove this read
+boundary; no production driver or live AWS resource is claimed.
+
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or
 version deletion; otherwise a delete marker could hide the semantic
@@ -428,8 +482,7 @@ predecessor. Noncurrent lifecycle retention also deliberately leaves one
 current version at every retired incarnation/node key until a future explicit
 retained-state collector proves it may remove that history.
 
-The AWS provider-spec SSM/EC2 resolver and validator, independently recoverable
-resource driver, source and packaged deployment commands, production
-composition, and clean-account lifecycle proof remain unfinished. A document,
-bucket/table tag, or content ID still never proves that an application resource
-effect occurred.
+The independently recoverable resource driver, source and packaged deployment
+commands, production composition, and clean-account lifecycle proof remain
+unfinished. A document, bucket/table tag, SSM result, EC2 description, or
+content ID still never proves that an application resource effect occurred.

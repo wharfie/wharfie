@@ -101,5 +101,7 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [provider-visible service-health
+The current restart handoff is the [exact AWS provider-spec resolution
+checkpoint](../llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md).
+Its parent is the [provider-visible service-health
 checkpoint](../llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md).

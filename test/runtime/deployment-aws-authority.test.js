@@ -35,10 +35,14 @@ const S3_CONTROL_METHODS = Object.freeze([
   'putObject',
   'headObject',
 ]);
+const PROVIDER_SPEC_READ_METHODS = Object.freeze([
+  'getParameter',
+  'describeImages',
+]);
 
 /**
  * Install isolated AWS SDK doubles before importing the authority module.
- * @param {{credentials?: unknown, identities?: unknown[], s3ConstructionError?: unknown, s3MethodError?: unknown, s3CloseError?: unknown}} [options] - Mock outcomes.
+ * @param {{credentials?: unknown, identities?: unknown[], s3ConstructionError?: unknown, s3MethodError?: unknown, s3CloseError?: unknown, ssmConstructionError?: unknown, ec2ConstructionError?: unknown, ssmMethodError?: unknown, ec2MethodError?: unknown, ssmCloseError?: unknown, ec2CloseError?: unknown}} [options] - Mock outcomes.
  * @returns {Promise<Record<string, any>>} - Module and SDK observations.
  */
 async function loadHarness({
@@ -47,6 +51,12 @@ async function loadHarness({
   s3ConstructionError,
   s3MethodError,
   s3CloseError,
+  ssmConstructionError,
+  ec2ConstructionError,
+  ssmMethodError,
+  ec2MethodError,
+  ssmCloseError,
+  ec2CloseError,
 } = {}) {
   jest.resetModules();
   const credentialProvider = jest.fn(async () => {
@@ -60,6 +70,10 @@ async function loadHarness({
   const dynamoConfigs = [];
   /** @type {Record<string, any>[]} */
   const s3Configs = [];
+  /** @type {Record<string, any>[]} */
+  const ssmConfigs = [];
+  /** @type {Record<string, any>[]} */
+  const ec2Configs = [];
   const stsDestroy = jest.fn();
   const dynamoDestroy = jest.fn();
   const dynamoSend = jest.fn(
@@ -78,6 +92,20 @@ async function loadHarness({
       return {};
     },
   );
+  const ssmDestroy = jest.fn(() => {
+    if (ssmCloseError) throw ssmCloseError;
+  });
+  const ec2Destroy = jest.fn(() => {
+    if (ec2CloseError) throw ec2CloseError;
+  });
+  const ssmSend = jest.fn(async (/** @type {unknown} */ input) => {
+    if (ssmMethodError) throw ssmMethodError;
+    return { Parameter: { Value: 'resolved-parameter' }, input };
+  });
+  const ec2Send = jest.fn(async (/** @type {unknown} */ input) => {
+    if (ec2MethodError) throw ec2MethodError;
+    return { Images: [], input };
+  });
   const responses = [...identities];
   const stsSend = jest.fn(async (/** @type {unknown} */ _command) => {
     const response = responses.length > 0 ? responses.shift() : IDENTITY;
@@ -163,6 +191,52 @@ async function loadHarness({
       }
     },
   }));
+  jest.unstable_mockModule('@aws-sdk/client-ssm', () => ({
+    GetParameterCommand: class GetParameterCommand {
+      input;
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    SSMClient: class SSMClient {
+      constructor(/** @type {Record<string, any>} */ config) {
+        if (ssmConstructionError) throw ssmConstructionError;
+        ssmConfigs.push(config);
+      }
+
+      send(/** @type {{input: unknown}} */ command) {
+        return ssmSend(command.input);
+      }
+
+      destroy() {
+        ssmDestroy();
+      }
+    },
+  }));
+  jest.unstable_mockModule('@aws-sdk/client-ec2', () => ({
+    DescribeImagesCommand: class DescribeImagesCommand {
+      input;
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    EC2Client: class EC2Client {
+      constructor(/** @type {Record<string, any>} */ config) {
+        if (ec2ConstructionError) throw ec2ConstructionError;
+        ec2Configs.push(config);
+      }
+
+      send(/** @type {{input: unknown}} */ command) {
+        return ec2Send(command.input);
+      }
+
+      destroy() {
+        ec2Destroy();
+      }
+    },
+  }));
   const documentClient = {
     query: jest.fn(),
     put: jest.fn(),
@@ -185,6 +259,8 @@ async function loadHarness({
     stsConfigs,
     dynamoConfigs,
     s3Configs,
+    ssmConfigs,
+    ec2Configs,
     stsSend,
     stsDestroy,
     dynamoDestroy,
@@ -192,11 +268,15 @@ async function loadHarness({
     documentDestroy,
     s3Destroy,
     s3Send,
+    ssmDestroy,
+    ec2Destroy,
+    ssmSend,
+    ec2Send,
   };
 }
 
 describe('AWS deployment invocation authority', () => {
-  it('pins explicit region and one credential snapshot across STS, DynamoDB, and S3', async () => {
+  it('pins explicit region and one credential snapshot across every issued client', async () => {
     const previousRegion = process.env.AWS_REGION;
     process.env.AWS_REGION = 'eu-west-1';
     const harness = await loadHarness();
@@ -225,14 +305,20 @@ describe('AWS deployment invocation authority', () => {
       const db = authority.createDynamoDB({ readOnly: true });
       const controlClient = authority.createDynamoDBControlClient();
       const s3ControlClient = authority.createS3ControlClient();
+      const providerSpecReadClient = authority.createProviderSpecReadClient();
       expect(harness.dynamoConfigs[0].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[0].credentials).toBe(credentials);
       expect(harness.dynamoConfigs[1].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[1].credentials).toBe(credentials);
       expect(harness.s3Configs[0].region).toBe('us-east-1');
       expect(harness.s3Configs[0].credentials).toBe(credentials);
+      expect(harness.ssmConfigs[0].region).toBe('us-east-1');
+      expect(harness.ssmConfigs[0].credentials).toBe(credentials);
+      expect(harness.ec2Configs[0].region).toBe('us-east-1');
+      expect(harness.ec2Configs[0].credentials).toBe(credentials);
       expect(Object.isFrozen(controlClient)).toBe(true);
       expect(Object.isFrozen(s3ControlClient)).toBe(true);
+      expect(Object.isFrozen(providerSpecReadClient)).toBe(true);
       expect(controlClient).not.toHaveProperty('config');
       expect(s3ControlClient).not.toHaveProperty('config');
       await controlClient.describeTable({ TableName: 'control-table' });
@@ -243,6 +329,16 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.s3Send).toHaveBeenCalledWith('headBucket', {
         Bucket: 'control-bucket',
       });
+      await providerSpecReadClient.getParameter({ Name: '/wharfie/image' });
+      expect(harness.ssmSend).toHaveBeenCalledWith({
+        Name: '/wharfie/image',
+      });
+      await providerSpecReadClient.describeImages({
+        ImageIds: ['ami-00000000000000001'],
+      });
+      expect(harness.ec2Send).toHaveBeenCalledWith({
+        ImageIds: ['ami-00000000000000001'],
+      });
       await expect(authority.resolveScope()).resolves.toEqual(
         authority.providerScope,
       );
@@ -251,6 +347,7 @@ describe('AWS deployment invocation authority', () => {
       await db.close();
       await controlClient.close();
       await s3ControlClient.close();
+      await providerSpecReadClient.close();
       await authority.close();
     } finally {
       if (previousRegion === undefined) delete process.env.AWS_REGION;
@@ -285,6 +382,165 @@ describe('AWS deployment invocation authority', () => {
       await client.close();
       await authority.close();
     }
+  });
+
+  it('exposes only the exact narrow provider-spec read surface', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createProviderSpecReadClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...PROVIDER_SPEC_READ_METHODS, 'close'].sort(),
+      );
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      await expect(
+        client.getParameter({ Name: '/wharfie/provider/image' }),
+      ).resolves.toMatchObject({
+        Parameter: { Value: 'resolved-parameter' },
+        input: { Name: '/wharfie/provider/image' },
+      });
+      await expect(
+        client.describeImages({ ImageIds: ['ami-00000000000000001'] }),
+      ).resolves.toMatchObject({
+        Images: [],
+        input: { ImageIds: ['ami-00000000000000001'] },
+      });
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it('replaces provider-spec read construction failures and cleans partial construction', async () => {
+    const ssmHarness = await loadHarness({
+      ssmConstructionError: new Error('ssm-construction-secret'),
+    });
+    const ssmAuthority = await ssmHarness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    expect(() => ssmAuthority.createProviderSpecReadClient()).toThrow(
+      'AWS deployment provider-spec read client creation failed.',
+    );
+    expect(ssmHarness.ec2Configs).toHaveLength(0);
+    expect(ssmHarness.ssmDestroy).not.toHaveBeenCalled();
+    await ssmAuthority.close();
+
+    const ec2Harness = await loadHarness({
+      ec2ConstructionError: new Error('ec2-construction-secret'),
+      ssmCloseError: new Error('partial-cleanup-secret'),
+    });
+    const ec2Authority = await ec2Harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    expect(() => ec2Authority.createProviderSpecReadClient()).toThrow(
+      'AWS deployment provider-spec read client creation failed.',
+    );
+    expect(ec2Harness.ssmDestroy).toHaveBeenCalledTimes(1);
+    expect(ec2Harness.ec2Destroy).not.toHaveBeenCalled();
+    await ec2Authority.close();
+  });
+
+  it.each(['ParameterNotFound', 'ParameterVersionNotFound'])(
+    'preserves only the %s provider-spec missing classification',
+    async (name) => {
+      const providerError = Object.assign(new Error('parameter-secret'), {
+        name,
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: 400,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ssmMethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createProviderSpecReadClient();
+
+      const observed = await client
+        .getParameter({ Name: '/wharfie/provider/missing' })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name,
+        code: 'AWS_DEPLOYMENT_PROVIDER_SPEC_READ_OPERATION',
+        message: 'AWS deployment provider-spec read operation failed.',
+        $metadata: { httpStatusCode: 400 },
+      });
+      expect(JSON.stringify(observed)).not.toMatch(
+        /parameter-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it('keeps access and unknown provider-spec failures generic and non-echoing', async () => {
+    const providerError = Object.assign(new Error('access-secret'), {
+      name: 'AccessDeniedException',
+      code: 'provider-code-secret',
+      $metadata: {
+        httpStatusCode: 403,
+        requestId: 'provider-request-secret',
+      },
+    });
+    const harness = await loadHarness({ ec2MethodError: providerError });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = authority.createProviderSpecReadClient();
+
+    const observed = await client
+      .describeImages({ ImageIds: ['ami-00000000000000001'] })
+      .catch((/** @type {unknown} */ error) => error);
+    expect(observed).not.toBe(providerError);
+    expect(observed).toMatchObject({
+      name: 'AwsDeploymentProviderSpecReadError',
+      code: 'AWS_DEPLOYMENT_PROVIDER_SPEC_READ_OPERATION',
+      message: 'AWS deployment provider-spec read operation failed.',
+      $metadata: { httpStatusCode: 403 },
+    });
+    expect(JSON.stringify(observed)).not.toMatch(
+      /AccessDenied|access-secret|provider-code-secret|provider-request-secret/,
+    );
+
+    await client.close();
+    await authority.close();
+  });
+
+  it('closes both provider-spec SDK clients once after a partial close failure', async () => {
+    const harness = await loadHarness({
+      ssmCloseError: new Error('ssm-close-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = authority.createProviderSpecReadClient();
+
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment provider-spec read client close failed.',
+    );
+    expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    await expect(
+      client.getParameter({ Name: '/wharfie/provider/closed' }),
+    ).rejects.toThrow('AWS deployment provider-spec read client is closed.');
+    await expect(
+      client.describeImages({ ImageIds: ['ami-00000000000000001'] }),
+    ).rejects.toThrow('AWS deployment provider-spec read client is closed.');
+    await authority.close();
   });
 
   it('normalizes S3 failures while preserving only allowlisted operation identity', async () => {
@@ -439,7 +695,7 @@ describe('AWS deployment invocation authority', () => {
     );
   });
 
-  it('closes STS idempotently, leaves issued DB and S3 ownership to callers, and refuses reuse', async () => {
+  it('closes STS idempotently, leaves every issued client caller-owned, and refuses reuse', async () => {
     const harness = await loadHarness();
     const authority = await harness.createAwsDeploymentAuthority({
       region: 'us-east-1',
@@ -449,6 +705,9 @@ describe('AWS deployment invocation authority', () => {
     const s3ControlClient = /** @type {Record<string, any>} */ (
       authority.createS3ControlClient()
     );
+    const providerSpecReadClient = /** @type {Record<string, any>} */ (
+      authority.createProviderSpecReadClient()
+    );
 
     await authority.close();
     await authority.close();
@@ -456,6 +715,8 @@ describe('AWS deployment invocation authority', () => {
     expect(harness.documentDestroy).not.toHaveBeenCalled();
     expect(harness.dynamoDestroy).not.toHaveBeenCalled();
     expect(harness.s3Destroy).not.toHaveBeenCalled();
+    expect(harness.ssmDestroy).not.toHaveBeenCalled();
+    expect(harness.ec2Destroy).not.toHaveBeenCalled();
     await expect(authority.resolveScope()).rejects.toThrow(
       'AWS deployment authority is closed.',
     );
@@ -468,9 +729,22 @@ describe('AWS deployment invocation authority', () => {
     expect(() => authority.createS3ControlClient()).toThrow(
       'AWS deployment authority is closed.',
     );
+    expect(() => authority.createProviderSpecReadClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
     await expect(
       s3ControlClient.headBucket({ Bucket: 'still-caller-owned' }),
     ).resolves.toEqual({});
+    await expect(
+      providerSpecReadClient.getParameter({ Name: '/still/caller-owned' }),
+    ).resolves.toMatchObject({
+      Parameter: { Value: 'resolved-parameter' },
+    });
+    await expect(
+      providerSpecReadClient.describeImages({
+        ImageIds: ['ami-00000000000000001'],
+      }),
+    ).resolves.toMatchObject({ Images: [] });
 
     await db.close();
     await controlClient.close();
@@ -486,8 +760,18 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment S3 control client is closed.',
       );
     }
+    const firstProviderSpecClose = providerSpecReadClient.close();
+    expect(providerSpecReadClient.close()).toBe(firstProviderSpecClose);
+    await firstProviderSpecClose;
+    for (const method of PROVIDER_SPEC_READ_METHODS) {
+      await expect(providerSpecReadClient[method]({})).rejects.toThrow(
+        'AWS deployment provider-spec read client is closed.',
+      );
+    }
     expect(harness.documentDestroy).toHaveBeenCalledTimes(1);
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
     expect(harness.s3Destroy).toHaveBeenCalledTimes(1);
+    expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
   });
 });

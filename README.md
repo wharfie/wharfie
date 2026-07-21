@@ -165,8 +165,14 @@ ownership bindings, and a CAS deployment head support crash-resumable
 convergence against a deterministic fake. The AWS boundary also resolves one
 ordinary credential-chain snapshot for an explicit region and bootstraps the
 fixed retained DynamoDB control table. These AWS calls are proven under
-focused mocks, not a live account. The same credential snapshot now exposes a
-narrow caller-owned S3 capability. Wharfie can bootstrap one retained,
+focused mocks, not a live account. That credential snapshot now also exposes a
+narrow SSM/EC2 provider-spec read capability. Only a new incarnation resolves
+the architecture-specific AL2023 latest parameter; converge validates the
+pinned parameter version and exact Amazon-owned, public, available,
+Linux/EBS/HVM/ENA image association without selecting a newer default.
+Frozen-candidate bounded retries distinguish missing, contradictory, and
+unresolved provider evidence. The same snapshot also exposes a narrow
+caller-owned S3 capability. Wharfie can bootstrap one retained,
 versioned control bucket with no bucket policy, wait through S3's documented
 first-enable propagation interval, persist an immutable stage intent before
 streaming the running SEA through a held descriptor, and accept only exact
@@ -193,7 +199,8 @@ proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Provider-visible service-health checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md) — the current handoff for strict health receipts, conditional S3 publication, provider-owned freshness, final Inspection V3 readiness, and bounded noncurrent-version retention.
+- [Exact AWS provider-spec resolution checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md) — the current handoff for frozen latest resolution, exact-version validation, strict SSM/EC2 image evidence, and typed bounded failure handling.
+- [Provider-visible service-health checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md) — the preceding handoff for strict health receipts, conditional S3 publication, provider-owned freshness, final Inspection V3 readiness, and bounded noncurrent-version retention.
 - [Recovery-safe artifact-staging checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md) — the preceding handoff for the retained versioned control bucket, held-source upload, and exact object-version recovery evidence.
 - [Pinned AWS provider-spec checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md) — the preceding handoff for immutable regional prerequisites and recovery-stable Plan/Inspection V2 authority.
 - [AWS deployment-control checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md) — the preceding handoff for credential-bound AWS scope, retained DynamoDB bootstrap, and the durable deployment store.

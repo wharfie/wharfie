@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { createDeploymentController } from '../../src/core/runtime/deployment-controller.js';
+import { createAwsSingleNodeProviderSpecResolver } from '../../src/core/runtime/deployment-aws-provider-spec-resolver.js';
 import {
   createCanonicalJsonSha256Id,
   createSha256Id,
@@ -712,7 +713,8 @@ function makeProvider(base, store, physical, events = []) {
     async resolveScope() {
       return clone(resolvedScope);
     },
-    async resolveProviderSpec() {
+    /** @param {Record<string, any>} _context */
+    async resolveProviderSpec(_context) {
       providerSpecResolutionCount += 1;
       return clone(base.providerSpec);
     },
@@ -1194,6 +1196,141 @@ describe('deployment controller artifact staging', () => {
 });
 
 describe('deployment controller crash recovery', () => {
+  it('pins exact provider reads before acceptance and never rediscovers them during recovery or READY lineage', async () => {
+    const harness = makeHarness();
+    const parameterName = AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS.x86_64;
+    const imageId = harness.base.providerSpec.machineImage.imageId;
+    /** @type {Record<string, any>[]} */
+    const parameterRequests = [];
+    /** @type {Record<string, any>[]} */
+    const imageRequests = [];
+    const client = {
+      /** @param {Record<string, any>} request */
+      async getParameter(request) {
+        parameterRequests.push(clone(request));
+        harness.events.push(`provider-spec:ssm:${request.Name}`);
+        const versioned = request.Name === `${parameterName}:42`;
+        return {
+          Parameter: {
+            Name: parameterName,
+            Type: 'String',
+            Value: imageId,
+            Version: 42,
+            LastModifiedDate: new Date('2026-01-01T00:00:00.000Z'),
+            ARN: `arn:aws:ssm:us-east-1::parameter${parameterName}`,
+            DataType: 'text',
+            ...(versioned ? { Selector: ':42' } : {}),
+          },
+        };
+      },
+      /** @param {Record<string, any>} request */
+      async describeImages(request) {
+        imageRequests.push(clone(request));
+        harness.events.push(`provider-spec:ec2:${request.ImageIds[0]}`);
+        return {
+          Images: [
+            {
+              ImageId: imageId,
+              OwnerId: harness.base.providerSpec.machineImage.ownerAccountId,
+              ImageOwnerAlias: 'amazon',
+              Public: true,
+              Architecture: 'x86_64',
+              ImageType: 'machine',
+              RootDeviceType: 'ebs',
+              VirtualizationType: 'hvm',
+              EnaSupport: true,
+              State: 'available',
+              PlatformDetails: 'Linux/UNIX',
+              PublicSsmParameterName: parameterName.slice(1),
+              ImageAllowed: true,
+              DeprecationTime: '2027-01-01T00:00:00Z',
+            },
+          ],
+        };
+      },
+    };
+    const resolver = createAwsSingleNodeProviderSpecResolver({
+      client,
+      providerScope: harness.base.providerScope,
+      bootstrapDigest: digest('fixed bootstrap'),
+      runtimeIdentityPolicyDigest: digest('fixed runtime identity policy'),
+      now: () => HEALTH_NOW,
+      maxAttempts: 1,
+      waitForRetry: async () => {},
+    });
+    harness.provider.api.resolveProviderSpec = resolver.resolveProviderSpec;
+    harness.provider.api.validateProviderSpec = resolver.validateProviderSpec;
+
+    const plan = await planWith(harness, 'apply');
+
+    expect(plan.providerSpec).toEqual(harness.base.providerSpec);
+    expect(parameterRequests).toEqual([
+      { Name: parameterName, WithDecryption: false },
+    ]);
+    expect(imageRequests).toEqual([
+      {
+        ImageIds: [imageId],
+        Owners: ['amazon'],
+        IncludeDeprecated: true,
+        IncludeDisabled: true,
+      },
+    ]);
+
+    harness.events.length = 0;
+    harness.provider.crashAfterPhysicalEffect(plan.actions[0].actionId);
+    await expect(
+      harness.controller.converge({
+        plan,
+        profile: harness.base.profile,
+      }),
+    ).rejects.toThrow('injected crash after physical effect');
+
+    const exactName = `${parameterName}:42`;
+    expect(
+      harness.events.filter(
+        (event) =>
+          event === 'artifact-stage' || event.startsWith('provider-spec:'),
+      ),
+    ).toEqual([
+      `provider-spec:ssm:${exactName}`,
+      `provider-spec:ec2:${imageId}`,
+      'artifact-stage',
+      `provider-spec:ssm:${exactName}`,
+      `provider-spec:ec2:${imageId}`,
+    ]);
+    expect(parameterRequests).toEqual([
+      { Name: parameterName, WithDecryption: false },
+      { Name: exactName, WithDecryption: false },
+      { Name: exactName, WithDecryption: false },
+    ]);
+    expect(imageRequests).toHaveLength(3);
+
+    const acceptedReadCounts = {
+      parameters: parameterRequests.length,
+      images: imageRequests.length,
+    };
+    harness.events.length = 0;
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: harness.base.deploymentInstanceId,
+      }),
+    ).resolves.toMatchObject({ phase: 'READY' });
+
+    const reconcilePlan = await planWith(harness, 'reconcile');
+    await expect(
+      harness.controller.converge({
+        plan: reconcilePlan,
+        profile: harness.base.profile,
+      }),
+    ).resolves.toMatchObject({ phase: 'READY' });
+
+    expect(parameterRequests).toHaveLength(acceptedReadCounts.parameters);
+    expect(imageRequests).toHaveLength(acceptedReadCounts.images);
+    expect(
+      harness.events.filter((event) => event.startsWith('provider-spec:')),
+    ).toEqual([]);
+  });
+
   it('resumes after the durable intent CAS and executes each logical action once', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
