@@ -50,6 +50,21 @@ const itOnPosix = process.platform === 'win32' ? it.skip : it;
 const itOnLinux = process.platform === 'linux' ? it : it.skip;
 
 /**
+ * The workspace installer may hardlink duplicate package bytes on Linux. The
+ * frozen closure materializer produces independent regular files, so this
+ * fixture must not let tar inherit installer-specific inode sharing.
+ */
+class FileOnlyTarLinkCache extends Map {
+  get() {
+    return undefined;
+  }
+
+  set() {
+    return this;
+  }
+}
+
+/**
  * @param {import('node:child_process').ChildProcess} child - Holder process.
  * @returns {Promise<string>} - Fresh extraction root reported over IPC.
  */
@@ -409,6 +424,7 @@ async function makeInstalledLmdbClosureArchive(options = {}) {
       {
         cwd: process.cwd(),
         gzip: { level: 9 },
+        linkCache: new FileOnlyTarLinkCache(),
         portable: true,
         noMtime: true,
       },
