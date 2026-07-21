@@ -47,9 +47,12 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
   'describeVolumes',
 ]);
 const NETWORK_RESOURCE_METHODS = Object.freeze([
+  'createInternetGateway',
   'createVpc',
+  'describeInternetGateways',
   'describeVpcs',
   'describeVpcAttribute',
+  'deleteInternetGateway',
   'deleteVpc',
 ]);
 
@@ -136,13 +139,25 @@ async function loadHarness({
         return { VolumeId: 'vol-00000000000000001', input };
       }
       if (method === 'describeVolumes') return { Volumes: [], input };
+      if (method === 'createInternetGateway') {
+        return {
+          InternetGateway: {
+            InternetGatewayId: 'igw-00000000000000001',
+          },
+          input,
+        };
+      }
       if (method === 'createVpc') {
         return { Vpc: { VpcId: 'vpc-00000000000000001' }, input };
+      }
+      if (method === 'describeInternetGateways') {
+        return { InternetGateways: [], input };
       }
       if (method === 'describeVpcs') return { Vpcs: [], input };
       if (method === 'describeVpcAttribute') {
         return { EnableDnsSupport: { Value: true }, input };
       }
+      if (method === 'deleteInternetGateway') return { input };
       if (method === 'deleteVpc') return { input };
       throw new Error(`Unexpected EC2 method: ${method}`);
     },
@@ -256,6 +271,14 @@ async function loadHarness({
     },
   }));
   jest.unstable_mockModule('@aws-sdk/client-ec2', () => ({
+    CreateInternetGatewayCommand: class CreateInternetGatewayCommand {
+      input;
+      operation = 'createInternetGateway';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateVpcCommand: class CreateVpcCommand {
       input;
       operation = 'createVpc';
@@ -288,6 +311,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    DescribeInternetGatewaysCommand: class DescribeInternetGatewaysCommand {
+      input;
+      operation = 'describeInternetGateways';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     DescribeInstanceTypeOfferingsCommand: class DescribeInstanceTypeOfferingsCommand {
       input;
       operation = 'describeInstanceTypeOfferings';
@@ -307,6 +338,14 @@ async function loadHarness({
     DeleteVpcCommand: class DeleteVpcCommand {
       input;
       operation = 'deleteVpc';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DeleteInternetGatewayCommand: class DeleteInternetGatewayCommand {
+      input;
+      operation = 'deleteInternetGateway';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -894,7 +933,7 @@ describe('AWS deployment invocation authority', () => {
     await authority.close();
   });
 
-  it('exposes only the exact narrow network resource surface and dispatches every VPC operation', async () => {
+  it('exposes only the exact narrow network resource surface and dispatches every operation', async () => {
     const harness = await loadHarness();
     const authority = await harness.createAwsDeploymentAuthority({
       region: 'us-east-1',
@@ -913,10 +952,35 @@ describe('AWS deployment invocation authority', () => {
       expect(client).not.toHaveProperty('send');
       expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
 
+      const createInternetGatewayInput = {
+        TagSpecifications: [
+          {
+            ResourceType: 'internet-gateway',
+            Tags: [{ Key: 'wharfie:managed-by', Value: 'wharfie' }],
+          },
+        ],
+      };
+      await expect(
+        client.createInternetGateway(createInternetGatewayInput),
+      ).resolves.toMatchObject({
+        InternetGateway: {
+          InternetGatewayId: 'igw-00000000000000001',
+        },
+        input: createInternetGatewayInput,
+      });
       const createInput = { CidrBlock: '10.42.0.0/16' };
       await expect(client.createVpc(createInput)).resolves.toMatchObject({
         Vpc: { VpcId: 'vpc-00000000000000001' },
         input: createInput,
+      });
+      const describeInternetGatewaysInput = {
+        InternetGatewayIds: ['igw-00000000000000001'],
+      };
+      await expect(
+        client.describeInternetGateways(describeInternetGatewaysInput),
+      ).resolves.toMatchObject({
+        InternetGateways: [],
+        input: describeInternetGatewaysInput,
       });
       const describeInput = { VpcIds: ['vpc-00000000000000001'] };
       await expect(client.describeVpcs(describeInput)).resolves.toMatchObject({
@@ -933,14 +997,23 @@ describe('AWS deployment invocation authority', () => {
         EnableDnsSupport: { Value: true },
         input: attributeInput,
       });
+      const deleteInternetGatewayInput = {
+        InternetGatewayId: 'igw-00000000000000001',
+      };
+      await expect(
+        client.deleteInternetGateway(deleteInternetGatewayInput),
+      ).resolves.toEqual({ input: deleteInternetGatewayInput });
       const deleteInput = { VpcId: 'vpc-00000000000000001' };
       await expect(client.deleteVpc(deleteInput)).resolves.toEqual({
         input: deleteInput,
       });
       expect(harness.ec2Send.mock.calls).toEqual([
+        ['createInternetGateway', createInternetGatewayInput],
         ['createVpc', createInput],
+        ['describeInternetGateways', describeInternetGatewaysInput],
         ['describeVpcs', describeInput],
         ['describeVpcAttribute', attributeInput],
+        ['deleteInternetGateway', deleteInternetGatewayInput],
         ['deleteVpc', deleteInput],
       ]);
     } finally {
@@ -967,6 +1040,7 @@ describe('AWS deployment invocation authority', () => {
 
   it.each([
     ['InvalidVpcID.NotFound', 'describeVpcs', 404],
+    ['InvalidInternetGatewayID.NotFound', 'describeInternetGateways', 404],
     ['DependencyViolation', 'deleteVpc', 400],
     ['IncorrectState', 'deleteVpc', 400],
   ])(

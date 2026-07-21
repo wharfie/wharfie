@@ -5,11 +5,13 @@ portable capability model into one fixed 15-role AWS resource graph. Provider
 specification V3 pins that graph; Plan/Action V3, Inspection V4, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
-destroy policy. The retained EBS volume and first direct-EC2 VPC effects now
-have strict controller-compatible drivers. VPC recovery is logically
-convergent when discovery is unique and visibly blocks duplicates because
-`CreateVpc` has no durable provider token. The remaining fixed drivers,
-provider composition, commands, and clean-account proof are next ·
+destroy policy. The retained EBS volume, direct-EC2 VPC, and standalone
+internet-gateway effects now have strict controller-compatible drivers. The
+network creates are logically convergent when discovery is unique and visibly
+block duplicates because their EC2 APIs have no durable provider token. The
+gateway's VPC attachment remains a separate derived effect. The remaining
+fixed drivers, provider composition, commands, and clean-account proof are
+next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -570,6 +572,16 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       silently adopted or deleted by a nondestructive create plan. Exact
       ownership is re-proved before purge. This is deterministic-mock proof,
       not provider exactly-once execution or a complete network driver.
+- [x] Implement the fixed direct `network-internet-gateway` role without
+      folding in its derived VPC attachment. The same single-attempt network
+      authority adds only the exact gateway create/describe/delete
+      operations; atomic tags, paginated discovery, dual broad/exact readback,
+      and an action/nonce attempt fence recover one unique visible gateway.
+      Create and no-op ignore attachment state, while purge requires both
+      independently read records to report an exact empty attachment set.
+      Duplicate or attached evidence never authorizes hidden cleanup. This is
+      deterministic-mock proof, not provider exactly-once execution or the
+      later attach/detach relationship.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -661,12 +673,13 @@ receipts remain bound to `0d927463`.
 
 The regional provider specification now pins its exact image, stable placement,
 instance-type availability, default EBS KMS key ARN, and volume/attachment
-contract. Controller-shaped retained-volume and direct VPC resources can
-create, inspect, and reconcile their exact effects under deterministic mocks.
+contract. Controller-shaped retained-volume, direct VPC, and standalone
+internet-gateway resources can create, inspect, and reconcile their exact
+effects under deterministic mocks.
 The portable capability model expands into a fixed 15-role graph, with one
 recoverable action per modeled resource or relationship, exact binding
 lineage, canonical apply/reverse-destroy ordering, and retained-volume versus
-purged-attachment lifecycle. Those two resource drivers are not yet composed
+purged-attachment lifecycle. Those three resource drivers are not yet composed
 into a complete provider, and the runtime path still does not attach, format,
 mount, or fulfill a service capability.
 
@@ -685,9 +698,11 @@ mount, or fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [direct EC2 VPC resource
-checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md).
-Its parent is the [multi-effect resource graph
+The current restart point is the [direct EC2 internet-gateway resource
+checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md).
+Its parent is the [direct EC2 VPC resource
+checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md), whose
+parent is the [multi-effect resource graph
 checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md),
 whose parent is the [retained EBS volume resource
 checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md),

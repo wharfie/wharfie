@@ -15,12 +15,12 @@ import {
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
 
-export const AWS_SINGLE_NODE_VPC_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS = 100;
-export const AWS_SINGLE_NODE_VPC_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-vpc-state:v1';
+export const AWS_SINGLE_NODE_INTERNET_GATEWAY_DEFAULT_MAX_ATTEMPTS = 3;
+export const AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS = 10;
+export const AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES = 16;
+export const AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS = 100;
+export const AWS_SINGLE_NODE_INTERNET_GATEWAY_STATE_DIGEST_DOMAIN =
+  'wharfie:aws-single-node-ec2-internet-gateway-state:v1';
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -40,44 +40,51 @@ const ACTION_CONTEXT_KEYS = new Set([
   'artifactStage',
 ]);
 const REQUIRED_CLIENT_METHODS = Object.freeze([
-  'createVpc',
-  'describeVpcs',
-  'describeVpcAttribute',
-  'deleteVpc',
+  'createInternetGateway',
+  'describeInternetGateways',
+  'deleteInternetGateway',
 ]);
+const INTERNET_GATEWAY_ID_PATTERN = /^igw-[0-9a-f]{8,32}$/;
 const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
-const VPC_CIDR_ASSOCIATION_ID_PATTERN = /^vpc-cidr-assoc-[0-9a-f]{8,32}$/;
-const DHCP_OPTIONS_ID_PATTERN = /^dopt-[0-9a-f]{8,32}$/;
-const MAX_VPC_TAGS = 50;
+const INTERNET_GATEWAY_ATTACHMENT_STATES = new Set([
+  'available',
+  'attaching',
+  'attached',
+  'detaching',
+  'detached',
+]);
+const MAX_INTERNET_GATEWAY_TAGS = 50;
 
 const BASE_RESERVED_TAGS = Object.freeze({
   'wharfie:managed-by': 'wharfie',
-  'wharfie:resource-kind': 'single-node-vpc',
+  'wharfie:resource-kind': 'single-node-internet-gateway',
   'wharfie:retention': 'purge',
   'wharfie:schema-version': '2',
 });
 
 /** Exact controller authority or present provider evidence is contradictory. */
-export class AwsSingleNodeVpcResourceConflictError extends Error {
+export class AwsSingleNodeInternetGatewayResourceConflictError extends Error {
   constructor() {
-    super('AWS single-node VPC resource conflicts with its exact contract.');
-    this.name = 'AwsSingleNodeVpcResourceConflictError';
-    this.code = 'AWS_SINGLE_NODE_VPC_RESOURCE_CONFLICT';
+    super(
+      'AWS single-node internet gateway resource conflicts with its exact contract.',
+    );
+    this.name = 'AwsSingleNodeInternetGatewayResourceConflictError';
+    this.code = 'AWS_SINGLE_NODE_INTERNET_GATEWAY_RESOURCE_CONFLICT';
   }
 }
 
 /** A bounded provider read or mutation could not establish safe state. */
-export class AwsSingleNodeVpcResourceUnknownError extends Error {
+export class AwsSingleNodeInternetGatewayResourceUnknownError extends Error {
   constructor() {
-    super('AWS single-node VPC resource state is unknown.');
-    this.name = 'AwsSingleNodeVpcResourceUnknownError';
-    this.code = 'AWS_SINGLE_NODE_VPC_RESOURCE_UNKNOWN';
+    super('AWS single-node internet gateway resource state is unknown.');
+    this.name = 'AwsSingleNodeInternetGatewayResourceUnknownError';
+    this.code = 'AWS_SINGLE_NODE_INTERNET_GATEWAY_RESOURCE_UNKNOWN';
   }
 }
 
 class ProviderResponseUnknownError extends Error {}
-class VpcEvidenceConflictError extends Error {}
-class VpcEvidenceTransientError extends Error {}
+class InternetGatewayEvidenceConflictError extends Error {}
+class InternetGatewayEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -146,33 +153,25 @@ async function defaultWaitForRetry(attempt) {
 }
 
 /**
- * Derive the exact provider-observable VPC state. Relationship resources are
- * intentionally excluded; each is a later independently recoverable graph
- * effect.
+ * Derive the exact provider-observable internet-gateway state. Attachment is
+ * deliberately excluded because the graph owns it as a later derived effect.
  * @param {unknown} value - Exact AWS single-node provider specification.
  * @returns {Readonly<{algorithm: 'sha256', value: string}>} - State digest.
  */
-export function getAwsSingleNodeVpcStateDigest(value) {
-  const providerSpec = validateAwsSingleNodeProviderSpec(
+export function getAwsSingleNodeInternetGatewayStateDigest(value) {
+  validateAwsSingleNodeProviderSpec(
     value,
-    'awsSingleNodeVpcState providerSpec',
+    'awsSingleNodeInternetGatewayState providerSpec',
   );
   const descriptor = sortCanonicalJsonValue({
     schemaVersion: 1,
-    kind: 'awsSingleNodeEc2VpcState',
-    cidrBlock: providerSpec.capabilities.networking.vpcCidr,
-    instanceTenancy: 'default',
-    isDefault: false,
-    ipv6: false,
-    enableDnsSupport: true,
-    enableDnsHostnames: false,
-    internetGatewayBlockMode: 'off',
+    kind: 'awsSingleNodeEc2InternetGatewayState',
     onDestroy: 'purge',
   });
   return deepFreeze({
     algorithm: 'sha256',
     value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_VPC_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
+      `${AWS_SINGLE_NODE_INTERNET_GATEWAY_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
         descriptor,
       )}`,
     ),
@@ -205,15 +204,12 @@ function sortedTags(tags) {
   );
 }
 
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<import('@aws-sdk/client-ec2').CreateVpcCommandInput>} */
-function createVpcRequest(authority) {
+/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput>} */
+function createInternetGatewayRequest(authority) {
   return deepFreeze({
-    AmazonProvidedIpv6CidrBlock: false,
-    CidrBlock: authority.providerSpec.capabilities.networking.vpcCidr,
-    InstanceTenancy: 'default',
     TagSpecifications: [
       {
-        ResourceType: 'vpc',
+        ResourceType: 'internet-gateway',
         Tags: sortedTags(requiredTags(authority)),
       },
     ],
@@ -248,10 +244,10 @@ function bindingMatchesAuthority(
 ) {
   return (
     binding.management === 'managed' &&
-    binding.providerType === 'ec2-vpc' &&
-    VPC_ID_PATTERN.test(binding.providerResourceId) &&
+    binding.providerType === 'ec2-internet-gateway' &&
+    INTERNET_GATEWAY_ID_PATTERN.test(binding.providerResourceId) &&
     binding.deploymentInstanceId === plan.deploymentInstanceId &&
-    binding.resourceKey === 'network-vpc' &&
+    binding.resourceKey === 'network-internet-gateway' &&
     binding.providerScopeId === providerScope.providerScopeId &&
     binding.incarnationId === plan.incarnationId &&
     sameJson(binding.capability, action.capability) &&
@@ -261,7 +257,7 @@ function bindingMatchesAuthority(
     binding.dependencyBindings.length === 0 &&
     binding.ownershipNonce === ownershipNonce &&
     action.before !== null &&
-    action.before.providerType === 'ec2-vpc' &&
+    action.before.providerType === 'ec2-internet-gateway' &&
     action.before.providerResourceId === binding.providerResourceId
   );
 }
@@ -269,12 +265,18 @@ function bindingMatchesAuthority(
 /** @param {unknown} value @param {Readonly<Record<string, any>>} providerScope @returns {Readonly<Record<string, any>>} */
 function validateActionContext(value, providerScope) {
   if (!isPlainObject(value)) {
-    throw new TypeError('awsSingleNodeVpc action context must be an object.');
+    throw new TypeError(
+      'awsSingleNodeInternetGateway action context must be an object.',
+    );
   }
-  assertExactKeys(value, ACTION_CONTEXT_KEYS, 'awsSingleNodeVpc context');
+  assertExactKeys(
+    value,
+    ACTION_CONTEXT_KEYS,
+    'awsSingleNodeInternetGateway context',
+  );
   const profile = validateDeploymentProfile(
     value.profile,
-    'awsSingleNodeVpc context.profile',
+    'awsSingleNodeInternetGateway context.profile',
   );
   const plan = validateDeploymentPlanContext(value.plan, { profile });
   const canonicalProviderSpec = validateAwsSingleNodeProviderSpecContext(
@@ -283,7 +285,7 @@ function validateActionContext(value, providerScope) {
   );
   const head = validateDeploymentHead(
     value.head,
-    'awsSingleNodeVpc context.head',
+    'awsSingleNodeInternetGateway context.head',
   );
   const expectedOperationKind =
     plan.operation === 'destroy'
@@ -320,7 +322,7 @@ function validateActionContext(value, providerScope) {
       ) => candidate.actionId !== plan.actions[index].actionId,
     )
   ) {
-    throw new AwsSingleNodeVpcResourceConflictError();
+    throw new AwsSingleNodeInternetGatewayResourceConflictError();
   }
   if (
     !Number.isSafeInteger(value.actionIndex) ||
@@ -328,7 +330,7 @@ function validateActionContext(value, providerScope) {
     value.actionIndex >= plan.actions.length ||
     value.actionIndex !== head.activeOperation.nextActionIndex
   ) {
-    throw new AwsSingleNodeVpcResourceConflictError();
+    throw new AwsSingleNodeInternetGatewayResourceConflictError();
   }
   const action = plan.actions[value.actionIndex];
   const intent = head.activeOperation.intents[value.actionIndex];
@@ -336,24 +338,26 @@ function validateActionContext(value, providerScope) {
     !sameJson(value.action, action) ||
     intent?.actionId !== action.actionId ||
     intent.status !== 'intended' ||
-    action.resourceKey !== 'network-vpc' ||
+    action.resourceKey !== 'network-internet-gateway' ||
     !sameJson(action.capability, { kind: 'networking', version: 1 }) ||
-    !sameJson(action.role, { kind: 'vpc', version: 1 }) ||
+    !sameJson(action.role, { kind: 'internet-gateway', version: 1 }) ||
     action.management !== 'managed' ||
     action.ownershipMode !== 'direct' ||
     action.onDestroy !== 'purge' ||
     action.dependsOn.length !== 0
   ) {
-    throw new AwsSingleNodeVpcResourceConflictError();
+    throw new AwsSingleNodeInternetGatewayResourceConflictError();
   }
   const ownershipNonce = validateOwnershipNonce(
     value.ownershipNonce,
-    'awsSingleNodeVpc context.ownershipNonce',
+    'awsSingleNodeInternetGateway context.ownershipNonce',
   );
   if (intent.ownershipNonce !== ownershipNonce) {
-    throw new AwsSingleNodeVpcResourceConflictError();
+    throw new AwsSingleNodeInternetGatewayResourceConflictError();
   }
-  const stateDigest = getAwsSingleNodeVpcStateDigest(canonicalProviderSpec);
+  const stateDigest = getAwsSingleNodeInternetGatewayStateDigest(
+    canonicalProviderSpec,
+  );
   const priorBinding = head.resourceBindings.find(
     (/** @type {Readonly<Record<string, any>>} */ candidate) =>
       candidate.resourceKey === action.resourceKey,
@@ -363,12 +367,12 @@ function validateActionContext(value, providerScope) {
       plan.operation === 'destroy' ||
       action.before !== null ||
       action.after === null ||
-      action.after.providerType !== 'ec2-vpc' ||
+      action.after.providerType !== 'ec2-internet-gateway' ||
       action.after.providerResourceId !== null ||
       !sameJson(action.after.stateDigest, stateDigest) ||
       priorBinding !== undefined
     ) {
-      throw new AwsSingleNodeVpcResourceConflictError();
+      throw new AwsSingleNodeInternetGatewayResourceConflictError();
     }
   } else if (action.action === 'noop') {
     if (
@@ -382,11 +386,11 @@ function validateActionContext(value, providerScope) {
         ownershipNonce,
       ) ||
       !sameJson(action.before.stateDigest, stateDigest) ||
-      action.after.providerType !== 'ec2-vpc' ||
+      action.after.providerType !== 'ec2-internet-gateway' ||
       action.after.providerResourceId !== priorBinding.providerResourceId ||
       !sameJson(action.after.stateDigest, stateDigest)
     ) {
-      throw new AwsSingleNodeVpcResourceConflictError();
+      throw new AwsSingleNodeInternetGatewayResourceConflictError();
     }
   } else if (action.action === 'delete') {
     if (
@@ -402,10 +406,10 @@ function validateActionContext(value, providerScope) {
       ) ||
       action.before.stateDigest === null
     ) {
-      throw new AwsSingleNodeVpcResourceConflictError();
+      throw new AwsSingleNodeInternetGatewayResourceConflictError();
     }
   } else {
-    throw new AwsSingleNodeVpcResourceConflictError();
+    throw new AwsSingleNodeInternetGatewayResourceConflictError();
   }
   return deepFreeze({
     operation: plan.operation,
@@ -422,39 +426,48 @@ function validateActionContext(value, providerScope) {
 }
 
 /** @param {unknown} value @returns {string|null} */
-function candidateVpcId(value) {
-  if (!isPlainObject(value) || !isPlainObject(value.Vpc)) return null;
-  return typeof value.Vpc.VpcId === 'string' &&
-    VPC_ID_PATTERN.test(value.Vpc.VpcId)
-    ? value.Vpc.VpcId
+function candidateInternetGatewayId(value) {
+  if (!isPlainObject(value) || !isPlainObject(value.InternetGateway)) {
+    return null;
+  }
+  const internetGatewayId = value.InternetGateway.InternetGatewayId;
+  return typeof internetGatewayId === 'string' &&
+    INTERNET_GATEWAY_ID_PATTERN.test(internetGatewayId)
+    ? internetGatewayId
     : null;
 }
 
-/** @param {unknown} response @param {string} exactVpcId @returns {Readonly<Record<string, any>>|null} */
-function oneVpcFromResponse(response, exactVpcId) {
-  if (!isPlainObject(response) || !Array.isArray(response.Vpcs)) {
+/** @param {unknown} response @param {string} exactInternetGatewayId @returns {Readonly<Record<string, any>>} */
+function oneInternetGatewayFromResponse(response, exactInternetGatewayId) {
+  if (!isPlainObject(response) || !Array.isArray(response.InternetGateways)) {
     throw new ProviderResponseUnknownError();
   }
   if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new VpcEvidenceConflictError();
+    throw new InternetGatewayEvidenceConflictError();
   }
-  if (response.Vpcs.length === 0) throw new ProviderResponseUnknownError();
-  if (response.Vpcs.length !== 1) throw new VpcEvidenceConflictError();
-  const vpc = response.Vpcs[0];
+  if (response.InternetGateways.length === 0) {
+    throw new ProviderResponseUnknownError();
+  }
+  if (response.InternetGateways.length !== 1) {
+    throw new InternetGatewayEvidenceConflictError();
+  }
+  const internetGateway = response.InternetGateways[0];
   if (
-    !isPlainObject(vpc) ||
-    typeof vpc.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(vpc.VpcId)
+    !isPlainObject(internetGateway) ||
+    typeof internetGateway.InternetGatewayId !== 'string' ||
+    !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId)
   ) {
     throw new ProviderResponseUnknownError();
   }
-  if (vpc.VpcId !== exactVpcId) throw new VpcEvidenceConflictError();
-  return vpc;
+  if (internetGateway.InternetGatewayId !== exactInternetGatewayId) {
+    throw new InternetGatewayEvidenceConflictError();
+  }
+  return internetGateway;
 }
 
-/** @param {unknown} response @returns {{vpcs: Readonly<Record<string, any>>[], nextToken: string|null}} */
+/** @param {unknown} response @returns {{internetGateways: Readonly<Record<string, any>>[], nextToken: string|null}} */
 function discoveryPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.Vpcs)) {
+  if (!isPlainObject(response) || !Array.isArray(response.InternetGateways)) {
     throw new ProviderResponseUnknownError();
   }
   let nextToken = null;
@@ -467,30 +480,34 @@ function discoveryPage(response) {
     }
     nextToken = response.NextToken;
   }
-  const vpcs = [];
-  for (const vpc of response.Vpcs) {
+  const internetGateways = [];
+  for (const internetGateway of response.InternetGateways) {
     if (
-      !isPlainObject(vpc) ||
-      typeof vpc.VpcId !== 'string' ||
-      !VPC_ID_PATTERN.test(vpc.VpcId)
+      !isPlainObject(internetGateway) ||
+      typeof internetGateway.InternetGatewayId !== 'string' ||
+      !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId)
     ) {
       throw new ProviderResponseUnknownError();
     }
-    vpcs.push(vpc);
+    internetGateways.push(internetGateway);
   }
-  return { vpcs, nextToken };
+  return { internetGateways, nextToken };
 }
 
 /** @param {unknown} tagsValue @param {Readonly<Record<string, string>>} expected @param {boolean} allowPropagation @returns {void} */
 function validateTags(tagsValue, expected, allowPropagation) {
   if (!Array.isArray(tagsValue)) {
     if (tagsValue === undefined || tagsValue === null) {
-      if (allowPropagation) throw new VpcEvidenceTransientError();
-      throw new VpcEvidenceConflictError();
+      if (allowPropagation) {
+        throw new InternetGatewayEvidenceTransientError();
+      }
+      throw new InternetGatewayEvidenceConflictError();
     }
     throw new ProviderResponseUnknownError();
   }
-  if (tagsValue.length > MAX_VPC_TAGS) throw new VpcEvidenceConflictError();
+  if (tagsValue.length > MAX_INTERNET_GATEWAY_TAGS) {
+    throw new InternetGatewayEvidenceConflictError();
+  }
   const observed = new Map();
   for (const tag of tagsValue) {
     if (
@@ -501,233 +518,130 @@ function validateTags(tagsValue, expected, allowPropagation) {
     ) {
       throw new ProviderResponseUnknownError();
     }
-    if (observed.has(tag.Key)) throw new VpcEvidenceConflictError();
+    if (observed.has(tag.Key)) {
+      throw new InternetGatewayEvidenceConflictError();
+    }
     observed.set(tag.Key, tag.Value);
   }
   for (const [key, value] of observed) {
     const reserved = Object.hasOwn(expected, key);
     if (key.startsWith('wharfie:') && !reserved) {
-      throw new VpcEvidenceConflictError();
+      throw new InternetGatewayEvidenceConflictError();
     }
     if (reserved && expected[key] !== value) {
-      throw new VpcEvidenceConflictError();
+      throw new InternetGatewayEvidenceConflictError();
     }
   }
   const complete = Object.entries(expected).every(
     ([key, value]) => observed.get(key) === value,
   );
   if (!complete) {
-    if (allowPropagation) throw new VpcEvidenceTransientError();
-    throw new VpcEvidenceConflictError();
-  }
-}
-
-/** @param {unknown} value @param {string} expectedState @param {boolean} allowPropagation @returns {void} */
-function validateCidrAssociations(value, expectedState, allowPropagation) {
-  if (!Array.isArray(value)) {
-    if (allowPropagation && (value === undefined || value === null)) {
-      throw new VpcEvidenceTransientError();
+    if (allowPropagation) {
+      throw new InternetGatewayEvidenceTransientError();
     }
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.length === 0 && allowPropagation) {
-    throw new VpcEvidenceTransientError();
-  }
-  if (value.length !== 1) throw new VpcEvidenceConflictError();
-  const association = value[0];
-  if (
-    !isPlainObject(association) ||
-    typeof association.AssociationId !== 'string' ||
-    !VPC_CIDR_ASSOCIATION_ID_PATTERN.test(association.AssociationId) ||
-    typeof association.CidrBlock !== 'string' ||
-    !isPlainObject(association.CidrBlockState) ||
-    typeof association.CidrBlockState.State !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    association.CidrBlockState.StatusMessage !== undefined &&
-    association.CidrBlockState.StatusMessage !== null &&
-    typeof association.CidrBlockState.StatusMessage !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (association.CidrBlock !== expectedState) {
-    throw new VpcEvidenceConflictError();
-  }
-  if (association.CidrBlockState.State === 'associating') {
-    throw new VpcEvidenceTransientError();
-  }
-  if (
-    association.CidrBlockState.State !== 'associated' ||
-    (association.CidrBlockState.StatusMessage !== undefined &&
-      association.CidrBlockState.StatusMessage !== null)
-  ) {
-    throw new VpcEvidenceConflictError();
+    throw new InternetGatewayEvidenceConflictError();
   }
 }
 
-/** @param {unknown} value @returns {void} */
-function validateIpv6Associations(value) {
-  if (value === undefined) return;
+/** @param {Readonly<Record<string, any>>} internetGateway @param {Readonly<Record<string, any>>} authority @returns {void} */
+function validateInternetGatewayOwnershipEvidence(internetGateway, authority) {
+  if (
+    typeof internetGateway.InternetGatewayId !== 'string' ||
+    !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId) ||
+    typeof internetGateway.OwnerId !== 'string'
+  ) {
+    throw new ProviderResponseUnknownError();
+  }
+  if (internetGateway.OwnerId !== authority.plan.providerScope.accountId) {
+    throw new InternetGatewayEvidenceConflictError();
+  }
+  validateTags(
+    internetGateway.Tags,
+    requiredTags(authority),
+    authority.action.action === 'create',
+  );
+}
+
+/** @param {unknown} value @returns {boolean} */
+function validateDetachedForDelete(value) {
   if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  if (value.length === 0) return;
-  for (const association of value) {
+  for (const attachment of value) {
     if (
-      !isPlainObject(association) ||
-      typeof association.AssociationId !== 'string' ||
-      !VPC_CIDR_ASSOCIATION_ID_PATTERN.test(association.AssociationId) ||
-      typeof association.Ipv6CidrBlock !== 'string' ||
-      association.Ipv6CidrBlock.length === 0 ||
-      !isPlainObject(association.Ipv6CidrBlockState) ||
-      typeof association.Ipv6CidrBlockState.State !== 'string' ||
-      (association.Ipv6CidrBlockState.StatusMessage !== undefined &&
-        association.Ipv6CidrBlockState.StatusMessage !== null &&
-        typeof association.Ipv6CidrBlockState.StatusMessage !== 'string')
+      !isPlainObject(attachment) ||
+      typeof attachment.State !== 'string' ||
+      !INTERNET_GATEWAY_ATTACHMENT_STATES.has(attachment.State) ||
+      typeof attachment.VpcId !== 'string' ||
+      !VPC_ID_PATTERN.test(attachment.VpcId)
     ) {
       throw new ProviderResponseUnknownError();
     }
   }
-  throw new VpcEvidenceConflictError();
-}
-
-/** @param {unknown} value @returns {void} */
-function validateBlockPublicAccessStates(value) {
-  if (
-    !isPlainObject(value) ||
-    typeof value.InternetGatewayBlockMode !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.InternetGatewayBlockMode === 'off') return;
-  if (
-    value.InternetGatewayBlockMode === 'block-ingress' ||
-    value.InternetGatewayBlockMode === 'block-bidirectional'
-  ) {
-    throw new VpcEvidenceConflictError();
-  }
-  throw new ProviderResponseUnknownError();
-}
-
-/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateVpcOwnershipEvidence(vpc, authority) {
-  if (
-    typeof vpc.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(vpc.VpcId) ||
-    typeof vpc.OwnerId !== 'string' ||
-    typeof vpc.State !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (vpc.OwnerId !== authority.plan.providerScope.accountId) {
-    throw new VpcEvidenceConflictError();
-  }
-  validateTags(
-    vpc.Tags,
-    requiredTags(authority),
-    authority.action.action === 'create',
-  );
-  if (vpc.State === 'pending') throw new VpcEvidenceTransientError();
-  if (vpc.State !== 'available') throw new VpcEvidenceConflictError();
-}
-
-/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateVpcDeletionEvidence(vpc, authority) {
-  validateVpcOwnershipEvidence(vpc, authority);
-  if (typeof vpc.IsDefault !== 'boolean') {
-    throw new ProviderResponseUnknownError();
-  }
-  if (vpc.IsDefault) throw new VpcEvidenceConflictError();
-}
-
-/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateVpcBaseEvidence(vpc, authority) {
-  const expectedCidr = authority.providerSpec.capabilities.networking.vpcCidr;
-  validateVpcOwnershipEvidence(vpc, authority);
-  if (
-    typeof vpc.CidrBlock !== 'string' ||
-    typeof vpc.InstanceTenancy !== 'string' ||
-    typeof vpc.IsDefault !== 'boolean' ||
-    typeof vpc.DhcpOptionsId !== 'string' ||
-    !DHCP_OPTIONS_ID_PATTERN.test(vpc.DhcpOptionsId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  validateIpv6Associations(vpc.Ipv6CidrBlockAssociationSet);
-  validateBlockPublicAccessStates(vpc.BlockPublicAccessStates);
-  if (
-    vpc.CidrBlock !== expectedCidr ||
-    vpc.InstanceTenancy !== 'default' ||
-    vpc.IsDefault
-  ) {
-    throw new VpcEvidenceConflictError();
-  }
-  validateCidrAssociations(
-    vpc.CidrBlockAssociationSet,
-    expectedCidr,
-    authority.action.action === 'create',
-  );
+  return value.length === 0;
 }
 
 /**
- * A create plan is non-destructive. Discovery may prove exactly one matching
- * effect, but it must never compact multiple VPCs behind that plan. A match
- * that becomes visible only after a binding was published is therefore
- * surfaced by later noop/destroy discovery as a conflict; EC2 offers neither
- * a CreateVpc client token nor a linearizable tag query that can eliminate
- * that late-visibility window.
- */
-
-/**
- * Bind one exact directly owned VPC to the fixed AWS single-node graph.
- * The factory never owns or closes the caller's narrow EC2 client.
+ * Bind one exact directly owned internet gateway to the fixed AWS single-node
+ * graph. The factory never owns or closes the caller's narrow EC2 client.
  * @param {unknown} options - Exact dependencies and retry policy.
  * @returns {Readonly<{executeAction: (context: unknown) => Promise<void>, verifySettlement: (context: unknown) => Promise<Record<string, any>>}>} - Controller action ports.
  */
-export function createAwsSingleNodeVpcResource(options) {
+export function createAwsSingleNodeInternetGatewayResource(options) {
   if (!isPlainObject(options)) {
-    throw new TypeError('awsSingleNodeVpc options must be an object.');
+    throw new TypeError(
+      'awsSingleNodeInternetGateway options must be an object.',
+    );
   }
-  assertSupportedKeys(options, FACTORY_KEYS, 'awsSingleNodeVpc options');
+  assertSupportedKeys(
+    options,
+    FACTORY_KEYS,
+    'awsSingleNodeInternetGateway options',
+  );
   assertRequiredKeys(
     options,
     FACTORY_REQUIRED_KEYS,
-    'awsSingleNodeVpc options',
+    'awsSingleNodeInternetGateway options',
   );
   const client = options.client;
   if (client === null || typeof client !== 'object' || Array.isArray(client)) {
-    throw new TypeError('awsSingleNodeVpc client must be an object.');
+    throw new TypeError(
+      'awsSingleNodeInternetGateway client must be an object.',
+    );
   }
   for (const method of REQUIRED_CLIENT_METHODS) {
     if (typeof client[method] !== 'function') {
-      throw new TypeError(`awsSingleNodeVpc client.${method} is required.`);
+      throw new TypeError(
+        `awsSingleNodeInternetGateway client.${method} is required.`,
+      );
     }
   }
   const providerScope = validateProviderScope(
     options.providerScope,
-    'awsSingleNodeVpc providerScope',
+    'awsSingleNodeInternetGateway providerScope',
   );
   const maxAttempts =
-    options.maxAttempts ?? AWS_SINGLE_NODE_VPC_DEFAULT_MAX_ATTEMPTS;
+    options.maxAttempts ??
+    AWS_SINGLE_NODE_INTERNET_GATEWAY_DEFAULT_MAX_ATTEMPTS;
   if (
     !Number.isSafeInteger(maxAttempts) ||
     maxAttempts < 1 ||
-    maxAttempts > AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS
+    maxAttempts > AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS
   ) {
     throw new TypeError(
-      `awsSingleNodeVpc maxAttempts must be an integer from 1 through ${AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS}.`,
+      `awsSingleNodeInternetGateway maxAttempts must be an integer from 1 through ${AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS}.`,
     );
   }
   const waitForRetry = options.waitForRetry ?? defaultWaitForRetry;
   if (typeof waitForRetry !== 'function') {
-    throw new TypeError('awsSingleNodeVpc waitForRetry must be a function.');
+    throw new TypeError(
+      'awsSingleNodeInternetGateway waitForRetry must be a function.',
+    );
   }
   /** Successful create responses are only ephemeral candidate locators. */
   const candidateIds = new Map();
   /**
-   * CreateVpc has no client token. Once this process crosses the mutation
-   * boundary for an intended effect it may only read back that attempt; an
-   * error or malformed response must never cause a same-process replay.
+   * CreateInternetGateway has no client token. Once this process crosses the
+   * mutation boundary for an intended effect it may only read back that
+   * attempt; an error or malformed response cannot trigger a replay here.
    */
   const attemptedEffects = new Set();
 
@@ -741,39 +655,41 @@ export function createAwsSingleNodeVpcResource(options) {
     try {
       await waitForRetry(attempt);
     } catch {
-      throw new AwsSingleNodeVpcResourceUnknownError();
+      throw new AwsSingleNodeInternetGatewayResourceUnknownError();
     }
   }
 
-  /** @param {string} vpcId @returns {Promise<Readonly<Record<string, any>>|null>} */
-  async function describeExactOnce(vpcId) {
+  /** @param {string} internetGatewayId @returns {Promise<Readonly<Record<string, any>>|null>} */
+  async function describeExactOnce(internetGatewayId) {
     let response;
     try {
-      response = await client.describeVpcs(deepFreeze({ VpcIds: [vpcId] }));
+      response = await client.describeInternetGateways(
+        deepFreeze({ InternetGatewayIds: [internetGatewayId] }),
+      );
     } catch (error) {
-      if (errorNamed(error, 'InvalidVpcID.NotFound')) return null;
+      if (errorNamed(error, 'InvalidInternetGatewayID.NotFound')) return null;
       throw new ProviderResponseUnknownError();
     }
-    return oneVpcFromResponse(response, vpcId);
+    return oneInternetGatewayFromResponse(response, internetGatewayId);
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Map<string, Readonly<Record<string, any>>>>} */
   async function discoverOnce(authority) {
     const filters = discoveryFilters(authority);
-    const vpcs = new Map();
+    const internetGateways = new Map();
     const seenTokens = new Set();
     let nextToken = null;
     for (
       let page = 1;
-      page <= AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES;
+      page <= AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES;
       page += 1
     ) {
       let response;
       try {
-        response = await client.describeVpcs(
+        response = await client.describeInternetGateways(
           deepFreeze({
             Filters: filters,
-            MaxResults: AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS,
+            MaxResults: AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS,
             ...(nextToken === null ? {} : { NextToken: nextToken }),
           }),
         );
@@ -781,13 +697,18 @@ export function createAwsSingleNodeVpcResource(options) {
         throw new ProviderResponseUnknownError();
       }
       const observed = discoveryPage(response);
-      for (const vpc of observed.vpcs) {
-        if (vpcs.has(vpc.VpcId)) throw new VpcEvidenceConflictError();
-        vpcs.set(vpc.VpcId, vpc);
+      for (const internetGateway of observed.internetGateways) {
+        if (internetGateways.has(internetGateway.InternetGatewayId)) {
+          throw new InternetGatewayEvidenceConflictError();
+        }
+        internetGateways.set(
+          internetGateway.InternetGatewayId,
+          internetGateway,
+        );
       }
       if (observed.nextToken === null) break;
       if (
-        page === AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES ||
+        page === AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES ||
         seenTokens.has(observed.nextToken)
       ) {
         throw new ProviderResponseUnknownError();
@@ -795,113 +716,57 @@ export function createAwsSingleNodeVpcResource(options) {
       seenTokens.add(observed.nextToken);
       nextToken = observed.nextToken;
     }
-    return vpcs;
-  }
-
-  /** @param {unknown} response @param {string} vpcId @param {'enableDnsSupport'|'enableDnsHostnames'} attribute @param {'EnableDnsSupport'|'EnableDnsHostnames'} responseKey @param {boolean} expected @returns {void} */
-  function validateAttributeResponse(
-    response,
-    vpcId,
-    attribute,
-    responseKey,
-    expected,
-  ) {
-    if (!isPlainObject(response)) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (
-      typeof response.VpcId !== 'string' ||
-      !VPC_ID_PATTERN.test(response.VpcId) ||
-      !isPlainObject(response[responseKey]) ||
-      typeof response[responseKey].Value !== 'boolean'
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (response.VpcId !== vpcId) throw new VpcEvidenceConflictError();
-    const otherKey =
-      attribute === 'enableDnsSupport'
-        ? 'EnableDnsHostnames'
-        : 'EnableDnsSupport';
-    if (
-      response[responseKey].Value !== expected ||
-      (response[otherKey] !== undefined && response[otherKey] !== null)
-    ) {
-      throw new VpcEvidenceConflictError();
-    }
-  }
-
-  /** @param {string} vpcId @param {'enableDnsSupport'|'enableDnsHostnames'} attribute @param {'EnableDnsSupport'|'EnableDnsHostnames'} responseKey @param {boolean} expected @returns {Promise<void>} */
-  async function readAttribute(vpcId, attribute, responseKey, expected) {
-    let response;
-    try {
-      response = await client.describeVpcAttribute(
-        deepFreeze({ Attribute: attribute, VpcId: vpcId }),
-      );
-    } catch (error) {
-      if (errorNamed(error, 'InvalidVpcID.NotFound')) {
-        throw new VpcEvidenceTransientError();
-      }
-      throw new ProviderResponseUnknownError();
-    }
-    validateAttributeResponse(
-      response,
-      vpcId,
-      attribute,
-      responseKey,
-      expected,
-    );
-  }
-
-  /** @param {string} vpcId @returns {Promise<void>} */
-  async function validateVpcAttributes(vpcId) {
-    await readAttribute(vpcId, 'enableDnsSupport', 'EnableDnsSupport', true);
-    await readAttribute(
-      vpcId,
-      'enableDnsHostnames',
-      'EnableDnsHostnames',
-      false,
-    );
-  }
-
-  /** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {Promise<void>} */
-  async function validateVpcEvidence(vpc, authority) {
-    validateVpcBaseEvidence(vpc, authority);
-    await validateVpcAttributes(vpc.VpcId);
+    return internetGateways;
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>[]>} */
   async function readLogicalMatches(authority) {
     const matches = await discoverOnce(authority);
-    if (matches.size > 1) throw new VpcEvidenceConflictError();
+    if (matches.size > 1) {
+      throw new InternetGatewayEvidenceConflictError();
+    }
     const discovered = [...matches.values()][0] ?? null;
     const exactId =
       authority.priorBinding?.providerResourceId ??
       candidateIds.get(effectKey(authority)) ??
+      discovered?.InternetGatewayId ??
       null;
-    if (exactId === null) {
-      if (discovered === null) return [];
-      await validateVpcEvidence(discovered, authority);
-      return [discovered];
-    }
-    if (discovered !== null && discovered.VpcId !== exactId) {
-      throw new VpcEvidenceConflictError();
+    if (exactId === null) return [];
+    if (discovered !== null && discovered.InternetGatewayId !== exactId) {
+      throw new InternetGatewayEvidenceConflictError();
     }
     const exact = await describeExactOnce(exactId);
     if (authority.action.action === 'delete') {
       if (discovered !== null) {
-        validateVpcDeletionEvidence(discovered, authority);
+        validateInternetGatewayOwnershipEvidence(discovered, authority);
       }
-      if (exact !== null) validateVpcDeletionEvidence(exact, authority);
+      if (exact !== null) {
+        validateInternetGatewayOwnershipEvidence(exact, authority);
+      }
+      const discoveredDetached =
+        discovered === null
+          ? null
+          : validateDetachedForDelete(discovered.Attachments);
+      const exactDetached =
+        exact === null ? null : validateDetachedForDelete(exact.Attachments);
+      if (discovered === null && exact === null) return [];
+      if (discovered === null || exact === null) {
+        throw new InternetGatewayEvidenceTransientError();
+      }
+      if (!discoveredDetached || !exactDetached) {
+        throw new InternetGatewayEvidenceTransientError();
+      }
     } else {
-      if (discovered !== null) validateVpcBaseEvidence(discovered, authority);
-      if (exact !== null) validateVpcBaseEvidence(exact, authority);
-    }
-    if (discovered === null && exact === null) return [];
-    if (discovered === null || exact === null) {
-      throw new VpcEvidenceTransientError();
-    }
-    if (authority.action.action !== 'delete') {
-      await validateVpcAttributes(exactId);
+      if (discovered !== null) {
+        validateInternetGatewayOwnershipEvidence(discovered, authority);
+      }
+      if (exact !== null) {
+        validateInternetGatewayOwnershipEvidence(exact, authority);
+      }
+      if (discovered === null && exact === null) return [];
+      if (discovered === null || exact === null) {
+        throw new InternetGatewayEvidenceTransientError();
+      }
     }
     return [exact];
   }
@@ -914,47 +779,62 @@ export function createAwsSingleNodeVpcResource(options) {
     try {
       matches = await readLogicalMatches(authority);
     } catch (error) {
-      if (error instanceof VpcEvidenceConflictError) {
-        throw new AwsSingleNodeVpcResourceConflictError();
+      if (error instanceof InternetGatewayEvidenceConflictError) {
+        throw new AwsSingleNodeInternetGatewayResourceConflictError();
       }
-      throw new AwsSingleNodeVpcResourceUnknownError();
+      if (
+        authority.action.action === 'delete' &&
+        error instanceof InternetGatewayEvidenceTransientError
+      ) {
+        return;
+      }
+      throw new AwsSingleNodeInternetGatewayResourceUnknownError();
     }
     if (authority.action.action === 'delete') {
       if (matches.length === 0) return;
-      const vpcId = authority.priorBinding.providerResourceId;
+      const internetGatewayId = authority.priorBinding.providerResourceId;
       try {
-        await client.deleteVpc(deepFreeze({ VpcId: vpcId }));
+        await client.deleteInternetGateway(
+          deepFreeze({ InternetGatewayId: internetGatewayId }),
+        );
       } catch (error) {
-        if (errorNamed(error, 'InvalidVpcID.NotFound')) return;
+        if (errorNamed(error, 'InvalidInternetGatewayID.NotFound')) return;
         if (
           errorNamed(error, 'DependencyViolation') ||
           errorNamed(error, 'IncorrectState')
         ) {
           return;
         }
-        throw new AwsSingleNodeVpcResourceUnknownError();
+        throw new AwsSingleNodeInternetGatewayResourceUnknownError();
       }
       return;
     }
     if (matches.length === 1) return;
     const key = effectKey(authority);
     if (attemptedEffects.has(key)) {
-      throw new AwsSingleNodeVpcResourceUnknownError();
+      throw new AwsSingleNodeInternetGatewayResourceUnknownError();
     }
     attemptedEffects.add(key);
     let response;
     try {
-      response = await client.createVpc(createVpcRequest(authority));
+      response = await client.createInternetGateway(
+        createInternetGatewayRequest(authority),
+      );
     } catch {
-      throw new AwsSingleNodeVpcResourceUnknownError();
+      throw new AwsSingleNodeInternetGatewayResourceUnknownError();
     }
-    const vpcId = candidateVpcId(response);
-    if (vpcId === null) throw new AwsSingleNodeVpcResourceUnknownError();
+    const internetGatewayId = candidateInternetGatewayId(response);
+    if (internetGatewayId === null) {
+      throw new AwsSingleNodeInternetGatewayResourceUnknownError();
+    }
     const priorCandidateId = candidateIds.get(key);
-    if (priorCandidateId !== undefined && priorCandidateId !== vpcId) {
-      throw new AwsSingleNodeVpcResourceConflictError();
+    if (
+      priorCandidateId !== undefined &&
+      priorCandidateId !== internetGatewayId
+    ) {
+      throw new AwsSingleNodeInternetGatewayResourceConflictError();
     }
-    candidateIds.set(key, vpcId);
+    candidateIds.set(key, internetGatewayId);
   }
 
   /** @param {unknown} value @returns {Promise<{status: 'converged', binding: Readonly<Record<string, any>>|null}|{status: 'not-converged'}|{status: 'blocked'}>} */
@@ -967,7 +847,7 @@ export function createAwsSingleNodeVpcResource(options) {
           if (authority.action.action === 'delete') {
             return Object.freeze({ status: 'not-converged' });
           }
-          const vpc = matches[0];
+          const internetGateway = matches[0];
           const binding =
             authority.priorBinding ??
             createDeploymentResourceBinding({
@@ -982,8 +862,8 @@ export function createAwsSingleNodeVpcResource(options) {
               ownershipMode: authority.action.ownershipMode,
               onDestroy: authority.action.onDestroy,
               dependencyBindings: [],
-              providerType: 'ec2-vpc',
-              providerResourceId: vpc.VpcId,
+              providerType: 'ec2-internet-gateway',
+              providerResourceId: internetGateway.InternetGatewayId,
               providerScopeId: providerScope.providerScopeId,
               ownershipNonce: authority.ownershipNonce,
               createdByActionId: authority.action.actionId,
@@ -996,18 +876,18 @@ export function createAwsSingleNodeVpcResource(options) {
           return deepFreeze({ status: 'converged', binding: null });
         }
       } catch (error) {
-        if (error instanceof VpcEvidenceConflictError) {
+        if (error instanceof InternetGatewayEvidenceConflictError) {
           return Object.freeze({ status: 'blocked' });
         }
         if (
           !(error instanceof ProviderResponseUnknownError) &&
-          !(error instanceof VpcEvidenceTransientError)
+          !(error instanceof InternetGatewayEvidenceTransientError)
         ) {
           throw error;
         }
         if (attempt === maxAttempts) {
           if (error instanceof ProviderResponseUnknownError) {
-            throw new AwsSingleNodeVpcResourceUnknownError();
+            throw new AwsSingleNodeInternetGatewayResourceUnknownError();
           }
           return Object.freeze({ status: 'not-converged' });
         }
@@ -1025,13 +905,13 @@ export function createAwsSingleNodeVpcResource(options) {
 }
 
 export default {
-  AWS_SINGLE_NODE_VPC_DEFAULT_MAX_ATTEMPTS,
-  AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS,
-  AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS,
-  AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES,
-  AWS_SINGLE_NODE_VPC_STATE_DIGEST_DOMAIN,
-  AwsSingleNodeVpcResourceConflictError,
-  AwsSingleNodeVpcResourceUnknownError,
-  createAwsSingleNodeVpcResource,
-  getAwsSingleNodeVpcStateDigest,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_STATE_DIGEST_DOMAIN,
+  AwsSingleNodeInternetGatewayResourceConflictError,
+  AwsSingleNodeInternetGatewayResourceUnknownError,
+  createAwsSingleNodeInternetGatewayResource,
+  getAwsSingleNodeInternetGatewayStateDigest,
 };

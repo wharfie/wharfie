@@ -2,11 +2,14 @@
 
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import {
+  CreateInternetGatewayCommand,
   CreateVpcCommand,
   CreateVolumeCommand,
+  DeleteInternetGatewayCommand,
   DeleteVpcCommand,
   DescribeAvailabilityZonesCommand,
   DescribeImagesCommand,
+  DescribeInternetGatewaysCommand,
   DescribeInstanceTypeOfferingsCommand,
   DescribeVpcAttributeCommand,
   DescribeVpcsCommand,
@@ -94,6 +97,7 @@ const VOLUME_RESOURCE_ERROR_NAMES = new Set([
 const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'DependencyViolation',
   'IncorrectState',
+  'InvalidInternetGatewayID.NotFound',
   'InvalidVpcID.NotFound',
 ]);
 const S3_CONTROL_ERROR_NAMES = new Set([
@@ -126,9 +130,12 @@ const S3_CONTROL_ERROR_NAMES = new Set([
 
 /**
  * @typedef NetworkResourceClient
+ * @property {(input: import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput) => Promise<any>} createInternetGateway - Create one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').CreateVpcCommandInput) => Promise<any>} createVpc - Create one exact VPC.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeInternetGatewaysCommandInput) => Promise<any>} describeInternetGateways - Read exact internet-gateway state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcsCommandInput) => Promise<any>} describeVpcs - Read exact VPC state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput) => Promise<any>} describeVpcAttribute - Read one exact VPC attribute.
+ * @property {(input: import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput) => Promise<any>} deleteInternetGateway - Delete one exact internet gateway.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteVpcCommandInput) => Promise<any>} deleteVpc - Delete one exact VPC.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
@@ -275,9 +282,10 @@ function sanitizeVolumeResourceError(value) {
 }
 
 /**
- * Preserve only the VPC classifications needed for authoritative absence and
- * dependency-fenced deletion. Raw SDK messages, request IDs, access details,
- * causes, and credential-bearing configuration never cross this boundary.
+ * Preserve only the network-resource classifications needed for authoritative
+ * absence and dependency-fenced deletion. Raw SDK messages, request IDs,
+ * access details, causes, and credential-bearing configuration never cross
+ * this boundary.
  * @param {unknown} value - Raw SDK failure.
  * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
  */
@@ -811,16 +819,16 @@ export async function createAwsDeploymentAuthority(options) {
     });
   }
 
-  /** @returns {Readonly<NetworkResourceClient>} - Caller-owned narrow VPC resource client. */
+  /** @returns {Readonly<NetworkResourceClient>} - Caller-owned narrow network resource client. */
   function createNetworkResourceClient() {
     assertOpen();
     /** @type {EC2Client} */
     let client;
     try {
       client = new EC2Client({
-        // CreateVpc has no provider idempotency token. Keep SDK transport
-        // retries from turning one authorized call into multiple VPCs; the
-        // resource driver owns explicit recovery through exact readback.
+        // These network creates have no provider idempotency token. Keep SDK
+        // transport retries from turning one authorized call into multiple
+        // resources; each driver owns explicit recovery through exact readback.
         ...BaseAWS.config({ maxAttempts: 1 }),
         region,
         credentials,
@@ -857,15 +865,24 @@ export async function createAwsDeploymentAuthority(options) {
     }
 
     return Object.freeze({
+      createInternetGateway: (
+        /** @type {import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput} */ input,
+      ) => call(() => client.send(new CreateInternetGatewayCommand(input))),
       createVpc: (
         /** @type {import('@aws-sdk/client-ec2').CreateVpcCommandInput} */ input,
       ) => call(() => client.send(new CreateVpcCommand(input))),
+      describeInternetGateways: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeInternetGatewaysCommandInput} */ input,
+      ) => call(() => client.send(new DescribeInternetGatewaysCommand(input))),
       describeVpcs: (
         /** @type {import('@aws-sdk/client-ec2').DescribeVpcsCommandInput} */ input,
       ) => call(() => client.send(new DescribeVpcsCommand(input))),
       describeVpcAttribute: (
         /** @type {import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput} */ input,
       ) => call(() => client.send(new DescribeVpcAttributeCommand(input))),
+      deleteInternetGateway: (
+        /** @type {import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput} */ input,
+      ) => call(() => client.send(new DeleteInternetGatewayCommand(input))),
       deleteVpc: (
         /** @type {import('@aws-sdk/client-ec2').DeleteVpcCommandInput} */ input,
       ) => call(() => client.send(new DeleteVpcCommand(input))),

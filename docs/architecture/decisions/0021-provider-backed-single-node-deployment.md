@@ -263,15 +263,17 @@ instance termination](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preser
 
 ### Direct VPC creation is a recoverable logical effect
 
-VPC mutation uses a separate caller-owned network authority with only EC2
-`CreateVpc`, `DescribeVpcs`, `DescribeVpcAttribute`, `DeleteVpc`, and `close`.
-The SDK client is configured for one transport attempt because
+Network mutation uses a separate caller-owned authority with only the fixed
+VPC and internet-gateway create, describe, delete operations plus
+`DescribeVpcAttribute` and `close`. The SDK client is configured for one
+transport attempt because
 [`CreateVpc`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateVpc.html)
 has no provider idempotency token. Driver-controlled retries first inspect the
 exact logical resource instead of allowing the SDK to hide a second create.
-Errors preserve only `InvalidVpcID.NotFound`, `DependencyViolation`,
-`IncorrectState`, and a bounded HTTP status; raw provider details never cross
-the authority boundary.
+Errors preserve only `InvalidVpcID.NotFound`,
+`InvalidInternetGatewayID.NotFound`, `DependencyViolation`, `IncorrectState`,
+and a bounded HTTP status; raw provider details never cross the authority
+boundary.
 
 `createAwsSingleNodeVpcResource` accepts only the fixed managed
 `network-vpc` role. Its state digest binds the provider specification's exact
@@ -325,6 +327,47 @@ ACL, and DHCP-options association as intrinsic parts of a VPC. They are not
 separate Wharfie bindings. The dedicated route-table and security-group roles
 in the fixed graph are later application-substrate effects and do not imply
 ownership of those AWS defaults.
+
+### Internet-gateway identity is separate from VPC attachment
+
+The fixed `network-internet-gateway` role uses the same caller-owned network
+authority, extended only with EC2 `CreateInternetGateway`,
+`DescribeInternetGateways`, and `DeleteInternetGateway`. The SDK remains capped
+at one attempt because
+[`CreateInternetGateway`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateInternetGateway.html)
+accepts atomic tag specifications but no durable client token. Its intrinsic
+state digest binds only the fixed gateway kind and purge policy; VPC identity,
+attachment state, and routes belong to later graph effects.
+
+Create sends the complete sorted schema-2 ownership envelope in the request's
+`internet-gateway` `TagSpecification`. As with the VPC, complete paginated
+discovery runs before mutation, the intended action and ownership nonce are
+fenced in process before the provider call, and a valid response ID is only an
+ephemeral candidate. Settlement keeps logical tag discovery separate from
+exact-ID `DescribeInternetGateways` evidence and requires both observations to
+agree on one exact account-owned identity with every required ownership tag.
+Missing,
+malformed, contradictory, or duplicate evidence cannot manufacture a binding.
+Across process loss an invisible effect can still race another create, so this
+is visibly convergent reconciliation rather than provider exactly-once
+execution.
+
+Create and no-op deliberately ignore the gateway's `Attachments` collection.
+After the later derived attachment role settles, an attached gateway is the
+normal intrinsic observation; making the gateway binding depend on that later
+effect would invert the graph. The separate
+`network-internet-gateway-attachment` role will own `AttachInternetGateway`,
+`DetachInternetGateway`, VPC identity, relationship state, and dependency
+lineage.
+
+Destroy applies the opposite safety boundary. AWS requires an internet gateway
+to be detached before deletion, so both the unique logical record and exact
+bound record must expose an explicit empty attachment collection immediately
+before `DeleteInternetGateway`. A visible attachment is a retryable fence, not
+delete authority; missing or malformed attachment evidence is unknown.
+Dependency/state races remain retryable, while only exact typed not-found plus
+zero complete logical discoveries can settle absence. Duplicate evidence never
+triggers implicit detachment, deletion, or winner selection.
 
 The portable capability model expands through one immutable, content-addressed
 `AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
@@ -713,6 +756,18 @@ make the logical effect recoverable where provider evidence is unique. Because
 and requires a future explicit repair action; the slice does not claim
 provider exactly-once execution. The remaining network roles and complete
 provider composition remain unfinished.
+
+The eleventh slice adds the directly owned internet gateway without collapsing
+its derived VPC attachment into the same receipt. It extends the single-attempt
+network authority by exactly three gateway operations and repeats the atomic
+tag, candidate, attempted-effect, dual-read, and duplicate-blocking protocol.
+Create/no-op accept an attached gateway because relationship evidence belongs
+to the following graph role; destroy requires independently observed empty
+attachments before deletion. The gateway attachment and remaining network
+roles are still unfinished. The same slice also makes the VPC driver's
+one-sided-visibility fence validate every present ownership record first, so a
+contradictory visible VPC cannot hide behind a temporarily absent corroborating
+read.
 
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or

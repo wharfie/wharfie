@@ -295,7 +295,7 @@ function makeBinding(base, action, overrides = {}) {
   });
 }
 
-/** @param {{operation?: 'apply'|'reconcile'|'destroy', observedVpcStateDigest?: Readonly<Record<string, any>>}} [options] */
+/** @param {{operation?: 'apply'|'reconcile'|'destroy', observedVpcStateDigest?: Readonly<Record<string, any>>, ownershipNonceByte?: number}} [options] */
 function makeFixture(options = {}) {
   const operation = options.operation ?? 'apply';
   const base = makeBase();
@@ -306,7 +306,7 @@ function makeFixture(options = {}) {
   );
   const action = plan.actions[actionIndex];
   if (action === undefined) throw new Error('Missing network-vpc action.');
-  const ownershipNonce = nonce(71);
+  const ownershipNonce = nonce(options.ownershipNonceByte ?? 71);
   const priorBinding =
     action.action === 'create'
       ? null
@@ -704,6 +704,41 @@ describe('AWS single-node VPC create and response-loss recovery', () => {
     }
     expect(createVpc).toHaveBeenCalledTimes(1);
     expect(client.deleteVpc).not.toHaveBeenCalled();
+  });
+
+  it('authorizes a new attempted effect when durable ownership advances to a new nonce', async () => {
+    const firstFixture = makeFixture({ ownershipNonceByte: 71 });
+    const secondFixture = makeFixture({ ownershipNonceByte: 72 });
+    expect(firstFixture.action.actionId).toBe(secondFixture.action.actionId);
+    const createVpc = jest.fn(async (/** @type {AnyRecord} */ _request) => {
+      throw new Error('ambiguous-create');
+    });
+    const client = makeClient(firstFixture, {
+      matches: [],
+      exact: [],
+      createVpc,
+    });
+    const { resource } = makePorts(firstFixture, { client });
+
+    await expect(
+      resource.executeAction(firstFixture.context),
+    ).rejects.toBeInstanceOf(AwsSingleNodeVpcResourceUnknownError);
+    await expect(
+      resource.executeAction(secondFixture.context),
+    ).rejects.toBeInstanceOf(AwsSingleNodeVpcResourceUnknownError);
+
+    expect(createVpc).toHaveBeenCalledTimes(2);
+    const observedNonces = createVpc.mock.calls.map(
+      ([request]) =>
+        request.TagSpecifications[0].Tags.find(
+          (/** @type {AnyRecord} */ tag) =>
+            tag.Key === 'wharfie:ownership-nonce',
+        ).Value,
+    );
+    expect(observedNonces).toEqual([
+      firstFixture.ownershipNonce,
+      secondFixture.ownershipNonce,
+    ]);
   });
 
   it('preflights an exact discovered effect and never repeats CreateVpc', async () => {
@@ -1227,6 +1262,24 @@ describe('AWS single-node VPC noop and late visibility', () => {
     expect(client.describeVpcAttribute).not.toHaveBeenCalled();
   });
 
+  it('blocks contradictory discovered ownership before one-sided visibility can hide it', async () => {
+    const fixture = makeFixture({ operation: 'reconcile' });
+    const notFound = Object.assign(new Error('exact-not-found'), {
+      name: 'InvalidVpcID.NotFound',
+    });
+    const describeVpcs = jest.fn(async (/** @type {AnyRecord} */ input) => {
+      if (input.VpcIds) throw notFound;
+      return { Vpcs: [makeVpc(fixture, { OwnerId: '999999999999' })] };
+    });
+    const client = makeClient(fixture, { describeVpcs });
+    const { resource } = makePorts(fixture, { client });
+
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    expect(client.describeVpcAttribute).not.toHaveBeenCalled();
+  });
+
   it('validates discovery and exact-ID records independently', async () => {
     const fixture = makeFixture({ operation: 'reconcile' });
     const client = makeClient(fixture, {
@@ -1449,6 +1502,23 @@ describe('AWS single-node VPC destroy', () => {
       matches: [replacement],
       exact: [],
     });
+    const { resource } = makePorts(fixture, { client });
+
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    await expect(
+      resource.executeAction(fixture.context),
+    ).rejects.toBeInstanceOf(AwsSingleNodeVpcResourceConflictError);
+    expect(client.deleteVpc).not.toHaveBeenCalled();
+  });
+
+  it('blocks contradictory exact ownership even when logical discovery is empty', async () => {
+    const fixture = makeFixture({ operation: 'destroy' });
+    const describeVpcs = jest.fn(async (/** @type {AnyRecord} */ input) => ({
+      Vpcs: input.VpcIds ? [makeVpc(fixture, { OwnerId: '999999999999' })] : [],
+    }));
+    const client = makeClient(fixture, { describeVpcs });
     const { resource } = makePorts(fixture, { client });
 
     await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({

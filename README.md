@@ -206,11 +206,14 @@ module can create one exact retained `gp3` volume with a stable EC2
 atomic ownership tags, recover an ambiguous response through controller replay
 or bounded tagged discovery plus strict `DescribeVolumes` readback, and make
 retention an explicit no-op.
-The first network driver similarly creates, discovers, strictly validates, and
-purges only the fixed direct-EC2 VPC role. Because `CreateVpc` has no durable
-provider token, it uses one SDK attempt, atomically tagged discovery, and an
-in-process attempt fence; duplicate logical evidence blocks rather than being
-silently adopted, deleted, or described as provider exactly-once execution.
+The first direct-EC2 network drivers similarly create, discover, strictly
+validate, and purge only the fixed VPC and standalone internet-gateway roles.
+Their create APIs have no durable provider token, so the shared network
+authority uses one SDK attempt while each driver uses atomically tagged
+discovery and an in-process attempt fence; duplicate logical evidence blocks
+rather than being silently adopted, deleted, or described as provider
+exactly-once execution. Gateway attachment remains a separate derived graph
+effect, and gateway deletion refuses to run while any attachment is visible.
 These modules do not yet attach, format, mount, or fulfill a complete service
 capability. The privileged host observer, remaining network, identity, node,
 attachment, complete AWS driver/router/inspection/`createPlan`, operator
@@ -222,7 +225,8 @@ commands, production composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Direct EC2 VPC resource checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md) — the current handoff for the narrow single-attempt network authority, atomically tagged VPC lifecycle, and explicit no-token ambiguity boundary.
+- [Direct EC2 internet-gateway resource checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md) — the current handoff for the standalone gateway lifecycle, attachment-independent intrinsic state, and attachment-fenced purge.
+- [Direct EC2 VPC resource checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md) — the preceding handoff for the narrow single-attempt network authority, atomically tagged VPC lifecycle, and explicit no-token ambiguity boundary.
 - [Multi-effect resource graph checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md) — the preceding handoff for the fixed 15-role graph, strict role/dependency/lifecycle contracts, and recoverable multi-effect controller frontier.
 - [Retained EBS volume resource checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md) — the preceding handoff for provider-spec V2 placement and encryption pinning plus the first controller-compatible, response-loss-safe retained resource capability.
 - [Exact AWS provider-spec resolution checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md) — the preceding handoff for frozen latest resolution, exact-version validation, strict SSM/EC2 image evidence, and typed bounded failure handling.
