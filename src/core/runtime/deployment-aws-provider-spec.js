@@ -19,11 +19,11 @@ import { DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS } from './deployme
 import { cloneJsonObject } from './json-value.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 1;
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 2;
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_KIND = 'awsSingleNodeProviderSpec';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN =
-  'wharfie:aws-single-node-provider-spec:v1';
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap1';
+  'wharfie:aws-single-node-provider-spec:v2';
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap2';
 export const AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION = 3;
 
 export const AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS = Object.freeze({
@@ -36,6 +36,8 @@ const FACTORY_KEYS = new Set([
   'profile',
   'providerScope',
   'machineImage',
+  'placement',
+  'storage',
   'bootstrapDigest',
   'runtimeIdentityPolicyDigest',
 ]);
@@ -47,6 +49,8 @@ const PAYLOAD_KEYS = new Set([
   'profileRevisionId',
   'targetId',
   'machineImage',
+  'placement',
+  'storage',
   'node',
   'capabilities',
 ]);
@@ -62,6 +66,8 @@ const MACHINE_IMAGE_KEYS = new Set([
   'enaSupport',
 ]);
 const SOURCE_PARAMETER_KEYS = new Set(['name', 'version']);
+const PLACEMENT_KEYS = new Set(['availabilityZoneId']);
+const STORAGE_KEYS = new Set(['ebsKmsKeyArn']);
 const NODE_KEYS = new Set(['instanceType', 'metadataOptions', 'bootstrap']);
 const METADATA_OPTIONS_KEYS = new Set([
   'httpEndpoint',
@@ -83,6 +89,11 @@ const VOLUME_KEYS = new Set([
   'storage',
   'volumeType',
   'sizeGiB',
+  'iops',
+  'throughputMiBps',
+  'multiAttach',
+  'deviceName',
+  'deleteOnTermination',
   'encrypted',
   'onDestroy',
 ]);
@@ -121,6 +132,9 @@ const SERVICE_HEALTH_KEYS = new Set([
 
 const AMI_ID_PATTERN = /^ami-[0-9a-f]{8,32}$/;
 const AWS_ACCOUNT_ID_PATTERN = /^[0-9]{12}$/;
+const AVAILABILITY_ZONE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-az[1-9][0-9]*$/;
+const KMS_KEY_ARN_PATTERN =
+  /^arn:([a-z0-9-]+):kms:([a-z0-9-]+):([0-9]{12}):key\/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$/;
 const TARGET_ID_PATTERN =
   /^node-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)-linux-(?:x64|arm64)-glibc$/;
 
@@ -131,13 +145,23 @@ const FIXED_METADATA_OPTIONS = Object.freeze({
   instanceMetadataTags: 'disabled',
 });
 
-const FIXED_VOLUME = Object.freeze({
+const FIXED_APPLICATION_VOLUME = Object.freeze({
   contractVersion: 1,
   storage: 'ebs-volume',
   volumeType: 'gp3',
   sizeGiB: 8,
+  iops: 3000,
+  throughputMiBps: 125,
+  multiAttach: false,
+  deviceName: '/dev/sdf',
+  deleteOnTermination: false,
   encrypted: true,
   onDestroy: 'retain',
+});
+
+const FIXED_CONTROL_VOLUME = Object.freeze({
+  ...FIXED_APPLICATION_VOLUME,
+  deviceName: '/dev/sdg',
 });
 
 const FIXED_ARTIFACT_STORAGE = Object.freeze({
@@ -283,6 +307,38 @@ function validateMachineImage(value, path) {
 }
 
 /** @param {unknown} value @param {string} path @returns {Readonly<Record<string, any>>} */
+function validatePlacement(value, path) {
+  const placement = cloneJsonObject(value, path);
+  assertAllKeys(placement, PLACEMENT_KEYS, path);
+  if (
+    typeof placement.availabilityZoneId !== 'string' ||
+    !AVAILABILITY_ZONE_ID_PATTERN.test(placement.availabilityZoneId)
+  ) {
+    throw new TypeError(
+      `${path}.availabilityZoneId must be a canonical AWS Availability Zone ID.`,
+    );
+  }
+  return deepFreeze({
+    availabilityZoneId: placement.availabilityZoneId,
+  });
+}
+
+/** @param {unknown} value @param {string} path @returns {Readonly<Record<string, any>>} */
+function validateStorage(value, path) {
+  const storage = cloneJsonObject(value, path);
+  assertAllKeys(storage, STORAGE_KEYS, path);
+  if (
+    typeof storage.ebsKmsKeyArn !== 'string' ||
+    !KMS_KEY_ARN_PATTERN.test(storage.ebsKmsKeyArn)
+  ) {
+    throw new TypeError(
+      `${path}.ebsKmsKeyArn must be a canonical AWS KMS key ARN.`,
+    );
+  }
+  return deepFreeze({ ebsKmsKeyArn: storage.ebsKmsKeyArn });
+}
+
+/** @param {unknown} value @param {string} path @returns {Readonly<Record<string, any>>} */
 function validateNode(value, path) {
   const node = cloneJsonObject(value, path);
   assertAllKeys(node, NODE_KEYS, path);
@@ -323,13 +379,13 @@ function validateCapabilities(value, path) {
   assertAllKeys(capabilities, CAPABILITIES_KEYS, path);
   const applicationState = validateFixedObject(
     capabilities.applicationState,
-    FIXED_VOLUME,
+    FIXED_APPLICATION_VOLUME,
     VOLUME_KEYS,
     `${path}.applicationState`,
   );
   const controlState = validateFixedObject(
     capabilities.controlState,
-    FIXED_VOLUME,
+    FIXED_CONTROL_VOLUME,
     VOLUME_KEYS,
     `${path}.controlState`,
   );
@@ -396,7 +452,7 @@ function validatePayload(value, path) {
   const payload = cloneJsonObject(value, path);
   assertAllKeys(payload, PAYLOAD_KEYS, path);
   if (payload.schemaVersion !== AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION) {
-    throw new TypeError(`${path}.schemaVersion must be the integer 1.`);
+    throw new TypeError(`${path}.schemaVersion must be the integer 2.`);
   }
   if (payload.kind !== AWS_SINGLE_NODE_PROVIDER_SPEC_KIND) {
     throw new TypeError(
@@ -433,6 +489,8 @@ function validatePayload(value, path) {
     payload.machineImage,
     `${path}.machineImage`,
   );
+  const placement = validatePlacement(payload.placement, `${path}.placement`);
+  const storage = validateStorage(payload.storage, `${path}.storage`);
   const node = validateNode(payload.node, `${path}.node`);
   const expectedInstanceType =
     machineImage.architecture === 'x86_64' ? 't3.small' : 't4g.small';
@@ -449,6 +507,8 @@ function validatePayload(value, path) {
     profileRevisionId: payload.profileRevisionId,
     targetId: payload.targetId,
     machineImage,
+    placement,
+    storage,
     node,
     capabilities: validateCapabilities(
       payload.capabilities,
@@ -508,6 +568,17 @@ function assertContext(spec, context, path) {
       `${path}.machineImage.architecture does not match the profile target.`,
     );
   }
+  const kmsKeyArn = KMS_KEY_ARN_PATTERN.exec(spec.storage.ebsKmsKeyArn);
+  if (
+    kmsKeyArn === null ||
+    kmsKeyArn[1] !== providerScope.partition ||
+    kmsKeyArn[2] !== providerScope.region ||
+    kmsKeyArn[3] !== providerScope.accountId
+  ) {
+    throw new Error(
+      `${path}.storage.ebsKmsKeyArn does not match the exact provider scope.`,
+    );
+  }
 }
 
 /**
@@ -532,6 +603,14 @@ export function createAwsSingleNodeProviderSpec(value) {
     input.machineImage,
     'awsProviderSpec input.machineImage',
   );
+  const placement = validatePlacement(
+    input.placement,
+    'awsProviderSpec input.placement',
+  );
+  const storage = validateStorage(
+    input.storage,
+    'awsProviderSpec input.storage',
+  );
   const architecture =
     profile.target.architecture === 'x64' ? 'x86_64' : 'arm64';
   if (machineImage.architecture !== architecture) {
@@ -548,6 +627,8 @@ export function createAwsSingleNodeProviderSpec(value) {
       profileRevisionId: profile.profileRevisionId,
       targetId: getBuildTargetId(profile.target),
       machineImage,
+      placement,
+      storage,
       node: {
         instanceType: architecture === 'x86_64' ? 't3.small' : 't4g.small',
         metadataOptions: FIXED_METADATA_OPTIONS,
@@ -560,8 +641,8 @@ export function createAwsSingleNodeProviderSpec(value) {
         },
       },
       capabilities: {
-        applicationState: FIXED_VOLUME,
-        controlState: FIXED_VOLUME,
+        applicationState: FIXED_APPLICATION_VOLUME,
+        controlState: FIXED_CONTROL_VOLUME,
         artifactStorage: FIXED_ARTIFACT_STORAGE,
         runtimeIdentity: {
           contractVersion: 1,

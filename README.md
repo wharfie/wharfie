@@ -153,10 +153,13 @@ work. The npm package remains deliberately private. It is not ready for
 production use.
 
 The first provider deployment authority is now defined. A strict AWS-shaped
-one-node profile now resolves one content-addressed provider specification
-that pins the exact regional AMI and parameter version, bootstrap and identity
-policy digests, instance shape, metadata controls, storage, network, and
-service-health timing. DeploymentPlanV2 embeds that specification and
+one-node profile now resolves one schema-V2, `wap2` content-addressed provider
+specification that pins the exact regional AMI and parameter version, a stable
+standard Availability Zone ID that offers the fixed instance type, the exact
+regional/account default EBS KMS key ARN, bootstrap and identity policy
+digests, instance shape, metadata controls, explicit retained-volume
+performance and attachment contracts, network, and service-health timing.
+DeploymentPlanV2 embeds that specification and
 DeploymentInspectionV3 binds its ID and the provider/profile contract is now
 version 3. Only a fresh incarnation resolves mutable
 provider prerequisites; converge, resume, and resident update/destroy reuse
@@ -169,10 +172,11 @@ focused mocks, not a live account. That credential snapshot now also exposes a
 narrow SSM/EC2 provider-spec read capability. Only a new incarnation resolves
 the architecture-specific AL2023 latest parameter; converge validates the
 pinned parameter version and exact Amazon-owned, public, available,
-Linux/EBS/HVM/ENA image association without selecting a newer default.
+Linux/EBS/HVM/ENA image association, exact pinned zone/instance offering, and
+exact default EBS key without selecting a newer default or replacement zone.
 Frozen-candidate bounded retries distinguish missing, contradictory, and
-unresolved provider evidence. The same snapshot also exposes a narrow
-caller-owned S3 capability. Wharfie can bootstrap one retained,
+unresolved provider evidence. The same snapshot also exposes narrow
+caller-owned S3 and EBS-volume capabilities. Wharfie can bootstrap one retained,
 versioned control bucket with no bucket policy, wait through S3's documented
 first-enable propagation interval, persist an immutable stage intent before
 streaming the running SEA through a held descriptor, and accept only exact
@@ -189,9 +193,15 @@ only a fresh context-bound receipt can make Inspection V3 converged. The exact
 `health/v1/` bucket lifecycle makes noncurrent health versions eligible for
 asynchronous expiration after one day without collecting the current receipt
 or staged artifacts. This boundary is
-proved under deterministic mocks; the privileged host observer, fixed AWS
-resource driver, operator commands, production composition, and clean-account
-proof remain unfinished.
+proved under deterministic mocks. The first controller-compatible resource
+module can create one exact retained `gp3` volume with a stable EC2
+`ClientToken` and atomic ownership tags, recover an ambiguous response through
+controller replay or bounded tagged discovery plus strict `DescribeVolumes`
+readback, and make retention an explicit no-op.
+It does not yet attach, format, mount, or fulfill the volume capability. The
+privileged host observer, network multi-effect/action-expansion model, volume
+attachment, complete AWS driver/router/inspection/`createPlan`, operator
+commands, production composition, and clean-account proof remain unfinished.
 
 ## Start here
 
@@ -199,7 +209,8 @@ proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Exact AWS provider-spec resolution checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md) — the current handoff for frozen latest resolution, exact-version validation, strict SSM/EC2 image evidence, and typed bounded failure handling.
+- [Retained EBS volume resource checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md) — the current handoff for provider-spec V2 placement and encryption pinning plus the first controller-compatible, response-loss-safe retained resource capability.
+- [Exact AWS provider-spec resolution checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md) — the preceding handoff for frozen latest resolution, exact-version validation, strict SSM/EC2 image evidence, and typed bounded failure handling.
 - [Provider-visible service-health checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md) — the preceding handoff for strict health receipts, conditional S3 publication, provider-owned freshness, final Inspection V3 readiness, and bounded noncurrent-version retention.
 - [Recovery-safe artifact-staging checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md) — the preceding handoff for the retained versioned control bucket, held-source upload, and exact object-version recovery evidence.
 - [Pinned AWS provider-spec checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md) — the preceding handoff for immutable regional prerequisites and recovery-stable Plan/Inspection V2 authority.

@@ -102,6 +102,10 @@ function makeProviderSpec(profile, providerScope, version = 17) {
       virtualizationType: 'hvm',
       enaSupport: true,
     },
+    placement: { availabilityZoneId: 'use1-az1' },
+    storage: {
+      ebsKmsKeyArn: `arn:${providerScope.partition}:kms:${providerScope.region}:${providerScope.accountId}:key/11111111-2222-3333-4444-555555555555`,
+    },
     bootstrapDigest: digest('bootstrap-v1'),
     runtimeIdentityPolicyDigest: digest('runtime-policy-v1'),
   });

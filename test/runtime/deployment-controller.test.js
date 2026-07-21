@@ -130,6 +130,11 @@ function makeProviderSpec(
       virtualizationType: 'hvm',
       enaSupport: true,
     },
+    placement: { availabilityZoneId: 'use1-az1' },
+    storage: {
+      ebsKmsKeyArn:
+        'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
+    },
     bootstrapDigest: digest('fixed bootstrap'),
     runtimeIdentityPolicyDigest: digest('fixed runtime identity policy'),
   });
@@ -1204,6 +1209,12 @@ describe('deployment controller crash recovery', () => {
     const parameterRequests = [];
     /** @type {Record<string, any>[]} */
     const imageRequests = [];
+    /** @type {Record<string, any>[]} */
+    const availabilityZoneRequests = [];
+    /** @type {Record<string, any>[]} */
+    const offeringRequests = [];
+    /** @type {Record<string, any>[]} */
+    const kmsKeyRequests = [];
     const client = {
       /** @param {Record<string, any>} request */
       async getParameter(request) {
@@ -1248,6 +1259,49 @@ describe('deployment controller crash recovery', () => {
           ],
         };
       },
+      /** @param {Record<string, any>} request */
+      async describeAvailabilityZones(request) {
+        availabilityZoneRequests.push(clone(request));
+        const availabilityZoneId =
+          harness.base.providerSpec.placement.availabilityZoneId;
+        harness.events.push(`provider-spec:az:${availabilityZoneId}`);
+        return {
+          AvailabilityZones: [
+            {
+              ZoneId: availabilityZoneId,
+              ZoneName: 'us-east-1a',
+              RegionName: 'us-east-1',
+              ZoneType: 'availability-zone',
+              State: 'available',
+              OptInStatus: 'opt-in-not-required',
+            },
+          ],
+        };
+      },
+      /** @param {Record<string, any>} request */
+      async describeInstanceTypeOfferings(request) {
+        offeringRequests.push(clone(request));
+        const availabilityZoneId =
+          harness.base.providerSpec.placement.availabilityZoneId;
+        harness.events.push(`provider-spec:offering:${availabilityZoneId}`);
+        return {
+          InstanceTypeOfferings: [
+            {
+              InstanceType: harness.base.providerSpec.node.instanceType,
+              LocationType: 'availability-zone-id',
+              Location: availabilityZoneId,
+            },
+          ],
+        };
+      },
+      /** @param {Record<string, any>} request */
+      async getEbsDefaultKmsKeyId(request) {
+        kmsKeyRequests.push(clone(request));
+        harness.events.push('provider-spec:kms');
+        return {
+          KmsKeyId: harness.base.providerSpec.storage.ebsKmsKeyArn,
+        };
+      },
     };
     const resolver = createAwsSingleNodeProviderSpecResolver({
       client,
@@ -1275,6 +1329,15 @@ describe('deployment controller crash recovery', () => {
         IncludeDisabled: true,
       },
     ]);
+    expect(availabilityZoneRequests).toHaveLength(1);
+    expect(availabilityZoneRequests[0].ZoneIds).toBeUndefined();
+    expect(offeringRequests).toHaveLength(1);
+    expect(
+      offeringRequests[0].Filters.find(
+        (/** @type {any} */ filter) => filter.Name === 'location',
+      ),
+    ).toBeUndefined();
+    expect(kmsKeyRequests).toEqual([{}]);
 
     harness.events.length = 0;
     harness.provider.crashAfterPhysicalEffect(plan.actions[0].actionId);
@@ -1293,9 +1356,15 @@ describe('deployment controller crash recovery', () => {
       ),
     ).toEqual([
       `provider-spec:ssm:${exactName}`,
+      `provider-spec:az:${harness.base.providerSpec.placement.availabilityZoneId}`,
+      `provider-spec:offering:${harness.base.providerSpec.placement.availabilityZoneId}`,
+      'provider-spec:kms',
       `provider-spec:ec2:${imageId}`,
       'artifact-stage',
       `provider-spec:ssm:${exactName}`,
+      `provider-spec:az:${harness.base.providerSpec.placement.availabilityZoneId}`,
+      `provider-spec:offering:${harness.base.providerSpec.placement.availabilityZoneId}`,
+      'provider-spec:kms',
       `provider-spec:ec2:${imageId}`,
     ]);
     expect(parameterRequests).toEqual([
@@ -1304,10 +1373,16 @@ describe('deployment controller crash recovery', () => {
       { Name: exactName, WithDecryption: false },
     ]);
     expect(imageRequests).toHaveLength(3);
+    expect(availabilityZoneRequests).toHaveLength(3);
+    expect(offeringRequests).toHaveLength(3);
+    expect(kmsKeyRequests).toHaveLength(3);
 
     const acceptedReadCounts = {
       parameters: parameterRequests.length,
       images: imageRequests.length,
+      availabilityZones: availabilityZoneRequests.length,
+      offerings: offeringRequests.length,
+      kmsKeys: kmsKeyRequests.length,
     };
     harness.events.length = 0;
     await expect(
@@ -1326,6 +1401,11 @@ describe('deployment controller crash recovery', () => {
 
     expect(parameterRequests).toHaveLength(acceptedReadCounts.parameters);
     expect(imageRequests).toHaveLength(acceptedReadCounts.images);
+    expect(availabilityZoneRequests).toHaveLength(
+      acceptedReadCounts.availabilityZones,
+    );
+    expect(offeringRequests).toHaveLength(acceptedReadCounts.offerings);
+    expect(kmsKeyRequests).toHaveLength(acceptedReadCounts.kmsKeys);
     expect(
       harness.events.filter((event) => event.startsWith('provider-spec:')),
     ).toEqual([]);

@@ -107,10 +107,16 @@ invocation.
 
 Mutable regional prerequisites are resolved only while previewing a new
 incarnation and reduced to one secret-free, content-addressed
-`AwsSingleNodeProviderSpecV1`. It pins the exact SSM public-parameter name and
-version, AMI ID/owner/architecture, bootstrap and runtime-policy digests,
-instance and metadata shape, retained-volume and artifact behavior, fixed
-network, and service-health timing, publication, and retention.
+`AwsSingleNodeProviderSpecV2` in the fresh `wap2` identity namespace. It pins
+the exact SSM public-parameter name and version, AMI ID/owner/architecture,
+one standard Availability Zone ID that offers the fixed instance type, the
+account's exact regional default EBS KMS key ARN, bootstrap and runtime-policy
+digests, instance and metadata shape, retained-volume and attachment behavior,
+fixed network, and service-health timing, publication, and retention. Each
+application and control volume is explicitly `gp3`, 8 GiB, 3,000 IOPS, 125
+MiB/s, encrypted, single-attach, retained on destroy, and attached with
+`DeleteOnTermination=false`; their fixed guest device requests are `/dev/sdf`
+and `/dev/sdg`, respectively.
 `DeploymentPlanV2` embeds the complete
 specification; every action ID binds its `providerSpecId`, and
 `DeploymentInspectionV3` binds the same ID and carries the complete
@@ -125,10 +131,11 @@ may resolve a new specification.
 ### Credential-bound provider-spec resolution
 
 The AWS authority exposes one caller-owned read capability containing only SSM
-`GetParameter` and EC2 `DescribeImages`. Both clients use the same immutable
-ordinary-credential snapshot, explicit region, and provider scope already used
-by the rest of the invocation; neither SDK client nor credentials cross the
-authority boundary.
+`GetParameter` plus EC2 `DescribeImages`, `DescribeAvailabilityZones`,
+`DescribeInstanceTypeOfferings`, and `GetEbsDefaultKmsKeyId`. Both clients use
+the same immutable ordinary-credential snapshot, explicit region, and provider
+scope already used by the rest of the invocation; neither SDK client nor
+credentials cross the authority boundary.
 
 Only `resolveProviderSpec` for a new incarnation may read the fixed
 architecture-specific AL2023 public parameter without a version selector. AWS
@@ -162,6 +169,102 @@ EC2 state, or another unresolved read is typed `unknown`. The resolver bounds
 each read stage to three attempts by default, with an explicit range of one
 through ten attempts. None of these reads creates a resource or grants later
 mutation authority by itself.
+
+Placement is pinned by Availability Zone ID, not its account-relative name.
+AWS documents that zone-name mappings can differ between accounts while
+[Availability Zone IDs identify the same physical zone](https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html).
+Resolution reads only standard, available zones in the exact region with
+[`DescribeAvailabilityZones`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeAvailabilityZones.html),
+then intersects those IDs with the fixed instance type returned by paginated
+[`DescribeInstanceTypeOfferings`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeInstanceTypeOfferings.html)
+using `availability-zone-id` locations. Because AWS does not promise response
+order, the resolver sorts the complete bounded intersection and pins the first
+ID. Validation queries only that pinned zone ID and exact instance type; a zone
+that is unavailable or no longer offers the type cannot be replaced silently.
+
+Resolution also calls
+[`GetEbsDefaultKmsKeyId`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_GetEbsDefaultKmsKeyId.html)
+and pins the exact full KMS key ARN for the provider partition, account, and
+region. A KMS alias is not sufficient: AWS documents that a
+[key ARN is the fully qualified key identifier while an alias may target a
+different key](https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id).
+Validation requires the provider's current default EBS key to remain that
+exact ARN. A changed default is an explicit provider-spec conflict, not an
+implicit storage migration.
+
+### Retained EBS volume creation is one resource effect
+
+Volume mutation uses a separate caller-owned authority surface containing only
+EC2 `CreateVolume`, `DescribeVolumes`, and `close`. It shares the invocation's
+immutable credential snapshot and explicit region, but neither this client nor
+its SDK configuration crosses the boundary. Errors retain only
+`IdempotentParameterMismatch`, `InvalidVolume.NotFound`, and a bounded HTTP
+status; all raw messages, request IDs, causes, access classifications, and
+credential-bearing details are discarded.
+
+`createAwsSingleNodeVolumeResource` exposes the controller's `executeAction`
+and `verifySettlement` ports for one application- or control-state volume at a
+time. It accepts only the active head's current intended managed `create` or
+retained `noop` action with the exact profile, plan, provider specification,
+state digest, and ownership nonce. Its
+[`CreateVolume`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateVolume.html)
+request carries the exact pinned zone ID, KMS key ARN, type, size, IOPS,
+throughput, and encryption contract. It omits `MultiAttachEnabled` because AWS
+supports that create parameter only for `io1` and `io2`; strict readback still
+requires the fixed `gp3` volume to report multi-attach disabled. The durable
+action identity supplies the stable `ClientToken`, and the complete
+ownership/contract tags are included atomically through the `volume`
+[`TagSpecification`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TagSpecification.html).
+Wharfie does not create an untagged volume and attempt to adopt or repair it
+later.
+
+A create response is not a durable resource receipt. Its valid volume ID is
+only a process-local candidate locator. A prior binding or that candidate is
+queried exactly with
+[`DescribeVolumes`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeVolumes.html),
+and settlement requires one complete observation matching the provider scope,
+placement, encryption key, performance choices, multi-attach setting, and
+reserved tags. If no durable ID exists after process/response loss, settlement
+performs bounded paginated discovery with the exact locator tags, requires one
+unique result, and then validates the full ownership and state contract.
+
+An ambiguous create reports the fixed unknown error and leaves the intended
+action recoverable. A later controller attempt replays the exact request and
+token; EC2 documents that the
+[same token and parameters are idempotent while different parameters produce
+`IdempotentParameterMismatch`](https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-idempotency.html).
+Readback is bounded and treats provider propagation as unresolved rather than
+absence because EC2 documents
+[eventual consistency after create](https://docs.aws.amazon.com/ec2/latest/devguide/eventual-consistency.html).
+Settlement returns an exact binding only for converged evidence, `blocked` for
+contradictory present evidence, or `not-converged` for a still-creating or
+still-missing create. Malformed or exhausted unknown evidence throws
+`AwsSingleNodeVolumeResourceUnknownError`; idempotency or action-authority
+conflict throws `AwsSingleNodeVolumeResourceConflictError`. Exact-ID not-found
+does not prove logical absence.
+
+A retained action is an explicit no-op: it validates the exact resource
+context and preserves the binding without issuing `DeleteVolume`; that method
+is absent from the authority. If a resident-node binding already exists, no-op
+settlement also requires one exact attached instance/device observation with
+`DeleteOnTermination=false`. During destroy, after that node binding has been
+removed, an otherwise exact attachment to the plan's retired node is treated
+as a bounded detachment transition until the volume is available and
+unattached. The module verifies that evidence but does not create it. This is
+only volume provisioning. A separate future action must call
+[`AttachVolume`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AttachVolume.html)
+for the exact node, volume, zone, and device, prove attachment and
+`DeleteOnTermination=false`, and arrange formatting and mounting. AWS documents
+that
+[delete-on-termination controls whether an attached EBS volume survives
+instance termination](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preserving-volumes-on-termination.html).
+
+The current action frontier assumes one provider effect per logical action.
+Attachment must remain distinct from creation, while the fixed network
+capability requires several independently observable effects. Before the
+complete driver can represent either honestly, planning must expand one
+capability into multiple durable actions or define a bounded partial-execution
+protocol with an independently recoverable frontier for every physical effect.
 
 Each create-to-destroy lifetime has a fresh unpredictable incarnation ID.
 Managed resource bindings contain an immutable provider ID, provider scope,
@@ -475,6 +578,20 @@ Amazon/public/available/Linux/EBS/HVM/ENA/SSM association, and typed
 missing/conflict/unknown outcomes. Deterministic SDK mocks prove this read
 boundary; no production driver or live AWS resource is claimed.
 
+The eighth slice deliberately advances the provider-spec schema, ID domain,
+and prefix to V2/`wap2`. The resolver adds stable Availability Zone ID and
+exact instance-offering discovery plus the provider-scoped default EBS KMS key
+ARN; exact validation refuses placement or key substitution. The authority
+adds those three reads to the narrow provider-spec client and exposes a
+separate exact create/describe-volume client. The first retained EBS resource
+uses an explicit stable `ClientToken`, atomic create tags, strict
+`DescribeVolumes` readback or bounded tag discovery, controller-driven
+response-loss replay, fixed typed errors/statuses, and an explicit retained
+no-op. Deterministic mocks prove this isolated resource only. It can validate
+later attachment evidence but cannot create it, and no complete provider
+router, inspection, `createPlan`, controller composition, command surface, or
+live AWS path exists yet.
+
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or
 version deletion; otherwise a delete marker could hide the semantic
@@ -482,7 +599,8 @@ predecessor. Noncurrent lifecycle retention also deliberately leaves one
 current version at every retired incarnation/node key until a future explicit
 retained-state collector proves it may remove that history.
 
-The independently recoverable resource driver, source and packaged deployment
-commands, production composition, and clean-account lifecycle proof remain
-unfinished. A document, bucket/table tag, SSM result, EC2 description, or
-content ID still never proves that an application resource effect occurred.
+The remaining independently recoverable resource driver, action expansion,
+source and packaged deployment commands, production composition, and
+clean-account lifecycle proof remain unfinished. A document, bucket/table tag,
+SSM result, EC2 description, or content ID still never proves that an
+application resource effect occurred.

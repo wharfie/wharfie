@@ -35,6 +35,10 @@ const NOW = Date.parse('2026-01-01T00:00:00.000Z');
 const X64_AMI = 'ami-0123456789abcdef0';
 const ARM64_AMI = 'ami-0fedcba9876543210';
 const AMAZON_ACCOUNT_ID = '137112412989';
+const PRIMARY_AZ_ID = 'use1-az2';
+const SECONDARY_AZ_ID = 'use1-az4';
+const EBS_KMS_KEY_ARN =
+  'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555';
 
 /** @param {string} value @returns {{algorithm: 'sha256', value: string}} */
 function digest(value) {
@@ -182,10 +186,60 @@ function imageResponse(
   };
 }
 
-/** @param {{parameters?: unknown[], images?: unknown[]}} [outcomes] */
-function makeClient({ parameters = [], images = [] } = {}) {
+/** @param {string} availabilityZoneId @param {string} region @param {string} [zoneName] @returns {Record<string, any>} */
+function availabilityZone(availabilityZoneId, region, zoneName = `${region}a`) {
+  return {
+    ZoneId: availabilityZoneId,
+    ZoneName: zoneName,
+    RegionName: region,
+    ZoneType: 'availability-zone',
+    State: 'available',
+    OptInStatus: 'opt-in-not-required',
+  };
+}
+
+/** @param {ReturnType<typeof makeFixture>} fixture @param {string[]} [availabilityZoneIds] @returns {Record<string, any>} */
+function availabilityZonesResponse(
+  fixture,
+  availabilityZoneIds = [PRIMARY_AZ_ID],
+) {
+  return {
+    AvailabilityZones: availabilityZoneIds.map((id, index) =>
+      availabilityZone(
+        id,
+        fixture.providerScope.region,
+        `${fixture.providerScope.region}${String.fromCharCode(97 + index)}`,
+      ),
+    ),
+  };
+}
+
+/** @param {string} instanceType @param {string[]} availabilityZoneIds @param {string} [nextToken] @returns {Record<string, any>} */
+function offeringsResponse(instanceType, availabilityZoneIds, nextToken) {
+  return {
+    InstanceTypeOfferings: availabilityZoneIds.map((availabilityZoneId) => ({
+      InstanceType: instanceType,
+      LocationType: 'availability-zone-id',
+      Location: availabilityZoneId,
+    })),
+    ...(nextToken === undefined ? {} : { NextToken: nextToken }),
+  };
+}
+
+/** @param {{parameters?: unknown[], images?: unknown[], availabilityZones?: unknown[], offerings?: unknown[], kmsKeys?: unknown[]}} [outcomes] */
+function makeClient({
+  parameters = [],
+  images = [],
+  availabilityZones,
+  offerings,
+  kmsKeys,
+} = {}) {
   let parameterIndex = 0;
   let imageIndex = 0;
+  let availabilityZoneIndex = 0;
+  let offeringIndex = 0;
+  let kmsKeyIndex = 0;
+  let defaultAvailabilityZoneId = PRIMARY_AZ_ID;
   const getParameter = jest.fn(async (_request) => {
     const outcome = parameters[parameterIndex];
     parameterIndex += 1;
@@ -198,7 +252,60 @@ function makeClient({ parameters = [], images = [] } = {}) {
     if (outcome instanceof Error) throw outcome;
     return outcome;
   });
-  return Object.freeze({ getParameter, describeImages });
+  const describeAvailabilityZones = jest.fn(
+    async (/** @type {any} */ request) => {
+      if (availabilityZones !== undefined) {
+        const outcome = availabilityZones[availabilityZoneIndex];
+        availabilityZoneIndex += 1;
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+      }
+      const region = request.Filters.find(
+        (/** @type {any} */ filter) => filter.Name === 'region-name',
+      ).Values[0];
+      defaultAvailabilityZoneId = request.ZoneIds?.[0] || PRIMARY_AZ_ID;
+      return {
+        AvailabilityZones: [
+          availabilityZone(defaultAvailabilityZoneId, region),
+        ],
+      };
+    },
+  );
+  const describeInstanceTypeOfferings = jest.fn(
+    async (/** @type {any} */ request) => {
+      if (offerings !== undefined) {
+        const outcome = offerings[offeringIndex];
+        offeringIndex += 1;
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+      }
+      const instanceType = request.Filters.find(
+        (/** @type {any} */ filter) => filter.Name === 'instance-type',
+      ).Values[0];
+      const location = request.Filters.find(
+        (/** @type {any} */ filter) => filter.Name === 'location',
+      )?.Values[0];
+      return offeringsResponse(instanceType, [
+        location || defaultAvailabilityZoneId,
+      ]);
+    },
+  );
+  const getEbsDefaultKmsKeyId = jest.fn(async (_request) => {
+    if (kmsKeys !== undefined) {
+      const outcome = kmsKeys[kmsKeyIndex];
+      kmsKeyIndex += 1;
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    }
+    return { KmsKeyId: EBS_KMS_KEY_ARN };
+  });
+  return Object.freeze({
+    getParameter,
+    describeImages,
+    describeAvailabilityZones,
+    describeInstanceTypeOfferings,
+    getEbsDefaultKmsKeyId,
+  });
 }
 
 /** @param {ReturnType<typeof makeFixture>} fixture @param {ReturnType<typeof makeClient>} client @param {{maxAttempts?: number, waitForRetry?: (attempt: number) => Promise<void>, bootstrapDigest?: ReturnType<typeof digest>, runtimeIdentityPolicyDigest?: ReturnType<typeof digest>, now?: () => number}} [overrides] */
@@ -215,8 +322,8 @@ function makeResolver(fixture, client, overrides = {}) {
   });
 }
 
-/** @param {ReturnType<typeof makeFixture>} fixture @param {number} [version] */
-function expectedSpec(fixture, version = 87) {
+/** @param {ReturnType<typeof makeFixture>} fixture @param {number} [version] @param {string} [ebsKmsKeyArn] */
+function expectedSpec(fixture, version = 87, ebsKmsKeyArn = EBS_KMS_KEY_ARN) {
   const architecture =
     fixture.profile.target.architecture === 'x64' ? 'x86_64' : 'arm64';
   return createAwsSingleNodeProviderSpec({
@@ -236,6 +343,8 @@ function expectedSpec(fixture, version = 87) {
       virtualizationType: 'hvm',
       enaSupport: true,
     },
+    placement: { availabilityZoneId: PRIMARY_AZ_ID },
+    storage: { ebsKmsKeyArn },
     bootstrapDigest: digest('bootstrap-v1'),
     runtimeIdentityPolicyDigest: digest('runtime-policy-v1'),
   });
@@ -269,6 +378,8 @@ describe('AWS single-node provider-spec resolver', () => {
           imageId,
           architecture: imageArchitecture,
         },
+        placement: { availabilityZoneId: PRIMARY_AZ_ID },
+        storage: { ebsKmsKeyArn: EBS_KMS_KEY_ARN },
         node: { instanceType },
       });
       expect(Object.isFrozen(spec)).toBe(true);
@@ -282,9 +393,75 @@ describe('AWS single-node provider-spec resolver', () => {
         IncludeDeprecated: true,
         IncludeDisabled: true,
       });
+      expect(client.describeAvailabilityZones).toHaveBeenCalledWith({
+        AllAvailabilityZones: false,
+        Filters: [
+          { Name: 'region-name', Values: ['us-east-1'] },
+          { Name: 'state', Values: ['available'] },
+          { Name: 'zone-type', Values: ['availability-zone'] },
+        ],
+      });
+      expect(client.describeInstanceTypeOfferings).toHaveBeenCalledWith({
+        LocationType: 'availability-zone-id',
+        Filters: [{ Name: 'instance-type', Values: [instanceType] }],
+        MaxResults: 1000,
+      });
+      expect(client.getEbsDefaultKmsKeyId).toHaveBeenCalledWith({});
       expect(Object.isFrozen(resolver)).toBe(true);
     },
   );
+
+  it('paginates all fixed-type offerings and selects the stable lexical available AZ ID', async () => {
+    const fixture = makeFixture();
+    const client = makeClient({
+      parameters: [parameterResponse(fixture)],
+      availabilityZones: [
+        availabilityZonesResponse(fixture, [SECONDARY_AZ_ID, PRIMARY_AZ_ID]),
+      ],
+      offerings: [
+        offeringsResponse('t3.small', [SECONDARY_AZ_ID], 'page-two'),
+        offeringsResponse('t3.small', [PRIMARY_AZ_ID]),
+      ],
+      images: [imageResponse(fixture)],
+    });
+    const resolver = makeResolver(fixture, client, {
+      now: () => {
+        expect(client.describeAvailabilityZones).toHaveBeenCalledTimes(1);
+        expect(client.describeInstanceTypeOfferings).toHaveBeenCalledTimes(2);
+        expect(client.getEbsDefaultKmsKeyId).toHaveBeenCalledTimes(1);
+        return NOW;
+      },
+    });
+
+    await expect(
+      resolver.resolveProviderSpec(makeContext(fixture)),
+    ).resolves.toEqual(expectedSpec(fixture));
+    expect(client.describeInstanceTypeOfferings.mock.calls).toEqual([
+      [
+        {
+          LocationType: 'availability-zone-id',
+          Filters: [{ Name: 'instance-type', Values: ['t3.small'] }],
+          MaxResults: 1000,
+        },
+      ],
+      [
+        {
+          LocationType: 'availability-zone-id',
+          Filters: [{ Name: 'instance-type', Values: ['t3.small'] }],
+          MaxResults: 1000,
+          NextToken: 'page-two',
+        },
+      ],
+    ]);
+    expect(client.getParameter).toHaveBeenCalledTimes(1);
+    for (const [request] of client.describeInstanceTypeOfferings.mock.calls) {
+      expect(Object.isFrozen(request)).toBe(true);
+      expect(Object.isFrozen(/** @type {any} */ (request).Filters)).toBe(true);
+      expect(
+        Object.isFrozen(/** @type {any} */ (request).Filters[0].Values),
+      ).toBe(true);
+    }
+  });
 
   it('validates only the pinned SSM version and reproduces the exact submitted spec', async () => {
     const fixture = makeFixture();
@@ -305,6 +482,68 @@ describe('AWS single-node provider-spec resolver', () => {
       Name: `${AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS.x86_64}:87`,
       WithDecryption: false,
     });
+    expect(client.describeAvailabilityZones).toHaveBeenCalledWith({
+      AllAvailabilityZones: false,
+      Filters: [
+        { Name: 'region-name', Values: ['us-east-1'] },
+        { Name: 'state', Values: ['available'] },
+        { Name: 'zone-type', Values: ['availability-zone'] },
+      ],
+      ZoneIds: [PRIMARY_AZ_ID],
+    });
+    expect(client.describeInstanceTypeOfferings).toHaveBeenCalledWith({
+      LocationType: 'availability-zone-id',
+      Filters: [
+        { Name: 'instance-type', Values: ['t3.small'] },
+        { Name: 'location', Values: [PRIMARY_AZ_ID] },
+      ],
+      MaxResults: 1000,
+    });
+    expect(client.getEbsDefaultKmsKeyId).toHaveBeenCalledWith({});
+  });
+
+  it('never drifts from the pinned AZ or KMS key during independent validation', async () => {
+    const fixture = makeFixture();
+    const parameter = parameterResponse(fixture);
+    parameter.Parameter.Selector = ':87';
+    const wrongZoneClient = makeClient({
+      parameters: [parameter],
+      availabilityZones: [
+        availabilityZonesResponse(fixture, [SECONDARY_AZ_ID]),
+      ],
+    });
+
+    await expect(
+      makeResolver(fixture, wrongZoneClient).validateProviderSpec(
+        makeContext(fixture, expectedSpec(fixture)),
+      ),
+    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+    expect(
+      /** @type {any} */ (
+        wrongZoneClient.describeAvailabilityZones.mock.calls[0][0]
+      ).ZoneIds,
+    ).toEqual([PRIMARY_AZ_ID]);
+    expect(
+      wrongZoneClient.describeInstanceTypeOfferings,
+    ).not.toHaveBeenCalled();
+
+    const exactParameter = parameterResponse(fixture);
+    exactParameter.Parameter.Selector = ':87';
+    const wrongKeyClient = makeClient({
+      parameters: [exactParameter],
+      kmsKeys: [
+        {
+          KmsKeyId:
+            'arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        },
+      ],
+    });
+    await expect(
+      makeResolver(fixture, wrongKeyClient).validateProviderSpec(
+        makeContext(fixture, expectedSpec(fixture)),
+      ),
+    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+    expect(wrongKeyClient.describeImages).not.toHaveBeenCalled();
   });
 
   it('rejects a versioned response that drifts to another SSM version or AMI', async () => {
@@ -560,6 +799,390 @@ describe('AWS single-node provider-spec resolver', () => {
       });
       expect(JSON.stringify(caught)).not.toContain('secret');
       expect(client.getParameter).toHaveBeenCalledTimes(1);
+      expect(client.describeImages).not.toHaveBeenCalled();
+      expect(waitForRetry).not.toHaveBeenCalled();
+    },
+  );
+
+  it('classifies a complete empty standard-AZ result as missing without further discovery', async () => {
+    const fixture = makeFixture();
+    const client = makeClient({
+      parameters: [parameterResponse(fixture)],
+      availabilityZones: [{ AvailabilityZones: [] }],
+    });
+
+    await expect(
+      makeResolver(fixture, client).resolveProviderSpec(makeContext(fixture)),
+    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecMissingError);
+    expect(client.describeAvailabilityZones).toHaveBeenCalledTimes(1);
+    expect(client.describeInstanceTypeOfferings).not.toHaveBeenCalled();
+    expect(client.getEbsDefaultKmsKeyId).not.toHaveBeenCalled();
+    expect(client.describeImages).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing envelope', {}],
+    ['null zone list', { AvailabilityZones: null }],
+    ['malformed zone', { AvailabilityZones: [null] }],
+    [
+      'missing zone field',
+      {
+        AvailabilityZones: [
+          {
+            ZoneId: PRIMARY_AZ_ID,
+            ZoneName: 'us-east-1a',
+            RegionName: 'us-east-1',
+            ZoneType: 'availability-zone',
+            State: 'available',
+          },
+        ],
+      },
+    ],
+  ])(
+    'retries malformed Availability Zone %s and exhausts unknown',
+    async (_name, outcome) => {
+      const fixture = makeFixture();
+      const waitForRetry = jest.fn(
+        async (/** @type {number} */ _attempt) => {},
+      );
+      const client = makeClient({
+        parameters: [parameterResponse(fixture)],
+        availabilityZones: [outcome, outcome],
+      });
+      await expect(
+        makeResolver(fixture, client, {
+          maxAttempts: 2,
+          waitForRetry,
+        }).resolveProviderSpec(makeContext(fixture)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecUnknownError);
+      expect(client.describeAvailabilityZones).toHaveBeenCalledTimes(2);
+      expect(client.describeAvailabilityZones.mock.calls[0][0]).toEqual(
+        client.describeAvailabilityZones.mock.calls[1][0],
+      );
+      expect(waitForRetry).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it.each([
+    [
+      'nonavailable state',
+      (/** @type {any} */ zone) => (zone.State = 'constrained'),
+    ],
+    [
+      'nonstandard zone type',
+      (/** @type {any} */ zone) => (zone.ZoneType = 'local-zone'),
+    ],
+    [
+      'invalid opt-in state',
+      (/** @type {any} */ zone) => (zone.OptInStatus = 'opted-in'),
+    ],
+    [
+      'wrong region',
+      (/** @type {any} */ zone) => (zone.RegionName = 'us-west-2'),
+    ],
+    [
+      'parent zone',
+      (/** @type {any} */ zone) => (zone.ParentZoneId = 'use1-az1'),
+    ],
+  ])(
+    'rejects Availability Zone %s as immediate conflict',
+    async (_name, mutate) => {
+      const fixture = makeFixture();
+      const response = availabilityZonesResponse(fixture);
+      mutate(response.AvailabilityZones[0]);
+      const waitForRetry = jest.fn(
+        async (/** @type {number} */ _attempt) => {},
+      );
+      const client = makeClient({
+        parameters: [parameterResponse(fixture)],
+        availabilityZones: [response],
+      });
+      await expect(
+        makeResolver(fixture, client, {
+          maxAttempts: 3,
+          waitForRetry,
+        }).resolveProviderSpec(makeContext(fixture)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+      expect(client.describeAvailabilityZones).toHaveBeenCalledTimes(1);
+      expect(waitForRetry).not.toHaveBeenCalled();
+    },
+  );
+
+  it('classifies a complete empty fixed-instance offering result as missing', async () => {
+    const fixture = makeFixture();
+    const client = makeClient({
+      parameters: [parameterResponse(fixture)],
+      offerings: [{ InstanceTypeOfferings: [] }],
+    });
+    await expect(
+      makeResolver(fixture, client).resolveProviderSpec(makeContext(fixture)),
+    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecMissingError);
+    expect(client.describeInstanceTypeOfferings).toHaveBeenCalledTimes(1);
+    expect(client.getEbsDefaultKmsKeyId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing envelope', {}],
+    ['null offerings', { InstanceTypeOfferings: null }],
+    ['malformed offering', { InstanceTypeOfferings: [null] }],
+    [
+      'missing offering field',
+      {
+        InstanceTypeOfferings: [
+          {
+            InstanceType: 't3.small',
+            LocationType: 'availability-zone-id',
+          },
+        ],
+      },
+    ],
+  ])(
+    'retries malformed instance-type offering %s and exhausts unknown',
+    async (_name, outcome) => {
+      const fixture = makeFixture();
+      const waitForRetry = jest.fn(
+        async (/** @type {number} */ _attempt) => {},
+      );
+      const client = makeClient({
+        parameters: [parameterResponse(fixture)],
+        offerings: [outcome, outcome],
+      });
+      await expect(
+        makeResolver(fixture, client, {
+          maxAttempts: 2,
+          waitForRetry,
+        }).resolveProviderSpec(makeContext(fixture)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecUnknownError);
+      expect(client.describeInstanceTypeOfferings).toHaveBeenCalledTimes(2);
+      expect(client.describeInstanceTypeOfferings.mock.calls[0][0]).toEqual(
+        client.describeInstanceTypeOfferings.mock.calls[1][0],
+      );
+      expect(waitForRetry).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it.each([
+    [
+      'instance type',
+      (/** @type {any} */ offering) => (offering.InstanceType = 't3.medium'),
+    ],
+    [
+      'location type',
+      (/** @type {any} */ offering) =>
+        (offering.LocationType = 'availability-zone'),
+    ],
+    [
+      'location',
+      (/** @type {any} */ offering) => (offering.Location = 'us-east-1a'),
+    ],
+  ])(
+    'rejects instance-type offering %s drift immediately',
+    async (_name, mutate) => {
+      const fixture = makeFixture();
+      const response = offeringsResponse('t3.small', [PRIMARY_AZ_ID]);
+      mutate(response.InstanceTypeOfferings[0]);
+      const waitForRetry = jest.fn(async () => {});
+      const client = makeClient({
+        parameters: [parameterResponse(fixture)],
+        offerings: [response],
+      });
+      await expect(
+        makeResolver(fixture, client, {
+          maxAttempts: 3,
+          waitForRetry,
+        }).resolveProviderSpec(makeContext(fixture)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+      expect(client.describeInstanceTypeOfferings).toHaveBeenCalledTimes(1);
+      expect(waitForRetry).not.toHaveBeenCalled();
+    },
+  );
+
+  it('freezes completed offering pages while retrying only one malformed continuation', async () => {
+    const fixture = makeFixture();
+    /** @type {number[]} */
+    const waits = [];
+    const client = makeClient({
+      parameters: [parameterResponse(fixture)],
+      availabilityZones: [
+        availabilityZonesResponse(fixture, [PRIMARY_AZ_ID, SECONDARY_AZ_ID]),
+      ],
+      offerings: [
+        offeringsResponse('t3.small', [SECONDARY_AZ_ID], 'continuation'),
+        {},
+        offeringsResponse('t3.small', [PRIMARY_AZ_ID]),
+      ],
+      images: [imageResponse(fixture)],
+    });
+    const resolver = makeResolver(fixture, client, {
+      maxAttempts: 2,
+      waitForRetry: async (attempt) => {
+        waits.push(attempt);
+      },
+    });
+
+    await expect(
+      resolver.resolveProviderSpec(makeContext(fixture)),
+    ).resolves.toEqual(expectedSpec(fixture));
+    expect(client.describeAvailabilityZones).toHaveBeenCalledTimes(1);
+    expect(client.describeInstanceTypeOfferings).toHaveBeenCalledTimes(3);
+    expect(client.describeInstanceTypeOfferings.mock.calls[1][0]).toEqual(
+      client.describeInstanceTypeOfferings.mock.calls[2][0],
+    );
+    expect(client.describeInstanceTypeOfferings.mock.calls[0][0]).not.toEqual(
+      client.describeInstanceTypeOfferings.mock.calls[1][0],
+    );
+    expect(waits).toEqual([1]);
+  });
+
+  it('bounds cyclic offering pagination as unknown without restarting discovery', async () => {
+    const fixture = makeFixture();
+    const client = makeClient({
+      parameters: [parameterResponse(fixture)],
+      offerings: [
+        offeringsResponse('t3.small', [PRIMARY_AZ_ID], 'same-token'),
+        offeringsResponse('t3.small', [SECONDARY_AZ_ID], 'same-token'),
+      ],
+    });
+    await expect(
+      makeResolver(fixture, client).resolveProviderSpec(makeContext(fixture)),
+    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecUnknownError);
+    expect(client.getParameter).toHaveBeenCalledTimes(1);
+    expect(client.describeAvailabilityZones).toHaveBeenCalledTimes(1);
+    expect(client.describeInstanceTypeOfferings).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects duplicate AZ and offering evidence as conflict', async () => {
+    const fixture = makeFixture();
+    const duplicatedZone = availabilityZone(
+      PRIMARY_AZ_ID,
+      fixture.providerScope.region,
+    );
+    const duplicateZoneClient = makeClient({
+      parameters: [parameterResponse(fixture)],
+      availabilityZones: [
+        { AvailabilityZones: [duplicatedZone, { ...duplicatedZone }] },
+      ],
+    });
+    await expect(
+      makeResolver(fixture, duplicateZoneClient).resolveProviderSpec(
+        makeContext(fixture),
+      ),
+    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+
+    const duplicateOfferingClient = makeClient({
+      parameters: [parameterResponse(fixture)],
+      offerings: [
+        offeringsResponse('t3.small', [PRIMARY_AZ_ID], 'next'),
+        offeringsResponse('t3.small', [PRIMARY_AZ_ID]),
+      ],
+    });
+    await expect(
+      makeResolver(fixture, duplicateOfferingClient).resolveProviderSpec(
+        makeContext(fixture),
+      ),
+    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+  });
+
+  it('retries the identical default-EBS-key read across failures and malformed success', async () => {
+    const fixture = makeFixture();
+    /** @type {number[]} */
+    const waits = [];
+    const client = makeClient({
+      parameters: [parameterResponse(fixture)],
+      kmsKeys: [
+        new Error('secret KMS failure'),
+        {},
+        { KmsKeyId: EBS_KMS_KEY_ARN },
+      ],
+      images: [imageResponse(fixture)],
+    });
+    const resolver = makeResolver(fixture, client, {
+      maxAttempts: 3,
+      waitForRetry: async (attempt) => {
+        waits.push(attempt);
+      },
+    });
+
+    await expect(
+      resolver.resolveProviderSpec(makeContext(fixture)),
+    ).resolves.toEqual(expectedSpec(fixture));
+    expect(client.getEbsDefaultKmsKeyId).toHaveBeenCalledTimes(3);
+    expect(client.getEbsDefaultKmsKeyId.mock.calls).toEqual([[{}], [{}], [{}]]);
+    expect(Object.isFrozen(client.getEbsDefaultKmsKeyId.mock.calls[0][0])).toBe(
+      true,
+    );
+    expect(waits).toEqual([1, 2]);
+  });
+
+  it.each([null, {}, { KmsKeyId: undefined }])(
+    'retries malformed default-EBS-key envelope %# and exhausts unknown',
+    async (outcome) => {
+      const fixture = makeFixture();
+      const waitForRetry = jest.fn(
+        async (/** @type {number} */ _attempt) => {},
+      );
+      const client = makeClient({
+        parameters: [parameterResponse(fixture)],
+        kmsKeys: [outcome, outcome],
+      });
+      await expect(
+        makeResolver(fixture, client, {
+          maxAttempts: 2,
+          waitForRetry,
+        }).resolveProviderSpec(makeContext(fixture)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecUnknownError);
+      expect(client.getEbsDefaultKmsKeyId).toHaveBeenCalledTimes(2);
+      expect(client.getEbsDefaultKmsKeyId.mock.calls).toEqual([[{}], [{}]]);
+      expect(waitForRetry).toHaveBeenCalledWith(1);
+      expect(client.describeImages).not.toHaveBeenCalled();
+    },
+  );
+
+  it('accepts an exact scoped multi-Region KMS key ARN', async () => {
+    const fixture = makeFixture();
+    const multiRegionKeyArn =
+      'arn:aws:kms:us-east-1:123456789012:key/mrk-11111111222222223333333344444444';
+    const client = makeClient({
+      parameters: [parameterResponse(fixture)],
+      kmsKeys: [{ KmsKeyId: multiRegionKeyArn }],
+      images: [imageResponse(fixture)],
+    });
+    await expect(
+      makeResolver(fixture, client).resolveProviderSpec(makeContext(fixture)),
+    ).resolves.toEqual(expectedSpec(fixture, 87, multiRegionKeyArn));
+  });
+
+  it.each([
+    ['bare alias', 'alias/aws/ebs'],
+    ['alias ARN', 'arn:aws:kms:us-east-1:123456789012:alias/aws/ebs'],
+    [
+      'wrong partition',
+      'arn:aws-cn:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
+    ],
+    [
+      'wrong region',
+      'arn:aws:kms:us-west-2:123456789012:key/11111111-2222-3333-4444-555555555555',
+    ],
+    [
+      'wrong account',
+      'arn:aws:kms:us-east-1:210987654321:key/11111111-2222-3333-4444-555555555555',
+    ],
+  ])(
+    'rejects default EBS KMS key %s as immediate conflict',
+    async (_name, kmsKeyId) => {
+      const fixture = makeFixture();
+      const waitForRetry = jest.fn(async () => {});
+      const client = makeClient({
+        parameters: [parameterResponse(fixture)],
+        kmsKeys: [{ KmsKeyId: kmsKeyId }],
+      });
+      await expect(
+        makeResolver(fixture, client, {
+          maxAttempts: 3,
+          waitForRetry,
+        }).resolveProviderSpec(makeContext(fixture)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+      expect(client.getEbsDefaultKmsKeyId).toHaveBeenCalledTimes(1);
       expect(client.describeImages).not.toHaveBeenCalled();
       expect(waitForRetry).not.toHaveBeenCalled();
     },
@@ -853,6 +1476,8 @@ describe('AWS single-node provider-spec resolver', () => {
       profile: fixture.profile,
       providerScope: fixture.providerScope,
       machineImage: expectedSpec(fixture).machineImage,
+      placement: { availabilityZoneId: PRIMARY_AZ_ID },
+      storage: { ebsKmsKeyArn: EBS_KMS_KEY_ARN },
       bootstrapDigest: digest('different-bootstrap'),
       runtimeIdentityPolicyDigest: digest('different-runtime-policy'),
     });

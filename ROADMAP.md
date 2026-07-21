@@ -4,8 +4,11 @@
 credential-bound AWS authority, retained DynamoDB/control-bucket lifecycles,
 portable control records, recovery-safe executable staging, and
 freshness-bounded provider-visible service health under focused mocks. Its
-exact SSM/EC2 provider-spec resolver now freezes and validates one admissible,
-available AL2023 image; the fixed driver, commands, and clean-account proof are next ·
+provider-spec schema V2 now also pins one stable standard Availability Zone ID
+that offers the machine type, the exact default EBS KMS key ARN, and the full
+retained-volume performance/attachment contract. The first controller-shaped
+retained EBS volume capability is response-loss recoverable; action expansion,
+the rest of the fixed driver, commands, and clean-account proof are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -525,6 +528,21 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       parameter version and exact AMI again without selecting a newer default;
       bounded retries retain one frozen candidate and strict SSM/EC2 evidence
       classifies missing, contradictory, and unresolved reads separately.
+- [x] Advance the AWS provider-spec schema and ID domain to V2/`wap2`. Resolve
+      one lexically stable standard Availability Zone ID from the intersection
+      of available zones and exact instance-type offerings, pin the exact
+      regional/account default EBS KMS key ARN, and make each retained `gp3`
+      volume's size, IOPS, throughput, multi-attach, device,
+      delete-on-termination, encryption, and destroy policy explicit.
+- [x] Implement the first controller-compatible retained EBS volume resource.
+      Create uses the durable action ID as the EC2 `ClientToken`, applies the
+      complete ownership/contract tags atomically, and accepts only strict
+      `DescribeVolumes` readback. Ambiguous create responses leave the intended
+      action recoverable; controller retry reuses the token, while fresh-process
+      settlement can locate the one exact atomically tagged volume. Retention
+      is an explicit no-op. This is deterministic-mock proof for volume
+      provisioning only, not an attached service node or a composed production
+      driver.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -614,28 +632,37 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-The regional provider specification now has a concrete credential-bound
-SSM/EC2 resolver and exact-version validator. Together with the retained
-artifact-stage version and host-owned freshness-bounded health protocol, its
-complete pre-driver authority is pinned or durably evidenced under
-deterministic mocks.
+The regional provider specification now pins its exact image, stable placement,
+instance-type availability, default EBS KMS key ARN, and volume/attachment
+contract. A first retained-volume resource can create and inspect one exact EBS
+volume through a controller-shaped interface under deterministic mocks. It is
+not yet composed into a driver and does not attach, format, mount, or fulfill a
+service capability.
 
-1. Implement the fixed AWS driver as independently recoverable resource
-   capabilities, then compose it, the retained table/bucket, artifact stager,
-   health boundary, and strict controller recovery protocol. Mount source and
-   packaged `plan`, `apply`, `inspect`, `reconcile`, and `destroy` commands,
-   requiring apply and reconcile to re-observe the currently running SEA.
-2. Install and wire the privileged host observer outside the application UID,
+1. Expand the plan/action model before adding the fixed network and attachment
+   paths. Network fulfillment needs several independently inspectable provider
+   effects, and attaching each retained volume must be a separate action with
+   its own response-loss recovery and `DeleteOnTermination=false` evidence;
+   neither fits the current one-logical-action/one-effect settlement shortcut.
+2. Implement the remaining independently recoverable AWS network, identity,
+   node, volume-attachment, managed-artifact, and resident-service resources;
+   then build the provider router, inspection, `createPlan`, and complete
+   controller composition. Mount source and packaged `plan`, `apply`,
+   `inspect`, `reconcile`, and `destroy` commands, requiring apply and
+   reconcile to re-observe the currently running SEA.
+3. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
    recovery.
-3. Begin provider-backed coordinator recovery only after the single-node
+4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [exact AWS provider-spec resolution
-checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md).
-Its parent is the [provider-visible service-health
+The current restart point is the [retained EBS volume resource
+checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md).
+Its parent is the [exact AWS provider-spec resolution
+checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md),
+whose parent is the [provider-visible service-health
 checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md),
 whose parent is the [recovery-safe artifact-staging
 checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md),

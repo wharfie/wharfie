@@ -37,7 +37,14 @@ const S3_CONTROL_METHODS = Object.freeze([
 ]);
 const PROVIDER_SPEC_READ_METHODS = Object.freeze([
   'getParameter',
+  'describeAvailabilityZones',
   'describeImages',
+  'describeInstanceTypeOfferings',
+  'getEbsDefaultKmsKeyId',
+]);
+const VOLUME_RESOURCE_METHODS = Object.freeze([
+  'createVolume',
+  'describeVolumes',
 ]);
 
 /**
@@ -102,10 +109,30 @@ async function loadHarness({
     if (ssmMethodError) throw ssmMethodError;
     return { Parameter: { Value: 'resolved-parameter' }, input };
   });
-  const ec2Send = jest.fn(async (/** @type {unknown} */ input) => {
-    if (ec2MethodError) throw ec2MethodError;
-    return { Images: [], input };
-  });
+  const ec2Send = jest.fn(
+    async (/** @type {string} */ method, /** @type {unknown} */ input) => {
+      if (ec2MethodError) throw ec2MethodError;
+      if (method === 'describeAvailabilityZones') {
+        return { AvailabilityZones: [], input };
+      }
+      if (method === 'describeImages') return { Images: [], input };
+      if (method === 'describeInstanceTypeOfferings') {
+        return { InstanceTypeOfferings: [], input };
+      }
+      if (method === 'getEbsDefaultKmsKeyId') {
+        return {
+          KmsKeyId:
+            'arn:aws:kms:us-east-1:123456789012:key/00000000-0000-4000-8000-000000000001',
+          input,
+        };
+      }
+      if (method === 'createVolume') {
+        return { VolumeId: 'vol-00000000000000001', input };
+      }
+      if (method === 'describeVolumes') return { Volumes: [], input };
+      throw new Error(`Unexpected EC2 method: ${method}`);
+    },
+  );
   const responses = [...identities];
   const stsSend = jest.fn(async (/** @type {unknown} */ _command) => {
     const response = responses.length > 0 ? responses.shift() : IDENTITY;
@@ -215,8 +242,41 @@ async function loadHarness({
     },
   }));
   jest.unstable_mockModule('@aws-sdk/client-ec2', () => ({
+    CreateVolumeCommand: class CreateVolumeCommand {
+      input;
+      operation = 'createVolume';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DescribeAvailabilityZonesCommand: class DescribeAvailabilityZonesCommand {
+      input;
+      operation = 'describeAvailabilityZones';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     DescribeImagesCommand: class DescribeImagesCommand {
       input;
+      operation = 'describeImages';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DescribeInstanceTypeOfferingsCommand: class DescribeInstanceTypeOfferingsCommand {
+      input;
+      operation = 'describeInstanceTypeOfferings';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DescribeVolumesCommand: class DescribeVolumesCommand {
+      input;
+      operation = 'describeVolumes';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -228,12 +288,20 @@ async function loadHarness({
         ec2Configs.push(config);
       }
 
-      send(/** @type {{input: unknown}} */ command) {
-        return ec2Send(command.input);
+      send(/** @type {{operation: string, input: unknown}} */ command) {
+        return ec2Send(command.operation, command.input);
       }
 
       destroy() {
         ec2Destroy();
+      }
+    },
+    GetEbsDefaultKmsKeyIdCommand: class GetEbsDefaultKmsKeyIdCommand {
+      input;
+      operation = 'getEbsDefaultKmsKeyId';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
       }
     },
   }));
@@ -306,6 +374,7 @@ describe('AWS deployment invocation authority', () => {
       const controlClient = authority.createDynamoDBControlClient();
       const s3ControlClient = authority.createS3ControlClient();
       const providerSpecReadClient = authority.createProviderSpecReadClient();
+      const volumeResourceClient = authority.createVolumeResourceClient();
       expect(harness.dynamoConfigs[0].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[0].credentials).toBe(credentials);
       expect(harness.dynamoConfigs[1].region).toBe('us-east-1');
@@ -316,11 +385,16 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.ssmConfigs[0].credentials).toBe(credentials);
       expect(harness.ec2Configs[0].region).toBe('us-east-1');
       expect(harness.ec2Configs[0].credentials).toBe(credentials);
+      expect(harness.ec2Configs[1].region).toBe('us-east-1');
+      expect(harness.ec2Configs[1].credentials).toBe(credentials);
       expect(Object.isFrozen(controlClient)).toBe(true);
       expect(Object.isFrozen(s3ControlClient)).toBe(true);
       expect(Object.isFrozen(providerSpecReadClient)).toBe(true);
+      expect(Object.isFrozen(volumeResourceClient)).toBe(true);
       expect(controlClient).not.toHaveProperty('config');
       expect(s3ControlClient).not.toHaveProperty('config');
+      expect(providerSpecReadClient).not.toHaveProperty('config');
+      expect(volumeResourceClient).not.toHaveProperty('config');
       await controlClient.describeTable({ TableName: 'control-table' });
       expect(harness.dynamoSend).toHaveBeenCalledWith('describeTable', {
         TableName: 'control-table',
@@ -336,8 +410,18 @@ describe('AWS deployment invocation authority', () => {
       await providerSpecReadClient.describeImages({
         ImageIds: ['ami-00000000000000001'],
       });
-      expect(harness.ec2Send).toHaveBeenCalledWith({
+      expect(harness.ec2Send).toHaveBeenCalledWith('describeImages', {
         ImageIds: ['ami-00000000000000001'],
+      });
+      await volumeResourceClient.createVolume({
+        AvailabilityZone: 'us-east-1a',
+        ClientToken: 'volume-token',
+        Size: 8,
+      });
+      expect(harness.ec2Send).toHaveBeenCalledWith('createVolume', {
+        AvailabilityZone: 'us-east-1a',
+        ClientToken: 'volume-token',
+        Size: 8,
       });
       await expect(authority.resolveScope()).resolves.toEqual(
         authority.providerScope,
@@ -348,6 +432,7 @@ describe('AWS deployment invocation authority', () => {
       await controlClient.close();
       await s3ControlClient.close();
       await providerSpecReadClient.close();
+      await volumeResourceClient.close();
       await authority.close();
     } finally {
       if (previousRegion === undefined) delete process.env.AWS_REGION;
@@ -409,11 +494,44 @@ describe('AWS deployment invocation authority', () => {
         input: { Name: '/wharfie/provider/image' },
       });
       await expect(
+        client.describeAvailabilityZones({
+          Filters: [{ Name: 'state', Values: ['available'] }],
+        }),
+      ).resolves.toMatchObject({
+        AvailabilityZones: [],
+        input: { Filters: [{ Name: 'state', Values: ['available'] }] },
+      });
+      await expect(
         client.describeImages({ ImageIds: ['ami-00000000000000001'] }),
       ).resolves.toMatchObject({
         Images: [],
         input: { ImageIds: ['ami-00000000000000001'] },
       });
+      await expect(
+        client.describeInstanceTypeOfferings({
+          LocationType: 'availability-zone',
+        }),
+      ).resolves.toMatchObject({
+        InstanceTypeOfferings: [],
+        input: { LocationType: 'availability-zone' },
+      });
+      await expect(client.getEbsDefaultKmsKeyId({})).resolves.toMatchObject({
+        KmsKeyId:
+          'arn:aws:kms:us-east-1:123456789012:key/00000000-0000-4000-8000-000000000001',
+        input: {},
+      });
+      expect(harness.ec2Send.mock.calls).toEqual([
+        [
+          'describeAvailabilityZones',
+          { Filters: [{ Name: 'state', Values: ['available'] }] },
+        ],
+        ['describeImages', { ImageIds: ['ami-00000000000000001'] }],
+        [
+          'describeInstanceTypeOfferings',
+          { LocationType: 'availability-zone' },
+        ],
+        ['getEbsDefaultKmsKeyId', {}],
+      ]);
     } finally {
       await client.close();
       await authority.close();
@@ -540,6 +658,173 @@ describe('AWS deployment invocation authority', () => {
     await expect(
       client.describeImages({ ImageIds: ['ami-00000000000000001'] }),
     ).rejects.toThrow('AWS deployment provider-spec read client is closed.');
+    await authority.close();
+  });
+
+  it('exposes only the exact narrow volume resource surface', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createVolumeResourceClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...VOLUME_RESOURCE_METHODS, 'close'].sort(),
+      );
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      const createInput = {
+        AvailabilityZone: 'us-east-1a',
+        ClientToken: 'volume-token',
+        Size: 8,
+      };
+      await expect(client.createVolume(createInput)).resolves.toMatchObject({
+        VolumeId: 'vol-00000000000000001',
+        input: createInput,
+      });
+      const describeInput = { VolumeIds: ['vol-00000000000000001'] };
+      await expect(
+        client.describeVolumes(describeInput),
+      ).resolves.toMatchObject({ Volumes: [], input: describeInput });
+      expect(harness.ec2Send.mock.calls).toEqual([
+        ['createVolume', createInput],
+        ['describeVolumes', describeInput],
+      ]);
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it('replaces volume resource client construction failures', async () => {
+    const harness = await loadHarness({
+      ec2ConstructionError: new Error('volume-construction-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+
+    expect(() => authority.createVolumeResourceClient()).toThrow(
+      'AWS deployment volume resource client creation failed.',
+    );
+    expect(harness.ec2Configs).toHaveLength(0);
+    expect(harness.ec2Destroy).not.toHaveBeenCalled();
+    await authority.close();
+  });
+
+  it.each([
+    ['IdempotentParameterMismatch', 'createVolume', 400],
+    ['InvalidVolume.NotFound', 'describeVolumes', 404],
+  ])(
+    'preserves only the %s volume resource classification',
+    async (name, method, status) => {
+      const providerError = Object.assign(new Error('volume-secret'), {
+        name,
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = /** @type {Record<string, any>} */ (
+        authority.createVolumeResourceClient()
+      );
+
+      const observed = await client[method]({ operationMarker: method }).catch(
+        (/** @type {unknown} */ error) => error,
+      );
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name,
+        code: 'AWS_DEPLOYMENT_VOLUME_RESOURCE_OPERATION',
+        message: 'AWS deployment volume resource operation failed.',
+        $metadata: { httpStatusCode: status },
+      });
+      expect(JSON.stringify(observed)).not.toMatch(
+        /volume-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it.each([
+    [403, true],
+    [399, false],
+    [600, false],
+    ['403', false],
+  ])(
+    'keeps unknown volume failures generic and safely handles status %p',
+    async (status, preservesStatus) => {
+      const providerError = Object.assign(new Error('volume-access-secret'), {
+        name: 'AccessDeniedException',
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createVolumeResourceClient();
+
+      const observed = await client
+        .describeVolumes({ VolumeIds: ['vol-00000000000000001'] })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name: 'AwsDeploymentVolumeResourceError',
+        code: 'AWS_DEPLOYMENT_VOLUME_RESOURCE_OPERATION',
+        message: 'AWS deployment volume resource operation failed.',
+      });
+      if (preservesStatus) {
+        expect(observed).toHaveProperty('$metadata.httpStatusCode', status);
+      } else {
+        expect(observed).not.toHaveProperty('$metadata');
+      }
+      expect(JSON.stringify(observed)).not.toMatch(
+        /AccessDenied|volume-access-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it('closes the volume resource SDK client idempotently and refuses reuse', async () => {
+    const harness = await loadHarness({
+      ec2CloseError: new Error('volume-close-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = authority.createVolumeResourceClient();
+
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment volume resource client close failed.',
+    );
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    await expect(
+      client.createVolume({ AvailabilityZone: 'us-east-1a' }),
+    ).rejects.toThrow('AWS deployment volume resource client is closed.');
+    await expect(
+      client.describeVolumes({ VolumeIds: ['vol-00000000000000001'] }),
+    ).rejects.toThrow('AWS deployment volume resource client is closed.');
     await authority.close();
   });
 
@@ -708,6 +993,9 @@ describe('AWS deployment invocation authority', () => {
     const providerSpecReadClient = /** @type {Record<string, any>} */ (
       authority.createProviderSpecReadClient()
     );
+    const volumeResourceClient = /** @type {Record<string, any>} */ (
+      authority.createVolumeResourceClient()
+    );
 
     await authority.close();
     await authority.close();
@@ -732,6 +1020,9 @@ describe('AWS deployment invocation authority', () => {
     expect(() => authority.createProviderSpecReadClient()).toThrow(
       'AWS deployment authority is closed.',
     );
+    expect(() => authority.createVolumeResourceClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
     await expect(
       s3ControlClient.headBucket({ Bucket: 'still-caller-owned' }),
     ).resolves.toEqual({});
@@ -745,6 +1036,18 @@ describe('AWS deployment invocation authority', () => {
         ImageIds: ['ami-00000000000000001'],
       }),
     ).resolves.toMatchObject({ Images: [] });
+    await expect(
+      volumeResourceClient.createVolume({
+        AvailabilityZone: 'us-east-1a',
+        ClientToken: 'still-caller-owned',
+        Size: 8,
+      }),
+    ).resolves.toMatchObject({ VolumeId: 'vol-00000000000000001' });
+    await expect(
+      volumeResourceClient.describeVolumes({
+        VolumeIds: ['vol-00000000000000001'],
+      }),
+    ).resolves.toMatchObject({ Volumes: [] });
 
     await db.close();
     await controlClient.close();
@@ -768,10 +1071,18 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment provider-spec read client is closed.',
       );
     }
+    const firstVolumeClose = volumeResourceClient.close();
+    expect(volumeResourceClient.close()).toBe(firstVolumeClose);
+    await firstVolumeClose;
+    for (const method of VOLUME_RESOURCE_METHODS) {
+      await expect(volumeResourceClient[method]({})).rejects.toThrow(
+        'AWS deployment volume resource client is closed.',
+      );
+    }
     expect(harness.documentDestroy).toHaveBeenCalledTimes(1);
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
     expect(harness.s3Destroy).toHaveBeenCalledTimes(1);
     expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
-    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(2);
   });
 });

@@ -52,10 +52,18 @@ const VALIDATE_CONTEXT_KEYS = new Set([
 const REQUIRED_CLIENT_METHODS = Object.freeze([
   'getParameter',
   'describeImages',
+  'describeAvailabilityZones',
+  'describeInstanceTypeOfferings',
+  'getEbsDefaultKmsKeyId',
 ]);
 const AMI_ID_PATTERN = /^ami-[0-9a-f]{8,32}$/;
 const AWS_ACCOUNT_ID_PATTERN = /^[0-9]{12}$/;
+const AVAILABILITY_ZONE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-az[1-9][0-9]*$/;
+const KMS_KEY_ARN_PATTERN =
+  /^arn:([a-z0-9-]+):kms:([a-z0-9-]+):([0-9]{12}):key\/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$/;
 const TRANSITIONAL_IMAGE_STATES = new Set(['pending', 'transient']);
+const INSTANCE_TYPE_OFFERING_MAX_RESULTS = 1000;
+const INSTANCE_TYPE_OFFERING_MAX_PAGES = 10;
 
 /** The exact public SSM parameter or selected AMI is absent. */
 export class AwsSingleNodeProviderSpecMissingError extends Error {
@@ -392,6 +400,165 @@ function validateImageResponse(value, selection, architecture, now) {
   });
 }
 
+/** @param {Record<string, any>} value @param {string} key @param {unknown} expected @returns {void} */
+function assertExactProviderField(value, key, expected) {
+  if (!Object.hasOwn(value, key)) throw new ProviderResponseUnknownError();
+  if (value[key] !== expected) {
+    throw new AwsSingleNodeProviderSpecConflictError();
+  }
+}
+
+/** @param {string} value @returns {string} */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+/**
+ * Validate the complete, non-paginated standard-AZ response. Missing fields
+ * cannot establish state, while present fields that contradict the exact
+ * request are authoritative conflicts.
+ * @param {unknown} value - DescribeAvailabilityZones response.
+ * @param {Readonly<Record<string, any>>} providerScope - Exact AWS scope.
+ * @param {string|null} exactAvailabilityZoneId - Pinned ID during validation.
+ * @returns {Readonly<string[]>} - Sorted available standard AZ IDs.
+ */
+function validateAvailabilityZonesResponse(
+  value,
+  providerScope,
+  exactAvailabilityZoneId,
+) {
+  if (!isPlainObject(value) || !Array.isArray(value.AvailabilityZones)) {
+    throw new ProviderResponseUnknownError();
+  }
+  if (value.NextToken !== undefined && value.NextToken !== null) {
+    throw new AwsSingleNodeProviderSpecConflictError();
+  }
+  if (value.AvailabilityZones.length === 0) {
+    throw new AwsSingleNodeProviderSpecMissingError();
+  }
+  const zoneNamePattern = new RegExp(
+    `^${escapeRegExp(providerScope.region)}[a-z]$`,
+    'u',
+  );
+  const ids = new Set();
+  for (const candidate of value.AvailabilityZones) {
+    if (!isPlainObject(candidate)) {
+      throw new ProviderResponseUnknownError();
+    }
+    if (!Object.hasOwn(candidate, 'ZoneId')) {
+      throw new ProviderResponseUnknownError();
+    }
+    if (
+      typeof candidate.ZoneId !== 'string' ||
+      !AVAILABILITY_ZONE_ID_PATTERN.test(candidate.ZoneId)
+    ) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    if (!Object.hasOwn(candidate, 'ZoneName')) {
+      throw new ProviderResponseUnknownError();
+    }
+    if (
+      typeof candidate.ZoneName !== 'string' ||
+      !zoneNamePattern.test(candidate.ZoneName)
+    ) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    assertExactProviderField(candidate, 'RegionName', providerScope.region);
+    assertExactProviderField(candidate, 'ZoneType', 'availability-zone');
+    assertExactProviderField(candidate, 'State', 'available');
+    assertExactProviderField(candidate, 'OptInStatus', 'opt-in-not-required');
+    if (
+      candidate.ParentZoneId !== undefined ||
+      candidate.ParentZoneName !== undefined ||
+      ids.has(candidate.ZoneId)
+    ) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    if (
+      exactAvailabilityZoneId !== null &&
+      candidate.ZoneId !== exactAvailabilityZoneId
+    ) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    ids.add(candidate.ZoneId);
+  }
+  if (exactAvailabilityZoneId !== null && ids.size !== 1) {
+    throw new AwsSingleNodeProviderSpecConflictError();
+  }
+  return deepFreeze([...ids].sort());
+}
+
+/**
+ * Validate one offerings page against its immutable filter.
+ * @param {unknown} value - DescribeInstanceTypeOfferings response.
+ * @param {string} instanceType - Fixed architecture-derived instance type.
+ * @param {string|null} exactAvailabilityZoneId - Pinned ID during validation.
+ * @returns {Readonly<{availabilityZoneIds: string[], nextToken: string|null}>} - Strict page.
+ */
+function validateInstanceTypeOfferingsResponse(
+  value,
+  instanceType,
+  exactAvailabilityZoneId,
+) {
+  if (!isPlainObject(value) || !Array.isArray(value.InstanceTypeOfferings)) {
+    throw new ProviderResponseUnknownError();
+  }
+  let nextToken = null;
+  if (value.NextToken !== undefined && value.NextToken !== null) {
+    if (typeof value.NextToken !== 'string' || value.NextToken.length === 0) {
+      throw new ProviderResponseUnknownError();
+    }
+    nextToken = value.NextToken;
+  }
+  const ids = [];
+  for (const offering of value.InstanceTypeOfferings) {
+    if (!isPlainObject(offering)) {
+      throw new ProviderResponseUnknownError();
+    }
+    assertExactProviderField(offering, 'InstanceType', instanceType);
+    assertExactProviderField(offering, 'LocationType', 'availability-zone-id');
+    if (!Object.hasOwn(offering, 'Location')) {
+      throw new ProviderResponseUnknownError();
+    }
+    if (
+      typeof offering.Location !== 'string' ||
+      !AVAILABILITY_ZONE_ID_PATTERN.test(offering.Location) ||
+      (exactAvailabilityZoneId !== null &&
+        offering.Location !== exactAvailabilityZoneId)
+    ) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    ids.push(offering.Location);
+  }
+  return deepFreeze({ availabilityZoneIds: ids, nextToken });
+}
+
+/**
+ * Validate the exact regional default EBS KMS key receipt. EC2 documents this
+ * field as a key ARN, so aliases and bare key IDs are contract conflicts.
+ * @param {unknown} value - GetEbsDefaultKmsKeyId response.
+ * @param {Readonly<Record<string, any>>} providerScope - Exact AWS scope.
+ * @returns {Readonly<{ebsKmsKeyArn: string}>} - Frozen encryption selection.
+ */
+function validateEbsDefaultKmsKeyResponse(value, providerScope) {
+  if (!isPlainObject(value) || !Object.hasOwn(value, 'KmsKeyId')) {
+    throw new ProviderResponseUnknownError();
+  }
+  if (typeof value.KmsKeyId !== 'string') {
+    throw new ProviderResponseUnknownError();
+  }
+  const match = KMS_KEY_ARN_PATTERN.exec(value.KmsKeyId);
+  if (
+    match === null ||
+    match[1] !== providerScope.partition ||
+    match[2] !== providerScope.region ||
+    match[3] !== providerScope.accountId
+  ) {
+    throw new AwsSingleNodeProviderSpecConflictError();
+  }
+  return deepFreeze({ ebsKmsKeyArn: value.KmsKeyId });
+}
+
 /**
  * Build the strict AWS single-node SSM/EC2 resolver around one caller-owned,
  * credential-bound read client. This boundary never closes or replaces the
@@ -540,22 +707,223 @@ export function createAwsSingleNodeProviderSpecResolver(options) {
     throw new AwsSingleNodeProviderSpecUnknownError();
   }
 
-  /** @param {Record<string, any>} context @param {number|null} exactVersion @param {string|null} exactImageId @returns {Promise<Readonly<Record<string, any>>>} */
-  async function discover(context, exactVersion, exactImageId) {
+  /** @param {string|null} exactAvailabilityZoneId @returns {Promise<Readonly<string[]>>} */
+  async function readAvailabilityZones(exactAvailabilityZoneId) {
+    const request = deepFreeze({
+      AllAvailabilityZones: false,
+      Filters: [
+        { Name: 'region-name', Values: [providerScope.region] },
+        { Name: 'state', Values: ['available'] },
+        { Name: 'zone-type', Values: ['availability-zone'] },
+      ],
+      ...(exactAvailabilityZoneId === null
+        ? {}
+        : { ZoneIds: [exactAvailabilityZoneId] }),
+    });
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response;
+      try {
+        response = await client.describeAvailabilityZones(request);
+      } catch {
+        if (attempt === maxAttempts) {
+          throw new AwsSingleNodeProviderSpecUnknownError();
+        }
+        await wait(attempt);
+        continue;
+      }
+      try {
+        return validateAvailabilityZonesResponse(
+          response,
+          providerScope,
+          exactAvailabilityZoneId,
+        );
+      } catch (error) {
+        if (!(error instanceof ProviderResponseUnknownError)) throw error;
+        if (attempt === maxAttempts) {
+          throw new AwsSingleNodeProviderSpecUnknownError();
+        }
+        await wait(attempt);
+      }
+    }
+    throw new AwsSingleNodeProviderSpecUnknownError();
+  }
+
+  /** @param {Readonly<Record<string, any>>} request @param {string} instanceType @param {string|null} exactAvailabilityZoneId @returns {Promise<Readonly<{availabilityZoneIds: string[], nextToken: string|null}>>} */
+  async function readInstanceTypeOfferingsPage(
+    request,
+    instanceType,
+    exactAvailabilityZoneId,
+  ) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response;
+      try {
+        response = await client.describeInstanceTypeOfferings(request);
+      } catch {
+        if (attempt === maxAttempts) {
+          throw new AwsSingleNodeProviderSpecUnknownError();
+        }
+        await wait(attempt);
+        continue;
+      }
+      try {
+        return validateInstanceTypeOfferingsResponse(
+          response,
+          instanceType,
+          exactAvailabilityZoneId,
+        );
+      } catch (error) {
+        if (!(error instanceof ProviderResponseUnknownError)) throw error;
+        if (attempt === maxAttempts) {
+          throw new AwsSingleNodeProviderSpecUnknownError();
+        }
+        await wait(attempt);
+      }
+    }
+    throw new AwsSingleNodeProviderSpecUnknownError();
+  }
+
+  /** @param {string} instanceType @param {string|null} exactAvailabilityZoneId @returns {Promise<Readonly<string[]>>} */
+  async function readInstanceTypeOfferings(
+    instanceType,
+    exactAvailabilityZoneId,
+  ) {
+    const filters = [
+      { Name: 'instance-type', Values: [instanceType] },
+      ...(exactAvailabilityZoneId === null
+        ? []
+        : [{ Name: 'location', Values: [exactAvailabilityZoneId] }]),
+    ];
+    const ids = new Set();
+    const seenTokens = new Set();
+    let nextToken = null;
+    for (let page = 1; page <= INSTANCE_TYPE_OFFERING_MAX_PAGES; page += 1) {
+      const request = deepFreeze({
+        LocationType: 'availability-zone-id',
+        Filters: filters,
+        MaxResults: INSTANCE_TYPE_OFFERING_MAX_RESULTS,
+        ...(nextToken === null ? {} : { NextToken: nextToken }),
+      });
+      const response = await readInstanceTypeOfferingsPage(
+        request,
+        instanceType,
+        exactAvailabilityZoneId,
+      );
+      for (const availabilityZoneId of response.availabilityZoneIds) {
+        if (ids.has(availabilityZoneId)) {
+          throw new AwsSingleNodeProviderSpecConflictError();
+        }
+        ids.add(availabilityZoneId);
+      }
+      if (response.nextToken === null) {
+        if (ids.size === 0) {
+          throw new AwsSingleNodeProviderSpecMissingError();
+        }
+        return deepFreeze([...ids].sort());
+      }
+      if (
+        page === INSTANCE_TYPE_OFFERING_MAX_PAGES ||
+        seenTokens.has(response.nextToken)
+      ) {
+        throw new AwsSingleNodeProviderSpecUnknownError();
+      }
+      seenTokens.add(response.nextToken);
+      nextToken = response.nextToken;
+    }
+    throw new AwsSingleNodeProviderSpecUnknownError();
+  }
+
+  /** @param {string} instanceType @param {string|null} exactAvailabilityZoneId @returns {Promise<Readonly<{availabilityZoneId: string}>>} */
+  async function readPlacement(instanceType, exactAvailabilityZoneId) {
+    const availableZoneIds = await readAvailabilityZones(
+      exactAvailabilityZoneId,
+    );
+    const offeringZoneIds = await readInstanceTypeOfferings(
+      instanceType,
+      exactAvailabilityZoneId,
+    );
+    const available = new Set(availableZoneIds);
+    const candidates = offeringZoneIds.filter((id) => available.has(id));
+    if (candidates.length === 0) {
+      throw new AwsSingleNodeProviderSpecMissingError();
+    }
+    if (
+      exactAvailabilityZoneId !== null &&
+      (candidates.length !== 1 || candidates[0] !== exactAvailabilityZoneId)
+    ) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    return deepFreeze({ availabilityZoneId: candidates.sort()[0] });
+  }
+
+  /** @param {string|null} exactKmsKeyArn @returns {Promise<Readonly<{ebsKmsKeyArn: string}>>} */
+  async function readStorage(exactKmsKeyArn) {
+    const request = Object.freeze({});
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response;
+      try {
+        response = await client.getEbsDefaultKmsKeyId(request);
+      } catch {
+        if (attempt === maxAttempts) {
+          throw new AwsSingleNodeProviderSpecUnknownError();
+        }
+        await wait(attempt);
+        continue;
+      }
+      try {
+        const storage = validateEbsDefaultKmsKeyResponse(
+          response,
+          providerScope,
+        );
+        if (
+          exactKmsKeyArn !== null &&
+          storage.ebsKmsKeyArn !== exactKmsKeyArn
+        ) {
+          throw new AwsSingleNodeProviderSpecConflictError();
+        }
+        return storage;
+      } catch (error) {
+        if (!(error instanceof ProviderResponseUnknownError)) throw error;
+        if (attempt === maxAttempts) {
+          throw new AwsSingleNodeProviderSpecUnknownError();
+        }
+        await wait(attempt);
+      }
+    }
+    throw new AwsSingleNodeProviderSpecUnknownError();
+  }
+
+  /** @param {Record<string, any>} context @param {number|null} exactVersion @param {string|null} exactImageId @param {string|null} exactAvailabilityZoneId @param {string|null} exactKmsKeyArn @returns {Promise<Readonly<Record<string, any>>>} */
+  async function discover(
+    context,
+    exactVersion,
+    exactImageId,
+    exactAvailabilityZoneId,
+    exactKmsKeyArn,
+  ) {
     const architecture =
       context.profile.target.architecture === 'x64' ? 'x86_64' : 'arm64';
+    const instanceType = architecture === 'x86_64' ? 't3.small' : 't4g.small';
     const parameterName =
       AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS[architecture];
     const selection = await readParameter(parameterName, exactVersion);
     if (exactImageId !== null && selection.imageId !== exactImageId) {
       throw new AwsSingleNodeProviderSpecConflictError();
     }
+    // Placement can paginate or retry. Resolve it before the AMI observation
+    // so the deprecation clock is sampled only after the final provider read.
+    const placement = await readPlacement(
+      instanceType,
+      exactAvailabilityZoneId,
+    );
+    const storage = await readStorage(exactKmsKeyArn);
     const machineImage = await readImage(selection, architecture);
     try {
       return createAwsSingleNodeProviderSpec({
         profile: context.profile,
         providerScope: context.providerScope,
         machineImage,
+        placement,
+        storage,
         bootstrapDigest,
         runtimeIdentityPolicyDigest,
       });
@@ -567,7 +935,7 @@ export function createAwsSingleNodeProviderSpecResolver(options) {
   /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
   async function resolveProviderSpec(value) {
     const context = validateContext(value, RESOLVE_CONTEXT_KEYS, providerScope);
-    return await discover(context, null, null);
+    return await discover(context, null, null, null, null);
   }
 
   /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
@@ -582,6 +950,8 @@ export function createAwsSingleNodeProviderSpecResolver(options) {
       context,
       expected.machineImage.sourceParameter.version,
       expected.machineImage.imageId,
+      expected.placement.availabilityZoneId,
+      expected.storage.ebsKmsKeyArn,
     );
     if (!sameJson(reproduced, expected)) {
       throw new AwsSingleNodeProviderSpecConflictError();

@@ -1,7 +1,15 @@
 /* eslint-disable jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact internal boundary helpers keep their complete types inline. */
 
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
-import { DescribeImagesCommand, EC2Client } from '@aws-sdk/client-ec2';
+import {
+  CreateVolumeCommand,
+  DescribeAvailabilityZonesCommand,
+  DescribeImagesCommand,
+  DescribeInstanceTypeOfferingsCommand,
+  DescribeVolumesCommand,
+  EC2Client,
+  GetEbsDefaultKmsKeyIdCommand,
+} from '@aws-sdk/client-ec2';
 import { S3 } from '@aws-sdk/client-s3';
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
@@ -55,9 +63,21 @@ const PROVIDER_SPEC_READ_CLOSED_ERROR =
   'AWS deployment provider-spec read client is closed.';
 const PROVIDER_SPEC_READ_CLOSE_ERROR =
   'AWS deployment provider-spec read client close failed.';
+const VOLUME_RESOURCE_CREATION_ERROR =
+  'AWS deployment volume resource client creation failed.';
+const VOLUME_RESOURCE_OPERATION_ERROR =
+  'AWS deployment volume resource operation failed.';
+const VOLUME_RESOURCE_CLOSED_ERROR =
+  'AWS deployment volume resource client is closed.';
+const VOLUME_RESOURCE_CLOSE_ERROR =
+  'AWS deployment volume resource client close failed.';
 const PROVIDER_SPEC_READ_ERROR_NAMES = new Set([
   'ParameterNotFound',
   'ParameterVersionNotFound',
+]);
+const VOLUME_RESOURCE_ERROR_NAMES = new Set([
+  'IdempotentParameterMismatch',
+  'InvalidVolume.NotFound',
 ]);
 const S3_CONTROL_ERROR_NAMES = new Set([
   'ConditionalRequestConflict',
@@ -90,8 +110,18 @@ const S3_CONTROL_ERROR_NAMES = new Set([
 /**
  * @typedef ProviderSpecReadClient
  * @property {(input: import('@aws-sdk/client-ssm').GetParameterCommandInput) => Promise<any>} getParameter - Read one exact parameter.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeAvailabilityZonesCommandInput) => Promise<any>} describeAvailabilityZones - Resolve regional availability-zone metadata.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeImagesCommandInput) => Promise<any>} describeImages - Resolve exact image metadata.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeInstanceTypeOfferingsCommandInput) => Promise<any>} describeInstanceTypeOfferings - Resolve exact regional instance-type offerings.
+ * @property {(input: import('@aws-sdk/client-ec2').GetEbsDefaultKmsKeyIdCommandInput) => Promise<any>} getEbsDefaultKmsKeyId - Resolve the account's regional default EBS KMS key.
  * @property {() => Promise<void>} close - Close both caller-owned SDK clients.
+ */
+
+/**
+ * @typedef VolumeResourceClient
+ * @property {(input: import('@aws-sdk/client-ec2').CreateVolumeCommandInput) => Promise<any>} createVolume - Create one exact EBS volume.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeVolumesCommandInput) => Promise<any>} describeVolumes - Read exact EBS volume state.
+ * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
 
 /**
@@ -183,6 +213,34 @@ function sanitizeProviderSpecReadError(value) {
     ? candidate.name
     : 'AwsDeploymentProviderSpecReadError';
   error.code = 'AWS_DEPLOYMENT_PROVIDER_SPEC_READ_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
+}
+
+/**
+ * Preserve only the EBS classifications required for safe idempotent create
+ * and authoritative readback. Raw SDK messages, request IDs, access
+ * classifications, causes, and credential-bearing configuration never cross
+ * this boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeVolumeResourceError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(VOLUME_RESOURCE_OPERATION_ERROR)
+    );
+  error.name = VOLUME_RESOURCE_ERROR_NAMES.has(candidate.name)
+    ? candidate.name
+    : 'AwsDeploymentVolumeResourceError';
+  error.code = 'AWS_DEPLOYMENT_VOLUME_RESOURCE_OPERATION';
   const status = candidate.$metadata?.httpStatusCode;
   if (Number.isInteger(status) && status >= 400 && status <= 599) {
     error.$metadata = Object.freeze({ httpStatusCode: status });
@@ -297,6 +355,7 @@ function scopeFromCallerIdentity(value, region) {
  *   createDynamoDBControlClient: () => Readonly<DynamoDBControlClient>,
  *   createS3ControlClient: () => Readonly<S3ControlClient>,
  *   createProviderSpecReadClient: () => Readonly<ProviderSpecReadClient>,
+ *   createVolumeResourceClient: () => Readonly<VolumeResourceClient>,
  *   close: () => Promise<void>,
  * }>>} - Credential-bound AWS authority.
  */
@@ -625,9 +684,75 @@ export async function createAwsDeploymentAuthority(options) {
       getParameter: (
         /** @type {import('@aws-sdk/client-ssm').GetParameterCommandInput} */ input,
       ) => call(() => ssmClient.send(new GetParameterCommand(input))),
+      describeAvailabilityZones: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeAvailabilityZonesCommandInput} */ input,
+      ) =>
+        call(() => ec2Client.send(new DescribeAvailabilityZonesCommand(input))),
       describeImages: (
         /** @type {import('@aws-sdk/client-ec2').DescribeImagesCommandInput} */ input,
       ) => call(() => ec2Client.send(new DescribeImagesCommand(input))),
+      describeInstanceTypeOfferings: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeInstanceTypeOfferingsCommandInput} */ input,
+      ) =>
+        call(() =>
+          ec2Client.send(new DescribeInstanceTypeOfferingsCommand(input)),
+        ),
+      getEbsDefaultKmsKeyId: (
+        /** @type {import('@aws-sdk/client-ec2').GetEbsDefaultKmsKeyIdCommandInput} */ input,
+      ) => call(() => ec2Client.send(new GetEbsDefaultKmsKeyIdCommand(input))),
+      close: closeClient,
+    });
+  }
+
+  /** @returns {Readonly<VolumeResourceClient>} - Caller-owned narrow EBS resource client. */
+  function createVolumeResourceClient() {
+    assertOpen();
+    /** @type {EC2Client} */
+    let client;
+    try {
+      client = new EC2Client({
+        ...BaseAWS.config(),
+        region,
+        credentials,
+      });
+    } catch {
+      throw new Error(VOLUME_RESOURCE_CREATION_ERROR);
+    }
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) throw new Error(VOLUME_RESOURCE_CLOSED_ERROR);
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeVolumeResourceError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        try {
+          client.destroy();
+        } catch {
+          throw new Error(VOLUME_RESOURCE_CLOSE_ERROR);
+        }
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      createVolume: (
+        /** @type {import('@aws-sdk/client-ec2').CreateVolumeCommandInput} */ input,
+      ) => call(() => client.send(new CreateVolumeCommand(input))),
+      describeVolumes: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeVolumesCommandInput} */ input,
+      ) => call(() => client.send(new DescribeVolumesCommand(input))),
       close: closeClient,
     });
   }
@@ -650,6 +775,7 @@ export async function createAwsDeploymentAuthority(options) {
     createDynamoDBControlClient,
     createS3ControlClient,
     createProviderSpecReadClient,
+    createVolumeResourceClient,
     close,
   });
 }

@@ -89,6 +89,11 @@ function makeFixture(architecture = 'x64') {
       machineImage: makeMachineImage(
         architecture === 'x64' ? 'x86_64' : 'arm64',
       ),
+      placement: { availabilityZoneId: 'use1-az2' },
+      storage: {
+        ebsKmsKeyArn:
+          'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
+      },
       bootstrapDigest: digest('bootstrap contract'),
       runtimeIdentityPolicyDigest: digest('runtime identity policy'),
     },
@@ -102,14 +107,19 @@ describe('AWS single-node provider specifications', () => {
     const { providerSpecId: _providerSpecId, ...payload } = spec;
 
     expect(spec).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'awsSingleNodeProviderSpec',
-      providerSpecId: expect.stringMatching(/^wap1_[A-Za-z0-9_-]{43}$/),
+      providerSpecId: expect.stringMatching(/^wap2_[A-Za-z0-9_-]{43}$/),
       providerContractVersion: 3,
       providerScopeId: fixture.providerScope.providerScopeId,
       profileRevisionId: fixture.profile.profileRevisionId,
       targetId: 'node-v24.13.1-linux-x64-glibc',
       machineImage: makeMachineImage('x86_64'),
+      placement: { availabilityZoneId: 'use1-az2' },
+      storage: {
+        ebsKmsKeyArn:
+          'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
+      },
       node: {
         instanceType: 't3.small',
         metadataOptions: {
@@ -129,6 +139,11 @@ describe('AWS single-node provider specifications', () => {
           storage: 'ebs-volume',
           volumeType: 'gp3',
           sizeGiB: 8,
+          iops: 3000,
+          throughputMiBps: 125,
+          multiAttach: false,
+          deviceName: '/dev/sdf',
+          deleteOnTermination: false,
           encrypted: true,
           onDestroy: 'retain',
         },
@@ -137,6 +152,11 @@ describe('AWS single-node provider specifications', () => {
           storage: 'ebs-volume',
           volumeType: 'gp3',
           sizeGiB: 8,
+          iops: 3000,
+          throughputMiBps: 125,
+          multiAttach: false,
+          deviceName: '/dev/sdg',
+          deleteOnTermination: false,
           encrypted: true,
           onDestroy: 'retain',
         },
@@ -176,22 +196,23 @@ describe('AWS single-node provider specifications', () => {
     });
     expect(spec.providerSpecId).toBe(
       createCanonicalJsonSha256Id({
-        domain: 'wharfie:aws-single-node-provider-spec:v1',
-        prefix: 'wap1',
+        domain: 'wharfie:aws-single-node-provider-spec:v2',
+        prefix: 'wap2',
         value: payload,
       }),
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(1);
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(2);
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_KIND).toBe(
       'awsSingleNodeProviderSpec',
     );
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN).toBe(
-      'wharfie:aws-single-node-provider-spec:v1',
+      'wharfie:aws-single-node-provider-spec:v2',
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap1');
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap2');
     expect(AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION).toBe(3);
     expect(Object.isFrozen(spec)).toBe(true);
     expect(Object.isFrozen(spec.machineImage.sourceParameter)).toBe(true);
+    expect(Object.isFrozen(spec.placement)).toBe(true);
     expect(Object.isFrozen(spec.capabilities.networking.ingressCidrs)).toBe(
       true,
     );
@@ -245,6 +266,11 @@ describe('AWS single-node provider specifications', () => {
           name: AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS.x86_64,
         },
       },
+      placement: { availabilityZoneId: 'use1-az2' },
+      storage: {
+        ebsKmsKeyArn:
+          'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
+      },
       providerScope: fixture.providerScope,
       profile: fixture.profile,
     };
@@ -273,6 +299,19 @@ describe('AWS single-node provider specifications', () => {
       },
     ],
     [
+      'availability zone',
+      (/** @type {any} */ value) => {
+        value.placement.availabilityZoneId = 'use1-az4';
+      },
+    ],
+    [
+      'EBS encryption key',
+      (/** @type {any} */ value) => {
+        value.storage.ebsKmsKeyArn =
+          'arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+      },
+    ],
+    [
       'bootstrap contract',
       (/** @type {any} */ value) => {
         value.bootstrapDigest = digest('changed bootstrap');
@@ -288,6 +327,8 @@ describe('AWS single-node provider specifications', () => {
       'provider account scope',
       (/** @type {any} */ value) => {
         value.providerScope = makeScope('210987654321');
+        value.storage.ebsKmsKeyArn =
+          'arn:aws:kms:us-east-1:210987654321:key/11111111-2222-3333-4444-555555555555';
       },
     ],
   ])('changes identity with the %s', (_name, mutate) => {
@@ -338,6 +379,20 @@ describe('AWS single-node provider specifications', () => {
       /architecture does not match the profile target/i,
     ],
     [
+      'noncanonical Availability Zone ID',
+      (/** @type {any} */ value) => {
+        value.placement.availabilityZoneId = 'us-east-1a';
+      },
+      /canonical AWS Availability Zone ID/i,
+    ],
+    [
+      'noncanonical EBS KMS key ARN',
+      (/** @type {any} */ value) => {
+        value.storage.ebsKmsKeyArn = 'alias/aws/ebs';
+      },
+      /canonical AWS KMS key ARN/i,
+    ],
+    [
       'non-HVM image',
       (/** @type {any} */ value) => {
         value.machineImage.virtualizationType = 'paravirtual';
@@ -360,6 +415,24 @@ describe('AWS single-node provider specifications', () => {
     volumeDrift.capabilities.applicationState.sizeGiB = 16;
     expect(() => validateAwsSingleNodeProviderSpec(volumeDrift)).toThrow(
       /fixed provider contract/i,
+    );
+
+    const volumePerformanceDrift = clone(original);
+    volumePerformanceDrift.capabilities.controlState.iops = 6000;
+    expect(() =>
+      validateAwsSingleNodeProviderSpec(volumePerformanceDrift),
+    ).toThrow(/fixed provider contract/i);
+
+    const volumeAttachmentDrift = clone(original);
+    volumeAttachmentDrift.capabilities.applicationState.deviceName = '/dev/sdh';
+    expect(() =>
+      validateAwsSingleNodeProviderSpec(volumeAttachmentDrift),
+    ).toThrow(/fixed provider contract/i);
+
+    const placementDrift = clone(original);
+    placementDrift.placement.availabilityZoneId = 'use1-az3';
+    expect(() => validateAwsSingleNodeProviderSpec(placementDrift)).toThrow(
+      /providerSpecId does not match/i,
     );
 
     const publicationDrift = clone(original);
@@ -422,6 +495,26 @@ describe('AWS single-node provider specifications', () => {
         providerScope: fixture.providerScope,
       }),
     ).toThrow(/provider scope does not match.*profile.*region/i);
+
+    for (const ebsKmsKeyArn of [
+      'arn:aws:kms:us-west-2:123456789012:key/11111111-2222-3333-4444-555555555555',
+      'arn:aws:kms:us-east-1:210987654321:key/11111111-2222-3333-4444-555555555555',
+    ]) {
+      const wrongKeyScope = /** @type {any} */ (clone(spec));
+      wrongKeyScope.storage.ebsKmsKeyArn = ebsKmsKeyArn;
+      const { providerSpecId: _oldId, ...wrongKeyPayload } = wrongKeyScope;
+      wrongKeyScope.providerSpecId = createCanonicalJsonSha256Id({
+        domain: AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN,
+        prefix: AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX,
+        value: wrongKeyPayload,
+      });
+      expect(() =>
+        validateAwsSingleNodeProviderSpecContext(wrongKeyScope, {
+          profile: fixture.profile,
+          providerScope: fixture.providerScope,
+        }),
+      ).toThrow(/KmsKeyArn does not match the exact provider scope/i);
+    }
   });
 
   it('rejects unsupported or secret-like input without echoing its value', () => {
