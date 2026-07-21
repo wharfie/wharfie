@@ -5,9 +5,11 @@ portable capability model into one fixed 15-role AWS resource graph. Provider
 specification V3 pins that graph; Plan/Action V3, Inspection V4, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
-destroy policy. The retained EBS volume effect is response-loss recoverable;
-the remaining fixed drivers, provider composition, commands, and clean-account
-proof are next ·
+destroy policy. The retained EBS volume and first direct-EC2 VPC effects now
+have strict controller-compatible drivers. VPC recovery is logically
+convergent when discovery is unique and visibly blocks duplicates because
+`CreateVpc` has no durable provider token. The remaining fixed drivers,
+provider composition, commands, and clean-account proof are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -559,6 +561,15 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       rooted in its six exact graph dependencies. This is strict deterministic
       contract/controller proof, not implementation of the remaining AWS
       resource drivers.
+- [x] Implement the fixed `network-vpc` role through a narrow direct-EC2
+      authority and controller-compatible resource driver. SDK transport
+      attempts are capped at one because `CreateVpc` has no `ClientToken`;
+      complete atomic ownership tags, paginated logical discovery, strict VPC
+      and DNS readback, and an in-process attempt fence recover unique evidence
+      without hidden retries. Duplicate logical matches block rather than being
+      silently adopted or deleted by a nondestructive create plan. Exact
+      ownership is re-proved before purge. This is deterministic-mock proof,
+      not provider exactly-once execution or a complete network driver.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -650,13 +661,13 @@ receipts remain bound to `0d927463`.
 
 The regional provider specification now pins its exact image, stable placement,
 instance-type availability, default EBS KMS key ARN, and volume/attachment
-contract. A first retained-volume resource can create and inspect one exact EBS
-volume through a controller-shaped interface under deterministic mocks. The
-portable capability model now expands into a fixed 15-role graph, with one
+contract. Controller-shaped retained-volume and direct VPC resources can
+create, inspect, and reconcile their exact effects under deterministic mocks.
+The portable capability model expands into a fixed 15-role graph, with one
 recoverable action per modeled resource or relationship, exact binding
 lineage, canonical apply/reverse-destroy ordering, and retained-volume versus
-purged-attachment lifecycle. Only the retained-volume resource driver exists;
-it is not yet composed into a complete provider and does not attach, format,
+purged-attachment lifecycle. Those two resource drivers are not yet composed
+into a complete provider, and the runtime path still does not attach, format,
 mount, or fulfill a service capability.
 
 1. Implement the remaining independently recoverable AWS network, identity,
@@ -674,9 +685,11 @@ mount, or fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [multi-effect resource graph
-checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md).
-Its parent is the [retained EBS volume resource
+The current restart point is the [direct EC2 VPC resource
+checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md).
+Its parent is the [multi-effect resource graph
+checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md),
+whose parent is the [retained EBS volume resource
 checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md),
 whose parent is the [exact AWS provider-spec resolution
 checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md),

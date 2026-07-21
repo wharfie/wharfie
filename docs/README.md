@@ -101,11 +101,13 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [multi-effect resource graph
+The current restart handoff is the [direct EC2 VPC resource
+checkpoint](../llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md).
+It adds the narrow single-attempt network authority and first fixed VPC driver
+to ProviderSpec V3's exact 15-role graph, with atomic ownership tags, strict
+readback, unique response-loss recovery, and an explicit duplicate-evidence
+block where EC2 exposes no durable create token. The retained-volume and VPC
+drivers are implemented; remaining network, identity, node, attachment, and
+complete AWS driver composition remain unfinished. Its parent is the
+[multi-effect resource graph
 checkpoint](../llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md).
-It records ProviderSpec V3's exact fixed 15-role graph plus Plan/Action V3,
-Inspection V4, Binding V2, and Head/Operation V2 dependency, ownership, and
-role-level lifecycle contracts. Only the retained-volume resource driver is
-implemented; network, identity, node, attachment, and complete AWS driver
-composition remain unfinished. Its parent is the [retained EBS volume resource
-checkpoint](../llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md).

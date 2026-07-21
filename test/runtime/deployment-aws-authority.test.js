@@ -46,6 +46,12 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
   'createVolume',
   'describeVolumes',
 ]);
+const NETWORK_RESOURCE_METHODS = Object.freeze([
+  'createVpc',
+  'describeVpcs',
+  'describeVpcAttribute',
+  'deleteVpc',
+]);
 
 /**
  * Install isolated AWS SDK doubles before importing the authority module.
@@ -130,6 +136,14 @@ async function loadHarness({
         return { VolumeId: 'vol-00000000000000001', input };
       }
       if (method === 'describeVolumes') return { Volumes: [], input };
+      if (method === 'createVpc') {
+        return { Vpc: { VpcId: 'vpc-00000000000000001' }, input };
+      }
+      if (method === 'describeVpcs') return { Vpcs: [], input };
+      if (method === 'describeVpcAttribute') {
+        return { EnableDnsSupport: { Value: true }, input };
+      }
+      if (method === 'deleteVpc') return { input };
       throw new Error(`Unexpected EC2 method: ${method}`);
     },
   );
@@ -242,6 +256,14 @@ async function loadHarness({
     },
   }));
   jest.unstable_mockModule('@aws-sdk/client-ec2', () => ({
+    CreateVpcCommand: class CreateVpcCommand {
+      input;
+      operation = 'createVpc';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateVolumeCommand: class CreateVolumeCommand {
       input;
       operation = 'createVolume';
@@ -277,6 +299,30 @@ async function loadHarness({
     DescribeVolumesCommand: class DescribeVolumesCommand {
       input;
       operation = 'describeVolumes';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DeleteVpcCommand: class DeleteVpcCommand {
+      input;
+      operation = 'deleteVpc';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DescribeVpcAttributeCommand: class DescribeVpcAttributeCommand {
+      input;
+      operation = 'describeVpcAttribute';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DescribeVpcsCommand: class DescribeVpcsCommand {
+      input;
+      operation = 'describeVpcs';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -375,6 +421,7 @@ describe('AWS deployment invocation authority', () => {
       const s3ControlClient = authority.createS3ControlClient();
       const providerSpecReadClient = authority.createProviderSpecReadClient();
       const volumeResourceClient = authority.createVolumeResourceClient();
+      const networkResourceClient = authority.createNetworkResourceClient();
       expect(harness.dynamoConfigs[0].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[0].credentials).toBe(credentials);
       expect(harness.dynamoConfigs[1].region).toBe('us-east-1');
@@ -387,14 +434,28 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.ec2Configs[0].credentials).toBe(credentials);
       expect(harness.ec2Configs[1].region).toBe('us-east-1');
       expect(harness.ec2Configs[1].credentials).toBe(credentials);
+      expect(harness.ec2Configs[2].region).toBe('us-east-1');
+      expect(harness.ec2Configs[2].credentials).toBe(credentials);
+      expect(harness.ec2Configs[2]).not.toBe(harness.ec2Configs[1]);
+      expect(harness.ec2Configs[2].retryStrategy).not.toBe(
+        harness.ec2Configs[1].retryStrategy,
+      );
+      await expect(
+        harness.ec2Configs[1].retryStrategy.maxAttempts(),
+      ).resolves.toBe(20);
+      await expect(
+        harness.ec2Configs[2].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
       expect(Object.isFrozen(controlClient)).toBe(true);
       expect(Object.isFrozen(s3ControlClient)).toBe(true);
       expect(Object.isFrozen(providerSpecReadClient)).toBe(true);
       expect(Object.isFrozen(volumeResourceClient)).toBe(true);
+      expect(Object.isFrozen(networkResourceClient)).toBe(true);
       expect(controlClient).not.toHaveProperty('config');
       expect(s3ControlClient).not.toHaveProperty('config');
       expect(providerSpecReadClient).not.toHaveProperty('config');
       expect(volumeResourceClient).not.toHaveProperty('config');
+      expect(networkResourceClient).not.toHaveProperty('config');
       await controlClient.describeTable({ TableName: 'control-table' });
       expect(harness.dynamoSend).toHaveBeenCalledWith('describeTable', {
         TableName: 'control-table',
@@ -423,6 +484,10 @@ describe('AWS deployment invocation authority', () => {
         ClientToken: 'volume-token',
         Size: 8,
       });
+      await networkResourceClient.createVpc({ CidrBlock: '10.42.0.0/16' });
+      expect(harness.ec2Send).toHaveBeenCalledWith('createVpc', {
+        CidrBlock: '10.42.0.0/16',
+      });
       await expect(authority.resolveScope()).resolves.toEqual(
         authority.providerScope,
       );
@@ -433,6 +498,7 @@ describe('AWS deployment invocation authority', () => {
       await s3ControlClient.close();
       await providerSpecReadClient.close();
       await volumeResourceClient.close();
+      await networkResourceClient.close();
       await authority.close();
     } finally {
       if (previousRegion === undefined) delete process.env.AWS_REGION;
@@ -828,6 +894,192 @@ describe('AWS deployment invocation authority', () => {
     await authority.close();
   });
 
+  it('exposes only the exact narrow network resource surface and dispatches every VPC operation', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createNetworkResourceClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...NETWORK_RESOURCE_METHODS, 'close'].sort(),
+      );
+      expect(Object.isFrozen(client)).toBe(true);
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      const createInput = { CidrBlock: '10.42.0.0/16' };
+      await expect(client.createVpc(createInput)).resolves.toMatchObject({
+        Vpc: { VpcId: 'vpc-00000000000000001' },
+        input: createInput,
+      });
+      const describeInput = { VpcIds: ['vpc-00000000000000001'] };
+      await expect(client.describeVpcs(describeInput)).resolves.toMatchObject({
+        Vpcs: [],
+        input: describeInput,
+      });
+      const attributeInput = {
+        VpcId: 'vpc-00000000000000001',
+        Attribute: 'enableDnsSupport',
+      };
+      await expect(
+        client.describeVpcAttribute(attributeInput),
+      ).resolves.toMatchObject({
+        EnableDnsSupport: { Value: true },
+        input: attributeInput,
+      });
+      const deleteInput = { VpcId: 'vpc-00000000000000001' };
+      await expect(client.deleteVpc(deleteInput)).resolves.toEqual({
+        input: deleteInput,
+      });
+      expect(harness.ec2Send.mock.calls).toEqual([
+        ['createVpc', createInput],
+        ['describeVpcs', describeInput],
+        ['describeVpcAttribute', attributeInput],
+        ['deleteVpc', deleteInput],
+      ]);
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it('replaces network resource client construction failures', async () => {
+    const harness = await loadHarness({
+      ec2ConstructionError: new Error('network-construction-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+
+    expect(() => authority.createNetworkResourceClient()).toThrow(
+      'AWS deployment network resource client creation failed.',
+    );
+    expect(harness.ec2Configs).toHaveLength(0);
+    expect(harness.ec2Destroy).not.toHaveBeenCalled();
+    await authority.close();
+  });
+
+  it.each([
+    ['InvalidVpcID.NotFound', 'describeVpcs', 404],
+    ['DependencyViolation', 'deleteVpc', 400],
+    ['IncorrectState', 'deleteVpc', 400],
+  ])(
+    'preserves only the %s network resource classification',
+    async (name, method, status) => {
+      const providerError = Object.assign(new Error('network-secret'), {
+        name,
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = /** @type {Record<string, any>} */ (
+        authority.createNetworkResourceClient()
+      );
+
+      const observed = await client[method]({ operationMarker: method }).catch(
+        (/** @type {unknown} */ error) => error,
+      );
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name,
+        code: 'AWS_DEPLOYMENT_NETWORK_RESOURCE_OPERATION',
+        message: 'AWS deployment network resource operation failed.',
+        $metadata: { httpStatusCode: status },
+      });
+      expect(JSON.stringify(observed)).not.toMatch(
+        /network-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it.each([
+    [403, true],
+    [399, false],
+    [600, false],
+    ['403', false],
+  ])(
+    'keeps unknown network failures generic and safely handles status %p',
+    async (status, preservesStatus) => {
+      const providerError = Object.assign(new Error('network-access-secret'), {
+        name: 'AccessDeniedException',
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createNetworkResourceClient();
+
+      const observed = await client
+        .describeVpcAttribute({
+          VpcId: 'vpc-00000000000000001',
+          Attribute: 'enableDnsSupport',
+        })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name: 'AwsDeploymentNetworkResourceError',
+        code: 'AWS_DEPLOYMENT_NETWORK_RESOURCE_OPERATION',
+        message: 'AWS deployment network resource operation failed.',
+      });
+      if (preservesStatus) {
+        expect(observed).toHaveProperty('$metadata.httpStatusCode', status);
+      } else {
+        expect(observed).not.toHaveProperty('$metadata');
+      }
+      expect(JSON.stringify(observed)).not.toMatch(
+        /AccessDenied|network-access-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it('closes the network resource SDK client idempotently and refuses every reuse', async () => {
+    const harness = await loadHarness({
+      ec2CloseError: new Error('network-close-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createNetworkResourceClient()
+    );
+
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment network resource client close failed.',
+    );
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    for (const method of NETWORK_RESOURCE_METHODS) {
+      await expect(client[method]({})).rejects.toThrow(
+        'AWS deployment network resource client is closed.',
+      );
+    }
+    await authority.close();
+  });
+
   it('normalizes S3 failures while preserving only allowlisted operation identity', async () => {
     const constructionHarness = await loadHarness({
       s3ConstructionError: new Error('construction-secret'),
@@ -996,6 +1248,9 @@ describe('AWS deployment invocation authority', () => {
     const volumeResourceClient = /** @type {Record<string, any>} */ (
       authority.createVolumeResourceClient()
     );
+    const networkResourceClient = /** @type {Record<string, any>} */ (
+      authority.createNetworkResourceClient()
+    );
 
     await authority.close();
     await authority.close();
@@ -1023,6 +1278,9 @@ describe('AWS deployment invocation authority', () => {
     expect(() => authority.createVolumeResourceClient()).toThrow(
       'AWS deployment authority is closed.',
     );
+    expect(() => authority.createNetworkResourceClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
     await expect(
       s3ControlClient.headBucket({ Bucket: 'still-caller-owned' }),
     ).resolves.toEqual({});
@@ -1048,6 +1306,16 @@ describe('AWS deployment invocation authority', () => {
         VolumeIds: ['vol-00000000000000001'],
       }),
     ).resolves.toMatchObject({ Volumes: [] });
+    await expect(
+      networkResourceClient.createVpc({ CidrBlock: '10.42.0.0/16' }),
+    ).resolves.toMatchObject({
+      Vpc: { VpcId: 'vpc-00000000000000001' },
+    });
+    await expect(
+      networkResourceClient.describeVpcs({
+        VpcIds: ['vpc-00000000000000001'],
+      }),
+    ).resolves.toMatchObject({ Vpcs: [] });
 
     await db.close();
     await controlClient.close();
@@ -1079,10 +1347,18 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment volume resource client is closed.',
       );
     }
+    const firstNetworkClose = networkResourceClient.close();
+    expect(networkResourceClient.close()).toBe(firstNetworkClose);
+    await firstNetworkClose;
+    for (const method of NETWORK_RESOURCE_METHODS) {
+      await expect(networkResourceClient[method]({})).rejects.toThrow(
+        'AWS deployment network resource client is closed.',
+      );
+    }
     expect(harness.documentDestroy).toHaveBeenCalledTimes(1);
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
     expect(harness.s3Destroy).toHaveBeenCalledTimes(1);
     expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
-    expect(harness.ec2Destroy).toHaveBeenCalledTimes(2);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(3);
   });
 });

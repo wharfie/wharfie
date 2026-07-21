@@ -2,10 +2,14 @@
 
 import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import {
+  CreateVpcCommand,
   CreateVolumeCommand,
+  DeleteVpcCommand,
   DescribeAvailabilityZonesCommand,
   DescribeImagesCommand,
   DescribeInstanceTypeOfferingsCommand,
+  DescribeVpcAttributeCommand,
+  DescribeVpcsCommand,
   DescribeVolumesCommand,
   EC2Client,
   GetEbsDefaultKmsKeyIdCommand,
@@ -71,6 +75,14 @@ const VOLUME_RESOURCE_CLOSED_ERROR =
   'AWS deployment volume resource client is closed.';
 const VOLUME_RESOURCE_CLOSE_ERROR =
   'AWS deployment volume resource client close failed.';
+const NETWORK_RESOURCE_CREATION_ERROR =
+  'AWS deployment network resource client creation failed.';
+const NETWORK_RESOURCE_OPERATION_ERROR =
+  'AWS deployment network resource operation failed.';
+const NETWORK_RESOURCE_CLOSED_ERROR =
+  'AWS deployment network resource client is closed.';
+const NETWORK_RESOURCE_CLOSE_ERROR =
+  'AWS deployment network resource client close failed.';
 const PROVIDER_SPEC_READ_ERROR_NAMES = new Set([
   'ParameterNotFound',
   'ParameterVersionNotFound',
@@ -78,6 +90,11 @@ const PROVIDER_SPEC_READ_ERROR_NAMES = new Set([
 const VOLUME_RESOURCE_ERROR_NAMES = new Set([
   'IdempotentParameterMismatch',
   'InvalidVolume.NotFound',
+]);
+const NETWORK_RESOURCE_ERROR_NAMES = new Set([
+  'DependencyViolation',
+  'IncorrectState',
+  'InvalidVpcID.NotFound',
 ]);
 const S3_CONTROL_ERROR_NAMES = new Set([
   'ConditionalRequestConflict',
@@ -104,6 +121,15 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-dynamodb').DescribeTimeToLiveCommandInput) => Promise<any>} describeTimeToLive - Read TTL state.
  * @property {(input: import('@aws-sdk/client-dynamodb').ListTagsOfResourceCommandInput) => Promise<any>} listTagsOfResource - Read table tags.
  * @property {(input: import('@aws-sdk/client-dynamodb').UpdateContinuousBackupsCommandInput) => Promise<any>} updateContinuousBackups - Strengthen backup state.
+ * @property {() => Promise<void>} close - Close the caller-owned SDK client.
+ */
+
+/**
+ * @typedef NetworkResourceClient
+ * @property {(input: import('@aws-sdk/client-ec2').CreateVpcCommandInput) => Promise<any>} createVpc - Create one exact VPC.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcsCommandInput) => Promise<any>} describeVpcs - Read exact VPC state.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput) => Promise<any>} describeVpcAttribute - Read one exact VPC attribute.
+ * @property {(input: import('@aws-sdk/client-ec2').DeleteVpcCommandInput) => Promise<any>} deleteVpc - Delete one exact VPC.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
 
@@ -248,6 +274,33 @@ function sanitizeVolumeResourceError(value) {
   return error;
 }
 
+/**
+ * Preserve only the VPC classifications needed for authoritative absence and
+ * dependency-fenced deletion. Raw SDK messages, request IDs, access details,
+ * causes, and credential-bearing configuration never cross this boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeNetworkResourceError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(NETWORK_RESOURCE_OPERATION_ERROR)
+    );
+  error.name = NETWORK_RESOURCE_ERROR_NAMES.has(candidate.name)
+    ? candidate.name
+    : 'AwsDeploymentNetworkResourceError';
+  error.code = 'AWS_DEPLOYMENT_NETWORK_RESOURCE_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
+}
+
 /** @param {Record<string, any>} value @param {Set<string>} keys @returns {boolean} */
 function hasExactKeys(value, keys) {
   const actual = Object.keys(value);
@@ -356,6 +409,7 @@ function scopeFromCallerIdentity(value, region) {
  *   createS3ControlClient: () => Readonly<S3ControlClient>,
  *   createProviderSpecReadClient: () => Readonly<ProviderSpecReadClient>,
  *   createVolumeResourceClient: () => Readonly<VolumeResourceClient>,
+ *   createNetworkResourceClient: () => Readonly<NetworkResourceClient>,
  *   close: () => Promise<void>,
  * }>>} - Credential-bound AWS authority.
  */
@@ -757,6 +811,68 @@ export async function createAwsDeploymentAuthority(options) {
     });
   }
 
+  /** @returns {Readonly<NetworkResourceClient>} - Caller-owned narrow VPC resource client. */
+  function createNetworkResourceClient() {
+    assertOpen();
+    /** @type {EC2Client} */
+    let client;
+    try {
+      client = new EC2Client({
+        // CreateVpc has no provider idempotency token. Keep SDK transport
+        // retries from turning one authorized call into multiple VPCs; the
+        // resource driver owns explicit recovery through exact readback.
+        ...BaseAWS.config({ maxAttempts: 1 }),
+        region,
+        credentials,
+      });
+    } catch {
+      throw new Error(NETWORK_RESOURCE_CREATION_ERROR);
+    }
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) throw new Error(NETWORK_RESOURCE_CLOSED_ERROR);
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeNetworkResourceError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        try {
+          client.destroy();
+        } catch {
+          throw new Error(NETWORK_RESOURCE_CLOSE_ERROR);
+        }
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      createVpc: (
+        /** @type {import('@aws-sdk/client-ec2').CreateVpcCommandInput} */ input,
+      ) => call(() => client.send(new CreateVpcCommand(input))),
+      describeVpcs: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeVpcsCommandInput} */ input,
+      ) => call(() => client.send(new DescribeVpcsCommand(input))),
+      describeVpcAttribute: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput} */ input,
+      ) => call(() => client.send(new DescribeVpcAttributeCommand(input))),
+      deleteVpc: (
+        /** @type {import('@aws-sdk/client-ec2').DeleteVpcCommandInput} */ input,
+      ) => call(() => client.send(new DeleteVpcCommand(input))),
+      close: closeClient,
+    });
+  }
+
   /** @returns {Promise<void>} */
   async function close() {
     if (closed) return;
@@ -776,6 +892,7 @@ export async function createAwsDeploymentAuthority(options) {
     createS3ControlClient,
     createProviderSpecReadClient,
     createVolumeResourceClient,
+    createNetworkResourceClient,
     close,
   });
 }

@@ -249,19 +249,82 @@ does not prove logical absence.
 
 A retained action is an explicit no-op: it validates the exact resource
 context and preserves the binding without issuing `DeleteVolume`; that method
-is absent from the authority. If a resident-node binding already exists, no-op
-settlement also requires one exact attached instance/device observation with
-`DeleteOnTermination=false`. During destroy, after that node binding has been
-removed, an otherwise exact attachment to the plan's retired node is treated
-as a bounded detachment transition until the volume is available and
-unattached. The module verifies that evidence but does not create it. This is
-only volume provisioning. A separate future action must call
+is absent from the authority. Volume settlement deliberately reads only the
+volume's intrinsic provider state. The independently modeled attachment roles
+own instance, device, attachment-state, and delete-on-termination evidence, so
+an earlier retained-volume action cannot depend on a later graph effect. This
+is only volume provisioning. A separate future action must call
 [`AttachVolume`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AttachVolume.html)
 for the exact node, volume, zone, and device, prove attachment and
 `DeleteOnTermination=false`, and arrange formatting and mounting. AWS documents
 that
 [delete-on-termination controls whether an attached EBS volume survives
 instance termination](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preserving-volumes-on-termination.html).
+
+### Direct VPC creation is a recoverable logical effect
+
+VPC mutation uses a separate caller-owned network authority with only EC2
+`CreateVpc`, `DescribeVpcs`, `DescribeVpcAttribute`, `DeleteVpc`, and `close`.
+The SDK client is configured for one transport attempt because
+[`CreateVpc`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateVpc.html)
+has no provider idempotency token. Driver-controlled retries first inspect the
+exact logical resource instead of allowing the SDK to hide a second create.
+Errors preserve only `InvalidVpcID.NotFound`, `DependencyViolation`,
+`IncorrectState`, and a bounded HTTP status; raw provider details never cross
+the authority boundary.
+
+`createAwsSingleNodeVpcResource` accepts only the fixed managed
+`network-vpc` role. Its state digest binds the provider specification's exact
+VPC CIDR plus default instance tenancy, nondefault-VPC identity, no IPv6, DNS
+support enabled, DNS hostnames disabled, an effective VPC Block Public Access
+internet-gateway mode of `off`, and purge lifecycle. Subnet, routing,
+public-address, and egress behavior belong to their own later graph roles and
+are not folded into the VPC receipt. Blocking modes are contradictory because
+the fixed graph's later internet-gateway route is intended to provide public
+IPv4 egress; AWS documents those modes in its
+[VPC Block Public Access overview](https://docs.aws.amazon.com/vpc/latest/userguide/security-vpc-bpa.html).
+
+Create performs a complete tagged discovery before mutation, then sends one
+`CreateVpc` request with the CIDR, default tenancy, IPv6 allocation disabled,
+and the complete ownership/contract tag envelope in the request's `vpc`
+`TagSpecification`. It never creates an untagged VPC or repairs tags after the
+fact. A valid create response is only an ephemeral locator. Settlement accepts
+one unique logical VPC after strict `DescribeVpcs` and
+`DescribeVpcAttribute` readback proves its account owner, ID, primary CIDR and
+sole associated IPv4 range, empty IPv6 associations, tenancy, nondefault and
+available state, DNS attributes, a syntactically valid DHCP-options identifier,
+an effective nonblocking public-access mode, and reserved tags. This slice does
+not inspect the contents of the associated DHCP options set.
+
+EC2 resource discovery is eventually consistent. After a lost response, a
+unique atomically tagged VPC can therefore settle without another create, and
+an in-process attempted-intent fence prevents an immediate duplicate request.
+Across process loss, however, an invisible prior create can still race a
+replay because AWS exposes no durable VPC create token or tag-uniqueness
+constraint. Zero visible results remain not converged; two logical matches
+block with no hidden deletion or arbitrary adoption. Cleaning duplicates must
+be a future explicit destructive repair action so a nominally nondestructive
+create plan cannot remove resources behind the operator's preview. This is
+convergent logical reconciliation with visible ambiguity, not a claim that the
+provider request executes exactly once.
+
+No-op settlement requires the one discovered logical VPC to be the exact
+durably bound provider identity and preserves its original creation receipt.
+Delete re-proves the exact bound resource and unique logical match immediately
+before sending `DeleteVpc`; dependency or provider-state races remain
+recoverable. Once binding identity, account ownership, reserved ownership tags,
+the nondefault-VPC invariant, and a sane provider lifecycle state are
+re-proved, mutable VPC configuration drift does not revoke an explicitly
+destructive plan's authority to purge that bound identity. Only exact
+not-found evidence can settle the purge with a null binding. Unknown,
+malformed, inaccessible, contradictory, or duplicate identity/ownership
+evidence never becomes absence or deletion authority.
+
+AWS creates a default route table, default security group, default network
+ACL, and DHCP-options association as intrinsic parts of a VPC. They are not
+separate Wharfie bindings. The dedicated route-table and security-group roles
+in the fixed graph are later application-substrate effects and do not imply
+ownership of those AWS defaults.
 
 The portable capability model expands through one immutable, content-addressed
 `AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
@@ -624,10 +687,10 @@ separate exact create/describe-volume client. The first retained EBS resource
 uses an explicit stable `ClientToken`, atomic create tags, strict
 `DescribeVolumes` readback or bounded tag discovery, controller-driven
 response-loss replay, fixed typed errors/statuses, and an explicit retained
-no-op. Deterministic mocks prove this isolated resource only. It can validate
-later attachment evidence but cannot create it, and no complete provider
-router, inspection, `createPlan`, controller composition, command surface, or
-live AWS path exists yet.
+no-op. Deterministic mocks prove this isolated resource only. Attachment
+evidence belongs exclusively to later attachment roles, and no complete
+provider router, inspection, `createPlan`, controller composition, command
+surface, or live AWS path exists yet.
 
 The ninth slice introduces the fixed 15-role resource graph and advances the
 strict namespaces to provider-spec V3/`wap3`, plan/action V3, inspection V4,
@@ -640,6 +703,16 @@ resource adopts the new action and tag envelope. Deterministic contract and
 controller tests prove this expansion; none of the newly named network,
 identity, node, or attachment roles has a production AWS resource
 implementation yet.
+
+The tenth slice implements the first network role through the narrow,
+single-attempt EC2 network authority and direct VPC resource driver. Atomic
+tags, strict paginated discovery and readback, response-candidate recovery,
+in-process attempt fencing, exact no-op identity, and ownership-safe delete
+make the logical effect recoverable where provider evidence is unique. Because
+`CreateVpc` has no durable idempotency token, duplicate logical evidence blocks
+and requires a future explicit repair action; the slice does not claim
+provider exactly-once execution. The remaining network roles and complete
+provider composition remain unfinished.
 
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or
