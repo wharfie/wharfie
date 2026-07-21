@@ -665,7 +665,9 @@ describe('AWS single-node VPC create and response-loss recovery', () => {
     expect(settlement.status).toBe('converged');
     expect(settlement.binding.providerResourceId).toBe(VPC_IDS.primary);
     expect(secondClient.createVpc).not.toHaveBeenCalled();
+    expect(secondClient.describeVpcs).toHaveBeenCalledTimes(1);
     const discovery = secondClient.describeVpcs.mock.calls[0][0];
+    expect(discovery).not.toHaveProperty('VpcIds');
     expect(discovery).toMatchObject({
       MaxResults: AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS,
       Filters: expect.arrayContaining([
@@ -1171,6 +1173,35 @@ describe('AWS single-node VPC eventual consistency and pagination', () => {
     await expect(
       resource.verifySettlement(fixture.context),
     ).rejects.toBeInstanceOf(AwsSingleNodeVpcResourceUnknownError);
+  });
+
+  it('rejects malformed discovery tokens and exact-ID pagination', async () => {
+    const fixture = makeFixture();
+    for (const NextToken of ['', 1, {}]) {
+      const client = makeClient(fixture, {
+        describeVpcs: jest.fn(async () => ({ Vpcs: [], NextToken })),
+      });
+      const { resource } = makePorts(fixture, { client });
+
+      await expect(
+        resource.verifySettlement(fixture.context),
+      ).rejects.toBeInstanceOf(AwsSingleNodeVpcResourceUnknownError);
+    }
+
+    const reconcileFixture = makeFixture({ operation: 'reconcile' });
+    const vpc = makeVpc(reconcileFixture);
+    const client = makeClient(reconcileFixture, {
+      describeVpcs: jest.fn(async (/** @type {AnyRecord} */ input) =>
+        input.VpcIds
+          ? { Vpcs: [vpc], NextToken: 'impossible' }
+          : { Vpcs: [vpc] },
+      ),
+    });
+    const { resource } = makePorts(reconcileFixture, { client });
+
+    await expect(
+      resource.verifySettlement(reconcileFixture.context),
+    ).resolves.toEqual({ status: 'blocked' });
   });
 
   it('maps a retry waiter failure to fixed unknown state', async () => {

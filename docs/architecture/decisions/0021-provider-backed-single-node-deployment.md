@@ -410,6 +410,29 @@ settlement evidence; only the complete independent reads can settle the
 action. This is deterministic mock-backed protocol proof, not a live-account
 lifecycle claim.
 
+### Tagged direct-resource recovery shares identity mechanics, not lifecycle
+
+The VPC and internet-gateway drivers use one internal tagged direct-EC2
+recovery kernel. It owns the common schema-2 ownership envelope, sorted atomic
+create tags, eight stable discovery filters, bounded singleton pagination,
+broad/exact identity correlation, and the in-process create fence keyed by
+action ID plus ownership nonce. A successful create response contributes only
+an ephemeral candidate locator. Clearing that candidate after settlement never
+clears the attempted-effect fence, so a malformed or failed non-idempotent
+create cannot be replayed by the same driver instance.
+
+The kernel deliberately does not own AWS response-envelope decoding, typed
+not-found interpretation, resource state validation, delete eligibility,
+mutation requests, bindings, or retry outcomes. Those are role contracts. The
+VPC therefore preserves its fresh-process discovery-only recovery path and
+separate DNS-attribute reads, while the gateway explicitly promotes a sole
+discovery ID into an independent exact-ID read. Once a candidate or durable
+binding exists, both roles require broad and exact identity agreement and
+validate every present record before treating one-sided visibility as
+transitional. Sharing these mechanics prevents later tagged resources from
+copying the recovery protocol without turning the kernel into general-purpose
+cloud infrastructure machinery.
+
 The portable capability model expands through one immutable, content-addressed
 `AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
 roles are the artifact object; two retained volumes; VPC; internet gateway and
@@ -821,6 +844,17 @@ typed errors remain nonauthoritative. Reverse destroy detaches the
 relationship before gateway or VPC purge. The next implementation slice
 extracts and migrates only the narrow common tagged direct-EC2 recovery kernel
 before continuing with the subnet and remaining fixed graph.
+
+The thirteenth slice extracts that internal tagged direct-EC2 recovery kernel
+and migrates the VPC and internet-gateway drivers onto it. Common tag
+construction and validation, bounded discovery, broad/exact identity
+correlation, candidate storage, and action-plus-nonce mutation fencing now
+have one tested implementation. AWS envelopes and typed errors, VPC intrinsic
+and DNS evidence, gateway attachment fences, delete mutations, bindings, and
+settlement mappings stay in the role drivers. The migration explicitly keeps
+fresh VPC discovery broad-only and gateway discovery independently
+corroborated, so it removes duplicated protocol code without weakening or
+homogenizing their evidence contracts. The subnet is the next graph role.
 
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or

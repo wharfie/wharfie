@@ -7,12 +7,13 @@ and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
 destroy policy. The retained EBS volume, direct-EC2 VPC, standalone internet
 gateway, and derived VPC/gateway attachment effects now have strict
-controller-compatible drivers. Direct network creates remain visibly
-ambiguous when AWS exposes neither a durable token nor uniqueness; the derived
-attachment instead converges through exact endpoint lineage and independently
-corroborated relationship readback. A narrow shared tagged-effect kernel, the
-remaining fixed drivers, provider composition, commands, and clean-account
-proof are next ·
+controller-compatible drivers. The VPC and gateway now share one narrow
+tagged direct-EC2 recovery kernel while retaining their distinct intrinsic and
+destroy contracts. Direct network creates remain visibly ambiguous when AWS
+exposes neither a durable token nor uniqueness; the derived attachment instead
+converges through exact endpoint lineage and independently corroborated
+relationship readback. The subnet and remaining fixed drivers, provider
+composition, commands, and clean-account proof are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -696,16 +697,13 @@ purged-attachment lifecycle. Those four resource drivers are not yet composed
 into a complete provider, and the runtime path still does not attach, format,
 or mount the retained volumes or fulfill a service capability.
 
-1. Extract the narrow shared kernel for tagged direct-EC2 effect discovery,
-   exact corroboration, ownership validation, and attempted-effect fencing;
-   migrate the VPC and internet-gateway drivers without changing their
-   evidence semantics. Then implement the remaining independently recoverable
-   AWS network, identity, node, volume-attachment, and managed-artifact
-   resources; build the provider router, inspection, `createPlan`, and
-   complete controller composition; and wire resident-service activation and
-   host observation. Mount source and packaged `plan`, `apply`, `inspect`,
-   `reconcile`, and `destroy` commands, requiring apply and reconcile to
-   re-observe the currently running SEA.
+1. Implement the subnet, then the remaining independently recoverable AWS
+   network, identity, node, volume-attachment, and managed-artifact resources;
+   build the provider router, inspection, `createPlan`, and complete controller
+   composition; and wire resident-service activation and host observation.
+   Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
+   `destroy` commands, requiring apply and reconcile to re-observe the
+   currently running SEA.
 2. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
@@ -714,9 +712,11 @@ or mount the retained volumes or fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [derived internet-gateway attachment
-checkpoint](llm/checkpoints/2026-07-21-v30-derived-internet-gateway-attachment.md).
-Its parent is the [direct EC2 internet-gateway resource
+The current restart point is the [tagged direct-EC2 recovery kernel
+checkpoint](llm/checkpoints/2026-07-21-v31-tagged-direct-ec2-recovery-kernel.md).
+Its parent is the [derived internet-gateway attachment
+checkpoint](llm/checkpoints/2026-07-21-v30-derived-internet-gateway-attachment.md),
+whose parent is the [direct EC2 internet-gateway resource
 checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md),
 whose parent is the [direct EC2 VPC resource
 checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md), whose

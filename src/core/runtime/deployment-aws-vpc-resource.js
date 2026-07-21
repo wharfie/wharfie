@@ -14,6 +14,12 @@ import {
   createDeploymentResourceBinding,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
+import {
+  AwsTaggedEc2RecoveryConflictError as VpcEvidenceConflictError,
+  AwsTaggedEc2RecoveryTransientError as VpcEvidenceTransientError,
+  AwsTaggedEc2RecoveryUnknownError as ProviderResponseUnknownError,
+  createAwsTaggedEc2RecoveryKernel,
+} from './deployment-aws-tagged-ec2-recovery.js';
 
 export const AWS_SINGLE_NODE_VPC_DEFAULT_MAX_ATTEMPTS = 3;
 export const AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS = 10;
@@ -74,10 +80,6 @@ export class AwsSingleNodeVpcResourceUnknownError extends Error {
     this.code = 'AWS_SINGLE_NODE_VPC_RESOURCE_UNKNOWN';
   }
 }
-
-class ProviderResponseUnknownError extends Error {}
-class VpcEvidenceConflictError extends Error {}
-class VpcEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -179,34 +181,8 @@ export function getAwsSingleNodeVpcStateDigest(value) {
   });
 }
 
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, string>>} */
-function requiredTags(authority) {
-  return deepFreeze({
-    ...BASE_RESERVED_TAGS,
-    'wharfie:capability': authority.action.capability.kind,
-    'wharfie:role': authority.action.role.kind,
-    'wharfie:provider-scope-id': authority.plan.providerScope.providerScopeId,
-    'wharfie:deployment-instance-id': authority.plan.deploymentInstanceId,
-    'wharfie:incarnation-id': authority.plan.incarnationId,
-    'wharfie:resource-key': authority.action.resourceKey,
-    'wharfie:created-by-action-id':
-      authority.priorBinding?.createdByActionId ?? authority.action.actionId,
-    'wharfie:ownership-nonce': authority.ownershipNonce,
-    'wharfie:state-digest': authority.stateDigest.value,
-  });
-}
-
-/** @param {Readonly<Record<string, string>>} tags @returns {Readonly<Array<{Key: string, Value: string}>>} */
-function sortedTags(tags) {
-  return deepFreeze(
-    Object.entries(tags)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([Key, Value]) => ({ Key, Value })),
-  );
-}
-
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<import('@aws-sdk/client-ec2').CreateVpcCommandInput>} */
-function createVpcRequest(authority) {
+/** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {Readonly<import('@aws-sdk/client-ec2').CreateVpcCommandInput>} */
+function createVpcRequest(authority, recovery) {
   return deepFreeze({
     AmazonProvidedIpv6CidrBlock: false,
     CidrBlock: authority.providerSpec.capabilities.networking.vpcCidr,
@@ -214,28 +190,10 @@ function createVpcRequest(authority) {
     TagSpecifications: [
       {
         ResourceType: 'vpc',
-        Tags: sortedTags(requiredTags(authority)),
+        Tags: recovery.sortedTags(recovery.requiredTags(authority)),
       },
     ],
   });
-}
-
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Array<{Name: string, Values: string[]}>>} */
-function discoveryFilters(authority) {
-  const tags = requiredTags(authority);
-  const locatorKeys = [
-    'wharfie:managed-by',
-    'wharfie:resource-kind',
-    'wharfie:capability',
-    'wharfie:role',
-    'wharfie:provider-scope-id',
-    'wharfie:deployment-instance-id',
-    'wharfie:incarnation-id',
-    'wharfie:resource-key',
-  ];
-  return deepFreeze(
-    locatorKeys.map((key) => ({ Name: `tag:${key}`, Values: [tags[key]] })),
-  );
 }
 
 /** @param {Readonly<Record<string, any>>} binding @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} providerScope @param {string} ownershipNonce @returns {boolean} */
@@ -481,47 +439,6 @@ function discoveryPage(response) {
   return { vpcs, nextToken };
 }
 
-/** @param {unknown} tagsValue @param {Readonly<Record<string, string>>} expected @param {boolean} allowPropagation @returns {void} */
-function validateTags(tagsValue, expected, allowPropagation) {
-  if (!Array.isArray(tagsValue)) {
-    if (tagsValue === undefined || tagsValue === null) {
-      if (allowPropagation) throw new VpcEvidenceTransientError();
-      throw new VpcEvidenceConflictError();
-    }
-    throw new ProviderResponseUnknownError();
-  }
-  if (tagsValue.length > MAX_VPC_TAGS) throw new VpcEvidenceConflictError();
-  const observed = new Map();
-  for (const tag of tagsValue) {
-    if (
-      !isPlainObject(tag) ||
-      typeof tag.Key !== 'string' ||
-      tag.Key.length === 0 ||
-      typeof tag.Value !== 'string'
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (observed.has(tag.Key)) throw new VpcEvidenceConflictError();
-    observed.set(tag.Key, tag.Value);
-  }
-  for (const [key, value] of observed) {
-    const reserved = Object.hasOwn(expected, key);
-    if (key.startsWith('wharfie:') && !reserved) {
-      throw new VpcEvidenceConflictError();
-    }
-    if (reserved && expected[key] !== value) {
-      throw new VpcEvidenceConflictError();
-    }
-  }
-  const complete = Object.entries(expected).every(
-    ([key, value]) => observed.get(key) === value,
-  );
-  if (!complete) {
-    if (allowPropagation) throw new VpcEvidenceTransientError();
-    throw new VpcEvidenceConflictError();
-  }
-}
-
 /** @param {unknown} value @param {string} expectedState @param {boolean} allowPropagation @returns {void} */
 function validateCidrAssociations(value, expectedState, allowPropagation) {
   if (!Array.isArray(value)) {
@@ -609,8 +526,8 @@ function validateBlockPublicAccessStates(value) {
   throw new ProviderResponseUnknownError();
 }
 
-/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateVpcOwnershipEvidence(vpc, authority) {
+/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
+function validateVpcOwnershipEvidence(vpc, authority, recovery) {
   if (
     typeof vpc.VpcId !== 'string' ||
     !VPC_ID_PATTERN.test(vpc.VpcId) ||
@@ -622,28 +539,28 @@ function validateVpcOwnershipEvidence(vpc, authority) {
   if (vpc.OwnerId !== authority.plan.providerScope.accountId) {
     throw new VpcEvidenceConflictError();
   }
-  validateTags(
+  recovery.validateTags(
     vpc.Tags,
-    requiredTags(authority),
+    recovery.requiredTags(authority),
     authority.action.action === 'create',
   );
   if (vpc.State === 'pending') throw new VpcEvidenceTransientError();
   if (vpc.State !== 'available') throw new VpcEvidenceConflictError();
 }
 
-/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateVpcDeletionEvidence(vpc, authority) {
-  validateVpcOwnershipEvidence(vpc, authority);
+/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
+function validateVpcDeletionEvidence(vpc, authority, recovery) {
+  validateVpcOwnershipEvidence(vpc, authority, recovery);
   if (typeof vpc.IsDefault !== 'boolean') {
     throw new ProviderResponseUnknownError();
   }
   if (vpc.IsDefault) throw new VpcEvidenceConflictError();
 }
 
-/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateVpcBaseEvidence(vpc, authority) {
+/** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
+function validateVpcBaseEvidence(vpc, authority, recovery) {
   const expectedCidr = authority.providerSpec.capabilities.networking.vpcCidr;
-  validateVpcOwnershipEvidence(vpc, authority);
+  validateVpcOwnershipEvidence(vpc, authority, recovery);
   if (
     typeof vpc.CidrBlock !== 'string' ||
     typeof vpc.InstanceTenancy !== 'string' ||
@@ -722,20 +639,6 @@ export function createAwsSingleNodeVpcResource(options) {
   if (typeof waitForRetry !== 'function') {
     throw new TypeError('awsSingleNodeVpc waitForRetry must be a function.');
   }
-  /** Successful create responses are only ephemeral candidate locators. */
-  const candidateIds = new Map();
-  /**
-   * CreateVpc has no client token. Once this process crosses the mutation
-   * boundary for an intended effect it may only read back that attempt; an
-   * error or malformed response must never cause a same-process replay.
-   */
-  const attemptedEffects = new Set();
-
-  /** @param {Readonly<Record<string, any>>} authority @returns {string} */
-  function effectKey(authority) {
-    return `${authority.action.actionId}\0${authority.ownershipNonce}`;
-  }
-
   /** @param {number} attempt @returns {Promise<void>} */
   async function wait(attempt) {
     try {
@@ -757,46 +660,28 @@ export function createAwsSingleNodeVpcResource(options) {
     return oneVpcFromResponse(response, vpcId);
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Map<string, Readonly<Record<string, any>>>>} */
-  async function discoverOnce(authority) {
-    const filters = discoveryFilters(authority);
-    const vpcs = new Map();
-    const seenTokens = new Set();
-    let nextToken = null;
-    for (
-      let page = 1;
-      page <= AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES;
-      page += 1
-    ) {
-      let response;
-      try {
-        response = await client.describeVpcs(
-          deepFreeze({
-            Filters: filters,
-            MaxResults: AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS,
-            ...(nextToken === null ? {} : { NextToken: nextToken }),
-          }),
-        );
-      } catch {
-        throw new ProviderResponseUnknownError();
-      }
-      const observed = discoveryPage(response);
-      for (const vpc of observed.vpcs) {
-        if (vpcs.has(vpc.VpcId)) throw new VpcEvidenceConflictError();
-        vpcs.set(vpc.VpcId, vpc);
-      }
-      if (observed.nextToken === null) break;
-      if (
-        page === AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES ||
-        seenTokens.has(observed.nextToken)
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-      seenTokens.add(observed.nextToken);
-      nextToken = observed.nextToken;
+  /** @param {Readonly<Record<string, any>>} request @returns {Promise<{records: Readonly<Record<string, any>>[], nextToken: string|null}>} */
+  async function readDiscoveryPage(request) {
+    let response;
+    try {
+      response = await client.describeVpcs(request);
+    } catch {
+      throw new ProviderResponseUnknownError();
     }
-    return vpcs;
+    const observed = discoveryPage(response);
+    return { records: observed.vpcs, nextToken: observed.nextToken };
   }
+
+  const recovery = createAwsTaggedEc2RecoveryKernel({
+    baseTags: BASE_RESERVED_TAGS,
+    discoveryMaxResults: AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS,
+    idKey: 'VpcId',
+    idPattern: VPC_ID_PATTERN,
+    maxDiscoveryPages: AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES,
+    maxTags: MAX_VPC_TAGS,
+    readDiscoveryPage,
+    readExact: describeExactOnce,
+  });
 
   /** @param {unknown} response @param {string} vpcId @param {'enableDnsSupport'|'enableDnsHostnames'} attribute @param {'EnableDnsSupport'|'EnableDnsHostnames'} responseKey @param {boolean} expected @returns {void} */
   function validateAttributeResponse(
@@ -865,36 +750,35 @@ export function createAwsSingleNodeVpcResource(options) {
 
   /** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {Promise<void>} */
   async function validateVpcEvidence(vpc, authority) {
-    validateVpcBaseEvidence(vpc, authority);
+    validateVpcBaseEvidence(vpc, authority, recovery);
     await validateVpcAttributes(vpc.VpcId);
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>[]>} */
   async function readLogicalMatches(authority) {
-    const matches = await discoverOnce(authority);
-    if (matches.size > 1) throw new VpcEvidenceConflictError();
-    const discovered = [...matches.values()][0] ?? null;
-    const exactId =
-      authority.priorBinding?.providerResourceId ??
-      candidateIds.get(effectKey(authority)) ??
-      null;
+    const { discovered, exact, exactId } = await recovery.readIdentityEvidence(
+      authority,
+      {
+        useDiscoveredId: false,
+      },
+    );
     if (exactId === null) {
       if (discovered === null) return [];
       await validateVpcEvidence(discovered, authority);
       return [discovered];
     }
-    if (discovered !== null && discovered.VpcId !== exactId) {
-      throw new VpcEvidenceConflictError();
-    }
-    const exact = await describeExactOnce(exactId);
     if (authority.action.action === 'delete') {
       if (discovered !== null) {
-        validateVpcDeletionEvidence(discovered, authority);
+        validateVpcDeletionEvidence(discovered, authority, recovery);
       }
-      if (exact !== null) validateVpcDeletionEvidence(exact, authority);
+      if (exact !== null) {
+        validateVpcDeletionEvidence(exact, authority, recovery);
+      }
     } else {
-      if (discovered !== null) validateVpcBaseEvidence(discovered, authority);
-      if (exact !== null) validateVpcBaseEvidence(exact, authority);
+      if (discovered !== null) {
+        validateVpcBaseEvidence(discovered, authority, recovery);
+      }
+      if (exact !== null) validateVpcBaseEvidence(exact, authority, recovery);
     }
     if (discovered === null && exact === null) return [];
     if (discovered === null || exact === null) {
@@ -937,24 +821,25 @@ export function createAwsSingleNodeVpcResource(options) {
       return;
     }
     if (matches.length === 1) return;
-    const key = effectKey(authority);
-    if (attemptedEffects.has(key)) {
+    if (!recovery.claimCreateAttempt(authority)) {
       throw new AwsSingleNodeVpcResourceUnknownError();
     }
-    attemptedEffects.add(key);
     let response;
     try {
-      response = await client.createVpc(createVpcRequest(authority));
+      response = await client.createVpc(createVpcRequest(authority, recovery));
     } catch {
       throw new AwsSingleNodeVpcResourceUnknownError();
     }
     const vpcId = candidateVpcId(response);
     if (vpcId === null) throw new AwsSingleNodeVpcResourceUnknownError();
-    const priorCandidateId = candidateIds.get(key);
-    if (priorCandidateId !== undefined && priorCandidateId !== vpcId) {
-      throw new AwsSingleNodeVpcResourceConflictError();
+    try {
+      recovery.rememberCandidate(authority, vpcId);
+    } catch (error) {
+      if (error instanceof VpcEvidenceConflictError) {
+        throw new AwsSingleNodeVpcResourceConflictError();
+      }
+      throw new AwsSingleNodeVpcResourceUnknownError();
     }
-    candidateIds.set(key, vpcId);
   }
 
   /** @param {unknown} value @returns {Promise<{status: 'converged', binding: Readonly<Record<string, any>>|null}|{status: 'not-converged'}|{status: 'blocked'}>} */
@@ -988,11 +873,11 @@ export function createAwsSingleNodeVpcResource(options) {
               ownershipNonce: authority.ownershipNonce,
               createdByActionId: authority.action.actionId,
             });
-          candidateIds.delete(effectKey(authority));
+          recovery.clearCandidate(authority);
           return deepFreeze({ status: 'converged', binding });
         }
         if (authority.action.action === 'delete') {
-          candidateIds.delete(effectKey(authority));
+          recovery.clearCandidate(authority);
           return deepFreeze({ status: 'converged', binding: null });
         }
       } catch (error) {

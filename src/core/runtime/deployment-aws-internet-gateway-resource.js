@@ -14,6 +14,12 @@ import {
   createDeploymentResourceBinding,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
+import {
+  AwsTaggedEc2RecoveryConflictError as InternetGatewayEvidenceConflictError,
+  AwsTaggedEc2RecoveryTransientError as InternetGatewayEvidenceTransientError,
+  AwsTaggedEc2RecoveryUnknownError as ProviderResponseUnknownError,
+  createAwsTaggedEc2RecoveryKernel,
+} from './deployment-aws-tagged-ec2-recovery.js';
 
 export const AWS_SINGLE_NODE_INTERNET_GATEWAY_DEFAULT_MAX_ATTEMPTS = 3;
 export const AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS = 10;
@@ -81,10 +87,6 @@ export class AwsSingleNodeInternetGatewayResourceUnknownError extends Error {
     this.code = 'AWS_SINGLE_NODE_INTERNET_GATEWAY_RESOURCE_UNKNOWN';
   }
 }
-
-class ProviderResponseUnknownError extends Error {}
-class InternetGatewayEvidenceConflictError extends Error {}
-class InternetGatewayEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -178,60 +180,16 @@ export function getAwsSingleNodeInternetGatewayStateDigest(value) {
   });
 }
 
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, string>>} */
-function requiredTags(authority) {
-  return deepFreeze({
-    ...BASE_RESERVED_TAGS,
-    'wharfie:capability': authority.action.capability.kind,
-    'wharfie:role': authority.action.role.kind,
-    'wharfie:provider-scope-id': authority.plan.providerScope.providerScopeId,
-    'wharfie:deployment-instance-id': authority.plan.deploymentInstanceId,
-    'wharfie:incarnation-id': authority.plan.incarnationId,
-    'wharfie:resource-key': authority.action.resourceKey,
-    'wharfie:created-by-action-id':
-      authority.priorBinding?.createdByActionId ?? authority.action.actionId,
-    'wharfie:ownership-nonce': authority.ownershipNonce,
-    'wharfie:state-digest': authority.stateDigest.value,
-  });
-}
-
-/** @param {Readonly<Record<string, string>>} tags @returns {Readonly<Array<{Key: string, Value: string}>>} */
-function sortedTags(tags) {
-  return deepFreeze(
-    Object.entries(tags)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([Key, Value]) => ({ Key, Value })),
-  );
-}
-
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput>} */
-function createInternetGatewayRequest(authority) {
+/** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {Readonly<import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput>} */
+function createInternetGatewayRequest(authority, recovery) {
   return deepFreeze({
     TagSpecifications: [
       {
         ResourceType: 'internet-gateway',
-        Tags: sortedTags(requiredTags(authority)),
+        Tags: recovery.sortedTags(recovery.requiredTags(authority)),
       },
     ],
   });
-}
-
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Array<{Name: string, Values: string[]}>>} */
-function discoveryFilters(authority) {
-  const tags = requiredTags(authority);
-  const locatorKeys = [
-    'wharfie:managed-by',
-    'wharfie:resource-kind',
-    'wharfie:capability',
-    'wharfie:role',
-    'wharfie:provider-scope-id',
-    'wharfie:deployment-instance-id',
-    'wharfie:incarnation-id',
-    'wharfie:resource-key',
-  ];
-  return deepFreeze(
-    locatorKeys.map((key) => ({ Name: `tag:${key}`, Values: [tags[key]] })),
-  );
 }
 
 /** @param {Readonly<Record<string, any>>} binding @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} providerScope @param {string} ownershipNonce @returns {boolean} */
@@ -494,57 +452,12 @@ function discoveryPage(response) {
   return { internetGateways, nextToken };
 }
 
-/** @param {unknown} tagsValue @param {Readonly<Record<string, string>>} expected @param {boolean} allowPropagation @returns {void} */
-function validateTags(tagsValue, expected, allowPropagation) {
-  if (!Array.isArray(tagsValue)) {
-    if (tagsValue === undefined || tagsValue === null) {
-      if (allowPropagation) {
-        throw new InternetGatewayEvidenceTransientError();
-      }
-      throw new InternetGatewayEvidenceConflictError();
-    }
-    throw new ProviderResponseUnknownError();
-  }
-  if (tagsValue.length > MAX_INTERNET_GATEWAY_TAGS) {
-    throw new InternetGatewayEvidenceConflictError();
-  }
-  const observed = new Map();
-  for (const tag of tagsValue) {
-    if (
-      !isPlainObject(tag) ||
-      typeof tag.Key !== 'string' ||
-      tag.Key.length === 0 ||
-      typeof tag.Value !== 'string'
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (observed.has(tag.Key)) {
-      throw new InternetGatewayEvidenceConflictError();
-    }
-    observed.set(tag.Key, tag.Value);
-  }
-  for (const [key, value] of observed) {
-    const reserved = Object.hasOwn(expected, key);
-    if (key.startsWith('wharfie:') && !reserved) {
-      throw new InternetGatewayEvidenceConflictError();
-    }
-    if (reserved && expected[key] !== value) {
-      throw new InternetGatewayEvidenceConflictError();
-    }
-  }
-  const complete = Object.entries(expected).every(
-    ([key, value]) => observed.get(key) === value,
-  );
-  if (!complete) {
-    if (allowPropagation) {
-      throw new InternetGatewayEvidenceTransientError();
-    }
-    throw new InternetGatewayEvidenceConflictError();
-  }
-}
-
-/** @param {Readonly<Record<string, any>>} internetGateway @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateInternetGatewayOwnershipEvidence(internetGateway, authority) {
+/** @param {Readonly<Record<string, any>>} internetGateway @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
+function validateInternetGatewayOwnershipEvidence(
+  internetGateway,
+  authority,
+  recovery,
+) {
   if (
     typeof internetGateway.InternetGatewayId !== 'string' ||
     !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId) ||
@@ -555,9 +468,9 @@ function validateInternetGatewayOwnershipEvidence(internetGateway, authority) {
   if (internetGateway.OwnerId !== authority.plan.providerScope.accountId) {
     throw new InternetGatewayEvidenceConflictError();
   }
-  validateTags(
+  recovery.validateTags(
     internetGateway.Tags,
-    requiredTags(authority),
+    recovery.requiredTags(authority),
     authority.action.action === 'create',
   );
 }
@@ -636,20 +549,6 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
       'awsSingleNodeInternetGateway waitForRetry must be a function.',
     );
   }
-  /** Successful create responses are only ephemeral candidate locators. */
-  const candidateIds = new Map();
-  /**
-   * CreateInternetGateway has no client token. Once this process crosses the
-   * mutation boundary for an intended effect it may only read back that
-   * attempt; an error or malformed response cannot trigger a replay here.
-   */
-  const attemptedEffects = new Set();
-
-  /** @param {Readonly<Record<string, any>>} authority @returns {string} */
-  function effectKey(authority) {
-    return `${authority.action.actionId}\0${authority.ownershipNonce}`;
-  }
-
   /** @param {number} attempt @returns {Promise<void>} */
   async function wait(attempt) {
     try {
@@ -673,75 +572,48 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
     return oneInternetGatewayFromResponse(response, internetGatewayId);
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Map<string, Readonly<Record<string, any>>>>} */
-  async function discoverOnce(authority) {
-    const filters = discoveryFilters(authority);
-    const internetGateways = new Map();
-    const seenTokens = new Set();
-    let nextToken = null;
-    for (
-      let page = 1;
-      page <= AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES;
-      page += 1
-    ) {
-      let response;
-      try {
-        response = await client.describeInternetGateways(
-          deepFreeze({
-            Filters: filters,
-            MaxResults: AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS,
-            ...(nextToken === null ? {} : { NextToken: nextToken }),
-          }),
-        );
-      } catch {
-        throw new ProviderResponseUnknownError();
-      }
-      const observed = discoveryPage(response);
-      for (const internetGateway of observed.internetGateways) {
-        if (internetGateways.has(internetGateway.InternetGatewayId)) {
-          throw new InternetGatewayEvidenceConflictError();
-        }
-        internetGateways.set(
-          internetGateway.InternetGatewayId,
-          internetGateway,
-        );
-      }
-      if (observed.nextToken === null) break;
-      if (
-        page === AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES ||
-        seenTokens.has(observed.nextToken)
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-      seenTokens.add(observed.nextToken);
-      nextToken = observed.nextToken;
+  /** @param {Readonly<Record<string, any>>} request @returns {Promise<{records: Readonly<Record<string, any>>[], nextToken: string|null}>} */
+  async function readDiscoveryPage(request) {
+    let response;
+    try {
+      response = await client.describeInternetGateways(request);
+    } catch {
+      throw new ProviderResponseUnknownError();
     }
-    return internetGateways;
+    const observed = discoveryPage(response);
+    return {
+      records: observed.internetGateways,
+      nextToken: observed.nextToken,
+    };
   }
+
+  const recovery = createAwsTaggedEc2RecoveryKernel({
+    baseTags: BASE_RESERVED_TAGS,
+    discoveryMaxResults: AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS,
+    idKey: 'InternetGatewayId',
+    idPattern: INTERNET_GATEWAY_ID_PATTERN,
+    maxDiscoveryPages: AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES,
+    maxTags: MAX_INTERNET_GATEWAY_TAGS,
+    readDiscoveryPage,
+    readExact: describeExactOnce,
+  });
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>[]>} */
   async function readLogicalMatches(authority) {
-    const matches = await discoverOnce(authority);
-    if (matches.size > 1) {
-      throw new InternetGatewayEvidenceConflictError();
-    }
-    const discovered = [...matches.values()][0] ?? null;
-    const exactId =
-      authority.priorBinding?.providerResourceId ??
-      candidateIds.get(effectKey(authority)) ??
-      discovered?.InternetGatewayId ??
-      null;
-    if (exactId === null) return [];
-    if (discovered !== null && discovered.InternetGatewayId !== exactId) {
-      throw new InternetGatewayEvidenceConflictError();
-    }
-    const exact = await describeExactOnce(exactId);
+    const { discovered, exact } = await recovery.readIdentityEvidence(
+      authority,
+      { useDiscoveredId: true },
+    );
     if (authority.action.action === 'delete') {
       if (discovered !== null) {
-        validateInternetGatewayOwnershipEvidence(discovered, authority);
+        validateInternetGatewayOwnershipEvidence(
+          discovered,
+          authority,
+          recovery,
+        );
       }
       if (exact !== null) {
-        validateInternetGatewayOwnershipEvidence(exact, authority);
+        validateInternetGatewayOwnershipEvidence(exact, authority, recovery);
       }
       const discoveredDetached =
         discovered === null
@@ -758,10 +630,14 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
       }
     } else {
       if (discovered !== null) {
-        validateInternetGatewayOwnershipEvidence(discovered, authority);
+        validateInternetGatewayOwnershipEvidence(
+          discovered,
+          authority,
+          recovery,
+        );
       }
       if (exact !== null) {
-        validateInternetGatewayOwnershipEvidence(exact, authority);
+        validateInternetGatewayOwnershipEvidence(exact, authority, recovery);
       }
       if (discovered === null && exact === null) return [];
       if (discovered === null || exact === null) {
@@ -810,15 +686,13 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
       return;
     }
     if (matches.length === 1) return;
-    const key = effectKey(authority);
-    if (attemptedEffects.has(key)) {
+    if (!recovery.claimCreateAttempt(authority)) {
       throw new AwsSingleNodeInternetGatewayResourceUnknownError();
     }
-    attemptedEffects.add(key);
     let response;
     try {
       response = await client.createInternetGateway(
-        createInternetGatewayRequest(authority),
+        createInternetGatewayRequest(authority, recovery),
       );
     } catch {
       throw new AwsSingleNodeInternetGatewayResourceUnknownError();
@@ -827,14 +701,14 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
     if (internetGatewayId === null) {
       throw new AwsSingleNodeInternetGatewayResourceUnknownError();
     }
-    const priorCandidateId = candidateIds.get(key);
-    if (
-      priorCandidateId !== undefined &&
-      priorCandidateId !== internetGatewayId
-    ) {
-      throw new AwsSingleNodeInternetGatewayResourceConflictError();
+    try {
+      recovery.rememberCandidate(authority, internetGatewayId);
+    } catch (error) {
+      if (error instanceof InternetGatewayEvidenceConflictError) {
+        throw new AwsSingleNodeInternetGatewayResourceConflictError();
+      }
+      throw new AwsSingleNodeInternetGatewayResourceUnknownError();
     }
-    candidateIds.set(key, internetGatewayId);
   }
 
   /** @param {unknown} value @returns {Promise<{status: 'converged', binding: Readonly<Record<string, any>>|null}|{status: 'not-converged'}|{status: 'blocked'}>} */
@@ -868,11 +742,11 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
               ownershipNonce: authority.ownershipNonce,
               createdByActionId: authority.action.actionId,
             });
-          candidateIds.delete(effectKey(authority));
+          recovery.clearCandidate(authority);
           return deepFreeze({ status: 'converged', binding });
         }
         if (authority.action.action === 'delete') {
-          candidateIds.delete(effectKey(authority));
+          recovery.clearCandidate(authority);
           return deepFreeze({ status: 'converged', binding: null });
         }
       } catch (error) {
