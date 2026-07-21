@@ -275,7 +275,7 @@ function makePlan(base, options) {
           options.operation === 'apply'
             ? null
             : base.deploymentRevision.deploymentRevisionId,
-        inspectionId: semanticId('win4', 'wharfie:test:volume-inspection:v1', {
+        inspectionId: semanticId('win5', 'wharfie:test:volume-inspection:v1', {
           operation: options.operation,
         }),
       },

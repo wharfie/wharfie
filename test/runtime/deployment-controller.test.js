@@ -71,6 +71,7 @@ function semanticId(prefix, domain, value) {
 }
 
 const HEALTH_NOW = 1_700_000_000_000;
+const RUNTIME_ROLE_ID = 'AROA1234567890EXAMPLE';
 
 const RESOURCE_BY_KEY = new Map(
   AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.map(
@@ -92,6 +93,8 @@ const RESOURCES = Object.freeze(
 
 /** @param {string} resourceKey @returns {string} */
 function providerResourceId(resourceKey) {
+  if (resourceKey === 'substrate') return 'i-0123456789abcdef0';
+  if (resourceKey === 'runtime-role') return RUNTIME_ROLE_ID;
   return `provider-resource-${resourceKey}`;
 }
 
@@ -389,6 +392,13 @@ function makeHealthObservation(base, head, nodeBinding, overrides = {}) {
   if (operation === null) {
     throw new Error('test health observation requires live release authority');
   }
+  const runtimeRoleBinding = head.resourceBindings.find(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.resourceKey === 'runtime-role',
+  );
+  if (runtimeRoleBinding === undefined) {
+    throw new Error('test health observation requires runtime role authority');
+  }
   const receipt = createDeploymentServiceHealthReceipt({
     providerScopeId: base.providerScope.providerScopeId,
     providerSpecId: base.providerSpec.providerSpecId,
@@ -399,6 +409,8 @@ function makeHealthObservation(base, head, nodeBinding, overrides = {}) {
     authorizedHeadGeneration: head.generation,
     nodeBindingId: nodeBinding.bindingId,
     nodeProviderResourceId: nodeBinding.providerResourceId,
+    runtimeRoleBindingId: runtimeRoleBinding.bindingId,
+    runtimeRoleId: runtimeRoleBinding.providerResourceId,
     deploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
     appId: base.deploymentRevision.appId,
     artifactId: base.deploymentRevision.artifactId,
@@ -1919,10 +1931,8 @@ describe('deployment controller crash recovery', () => {
 
   it.each([
     ['missing proof', null],
-    [
-      'another node',
-      { nodeProviderResourceId: 'provider-resource-foreign-substrate' },
-    ],
+    ['another node', { nodeProviderResourceId: 'i-0fedcba9876543210' }],
+    ['another runtime role', { runtimeRoleId: 'AROA0987654321EXAMPLE' }],
     [
       'another incarnation',
       { incarnationId: createDeploymentIncarnationId(Buffer.alloc(32, 88)) },

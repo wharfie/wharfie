@@ -48,6 +48,7 @@ import {
 import { createLedgerServiceId } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 
 const HEALTH_NOW = 1_700_000_000_000;
+const RUNTIME_ROLE_ID = 'AROA1234567890EXAMPLE';
 
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
@@ -172,6 +173,7 @@ function providerResourceId(resourceKey) {
   if (resourceKey === 'runtime-identity') {
     return 'arn:aws:iam::123456789012:instance-profile/wharfie-host';
   }
+  if (resourceKey === 'runtime-role') return RUNTIME_ROLE_ID;
   return `provider-resource-${resourceKey}`;
 }
 
@@ -254,7 +256,7 @@ function makePlan(operation = 'apply', base = makeBase()) {
           operation === 'apply'
             ? null
             : base.deploymentRevision.deploymentRevisionId,
-        inspectionId: semanticId('win4', 'wharfie:test:inspection:v4', {
+        inspectionId: semanticId('win5', 'wharfie:test:inspection:v5', {
           operation,
         }),
       },
@@ -341,8 +343,12 @@ function makeReadyAuthority() {
 /** @param {Readonly<Record<string, any>>} authority @param {Record<string, any>} [overrides] */
 function makeHealthObservation(authority, overrides = {}) {
   const nodeBinding = authority.bindingByResourceKey.get('substrate');
+  const runtimeRoleBinding = authority.bindingByResourceKey.get('runtime-role');
   if (nodeBinding === undefined || authority.head.lastOperation === null) {
     throw new Error('Fixture requires node and completed operation authority.');
+  }
+  if (runtimeRoleBinding === undefined) {
+    throw new Error('Fixture requires runtime role authority.');
   }
   const receipt = createDeploymentServiceHealthReceipt({
     providerScopeId: authority.providerScope.providerScopeId,
@@ -354,6 +360,8 @@ function makeHealthObservation(authority, overrides = {}) {
     authorizedHeadGeneration: authority.head.generation,
     nodeBindingId: nodeBinding.bindingId,
     nodeProviderResourceId: nodeBinding.providerResourceId,
+    runtimeRoleBindingId: runtimeRoleBinding.bindingId,
+    runtimeRoleId: runtimeRoleBinding.providerResourceId,
     deploymentRevisionId: authority.deploymentRevision.deploymentRevisionId,
     appId: authority.deploymentRevision.appId,
     artifactId: authority.deploymentRevision.artifactId,
@@ -459,8 +467,9 @@ function requireResource(resources, resourceKey) {
 /**
  * @param {string} status
  * @param {Array<Record<string, any>>} [resources]
+ * @param {boolean} [includeHead]
  */
-function makeInspection(status, resources) {
+function makeInspection(status, resources, includeHead = true) {
   const authority = makeInspectionAuthority();
   const absent = status === 'absent';
   return createDeploymentInspection(
@@ -480,7 +489,7 @@ function makeInspection(status, resources) {
     {
       profile: authority.profile,
       providerSpec: authority.providerSpec,
-      ...(absent ? {} : { head: authority.head }),
+      ...(absent || !includeHead ? {} : { head: authority.head }),
       now: HEALTH_NOW,
     },
   );
@@ -936,7 +945,8 @@ describe('deployment inspections', () => {
     const authority = makeInspectionAuthority();
 
     expect(second).toEqual(first);
-    expect(first.inspectionId).toMatch(/^win4_[A-Za-z0-9_-]{43}$/);
+    expect(first.schemaVersion).toBe(5);
+    expect(first.inspectionId).toMatch(/^win5_[A-Za-z0-9_-]{43}$/);
     expect(authority.head.headId).toMatch(/^wdh2_[A-Za-z0-9_-]{43}$/);
     expect(authority.head.lastOperation.operationId).toMatch(
       /^wdo2_[A-Za-z0-9_-]{43}$/,
@@ -1111,6 +1121,38 @@ describe('deployment inspections', () => {
     startingNode.service.healthReceipt = null;
     expect(makeInspection('in-flight', startingWithProof).status).toBe(
       'in-flight',
+    );
+  });
+
+  it('correlates provider health to the independently inspected runtime role resource without head context', () => {
+    const wrongRoleId = makeConvergedResources();
+    requireResource(
+      wrongRoleId,
+      'runtime-role',
+    ).providerIdentity.providerResourceId = 'AROA0987654321EXAMPLE';
+    expect(() => makeInspection('converged', wrongRoleId, false)).toThrow(
+      /runtimeRoleId.*exact inspection authority|exact inspection authority/i,
+    );
+
+    const wrongRoleBinding = makeConvergedResources();
+    const substrateBindingId = requireResource(
+      wrongRoleBinding,
+      'substrate',
+    ).bindingId;
+    requireResource(wrongRoleBinding, 'runtime-role').bindingId =
+      substrateBindingId;
+    expect(() => makeInspection('converged', wrongRoleBinding, false)).toThrow(
+      /runtimeRoleBindingId.*exact inspection authority|exact inspection authority/i,
+    );
+
+    const wrongNodeBinding = makeConvergedResources();
+    const roleBindingId = requireResource(
+      wrongNodeBinding,
+      'runtime-role',
+    ).bindingId;
+    requireResource(wrongNodeBinding, 'substrate').bindingId = roleBindingId;
+    expect(() => makeInspection('converged', wrongNodeBinding, false)).toThrow(
+      /nodeBindingId.*exact inspection authority|exact inspection authority/i,
     );
   });
 

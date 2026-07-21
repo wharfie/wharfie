@@ -3,17 +3,11 @@
 import { createHash } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 
-import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
-import { validateDeploymentHead } from './deployment-head.js';
-import { validateDeploymentProfile } from './deployment-profile.js';
-import {
-  getDeploymentInstanceId,
-  validateProviderScope,
-} from './deployment-provider-scope.js';
-import { validateDeploymentRevision } from './deployment-revision.js';
+import { validateProviderScope } from './deployment-provider-scope.js';
 import {
   getDeploymentServiceHealthObjectKey,
   getDeploymentServiceHealthObjectLocation,
+  validateDeploymentServiceHealthAuthorityContext,
   validateDeploymentServiceHealthReceipt,
   validateDeploymentServiceHealthReceiptContext,
   validateDeploymentServiceHealthReceiptSuccessor,
@@ -25,7 +19,7 @@ export const DEPLOYMENT_SERVICE_HEALTH_CONTENT_TYPE =
   'application/vnd.wharfie.deployment-service-health+json';
 export const DEPLOYMENT_SERVICE_HEALTH_CACHE_CONTROL = 'no-store';
 export const DEPLOYMENT_SERVICE_HEALTH_METADATA_SCHEMA =
-  'deployment-service-health-v2';
+  'deployment-service-health-v3';
 export { DEPLOYMENT_SERVICE_HEALTH_DOCUMENT_MAX_BYTES };
 export const DEPLOYMENT_SERVICE_HEALTH_DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -590,68 +584,24 @@ export function createDeploymentServiceHealthS3(options) {
       );
     }
     assertAllKeys(value, CONTEXT_KEYS, 'deploymentServiceHealthS3 context');
-    const contextScope = validateProviderScope(
-      value.providerScope,
-      'deploymentServiceHealthS3 context.providerScope',
+    const authority = validateDeploymentServiceHealthAuthorityContext(
+      value,
+      'deploymentServiceHealthS3',
     );
+    const contextScope = authority.context.providerScope;
     if (contextScope.providerScopeId !== providerScope.providerScopeId) {
       throw new Error(
         'deploymentServiceHealthS3 context provider scope does not match the bound scope.',
       );
     }
-    const profile = validateDeploymentProfile(
-      value.profile,
-      'deploymentServiceHealthS3 context.profile',
-    );
-    const deploymentRevision = validateDeploymentRevision(
-      value.deploymentRevision,
-      'deploymentServiceHealthS3 context.deploymentRevision',
-    );
-    const providerSpec = validateAwsSingleNodeProviderSpecContext(
-      value.providerSpec,
-      { profile, providerScope: contextScope },
-    );
-    const head = validateDeploymentHead(
-      value.head,
-      'deploymentServiceHealthS3 context.head',
-    );
-    const deploymentInstanceId = getDeploymentInstanceId({
-      deploymentRevision,
-      providerScope: contextScope,
-    });
-    if (
-      head.deploymentInstanceId !== deploymentInstanceId ||
-      head.providerScope.providerScopeId !== contextScope.providerScopeId
-    ) {
-      throw new Error(
-        'deploymentServiceHealthS3 context head does not match its deployment and provider scope.',
-      );
-    }
-    const nodeBindings = head.resourceBindings.filter(
-      (/** @type {Readonly<Record<string, any>>} */ binding) =>
-        binding.capability.kind === 'resident-node',
-    );
-    if (nodeBindings.length !== 1) {
-      throw new Error(
-        'deploymentServiceHealthS3 context requires exactly one resident-node binding.',
-      );
-    }
-    const nodeBinding = nodeBindings[0];
-    const location = getDeploymentServiceHealthObjectLocation(providerScope, {
-      deploymentInstanceId,
-      incarnationId: head.incarnationId,
-      nodeBindingId: nodeBinding.bindingId,
+    const location = getDeploymentServiceHealthObjectLocation(contextScope, {
+      runtimeRoleId: authority.runtimeRoleBinding.providerResourceId,
+      nodeProviderResourceId: authority.nodeBinding.providerResourceId,
     });
     return deepFreeze({
-      context: {
-        deploymentRevision,
-        profile,
-        providerScope: contextScope,
-        providerSpec,
-        head,
-      },
+      context: authority.context,
       location,
-      serviceHealth: providerSpec.capabilities.serviceHealth,
+      serviceHealth: authority.context.providerSpec.capabilities.serviceHealth,
     });
   }
 
@@ -845,35 +795,46 @@ export function createDeploymentServiceHealthS3(options) {
     const bytes = encodeReceipt(candidate);
     /** @type {unknown} */
     let ambiguousCause;
+    /** @type {Readonly<Record<string, any>>|null} */
+    let predecessor = null;
+    let needsPreRead = candidate.sequence !== 1;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      /** @type {Readonly<Record<string, any>>|null} */
-      let predecessor;
-      try {
-        predecessor = await readCurrent(validated, false);
-      } catch (error) {
-        if (error instanceof DeploymentServiceHealthMissingError) {
-          predecessor = null;
-        } else if (error instanceof DeploymentServiceHealthUnknownError) {
-          ambiguousCause = error;
-          continue;
-        } else {
-          throw error;
+      if (needsPreRead) {
+        let observed;
+        try {
+          observed = await readCurrent(validated, false);
+        } catch (error) {
+          if (error instanceof DeploymentServiceHealthMissingError) {
+            if (candidate.sequence !== 1 || predecessor !== null) {
+              throw new DeploymentServiceHealthConflictError({ cause: error });
+            }
+            needsPreRead = false;
+            observed = null;
+          } else if (error instanceof DeploymentServiceHealthUnknownError) {
+            ambiguousCause = error;
+            continue;
+          } else {
+            throw error;
+          }
         }
-      }
-
-      if (predecessor === null) {
-        if (candidate.sequence !== 1) {
+        if (observed?.receipt.receiptId === candidate.receiptId) {
+          return observed;
+        }
+        if (
+          observed !== null &&
+          isAdoptableSuccessor(candidate, observed.receipt, validated.context)
+        ) {
+          return observed;
+        }
+        if (
+          observed !== null &&
+          !isValidSuccessor(observed.receipt, candidate)
+        ) {
           throw new DeploymentServiceHealthConflictError();
         }
-      } else if (predecessor.receipt.receiptId === candidate.receiptId) {
-        return predecessor;
-      } else if (
-        isAdoptableSuccessor(candidate, predecessor.receipt, validated.context)
-      ) {
-        return predecessor;
-      } else if (!isValidSuccessor(predecessor.receipt, candidate)) {
-        throw new DeploymentServiceHealthConflictError();
+        predecessor = observed;
+        needsPreRead = false;
       }
 
       try {
@@ -894,6 +855,7 @@ export function createDeploymentServiceHealthS3(options) {
           readback = null;
         } else if (error instanceof DeploymentServiceHealthUnknownError) {
           ambiguousCause = error;
+          needsPreRead = predecessor !== null;
           continue;
         } else {
           throw error;
@@ -909,12 +871,16 @@ export function createDeploymentServiceHealthS3(options) {
       ) {
         return readback;
       }
-      if (
-        (predecessor === null && readback === null) ||
-        (predecessor !== null &&
-          readback !== null &&
-          readback.receipt.receiptId === predecessor.receipt.receiptId)
-      ) {
+      if (readback === null) {
+        if (predecessor !== null) {
+          throw new DeploymentServiceHealthConflictError();
+        }
+        needsPreRead = false;
+        continue;
+      }
+      if (isValidSuccessor(readback.receipt, candidate)) {
+        predecessor = readback;
+        needsPreRead = false;
         continue;
       }
       throw new DeploymentServiceHealthConflictError();

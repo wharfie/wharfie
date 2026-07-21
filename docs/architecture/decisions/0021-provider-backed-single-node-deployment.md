@@ -120,7 +120,7 @@ MiB/s, encrypted, single-attach, retained on destroy, and attached with
 and `/dev/sdg`, respectively.
 `DeploymentPlanV3` embeds the complete
 specification; every action ID binds its `providerSpecId`, and
-`DeploymentInspectionV4` binds the same ID and carries the complete
+`DeploymentInspectionV5` binds the same ID and carries the complete
 provider-visible service-health observation when one exists.
 
 Converge and recovery validate the submitted or stored specification and never
@@ -608,7 +608,7 @@ dependency binding IDs. Direct resources prove provider-visible ownership;
 untaggable relationships use derived ownership rooted transitively in directly
 owned resources. `DeploymentHeadV2` accepts no dangling, stale, self-referential,
 or cyclic lineage, and a retained binding may not depend on a role that destroy
-purges. `DeploymentInspectionV4` distinguishes exact reads, authoritative
+purges. `DeploymentInspectionV5` distinguishes exact reads, authoritative
 not-found results, and access failures, and names the exact binding and
 dependency lineage behind present ownership evidence. Present evidence must
 reproduce the referenced binding's provider identity, graph role, ownership,
@@ -735,19 +735,26 @@ and `conflict` are first-class results even when no head or incarnation can be
 read. `absent` requires an authoritative provider-locator not-found result;
 an empty caller-supplied array is not absence.
 
-One host-owned `DeploymentServiceHealthReceiptV2` may be published to the
-deterministic current object
-`health/v2/<deployment-instance>/<incarnation>/<node-binding>`. It binds the
-provider scope and specification, deployment instance and incarnation, one
-stable non-destroy operation plus the head ID/generation that authorized it,
-the exact resident-node binding and provider resource ID, deployment and
-application revisions, artifact, service and process session, lifecycle and
-owner generations, activation record and selection generations, process ID,
-and a positive sequence. Its substrate binding must resolve all eight exact
-artifact, network, and runtime-identity dependency bindings in the current
-head. It can assert only `healthy`. The authorizing head is
-not required to remain the exact latest mutable head: a later head may retain
-the same target or settled deployment lineage and operation authority.
+One host-owned `DeploymentServiceHealthReceiptV3` (`whr3`) may be published to
+the deterministic current object:
+
+```text
+health/v3/<RoleId>:<InstanceId>
+```
+
+It binds the provider scope and specification, deployment instance and
+incarnation, one stable non-destroy operation plus the head ID/generation that
+authorized it, deployment and application revisions, artifact, service and
+process session, lifecycle and owner generations, activation record and
+selection generations, process ID, and a positive sequence. It additionally
+binds both the exact resident-node binding and long-format EC2 instance ID and
+the exact runtime-role binding and immutable IAM RoleId. Before provider I/O,
+the health boundary validates those two graph members, their provider-ID
+shapes, and the complete transitive dependency-binding closure rooted at the
+substrate against the current non-destroy head. It can assert only `healthy`.
+The authorizing head is not required to remain the exact latest mutable head:
+a later head may retain the same target or settled deployment lineage and
+operation authority.
 
 Every new S3 publication must name the exact current head ID and generation.
 After publication, a coordinator head transition may leave that receipt
@@ -757,12 +764,23 @@ is host-authored history, while the current operation lineage is the authority
 the coordinator can independently revalidate.
 
 Publication writes canonical JSON with SHA-256 checksum and AES256 encryption
-to the current versioned S3 object. `If-None-Match` establishes the first
-receipt; later writes use the current ETag only as an opaque `If-Match`
-compare-and-swap token. ETag is neither content identity nor ordering
-evidence. Ambiguous writes, including response loss, are decided by bounded
-`GetObject` plus `HeadObject` readback of the current VersionId, checksum,
-metadata, encryption, and complete receipt. Within one process session the
+to the current versioned S3 object. A sequence-one publication attempts
+`PutObject` with `If-None-Match: *` before any read. The conditional write and
+its bounded exact `GetObject` plus `HeadObject` readback distinguish an accepted
+first receipt, an occupied predecessor, a lost response, and unresolved
+provider evidence without treating `GetObject` authorization as proof that a
+key is absent. The transport never calls object or version listing and has no
+`ListBucket` absence dependency. A later-sequence publication first reads the
+current object and uses its ETag only as an opaque `If-Match` compare-and-swap
+token. A sequence-one new session that finds an existing legal predecessor may
+likewise advance it through that conditional CAS. ETag is neither content
+identity nor ordering evidence.
+
+No mutation response proves settlement. Every successful, conditional, or
+ambiguous write outcome is decided by bounded `GetObject` plus `HeadObject`
+readback of the same current VersionId, checksum, metadata, encryption, and
+complete receipt. A forbidden or otherwise unresolved exact read remains
+unknown; it never falls back to listing. Within one process session the
 sequence must advance by exactly one; a new fenced session restarts at one and
 must advance the lifecycle generation. Owner generation is stable inside one
 session but may reset after graceful ownership release; the newer lifecycle
@@ -773,12 +791,22 @@ generation, and session.
 Freshness comes from S3's `LastModified`, never a host-authored timestamp. The
 pinned provider contract publishes every 15 seconds and admits a receipt only
 through 60 seconds of age plus 5 seconds of clock-skew allowance; a provider
-timestamp more than 5 seconds in the coordinator's future is conflict. The
-inspection `win4` namespace carries the complete receipt and current object
-VersionId/ETag/`LastModified` observation. Only an exact, fresh, context-bound
+timestamp more than 5 seconds in the coordinator's future is conflict.
+`DeploymentInspectionV5` in the fresh `win5` namespace carries the complete
+receipt and current object VersionId/ETag/`LastModified` observation. It
+correlates both the node binding/instance ID and runtime-role binding/RoleId
+with the inspection resource evidence. Only an exact, fresh, context-bound
 observation can make the resident service healthy, and only that healthy
 resident observation can make the whole inspection `converged` or authorize
 final readiness.
+
+This contract validates the claimed role and node identities against durable
+bindings; it does not prove that the credentials used to publish belong to that
+exact STS role session. The runtime IAM policy, live caller-identity proof,
+privileged observer, and production publisher wiring remain separate future
+work. In particular, this decision does not claim that a not-yet-implemented
+IAM policy enforces `If-None-Match` or `If-Match`; those headers are currently
+fences in the application publication protocol.
 
 `converged` requires complete provider-defined resource-graph coverage,
 verified ownership, exact desired/observed state, and a resident service status
@@ -1036,16 +1064,48 @@ shapes; reverse destroy waits for both plus any virtual-gateway propagation to
 disappear. The default IPv4 route is the next graph role, followed by the
 subnet association and application security group.
 
-The production runtime policy must grant only current-object reads and
-conditional writes for the deployment's exact health key and deny object or
-version deletion; otherwise a delete marker could hide the semantic
-predecessor. Noncurrent lifecycle retention also deliberately leaves one
-current version at every retired incarnation/node key until a future explicit
-retained-state collector proves it may remove that history.
+The sixteenth through eighteenth slices complete the fixed network path with
+three more independently recoverable effects: the derived default IPv4 route,
+the derived subnet/route-table association, and the directly owned application
+security group. The two derived resources use exact endpoint-binding lineage
+and provider natural slots instead of pretending that mutation responses are
+durable receipts. The security group correlates exact ID, ownership-tag, and
+case-insensitive VPC/name-slot evidence and accepts only the fixed no-ingress,
+all-IPv4-egress shape. The retained volume and all eight network effects now
+have controller-compatible deterministic-mock drivers, but they are not yet a
+composed provider.
 
-The remaining independently recoverable resource drivers, starting with the
-route table's derived default route and subnet association, source and packaged
-deployment commands, production composition, and clean-account lifecycle proof
-remain unfinished. A document, bucket/table tag,
-SSM result, EC2 description, or content ID still never proves that an
-application resource effect occurred.
+The nineteenth slice replaces the old compound runtime identity role with the
+18-role `AwsSingleNodeResourceGraphV2` and pins it in ProviderSpec V4/`wap4`.
+IAM role creation, inline-policy installation, instance-profile creation, and
+role/profile membership are four independent durable actions. No IAM driver or
+IAM authority is implemented by that graph change.
+
+The twentieth slice advances the host-owned receipt to V3/`whr3`, changes its
+current-object address to `health/v3/<RoleId>:<InstanceId>`, and advances
+inspection to V5/`win5`. It requires both exact runtime-role and node binding
+correlation and makes sequence-one publication a conditional PUT-first
+protocol, with every outcome resolved by bounded exact body/head readback.
+The transport does not list objects and does not need `ListBucket` to infer
+first-publication absence. The provider specification remains V4 because its
+serialized fixed timing and abstract conditional-current-object capability did
+not change.
+
+The future production runtime policy must grant only the exact current-object
+reads and writes intended for one runtime identity and deny object or version
+deletion; otherwise a delete marker could hide the semantic predecessor. That
+policy is not implemented here, and this decision does not claim IAM
+enforcement of the HTTP conditional headers. The health boundary also does not
+yet use STS to prove that the live publishing credentials' caller identity is
+the RoleId/InstanceId pair claimed by the receipt. Noncurrent lifecycle
+retention deliberately leaves one current object at every retired role/node
+key, while earlier V1/V2 current objects are not migrated or collected. A
+future explicit retained-state collector must prove when any such current
+object may be removed.
+
+The IAM contract and authority, four independently recoverable runtime-identity
+drivers, source and packaged deployment commands, production composition,
+privileged publisher wiring, and clean-account lifecycle proof remain
+unfinished. A document, bucket/table tag, SSM result, EC2 description, health
+receipt, or content ID still never proves that an application resource effect
+occurred or that a particular live AWS principal published it.

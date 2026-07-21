@@ -53,11 +53,11 @@ import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 4;
+export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 5;
 export const DEPLOYMENT_INSPECTION_KIND = 'deploymentInspection';
 export const DEPLOYMENT_INSPECTION_ID_DOMAIN =
-  'wharfie:deployment-inspection:v4';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win4';
+  'wharfie:deployment-inspection:v5';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win5';
 export const DEPLOYMENT_INSPECTION_STATUSES = Object.freeze([
   'absent',
   'converged',
@@ -998,6 +998,10 @@ function assertInspectionContext(
     (/** @type {Readonly<Record<string, any>>} */ resource) =>
       resource.resourceKey === 'substrate',
   );
+  const runtimeRole = payload.resources.find(
+    (/** @type {Readonly<Record<string, any>>} */ resource) =>
+      resource.resourceKey === 'runtime-role',
+  );
   const healthObservation = resident?.service?.healthReceipt ?? null;
   if (healthObservation !== null) {
     const receipt = healthObservation.receipt;
@@ -1015,8 +1019,12 @@ function assertInspectionContext(
       receipt.appId !== payload.deploymentRevision.appId ||
       receipt.artifactId !== payload.deploymentRevision.artifactId ||
       receipt.revisionId !== payload.deploymentRevision.revisionId ||
+      receipt.nodeBindingId !== resident?.bindingId ||
       receipt.nodeProviderResourceId !==
         resident?.providerIdentity?.providerResourceId ||
+      receipt.runtimeRoleBindingId !== runtimeRole?.bindingId ||
+      receipt.runtimeRoleId !==
+        runtimeRole?.providerIdentity?.providerResourceId ||
       receipt.authorizedHeadGeneration > payload.headGeneration ||
       healthObservation.object.bucketName !== expectedLocation.bucketName ||
       healthObservation.object.key !== expectedLocation.key
@@ -1217,7 +1225,7 @@ export function validateDeploymentInspection(
   const document = cloneJsonObject(value, valuePath);
   assertAllKeys(document, DOCUMENT_KEYS, valuePath);
   if (document.schemaVersion !== DEPLOYMENT_INSPECTION_SCHEMA_VERSION) {
-    throw new TypeError(`${valuePath}.schemaVersion must be the integer 4.`);
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 5.`);
   }
   if (document.kind !== DEPLOYMENT_INSPECTION_KIND) {
     throw new TypeError(

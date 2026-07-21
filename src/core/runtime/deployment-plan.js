@@ -45,7 +45,7 @@ export const DEPLOYMENT_PLAN_KIND = 'deploymentPlan';
 export const DEPLOYMENT_PLAN_ID_DOMAIN = 'wharfie:deployment-plan:v3';
 export const DEPLOYMENT_PLAN_ID_PREFIX = 'wpl3';
 export const DEPLOYMENT_ACTION_ID_DOMAIN = 'wharfie:deployment-action:v3';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win4';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win5';
 
 export const DEPLOYMENT_PLAN_OPERATIONS = Object.freeze([
   'apply',

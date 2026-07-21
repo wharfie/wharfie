@@ -37,6 +37,8 @@ import {
 import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from '../../src/core/runtime/deployment-resource-graph.js';
 import { createLedgerServiceId } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 
+const RUNTIME_ROLE_ID = 'AROA1234567890EXAMPLE';
+
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
   return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
@@ -50,6 +52,11 @@ function digest(value) {
 /** @param {string} prefix @param {string} domain @param {unknown} value @returns {string} */
 function semanticId(prefix, domain, value) {
   return createCanonicalJsonSha256Id({ prefix, domain, value });
+}
+
+/** @param {number} seed @returns {string} */
+function instanceId(seed) {
+  return `i-${seed.toString(16).padStart(17, '0')}`;
 }
 
 /** @param {number} seed @returns {string} */
@@ -216,8 +223,10 @@ function makeResourceBindings(
           providerTypeOverrides[resource.resourceKey] ?? resource.providerType,
         providerResourceId:
           resource.resourceKey === 'substrate'
-            ? `i-0123456789abcde${seed}`
-            : `provider-resource-${resource.resourceKey}-${seed}`,
+            ? instanceId(seed)
+            : resource.resourceKey === 'runtime-role'
+              ? RUNTIME_ROLE_ID
+              : `provider-resource-${resource.resourceKey}-${seed}`,
         providerScopeId: fixture.providerScope.providerScopeId,
         ownershipNonce: createOwnershipNonce(
           Buffer.alloc(32, ((seed + index) % 255) + 1),
@@ -244,7 +253,7 @@ function makeNodeBinding(fixture, seed = 1, resourceKey = 'substrate') {
     onDestroy: 'purge',
     dependencyBindings: fixture.node.dependencyBindings,
     providerType: 'ec2-instance',
-    providerResourceId: `i-0123456789abcde${seed}`,
+    providerResourceId: instanceId(seed),
     providerScopeId: fixture.providerScope.providerScopeId,
     ownershipNonce: createOwnershipNonce(Buffer.alloc(32, seed)),
     createdByActionId: actionId(seed),
@@ -303,6 +312,13 @@ function makeFixture() {
       binding.resourceKey === 'substrate',
   );
   if (node === undefined) throw new Error('Health fixture lacks substrate.');
+  const runtimeRole = bindings.find(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.resourceKey === 'runtime-role',
+  );
+  if (runtimeRole === undefined) {
+    throw new Error('Health fixture lacks runtime role.');
+  }
   const head = createDeploymentHead({
     deploymentInstanceId,
     providerScope,
@@ -315,7 +331,7 @@ function makeFixture() {
     activeOperation: null,
     lastOperation: completedOperation(1, 'create', bindings),
   });
-  return Object.freeze({ ...base, bindings, node, head });
+  return Object.freeze({ ...base, bindings, node, runtimeRole, head });
 }
 
 /** @param {ReturnType<typeof makeFixture>} fixture @param {Record<string, any>} [overrides] @returns {Readonly<Record<string, any>>} */
@@ -330,6 +346,8 @@ function makeReceipt(fixture, overrides = {}) {
     authorizedHeadGeneration: fixture.head.generation,
     nodeBindingId: fixture.node.bindingId,
     nodeProviderResourceId: fixture.node.providerResourceId,
+    runtimeRoleBindingId: fixture.runtimeRole.bindingId,
+    runtimeRoleId: fixture.runtimeRole.providerResourceId,
     deploymentRevisionId: fixture.deploymentRevision.deploymentRevisionId,
     appId: fixture.deploymentRevision.appId,
     artifactId: fixture.deploymentRevision.artifactId,
@@ -382,12 +400,14 @@ describe('deployment service-health receipt', () => {
     const { receiptId, ...payload } = receipt;
 
     expect(receipt).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: 'deploymentServiceHealthReceipt',
-      receiptId: expect.stringMatching(/^whr2_[A-Za-z0-9_-]{43}$/),
+      receiptId: expect.stringMatching(/^whr3_[A-Za-z0-9_-]{43}$/),
       health: 'healthy',
       nodeBindingId: fixture.node.bindingId,
       nodeProviderResourceId: fixture.node.providerResourceId,
+      runtimeRoleBindingId: fixture.runtimeRole.bindingId,
+      runtimeRoleId: RUNTIME_ROLE_ID,
       deploymentRevisionId: fixture.deploymentRevision.deploymentRevisionId,
       sequence: 1,
     });
@@ -407,7 +427,7 @@ describe('deployment service-health receipt', () => {
   it('derives the only current-object key and canonical control bucket', () => {
     const fixture = makeFixture();
     const receipt = makeReceipt(fixture);
-    const key = `health/v2/${fixture.deploymentInstanceId}/${fixture.incarnationId}/${fixture.node.bindingId}`;
+    const key = `health/v3/${RUNTIME_ROLE_ID}:${fixture.node.providerResourceId}`;
 
     expect(getDeploymentServiceHealthObjectKey(receipt)).toBe(key);
     const location = getDeploymentServiceHealthObjectLocation(
@@ -428,7 +448,15 @@ describe('deployment service-health receipt', () => {
     const receipt = makeReceipt(fixture);
     const unsupported = { ...clone(receipt), observedAt: 1 };
     const changed = { ...clone(receipt), sequence: 2 };
-    const legacy = { ...clone(receipt), schemaVersion: 1 };
+    const legacy = { ...clone(receipt), schemaVersion: 2 };
+    const legacyReceiptId = {
+      ...clone(receipt),
+      receiptId: semanticId(
+        'whr2',
+        'wharfie:deployment-service-health-receipt:v2',
+        { legacy: true },
+      ),
+    };
 
     expect(() => validateDeploymentServiceHealthReceipt(unsupported)).toThrow(
       /observedAt is not supported/,
@@ -437,8 +465,11 @@ describe('deployment service-health receipt', () => {
       /receiptId does not match/,
     );
     expect(() => validateDeploymentServiceHealthReceipt(legacy)).toThrow(
-      /schemaVersion must be the integer 2/,
+      /schemaVersion must be the integer 3/,
     );
+    expect(() =>
+      validateDeploymentServiceHealthReceipt(legacyReceiptId),
+    ).toThrow(/whr3/);
     expect(() => makeReceipt(fixture, { health: 'starting' })).toThrow(
       /health must be 'healthy'/,
     );
@@ -456,7 +487,21 @@ describe('deployment service-health receipt', () => {
       makeReceipt(fixture, {
         nodeProviderResourceId: 'https://user:password@example.com/node',
       }),
-    ).toThrow(/credential-bearing URLs/);
+    ).toThrow(/nodeProviderResourceId|EC2 instance ID/);
+    expect(() =>
+      makeReceipt(fixture, { runtimeRoleId: 'not-an-iam-role-id' }),
+    ).toThrow(/runtimeRoleId|IAM RoleId/);
+    expect(() =>
+      makeReceipt(fixture, { runtimeRoleId: 'AIPA1234567890EXAMPLE' }),
+    ).toThrow(/runtimeRoleId|IAM RoleId/);
+    expect(() =>
+      makeReceipt(fixture, { nodeProviderResourceId: 'i-01234567' }),
+    ).toThrow(/nodeProviderResourceId|EC2 instance ID/);
+    expect(() =>
+      makeReceipt(fixture, {
+        nodeProviderResourceId: 'i-0123456789ABCDEF0',
+      }),
+    ).toThrow(/nodeProviderResourceId|EC2 instance ID/);
   });
 
   it('binds exact scope, specification, head, node, revision, and resident service authority', () => {
@@ -477,6 +522,22 @@ describe('deployment service-health receipt', () => {
         context(fixture),
       ),
     ).toThrow(/nodeProviderResourceId does not match context/);
+    expect(() =>
+      validateDeploymentServiceHealthReceiptContext(
+        makeReceipt(fixture, {
+          runtimeRoleId: 'AROA0987654321EXAMPLE',
+        }),
+        context(fixture),
+      ),
+    ).toThrow(/runtimeRoleId does not match context/);
+    expect(() =>
+      validateDeploymentServiceHealthReceiptContext(
+        makeReceipt(fixture, {
+          runtimeRoleBindingId: fixture.node.bindingId,
+        }),
+        context(fixture),
+      ),
+    ).toThrow(/runtimeRoleBindingId does not match context/);
     expect(() =>
       validateDeploymentServiceHealthReceiptContext(
         makeReceipt(fixture, { deploymentOperationId: operationId(77) }),
@@ -913,6 +974,24 @@ describe('deployment service-health successors', () => {
         }),
       ),
     ).toThrow(/nodeProviderResourceId cannot change/);
+    expect(() =>
+      validateDeploymentServiceHealthReceiptSuccessor(
+        previous,
+        successor(previous, {
+          runtimeRoleId: 'AROA0987654321EXAMPLE',
+          sequence: 2,
+        }),
+      ),
+    ).toThrow(/runtimeRoleId cannot change/);
+    expect(() =>
+      validateDeploymentServiceHealthReceiptSuccessor(
+        previous,
+        successor(previous, {
+          runtimeRoleBindingId: fixture.node.bindingId,
+          sequence: 2,
+        }),
+      ),
+    ).toThrow(/runtimeRoleBindingId cannot change/);
     expect(() =>
       validateDeploymentServiceHealthReceiptSuccessor(
         previous,

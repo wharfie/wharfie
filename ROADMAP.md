@@ -2,7 +2,7 @@
 
 **Status:** The strict single-node deployment protocol now expands its small
 portable capability model into one fixed 18-role AWS resource graph. Provider
-specification V4 pins that graph; Plan/Action V3, Inspection V4, Binding V2,
+specification V4 pins that graph; Plan/Action V3, Inspection V5, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
 destroy policy. Strict controller-compatible drivers now cover the retained
@@ -13,8 +13,14 @@ EC2 recovery kernel while retaining distinct intrinsic, natural-slot, and
 destroy contracts; derived relationships prove both endpoints before mutation.
 Runtime identity is now split into four explicit graph effects so its role,
 inline policy, instance profile, and role/profile membership can recover
-independently. Their IAM drivers, followed by managed artifact, substrate,
-attachment, provider composition, commands, and clean-account proof, are next ·
+independently. Service health V3/`whr3` binds the exact runtime-role and node
+bindings plus immutable IAM RoleId and EC2 instance ID at
+`health/v3/<RoleId>:<InstanceId>`. Initial publication is a conditional
+PUT-first protocol with exact readback and no `ListBucket` absence dependency;
+Inspection V5/`win5` correlates both identities before readiness. Live STS
+caller proof and the privileged production publisher remain unwired. The IAM
+contracts and drivers, followed by managed artifact, substrate, attachment,
+provider composition, commands, and clean-account proof, are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -567,6 +573,16 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       rooted in its exact graph dependencies. This is strict deterministic
       contract/controller proof, not implementation of the remaining AWS
       resource drivers.
+- [x] Advance current service health to V3/`whr3` and inspection to
+      V5/`win5`. The receipt and inspection correlate the exact runtime-role
+      binding/immutable IAM RoleId with the resident-node binding/long-format
+      EC2 instance ID, and the one current object is
+      `health/v3/<RoleId>:<InstanceId>`. Sequence one conditionally writes
+      before reading, then every outcome settles only through bounded exact
+      `GetObject` plus `HeadObject`; later successors retain ETag CAS. The
+      transport never lists and needs no `ListBucket` absence proof. This is a
+      deterministic contract/transport boundary, not STS proof of the live
+      publisher, an IAM policy implementation, or production observer wiring.
 - [x] Implement the fixed `network-vpc` role through a narrow direct-EC2
       authority and controller-compatible resource driver. SDK transport
       attempts are capped at one because `CreateVpc` has no `ClientToken`;
@@ -723,30 +739,44 @@ recoverable action per modeled resource or relationship, exact binding
 lineage, canonical apply/reverse-destroy ordering, and retained-volume versus
 purged-attachment lifecycle. Runtime identity is explicitly decomposed into
 an IAM role, derived inline policy, instance profile, and derived profile/role
-association so each provider effect can settle durably. The implemented
-resource drivers are not yet composed into a complete provider, and the
-runtime path still does not attach, format, or mount the retained volumes or
-fulfill a service capability.
+association so each provider effect can settle durably. Current service-health
+authority is V3/`whr3`: it correlates the runtime-role and node bindings with
+their immutable AWS RoleId and EC2 instance ID and addresses exactly
+`health/v3/<RoleId>:<InstanceId>`. Sequence-one publication is PUT-first with
+`If-None-Match: *`, followed by bounded exact body/head readback; it never uses
+object listing or `ListBucket` as an absence oracle. Later heartbeats retain
+ETag compare-and-swap, and Inspection V5/`win5` is the final readiness
+envelope. The binding checks do not prove the publisher's live STS caller
+identity, and the privileged production publisher is not wired. The
+implemented resource drivers are not yet composed into a complete provider,
+and the runtime path still does not attach, format, or mount the retained
+volumes or fulfill a service capability.
 
-1. Implement the independently recoverable AWS runtime-role, inline-policy,
-   instance-profile, and role/profile-association effects, then the managed
-   artifact, node, and volume-attachment resources;
+1. Define the exact IAM names, trust and inline-policy documents, state
+   digests, identity evidence, and narrow AWS authority; then implement the
+   independently recoverable runtime-role, inline-policy, instance-profile,
+   and role/profile-association effects. Do not treat the V3 health key or its
+   conditional publication protocol as proof that an IAM policy or STS caller
+   check already exists.
+2. Implement the managed artifact, node, and volume-attachment resources;
    build the provider router, inspection, `createPlan`, and complete controller
    composition; and wire resident-service activation and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
-2. Install and wire the privileged host observer outside the application UID,
+3. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
-   recovery.
-3. Begin provider-backed coordinator recovery only after the single-node
+   recovery and the publishing caller's exact STS role/session identity.
+4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [runtime-identity resource-graph
-checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md).
-Its parent is the [direct EC2 security-group resource
+The current restart point is the [exact runtime service-health
+checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md).
+Its parent is the [runtime-identity resource-graph
+checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md),
+whose parent is the [direct EC2 security-group resource
 checkpoint](llm/checkpoints/2026-07-21-v36-direct-ec2-security-group-resource.md),
 whose parent is the [derived subnet/route-table association
 checkpoint](llm/checkpoints/2026-07-21-v35-derived-subnet-route-table-association.md),

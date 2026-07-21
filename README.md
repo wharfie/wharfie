@@ -163,7 +163,7 @@ content ID of one fixed 18-role physical-resource graph. Runtime identity is
 four independently recoverable effects: an IAM role, its derived inline
 policy, an instance profile, and their derived association. DeploymentPlanV3
 expands the small portable capability model into one independently recoverable
-action per graph role, while DeploymentInspectionV4 binds present ownership to
+action per graph role, while DeploymentInspectionV5 binds present ownership to
 exact BindingV2 dependency lineage and distinguishes authoritative absence from
 access failure. Apply and reconcile use one canonical topological order;
 destroy reverses it, retaining state volumes while purging their attachments.
@@ -194,16 +194,25 @@ held bytes are also cross-checked against the SEA's embedded app, revision, and
 runtime target. Converge requires that receipt and regenerates provider
 authority after staging before accepting a plan; resume revalidates the
 retained version without historical local bytes, while destroy deliberately
-does not require it. A host-owned provider-visible health receipt now binds the
-exact deployment/node, operation/head lineage, running release, service
-session, durable generations, process, and heartbeat sequence. Its conditional
-current S3 object supplies version and `LastModified` freshness evidence, and
-only a fresh context-bound receipt can make Inspection V4 converged. The exact
-`health/v2/` bucket lifecycle makes noncurrent health versions eligible for
-asynchronous expiration after one day without collecting the current receipt
-or staged artifacts. This boundary is
-proved under deterministic mocks. The first controller-compatible resource
-module can create one exact retained `gp3` volume with a stable EC2
+does not require it. A host-owned provider-visible V3/`whr3` health receipt
+now binds the exact deployment, operation/head lineage, running release,
+service session, durable generations, process, and heartbeat sequence to both
+the resident-node binding/EC2 instance ID and runtime-role binding/immutable
+IAM RoleId. Its one current S3 object is addressed exactly as
+`health/v3/<RoleId>:<InstanceId>`. A sequence-one publisher attempts the
+conditional `PutObject` before any read, then resolves every outcome through
+bounded exact `GetObject` plus `HeadObject` readback; later successors use the
+current ETag as an opaque compare-and-swap token. The transport never lists
+objects and does not require `ListBucket` to prove first-publication absence.
+The current object supplies version and `LastModified` freshness evidence, and
+only a fresh context-bound receipt can make Inspection V5/`win5` converged.
+The exact `health/v3/` bucket lifecycle makes noncurrent health versions
+eligible for asynchronous expiration after one day without collecting the
+current receipt or staged artifacts. This boundary is proved under
+deterministic mocks. It does not yet prove the publishing caller's live STS
+identity or wire the privileged production publisher. The first
+controller-compatible resource module can create one exact retained `gp3`
+volume with a stable EC2
 `ClientToken` derived from the durable action and exact ownership nonce, apply
 atomic ownership tags, recover an ambiguous response through controller replay
 or bounded tagged discovery plus strict `DescribeVolumes` readback, and make
@@ -227,8 +236,9 @@ composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Runtime-identity graph checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md) — the current handoff for the fixed 18-role graph and recoverable IAM effect boundaries.
-- [Direct EC2 internet-gateway resource checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md) — the current handoff for the standalone gateway lifecycle, attachment-independent intrinsic state, and attachment-fenced purge.
+- [Exact runtime service-health checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md) — the current handoff for V3 role/node-addressed health, PUT-first conditional publication, and Inspection V5 authority.
+- [Runtime-identity graph checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md) — the preceding handoff for the fixed 18-role graph and recoverable IAM effect boundaries.
+- [Direct EC2 internet-gateway resource checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md) — the preceding handoff for the standalone gateway lifecycle, attachment-independent intrinsic state, and attachment-fenced purge.
 - [Direct EC2 VPC resource checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md) — the preceding handoff for the narrow single-attempt network authority, atomically tagged VPC lifecycle, and explicit no-token ambiguity boundary.
 - [Multi-effect resource graph checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md) — the historical handoff for the superseded 15-role graph, strict role/dependency/lifecycle contracts, and recoverable multi-effect controller frontier.
 - [Retained EBS volume resource checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md) — the preceding handoff for provider-spec V2 placement and encryption pinning plus the first controller-compatible, response-loss-safe retained resource capability.

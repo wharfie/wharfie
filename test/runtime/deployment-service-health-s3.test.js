@@ -43,6 +43,7 @@ import {
 } from '../../src/core/runtime/content-id.js';
 
 const NOW = 1_800_000_000_000;
+const RUNTIME_ROLE_ID = 'AROA1234567890EXAMPLE';
 
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
@@ -66,8 +67,8 @@ function bindingActionId(index) {
   });
 }
 
-/** @param {Readonly<Record<string, any>>} fixture @returns {Readonly<Record<string, any>>[]} */
-function makeResourceBindings(fixture) {
+/** @param {Readonly<Record<string, any>>} fixture @param {Readonly<Record<string, string>>} [providerTypeOverrides] @returns {Readonly<Record<string, any>>[]} */
+function makeResourceBindings(fixture, providerTypeOverrides = {}) {
   /** @type {Readonly<Record<string, any>>[]} */
   const bindings = [];
   for (
@@ -108,11 +109,14 @@ function makeResourceBindings(fixture) {
         ownershipMode: resource.ownershipMode,
         onDestroy: resource.onDestroy,
         dependencyBindings,
-        providerType: resource.providerType,
+        providerType:
+          providerTypeOverrides[resource.resourceKey] ?? resource.providerType,
         providerResourceId:
           resource.resourceKey === 'substrate'
             ? 'i-0123456789abcdef0'
-            : `provider-resource-${resource.resourceKey}`,
+            : resource.resourceKey === 'runtime-role'
+              ? RUNTIME_ROLE_ID
+              : `provider-resource-${resource.resourceKey}`,
         providerScopeId: fixture.providerScope.providerScopeId,
         ownershipNonce: createOwnershipNonce(Buffer.alloc(32, index + 1)),
         createdByActionId: bindingActionId(index),
@@ -202,6 +206,13 @@ function makeFixture() {
       binding.resourceKey === 'substrate',
   );
   if (node === undefined) throw new Error('Health S3 fixture lacks substrate.');
+  const runtimeRole = bindings.find(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.resourceKey === 'runtime-role',
+  );
+  if (runtimeRole === undefined) {
+    throw new Error('Health S3 fixture lacks runtime role.');
+  }
   const head = createDeploymentHead({
     deploymentInstanceId,
     providerScope,
@@ -242,6 +253,7 @@ function makeFixture() {
     incarnationId,
     bindings,
     node,
+    runtimeRole,
     head,
     context,
   });
@@ -259,6 +271,8 @@ function makeReceipt(fixture, overrides = {}) {
     authorizedHeadGeneration: fixture.head.generation,
     nodeBindingId: fixture.node.bindingId,
     nodeProviderResourceId: fixture.node.providerResourceId,
+    runtimeRoleBindingId: fixture.runtimeRole.bindingId,
+    runtimeRoleId: fixture.runtimeRole.providerResourceId,
     deploymentRevisionId: fixture.deploymentRevision.deploymentRevisionId,
     appId: fixture.deploymentRevision.appId,
     artifactId: fixture.deploymentRevision.artifactId,
@@ -309,7 +323,7 @@ function makeStoredObject(receipt, version, lastModifiedAt) {
     ContentType: DEPLOYMENT_SERVICE_HEALTH_CONTENT_TYPE,
     CacheControl: DEPLOYMENT_SERVICE_HEALTH_CACHE_CONTROL,
     Metadata: {
-      'wharfie-schema': 'deployment-service-health-v2',
+      'wharfie-schema': 'deployment-service-health-v3',
       'wharfie-receipt': receipt.receiptId,
     },
   };
@@ -350,11 +364,13 @@ function makeClient(options = {}) {
       if (request.IfNoneMatch === '*' && current !== null) {
         throw Object.assign(new Error('occupied'), {
           name: 'PreconditionFailed',
+          $metadata: { httpStatusCode: 412 },
         });
       }
       if (request.IfMatch !== undefined && request.IfMatch !== current?.ETag) {
         throw Object.assign(new Error('changed'), {
           name: 'PreconditionFailed',
+          $metadata: { httpStatusCode: 412 },
         });
       }
       version += 1;
@@ -379,6 +395,88 @@ function makeClient(options = {}) {
 }
 
 describe('deployment service-health S3 transport', () => {
+  it('rejects malformed runtime-role graph authority before any provider I/O', async () => {
+    const fixture = makeFixture();
+    const bindings = makeResourceBindings(fixture, {
+      'runtime-role': 'iam-user',
+    });
+    const head = createDeploymentHead({
+      deploymentInstanceId: fixture.deploymentInstanceId,
+      providerScope: fixture.providerScope,
+      incarnationId: fixture.incarnationId,
+      generation: fixture.head.generation,
+      phase: 'READY',
+      settledDeploymentRevisionId:
+        fixture.deploymentRevision.deploymentRevisionId,
+      targetDeploymentRevisionId:
+        fixture.deploymentRevision.deploymentRevisionId,
+      resourceBindings: bindings,
+      activeOperation: null,
+      lastOperation: fixture.head.lastOperation,
+    });
+    const harness = makeClient();
+    const health = createDeploymentServiceHealthS3({
+      client: harness.client,
+      providerScope: fixture.providerScope,
+      now: () => NOW,
+    });
+
+    await expect(health.inspect({ ...fixture.context, head })).rejects.toThrow(
+      /runtime-role|exact graph definition/i,
+    );
+    expect(harness.client.getObject).not.toHaveBeenCalled();
+    expect(harness.client.headObject).not.toHaveBeenCalled();
+    expect(harness.client.putObject).not.toHaveBeenCalled();
+  });
+
+  it('rejects destroy-phase health authority before any provider I/O', async () => {
+    const fixture = makeFixture();
+    const head = createDeploymentHead({
+      deploymentInstanceId: fixture.deploymentInstanceId,
+      providerScope: fixture.providerScope,
+      incarnationId: fixture.incarnationId,
+      generation: fixture.head.generation + 1,
+      phase: 'DESTROYING',
+      settledDeploymentRevisionId:
+        fixture.deploymentRevision.deploymentRevisionId,
+      targetDeploymentRevisionId: null,
+      resourceBindings: fixture.bindings,
+      activeOperation: {
+        kind: 'destroy',
+        planId: semanticId('wpl3', 'wharfie:test:health-s3-plan:v1', {
+          seed: 2,
+        }),
+        status: 'running',
+        nextActionIndex: 0,
+        intents: [
+          {
+            actionId: semanticId(
+              'wda3',
+              'wharfie:test:health-s3-destroy-action:v1',
+              { seed: 1 },
+            ),
+            status: 'pending',
+            ownershipNonce: null,
+          },
+        ],
+      },
+      lastOperation: fixture.head.lastOperation,
+    });
+    const harness = makeClient();
+    const health = createDeploymentServiceHealthS3({
+      client: harness.client,
+      providerScope: fixture.providerScope,
+      now: () => NOW,
+    });
+
+    await expect(health.inspect({ ...fixture.context, head })).rejects.toThrow(
+      /cannot authorize health during destroy/i,
+    );
+    expect(harness.client.getObject).not.toHaveBeenCalled();
+    expect(harness.client.headObject).not.toHaveBeenCalled();
+    expect(harness.client.putObject).not.toHaveBeenCalled();
+  });
+
   it('publishes the first receipt conditionally and independently inspects fresh provider evidence', async () => {
     const fixture = makeFixture();
     const receipt = makeReceipt(fixture);
@@ -421,7 +519,7 @@ describe('deployment service-health S3 transport', () => {
       CacheControl: 'no-store',
       ExpectedBucketOwner: fixture.providerScope.accountId,
       Metadata: {
-        'wharfie-schema': 'deployment-service-health-v2',
+        'wharfie-schema': 'deployment-service-health-v3',
         'wharfie-receipt': receipt.receiptId,
       },
       IfNoneMatch: '*',
@@ -432,9 +530,20 @@ describe('deployment service-health S3 transport', () => {
       ChecksumMode: 'ENABLED',
       ExpectedBucketOwner: fixture.providerScope.accountId,
     });
+    expect(harness.client.putObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.getObject).toHaveBeenCalledTimes(2);
+    expect(harness.client.headObject).toHaveBeenCalledTimes(2);
+    expect(harness.client.putObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.getObject.mock.invocationCallOrder[0],
+    );
+    expect(harness.client.putObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.headObject.mock.invocationCallOrder[0],
+    );
+    expect(harness.client).not.toHaveProperty('listObjectsV2');
+    expect(harness.client).not.toHaveProperty('listObjectVersions');
   });
 
-  it('uses the opaque current ETag for successors and resolves a lost Put response by readback', async () => {
+  it('reads a later-sequence predecessor before using its opaque ETag for successor CAS', async () => {
     const fixture = makeFixture();
     const first = makeReceipt(fixture);
     const second = successor(first, { sequence: 2 });
@@ -456,6 +565,12 @@ describe('deployment service-health S3 transport', () => {
     });
     expect(harness.client.putObject.mock.calls[0][0]).not.toHaveProperty(
       'IfNoneMatch',
+    );
+    expect(harness.client.getObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.putObject.mock.invocationCallOrder[0],
+    );
+    expect(harness.client.headObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.putObject.mock.invocationCallOrder[0],
     );
   });
 
@@ -603,7 +718,7 @@ describe('deployment service-health S3 transport', () => {
     expect(harness.client.headObject).toHaveBeenCalledTimes(2);
   });
 
-  it('rejects noninitial creation and adopts an already-current valid successor without writing', async () => {
+  it('rejects absent noninitial creation but transitions from an initial 412 to the occupied successor', async () => {
     const fixture = makeFixture();
     const first = makeReceipt(fixture);
     const noninitial = successor(first, { sequence: 2 });
@@ -624,7 +739,203 @@ describe('deployment service-health S3 transport', () => {
       create(occupied.client).publish(first, fixture.context),
     ).resolves.toMatchObject({ receipt: { receiptId: noninitial.receiptId } });
     expect(missing.client.putObject).not.toHaveBeenCalled();
-    expect(occupied.client.putObject).not.toHaveBeenCalled();
+    expect(occupied.client.putObject).toHaveBeenCalledTimes(1);
+    expect(occupied.client.putObject).toHaveBeenCalledWith(
+      expect.objectContaining({ IfNoneMatch: '*' }),
+    );
+    expect(occupied.client.putObject.mock.invocationCallOrder[0]).toBeLessThan(
+      occupied.client.getObject.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('resolves an ambiguous successful initial Put only through exact Get and Head readback', async () => {
+    const fixture = makeFixture();
+    const receipt = makeReceipt(fixture);
+    const harness = makeClient({ throwAfterPut: true });
+    const health = createDeploymentServiceHealthS3({
+      client: harness.client,
+      providerScope: fixture.providerScope,
+      now: () => NOW,
+    });
+
+    await expect(
+      health.publish(receipt, fixture.context),
+    ).resolves.toMatchObject({
+      receipt: { receiptId: receipt.receiptId },
+      object: { versionId: 'version-1' },
+    });
+    expect(harness.client.putObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.getObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.headObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.putObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.getObject.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('transitions an occupied old session to a valid sequence-one new session with predecessor CAS', async () => {
+    const fixture = makeFixture();
+    const oldSession = makeReceipt(fixture, { sequence: 19 });
+    const newSession = successor(oldSession, {
+      sessionId: semanticId('wss', 'wharfie:test:health-s3-session:v1', {
+        seed: 2,
+      }),
+      lifecycleGeneration: 4,
+      ownerGeneration: 1,
+      processId: 5252,
+      sequence: 1,
+    });
+    const harness = makeClient({ receipt: oldSession });
+    const health = createDeploymentServiceHealthS3({
+      client: harness.client,
+      providerScope: fixture.providerScope,
+      now: () => NOW,
+    });
+
+    await expect(
+      health.publish(newSession, fixture.context),
+    ).resolves.toMatchObject({
+      receipt: { receiptId: newSession.receiptId },
+      object: { versionId: 'version-2' },
+    });
+    expect(harness.client.putObject).toHaveBeenCalledTimes(2);
+    expect(harness.client.putObject.mock.calls[0][0]).toMatchObject({
+      IfNoneMatch: '*',
+    });
+    expect(harness.client.putObject.mock.calls[0][0]).not.toHaveProperty(
+      'IfMatch',
+    );
+    expect(harness.client.putObject.mock.calls[1][0]).toMatchObject({
+      IfMatch: '"opaque-1"',
+    });
+    expect(harness.client.putObject.mock.calls[1][0]).not.toHaveProperty(
+      'IfNoneMatch',
+    );
+  });
+
+  it('resolves a 409 conditional conflict only through bounded exact readback', async () => {
+    const fixture = makeFixture();
+    const first = makeReceipt(fixture);
+    const candidate = successor(first, { sequence: 2 });
+    const harness = makeClient({ receipt: first });
+    harness.client.putObject.mockImplementationOnce(async () => {
+      harness.current = makeStoredObject(candidate, 2, NOW);
+      throw Object.assign(new Error('conditional request conflict'), {
+        name: 'ConditionalRequestConflict',
+        $metadata: { httpStatusCode: 409 },
+      });
+    });
+    const health = createDeploymentServiceHealthS3({
+      client: harness.client,
+      providerScope: fixture.providerScope,
+      now: () => NOW,
+      maxAttempts: 2,
+    });
+
+    await expect(
+      health.publish(candidate, fixture.context),
+    ).resolves.toMatchObject({
+      receipt: { receiptId: candidate.receiptId },
+      object: { versionId: 'version-2' },
+    });
+    expect(harness.client.putObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.getObject).toHaveBeenCalledTimes(2);
+    expect(harness.client.headObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries an initial IfNoneMatch Put after a 409 and unresolved 403 readback without listing', async () => {
+    const fixture = makeFixture();
+    const receipt = makeReceipt(fixture);
+    const harness = makeClient();
+    let putAttempts = 0;
+    harness.client.putObject.mockImplementation(
+      async (/** @type {Record<string, any>} */ request) => {
+        putAttempts += 1;
+        if (putAttempts === 1) {
+          throw Object.assign(new Error('conditional request conflict'), {
+            name: 'ConditionalRequestConflict',
+            $metadata: { httpStatusCode: 409 },
+          });
+        }
+        const storedReceipt = JSON.parse(
+          Buffer.from(request.Body).toString('utf8'),
+        );
+        harness.current = makeStoredObject(storedReceipt, 1, NOW);
+        return { VersionId: 'version-1', ETag: '"opaque-1"' };
+      },
+    );
+    harness.client.getObject.mockImplementation(
+      async (/** @type {Record<string, any>} */ _request) => {
+        if (putAttempts === 1) {
+          throw Object.assign(new Error('readback forbidden'), {
+            name: 'AccessDenied',
+            $metadata: { httpStatusCode: 403 },
+          });
+        }
+        const stored = harness.current;
+        if (stored === null)
+          throw new Error('Expected retry to store receipt.');
+        return { ...stored, Body: Buffer.from(stored.Body) };
+      },
+    );
+    const health = createDeploymentServiceHealthS3({
+      client: harness.client,
+      providerScope: fixture.providerScope,
+      now: () => NOW,
+      maxAttempts: 2,
+    });
+
+    await expect(
+      health.publish(receipt, fixture.context),
+    ).resolves.toMatchObject({
+      receipt: { receiptId: receipt.receiptId },
+      object: { versionId: 'version-1' },
+    });
+    expect(harness.client.putObject).toHaveBeenCalledTimes(2);
+    for (const [request] of harness.client.putObject.mock.calls) {
+      expect(request).toMatchObject({ IfNoneMatch: '*' });
+      expect(request).not.toHaveProperty('IfMatch');
+    }
+    expect(harness.client.getObject).toHaveBeenCalledTimes(2);
+    expect(harness.client.headObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.putObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.getObject.mock.invocationCallOrder[0],
+    );
+    expect(harness.client.getObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.putObject.mock.invocationCallOrder[1],
+    );
+    expect(harness.client.putObject.mock.invocationCallOrder[1]).toBeLessThan(
+      harness.client.getObject.mock.invocationCallOrder[1],
+    );
+    expect(harness.client).not.toHaveProperty('listObjectsV2');
+    expect(harness.client).not.toHaveProperty('listObjectVersions');
+  });
+
+  it('treats 403 reads as unknown and never falls back to object listing', async () => {
+    const fixture = makeFixture();
+    const first = makeReceipt(fixture);
+    const second = successor(first, { sequence: 2 });
+    const harness = makeClient();
+    harness.client.getObject.mockRejectedValue(
+      Object.assign(new Error('forbidden'), {
+        name: 'AccessDenied',
+        $metadata: { httpStatusCode: 403 },
+      }),
+    );
+    const health = createDeploymentServiceHealthS3({
+      client: harness.client,
+      providerScope: fixture.providerScope,
+      now: () => NOW,
+      maxAttempts: 2,
+    });
+
+    await expect(
+      health.publish(second, fixture.context),
+    ).rejects.toBeInstanceOf(DeploymentServiceHealthUnknownError);
+    expect(harness.client.getObject).toHaveBeenCalledTimes(2);
+    expect(harness.client.headObject).not.toHaveBeenCalled();
+    expect(harness.client.putObject).not.toHaveBeenCalled();
+    expect(harness.client).not.toHaveProperty('listObjectsV2');
+    expect(harness.client).not.toHaveProperty('listObjectVersions');
   });
 
   it('adopts an already-valid successor after losing a conditional write race', async () => {
@@ -677,7 +988,13 @@ describe('deployment service-health S3 transport', () => {
     await expect(
       health.publish(candidate, fixture.context),
     ).rejects.toBeInstanceOf(DeploymentServiceHealthConflictError);
-    expect(harness.client.putObject).not.toHaveBeenCalled();
+    expect(harness.client.putObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.putObject).toHaveBeenCalledWith(
+      expect.objectContaining({ IfNoneMatch: '*' }),
+    );
+    expect(harness.client.putObject.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.client.getObject.mock.invocationCallOrder[0],
+    );
   });
 
   it('requires every newly published receipt to name the exact current head', async () => {

@@ -14,6 +14,10 @@ import {
   AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX,
   validateAwsSingleNodeProviderSpecContext,
 } from './deployment-aws-provider-spec.js';
+import {
+  assertAwsEc2InstanceId,
+  assertAwsIamRoleId,
+} from './deployment-aws-runtime-identity-contract.js';
 import { getDeploymentControlBucketName } from './deployment-artifact-stage.js';
 import {
   assertDeploymentHeadId,
@@ -34,7 +38,6 @@ import {
 import {
   DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
   assertDeploymentIncarnationId,
-  validateProviderResourceId,
 } from './deployment-resource-binding.js';
 import {
   DEPLOYMENT_REVISION_ID_PREFIX,
@@ -53,12 +56,12 @@ import {
   DEPLOYMENT_SERVICE_HEALTH_OBJECT_PREFIX,
 } from './deployment-service-health-contract.js';
 
-export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_SCHEMA_VERSION = 2;
+export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_SCHEMA_VERSION = 3;
 export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_KIND =
   'deploymentServiceHealthReceipt';
 export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_DOMAIN =
-  'wharfie:deployment-service-health-receipt:v2';
-export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_PREFIX = 'whr2';
+  'wharfie:deployment-service-health-receipt:v3';
+export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_PREFIX = 'whr3';
 export const DEPLOYMENT_SERVICE_HEALTH_RECEIPT_MAX_BYTES =
   DEPLOYMENT_SERVICE_HEALTH_DOCUMENT_MAX_BYTES;
 export const DEPLOYMENT_SERVICE_HEALTH_CONTEXT_MAX_BYTES = 128 * 1024;
@@ -73,6 +76,8 @@ const CREATE_KEYS = new Set([
   'authorizedHeadGeneration',
   'nodeBindingId',
   'nodeProviderResourceId',
+  'runtimeRoleBindingId',
+  'runtimeRoleId',
   'deploymentRevisionId',
   'appId',
   'artifactId',
@@ -103,6 +108,8 @@ const SUCCESSOR_AUTHORITY_KEYS = Object.freeze([
   'incarnationId',
   'nodeBindingId',
   'nodeProviderResourceId',
+  'runtimeRoleBindingId',
+  'runtimeRoleId',
   'appId',
   'serviceId',
   'health',
@@ -114,8 +121,8 @@ const SUCCESSOR_REVISION_KEYS = Object.freeze([
 ]);
 
 /**
- * @typedef DeploymentServiceHealthReceiptV2
- * @property {2} schemaVersion - Schema version.
+ * @typedef DeploymentServiceHealthReceiptV3
+ * @property {3} schemaVersion - Schema version.
  * @property {'deploymentServiceHealthReceipt'} kind - Document kind.
  * @property {string} receiptId - Immutable content identity.
  * @property {string} providerScopeId - Exact provider credential scope.
@@ -127,6 +134,8 @@ const SUCCESSOR_REVISION_KEYS = Object.freeze([
  * @property {number} authorizedHeadGeneration - Head generation observed by the host boundary.
  * @property {string} nodeBindingId - Exact resident-node binding.
  * @property {string} nodeProviderResourceId - Exact provider node identity.
+ * @property {string} runtimeRoleBindingId - Exact immutable runtime-role binding.
+ * @property {string} runtimeRoleId - Exact immutable AWS IAM RoleId.
  * @property {string} deploymentRevisionId - Exact deployed revision.
  * @property {string} appId - Owning application.
  * @property {string} artifactId - Exact running SEA bytes.
@@ -183,7 +192,7 @@ function positiveSafeInteger(value, path) {
 /**
  * Derive the one mutable current-health object key for a deployment node.
  * Versioned object storage retains each immutable receipt written to this key.
- * @param {unknown} value - Deployment instance, incarnation, and node binding.
+ * @param {unknown} value - Immutable runtime role and resident-node identities.
  * @param {string} [valuePath] - Human-readable value path.
  * @returns {string} - Canonical current-health object key.
  */
@@ -192,26 +201,18 @@ export function getDeploymentServiceHealthObjectKey(
   valuePath = 'deploymentServiceHealth',
 ) {
   const identity = /** @type {Record<string, any>} */ (value);
-  assertDeploymentInstanceId(
-    identity?.deploymentInstanceId,
-    `${valuePath}.deploymentInstanceId`,
+  assertAwsIamRoleId(identity?.runtimeRoleId, `${valuePath}.runtimeRoleId`);
+  assertAwsEc2InstanceId(
+    identity?.nodeProviderResourceId,
+    `${valuePath}.nodeProviderResourceId`,
   );
-  assertDeploymentIncarnationId(
-    identity?.incarnationId,
-    `${valuePath}.incarnationId`,
-  );
-  assertDomainSeparatedSha256Id(
-    identity?.nodeBindingId,
-    DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
-    `${valuePath}.nodeBindingId`,
-  );
-  return `${DEPLOYMENT_SERVICE_HEALTH_OBJECT_PREFIX}${identity.deploymentInstanceId}/${identity.incarnationId}/${identity.nodeBindingId}`;
+  return `${DEPLOYMENT_SERVICE_HEALTH_OBJECT_PREFIX}${identity.runtimeRoleId}:${identity.nodeProviderResourceId}`;
 }
 
 /**
  * Derive the complete provider-visible current-health lookup.
  * @param {unknown} providerScope - Exact resolved provider scope.
- * @param {unknown} value - Deployment instance, incarnation, and node binding.
+ * @param {unknown} value - Immutable runtime role and resident-node identities.
  * @returns {Readonly<{bucketName: string, key: string}>} - Canonical location.
  */
 export function getDeploymentServiceHealthObjectLocation(providerScope, value) {
@@ -221,14 +222,14 @@ export function getDeploymentServiceHealthObjectLocation(providerScope, value) {
   });
 }
 
-/** @param {unknown} value @param {string} path @returns {Omit<DeploymentServiceHealthReceiptV2, 'receiptId'>} */
+/** @param {unknown} value @param {string} path @returns {Omit<DeploymentServiceHealthReceiptV3, 'receiptId'>} */
 function validatePayload(value, path) {
   const receipt = cloneReceipt(value, path);
   assertAllKeys(receipt, PAYLOAD_KEYS, path);
   if (
     receipt.schemaVersion !== DEPLOYMENT_SERVICE_HEALTH_RECEIPT_SCHEMA_VERSION
   ) {
-    throw new TypeError(`${path}.schemaVersion must be the integer 2.`);
+    throw new TypeError(`${path}.schemaVersion must be the integer 3.`);
   }
   if (receipt.kind !== DEPLOYMENT_SERVICE_HEALTH_RECEIPT_KIND) {
     throw new TypeError(
@@ -260,6 +261,16 @@ function validatePayload(value, path) {
     DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
     `${path}.nodeBindingId`,
   );
+  assertAwsEc2InstanceId(
+    receipt.nodeProviderResourceId,
+    `${path}.nodeProviderResourceId`,
+  );
+  assertDomainSeparatedSha256Id(
+    receipt.runtimeRoleBindingId,
+    DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
+    `${path}.runtimeRoleBindingId`,
+  );
+  assertAwsIamRoleId(receipt.runtimeRoleId, `${path}.runtimeRoleId`);
   assertDomainSeparatedSha256Id(
     receipt.deploymentRevisionId,
     DEPLOYMENT_REVISION_ID_PREFIX,
@@ -284,10 +295,9 @@ function validatePayload(value, path) {
       `${path}.authorizedHeadGeneration`,
     ),
     nodeBindingId: receipt.nodeBindingId,
-    nodeProviderResourceId: validateProviderResourceId(
-      receipt.nodeProviderResourceId,
-      `${path}.nodeProviderResourceId`,
-    ),
+    nodeProviderResourceId: receipt.nodeProviderResourceId,
+    runtimeRoleBindingId: receipt.runtimeRoleBindingId,
+    runtimeRoleId: receipt.runtimeRoleId,
     deploymentRevisionId: receipt.deploymentRevisionId,
     appId: receipt.appId,
     artifactId: receipt.artifactId,
@@ -323,7 +333,7 @@ function validatePayload(value, path) {
     throw new TypeError(`${path}.health must be 'healthy'.`);
   }
   assertManifestIsSecretFree(normalized, path);
-  return /** @type {Omit<DeploymentServiceHealthReceiptV2, 'receiptId'>} */ (
+  return /** @type {Omit<DeploymentServiceHealthReceiptV3, 'receiptId'>} */ (
     deepFreeze(sortCanonicalJsonValue(normalized))
   );
 }
@@ -333,7 +343,7 @@ function validatePayload(value, path) {
  * deliberately not part of these host-authored bytes; the object store's
  * version and LastModified observation supply that independent evidence.
  * @param {unknown} value - Exact receipt fields without schema, kind, or ID.
- * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Canonical receipt.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV3>} - Canonical receipt.
  */
 export function createDeploymentServiceHealthReceipt(value) {
   const input = cloneReceipt(value, 'deploymentServiceHealthReceipt');
@@ -359,7 +369,7 @@ export function createDeploymentServiceHealthReceipt(value) {
  * Validate, reidentify, and freeze one serialized health receipt.
  * @param {unknown} value - Candidate receipt.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Canonical receipt.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV3>} - Canonical receipt.
  */
 export function validateDeploymentServiceHealthReceipt(
   value,
@@ -367,15 +377,15 @@ export function validateDeploymentServiceHealthReceipt(
 ) {
   const document = cloneReceipt(value, valuePath);
   assertAllKeys(document, DOCUMENT_KEYS, valuePath);
+  /** @type {Record<string, any>} */
+  const payloadInput = {};
+  for (const key of PAYLOAD_KEYS) payloadInput[key] = document[key];
+  const payload = validatePayload(payloadInput, valuePath);
   assertDomainSeparatedSha256Id(
     document.receiptId,
     DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_PREFIX,
     `${valuePath}.receiptId`,
   );
-  /** @type {Record<string, any>} */
-  const payloadInput = {};
-  for (const key of PAYLOAD_KEYS) payloadInput[key] = document[key];
-  const payload = validatePayload(payloadInput, valuePath);
   const expectedId = createCanonicalJsonSha256Id({
     domain: DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_DOMAIN,
     prefix: DEPLOYMENT_SERVICE_HEALTH_RECEIPT_ID_PREFIX,
@@ -393,21 +403,17 @@ export function validateDeploymentServiceHealthReceipt(
 }
 
 /**
- * Cross-check host-authored health against the complete current deployment
- * authority. An older authorized head may remain useful only while its exact
- * non-destroy operation and deployed-revision lineage are still represented
- * by the current head.
- * @param {unknown} value - Candidate receipt.
+ * Validate the complete durable authority needed to address one service-health
+ * object before any provider I/O. The returned node and role bindings are
+ * exact graph members whose complete dependency closure resolves to the head.
  * @param {unknown} context - Exact deployment, provider, and head authority.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Context-bound receipt.
+ * @returns {Readonly<{context: Readonly<Record<string, any>>, deploymentInstanceId: string, nodeBinding: Readonly<Record<string, any>>, runtimeRoleBinding: Readonly<Record<string, any>>}>} - Canonical address authority.
  */
-export function validateDeploymentServiceHealthReceiptContext(
-  value,
+export function validateDeploymentServiceHealthAuthorityContext(
   context,
-  valuePath = 'deploymentServiceHealthReceipt',
+  valuePath = 'deploymentServiceHealth',
 ) {
-  const receipt = validateDeploymentServiceHealthReceipt(value, valuePath);
   const trusted = cloneBoundedJsonObject(
     context,
     DEPLOYMENT_SERVICE_HEALTH_CONTEXT_MAX_BYTES,
@@ -466,7 +472,17 @@ export function validateDeploymentServiceHealthReceiptContext(
       `${valuePath}.context head must contain exactly one substrate binding.`,
     );
   }
-  const node = substrateBindings[0];
+  const nodeBinding = substrateBindings[0];
+  const runtimeRoleBindings = head.resourceBindings.filter(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.resourceKey === 'runtime-role',
+  );
+  if (runtimeRoleBindings.length !== 1) {
+    throw new Error(
+      `${valuePath}.context head must contain exactly one runtime-role binding.`,
+    );
+  }
+  const runtimeRoleBinding = runtimeRoleBindings[0];
   const nodeDefinition = getAwsSingleNodeResourceDefinition('substrate');
   if (nodeDefinition === null) {
     throw new Error(
@@ -559,7 +575,55 @@ export function validateDeploymentServiceHealthReceiptContext(
     validatedResourceKeys.add(resourceKey);
   }
   assertExactGraphBindingClosure(nodeDefinition.resourceKey);
+  assertExactGraphBindingClosure('runtime-role');
+  assertAwsEc2InstanceId(
+    nodeBinding.providerResourceId,
+    `${valuePath}.context substrate binding.providerResourceId`,
+  );
+  assertAwsIamRoleId(
+    runtimeRoleBinding.providerResourceId,
+    `${valuePath}.context runtime-role binding.providerResourceId`,
+  );
 
+  return deepFreeze({
+    context: {
+      deploymentRevision,
+      profile,
+      providerScope,
+      providerSpec,
+      head,
+    },
+    deploymentInstanceId,
+    nodeBinding,
+    runtimeRoleBinding,
+  });
+}
+
+/**
+ * Cross-check host-authored health against the complete current deployment
+ * authority. An older authorized head may remain useful only while its exact
+ * non-destroy operation and deployed-revision lineage are still represented
+ * by the current head.
+ * @param {unknown} value - Candidate receipt.
+ * @param {unknown} context - Exact deployment, provider, and head authority.
+ * @param {string} [valuePath] - Human-readable value path.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV3>} - Context-bound receipt.
+ */
+export function validateDeploymentServiceHealthReceiptContext(
+  value,
+  context,
+  valuePath = 'deploymentServiceHealthReceipt',
+) {
+  const receipt = validateDeploymentServiceHealthReceipt(value, valuePath);
+  const authority = validateDeploymentServiceHealthAuthorityContext(
+    context,
+    valuePath,
+  );
+  const { deploymentRevision, providerScope, providerSpec, head } =
+    authority.context;
+  const { deploymentInstanceId } = authority;
+  const node = authority.nodeBinding;
+  const runtimeRole = authority.runtimeRoleBinding;
   /** @type {Array<[string, string]>} */
   const exactMatches = [
     ['providerScopeId', providerScope.providerScopeId],
@@ -568,6 +632,8 @@ export function validateDeploymentServiceHealthReceiptContext(
     ['incarnationId', head.incarnationId],
     ['nodeBindingId', node.bindingId],
     ['nodeProviderResourceId', node.providerResourceId],
+    ['runtimeRoleBindingId', runtimeRole.bindingId],
+    ['runtimeRoleId', runtimeRole.providerResourceId],
     ['deploymentRevisionId', deploymentRevision.deploymentRevisionId],
     ['appId', deploymentRevision.appId],
     ['artifactId', deploymentRevision.artifactId],
@@ -625,7 +691,7 @@ export function validateDeploymentServiceHealthReceiptContext(
   return receipt;
 }
 
-/** @param {DeploymentServiceHealthReceiptV2} previous @param {DeploymentServiceHealthReceiptV2} next @param {string} path @returns {void} */
+/** @param {DeploymentServiceHealthReceiptV3} previous @param {DeploymentServiceHealthReceiptV3} next @param {string} path @returns {void} */
 function assertSuccessor(previous, next, path) {
   const previousRecord = /** @type {Readonly<Record<string, any>>} */ (
     previous
@@ -746,7 +812,7 @@ function assertSuccessor(previous, next, path) {
  * @param {unknown} previousValue - Current receipt.
  * @param {unknown} nextValue - Proposed replacement receipt.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {Readonly<DeploymentServiceHealthReceiptV2>} - Canonical successor.
+ * @returns {Readonly<DeploymentServiceHealthReceiptV3>} - Canonical successor.
  */
 export function validateDeploymentServiceHealthReceiptSuccessor(
   previousValue,
@@ -775,6 +841,7 @@ export default {
   createDeploymentServiceHealthReceipt,
   getDeploymentServiceHealthObjectKey,
   getDeploymentServiceHealthObjectLocation,
+  validateDeploymentServiceHealthAuthorityContext,
   validateDeploymentServiceHealthReceipt,
   validateDeploymentServiceHealthReceiptContext,
   validateDeploymentServiceHealthReceiptSuccessor,
