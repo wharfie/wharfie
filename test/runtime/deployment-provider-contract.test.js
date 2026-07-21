@@ -15,6 +15,11 @@ import {
   validateDeploymentInspectionContext,
 } from '../../src/core/runtime/deployment-inspection.js';
 import {
+  createDeploymentServiceHealthReceipt,
+  getDeploymentServiceHealthObjectLocation,
+} from '../../src/core/runtime/deployment-service-health.js';
+import { validateDeploymentServiceHealthObservation } from '../../src/core/runtime/deployment-service-health-s3.js';
+import {
   createDeploymentPlan,
   validateDeploymentPlan,
   validateDeploymentPlanContext,
@@ -35,6 +40,9 @@ import {
   validateDeploymentResourceBinding,
   validateOwnershipNonce,
 } from '../../src/core/runtime/deployment-resource-binding.js';
+import { createLedgerServiceId } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
+
+const HEALTH_NOW = 1_700_000_000_000;
 
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
@@ -146,7 +154,7 @@ function makePlan() {
       basis: {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
-        inspectionId: semanticId('win2', 'wharfie:test:inspection:v2', {
+        inspectionId: semanticId('win3', 'wharfie:test:inspection:v3', {
           absent: true,
         }),
       },
@@ -241,11 +249,99 @@ function makePlan() {
   );
 }
 
-/** @returns {Array<Record<string, any>>} */
-function makeConvergedResources() {
-  const deploymentRevision = makeDeploymentRevision();
+/**
+ * @param {Readonly<Record<string, any>>} deploymentRevision
+ * @param {Readonly<Record<string, any>>} providerScope
+ * @param {Readonly<Record<string, any>>} providerSpec
+ * @param {string} incarnationId
+ * @param {string} nodeProviderResourceId
+ * @param {Record<string, any>} [overrides]
+ */
+function makeHealthObservation(
+  deploymentRevision,
+  providerScope,
+  providerSpec,
+  incarnationId,
+  nodeProviderResourceId,
+  overrides = {},
+) {
+  const deploymentInstanceId = getDeploymentInstanceId({
+    deploymentRevision,
+    providerScope,
+  });
+  const receipt = createDeploymentServiceHealthReceipt({
+    providerScopeId: providerScope.providerScopeId,
+    providerSpecId: providerSpec.providerSpecId,
+    deploymentInstanceId,
+    incarnationId,
+    deploymentOperationId: semanticId(
+      'wdo1',
+      'wharfie:test:health-operation:v1',
+      { deploymentInstanceId },
+    ),
+    authorizedHeadId: semanticId('wdh1', 'wharfie:test:health-head:v1', {
+      deploymentInstanceId,
+      generation: 3,
+    }),
+    authorizedHeadGeneration: 3,
+    nodeBindingId: semanticId('wrb1', 'wharfie:test:health-binding:v1', {
+      deploymentInstanceId,
+      nodeProviderResourceId,
+    }),
+    nodeProviderResourceId,
+    deploymentRevisionId: deploymentRevision.deploymentRevisionId,
+    appId: deploymentRevision.appId,
+    artifactId: deploymentRevision.artifactId,
+    revisionId: deploymentRevision.revisionId,
+    serviceId: createLedgerServiceId({ appId: deploymentRevision.appId }),
+    sessionId: `wss_${Buffer.alloc(32, 5).toString('base64url')}`,
+    lifecycleGeneration: 1,
+    ownerGeneration: 1,
+    activationRecordVersion: 1,
+    activationSelectionGeneration: 1,
+    processId: 4321,
+    sequence: 1,
+    health: 'healthy',
+    ...overrides,
+  });
+  const location = getDeploymentServiceHealthObjectLocation(
+    providerScope,
+    receipt,
+  );
+  return validateDeploymentServiceHealthObservation({
+    receipt,
+    object: {
+      bucketName: location.bucketName,
+      key: location.key,
+      versionId: 'health-version-1',
+      etag: '"health-etag-1"',
+      lastModifiedAt: HEALTH_NOW,
+    },
+  });
+}
+
+/** @param {Record<string, any>} [healthReceiptOverrides] @returns {Array<Record<string, any>>} */
+function makeConvergedResources(healthReceiptOverrides = {}) {
+  const profile = makeProfile();
+  const deploymentRevision = makeDeploymentRevision(profile);
+  const providerScope = createAwsProviderScope({
+    partition: 'aws',
+    accountId: '123456789012',
+    region: 'us-east-1',
+  });
+  const providerSpec = makeProviderSpec(profile, providerScope);
+  const incarnationId = createDeploymentIncarnationId(Buffer.alloc(32, 1));
+  const nodeProviderResourceId = 'i-0123456789abcdef0';
+  const healthReceipt = makeHealthObservation(
+    deploymentRevision,
+    providerScope,
+    providerSpec,
+    incarnationId,
+    nodeProviderResourceId,
+    healthReceiptOverrides,
+  );
   return [
-    ['substrate', 'resident-node', 'ec2-instance', 'i-0123456789abcdef0'],
+    ['substrate', 'resident-node', 'ec2-instance', nodeProviderResourceId],
     [
       'application-state',
       'application-state',
@@ -282,6 +378,7 @@ function makeConvergedResources() {
             health: 'healthy',
             artifactId: deploymentRevision.artifactId,
             revisionId: deploymentRevision.revisionId,
+            healthReceipt,
           }
         : null,
   }));
@@ -321,7 +418,7 @@ function makeInspection(status, resources = makeConvergedResources()) {
       status,
       resources: status === 'absent' ? [] : resources,
     },
-    { profile, providerSpec },
+    { profile, providerSpec, now: HEALTH_NOW },
   );
 }
 
@@ -707,7 +804,7 @@ describe('deployment inspections', () => {
     const second = makeInspection('converged', resources);
 
     expect(second).toEqual(first);
-    expect(first.inspectionId).toMatch(/^win2_[A-Za-z0-9_-]{43}$/);
+    expect(first.inspectionId).toMatch(/^win3_[A-Za-z0-9_-]{43}$/);
     expect(
       first.resources.map(
         (/** @type {Record<string, any>} */ resource) => resource.resourceKey,
@@ -727,8 +824,29 @@ describe('deployment inspections', () => {
       validateDeploymentInspectionContext(clone(first), {
         profile,
         providerSpec,
+        now: HEALTH_NOW,
       }),
     ).toEqual(first);
+    expect(() =>
+      validateDeploymentInspectionContext(clone(first), {
+        profile,
+        providerSpec,
+        now: HEALTH_NOW + 65_001,
+      }),
+    ).toThrow(/stale/i);
+    expect(() =>
+      validateDeploymentInspectionContext(clone(first), {
+        profile,
+        providerSpec,
+        now: HEALTH_NOW - 5_001,
+      }),
+    ).toThrow(/conflict/i);
+    expect(() =>
+      validateDeploymentInspectionContext(clone(first), {
+        profile,
+        providerSpec,
+      }),
+    ).toThrow(/freshness context\.now/i);
     expect(Object.isFrozen(first)).toBe(true);
   });
 
@@ -810,13 +928,43 @@ describe('deployment inspections', () => {
       /converged status requires exact/i,
     );
 
+    const missingProviderReceipt = makeConvergedResources();
+    missingProviderReceipt[0].service.healthReceipt = null;
+    expect(() => makeInspection('converged', missingProviderReceipt)).toThrow(
+      /healthReceipt is required/i,
+    );
+
     const wrongRelease = makeConvergedResources();
     wrongRelease[0].service.artifactId = createSha256Id({
       prefix: 'waf1',
       payload: 'different artifact',
     });
     expect(() => makeInspection('converged', wrongRelease)).toThrow(
-      /exact deployment artifact and revision/i,
+      /exact reported health and release|exact deployment artifact and revision/i,
+    );
+  });
+
+  it('accepts provider health only for the exact S3 location and healthy service state', () => {
+    const wrongBucket = makeConvergedResources();
+    wrongBucket[0].service.healthReceipt = clone(
+      wrongBucket[0].service.healthReceipt,
+    );
+    wrongBucket[0].service.healthReceipt.object.bucketName =
+      'wharfie-dc-v1-210987654321-aaaaaaaaaaaaaaaaaaaa';
+    expect(() => makeInspection('converged', wrongBucket)).toThrow(
+      /exact inspection authority/i,
+    );
+
+    const startingWithProof = makeConvergedResources();
+    startingWithProof[0].health = 'starting';
+    startingWithProof[0].service.health = 'starting';
+    expect(() => makeInspection('in-flight', startingWithProof)).toThrow(
+      /can prove only provider-visible healthy status/i,
+    );
+
+    startingWithProof[0].service.healthReceipt = null;
+    expect(makeInspection('in-flight', startingWithProof).status).toBe(
+      'in-flight',
     );
   });
 

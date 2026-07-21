@@ -49,7 +49,7 @@ describe('deployment profiles', () => {
       profileRevisionId: expect.stringMatching(/^wpr2_[A-Za-z0-9_-]{43}$/),
       provider: {
         configuration: AWS_SINGLE_NODE_CONFIGURATION,
-        contractVersion: 2,
+        contractVersion: 3,
         kind: 'aws',
         scope: { region: 'us-east-1' },
       },
@@ -84,7 +84,7 @@ describe('deployment profiles', () => {
       },
       runtimeIdentity: {
         management: 'managed',
-        kind: 'host-ssm-artifact-read-health-write',
+        kind: 'host-ssm-artifact-read-health-read-write-current-object',
       },
       networking: {
         management: 'managed',
@@ -127,7 +127,7 @@ describe('deployment profiles', () => {
             management: 'managed',
           },
           runtimeIdentity: {
-            kind: 'host-ssm-artifact-read-health-write',
+            kind: 'host-ssm-artifact-read-health-read-write-current-object',
             management: 'managed',
           },
           artifactStorage: {
@@ -148,7 +148,7 @@ describe('deployment profiles', () => {
           node: { capacity: 'small', management: 'managed' },
         },
         scope: { region: 'us-east-1' },
-        contractVersion: 2,
+        contractVersion: 3,
         kind: 'aws',
       },
       mode: { version: 1, kind: 'single-node-systemd-user' },
@@ -235,7 +235,7 @@ describe('deployment profiles', () => {
     [
       'wrong contract version',
       (/** @type {any} */ value) => (value.provider.contractVersion = 1),
-      /contractVersion must be the integer 2/i,
+      /contractVersion must be the integer 3/i,
     ],
     [
       'implicit region',

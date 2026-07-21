@@ -15,6 +15,7 @@ import {
   PROVIDER_SCOPE_ID_PREFIX,
   validateProviderScope,
 } from './deployment-provider-scope.js';
+import { DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS } from './deployment-service-health-contract.js';
 import { cloneJsonObject } from './json-value.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
@@ -23,7 +24,7 @@ export const AWS_SINGLE_NODE_PROVIDER_SPEC_KIND = 'awsSingleNodeProviderSpec';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN =
   'wharfie:aws-single-node-provider-spec:v1';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap1';
-export const AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION = 2;
+export const AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION = 3;
 
 export const AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS = Object.freeze({
   x86_64:
@@ -114,6 +115,8 @@ const SERVICE_HEALTH_KEYS = new Set([
   'intervalSeconds',
   'maxAgeSeconds',
   'clockSkewSeconds',
+  'publication',
+  'noncurrentVersionExpirationDays',
 ]);
 
 const AMI_ID_PATTERN = /^ami-[0-9a-f]{8,32}$/;
@@ -160,6 +163,9 @@ const FIXED_SERVICE_HEALTH = Object.freeze({
   intervalSeconds: 15,
   maxAgeSeconds: 60,
   clockSkewSeconds: 5,
+  publication: 'conditional-current-object',
+  noncurrentVersionExpirationDays:
+    DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS,
 });
 
 /** @param {any} value @returns {any} */
@@ -346,7 +352,7 @@ function validateCapabilities(value, path) {
     runtimeIdentity.contractVersion !== 1 ||
     runtimeIdentity.managementChannel !== 'ssm' ||
     runtimeIdentity.artifactAccess !== 'read' ||
-    runtimeIdentity.serviceHealthAccess !== 'write' ||
+    runtimeIdentity.serviceHealthAccess !== 'read-write-current-object' ||
     runtimeIdentity.applicationInstanceMetadata !== 'blocked'
   ) {
     throw new TypeError(
@@ -373,7 +379,7 @@ function validateCapabilities(value, path) {
       contractVersion: 1,
       managementChannel: 'ssm',
       artifactAccess: 'read',
-      serviceHealthAccess: 'write',
+      serviceHealthAccess: 'read-write-current-object',
       applicationInstanceMetadata: 'blocked',
       policyDigest: validateSha256Digest(
         runtimeIdentity.policyDigest,
@@ -402,7 +408,7 @@ function validatePayload(value, path) {
     AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION
   ) {
     throw new TypeError(
-      `${path}.providerContractVersion must be the integer 2.`,
+      `${path}.providerContractVersion must be the integer 3.`,
     );
   }
   assertDomainSeparatedSha256Id(
@@ -475,7 +481,7 @@ function assertContext(spec, context, path) {
       AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION
   ) {
     throw new Error(
-      `${path} profile does not select AWS provider contract version 2.`,
+      `${path} profile does not select AWS provider contract version 3.`,
     );
   }
   if (
@@ -561,7 +567,7 @@ export function createAwsSingleNodeProviderSpec(value) {
           contractVersion: 1,
           managementChannel: 'ssm',
           artifactAccess: 'read',
-          serviceHealthAccess: 'write',
+          serviceHealthAccess: 'read-write-current-object',
           applicationInstanceMetadata: 'blocked',
           policyDigest: validateSha256Digest(
             input.runtimeIdentityPolicyDigest,

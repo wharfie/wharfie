@@ -101,5 +101,5 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [recoverable systemd activation
-checkpoint](../llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md).
+The current restart handoff is the [provider-visible service-health
+checkpoint](../llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md).

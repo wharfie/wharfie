@@ -49,7 +49,7 @@ The initial fixed fulfillment provides:
 - retained application and control state on encrypted attached storage;
 - private provider object storage for exact artifacts, purged on destroy;
 - a host identity limited to SSM management, exact artifact reads, and exact
-  service-health receipt writes;
+  current service-health object reads and writes;
 - public outbound network access with no inbound rule; and
 - no managed ingress.
 
@@ -60,7 +60,9 @@ may create that user, enable lingering, install the fixed service projection,
 and prevent the application UID from reaching instance metadata. Provider
 credentials remain in the ambient operator or host-management boundary and
 are never serialized into a profile, plan, inspection, head, artifact, or
-application input.
+application input. Service-health publication belongs to a privileged
+host-owned observer outside that application UID; application code cannot
+manufacture its own provider-visible readiness proof.
 
 External/adopted nodes, multiple nodes, private-NAT topology, ingress, managed
 application secrets, node replacement, and arbitrary provider resources are
@@ -108,9 +110,11 @@ incarnation and reduced to one secret-free, content-addressed
 `AwsSingleNodeProviderSpecV1`. It pins the exact SSM public-parameter name and
 version, AMI ID/owner/architecture, bootstrap and runtime-policy digests,
 instance and metadata shape, retained-volume and artifact behavior, fixed
-network, and service-health timing. `DeploymentPlanV2` embeds the complete
+network, and service-health timing, publication, and retention.
+`DeploymentPlanV2` embeds the complete
 specification; every action ID binds its `providerSpecId`, and
-`DeploymentInspectionV2` binds the same ID.
+`DeploymentInspectionV3` binds the same ID and carries the complete
+provider-visible service-health observation when one exists.
 
 Converge and recovery validate the submitted or stored specification and never
 resolve “latest” again. A deployment already in `READY` loads the specification
@@ -227,6 +231,49 @@ is evidence for humans and planning, not standalone authorization. `unknown`
 and `conflict` are first-class results even when no head or incarnation can be
 read. `absent` requires an authoritative provider-locator not-found result;
 an empty caller-supplied array is not absence.
+
+One host-owned `DeploymentServiceHealthReceiptV1` may be published to the
+deterministic current object
+`health/v1/<deployment-instance>/<incarnation>/<node-binding>`. It binds the
+provider scope and specification, deployment instance and incarnation, one
+stable non-destroy operation plus the head ID/generation that authorized it,
+the exact resident-node binding and provider resource ID, deployment and
+application revisions, artifact, service and process session, lifecycle and
+owner generations, activation record and selection generations, process ID,
+and a positive sequence. It can assert only `healthy`. The authorizing head is
+not required to remain the exact latest mutable head: a later head may retain
+the same target or settled deployment lineage and operation authority.
+
+Every new S3 publication must name the exact current head ID and generation.
+After publication, a coordinator head transition may leave that receipt
+temporarily useful while the same non-destroy operation and deployed revision
+remain current or settled. In that case the retained receipt's older head ID
+is host-authored history, while the current operation lineage is the authority
+the coordinator can independently revalidate.
+
+Publication writes canonical JSON with SHA-256 checksum and AES256 encryption
+to the current versioned S3 object. `If-None-Match` establishes the first
+receipt; later writes use the current ETag only as an opaque `If-Match`
+compare-and-swap token. ETag is neither content identity nor ordering
+evidence. Ambiguous writes, including response loss, are decided by bounded
+`GetObject` plus `HeadObject` readback of the current VersionId, checksum,
+metadata, encryption, and complete receipt. Within one process session the
+sequence must advance by exactly one; a new fenced session restarts at one and
+must advance the lifecycle generation. Owner generation is stable inside one
+session but may reset after graceful ownership release; the newer lifecycle
+generation and session ID remain the cross-session fence. Release changes
+require a newer authorizing head, operation, activation record, selection
+generation, and session.
+
+Freshness comes from S3's `LastModified`, never a host-authored timestamp. The
+pinned provider contract publishes every 15 seconds and admits a receipt only
+through 60 seconds of age plus 5 seconds of clock-skew allowance; a provider
+timestamp more than 5 seconds in the coordinator's future is conflict. The
+inspection `win3` namespace carries the complete receipt and current object
+VersionId/ETag/`LastModified` observation. Only an exact, fresh, context-bound
+observation can make the resident service healthy, and only that healthy
+resident observation can make the whole inspection `converged` or authorize
+final readiness.
 
 `converged` requires complete provider-defined capability coverage, verified
 ownership, exact desired/observed state, and a resident service status proving
@@ -360,7 +407,29 @@ active head. Destroy deliberately skips staging. Every non-destroy provider
 action receives the independently revalidated stage bundle, while a stale or
 malformed bundle causes no plan/profile/head mutation.
 
-The fixed service-health receipt boundary, AWS resource driver, source and
-packaged deployment commands, production composition, and clean-account
-lifecycle proof remain unfinished. A document, bucket/table tag, or content ID
-still never proves that an application resource effect occurred.
+The sixth slice advances the strict profile/provider contract to version 3 and
+the inspection namespace to `win3`. Runtime identity is limited to SSM,
+artifact reads, and the exact current-health object read/write boundary.
+`DeploymentServiceHealthReceiptV1` and its S3 transport implement the
+host-owned health protocol above: complete context and successor validation,
+conditional canonical publication, response-loss readback, current VersionId
+evidence, provider-owned freshness, and final inspection gating. The retained
+control bucket now admits exactly one lifecycle rule: noncurrent versions only
+under `health/v1/` become eligible for asynchronous expiration after one day.
+The current health version, all artifact-stage versions, and all other retained
+control objects remain untouched. As with the preceding slices, deterministic
+mocks prove the contract; the privileged host observer is not yet installed or
+wired, and no real AWS driver or live resource is claimed.
+
+The production runtime policy must grant only current-object reads and
+conditional writes for the deployment's exact health key and deny object or
+version deletion; otherwise a delete marker could hide the semantic
+predecessor. Noncurrent lifecycle retention also deliberately leaves one
+current version at every retired incarnation/node key until a future explicit
+retained-state collector proves it may remove that history.
+
+The AWS provider-spec SSM/EC2 resolver and validator, independently recoverable
+resource driver, source and packaged deployment commands, production
+composition, and clean-account lifecycle proof remain unfinished. A document,
+bucket/table tag, or content ID still never proves that an application resource
+effect occurred.

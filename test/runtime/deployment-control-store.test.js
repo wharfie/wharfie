@@ -161,8 +161,8 @@ function makeDocuments() {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win2',
-          'wharfie:test:deployment-inspection:v2',
+          'win3',
+          'wharfie:test:deployment-inspection:v3',
           { inspection: 1 },
         ),
       },

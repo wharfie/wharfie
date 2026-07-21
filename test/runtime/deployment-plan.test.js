@@ -166,8 +166,8 @@ function makePlanInput(fixture, providerSpec = fixture.providerSpec) {
       headGeneration: 0,
       settledDeploymentRevisionId: null,
       inspectionId: semanticId(
-        'win2',
-        'wharfie:test:deployment-inspection:v2',
+        'win3',
+        'wharfie:test:deployment-inspection:v3',
         { absent: true },
       ),
     },
@@ -243,7 +243,7 @@ describe('deployment plan v2', () => {
   });
 });
 
-describe('deployment inspection v2', () => {
+describe('deployment inspection v3', () => {
   it('binds provider evidence to a full context-checked specification', () => {
     const fixture = makeFixture();
     const inspection = createDeploymentInspection(
@@ -264,8 +264,8 @@ describe('deployment inspection v2', () => {
       { profile: fixture.profile, providerSpec: fixture.providerSpec },
     );
 
-    expect(inspection.schemaVersion).toBe(2);
-    expect(inspection.inspectionId).toMatch(/^win2_[A-Za-z0-9_-]{43}$/);
+    expect(inspection.schemaVersion).toBe(3);
+    expect(inspection.inspectionId).toMatch(/^win3_[A-Za-z0-9_-]{43}$/);
     expect(inspection.providerSpecId).toBe(fixture.providerSpec.providerSpecId);
     expect(validateDeploymentInspection(clone(inspection))).toEqual(inspection);
     expect(

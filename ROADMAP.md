@@ -2,9 +2,10 @@
 
 **Status:** The strict single-node deployment protocol now has an exact
 credential-bound AWS authority, retained DynamoDB/control-bucket lifecycles,
-portable control records, and recovery-safe executable staging under focused
-mocks; provider health evidence, the fixed driver, commands, and clean-account
-proof are next · **Last updated:** 2026-07-20
+portable control records, recovery-safe executable staging, and
+freshness-bounded provider-visible service health under focused mocks; the
+exact AWS resolver/validator, fixed driver, commands, and clean-account proof
+are next · **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -508,6 +509,15 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       historical bytes. Bucket bootstrap rejects bucket policies, waits the
       documented first-enable propagation interval, then proves versioned
       object-write readiness before staging.
+- [x] Add the host-owned provider-visible service-health receipt and conditional
+      current S3 object protocol. The receipt binds provider/deployment/node,
+      operation/head lineage, exact release, resident session and generations,
+      process, and positive per-session sequence; only a fresh S3
+      `LastModified` observation may make `win3` healthy or finally converged.
+      The exact `health/v1/` lifecycle makes only noncurrent versions eligible
+      for asynchronous expiration after one day. Deterministic mocks prove
+      this boundary, not a privileged host observer, real driver, or live
+      resource.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -597,23 +607,28 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Add the provider-visible read-only service-health receipt. The exact
-   regional provider specification, retained artifact-stage version, and narrow
-   SSM/artifact-read/health-write identity are now pinned or durably evidenced.
+1. Implement the exact AWS provider-spec SSM/EC2 resolver and validator. The
+   regional provider specification, retained artifact-stage version, and
+   host-owned freshness-bounded health protocol are now pinned or durably
+   evidenced under deterministic mocks.
 2. Implement the fixed AWS driver as independently recoverable resource
-   capabilities, then compose it and the retained table with the strict
-   recovery protocol. Mount source and packaged `plan`, `apply`, `inspect`,
-   `reconcile`, and `destroy` commands, requiring apply and reconcile to
-   re-observe the currently running SEA.
-3. Prove the complete lifecycle in a clean account through the user's ordinary
-   credential chain, including interruption and response-loss recovery.
+   capabilities, then compose it, the retained table/bucket, artifact stager,
+   health boundary, and strict controller recovery protocol. Mount source and
+   packaged `plan`, `apply`, `inspect`, `reconcile`, and `destroy` commands,
+   requiring apply and reconcile to re-observe the currently running SEA.
+3. Install and wire the privileged host observer outside the application UID,
+   then prove the complete lifecycle in a clean account through the user's
+   ordinary credential chain, including interruption and response-loss
+   recovery.
 4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [recovery-safe artifact-staging
-checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md).
-Its parent is the [pinned AWS provider-spec
+The current restart point is the [provider-visible service-health
+checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md).
+Its parent is the [recovery-safe artifact-staging
+checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md),
+whose parent is the [pinned AWS provider-spec
 checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md), whose
 parent is the [AWS deployment-control
 checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md), whose

@@ -138,7 +138,7 @@ function nextHead(head, changes) {
  * Provider calls receive immutable validated documents plus the current head;
  * credentials remain private to the provider implementation.
  *
- * @param {{store: Record<string, Function>, provider: Record<string, Function>, artifactStager: Record<string, Function>, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports.
+ * @param {{store: Record<string, Function>, provider: Record<string, Function>, artifactStager: Record<string, Function>, now: () => number, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports and explicit inspection clock.
  * @returns {Readonly<{plan: (input: unknown) => Promise<Readonly<Record<string, any>>>, converge: (input: unknown) => Promise<Readonly<Record<string, any>>>, resume: (input: unknown) => Promise<Readonly<Record<string, any>>>}>} - Controller API.
  */
 export function createDeploymentController(dependencies) {
@@ -149,7 +149,7 @@ export function createDeploymentController(dependencies) {
   ) {
     throw new TypeError('deploymentController dependencies must be an object.');
   }
-  const { store, provider, artifactStager } = dependencies;
+  const { store, provider, artifactStager, now } = dependencies;
   const nonceFactory =
     dependencies.createOwnershipNonce || createRandomOwnershipNonce;
   const incarnationFactory =
@@ -207,6 +207,20 @@ export function createDeploymentController(dependencies) {
     throw new TypeError(
       'deploymentController.createDeploymentIncarnationId must be a function.',
     );
+  }
+  if (typeof now !== 'function') {
+    throw new TypeError('deploymentController.now must be a function.');
+  }
+
+  /** @returns {number} */
+  function sampleInspectionNow() {
+    const sampledNow = now();
+    if (!Number.isSafeInteger(sampledNow) || sampledNow < 0) {
+      throw new TypeError(
+        'deploymentController.now must return nonnegative epoch milliseconds.',
+      );
+    }
+    return sampledNow;
   }
 
   /** @param {string} deploymentInstanceId @returns {Promise<Readonly<Record<string, any>>|null>} */
@@ -696,12 +710,15 @@ export function createDeploymentController(dependencies) {
       profile,
       providerSpec: plan.providerSpec,
     };
-    const inspection = validateDeploymentInspectionContext(
-      await provider.inspect(
-        Object.freeze({ ...providerContext(request, head), plan }),
-      ),
-      { profile, providerSpec: plan.providerSpec },
+    const observed = await provider.inspect(
+      Object.freeze({ ...providerContext(request, head), plan }),
     );
+    const inspection = validateDeploymentInspectionContext(observed, {
+      profile,
+      providerSpec: plan.providerSpec,
+      head,
+      now: sampleInspectionNow(),
+    });
     assertInspectionAuthority(inspection, request, head);
     return inspection;
   }
@@ -797,10 +814,13 @@ export function createDeploymentController(dependencies) {
       providerScope: request.providerScope,
     });
     const context = providerContext(request, head);
-    const inspection = validateDeploymentInspectionContext(
-      await provider.inspect(context),
-      { profile: request.profile, providerSpec: request.providerSpec },
-    );
+    const observed = await provider.inspect(context);
+    const inspection = validateDeploymentInspectionContext(observed, {
+      profile: request.profile,
+      providerSpec: request.providerSpec,
+      head,
+      now: sampleInspectionNow(),
+    });
     assertInspectionAuthority(inspection, request, head);
     const plan = validateDeploymentPlanContext(
       await provider.createPlan(Object.freeze({ ...context, inspection })),
@@ -1123,6 +1143,20 @@ export function createDeploymentController(dependencies) {
         `Final inspection cannot prove deployment status '${expectedStatus}'.`,
       );
     }
+    if (expectedStatus === 'converged') {
+      const resident = inspection.resources.find(
+        (/** @type {Readonly<Record<string, any>>} */ resource) =>
+          resource.capability.kind === 'resident-node',
+      );
+      if (
+        resident?.service?.healthReceipt?.receipt.deploymentOperationId !==
+        head.activeOperation.operationId
+      ) {
+        throw new AmbiguousDeploymentActionError(
+          'Final healthy service receipt does not authorize the active deployment operation.',
+        );
+      }
+    }
     const bindingByResource = new Map(
       head.resourceBindings.map(
         (/** @type {Readonly<Record<string, any>>} */ binding) => [
@@ -1175,26 +1209,29 @@ export function createDeploymentController(dependencies) {
   async function finalize(plan, profile, head) {
     await assertPlanProviderScope(plan, profile);
     try {
-      const inspection = validateDeploymentInspectionContext(
-        await provider.inspect(
-          Object.freeze({
-            ...providerContext(
-              {
-                operation: plan.operation,
-                deploymentRevision: plan.deploymentRevision,
-                providerScope: plan.providerScope,
-                deploymentInstanceId: plan.deploymentInstanceId,
-                incarnationId: plan.incarnationId,
-                profile,
-                providerSpec: plan.providerSpec,
-              },
-              head,
-            ),
-            plan,
-          }),
-        ),
-        { profile, providerSpec: plan.providerSpec },
+      const observed = await provider.inspect(
+        Object.freeze({
+          ...providerContext(
+            {
+              operation: plan.operation,
+              deploymentRevision: plan.deploymentRevision,
+              providerScope: plan.providerScope,
+              deploymentInstanceId: plan.deploymentInstanceId,
+              incarnationId: plan.incarnationId,
+              profile,
+              providerSpec: plan.providerSpec,
+            },
+            head,
+          ),
+          plan,
+        }),
       );
+      const inspection = validateDeploymentInspectionContext(observed, {
+        profile,
+        providerSpec: plan.providerSpec,
+        head,
+        now: sampleInspectionNow(),
+      });
       assertFinalInspection(inspection, plan, head);
     } catch {
       await assertPlanProviderScope(plan, profile);

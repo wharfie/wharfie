@@ -1,6 +1,9 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import {
+  DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_LIFECYCLE_RULE_ID,
+  DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS,
+  DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_PREFIX,
   DEPLOYMENT_CONTROL_BUCKET_VERSIONING_PROPAGATION_MS,
   DEPLOYMENT_CONTROL_BUCKET_VERSIONING_READY_CHECKSUM_SHA256,
   DEPLOYMENT_CONTROL_BUCKET_VERSIONING_READY_KEY,
@@ -72,6 +75,26 @@ function encryptionResponse() {
   };
 }
 
+/** @param {Record<string, any>} [ruleOverrides] @returns {Record<string, any>} */
+function lifecycleResponse(ruleOverrides = {}) {
+  return {
+    Rules: [
+      {
+        ID: DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_LIFECYCLE_RULE_ID,
+        Status: 'Enabled',
+        Filter: {
+          Prefix: DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_PREFIX,
+        },
+        NoncurrentVersionExpiration: {
+          NoncurrentDays:
+            DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS,
+        },
+        ...ruleOverrides,
+      },
+    ],
+  };
+}
+
 /** @param {Readonly<Record<string, any>>} [providerScope] @returns {Record<string, string>} */
 function sentinelMetadata(providerScope = PROVIDER_SCOPE) {
   return {
@@ -102,9 +125,6 @@ function sentinelResponse(providerScope = PROVIDER_SCOPE, overrides = {}) {
  * @returns {Record<string, any>} - Complete low-level S3 double.
  */
 function createClient(overrides = {}, providerScope = PROVIDER_SCOPE) {
-  const noLifecycle = async () => {
-    throw awsError('NoSuchLifecycleConfiguration');
-  };
   const noReplication = async () => {
     throw awsError('ReplicationConfigurationNotFoundError');
   };
@@ -134,7 +154,8 @@ function createClient(overrides = {}, providerScope = PROVIDER_SCOPE) {
       overrides.getBucketEncryption ?? (async () => encryptionResponse()),
     ),
     getBucketLifecycleConfiguration: jest.fn(
-      overrides.getBucketLifecycleConfiguration ?? noLifecycle,
+      overrides.getBucketLifecycleConfiguration ??
+        (async () => lifecycleResponse()),
     ),
     getBucketReplication: jest.fn(
       overrides.getBucketReplication ?? noReplication,
@@ -154,6 +175,9 @@ function createClient(overrides = {}, providerScope = PROVIDER_SCOPE) {
     ),
     putBucketEncryption: jest.fn(
       overrides.putBucketEncryption ?? (async () => ({})),
+    ),
+    putBucketLifecycleConfiguration: jest.fn(
+      overrides.putBucketLifecycleConfiguration ?? (async () => ({})),
     ),
     putObject: jest.fn(overrides.putObject ?? (async () => ({}))),
   };
@@ -206,7 +230,7 @@ describe('AWS deployment control bucket', () => {
       publicAccessBlocked: false,
       objectOwnership: null,
       defaultEncryption: null,
-      lifecycleConfigurationPresent: null,
+      serviceHealthLifecycleConforms: false,
       bucketPolicyPresent: null,
       replicationConfigurationPresent: null,
     });
@@ -231,7 +255,7 @@ describe('AWS deployment control bucket', () => {
       kind: 'deploymentControlBucketInspection',
       status: 'active',
       evidence:
-        'head-location-tags-versioning-public-access-ownership-encryption-no-lifecycle-no-policy-no-replication-and-versioned-sentinel',
+        'head-location-tags-versioning-public-access-ownership-encryption-service-health-lifecycle-no-policy-no-replication-and-versioned-sentinel',
       bucketName: BUCKET_NAME,
       providerScopeId: PROVIDER_SCOPE.providerScopeId,
       bucketRegion: 'us-east-1',
@@ -241,7 +265,7 @@ describe('AWS deployment control bucket', () => {
       publicAccessBlocked: true,
       objectOwnership: 'BucketOwnerEnforced',
       defaultEncryption: 'AES256',
-      lifecycleConfigurationPresent: false,
+      serviceHealthLifecycleConforms: true,
       bucketPolicyPresent: false,
       replicationConfigurationPresent: false,
     });
@@ -316,6 +340,9 @@ describe('AWS deployment control bucket', () => {
       getBucketEncryption: async () => {
         throw awsError('ServerSideEncryptionConfigurationNotFoundError');
       },
+      getBucketLifecycleConfiguration: async () => {
+        throw awsError('NoSuchLifecycleConfiguration');
+      },
     });
 
     await expect(createBucket(client).inspect()).resolves.toMatchObject({
@@ -326,12 +353,14 @@ describe('AWS deployment control bucket', () => {
       publicAccessBlocked: false,
       objectOwnership: null,
       defaultEncryption: null,
+      serviceHealthLifecycleConforms: false,
     });
     expect(client.createBucket).not.toHaveBeenCalled();
     expect(client.putBucketVersioning).not.toHaveBeenCalled();
     expect(client.putPublicAccessBlock).not.toHaveBeenCalled();
     expect(client.putBucketOwnershipControls).not.toHaveBeenCalled();
     expect(client.putBucketEncryption).not.toHaveBeenCalled();
+    expect(client.putBucketLifecycleConfiguration).not.toHaveBeenCalled();
     expect(client.putObject).not.toHaveBeenCalled();
   });
 
@@ -384,11 +413,10 @@ describe('AWS deployment control bucket', () => {
       },
     ],
     [
-      'a lifecycle configuration',
+      'a lifecycle rule covering retained artifacts',
       {
-        getBucketLifecycleConfiguration: async () => ({
-          Rules: [{ ID: 'expire-retained-data', Status: 'Enabled' }],
-        }),
+        getBucketLifecycleConfiguration: async () =>
+          lifecycleResponse({ Filter: { Prefix: 'stage/v1/' } }),
       },
     ],
     [
@@ -461,6 +489,63 @@ describe('AWS deployment control bucket', () => {
   );
 
   it.each([
+    ['a disabled rule', lifecycleResponse({ Status: 'Disabled' })],
+    [
+      'a different expiration',
+      lifecycleResponse({
+        NoncurrentVersionExpiration: { NoncurrentDays: 2 },
+      }),
+    ],
+    [
+      'an extra rule',
+      {
+        Rules: [
+          ...lifecycleResponse().Rules,
+          {
+            ID: 'other-rule',
+            Status: 'Enabled',
+            Filter: { Prefix: 'other/' },
+            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+          },
+        ],
+      },
+    ],
+    ['an extra action', lifecycleResponse({ Expiration: { Days: 1 } })],
+  ])(
+    'rejects service-health lifecycle drift with %s',
+    async (_label, value) => {
+      const client = createClient({
+        getBucketLifecycleConfiguration: async () => value,
+      });
+
+      await expect(createBucket(client).inspect()).rejects.toBeInstanceOf(
+        DeploymentControlBucketConflictError,
+      );
+    },
+  );
+
+  it.each([
+    ['a non-object rule', { Rules: [null] }],
+    [
+      'a malformed expiration day',
+      lifecycleResponse({
+        NoncurrentVersionExpiration: { NoncurrentDays: '1' },
+      }),
+    ],
+  ])(
+    'rejects malformed lifecycle evidence as unknown with %s',
+    async (_label, value) => {
+      const client = createClient({
+        getBucketLifecycleConfiguration: async () => value,
+      });
+
+      await expect(createBucket(client).inspect()).rejects.toBeInstanceOf(
+        DeploymentControlBucketUnknownError,
+      );
+    },
+  );
+
+  it.each([
     ['location', { getBucketLocation: async () => null }],
     ['tags', { getBucketTagging: async () => ({ TagSet: {} }) }],
     [
@@ -519,6 +604,7 @@ describe('AWS deployment control bucket', () => {
       publicAccess: false,
       ownership: false,
       encryption: false,
+      lifecycle: false,
       sentinel: false,
     };
     const client = createClient({
@@ -550,6 +636,12 @@ describe('AWS deployment control bucket', () => {
         }
         return encryptionResponse();
       },
+      getBucketLifecycleConfiguration: async () => {
+        if (!state.lifecycle) {
+          throw awsError('NoSuchLifecycleConfiguration');
+        }
+        return lifecycleResponse();
+      },
       headObject: async () => {
         if (!state.sentinel) throw awsError('NotFound');
         return sentinelResponse();
@@ -574,6 +666,10 @@ describe('AWS deployment control bucket', () => {
       putBucketEncryption: async () => {
         state.encryption = true;
         throw new Error('lost encryption response');
+      },
+      putBucketLifecycleConfiguration: async () => {
+        state.lifecycle = true;
+        throw new Error('lost lifecycle response');
       },
       putObject: async () => {
         state.sentinel = true;
@@ -624,6 +720,11 @@ describe('AWS deployment control bucket', () => {
       Bucket: BUCKET_NAME,
       ExpectedBucketOwner: PROVIDER_SCOPE.accountId,
       VersioningConfiguration: { Status: 'Enabled' },
+    });
+    expect(client.putBucketLifecycleConfiguration).toHaveBeenCalledWith({
+      Bucket: BUCKET_NAME,
+      ExpectedBucketOwner: PROVIDER_SCOPE.accountId,
+      LifecycleConfiguration: lifecycleResponse(),
     });
     expect(client.putObject).toHaveBeenCalledWith({
       Bucket: BUCKET_NAME,

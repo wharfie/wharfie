@@ -32,15 +32,23 @@ import {
   validateProviderResourceId,
 } from './deployment-resource-binding.js';
 import { validateDeploymentRevision } from './deployment-revision.js';
+import {
+  getDeploymentServiceHealthObjectLocation,
+  validateDeploymentServiceHealthReceiptContext,
+} from './deployment-service-health.js';
+import {
+  validateDeploymentServiceHealthObservation,
+  validateDeploymentServiceHealthObservationFreshness,
+} from './deployment-service-health-s3.js';
 import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 2;
+export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 3;
 export const DEPLOYMENT_INSPECTION_KIND = 'deploymentInspection';
 export const DEPLOYMENT_INSPECTION_ID_DOMAIN =
-  'wharfie:deployment-inspection:v2';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win2';
+  'wharfie:deployment-inspection:v3';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win3';
 export const DEPLOYMENT_INSPECTION_STATUSES = Object.freeze([
   'absent',
   'converged',
@@ -79,7 +87,12 @@ const RESOURCE_KEYS = new Set([
 ]);
 const CAPABILITY_KEYS = new Set(['kind', 'version']);
 const PROVIDER_IDENTITY_KEYS = new Set(['providerType', 'providerResourceId']);
-const SERVICE_KEYS = new Set(['health', 'artifactId', 'revisionId']);
+const SERVICE_KEYS = new Set([
+  'health',
+  'artifactId',
+  'revisionId',
+  'healthReceipt',
+]);
 const CONTROL_STATE_KEYS = new Set(['status', 'evidence']);
 const CONTROL_STATE_EVIDENCE = Object.freeze({
   absent: 'authoritative-not-found',
@@ -190,7 +203,7 @@ function validateControlState(value, path) {
  * Validate the existing packaged service proof projected by the provider.
  * @param {unknown} value - Candidate resident service observation.
  * @param {string} path - Human-readable value path.
- * @returns {Readonly<Record<string, string>>|null} - Canonical observation.
+ * @returns {Readonly<Record<string, any>>|null} - Canonical observation.
  */
 function validateService(value, path) {
   if (value === null) return null;
@@ -205,10 +218,38 @@ function validateService(value, path) {
   }
   assertArtifactId(service.artifactId, `${path}.artifactId`);
   assertApplicationRevisionId(service.revisionId, `${path}.revisionId`);
+  const healthReceipt =
+    service.healthReceipt === null
+      ? null
+      : validateDeploymentServiceHealthObservation(
+          service.healthReceipt,
+          `${path}.healthReceipt`,
+        );
+  if (service.health === 'healthy' && healthReceipt === null) {
+    throw new Error(
+      `${path}.healthReceipt is required for provider-visible healthy status.`,
+    );
+  }
+  if (service.health !== 'healthy' && healthReceipt !== null) {
+    throw new Error(
+      `${path}.healthReceipt can prove only provider-visible healthy status.`,
+    );
+  }
+  if (
+    healthReceipt !== null &&
+    (healthReceipt.receipt.health !== service.health ||
+      healthReceipt.receipt.artifactId !== service.artifactId ||
+      healthReceipt.receipt.revisionId !== service.revisionId)
+  ) {
+    throw new Error(
+      `${path}.healthReceipt must prove the exact reported health and release.`,
+    );
+  }
   return Object.freeze({
     health: service.health,
     artifactId: service.artifactId,
     revisionId: service.revisionId,
+    healthReceipt,
   });
 }
 
@@ -438,10 +479,19 @@ function assertStatusEvidence(
  * @param {Readonly<Record<string, any>>} payload - Canonical inspection payload.
  * @param {Readonly<Record<string, any>>} profile - Exact deployment profile.
  * @param {unknown} providerSpec - Exact resolved provider specification.
+ * @param {unknown} head - Optional exact durable head for full receipt lineage validation.
+ * @param {unknown} now - Explicit sampled epoch milliseconds for health freshness validation.
  * @param {string} path - Human-readable value path.
  * @returns {void}
  */
-function assertInspectionContext(payload, profile, providerSpec, path) {
+function assertInspectionContext(
+  payload,
+  profile,
+  providerSpec,
+  head,
+  now,
+  path,
+) {
   const canonicalProviderSpec = validateAwsSingleNodeProviderSpecContext(
     providerSpec,
     { profile, providerScope: payload.providerScope },
@@ -540,18 +590,71 @@ function assertInspectionContext(payload, profile, providerSpec, path) {
       );
     }
   }
-  if (payload.status === 'converged') {
-    const resident = payload.resources.find(
-      (/** @type {Readonly<Record<string, any>>} */ resource) =>
-        resource.capability.kind === 'resident-node',
+  const resident = payload.resources.find(
+    (/** @type {Readonly<Record<string, any>>} */ resource) =>
+      resource.capability.kind === 'resident-node',
+  );
+  const healthObservation = resident?.service?.healthReceipt ?? null;
+  if (healthObservation !== null) {
+    const receipt = healthObservation.receipt;
+    const expectedLocation = getDeploymentServiceHealthObjectLocation(
+      payload.providerScope,
+      receipt,
     );
+    if (
+      receipt.providerScopeId !== payload.providerScope.providerScopeId ||
+      receipt.providerSpecId !== payload.providerSpecId ||
+      receipt.deploymentInstanceId !== payload.deploymentInstanceId ||
+      receipt.incarnationId !== payload.incarnationId ||
+      receipt.deploymentRevisionId !==
+        payload.deploymentRevision.deploymentRevisionId ||
+      receipt.appId !== payload.deploymentRevision.appId ||
+      receipt.artifactId !== payload.deploymentRevision.artifactId ||
+      receipt.revisionId !== payload.deploymentRevision.revisionId ||
+      receipt.nodeProviderResourceId !==
+        resident?.providerIdentity?.providerResourceId ||
+      receipt.authorizedHeadGeneration > payload.headGeneration ||
+      healthObservation.object.bucketName !== expectedLocation.bucketName ||
+      healthObservation.object.key !== expectedLocation.key
+    ) {
+      throw new Error(
+        `${path} resident health receipt does not match the exact inspection authority.`,
+      );
+    }
+    if (head !== undefined) {
+      validateDeploymentServiceHealthReceiptContext(
+        receipt,
+        {
+          deploymentRevision: payload.deploymentRevision,
+          profile,
+          providerScope: payload.providerScope,
+          providerSpec: canonicalProviderSpec,
+          head,
+        },
+        `${path}.residentHealthReceipt`,
+      );
+    }
+    validateDeploymentServiceHealthObservationFreshness(
+      healthObservation,
+      {
+        now,
+        maxAgeSeconds:
+          canonicalProviderSpec.capabilities.serviceHealth.maxAgeSeconds,
+        clockSkewSeconds:
+          canonicalProviderSpec.capabilities.serviceHealth.clockSkewSeconds,
+      },
+      `${path}.residentHealthReceipt`,
+    );
+  }
+  if (payload.status === 'converged') {
     if (
       resident?.service?.health !== 'healthy' ||
       resident.service.artifactId !== payload.deploymentRevision.artifactId ||
-      resident.service.revisionId !== payload.deploymentRevision.revisionId
+      resident.service.revisionId !== payload.deploymentRevision.revisionId ||
+      resident.service.healthReceipt === null
     ) {
       throw new Error(
-        `${path} converged status requires the exact deployment artifact and revision to be healthy.`,
+        `${path} converged status requires a provider-visible receipt proving the exact deployment artifact and revision healthy.`,
       );
     }
   }
@@ -647,7 +750,7 @@ function createPayload(value, path) {
 /**
  * Create a deterministic redacted provider inspection.
  * @param {unknown} value - Inspection evidence without derived ID.
- * @param {{profile?: unknown, providerSpec?: unknown}} [context] - Exact immutable profile and resolved provider context.
+ * @param {{profile?: unknown, providerSpec?: unknown, head?: unknown, now?: unknown}} [context] - Exact immutable profile, resolved provider context, optional durable head, and explicit sampled time when health evidence is present.
  * @returns {Readonly<Record<string, any>>} - Canonical inspection.
  */
 export function createDeploymentInspection(value, context = {}) {
@@ -672,6 +775,8 @@ export function createDeploymentInspection(value, context = {}) {
     payload,
     profile,
     context.providerSpec,
+    context.head,
+    context.now,
     'deploymentInspection',
   );
   const inspectionId = createCanonicalJsonSha256Id({
@@ -695,7 +800,7 @@ export function validateDeploymentInspection(
   const document = cloneJsonObject(value, valuePath);
   assertAllKeys(document, DOCUMENT_KEYS, valuePath);
   if (document.schemaVersion !== DEPLOYMENT_INSPECTION_SCHEMA_VERSION) {
-    throw new TypeError(`${valuePath}.schemaVersion must be the integer 2.`);
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 3.`);
   }
   if (document.kind !== DEPLOYMENT_INSPECTION_KIND) {
     throw new TypeError(
@@ -743,7 +848,7 @@ export function validateDeploymentInspection(
 /**
  * Re-resolve the immutable profile before using inspection evidence to mutate.
  * @param {unknown} value - Candidate inspection.
- * @param {{profile: unknown, providerSpec: unknown}} context - Exact immutable profile and resolved provider specification.
+ * @param {{profile: unknown, providerSpec: unknown, head?: unknown, now?: unknown}} context - Exact immutable profile, resolved provider specification, optional durable head, and explicit sampled time when health evidence is present.
  * @returns {Readonly<Record<string, any>>} - Fully cross-checked inspection.
  */
 export function validateDeploymentInspectionContext(value, context) {
@@ -756,6 +861,8 @@ export function validateDeploymentInspectionContext(value, context) {
     inspection,
     profile,
     context?.providerSpec,
+    context?.head,
+    context?.now,
     'deploymentInspection',
   );
   return inspection;

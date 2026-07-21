@@ -2,6 +2,10 @@
 
 import { getDeploymentControlBucketName } from './deployment-artifact-stage.js';
 import { validateProviderScope } from './deployment-provider-scope.js';
+import {
+  DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS,
+  DEPLOYMENT_SERVICE_HEALTH_OBJECT_PREFIX,
+} from './deployment-service-health-contract.js';
 
 export { getDeploymentControlBucketName };
 
@@ -12,6 +16,12 @@ export const DEPLOYMENT_CONTROL_BUCKET_VERSIONING_READY_KEY =
   'control/v1/versioning-ready';
 export const DEPLOYMENT_CONTROL_BUCKET_VERSIONING_READY_CHECKSUM_SHA256 =
   '47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=';
+export const DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_PREFIX =
+  DEPLOYMENT_SERVICE_HEALTH_OBJECT_PREFIX;
+export const DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_LIFECYCLE_RULE_ID =
+  'wharfie-expire-noncurrent-service-health-v1';
+export const DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS =
+  DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS;
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -33,6 +43,7 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
   'headBucket',
   'headObject',
   'putBucketEncryption',
+  'putBucketLifecycleConfiguration',
   'putBucketOwnershipControls',
   'putBucketVersioning',
   'putPublicAccessBlock',
@@ -44,6 +55,14 @@ const PUBLIC_ACCESS_KEYS = new Set([
   'IgnorePublicAcls',
   'RestrictPublicBuckets',
 ]);
+const LIFECYCLE_RULE_KEYS = new Set([
+  'ID',
+  'Status',
+  'Filter',
+  'NoncurrentVersionExpiration',
+]);
+const LIFECYCLE_FILTER_KEYS = new Set(['Prefix']);
+const NONCURRENT_VERSION_EXPIRATION_KEYS = new Set(['NoncurrentDays']);
 const MAX_BUCKET_TAGS = 50;
 const MAX_VERSION_ID_UTF8_BYTES = 1024;
 
@@ -64,7 +83,7 @@ const BASE_VERSIONING_READY_METADATA = Object.freeze({
  * @typedef DeploymentControlBucketClient
  * @property {(input: import('@aws-sdk/client-s3').CreateBucketCommandInput) => Promise<any>} createBucket - Create the retained bucket.
  * @property {(input: import('@aws-sdk/client-s3').GetBucketEncryptionCommandInput) => Promise<any>} getBucketEncryption - Read default encryption.
- * @property {(input: import('@aws-sdk/client-s3').GetBucketLifecycleConfigurationCommandInput) => Promise<any>} getBucketLifecycleConfiguration - Prove lifecycle absence.
+ * @property {(input: import('@aws-sdk/client-s3').GetBucketLifecycleConfigurationCommandInput) => Promise<any>} getBucketLifecycleConfiguration - Read exact service-health retention.
  * @property {(input: import('@aws-sdk/client-s3').GetBucketLocationCommandInput) => Promise<any>} getBucketLocation - Read the bucket region.
  * @property {(input: import('@aws-sdk/client-s3').GetBucketOwnershipControlsCommandInput) => Promise<any>} getBucketOwnershipControls - Read object ownership.
  * @property {(input: import('@aws-sdk/client-s3').GetBucketPolicyCommandInput) => Promise<any>} getBucketPolicy - Prove bucket-policy absence.
@@ -75,6 +94,7 @@ const BASE_VERSIONING_READY_METADATA = Object.freeze({
  * @property {(input: import('@aws-sdk/client-s3').HeadBucketCommandInput) => Promise<any>} headBucket - Prove bucket ownership/existence.
  * @property {(input: import('@aws-sdk/client-s3').HeadObjectCommandInput) => Promise<any>} headObject - Read versioning-readiness evidence.
  * @property {(input: import('@aws-sdk/client-s3').PutBucketEncryptionCommandInput) => Promise<any>} putBucketEncryption - Set SSE-S3 default encryption.
+ * @property {(input: import('@aws-sdk/client-s3').PutBucketLifecycleConfigurationCommandInput) => Promise<any>} putBucketLifecycleConfiguration - Expire only noncurrent service-health versions.
  * @property {(input: import('@aws-sdk/client-s3').PutBucketOwnershipControlsCommandInput) => Promise<any>} putBucketOwnershipControls - Enforce bucket ownership.
  * @property {(input: import('@aws-sdk/client-s3').PutBucketVersioningCommandInput) => Promise<any>} putBucketVersioning - Enable versioning.
  * @property {(input: import('@aws-sdk/client-s3').PutPublicAccessBlockCommandInput) => Promise<any>} putPublicAccessBlock - Block all public access.
@@ -214,7 +234,7 @@ function absentEvidence(providerScope, bucketName) {
     publicAccessBlocked: false,
     objectOwnership: null,
     defaultEncryption: null,
-    lifecycleConfigurationPresent: null,
+    serviceHealthLifecycleConforms: false,
     bucketPolicyPresent: null,
     replicationConfigurationPresent: null,
   });
@@ -510,8 +530,8 @@ async function inspectVersioningReady(client, bucketName, providerScope) {
   return { status: 'ready', versionId };
 }
 
-/** @param {DeploymentControlBucketClient} client @param {string} bucketName @param {string} accountId @returns {Promise<void>} */
-async function validateNoLifecycle(client, bucketName, accountId) {
+/** @param {DeploymentControlBucketClient} client @param {string} bucketName @param {string} accountId @returns {Promise<boolean>} */
+async function inspectServiceHealthLifecycle(client, bucketName, accountId) {
   let response;
   try {
     response = await client.getBucketLifecycleConfiguration({
@@ -519,13 +539,74 @@ async function validateNoLifecycle(client, bucketName, accountId) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
-    if (errorNamed(error, 'NoSuchLifecycleConfiguration')) return;
+    if (errorNamed(error, 'NoSuchLifecycleConfiguration')) return false;
     throw new DeploymentControlBucketUnknownError();
   }
   if (!isPlainObject(response) || !Array.isArray(response.Rules)) {
     throw new DeploymentControlBucketUnknownError();
   }
-  throw new DeploymentControlBucketConflictError();
+  if (response.Rules.length !== 1) {
+    throw new DeploymentControlBucketConflictError();
+  }
+  const rule = response.Rules[0];
+  if (!isPlainObject(rule)) {
+    throw new DeploymentControlBucketUnknownError();
+  }
+  for (const key of LIFECYCLE_RULE_KEYS) {
+    if (!Object.hasOwn(rule, key)) {
+      throw new DeploymentControlBucketConflictError();
+    }
+  }
+  for (const key of Object.keys(rule)) {
+    if (!LIFECYCLE_RULE_KEYS.has(key)) {
+      throw new DeploymentControlBucketConflictError();
+    }
+  }
+  if (
+    typeof rule.ID !== 'string' ||
+    typeof rule.Status !== 'string' ||
+    !isPlainObject(rule.Filter) ||
+    !isPlainObject(rule.NoncurrentVersionExpiration)
+  ) {
+    throw new DeploymentControlBucketUnknownError();
+  }
+  for (const key of Object.keys(rule.Filter)) {
+    if (!LIFECYCLE_FILTER_KEYS.has(key)) {
+      throw new DeploymentControlBucketConflictError();
+    }
+  }
+  for (const key of LIFECYCLE_FILTER_KEYS) {
+    if (!Object.hasOwn(rule.Filter, key)) {
+      throw new DeploymentControlBucketConflictError();
+    }
+  }
+  for (const key of Object.keys(rule.NoncurrentVersionExpiration)) {
+    if (!NONCURRENT_VERSION_EXPIRATION_KEYS.has(key)) {
+      throw new DeploymentControlBucketConflictError();
+    }
+  }
+  for (const key of NONCURRENT_VERSION_EXPIRATION_KEYS) {
+    if (!Object.hasOwn(rule.NoncurrentVersionExpiration, key)) {
+      throw new DeploymentControlBucketConflictError();
+    }
+  }
+  if (
+    typeof rule.Filter.Prefix !== 'string' ||
+    !Number.isSafeInteger(rule.NoncurrentVersionExpiration.NoncurrentDays) ||
+    rule.NoncurrentVersionExpiration.NoncurrentDays < 1
+  ) {
+    throw new DeploymentControlBucketUnknownError();
+  }
+  if (
+    rule.ID !== DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_LIFECYCLE_RULE_ID ||
+    rule.Status !== 'Enabled' ||
+    rule.Filter.Prefix !== DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_PREFIX ||
+    rule.NoncurrentVersionExpiration.NoncurrentDays !==
+      DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS
+  ) {
+    throw new DeploymentControlBucketConflictError();
+  }
+  return true;
 }
 
 /** @param {DeploymentControlBucketClient} client @param {string} bucketName @param {string} accountId @returns {Promise<void>} */
@@ -595,6 +676,29 @@ function putVersioningReadyRequest(providerScope, bucketName, onlyIfAbsent) {
     StorageClass: 'STANDARD',
     Metadata: versioningReadyMetadata(providerScope),
     ...(onlyIfAbsent ? { IfNoneMatch: '*' } : {}),
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} providerScope @param {string} bucketName @returns {Readonly<import('@aws-sdk/client-s3').PutBucketLifecycleConfigurationCommandInput>} */
+function putServiceHealthLifecycleRequest(providerScope, bucketName) {
+  return deepFreeze({
+    Bucket: bucketName,
+    ExpectedBucketOwner: providerScope.accountId,
+    LifecycleConfiguration: {
+      Rules: [
+        {
+          ID: DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_LIFECYCLE_RULE_ID,
+          Status: 'Enabled',
+          Filter: {
+            Prefix: DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_PREFIX,
+          },
+          NoncurrentVersionExpiration: {
+            NoncurrentDays:
+              DEPLOYMENT_CONTROL_BUCKET_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS,
+          },
+        },
+      ],
+    },
   });
 }
 
@@ -691,7 +795,11 @@ export function createDeploymentControlBucket(options) {
       bucketName,
       providerScope.accountId,
     );
-    await validateNoLifecycle(client, bucketName, providerScope.accountId);
+    const serviceHealthLifecycleConforms = await inspectServiceHealthLifecycle(
+      client,
+      bucketName,
+      providerScope.accountId,
+    );
     await validateNoBucketPolicy(client, bucketName, providerScope.accountId);
     await validateNoReplication(client, bucketName, providerScope.accountId);
     const sentinel = await inspectVersioningReady(
@@ -709,14 +817,15 @@ export function createDeploymentControlBucket(options) {
       sentinel.status === 'ready' &&
       publicAccessBlocked &&
       ownership.ready &&
-      encryption.ready;
+      encryption.ready &&
+      serviceHealthLifecycleConforms;
     return {
       state: deepFreeze({
         schemaVersion: 1,
         kind: 'deploymentControlBucketInspection',
         status: active ? 'active' : 'bootstrap-required',
         evidence:
-          'head-location-tags-versioning-public-access-ownership-encryption-no-lifecycle-no-policy-no-replication-and-versioned-sentinel',
+          'head-location-tags-versioning-public-access-ownership-encryption-service-health-lifecycle-no-policy-no-replication-and-versioned-sentinel',
         bucketName,
         providerScopeId: providerScope.providerScopeId,
         bucketRegion: region,
@@ -726,7 +835,7 @@ export function createDeploymentControlBucket(options) {
         publicAccessBlocked,
         objectOwnership: ownership.value,
         defaultEncryption: encryption.value,
-        lifecycleConfigurationPresent: false,
+        serviceHealthLifecycleConforms,
         bucketPolicyPresent: false,
         replicationConfigurationPresent: false,
       }),
@@ -735,6 +844,7 @@ export function createDeploymentControlBucket(options) {
         publicAccess: !publicAccessBlocked,
         ownership: !ownership.ready,
         encryption: !encryption.ready,
+        lifecycle: !serviceHealthLifecycleConforms,
         sentinel: sentinel.status !== 'ready',
       },
       sentinel,
@@ -802,7 +912,8 @@ export function createDeploymentControlBucket(options) {
       observed.needs.versioning === false &&
       observed.needs.publicAccess === false &&
       observed.needs.ownership === false &&
-      observed.needs.encryption === false
+      observed.needs.encryption === false &&
+      observed.needs.lifecycle === false
     );
   }
 
@@ -955,6 +1066,13 @@ export function createDeploymentControlBucket(options) {
           ExpectedBucketOwner: providerScope.accountId,
           VersioningConfiguration: { Status: 'Enabled' },
         }),
+      );
+    }
+    if (observed.needs.lifecycle) {
+      await attemptWrite(() =>
+        client.putBucketLifecycleConfiguration(
+          putServiceHealthLifecycleRequest(providerScope, bucketName),
+        ),
       );
     }
     observed = await awaitInspection(

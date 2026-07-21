@@ -105,7 +105,7 @@ describe('AWS single-node provider specifications', () => {
       schemaVersion: 1,
       kind: 'awsSingleNodeProviderSpec',
       providerSpecId: expect.stringMatching(/^wap1_[A-Za-z0-9_-]{43}$/),
-      providerContractVersion: 2,
+      providerContractVersion: 3,
       providerScopeId: fixture.providerScope.providerScopeId,
       profileRevisionId: fixture.profile.profileRevisionId,
       targetId: 'node-v24.13.1-linux-x64-glibc',
@@ -150,7 +150,7 @@ describe('AWS single-node provider specifications', () => {
           contractVersion: 1,
           managementChannel: 'ssm',
           artifactAccess: 'read',
-          serviceHealthAccess: 'write',
+          serviceHealthAccess: 'read-write-current-object',
           applicationInstanceMetadata: 'blocked',
           policyDigest: digest('runtime identity policy'),
         },
@@ -169,6 +169,8 @@ describe('AWS single-node provider specifications', () => {
           intervalSeconds: 15,
           maxAgeSeconds: 60,
           clockSkewSeconds: 5,
+          publication: 'conditional-current-object',
+          noncurrentVersionExpirationDays: 1,
         },
       },
     });
@@ -187,7 +189,7 @@ describe('AWS single-node provider specifications', () => {
       'wharfie:aws-single-node-provider-spec:v1',
     );
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap1');
-    expect(AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION).toBe(2);
+    expect(AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION).toBe(3);
     expect(Object.isFrozen(spec)).toBe(true);
     expect(Object.isFrozen(spec.machineImage.sourceParameter)).toBe(true);
     expect(Object.isFrozen(spec.capabilities.networking.ingressCidrs)).toBe(
@@ -359,6 +361,25 @@ describe('AWS single-node provider specifications', () => {
     expect(() => validateAwsSingleNodeProviderSpec(volumeDrift)).toThrow(
       /fixed provider contract/i,
     );
+
+    const publicationDrift = clone(original);
+    publicationDrift.capabilities.serviceHealth.publication = 'overwrite';
+    expect(() => validateAwsSingleNodeProviderSpec(publicationDrift)).toThrow(
+      /fixed provider contract/i,
+    );
+
+    const retentionDrift = clone(original);
+    retentionDrift.capabilities.serviceHealth.noncurrentVersionExpirationDays = 7;
+    expect(() => validateAwsSingleNodeProviderSpec(retentionDrift)).toThrow(
+      /fixed provider contract/i,
+    );
+
+    const runtimeIdentityDrift = clone(original);
+    runtimeIdentityDrift.capabilities.runtimeIdentity.serviceHealthAccess =
+      'write';
+    expect(() =>
+      validateAwsSingleNodeProviderSpec(runtimeIdentityDrift),
+    ).toThrow(/fixed provider contract/i);
 
     const instanceDrift = clone(original);
     instanceDrift.node.instanceType = 't4g.small';

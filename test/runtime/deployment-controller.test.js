@@ -20,6 +20,11 @@ import {
 } from '../../src/core/runtime/deployment-head.js';
 import { createDeploymentInspection } from '../../src/core/runtime/deployment-inspection.js';
 import {
+  createDeploymentServiceHealthReceipt,
+  getDeploymentServiceHealthObjectLocation,
+} from '../../src/core/runtime/deployment-service-health.js';
+import { validateDeploymentServiceHealthObservation } from '../../src/core/runtime/deployment-service-health-s3.js';
+import {
   createDeploymentPlan,
   validateDeploymentPlan,
 } from '../../src/core/runtime/deployment-plan.js';
@@ -39,6 +44,7 @@ import {
   createOwnershipNonce,
 } from '../../src/core/runtime/deployment-resource-binding.js';
 import { validateDeploymentRevision } from '../../src/core/runtime/deployment-revision.js';
+import { createLedgerServiceId } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
@@ -54,6 +60,8 @@ function digest(value) {
 function semanticId(prefix, domain, value) {
   return createCanonicalJsonSha256Id({ prefix, domain, value });
 }
+
+const HEALTH_NOW = 1_700_000_000_000;
 
 const RESOURCES = Object.freeze([
   {
@@ -323,6 +331,65 @@ function makeBinding(
   });
 }
 
+/**
+ * @param {Readonly<Record<string, any>>} base
+ * @param {Readonly<Record<string, any>>} head
+ * @param {Readonly<Record<string, any>>} nodeBinding
+ * @param {Record<string, any>} [overrides]
+ */
+function makeHealthObservation(base, head, nodeBinding, overrides = {}) {
+  const operation =
+    head.activeOperation !== null && head.activeOperation.kind !== 'destroy'
+      ? head.activeOperation
+      : head.lastOperation !== null && head.lastOperation.kind !== 'destroy'
+        ? head.lastOperation
+        : null;
+  if (operation === null) {
+    throw new Error('test health observation requires live release authority');
+  }
+  const receipt = createDeploymentServiceHealthReceipt({
+    providerScopeId: base.providerScope.providerScopeId,
+    providerSpecId: base.providerSpec.providerSpecId,
+    deploymentInstanceId: base.deploymentInstanceId,
+    incarnationId: head.incarnationId,
+    deploymentOperationId: operation.operationId,
+    authorizedHeadId: head.headId,
+    authorizedHeadGeneration: head.generation,
+    nodeBindingId: nodeBinding.bindingId,
+    nodeProviderResourceId: nodeBinding.providerResourceId,
+    deploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    appId: base.deploymentRevision.appId,
+    artifactId: base.deploymentRevision.artifactId,
+    revisionId: base.deploymentRevision.revisionId,
+    serviceId: createLedgerServiceId({
+      appId: base.deploymentRevision.appId,
+    }),
+    sessionId: `wss_${Buffer.alloc(32, 13).toString('base64url')}`,
+    lifecycleGeneration: 1,
+    ownerGeneration: 1,
+    activationRecordVersion: 1,
+    activationSelectionGeneration: 1,
+    processId: 4321,
+    sequence: 1,
+    health: 'healthy',
+    ...overrides,
+  });
+  const location = getDeploymentServiceHealthObjectLocation(
+    base.providerScope,
+    receipt,
+  );
+  return validateDeploymentServiceHealthObservation({
+    receipt,
+    object: {
+      bucketName: location.bucketName,
+      key: location.key,
+      versionId: 'controller-health-version-1',
+      etag: '"controller-health-etag-1"',
+      lastModifiedAt: HEALTH_NOW,
+    },
+  });
+}
+
 /** @param {Readonly<Record<string, any>>} base */
 function makeAbsentInspection(base) {
   return createDeploymentInspection(
@@ -350,6 +417,7 @@ function makeAbsentInspection(base) {
  * @param {Map<string, Readonly<Record<string, any>>>} physical
  * @param {'conflict'|'missing'|'unknown'|null} [inspectionEvidence]
  * @param {string|null} [inspectionStateDriftResourceKey]
+ * @param {Record<string, any>|null} [healthReceiptOverrides]
  */
 function makeLiveInspection(
   base,
@@ -357,6 +425,7 @@ function makeLiveInspection(
   physical,
   inspectionEvidence = null,
   inspectionStateDriftResourceKey = null,
+  healthReceiptOverrides = {},
 ) {
   const destroying = head.activeOperation?.kind === 'destroy';
   const allPresent = RESOURCES.every(({ resourceKey }) =>
@@ -367,6 +436,14 @@ function makeLiveInspection(
     RESOURCES.every(({ resourceKey, retained }) =>
       retained ? physical.has(resourceKey) : !physical.has(resourceKey),
     );
+  const finalReadinessEligible =
+    head.phase === 'READY' ||
+    (head.activeOperation !== null &&
+      head.activeOperation.intents.every(
+        (
+          /** @type {Readonly<Record<string, any>>} */ { status: intentStatus },
+        ) => intentStatus === 'settled',
+      ));
   const status =
     inspectionEvidence === 'conflict'
       ? 'conflict'
@@ -378,9 +455,27 @@ function makeLiveInspection(
             ? 'drifted'
             : destroyed
               ? 'destroyed'
-              : allPresent
-                ? 'converged'
-                : 'in-flight';
+              : destroying
+                ? 'in-flight'
+                : allPresent && finalReadinessEligible
+                  ? 'converged'
+                  : 'in-flight';
+  const durableNodeBinding = head.resourceBindings.find(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.capability.kind === 'resident-node',
+  );
+  const claimsHealthy = status === 'converged';
+  const healthReceipt =
+    claimsHealthy &&
+    durableNodeBinding !== undefined &&
+    healthReceiptOverrides !== null
+      ? makeHealthObservation(
+          base,
+          head,
+          durableNodeBinding,
+          healthReceiptOverrides,
+        )
+      : null;
   const resources = RESOURCES.map((resource) => {
     const binding = physical.get(resource.resourceKey);
     const present = binding !== undefined;
@@ -413,15 +508,18 @@ function makeLiveInspection(
         : null,
       health: present
         ? resource.capability === 'resident-node'
-          ? 'healthy'
+          ? claimsHealthy
+            ? 'healthy'
+            : 'starting'
           : 'not-applicable'
         : 'absent',
       service:
         present && resource.capability === 'resident-node'
           ? {
-              health: 'healthy',
+              health: claimsHealthy ? 'healthy' : 'starting',
               artifactId: base.deploymentRevision.artifactId,
               revisionId: base.deploymentRevision.revisionId,
+              healthReceipt,
             }
           : null,
     };
@@ -441,7 +539,12 @@ function makeLiveInspection(
       status,
       resources,
     },
-    { profile: base.profile, providerSpec: base.providerSpec },
+    {
+      profile: base.profile,
+      providerSpec: base.providerSpec,
+      head,
+      now: HEALTH_NOW,
+    },
   );
 }
 
@@ -593,6 +696,8 @@ function makeProvider(base, store, physical, events = []) {
   let driftAfterEffectActionId = null;
   /** @type {string|null} */
   let inspectionStateDriftResourceKey = null;
+  /** @type {Record<string, any>|null} */
+  let healthReceiptOverrides = {};
   /** @type {Map<string, number>} */
   const executeCount = new Map();
   /** @type {Record<string, any>[]} */
@@ -630,6 +735,7 @@ function makeProvider(base, store, physical, events = []) {
             physical,
             inspectionEvidence,
             inspectionStateDriftResourceKey,
+            healthReceiptOverrides,
           );
     },
     /** @param {Record<string, any>} context */
@@ -714,6 +820,10 @@ function makeProvider(base, store, physical, events = []) {
     /** @param {'conflict'|'missing'|'unknown'|null} value */
     setInspectionEvidence(value) {
       inspectionEvidence = value;
+    },
+    /** @param {Record<string, any>|null} value */
+    setHealthReceiptOverrides(value) {
+      healthReceiptOverrides = value;
     },
     /** @param {string} actionId */
     crashAfterPhysicalEffect(actionId) {
@@ -831,19 +941,21 @@ function replaceReadySettledPlan(
   });
 }
 
-/** @param {{head?: Readonly<Record<string, any>>|null, physical?: Map<string, Readonly<Record<string, any>>>}} [options] */
+/** @param {{head?: Readonly<Record<string, any>>|null, plans?: Readonly<Record<string, any>>[], physical?: Map<string, Readonly<Record<string, any>>>}} [options] */
 function makeHarness(options = {}) {
   const base = makeContext();
   /** @type {string[]} */
   const events = [];
   const physical = options.physical || new Map();
-  const store = makeStore(options.head || null, [], events);
+  const store = makeStore(options.head || null, options.plans || [], events);
   const provider = makeProvider(base, store, physical, events);
   const artifactStager = makeArtifactStager(base, events);
+  let currentNow = HEALTH_NOW;
   const controller = createDeploymentController({
     store: store.api,
     provider: provider.api,
     artifactStager: artifactStager.api,
+    now: () => currentNow,
     createOwnershipNonce: (() => {
       let index = 20;
       return () => createOwnershipNonce(Buffer.alloc(32, index++));
@@ -858,10 +970,14 @@ function makeHarness(options = {}) {
     artifactStager,
     events,
     controller,
+    /** @param {number} value */
+    setNow(value) {
+      currentNow = value;
+    },
   };
 }
 
-/** @param {ReturnType<typeof makeHarness>} harness @param {'apply'|'destroy'} operation */
+/** @param {ReturnType<typeof makeHarness>} harness @param {'apply'|'reconcile'|'destroy'} operation */
 async function planWith(harness, operation) {
   return harness.controller.plan({
     operation,
@@ -1042,6 +1158,7 @@ describe('deployment controller artifact staging', () => {
       store: store.api,
       provider: provider.api,
       artifactStager: artifactStager.api,
+      now: () => HEALTH_NOW,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => ready.base.incarnationId,
     });
@@ -1277,6 +1394,119 @@ describe('deployment controller crash recovery', () => {
     }
   });
 
+  it.each([
+    ['missing proof', null],
+    [
+      'another node',
+      { nodeProviderResourceId: 'provider-resource-foreign-substrate' },
+    ],
+    [
+      'another incarnation',
+      { incarnationId: createDeploymentIncarnationId(Buffer.alloc(32, 88)) },
+    ],
+    [
+      'another operation',
+      {
+        deploymentOperationId: semanticId(
+          'wdo1',
+          'wharfie:test:foreign-health-operation:v1',
+          { operation: 1 },
+        ),
+      },
+    ],
+    [
+      'a future head generation',
+      { authorizedHeadGeneration: Number.MAX_SAFE_INTEGER },
+    ],
+    [
+      'another release',
+      {
+        artifactId: createSha256Id({
+          prefix: 'waf1',
+          payload: 'foreign controller artifact',
+        }),
+      },
+    ],
+  ])(
+    'does not finalize with service health proof for %s',
+    async (_description, healthReceiptOverrides) => {
+      const harness = makeHarness();
+      const plan = await planWith(harness, 'apply');
+      harness.provider.setHealthReceiptOverrides(healthReceiptOverrides);
+
+      const head = await harness.controller.converge({
+        plan,
+        profile: harness.base.profile,
+      });
+
+      expect(head).toMatchObject({
+        phase: 'CONVERGING',
+        activeOperation: {
+          nextActionIndex: plan.actions.length,
+          status: 'blocked',
+        },
+      });
+      expect(
+        harness.store.head?.activeOperation?.intents.every(
+          (/** @type {Readonly<Record<string, any>>} */ intent) =>
+            intent.status === 'settled',
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    ['stale', HEALTH_NOW + 65_001],
+    ['too far in the future', HEALTH_NOW - 5_001],
+  ])(
+    'does not finalize with structurally valid but %s service health evidence',
+    async (_description, now) => {
+      const harness = makeHarness();
+      const plan = await planWith(harness, 'apply');
+      harness.setNow(now);
+
+      const head = await harness.controller.converge({
+        plan,
+        profile: harness.base.profile,
+      });
+
+      expect(head).toMatchObject({
+        phase: 'CONVERGING',
+        activeOperation: {
+          nextActionIndex: plan.actions.length,
+          status: 'blocked',
+        },
+      });
+    },
+  );
+
+  it('does not finalize reconcile with a fresh receipt from the prior settled operation', async () => {
+    const ready = makeReadyState();
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'reconcile');
+    harness.provider.setHealthReceiptOverrides({
+      deploymentOperationId: ready.head.lastOperation.operationId,
+    });
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(head).toMatchObject({
+      phase: 'CONVERGING',
+      activeOperation: {
+        kind: 'reconcile',
+        nextActionIndex: plan.actions.length,
+        status: 'blocked',
+      },
+    });
+  });
+
   it('does not settle an action without fresh matching provider state evidence', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
@@ -1311,6 +1541,7 @@ describe('deployment controller fencing', () => {
       store: store.api,
       provider: provider.api,
       artifactStager: makeArtifactStager(ready.base).api,
+      now: () => HEALTH_NOW,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => ready.base.incarnationId,
     });
@@ -1430,6 +1661,7 @@ describe('deployment controller fencing', () => {
         store: store.api,
         provider: provider.api,
         artifactStager: makeArtifactStager(ready.base).api,
+        now: () => HEALTH_NOW,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
       });
@@ -1622,6 +1854,7 @@ describe('deployment controller destroy ownership', () => {
         store: store.api,
         provider: provider.api,
         artifactStager: makeArtifactStager(ready.base).api,
+        now: () => HEALTH_NOW,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
       });
@@ -1658,6 +1891,7 @@ describe('deployment controller destroy ownership', () => {
         store: store.api,
         provider: provider.api,
         artifactStager: makeArtifactStager(ready.base).api,
+        now: () => HEALTH_NOW,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
       });
@@ -1688,6 +1922,7 @@ describe('deployment controller destroy ownership', () => {
       store: store.api,
       provider: provider.api,
       artifactStager: makeArtifactStager(ready.base).api,
+      now: () => HEALTH_NOW,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => freshIncarnationId,
     });

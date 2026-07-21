@@ -157,7 +157,8 @@ one-node profile now resolves one content-addressed provider specification
 that pins the exact regional AMI and parameter version, bootstrap and identity
 policy digests, instance shape, metadata controls, storage, network, and
 service-health timing. DeploymentPlanV2 embeds that specification and
-DeploymentInspectionV2 binds its ID. Only a fresh incarnation resolves mutable
+DeploymentInspectionV3 binds its ID and the provider/profile contract is now
+version 3. Only a fresh incarnation resolves mutable
 provider prerequisites; converge, resume, and resident update/destroy reuse
 the pinned document. Running-SEA deployment identity, exact provider scope and
 ownership bindings, and a CAS deployment head support crash-resumable
@@ -174,9 +175,17 @@ held bytes are also cross-checked against the SEA's embedded app, revision, and
 runtime target. Converge requires that receipt and regenerates provider
 authority after staging before accepting a plan; resume revalidates the
 retained version without historical local bytes, while destroy deliberately
-does not require it. The provider-visible health receipt, fixed AWS resource
-driver, operator commands, composition, and clean-account proof remain
-unfinished.
+does not require it. A host-owned provider-visible health receipt now binds the
+exact deployment/node, operation/head lineage, running release, service
+session, durable generations, process, and heartbeat sequence. Its conditional
+current S3 object supplies version and `LastModified` freshness evidence, and
+only a fresh context-bound receipt can make Inspection V3 converged. The exact
+`health/v1/` bucket lifecycle makes noncurrent health versions eligible for
+asynchronous expiration after one day without collecting the current receipt
+or staged artifacts. This boundary is
+proved under deterministic mocks; the privileged host observer, fixed AWS
+resource driver, operator commands, production composition, and clean-account
+proof remain unfinished.
 
 ## Start here
 
@@ -184,7 +193,8 @@ unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Recovery-safe artifact-staging checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md) — the current handoff for the retained versioned control bucket, held-source upload, and exact object-version recovery evidence.
+- [Provider-visible service-health checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md) — the current handoff for strict health receipts, conditional S3 publication, provider-owned freshness, final Inspection V3 readiness, and bounded noncurrent-version retention.
+- [Recovery-safe artifact-staging checkpoint](llm/checkpoints/2026-07-20-v23-recovery-safe-artifact-staging.md) — the preceding handoff for the retained versioned control bucket, held-source upload, and exact object-version recovery evidence.
 - [Pinned AWS provider-spec checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md) — the preceding handoff for immutable regional prerequisites and recovery-stable Plan/Inspection V2 authority.
 - [AWS deployment-control checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md) — the preceding handoff for credential-bound AWS scope, retained DynamoDB bootstrap, and the durable deployment store.
 - [Recoverable deployment-controller checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md) — the preceding handoff for strict single-node deployment identity, planning, ownership, and provider-neutral crash recovery.

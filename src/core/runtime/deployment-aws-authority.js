@@ -86,7 +86,9 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-s3').GetBucketTaggingCommandInput) => Promise<any>} getBucketTagging - Read bucket tags.
  * @property {(input: import('@aws-sdk/client-s3').GetBucketVersioningCommandInput) => Promise<any>} getBucketVersioning - Read versioning state.
  * @property {(input: import('@aws-sdk/client-s3').GetPublicAccessBlockCommandInput) => Promise<any>} getPublicAccessBlock - Read public-access state.
+ * @property {(input: import('@aws-sdk/client-s3').GetObjectCommandInput) => Promise<any>} getObject - Read one exact object.
  * @property {(input: import('@aws-sdk/client-s3').PutBucketEncryptionCommandInput) => Promise<any>} putBucketEncryption - Set exact encryption state.
+ * @property {(input: import('@aws-sdk/client-s3').PutBucketLifecycleConfigurationCommandInput) => Promise<any>} putBucketLifecycleConfiguration - Set exact lifecycle state.
  * @property {(input: import('@aws-sdk/client-s3').PutBucketOwnershipControlsCommandInput) => Promise<any>} putBucketOwnershipControls - Set exact ownership controls.
  * @property {(input: import('@aws-sdk/client-s3').PutBucketVersioningCommandInput) => Promise<any>} putBucketVersioning - Set exact versioning state.
  * @property {(input: import('@aws-sdk/client-s3').PutPublicAccessBlockCommandInput) => Promise<any>} putPublicAccessBlock - Set exact public-access state.
@@ -471,9 +473,15 @@ export async function createAwsDeploymentAuthority(options) {
       getPublicAccessBlock: (
         /** @type {import('@aws-sdk/client-s3').GetPublicAccessBlockCommandInput} */ input,
       ) => call(() => client.getPublicAccessBlock(input)),
+      getObject: (
+        /** @type {import('@aws-sdk/client-s3').GetObjectCommandInput} */ input,
+      ) => call(() => client.getObject(input)),
       putBucketEncryption: (
         /** @type {import('@aws-sdk/client-s3').PutBucketEncryptionCommandInput} */ input,
       ) => call(() => client.putBucketEncryption(input)),
+      putBucketLifecycleConfiguration: (
+        /** @type {import('@aws-sdk/client-s3').PutBucketLifecycleConfigurationCommandInput} */ input,
+      ) => call(() => client.putBucketLifecycleConfiguration(input)),
       putBucketOwnershipControls: (
         /** @type {import('@aws-sdk/client-s3').PutBucketOwnershipControlsCommandInput} */ input,
       ) => call(() => client.putBucketOwnershipControls(input)),
