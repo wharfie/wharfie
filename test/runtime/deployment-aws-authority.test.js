@@ -49,12 +49,15 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
 const NETWORK_RESOURCE_METHODS = Object.freeze([
   'attachInternetGateway',
   'createInternetGateway',
+  'createSubnet',
   'createVpc',
   'describeInternetGateways',
+  'describeSubnets',
   'describeVpcs',
   'describeVpcAttribute',
   'detachInternetGateway',
   'deleteInternetGateway',
+  'deleteSubnet',
   'deleteVpc',
 ]);
 
@@ -149,12 +152,16 @@ async function loadHarness({
           input,
         };
       }
+      if (method === 'createSubnet') {
+        return { Subnet: { SubnetId: 'subnet-00000000000000001' }, input };
+      }
       if (method === 'createVpc') {
         return { Vpc: { VpcId: 'vpc-00000000000000001' }, input };
       }
       if (method === 'describeInternetGateways') {
         return { InternetGateways: [], input };
       }
+      if (method === 'describeSubnets') return { Subnets: [], input };
       if (method === 'describeVpcs') return { Vpcs: [], input };
       if (method === 'describeVpcAttribute') {
         return { EnableDnsSupport: { Value: true }, input };
@@ -162,6 +169,7 @@ async function loadHarness({
       if (method === 'attachInternetGateway') return { input };
       if (method === 'detachInternetGateway') return { input };
       if (method === 'deleteInternetGateway') return { input };
+      if (method === 'deleteSubnet') return { input };
       if (method === 'deleteVpc') return { input };
       throw new Error(`Unexpected EC2 method: ${method}`);
     },
@@ -291,6 +299,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    CreateSubnetCommand: class CreateSubnetCommand {
+      input;
+      operation = 'createSubnet';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateVpcCommand: class CreateVpcCommand {
       input;
       operation = 'createVpc';
@@ -331,6 +347,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    DescribeSubnetsCommand: class DescribeSubnetsCommand {
+      input;
+      operation = 'describeSubnets';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     DescribeInstanceTypeOfferingsCommand: class DescribeInstanceTypeOfferingsCommand {
       input;
       operation = 'describeInstanceTypeOfferings';
@@ -358,6 +382,14 @@ async function loadHarness({
     DeleteInternetGatewayCommand: class DeleteInternetGatewayCommand {
       input;
       operation = 'deleteInternetGateway';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DeleteSubnetCommand: class DeleteSubnetCommand {
+      input;
+      operation = 'deleteSubnet';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -1000,6 +1032,17 @@ describe('AWS deployment invocation authority', () => {
         Vpc: { VpcId: 'vpc-00000000000000001' },
         input: createInput,
       });
+      const createSubnetInput = {
+        AvailabilityZoneId: 'use1-az1',
+        CidrBlock: '10.42.1.0/24',
+        VpcId: 'vpc-00000000000000001',
+      };
+      await expect(
+        client.createSubnet(createSubnetInput),
+      ).resolves.toMatchObject({
+        Subnet: { SubnetId: 'subnet-00000000000000001' },
+        input: createSubnetInput,
+      });
       const describeInternetGatewaysInput = {
         InternetGatewayIds: ['igw-00000000000000001'],
       };
@@ -1008,6 +1051,15 @@ describe('AWS deployment invocation authority', () => {
       ).resolves.toMatchObject({
         InternetGateways: [],
         input: describeInternetGatewaysInput,
+      });
+      const describeSubnetsInput = {
+        SubnetIds: ['subnet-00000000000000001'],
+      };
+      await expect(
+        client.describeSubnets(describeSubnetsInput),
+      ).resolves.toMatchObject({
+        Subnets: [],
+        input: describeSubnetsInput,
       });
       const describeInput = { VpcIds: ['vpc-00000000000000001'] };
       await expect(client.describeVpcs(describeInput)).resolves.toMatchObject({
@@ -1037,6 +1089,12 @@ describe('AWS deployment invocation authority', () => {
       await expect(
         client.deleteInternetGateway(deleteInternetGatewayInput),
       ).resolves.toEqual({ input: deleteInternetGatewayInput });
+      const deleteSubnetInput = {
+        SubnetId: 'subnet-00000000000000001',
+      };
+      await expect(client.deleteSubnet(deleteSubnetInput)).resolves.toEqual({
+        input: deleteSubnetInput,
+      });
       const deleteInput = { VpcId: 'vpc-00000000000000001' };
       await expect(client.deleteVpc(deleteInput)).resolves.toEqual({
         input: deleteInput,
@@ -1045,11 +1103,14 @@ describe('AWS deployment invocation authority', () => {
         ['attachInternetGateway', attachmentInput],
         ['createInternetGateway', createInternetGatewayInput],
         ['createVpc', createInput],
+        ['createSubnet', createSubnetInput],
         ['describeInternetGateways', describeInternetGatewaysInput],
+        ['describeSubnets', describeSubnetsInput],
         ['describeVpcs', describeInput],
         ['describeVpcAttribute', attributeInput],
         ['detachInternetGateway', detachInput],
         ['deleteInternetGateway', deleteInternetGatewayInput],
+        ['deleteSubnet', deleteSubnetInput],
         ['deleteVpc', deleteInput],
       ]);
     } finally {
@@ -1077,6 +1138,8 @@ describe('AWS deployment invocation authority', () => {
   it.each([
     ['InvalidVpcID.NotFound', 'describeVpcs', 404],
     ['InvalidInternetGatewayID.NotFound', 'describeInternetGateways', 404],
+    ['InvalidSubnetID.NotFound', 'describeSubnets', 404],
+    ['InvalidSubnetId.NotFound', 'describeSubnets', 404],
     ['DependencyViolation', 'deleteVpc', 400],
     ['IncorrectState', 'deleteVpc', 400],
     ['Gateway.NotAttached', 'detachInternetGateway', 400],

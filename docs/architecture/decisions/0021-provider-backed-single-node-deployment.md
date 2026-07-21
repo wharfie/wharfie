@@ -264,16 +264,20 @@ instance termination](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preser
 ### Direct VPC creation is a recoverable logical effect
 
 Network mutation uses a separate caller-owned authority with only the fixed
-VPC and internet-gateway create, describe, delete, attach, and detach
-operations plus `DescribeVpcAttribute` and `close`. The SDK client is
-configured for one transport attempt because
+VPC, internet-gateway, and subnet create, describe, and delete operations;
+gateway attach and detach; `DescribeVpcAttribute`; and `close`. The SDK client
+is configured for one transport attempt because the direct create operations
+expose no provider idempotency token; for example,
 [`CreateVpc`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateVpc.html)
-has no provider idempotency token. Driver-controlled retries first inspect the
+and
+[`CreateSubnet`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateSubnet.html)
+have no client-token parameter. Driver-controlled retries first inspect the
 exact logical resource instead of allowing the SDK to hide a second create.
 Errors preserve only `InvalidVpcID.NotFound`,
-`InvalidInternetGatewayID.NotFound`, `DependencyViolation`, `IncorrectState`,
-`Gateway.NotAttached`, `Resource.AlreadyAssociated`, and a bounded HTTP status;
-raw provider details never cross the authority boundary.
+`InvalidInternetGatewayID.NotFound`, both `InvalidSubnetID.NotFound` and
+`InvalidSubnetId.NotFound`, `DependencyViolation`, `IncorrectState`,
+`Gateway.NotAttached`, `Resource.AlreadyAssociated`, and a bounded HTTP
+status; raw provider details never cross the authority boundary.
 
 `createAwsSingleNodeVpcResource` accepts only the fixed managed
 `network-vpc` role. Its state digest binds the provider specification's exact
@@ -412,26 +416,94 @@ lifecycle claim.
 
 ### Tagged direct-resource recovery shares identity mechanics, not lifecycle
 
-The VPC and internet-gateway drivers use one internal tagged direct-EC2
-recovery kernel. It owns the common schema-2 ownership envelope, sorted atomic
-create tags, eight stable discovery filters, bounded singleton pagination,
-broad/exact identity correlation, and the in-process create fence keyed by
-action ID plus ownership nonce. A successful create response contributes only
-an ephemeral candidate locator. Clearing that candidate after settlement never
-clears the attempted-effect fence, so a malformed or failed non-idempotent
-create cannot be replayed by the same driver instance.
+The VPC, internet-gateway, and subnet drivers use one internal tagged
+direct-EC2 recovery kernel. It owns the common schema-2 ownership envelope,
+sorted atomic create tags, eight stable discovery filters, bounded singleton
+pagination, broad/exact identity correlation, and the in-process create fence
+keyed by action ID plus ownership nonce. A successful create response
+contributes only an ephemeral candidate locator. Clearing that candidate after
+settlement never clears the attempted-effect fence, so a malformed or failed
+non-idempotent create cannot be replayed by the same driver instance.
 
 The kernel deliberately does not own AWS response-envelope decoding, typed
 not-found interpretation, resource state validation, delete eligibility,
 mutation requests, bindings, or retry outcomes. Those are role contracts. The
 VPC therefore preserves its fresh-process discovery-only recovery path and
 separate DNS-attribute reads, while the gateway explicitly promotes a sole
-discovery ID into an independent exact-ID read. Once a candidate or durable
-binding exists, both roles require broad and exact identity agreement and
-validate every present record before treating one-sided visibility as
-transitional. Sharing these mechanics prevents later tagged resources from
-copying the recovery protocol without turning the kernel into general-purpose
-cloud infrastructure machinery.
+discovery ID into an independent exact-ID read. The subnet also promotes a
+sole discovery ID and adds its separate VPC/CIDR natural-slot read. Once a
+candidate or durable binding exists, all three roles require broad and exact
+identity agreement and validate every present record before treating one-sided
+visibility as transitional. Sharing these mechanics prevents later tagged
+resources from copying the recovery protocol without turning the kernel into
+general-purpose cloud infrastructure machinery.
+
+### Subnet identity adds a natural VPC/CIDR slot
+
+The fixed managed `network-subnet` role is a directly owned, purged child of
+the exact `network-vpc` binding. Apply and reconcile accept only the earlier
+settled VPC dependency; reverse destroy accepts only the later pending,
+still-intact VPC dependency. The subnet binding records that exact VPC binding
+ID as immutable lineage. The plan-time state digest instead contains only the
+fixed subnet CIDR, pinned Availability Zone ID, nondefault and IPv4-only
+identity, disabled subnet-wide public IPv4 assignment, effective VPC Block
+Public Access internet-gateway mode `off`, and purge lifecycle. The dynamic
+VPC provider ID therefore cannot alter a previously content-addressed target
+state.
+
+Create sends one
+[`CreateSubnet`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateSubnet.html)
+request containing only the exact dependency VPC ID, fixed IPv4 CIDR, pinned
+Availability Zone ID, and complete sorted schema-2 `subnet` tag specification.
+It does not select an account-relative Availability Zone name, IPAM pool,
+Outpost, IPv6 allocation, or an unavailable client token, and it never creates
+an untagged subnet for later repair. Subnet-wide `MapPublicIpOnLaunch` remains
+false. AWS documents that nondefault subnets do not assign public IPv4
+addresses by default; the later substrate node's primary ENI will explicitly
+request the one public address instead of broadening the whole subnet's
+[public-IP behavior](https://docs.aws.amazon.com/vpc/latest/userguide/subnet-public-ip.html).
+Wharfie consequently does not introduce a second
+[`ModifySubnetAttribute`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifySubnetAttribute.html)
+mutation.
+
+Settlement correlates three complete, bounded
+[`DescribeSubnets`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSubnets.html)
+views: logical discovery through the shared eight ownership filters, natural
+slot discovery filtered by the exact VPC ID and subnet CIDR, and an independent
+exact-ID read selected from the durable binding, response candidate, or sole
+logical match. Every present record is validated before one-sided visibility
+is classified as transitional. Create and no-op require all three views to
+agree on one account-owned, available subnet in the exact VPC and CIDR, pinned
+Availability Zone ID, nondefault status, no IPv6 allocation or automatic IPv6
+assignment, `MapPublicIpOnLaunch=false`, effective internet-gateway block mode
+`off`, and the full reserved ownership envelope. Account-relative Availability
+Zone names and address occupancy are deliberately outside this intrinsic
+contract. AWS's
+[`Subnet` response](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Subnet.html)
+defines the provider evidence, including the effective
+[`BlockPublicAccessStates`](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_BlockPublicAccessStates.html)
+observation.
+
+The natural slot is stronger response-loss evidence than tags alone because
+EC2 refuses overlapping subnet CIDRs within one VPC. A lost first response may
+therefore be recovered from the occupied intended slot, while a foreign slot
+or disagreeing provider ID blocks rather than being adopted or deleted. The
+shared action-plus-nonce fence still prevents an immediate in-process replay,
+and mutation responses and typed errors remain nonauthoritative. This is a
+claim that at most one desired CIDR can be successfully allocated in the exact
+VPC, not a claim that `CreateSubnet` executes exactly once.
+
+Destroy keeps the stricter identity boundary while allowing mutable subnet
+configuration to drift. Logical and exact bound reads must still corroborate
+the same available, account-owned, tagged, nondefault subnet in the exact VPC;
+a present natural-slot record must agree, but the original desired slot may be
+empty after CIDR drift. CIDR, Availability Zone, IPv4/IPv6 assignment, and
+effective public-access settings therefore do not revoke an explicit purge of
+the exact owned identity. A null binding settles only when complete logical
+discovery and natural-slot discovery are empty and the independent exact read
+returns one of AWS's typed subnet not-found classifications. Delete success,
+not-found, dependency, and incorrect-state outcomes all require fresh readback
+rather than settling the action themselves.
 
 The portable capability model expands through one immutable, content-addressed
 `AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
@@ -856,6 +928,18 @@ fresh VPC discovery broad-only and gateway discovery independently
 corroborated, so it removes duplicated protocol code without weakening or
 homogenizing their evidence contracts. The subnet is the next graph role.
 
+The fourteenth slice extends the same single-attempt network authority with
+the three subnet operations and implements the directly owned subnet beneath
+the exact VPC dependency binding. Logical tag discovery, the VPC/CIDR natural
+slot, and independent exact-ID evidence must corroborate one complete subnet
+before create or no-op settles. The natural slot prevents a second successful
+desired-CIDR allocation after response loss without pretending the provider
+call executes exactly once. The state contract keeps the subnet nondefault,
+IPv4-only, nonblocking, and free of subnet-wide public IPv4 assignment; the
+later node ENI owns its explicit public address. Reverse destroy preserves
+identity, ownership, VPC, nondefault, and available-state fences while
+allowing mutable configuration drift. The route table is the next graph role.
+
 The production runtime policy must grant only current-object reads and
 conditional writes for the deployment's exact health key and deny object or
 version deletion; otherwise a delete marker could hide the semantic
@@ -863,7 +947,8 @@ predecessor. Noncurrent lifecycle retention also deliberately leaves one
 current version at every retired incarnation/node key until a future explicit
 retained-state collector proves it may remove that history.
 
-The remaining independently recoverable resource drivers, source and packaged
+The remaining independently recoverable resource drivers, starting with the
+route table and its derived route and association, source and packaged
 deployment commands, production composition, and clean-account lifecycle proof
 remain unfinished. A document, bucket/table tag,
 SSM result, EC2 description, or content ID still never proves that an

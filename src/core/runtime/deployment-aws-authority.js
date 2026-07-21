@@ -4,14 +4,17 @@ import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import {
   AttachInternetGatewayCommand,
   CreateInternetGatewayCommand,
+  CreateSubnetCommand,
   CreateVpcCommand,
   CreateVolumeCommand,
   DeleteInternetGatewayCommand,
+  DeleteSubnetCommand,
   DeleteVpcCommand,
   DescribeAvailabilityZonesCommand,
   DescribeImagesCommand,
   DescribeInternetGatewaysCommand,
   DescribeInstanceTypeOfferingsCommand,
+  DescribeSubnetsCommand,
   DescribeVpcAttributeCommand,
   DescribeVpcsCommand,
   DescribeVolumesCommand,
@@ -101,6 +104,8 @@ const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'Gateway.NotAttached',
   'IncorrectState',
   'InvalidInternetGatewayID.NotFound',
+  'InvalidSubnetID.NotFound',
+  'InvalidSubnetId.NotFound',
   'InvalidVpcID.NotFound',
   'Resource.AlreadyAssociated',
 ]);
@@ -136,12 +141,15 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @typedef NetworkResourceClient
  * @property {(input: import('@aws-sdk/client-ec2').AttachInternetGatewayCommandInput) => Promise<any>} attachInternetGateway - Attach one exact internet gateway to one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput) => Promise<any>} createInternetGateway - Create one exact internet gateway.
+ * @property {(input: import('@aws-sdk/client-ec2').CreateSubnetCommandInput) => Promise<any>} createSubnet - Create one exact subnet.
  * @property {(input: import('@aws-sdk/client-ec2').CreateVpcCommandInput) => Promise<any>} createVpc - Create one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeInternetGatewaysCommandInput) => Promise<any>} describeInternetGateways - Read exact internet-gateway state.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeSubnetsCommandInput) => Promise<any>} describeSubnets - Read exact subnet state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcsCommandInput) => Promise<any>} describeVpcs - Read exact VPC state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput) => Promise<any>} describeVpcAttribute - Read one exact VPC attribute.
  * @property {(input: import('@aws-sdk/client-ec2').DetachInternetGatewayCommandInput) => Promise<any>} detachInternetGateway - Detach one exact internet gateway from one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput) => Promise<any>} deleteInternetGateway - Delete one exact internet gateway.
+ * @property {(input: import('@aws-sdk/client-ec2').DeleteSubnetCommandInput) => Promise<any>} deleteSubnet - Delete one exact subnet.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteVpcCommandInput) => Promise<any>} deleteVpc - Delete one exact VPC.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
@@ -877,12 +885,18 @@ export async function createAwsDeploymentAuthority(options) {
       createInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new CreateInternetGatewayCommand(input))),
+      createSubnet: (
+        /** @type {import('@aws-sdk/client-ec2').CreateSubnetCommandInput} */ input,
+      ) => call(() => client.send(new CreateSubnetCommand(input))),
       createVpc: (
         /** @type {import('@aws-sdk/client-ec2').CreateVpcCommandInput} */ input,
       ) => call(() => client.send(new CreateVpcCommand(input))),
       describeInternetGateways: (
         /** @type {import('@aws-sdk/client-ec2').DescribeInternetGatewaysCommandInput} */ input,
       ) => call(() => client.send(new DescribeInternetGatewaysCommand(input))),
+      describeSubnets: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeSubnetsCommandInput} */ input,
+      ) => call(() => client.send(new DescribeSubnetsCommand(input))),
       describeVpcs: (
         /** @type {import('@aws-sdk/client-ec2').DescribeVpcsCommandInput} */ input,
       ) => call(() => client.send(new DescribeVpcsCommand(input))),
@@ -895,6 +909,9 @@ export async function createAwsDeploymentAuthority(options) {
       deleteInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new DeleteInternetGatewayCommand(input))),
+      deleteSubnet: (
+        /** @type {import('@aws-sdk/client-ec2').DeleteSubnetCommandInput} */ input,
+      ) => call(() => client.send(new DeleteSubnetCommand(input))),
       deleteVpc: (
         /** @type {import('@aws-sdk/client-ec2').DeleteVpcCommandInput} */ input,
       ) => call(() => client.send(new DeleteVpcCommand(input))),

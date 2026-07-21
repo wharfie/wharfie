@@ -6,14 +6,16 @@ specification V3 pins that graph; Plan/Action V3, Inspection V4, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
 destroy policy. The retained EBS volume, direct-EC2 VPC, standalone internet
-gateway, and derived VPC/gateway attachment effects now have strict
-controller-compatible drivers. The VPC and gateway now share one narrow
-tagged direct-EC2 recovery kernel while retaining their distinct intrinsic and
-destroy contracts. Direct network creates remain visibly ambiguous when AWS
-exposes neither a durable token nor uniqueness; the derived attachment instead
-converges through exact endpoint lineage and independently corroborated
-relationship readback. The subnet and remaining fixed drivers, provider
-composition, commands, and clean-account proof are next ·
+gateway, derived VPC/gateway attachment, and direct subnet effects now have
+strict controller-compatible drivers. The VPC, gateway, and subnet share one
+narrow tagged direct-EC2 recovery kernel while retaining their distinct
+intrinsic and destroy contracts. VPC and gateway creation can still expose
+visible ambiguity across process loss because neither has a durable token or
+unique natural slot. The subnet additionally corroborates logical identity
+against its exact VPC/CIDR natural slot and bound provider ID. This prevents a
+second successful desired-CIDR allocation without claiming that an EC2 API
+call executes exactly once. The route table and remaining fixed drivers,
+provider composition, commands, and clean-account proof are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -596,6 +598,18 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       one-sided or nonavailable evidence remains transitional. Reverse destroy
       detaches before the directly owned resources can be purged. This is
       deterministic-mock proof, not a live-account lifecycle claim.
+- [x] Implement the directly owned `network-subnet` role beneath the exact
+      settled VPC binding. Its atomic schema-2 tags, complete logical
+      discovery, bounded VPC/CIDR natural-slot discovery, and independent
+      exact-ID read must agree before create or no-op settles. The fixed state
+      keeps IPv6 and subnet-wide public IPv4 assignment disabled and VPC Block
+      Public Access off; the later node's primary ENI owns its explicit public
+      IPv4 request. Destroy re-proves exact identity, ownership, VPC lineage,
+      nondefault status, and available lifecycle while allowing mutable subnet
+      configuration drift. CIDR uniqueness prevents a second successful
+      desired-slot allocation, but responses and typed errors remain
+      nonauthoritative and no API-call exactly-once claim is made. This is
+      deterministic-mock proof, not a live-account lifecycle claim.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -688,17 +702,20 @@ receipts remain bound to `0d927463`.
 The regional provider specification now pins its exact image, stable placement,
 instance-type availability, default EBS KMS key ARN, and volume/attachment
 contract. Controller-shaped retained-volume, direct VPC, standalone
-internet-gateway, and derived VPC/gateway-attachment resources can create,
-inspect, and reconcile their exact effects under deterministic mocks.
+internet-gateway, derived VPC/gateway-attachment, and direct subnet resources
+can create, inspect, and reconcile their exact effects under deterministic
+mocks.
 The portable capability model expands into a fixed 15-role graph, with one
 recoverable action per modeled resource or relationship, exact binding
 lineage, canonical apply/reverse-destroy ordering, and retained-volume versus
-purged-attachment lifecycle. Those four resource drivers are not yet composed
+purged-attachment lifecycle. Those five resource drivers are not yet composed
 into a complete provider, and the runtime path still does not attach, format,
 or mount the retained volumes or fulfill a service capability.
 
-1. Implement the subnet, then the remaining independently recoverable AWS
-   network, identity, node, volume-attachment, and managed-artifact resources;
+1. Implement the route table, default IPv4 route, subnet/route-table
+   association, and application security group, then the remaining
+   independently recoverable AWS identity, node, volume-attachment, and
+   managed-artifact resources;
    build the provider router, inspection, `createPlan`, and complete controller
    composition; and wire resident-service activation and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
@@ -712,9 +729,11 @@ or mount the retained volumes or fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [tagged direct-EC2 recovery kernel
-checkpoint](llm/checkpoints/2026-07-21-v31-tagged-direct-ec2-recovery-kernel.md).
-Its parent is the [derived internet-gateway attachment
+The current restart point is the [direct EC2 subnet resource
+checkpoint](llm/checkpoints/2026-07-21-v32-direct-ec2-subnet-resource.md).
+Its parent is the [tagged direct-EC2 recovery kernel
+checkpoint](llm/checkpoints/2026-07-21-v31-tagged-direct-ec2-recovery-kernel.md),
+whose parent is the [derived internet-gateway attachment
 checkpoint](llm/checkpoints/2026-07-21-v30-derived-internet-gateway-attachment.md),
 whose parent is the [direct EC2 internet-gateway resource
 checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md),
