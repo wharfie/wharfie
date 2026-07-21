@@ -133,6 +133,12 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       proved graceful `STOPPED` on `SIGTERM` with Node absent from `PATH`.
       Windows targets remain explicitly deferred pending a hardened
       private-extraction design.
+- [x] Bound stale packaged-core native extraction after abrupt termination.
+      The private parent scopes UID/host authority and versioned roots carry
+      boot/namespace/PID/process-start claims; live or uncertain owners are
+      preserved, positively dead roots are removed eight at a time before new
+      extraction, and oversized scans fail closed for inspection rather than
+      doing unbounded startup work.
 - [x] Add a typed, redacted,
       atomically maintained per-service run-history directory and a bounded
       portable pagination primitive. Its internal API verifies every directory
@@ -556,11 +562,9 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Close the remaining single-node service hardening: bound and clean stale
-   native-runtime extraction after abrupt termination.
-2. Add the smallest provider-backed path that can create, inspect, update, and
+1. Add the smallest provider-backed path that can create, inspect, update, and
    remove one durable node through the operator's credential chain.
-3. Begin provider-backed coordinator recovery only after the single-node
+2. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 

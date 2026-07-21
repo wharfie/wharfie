@@ -125,6 +125,19 @@ worker, extracts it into a fresh private mode-0700 root, rejects links and
 special entries, never reuses a deterministic on-disk cache, and removes the
 root when its worker or cache entry is destroyed.
 
+Packaged core dependencies use a separate v2 temporary authority scoped by
+effective UID and an opaque host identity. Every fresh root atomically names
+its host, boot, PID namespace, PID, and (on Linux) kernel process-start time.
+Normal exit removes the root. Before allocating another root, a successor
+inspects at most 128 direct entries and removes at most eight roots whose owner
+is positively dead. A different Linux boot proves death only when the stable
+machine identity also matches; a reused PID is distinguished by its process
+start time. Foreign-host, foreign-namespace, malformed, wrong-owner, and
+otherwise uncertain claims are retained. More than eight stale roots converge
+through explicit retries, while an oversized or ambiguous directory requires
+manual inspection instead of unbounded startup work or speculative deletion.
+Unrecognized entries are never deleted.
+
 Before packaged core code is required, Wharfie verifies the exact planned
 package-location set and every extracted package manifest. It resolves every
 root and dependency edge from its real CommonJS caller and requires the entry
@@ -171,6 +184,12 @@ dependency lock.
   and revision/source identity directly. The current official builder is
   trusted to derive both the revision and coherent FunctionResource inputs from
   one private prepared snapshot.
+- Automatic stale-core cleanup assumes the supported resident process remains
+  in one host PID namespace. A claim from another live or unverifiable
+  namespace is intentionally retained; namespace-churned container deployment
+  needs a future host-level lease authority or operator cleanup. Darwin lacks
+  the Linux boot and process-start evidence, so PID reuse can conservatively
+  retain a dead root until that PID is no longer live.
 
 The frozen core closure has run from moved Darwin and clean hosted-Linux SEAs
 with Node absent from `PATH`. Those portability proofs do not make final SEA

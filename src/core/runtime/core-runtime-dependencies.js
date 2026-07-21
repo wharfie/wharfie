@@ -1,16 +1,23 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import {
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import {
   chmod,
   lstat,
   mkdir,
   mkdtemp,
+  opendir,
   readdir,
   rm,
   writeFile,
 } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -31,7 +38,11 @@ import { getBuildTargetId } from './build-target.js';
 import { compareCanonicalStrings } from './canonical-order.js';
 
 const CORE_RUNTIME_DEPENDENCY_TEMP_DIRECTORY =
-  'wharfie-core-runtime-dependencies';
+  'wharfie-core-runtime-dependencies-v2';
+const CORE_RUNTIME_DEPENDENCY_ROOT_NAME_PATTERN =
+  /^closure-v2-[A-Za-z0-9_-]{16}-h(?<host>[a-f0-9]{24})-b(?<boot>[a-f0-9]{24})-n(?<namespace>[a-z0-9]+)-p(?<pid>[1-9][0-9]*)-s(?<start>[a-z0-9]+)-t[0-9a-z]+-[A-Za-z0-9]{6}$/;
+const MAX_STALE_CORE_RUNTIME_DEPENDENCY_REMOVALS = 8;
+const MAX_CORE_RUNTIME_DEPENDENCY_ROOT_INSPECTIONS = 128;
 
 /** @type {Promise<PreparedCoreRuntimeDependencies | null> | null} */
 let preparedDependenciesPromise = null;
@@ -56,6 +67,198 @@ let processExitCleanupInstalled = false;
  */
 
 /**
+ * @typedef RuntimeExtractionOwnerIdentity
+ * @property {string} hostToken - Opaque stable host identity.
+ * @property {string} bootToken - Opaque host-boot identity.
+ * @property {string} namespaceToken - Opaque process namespace identity.
+ * @property {string} processStartToken - Opaque process-birth identity.
+ * @property {boolean} bootIdentityReliable - Whether a changed boot token proves the prior owner exited.
+ */
+
+/**
+ * @typedef RuntimeExtractionRootClaim
+ * @property {string} hostToken - Opaque claimed stable host identity.
+ * @property {string} bootToken - Opaque claimed host-boot identity.
+ * @property {string} namespaceToken - Opaque claimed process namespace identity.
+ * @property {number} pid - Claimed owner process ID.
+ * @property {string} processStartToken - Opaque claimed process-birth identity.
+ */
+
+/**
+ * Return a short filesystem-safe digest without disclosing its input.
+ * @param {string} value - Host identity input.
+ * @returns {string} - Twenty-four lowercase hexadecimal characters.
+ */
+function digestRuntimeOwnerToken(value) {
+  return createHash('sha256').update(value).digest('hex').slice(0, 24);
+}
+
+/**
+ * Use the effective filesystem principal when POSIX exposes one.
+ * @returns {number | null} - Effective UID or null on an unsupported host.
+ */
+function getRuntimeFilesystemUid() {
+  if (typeof process.geteuid === 'function') return process.geteuid();
+  if (typeof process.getuid === 'function') return process.getuid();
+  return null;
+}
+
+/**
+ * Read Linux field 22 (starttime) without depending on the parenthesized comm
+ * field's contents. The token distinguishes a reused PID from the owner that
+ * created an extraction root.
+ * @param {number | 'self'} pid - Visible process identifier.
+ * @returns {string} - Kernel start ticks encoded in base 36.
+ */
+function readLinuxProcessStartToken(pid) {
+  const record = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const commEnd = record.lastIndexOf(')');
+  const fields =
+    commEnd < 0
+      ? []
+      : record
+          .slice(commEnd + 2)
+          .trim()
+          .split(/ +/);
+  const startTicks = fields[19];
+  if (!startTicks || !/^[1-9][0-9]*$/.test(startTicks)) {
+    throw new Error(`Linux process '${pid}' has an invalid /proc stat record.`);
+  }
+  return BigInt(startTicks).toString(36);
+}
+
+/**
+ * Identify the process authority used by extraction-root claims. Linux host,
+ * boot, and PID-namespace identities prevent another host or namespace from
+ * being mistaken for a dead local owner. Darwin has no PID namespaces; PID
+ * reuse can conservatively retain a stale root but cannot delete a live one.
+ * @returns {RuntimeExtractionOwnerIdentity} - Current process authority.
+ */
+function getRuntimeExtractionOwnerIdentity() {
+  if (process.platform !== 'linux') {
+    return {
+      hostToken: digestRuntimeOwnerToken(`${process.platform}:${hostname()}`),
+      bootToken: digestRuntimeOwnerToken(`${process.platform}:portable`),
+      namespaceToken: 'host',
+      processStartToken: 'portable',
+      bootIdentityReliable: false,
+    };
+  }
+
+  let bootId;
+  let machineId;
+  let namespaceIdentity;
+  let processStartToken;
+  try {
+    bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    machineId = readFileSync('/etc/machine-id', 'utf8').trim();
+    namespaceIdentity = readlinkSync('/proc/self/ns/pid');
+    processStartToken = readLinuxProcessStartToken('self');
+  } catch (error) {
+    const detail = error instanceof Error ? ` ${error.message}` : '';
+    throw new Error(
+      `Linux core runtime extraction requires readable machine, boot, and PID-namespace identities.${detail}`,
+    );
+  }
+  const namespaceMatch = /^pid:\[([1-9][0-9]*)\]$/.exec(namespaceIdentity);
+  if (
+    !bootId ||
+    !/^[a-f0-9]{32}$/.test(machineId) ||
+    /^0+$/.test(machineId) ||
+    !namespaceMatch
+  ) {
+    throw new Error(
+      'Linux core runtime extraction received invalid machine, boot, or PID-namespace identity.',
+    );
+  }
+  return {
+    hostToken: digestRuntimeOwnerToken(machineId),
+    bootToken: digestRuntimeOwnerToken(bootId),
+    namespaceToken: Number(namespaceMatch[1]).toString(36),
+    processStartToken,
+    bootIdentityReliable: true,
+  };
+}
+
+/**
+ * Parse only the versioned root names created atomically by this runtime.
+ * @param {string} name - Direct child name beneath the private parent.
+ * @returns {RuntimeExtractionRootClaim | null} - Parsed claim or null.
+ */
+function parseRuntimeExtractionRootClaim(name) {
+  const match = CORE_RUNTIME_DEPENDENCY_ROOT_NAME_PATTERN.exec(name);
+  if (!match?.groups) return null;
+  const pid = Number(match.groups.pid);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  return {
+    hostToken: match.groups.host,
+    bootToken: match.groups.boot,
+    namespaceToken: match.groups.namespace,
+    pid,
+    processStartToken: match.groups.start,
+  };
+}
+
+/**
+ * A failed liveness probe is authoritative only for ESRCH. Permission and
+ * platform errors preserve the root rather than risking deletion of live
+ * native code.
+ * @param {number} pid - Claimed owner process ID.
+ * @returns {boolean} - Whether the process may still be alive.
+ */
+function mayProcessBeAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ESRCH'
+    );
+  }
+}
+
+/**
+ * Require positive evidence that a claimed owner is gone. A Linux boot change
+ * on the same stable host is sufficient. Within one boot, cleanup only probes
+ * PIDs from this exact PID namespace. Other hosts, unknown namespaces, and
+ * uncertain probes are retained.
+ * @param {RuntimeExtractionRootClaim} claim - Root owner claim.
+ * @param {RuntimeExtractionOwnerIdentity} current - Current process authority.
+ * @returns {boolean} - Whether the root may still have a live owner.
+ */
+function mayRuntimeExtractionOwnerBeAlive(claim, current) {
+  if (claim.hostToken !== current.hostToken) return true;
+  if (current.bootIdentityReliable && claim.bootToken !== current.bootToken) {
+    return false;
+  }
+  if (
+    claim.bootToken !== current.bootToken ||
+    claim.namespaceToken !== current.namespaceToken
+  ) {
+    return true;
+  }
+  if (process.platform === 'linux') {
+    try {
+      return readLinuxProcessStartToken(claim.pid) === claim.processStartToken;
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        return false;
+      }
+      return true;
+    }
+  }
+  return mayProcessBeAlive(claim.pid);
+}
+
+/**
  * @param {string} directory - Candidate private directory.
  * @param {string} label - Human-readable label.
  * @returns {Promise<import('node:fs').Stats>} - Stable directory identity.
@@ -67,6 +270,10 @@ async function assertPrivateDirectory(directory, label) {
   }
   if ((stats.mode & 0o777) !== 0o700) {
     throw new Error(`${label} must have mode 0700.`);
+  }
+  const uid = getRuntimeFilesystemUid();
+  if (uid !== null && stats.uid !== uid) {
+    throw new Error(`${label} must be owned by the current user.`);
   }
   return stats;
 }
@@ -86,6 +293,12 @@ async function ensurePrivateParent(parent) {
       'Core runtime dependency parent must be a non-symbolic-link directory.',
     );
   }
+  const uid = getRuntimeFilesystemUid();
+  if (uid !== null && before.uid !== uid) {
+    throw new Error(
+      'Core runtime dependency parent must be owned by the current user.',
+    );
+  }
   await chmod(parent, 0o700);
   const after = await assertPrivateDirectory(
     parent,
@@ -102,11 +315,13 @@ async function ensurePrivateParent(parent) {
 /**
  * @param {string} parent - Validated private parent.
  * @param {string} prefix - Readable content-derived prefix.
+ * @param {RuntimeExtractionOwnerIdentity} owner - Current process authority.
  * @returns {Promise<string>} - Fresh private child root.
  */
-async function createFreshPrivateRoot(parent, prefix) {
+async function createFreshPrivateRoot(parent, prefix, owner) {
   const parentIdentity = await ensurePrivateParent(parent);
-  const root = await mkdtemp(path.join(parent, `${prefix}-`));
+  const ownerPrefix = `${prefix}-h${owner.hostToken}-b${owner.bootToken}-n${owner.namespaceToken}-p${process.pid}-s${owner.processStartToken}-t${Date.now().toString(36)}`;
+  const root = await mkdtemp(path.join(parent, `${ownerPrefix}-`));
   try {
     await chmod(root, 0o700);
     await assertPrivateDirectory(root, 'Core runtime dependency root');
@@ -126,6 +341,110 @@ async function createFreshPrivateRoot(parent, prefix) {
   } catch (error) {
     await rm(root, { force: true, recursive: true });
     throw error;
+  }
+}
+
+/**
+ * Remove a bounded number of positively dead extraction roots before creating
+ * another. The versioned private parent contains no application data: an
+ * unrecognized entry is left untouched, an uncertain owner is retained, and
+ * an unsafe claimed root or exhausted budget stops allocation without deleting
+ * it.
+ *
+ * Cleanup happens before extraction, so repeated abrupt termination converges:
+ * a killed attempt leaves at most its fresh root, and its successor removes it
+ * before allocating another. Large pre-existing backlogs are drained in fixed
+ * batches across explicit retries.
+ * @param {string} parent - Dedicated private extraction parent.
+ * @param {RuntimeExtractionOwnerIdentity} owner - Current process authority.
+ * @returns {Promise<void>} - Completes when another root may be admitted.
+ */
+async function scavengeStaleRuntimeExtractionRoots(parent, owner) {
+  const parentIdentity = await ensurePrivateParent(parent);
+  let inspected = 0;
+  let removed = 0;
+  let staleBacklog = false;
+  let inspectionBudgetExhausted = false;
+
+  const directory = await opendir(parent);
+  for await (const entry of directory) {
+    inspected += 1;
+    if (inspected > MAX_CORE_RUNTIME_DEPENDENCY_ROOT_INSPECTIONS) {
+      inspectionBudgetExhausted = true;
+      break;
+    }
+    const claim = parseRuntimeExtractionRootClaim(entry.name);
+    if (!claim) continue;
+    const root = path.join(parent, entry.name);
+    let rootIdentity;
+    try {
+      rootIdentity = await assertPrivateDirectory(
+        root,
+        `Core runtime dependency root '${entry.name}'`,
+      );
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    if (mayRuntimeExtractionOwnerBeAlive(claim, owner)) {
+      continue;
+    }
+    if (removed >= MAX_STALE_CORE_RUNTIME_DEPENDENCY_REMOVALS) {
+      staleBacklog = true;
+      continue;
+    }
+
+    const currentParent = await assertPrivateDirectory(
+      parent,
+      'Core runtime dependency parent',
+    );
+    let currentRoot;
+    try {
+      currentRoot = await assertPrivateDirectory(
+        root,
+        `Core runtime dependency root '${entry.name}'`,
+      );
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    if (
+      currentParent.dev !== parentIdentity.dev ||
+      currentParent.ino !== parentIdentity.ino ||
+      currentRoot.dev !== rootIdentity.dev ||
+      currentRoot.ino !== rootIdentity.ino
+    ) {
+      throw new Error(
+        'Core runtime dependency extraction authority changed during stale-root cleanup.',
+      );
+    }
+    await rm(root, { force: true, recursive: true });
+    removed += 1;
+  }
+
+  if (inspectionBudgetExhausted) {
+    throw new Error(
+      `Core runtime dependency parent exceeded the ${MAX_CORE_RUNTIME_DEPENDENCY_ROOT_INSPECTIONS}-entry automatic inspection limit after removing ${removed} stale roots; manual inspection is required before another allocation.`,
+    );
+  }
+  if (staleBacklog) {
+    throw new Error(
+      `Core runtime dependency stale-root cleanup exhausted its bounded removal budget after inspecting ${inspected} entries and removing ${removed}; retry preparation to continue convergence.`,
+    );
   }
 }
 
@@ -967,9 +1286,6 @@ export async function preparePackagedCoreRuntimeDependencies(options = {}) {
 
   const readIdentity =
     options.readEmbeddedRevisionRuntimePair || readEmbeddedRevisionRuntimePair;
-  const tempParent =
-    options.tempParent ||
-    path.join(tmpdir(), CORE_RUNTIME_DEPENDENCY_TEMP_DIRECTORY);
   preparedDependenciesPromise = (async () => {
     const rawManifest = asAssetBytes(
       await assetProvider.getAsset(CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME),
@@ -996,9 +1312,24 @@ export async function preparePackagedCoreRuntimeDependencies(options = {}) {
     }
     const embedded = await readIdentity();
     assertRuntimeTarget(manifest, embedded);
+    const owner = getRuntimeExtractionOwnerIdentity();
+    const filesystemUid = getRuntimeFilesystemUid();
+    if (filesystemUid === null) {
+      throw new Error(
+        'Core runtime dependency extraction requires a POSIX filesystem principal.',
+      );
+    }
+    const tempParent =
+      options.tempParent ||
+      path.join(
+        tmpdir(),
+        `${CORE_RUNTIME_DEPENDENCY_TEMP_DIRECTORY}-uid${filesystemUid}-h${owner.hostToken}`,
+      );
+    await scavengeStaleRuntimeExtractionRoots(tempParent, owner);
     const root = await createFreshPrivateRoot(
       tempParent,
-      `closure-${actualArchiveDigest.slice(0, 16)}`,
+      `closure-v2-${actualArchiveDigest.slice(0, 16)}`,
+      owner,
     );
     try {
       await extractCoreRuntimeDependencyArchive(archiveBytes, root);

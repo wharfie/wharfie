@@ -2,10 +2,13 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, lstatSync, readFileSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { c } from 'tar';
@@ -37,6 +40,106 @@ const PACKAGE_METADATA = JSON.parse(
 );
 const CAN_OPEN_NATIVE_LMDB =
   process.versions.node === PACKAGE_METADATA.engines.node;
+const CORE_RUNTIME_DEPENDENCY_HOLDER_PATH = fileURLToPath(
+  new URL(
+    '../fixtures/runtime/core-runtime-dependency-holder.js',
+    import.meta.url,
+  ),
+);
+const itOnPosix = process.platform === 'win32' ? it.skip : it;
+const itOnLinux = process.platform === 'linux' ? it : it.skip;
+
+/**
+ * @param {import('node:child_process').ChildProcess} child - Holder process.
+ * @returns {Promise<string>} - Fresh extraction root reported over IPC.
+ */
+function waitForHolderReady(child) {
+  return new Promise((resolve, reject) => {
+    let errors = '';
+    const stderr = child.stderr;
+    if (!stderr) {
+      reject(new Error('Core runtime dependency holder has no stderr pipe.'));
+      return;
+    }
+    stderr.setEncoding('utf8');
+    stderr.on('data', (chunk) => {
+      errors += String(chunk);
+    });
+
+    const cleanup = () => {
+      child.removeListener('error', onError);
+      child.removeListener('exit', onExit);
+      child.removeListener('message', onMessage);
+    };
+    /** @param {Error} error - Spawn failure. */
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    /**
+     * @param {number | null} code - Exit status.
+     * @param {NodeJS.Signals | null} signal - Exit signal.
+     */
+    const onExit = (code, signal) => {
+      cleanup();
+      reject(
+        new Error(
+          `Core runtime dependency holder exited before ready (code ${code}, signal ${signal}): ${errors}`,
+        ),
+      );
+    };
+    /** @param {unknown} message - IPC message. */
+    const onMessage = (message) => {
+      if (
+        !message ||
+        typeof message !== 'object' ||
+        !('type' in message) ||
+        message.type !== 'ready' ||
+        !('root' in message) ||
+        typeof message.root !== 'string'
+      ) {
+        return;
+      }
+      cleanup();
+      resolve(message.root);
+    };
+
+    child.once('error', onError);
+    child.once('exit', onExit);
+    child.on('message', onMessage);
+  });
+}
+
+/**
+ * Hold one prepared extraction open in a real child process.
+ * @param {{tempParent: string, manifestPath: string, archivePath: string}} configuration - Holder configuration.
+ * @returns {import('node:child_process').ChildProcess} - Spawned holder.
+ */
+function spawnCoreRuntimeDependencyHolder(configuration) {
+  return spawn(
+    process.execPath,
+    [CORE_RUNTIME_DEPENDENCY_HOLDER_PATH, JSON.stringify(configuration)],
+    {
+      env: { ...process.env, NODE_ENV: 'test' },
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    },
+  );
+}
+
+/**
+ * @param {import('node:child_process').ChildProcess} child - Holder to kill.
+ * @returns {Promise<void>} - Resolves after a real ungraceful exit.
+ */
+async function killHolder(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exit = once(child, 'exit');
+  if (!child.kill('SIGKILL')) {
+    throw new Error('Could not deliver SIGKILL to dependency holder.');
+  }
+  const [code, signal] = await exit;
+  expect(code).toBeNull();
+  expect(signal).toBe('SIGKILL');
+}
 
 /**
  * @returns {import('../../src/core/runtime/build-target.js').BuildTarget} - Current test target.
@@ -500,6 +603,264 @@ describe('packaged core runtime dependencies', () => {
       await fsp.rm(tempParent, { force: true, recursive: true });
     }
   });
+
+  itOnPosix(
+    'preserves a live extraction and removes it after abrupt owner death',
+    async () => {
+      const fixture = await makeClosureArchive();
+      const tempParent = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-core-runtime-parent-'),
+      );
+      const assets = makeAssets(fixture.archive);
+      const manifestPath = path.join(fixture.directory, 'manifest.asset');
+      const archivePath = path.join(fixture.directory, 'archive.asset');
+      await Promise.all([
+        fsp.writeFile(
+          manifestPath,
+          assets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME],
+        ),
+        fsp.writeFile(
+          archivePath,
+          assets[CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME],
+        ),
+      ]);
+      const child = spawnCoreRuntimeDependencyHolder({
+        tempParent,
+        manifestPath,
+        archivePath,
+      });
+
+      try {
+        const staleRoot = await waitForHolderReady(child);
+        expect(existsSync(staleRoot)).toBe(true);
+        const options = {
+          assetProvider: {
+            isSea: () => true,
+            getAsset: /** @param {string} name */ (name) => assets[name],
+          },
+          readEmbeddedRevisionRuntimePair: async () => ({
+            runtime: { target: currentTarget() },
+          }),
+          tempParent,
+        };
+        const concurrent =
+          await preparePackagedCoreRuntimeDependencies(options);
+        expect(concurrent).not.toBeNull();
+        expect(concurrent?.root).not.toBe(staleRoot);
+        expect(existsSync(staleRoot)).toBe(true);
+        await expect(fsp.readdir(tempParent)).resolves.toHaveLength(2);
+        await _resetPackagedCoreRuntimeDependenciesForTest();
+
+        await killHolder(child);
+        expect(existsSync(staleRoot)).toBe(true);
+        const prepared = await preparePackagedCoreRuntimeDependencies(options);
+
+        expect(prepared).not.toBeNull();
+        expect(prepared?.root).not.toBe(staleRoot);
+        expect(existsSync(staleRoot)).toBe(false);
+        await expect(fsp.readdir(tempParent)).resolves.toEqual([
+          path.basename(String(prepared?.root)),
+        ]);
+      } finally {
+        await killHolder(child);
+        await fsp.rm(fixture.directory, { force: true, recursive: true });
+        await fsp.rm(tempParent, { force: true, recursive: true });
+      }
+    },
+  );
+
+  itOnPosix(
+    'drains an oversized stale-root backlog in bounded retry batches',
+    async () => {
+      const fixture = await makeClosureArchive();
+      const tempParent = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-core-runtime-parent-'),
+      );
+      const assets = makeAssets(fixture.archive);
+      const manifestPath = path.join(fixture.directory, 'manifest.asset');
+      const archivePath = path.join(fixture.directory, 'archive.asset');
+      await Promise.all([
+        fsp.writeFile(
+          manifestPath,
+          assets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME],
+        ),
+        fsp.writeFile(
+          archivePath,
+          assets[CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME],
+        ),
+      ]);
+      const child = spawnCoreRuntimeDependencyHolder({
+        tempParent,
+        manifestPath,
+        archivePath,
+      });
+
+      try {
+        const staleRoot = await waitForHolderReady(child);
+        await killHolder(child);
+        const staleName = path.basename(staleRoot);
+        const namePrefix = staleName.slice(0, -6);
+        await Promise.all(
+          Array.from({ length: 8 }, (_unused, index) =>
+            fsp.mkdir(
+              path.join(
+                tempParent,
+                `${namePrefix}q${String(index).padStart(5, '0')}`,
+              ),
+              { mode: 0o700 },
+            ),
+          ),
+        );
+
+        const options = {
+          assetProvider: {
+            isSea: () => true,
+            getAsset: /** @param {string} name */ (name) => assets[name],
+          },
+          readEmbeddedRevisionRuntimePair: async () => ({
+            runtime: { target: currentTarget() },
+          }),
+          tempParent,
+        };
+        await expect(
+          preparePackagedCoreRuntimeDependencies(options),
+        ).rejects.toThrow(
+          /cleanup exhausted its bounded removal budget.*removing 8/i,
+        );
+        await expect(fsp.readdir(tempParent)).resolves.toHaveLength(1);
+
+        const prepared = await preparePackagedCoreRuntimeDependencies(options);
+        expect(prepared).not.toBeNull();
+        await expect(fsp.readdir(tempParent)).resolves.toEqual([
+          path.basename(String(prepared?.root)),
+        ]);
+      } finally {
+        await killHolder(child);
+        await fsp.rm(fixture.directory, { force: true, recursive: true });
+        await fsp.rm(tempParent, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it('leaves unrelated entries in an injected extraction parent untouched', async () => {
+    const fixture = await makeClosureArchive();
+    const tempParent = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-core-runtime-parent-'),
+    );
+    const unrelatedPath = path.join(tempParent, 'not-a-wharfie-root');
+    await fsp.writeFile(unrelatedPath, 'preserve me', { mode: 0o600 });
+    const assets = makeAssets(fixture.archive);
+
+    try {
+      await preparePackagedCoreRuntimeDependencies({
+        assetProvider: {
+          isSea: () => true,
+          getAsset: /** @param {string} name */ (name) => assets[name],
+        },
+        readEmbeddedRevisionRuntimePair: async () => ({
+          runtime: { target: currentTarget() },
+        }),
+        tempParent,
+      });
+      await expect(fsp.readFile(unrelatedPath, 'utf8')).resolves.toBe(
+        'preserve me',
+      );
+    } finally {
+      await fsp.rm(fixture.directory, { force: true, recursive: true });
+      await fsp.rm(tempParent, { force: true, recursive: true });
+    }
+  });
+
+  it('retains a claimed extraction from a different host authority', async () => {
+    const fixture = await makeClosureArchive();
+    const tempParent = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-core-runtime-parent-'),
+    );
+    const assets = makeAssets(fixture.archive);
+    const options = {
+      assetProvider: {
+        isSea: () => true,
+        getAsset: /** @param {string} name */ (name) => assets[name],
+      },
+      readEmbeddedRevisionRuntimePair: async () => ({
+        runtime: { target: currentTarget() },
+      }),
+      tempParent,
+    };
+
+    try {
+      const initial = await preparePackagedCoreRuntimeDependencies(options);
+      const initialName = path.basename(String(initial?.root));
+      const hostMatch = /-h([a-f0-9]{24})-b/.exec(initialName);
+      expect(hostMatch).not.toBeNull();
+      if (!hostMatch) throw new Error('Extraction root has no host claim.');
+      await _resetPackagedCoreRuntimeDependenciesForTest();
+      const otherHostToken = `${hostMatch[1][0] === '0' ? '1' : '0'}${hostMatch[1].slice(1)}`;
+      const foreignName = initialName.replace(
+        /-h[a-f0-9]{24}-b/,
+        `-h${otherHostToken}-b`,
+      );
+      const foreignRoot = path.join(tempParent, foreignName);
+      await fsp.mkdir(foreignRoot, { mode: 0o700 });
+
+      const prepared = await preparePackagedCoreRuntimeDependencies(options);
+      expect(prepared).not.toBeNull();
+      expect(existsSync(foreignRoot)).toBe(true);
+      await expect(fsp.readdir(tempParent)).resolves.toHaveLength(2);
+    } finally {
+      await fsp.rm(fixture.directory, { force: true, recursive: true });
+      await fsp.rm(tempParent, { force: true, recursive: true });
+    }
+  });
+
+  itOnLinux(
+    'removes a dead Linux claim after its PID has been reused',
+    async () => {
+      const fixture = await makeClosureArchive();
+      const tempParent = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-core-runtime-parent-'),
+      );
+      const assets = makeAssets(fixture.archive);
+      const options = {
+        assetProvider: {
+          isSea: () => true,
+          getAsset: /** @param {string} name */ (name) => assets[name],
+        },
+        readEmbeddedRevisionRuntimePair: async () => ({
+          runtime: { target: currentTarget() },
+        }),
+        tempParent,
+      };
+
+      try {
+        const initial = await preparePackagedCoreRuntimeDependencies(options);
+        const initialName = path.basename(String(initial?.root));
+        const startMatch = /-p([1-9][0-9]*)-s([a-z0-9]+)-t/.exec(initialName);
+        expect(startMatch?.[1]).toBe(String(process.pid));
+        if (!startMatch) {
+          throw new Error('Extraction root has no process-start claim.');
+        }
+        await _resetPackagedCoreRuntimeDependenciesForTest();
+        const reusedStart = startMatch[2] === '1' ? '2' : '1';
+        const reusedName = initialName.replace(
+          `-p${startMatch[1]}-s${startMatch[2]}-t`,
+          `-p${startMatch[1]}-s${reusedStart}-t`,
+        );
+        const reusedRoot = path.join(tempParent, reusedName);
+        await fsp.mkdir(reusedRoot, { mode: 0o700 });
+
+        const prepared = await preparePackagedCoreRuntimeDependencies(options);
+        expect(prepared).not.toBeNull();
+        expect(existsSync(reusedRoot)).toBe(false);
+        await expect(fsp.readdir(tempParent)).resolves.toEqual([
+          path.basename(String(prepared?.root)),
+        ]);
+      } finally {
+        await fsp.rm(fixture.directory, { force: true, recursive: true });
+        await fsp.rm(tempParent, { force: true, recursive: true });
+      }
+    },
+  );
 
   it('rejects archive bytes that do not match the sealed receipt', async () => {
     const fixture = await makeClosureArchive();

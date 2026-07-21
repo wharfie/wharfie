@@ -474,6 +474,13 @@ are deliberately deferred until private runtime extraction has a tested ACL and
 reparse-point design. Moved Darwin SEAs and the clean hosted-Linux verifier
 exercise a real LMDB dependency with Node absent from `PATH`.
 
+Packaged core native dependencies are always extracted into a fresh private
+root; they are never reused as a mutable cache. Normal exit removes that root.
+After `SIGKILL`, a successor verifies the same UID/host/boot/process authority
+and removes only roots whose owner is positively dead, with fixed inspection
+and removal budgets. Foreign or uncertain claims are retained, and a large
+backlog converges through retries instead of making startup cleanup unbounded.
+
 Prepared revisions also fail closed when reachable JavaScript or TypeScript
 uses a runtime-computed native module path or aliases a native loader. Portable
 code must use literal module specifiers so the frozen dependency closure and
