@@ -870,7 +870,7 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
     }
   });
 
-  it('stores complete 15-role graph envelopes with maximum provider IDs below the byte limit', async () => {
+  it('stores complete 18-role graph envelopes with maximum provider IDs below the byte limit', async () => {
     const harness = await create();
     try {
       const store = createDeploymentControlStore({
@@ -880,8 +880,8 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
       const { plan, head, planEnvelopeBytes, headEnvelopeBytes } =
         makeMaximumDocuments();
 
-      expect(plan.actions).toHaveLength(15);
-      expect(head.resourceBindings).toHaveLength(15);
+      expect(plan.actions).toHaveLength(18);
+      expect(head.resourceBindings).toHaveLength(18);
       expect(plan.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
       expect(plan.basis.inspectionId).toMatch(/^win4_[A-Za-z0-9_-]{43}$/);
       expect(head.headId).toMatch(/^wdh2_[A-Za-z0-9_-]{43}$/);

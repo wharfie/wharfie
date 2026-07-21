@@ -9,11 +9,11 @@ import { DEPLOYMENT_CAPABILITY_KINDS } from './deployment-profile.js';
 import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 
-export const AWS_SINGLE_NODE_RESOURCE_GRAPH_SCHEMA_VERSION = 1;
+export const AWS_SINGLE_NODE_RESOURCE_GRAPH_SCHEMA_VERSION = 2;
 export const AWS_SINGLE_NODE_RESOURCE_GRAPH_KIND = 'awsSingleNodeResourceGraph';
 export const AWS_SINGLE_NODE_RESOURCE_GRAPH_ID_DOMAIN =
-  'wharfie:aws-single-node-resource-graph:v1';
-export const AWS_SINGLE_NODE_RESOURCE_GRAPH_ID_PREFIX = 'wrg1';
+  'wharfie:aws-single-node-resource-graph:v2';
+export const AWS_SINGLE_NODE_RESOURCE_GRAPH_ID_PREFIX = 'wrg2';
 export const AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES = 32;
 
 const PAYLOAD_KEYS = new Set(['schemaVersion', 'kind', 'resources']);
@@ -35,6 +35,8 @@ const DERIVED_ROLE_KINDS = new Set([
   'internet-gateway-attachment',
   'default-ipv4-route',
   'subnet-route-table-association',
+  'inline-policy',
+  'instance-profile-role-association',
   'attachment',
 ]);
 
@@ -153,12 +155,43 @@ const RESOURCE_CONTRACTS = Object.freeze([
     onDestroy: 'purge',
   }),
   Object.freeze({
+    resourceKey: 'runtime-role',
+    roleKind: 'role',
+    capabilityKind: 'runtime-identity',
+    providerType: 'iam-role',
+    ownershipMode: 'direct',
+    dependencies: Object.freeze([]),
+    onDestroy: 'purge',
+  }),
+  Object.freeze({
+    resourceKey: 'runtime-role-policy',
+    roleKind: 'inline-policy',
+    capabilityKind: 'runtime-identity',
+    providerType: 'iam-role-inline-policy',
+    ownershipMode: 'derived',
+    dependencies: Object.freeze(['artifact', 'runtime-role']),
+    onDestroy: 'purge',
+  }),
+  Object.freeze({
     resourceKey: 'runtime-identity',
     roleKind: 'instance-profile',
     capabilityKind: 'runtime-identity',
     providerType: 'instance-profile',
     ownershipMode: 'direct',
     dependencies: Object.freeze([]),
+    onDestroy: 'purge',
+  }),
+  Object.freeze({
+    resourceKey: 'runtime-identity-role-association',
+    roleKind: 'instance-profile-role-association',
+    capabilityKind: 'runtime-identity',
+    providerType: 'iam-instance-profile-role-association',
+    ownershipMode: 'derived',
+    dependencies: Object.freeze([
+      'runtime-role',
+      'runtime-role-policy',
+      'runtime-identity',
+    ]),
     onDestroy: 'purge',
   }),
   Object.freeze({
@@ -173,7 +206,9 @@ const RESOURCE_CONTRACTS = Object.freeze([
       'network-default-ipv4-route',
       'network-subnet-route-table-association',
       'network-security-group',
+      'runtime-role-policy',
       'runtime-identity',
+      'runtime-identity-role-association',
     ]),
     onDestroy: 'purge',
   }),
@@ -392,7 +427,9 @@ function validatePayload(value, path) {
   const graph = cloneJsonObject(value, path);
   assertAllKeys(graph, PAYLOAD_KEYS, path);
   if (graph.schemaVersion !== AWS_SINGLE_NODE_RESOURCE_GRAPH_SCHEMA_VERSION) {
-    throw new TypeError(`${path}.schemaVersion must be the integer 1.`);
+    throw new TypeError(
+      `${path}.schemaVersion must be the integer ${AWS_SINGLE_NODE_RESOURCE_GRAPH_SCHEMA_VERSION}.`,
+    );
   }
   if (graph.kind !== AWS_SINGLE_NODE_RESOURCE_GRAPH_KIND) {
     throw new TypeError(
@@ -473,7 +510,7 @@ export function canonicalizeAwsSingleNodeResourceGraphPayload(
  * Compute the identity of one valid resource graph payload.
  * @param {unknown} value - Candidate payload or serialized graph document.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {string} - `wrg1_<base64url SHA-256>` identity.
+ * @returns {string} - `wrg2_<base64url SHA-256>` identity.
  */
 export function getAwsSingleNodeResourceGraphId(
   value,

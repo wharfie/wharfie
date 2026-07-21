@@ -20,11 +20,11 @@ import { DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS } from './deployme
 import { cloneJsonObject } from './json-value.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 3;
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 4;
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_KIND = 'awsSingleNodeProviderSpec';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN =
-  'wharfie:aws-single-node-provider-spec:v3';
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap3';
+  'wharfie:aws-single-node-provider-spec:v4';
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap4';
 export const AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION = 3;
 
 export const AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS = Object.freeze({
@@ -454,7 +454,9 @@ function validatePayload(value, path) {
   const payload = cloneJsonObject(value, path);
   assertAllKeys(payload, PAYLOAD_KEYS, path);
   if (payload.schemaVersion !== AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION) {
-    throw new TypeError(`${path}.schemaVersion must be the integer 3.`);
+    throw new TypeError(
+      `${path}.schemaVersion must be the integer ${AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION}.`,
+    );
   }
   if (payload.kind !== AWS_SINGLE_NODE_PROVIDER_SPEC_KIND) {
     throw new TypeError(

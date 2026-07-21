@@ -107,7 +107,7 @@ invocation.
 
 Mutable regional prerequisites are resolved only while previewing a new
 incarnation and reduced to one secret-free, content-addressed
-`AwsSingleNodeProviderSpecV3` in the fresh `wap3` identity namespace. It pins
+`AwsSingleNodeProviderSpecV4` in the fresh `wap4` identity namespace. It pins
 the exact SSM public-parameter name and version, AMI ID/owner/architecture,
 one standard Availability Zone ID that offers the fixed instance type, the
 account's exact regional default EBS KMS key ARN, bootstrap and runtime-policy
@@ -587,12 +587,13 @@ nonmain route table can be deleted without using provider refusal as Wharfie's
 destroy-order authority.
 
 The portable capability model expands through one immutable, content-addressed
-`AwsSingleNodeResourceGraphV1`, not user-authored infrastructure. Its 15 exact
+`AwsSingleNodeResourceGraphV2`, not user-authored infrastructure. Its 18 exact
 roles are the artifact object; two retained volumes; VPC; internet gateway and
 attachment; subnet; route table, default IPv4 route, and subnet association;
-security group; runtime instance profile; resident node; and two volume
-attachments. `AwsSingleNodeProviderSpecV3` pins the graph's `wrg1` identity, so
-changing topology or lifecycle cannot reinterpret an existing specification.
+security group; runtime IAM role, derived inline policy, instance profile, and
+derived role/profile association; resident node; and two volume attachments.
+`AwsSingleNodeProviderSpecV4` pins the graph's `wrg2` identity, so changing
+topology or lifecycle cannot reinterpret an existing specification.
 
 `DeploymentPlanV3` contains exactly one independently recoverable action for
 each graph role. Apply and reconcile use the graph's one canonical topological
@@ -742,7 +743,7 @@ stable non-destroy operation plus the head ID/generation that authorized it,
 the exact resident-node binding and provider resource ID, deployment and
 application revisions, artifact, service and process session, lifecycle and
 owner generations, activation record and selection generations, process ID,
-and a positive sequence. Its substrate binding must resolve all six exact
+and a positive sequence. Its substrate binding must resolve all eight exact
 artifact, network, and runtime-identity dependency bindings in the current
 head. It can assert only `healthy`. The authorizing head is
 not required to remain the exact latest mutable head: a later head may retain

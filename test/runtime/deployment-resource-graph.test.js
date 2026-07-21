@@ -167,12 +167,39 @@ const EXPECTED_RESOURCES = [
     'purge',
   ),
   resource(
+    'runtime-role',
+    'runtime-identity',
+    'role',
+    'iam-role',
+    'direct',
+    [],
+    'purge',
+  ),
+  resource(
+    'runtime-role-policy',
+    'runtime-identity',
+    'inline-policy',
+    'iam-role-inline-policy',
+    'derived',
+    ['artifact', 'runtime-role'],
+    'purge',
+  ),
+  resource(
     'runtime-identity',
     'runtime-identity',
     'instance-profile',
     'instance-profile',
     'direct',
     [],
+    'purge',
+  ),
+  resource(
+    'runtime-identity-role-association',
+    'runtime-identity',
+    'instance-profile-role-association',
+    'iam-instance-profile-role-association',
+    'derived',
+    ['runtime-role', 'runtime-role-policy', 'runtime-identity'],
     'purge',
   ),
   resource(
@@ -187,7 +214,9 @@ const EXPECTED_RESOURCES = [
       'network-default-ipv4-route',
       'network-subnet-route-table-association',
       'network-security-group',
+      'runtime-role-policy',
       'runtime-identity',
+      'runtime-identity-role-association',
     ],
     'purge',
   ),
@@ -216,31 +245,31 @@ const EXPECTED_APPLY_ORDER = EXPECTED_RESOURCES.map(
 );
 
 describe('AWS single-node deployment resource graph', () => {
-  it('exports the exact content-addressed 15-resource physical graph', () => {
-    expect(AWS_SINGLE_NODE_RESOURCE_GRAPH_SCHEMA_VERSION).toBe(1);
+  it('exports the exact content-addressed 18-resource physical graph', () => {
+    expect(AWS_SINGLE_NODE_RESOURCE_GRAPH_SCHEMA_VERSION).toBe(2);
     expect(AWS_SINGLE_NODE_RESOURCE_GRAPH_KIND).toBe(
       'awsSingleNodeResourceGraph',
     );
     expect(AWS_SINGLE_NODE_RESOURCE_GRAPH_ID_DOMAIN).toBe(
-      'wharfie:aws-single-node-resource-graph:v1',
+      'wharfie:aws-single-node-resource-graph:v2',
     );
-    expect(AWS_SINGLE_NODE_RESOURCE_GRAPH_ID_PREFIX).toBe('wrg1');
+    expect(AWS_SINGLE_NODE_RESOURCE_GRAPH_ID_PREFIX).toBe('wrg2');
     expect(AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES).toBe(32);
     expect(AWS_SINGLE_NODE_RESOURCE_GRAPH).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'awsSingleNodeResourceGraph',
-      resourceGraphId: expect.stringMatching(/^wrg1_[A-Za-z0-9_-]{43}$/),
+      resourceGraphId: expect.stringMatching(/^wrg2_[A-Za-z0-9_-]{43}$/),
       resources: EXPECTED_RESOURCES,
     });
 
     const payload = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'awsSingleNodeResourceGraph',
       resources: EXPECTED_RESOURCES,
     };
     const expectedId = createCanonicalJsonSha256Id({
-      domain: 'wharfie:aws-single-node-resource-graph:v1',
-      prefix: 'wrg1',
+      domain: 'wharfie:aws-single-node-resource-graph:v2',
+      prefix: 'wrg2',
       value: payload,
     });
     expect(AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId).toBe(expectedId);
@@ -262,7 +291,7 @@ describe('AWS single-node deployment resource graph', () => {
       Object.isFrozen(AWS_SINGLE_NODE_RESOURCE_GRAPH.resources[0].role),
     ).toBe(true);
     expect(
-      Object.isFrozen(AWS_SINGLE_NODE_RESOURCE_GRAPH.resources[12].dependsOn),
+      Object.isFrozen(AWS_SINGLE_NODE_RESOURCE_GRAPH.resources[15].dependsOn),
     ).toBe(true);
   });
 
@@ -289,7 +318,7 @@ describe('AWS single-node deployment resource graph', () => {
     expect(validated).toEqual(AWS_SINGLE_NODE_RESOURCE_GRAPH);
     expect(validated).not.toBe(serialized);
     expect(validated.resources).not.toBe(serialized.resources);
-    expect(Object.isFrozen(validated.resources[14].dependsOn)).toBe(true);
+    expect(Object.isFrozen(validated.resources[17].dependsOn)).toBe(true);
     serialized.resources[0].providerType = 'changed';
     expect(validated.resources[0].providerType).toBe('s3-object');
   });
@@ -312,14 +341,14 @@ describe('AWS single-node deployment resource graph', () => {
         resourceKey: definition.resourceKey,
       })),
       kind: 'awsSingleNodeResourceGraph',
-      schemaVersion: 1,
+      schemaVersion: 2,
     };
 
     expect(
       canonicalizeAwsSingleNodeResourceGraphPayload(reorderedProperties),
     ).toEqual(
       canonicalizeAwsSingleNodeResourceGraphPayload({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'awsSingleNodeResourceGraph',
         resources: EXPECTED_RESOURCES,
       }),
@@ -355,8 +384,8 @@ describe('AWS single-node deployment resource graph', () => {
     ],
     [
       'wrong schema version',
-      (/** @type {any} */ value) => (value.schemaVersion = 2),
-      /schemaVersion must be the integer 1/i,
+      (/** @type {any} */ value) => (value.schemaVersion = 1),
+      /schemaVersion must be the integer 2/i,
     ],
     [
       'wrong graph kind',
@@ -367,10 +396,10 @@ describe('AWS single-node deployment resource graph', () => {
       'old identity prefix',
       (/** @type {any} */ value) =>
         (value.resourceGraphId = value.resourceGraphId.replace(
-          /^wrg1_/,
-          'wrg0_',
+          /^wrg2_/,
+          'wrg1_',
         )),
-      /canonical wrg1_/i,
+      /canonical wrg2_/i,
     ],
     [
       'unsupported resource field',
@@ -491,7 +520,7 @@ describe('AWS single-node deployment resource graph', () => {
     [
       'duplicate dependencies',
       (/** @type {any} */ value) =>
-        value.resources[12].dependsOn.push('runtime-identity'),
+        value.resources[15].dependsOn.push('runtime-identity'),
       /dependsOn must contain unique resource keys/i,
     ],
     [
@@ -519,7 +548,7 @@ describe('AWS single-node deployment resource graph', () => {
     ],
     [
       'a missing required dependency',
-      (/** @type {any} */ value) => value.resources[12].dependsOn.shift(),
+      (/** @type {any} */ value) => value.resources[15].dependsOn.shift(),
       /dependsOn does not match the finite contract/i,
     ],
   ])('rejects %s', (_name, mutate, pattern) => {
@@ -542,13 +571,25 @@ describe('AWS single-node deployment resource graph', () => {
       /must be 'direct' for role 'vpc'/i,
     ],
     [
+      'direct ownership for the inline policy relationship',
+      (/** @type {any} */ value) =>
+        (value.resources[12].ownershipMode = 'direct'),
+      /must be 'derived' for role 'inline-policy'/i,
+    ],
+    [
+      'direct ownership for the profile association relationship',
+      (/** @type {any} */ value) =>
+        (value.resources[14].ownershipMode = 'direct'),
+      /must be 'derived' for role 'instance-profile-role-association'/i,
+    ],
+    [
       'purging a retained volume role',
       (/** @type {any} */ value) => (value.resources[1].onDestroy = 'purge'),
       /must be 'retain' for role 'volume'/i,
     ],
     [
       'retaining a relationship role',
-      (/** @type {any} */ value) => (value.resources[13].onDestroy = 'retain'),
+      (/** @type {any} */ value) => (value.resources[16].onDestroy = 'retain'),
       /must be 'purge' for role 'attachment'/i,
     ],
     [
@@ -566,12 +607,12 @@ describe('AWS single-node deployment resource graph', () => {
     const missing = clone(AWS_SINGLE_NODE_RESOURCE_GRAPH);
     missing.resources.pop();
     expect(() => validateAwsSingleNodeResourceGraph(missing)).toThrow(
-      /complete 15-resource AWS single-node contract/i,
+      /complete 18-resource AWS single-node contract/i,
     );
 
     const unrecognized = clone(AWS_SINGLE_NODE_RESOURCE_GRAPH);
     unrecognized.resources[10].resourceKey = 'network-firewall';
-    unrecognized.resources[12].dependsOn[4] = 'network-firewall';
+    unrecognized.resources[15].dependsOn[4] = 'network-firewall';
     expect(() => validateAwsSingleNodeResourceGraph(unrecognized)).toThrow(
       /resourceKey must be 'network-security-group' in canonical apply order/i,
     );

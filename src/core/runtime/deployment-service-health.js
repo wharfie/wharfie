@@ -527,46 +527,38 @@ export function validateDeploymentServiceHealthReceiptContext(
       );
     }
   }
-  const expectedNodeDependencyKeys = [...nodeDefinition.dependsOn].sort(
-    compareCanonicalStrings,
-  );
-  if (
-    node.dependencyBindings.length !== expectedNodeDependencyKeys.length ||
-    node.dependencyBindings.some(
-      (
-        /** @type {Readonly<Record<string, any>>} */ dependency,
-        /** @type {number} */ index,
-      ) =>
-        dependency.resourceKey !== expectedNodeDependencyKeys[index] ||
-        bindingByResourceKey.get(dependency.resourceKey)?.bindingId !==
-          dependency.bindingId,
-    )
-  ) {
-    throw new Error(
-      `${valuePath}.context substrate dependency bindings must name all six exact graph dependencies and resolve to the exact head binding IDs.`,
-    );
-  }
-  assertExactGraphBinding(
-    node,
-    nodeDefinition,
-    `${valuePath}.context substrate binding`,
-  );
-  for (const dependency of node.dependencyBindings) {
-    const binding = bindingByResourceKey.get(dependency.resourceKey);
-    const definition = getAwsSingleNodeResourceDefinition(
-      dependency.resourceKey,
-    );
-    if (binding === undefined || definition === null) {
+  const validatedResourceKeys = new Set();
+  const visitingResourceKeys = new Set();
+  /** @param {string} resourceKey @returns {void} */
+  function assertExactGraphBindingClosure(resourceKey) {
+    if (validatedResourceKeys.has(resourceKey)) return;
+    if (visitingResourceKeys.has(resourceKey)) {
       throw new Error(
-        `${valuePath}.context substrate dependency '${dependency.resourceKey}' lacks exact graph and head authority.`,
+        `${valuePath}.context graph dependency closure must be acyclic.`,
       );
     }
+    const binding = bindingByResourceKey.get(resourceKey);
+    const definition = getAwsSingleNodeResourceDefinition(resourceKey);
+    if (binding === undefined || definition === null) {
+      throw new Error(
+        `${valuePath}.context graph dependency '${resourceKey}' lacks exact graph and head authority.`,
+      );
+    }
+    visitingResourceKeys.add(resourceKey);
     assertExactGraphBinding(
       binding,
       definition,
-      `${valuePath}.context substrate dependency '${dependency.resourceKey}'`,
+      resourceKey === 'substrate'
+        ? `${valuePath}.context substrate binding`
+        : `${valuePath}.context graph dependency '${resourceKey}'`,
     );
+    for (const dependencyKey of definition.dependsOn) {
+      assertExactGraphBindingClosure(dependencyKey);
+    }
+    visitingResourceKeys.delete(resourceKey);
+    validatedResourceKeys.add(resourceKey);
   }
+  assertExactGraphBindingClosure(nodeDefinition.resourceKey);
 
   /** @type {Array<[string, string]>} */
   const exactMatches = [

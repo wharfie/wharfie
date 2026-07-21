@@ -400,7 +400,7 @@ describe('deployment plan v3', () => {
 
     expect(plan.schemaVersion).toBe(3);
     expect(plan.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
-    expect(plan.actions).toHaveLength(15);
+    expect(plan.actions).toHaveLength(18);
     expect(plan.actions[0].resourceKey).toBe('artifact');
     expect(plan.actions.at(-1).resourceKey).toBe('control-state-attachment');
     expect(

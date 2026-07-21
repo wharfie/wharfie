@@ -108,9 +108,9 @@ describe('AWS single-node provider specifications', () => {
     const { providerSpecId: _providerSpecId, ...payload } = spec;
 
     expect(spec).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: 'awsSingleNodeProviderSpec',
-      providerSpecId: expect.stringMatching(/^wap3_[A-Za-z0-9_-]{43}$/),
+      providerSpecId: expect.stringMatching(/^wap4_[A-Za-z0-9_-]{43}$/),
       providerContractVersion: 3,
       providerScopeId: fixture.providerScope.providerScopeId,
       profileRevisionId: fixture.profile.profileRevisionId,
@@ -198,19 +198,19 @@ describe('AWS single-node provider specifications', () => {
     });
     expect(spec.providerSpecId).toBe(
       createCanonicalJsonSha256Id({
-        domain: 'wharfie:aws-single-node-provider-spec:v3',
-        prefix: 'wap3',
+        domain: 'wharfie:aws-single-node-provider-spec:v4',
+        prefix: 'wap4',
         value: payload,
       }),
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(3);
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(4);
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_KIND).toBe(
       'awsSingleNodeProviderSpec',
     );
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN).toBe(
-      'wharfie:aws-single-node-provider-spec:v3',
+      'wharfie:aws-single-node-provider-spec:v4',
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap3');
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap4');
     expect(AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION).toBe(3);
     expect(Object.isFrozen(spec)).toBe(true);
     expect(Object.isFrozen(spec.machineImage.sourceParameter)).toBe(true);
@@ -438,7 +438,7 @@ describe('AWS single-node provider specifications', () => {
     );
 
     const resourceGraphDrift = /** @type {any} */ (clone(original));
-    resourceGraphDrift.resourceGraphId = `wrg1_${'A'.repeat(43)}`;
+    resourceGraphDrift.resourceGraphId = `wrg2_${'A'.repeat(43)}`;
     expect(() => validateAwsSingleNodeProviderSpec(resourceGraphDrift)).toThrow(
       /exact AWS single-node resource graph/i,
     );
@@ -473,6 +473,23 @@ describe('AWS single-node provider specifications', () => {
     expect(() => validateAwsSingleNodeProviderSpec(identityDrift)).toThrow(
       /providerSpecId does not match/i,
     );
+  });
+
+  it('rejects superseded V3 schema and identity authority', () => {
+    const current = createAwsSingleNodeProviderSpec(makeFixture().input);
+
+    const oldSchema = /** @type {any} */ (clone(current));
+    oldSchema.schemaVersion = 3;
+    expect(() => validateAwsSingleNodeProviderSpec(oldSchema)).toThrow(
+      /schemaVersion must be the integer 4/i,
+    );
+
+    const oldIdentityNamespace = /** @type {any} */ (clone(current));
+    oldIdentityNamespace.providerSpecId =
+      oldIdentityNamespace.providerSpecId.replace(/^wap4_/, 'wap3_');
+    expect(() =>
+      validateAwsSingleNodeProviderSpec(oldIdentityNamespace),
+    ).toThrow(/canonical wap4_/i);
   });
 
   it('cross-checks the exact profile, provider scope, and target', () => {

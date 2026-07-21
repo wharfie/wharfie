@@ -560,11 +560,11 @@ describe('deployment plans', () => {
     expect(second).toEqual(first);
     expect(first.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
     expect(first.providerSpec).toMatchObject({
-      schemaVersion: 3,
-      providerSpecId: expect.stringMatching(/^wap3_[A-Za-z0-9_-]{43}$/),
+      schemaVersion: 4,
+      providerSpecId: expect.stringMatching(/^wap4_[A-Za-z0-9_-]{43}$/),
       resourceGraphId: AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId,
     });
-    expect(first.actions).toHaveLength(15);
+    expect(first.actions).toHaveLength(18);
     expect(
       first.actions.map(
         (/** @type {Readonly<Record<string, any>>} */ action) =>
@@ -575,7 +575,7 @@ describe('deployment plans', () => {
       expect(action.actionId).toMatch(/^wda3_[A-Za-z0-9_-]{43}$/);
     }
     expect(first.summary).toEqual({
-      create: 15,
+      create: 18,
       delete: 0,
       destructive: false,
       noop: 0,
@@ -1290,7 +1290,10 @@ describe('deployment resource bindings', () => {
       onDestroy: 'purge',
     });
     expect(binding.ownershipNonce).toBe(
-      Buffer.alloc(32, 14).toString('base64url'),
+      Buffer.alloc(
+        32,
+        getAwsSingleNodeResourceApplyOrder().indexOf('substrate') + 2,
+      ).toString('base64url'),
     );
     expect(
       binding.dependencyBindings.map(

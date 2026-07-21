@@ -153,13 +153,15 @@ work. The npm package remains deliberately private. It is not ready for
 production use.
 
 The first provider deployment authority is now defined. A strict AWS-shaped
-one-node profile now resolves one schema-V3, `wap3` content-addressed provider
+one-node profile now resolves one schema-V4, `wap4` content-addressed provider
 specification that pins the exact regional AMI and parameter version, a stable
 standard Availability Zone ID that offers the fixed instance type, the exact
 regional/account default EBS KMS key ARN, bootstrap and identity policy
 digests, instance shape, metadata controls, explicit retained-volume
 performance and attachment contracts, network, service-health timing, and the
-content ID of one fixed 15-role physical-resource graph. DeploymentPlanV3
+content ID of one fixed 18-role physical-resource graph. Runtime identity is
+four independently recoverable effects: an IAM role, its derived inline
+policy, an instance profile, and their derived association. DeploymentPlanV3
 expands the small portable capability model into one independently recoverable
 action per graph role, while DeploymentInspectionV4 binds present ownership to
 exact BindingV2 dependency lineage and distinguishes authoritative absence from
@@ -206,18 +208,18 @@ module can create one exact retained `gp3` volume with a stable EC2
 atomic ownership tags, recover an ambiguous response through controller replay
 or bounded tagged discovery plus strict `DescribeVolumes` readback, and make
 retention an explicit no-op.
-The first direct-EC2 network drivers similarly create, discover, strictly
-validate, and purge only the fixed VPC and standalone internet-gateway roles.
-Their create APIs have no durable provider token, so the shared network
-authority uses one SDK attempt while each driver uses atomically tagged
-discovery and an in-process attempt fence; duplicate logical evidence blocks
-rather than being silently adopted, deleted, or described as provider
-exactly-once execution. Gateway attachment remains a separate derived graph
-effect, and gateway deletion refuses to run while any attachment is visible.
+The eight implemented network-effect drivers create, discover, strictly
+validate, and purge the fixed VPC, internet gateway and attachment, subnet,
+route table, default route, subnet association, and application security
+group. Direct resources use the shared tagged recovery kernel while derived
+relationships bind exact endpoint lineage; duplicate or contradictory
+provider evidence blocks rather than being adopted, deleted, or described as
+provider exactly-once execution.
 These modules do not yet attach, format, mount, or fulfill a complete service
-capability. The privileged host observer, remaining network, identity, node,
-attachment, complete AWS driver/router/inspection/`createPlan`, operator
-commands, production composition, and clean-account proof remain unfinished.
+capability. The four runtime-identity effects, managed artifact, node and
+volume attachments, privileged host observer, complete AWS
+driver/router/inspection/`createPlan`, operator commands, production
+composition, and clean-account proof remain unfinished.
 
 ## Start here
 
@@ -225,9 +227,10 @@ commands, production composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
+- [Runtime-identity graph checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md) — the current handoff for the fixed 18-role graph and recoverable IAM effect boundaries.
 - [Direct EC2 internet-gateway resource checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md) — the current handoff for the standalone gateway lifecycle, attachment-independent intrinsic state, and attachment-fenced purge.
 - [Direct EC2 VPC resource checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md) — the preceding handoff for the narrow single-attempt network authority, atomically tagged VPC lifecycle, and explicit no-token ambiguity boundary.
-- [Multi-effect resource graph checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md) — the preceding handoff for the fixed 15-role graph, strict role/dependency/lifecycle contracts, and recoverable multi-effect controller frontier.
+- [Multi-effect resource graph checkpoint](llm/checkpoints/2026-07-21-v27-multi-effect-resource-graph.md) — the historical handoff for the superseded 15-role graph, strict role/dependency/lifecycle contracts, and recoverable multi-effect controller frontier.
 - [Retained EBS volume resource checkpoint](llm/checkpoints/2026-07-21-v26-retained-ebs-volume-resource.md) — the preceding handoff for provider-spec V2 placement and encryption pinning plus the first controller-compatible, response-loss-safe retained resource capability.
 - [Exact AWS provider-spec resolution checkpoint](llm/checkpoints/2026-07-21-v25-exact-aws-provider-spec-resolution.md) — the preceding handoff for frozen latest resolution, exact-version validation, strict SSM/EC2 image evidence, and typed bounded failure handling.
 - [Provider-visible service-health checkpoint](llm/checkpoints/2026-07-21-v24-provider-visible-service-health.md) — the preceding handoff for strict health receipts, conditional S3 publication, provider-owned freshness, final Inspection V3 readiness, and bounded noncurrent-version retention.

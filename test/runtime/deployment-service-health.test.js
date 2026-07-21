@@ -493,7 +493,9 @@ describe('deployment service-health receipt', () => {
         'network-default-ipv4-route',
         'network-subnet-route-table-association',
         'network-security-group',
+        'runtime-role-policy',
         'runtime-identity',
+        'runtime-identity-role-association',
       ],
     ],
     [
@@ -504,7 +506,9 @@ describe('deployment service-health receipt', () => {
         'network-default-ipv4-route',
         'network-subnet-route-table-association',
         'network-security-group',
+        'runtime-role-policy',
         'runtime-identity',
+        'runtime-identity-role-association',
       ],
     ],
   ])(
@@ -532,9 +536,7 @@ describe('deployment service-health receipt', () => {
           makeReceipt(fixture),
           context(fixture, head),
         ),
-      ).toThrow(
-        /substrate dependency bindings must name all six exact graph dependencies/i,
-      );
+      ).toThrow(/substrate binding.*exact graph definition/i);
     },
   );
 
@@ -563,7 +565,35 @@ describe('deployment service-health receipt', () => {
         makeReceipt(fixture),
         context(fixture, head),
       ),
-    ).toThrow(/substrate dependency 'artifact'.*exact graph definition/i);
+    ).toThrow(/graph dependency 'artifact'.*exact graph definition/i);
+  });
+
+  it('rejects malformed transitive authority hidden behind valid direct IAM lineage', () => {
+    const fixture = makeFixture();
+    const bindings = makeResourceBindings(fixture, 22, null, {
+      'runtime-role': 'iam-user',
+    });
+    const head = createDeploymentHead({
+      deploymentInstanceId: fixture.deploymentInstanceId,
+      providerScope: fixture.providerScope,
+      incarnationId: fixture.incarnationId,
+      generation: 8,
+      phase: 'READY',
+      settledDeploymentRevisionId:
+        fixture.deploymentRevision.deploymentRevisionId,
+      targetDeploymentRevisionId:
+        fixture.deploymentRevision.deploymentRevisionId,
+      resourceBindings: bindings,
+      activeOperation: null,
+      lastOperation: completedOperation(22, 'create', bindings),
+    });
+
+    expect(() =>
+      validateDeploymentServiceHealthReceiptContext(
+        makeReceipt(fixture),
+        context(fixture, head),
+      ),
+    ).toThrow(/graph dependency 'runtime-role'.*exact graph definition/i);
   });
 
   it('accepts an older head authorization only while current lineage retains its operation', () => {

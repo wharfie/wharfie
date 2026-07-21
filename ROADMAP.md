@@ -1,24 +1,20 @@
 # Wharfie roadmap
 
 **Status:** The strict single-node deployment protocol now expands its small
-portable capability model into one fixed 15-role AWS resource graph. Provider
-specification V3 pins that graph; Plan/Action V3, Inspection V4, Binding V2,
+portable capability model into one fixed 18-role AWS resource graph. Provider
+specification V4 pins that graph; Plan/Action V3, Inspection V4, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
-destroy policy. The retained EBS volume, direct-EC2 VPC, standalone internet
-gateway, derived VPC/gateway attachment, direct subnet, and direct route-table
-effects now have strict controller-compatible drivers. The VPC, gateway,
-subnet, and route table share one narrow tagged direct-EC2 recovery kernel
-while retaining their distinct intrinsic and destroy contracts. VPC and
-gateway creation can still expose visible ambiguity across process loss
-because neither has a durable token or unique natural slot. The subnet instead
-corroborates its exact VPC/CIDR natural slot, while the route table derives a
-durable EC2 `ClientToken` from its action ID and ownership nonce. AWS's
-regional idempotency contract prevents a second successful route-table create
-effect for identical token and parameters, although the token-retention
-horizon is undocumented and Wharfie never claims API-call exactly-once
-execution. The default route and remaining fixed drivers, provider
-composition, commands, and clean-account proof are next ·
+destroy policy. Strict controller-compatible drivers now cover the retained
+EBS volume and all eight network effects: VPC, internet gateway and attachment,
+subnet, route table, default IPv4 route, subnet/route-table association, and
+security group. The directly owned network containers share one narrow tagged
+EC2 recovery kernel while retaining distinct intrinsic, natural-slot, and
+destroy contracts; derived relationships prove both endpoints before mutation.
+Runtime identity is now split into four explicit graph effects so its role,
+inline policy, instance profile, and role/profile membership can recover
+independently. Their IAM drivers, followed by managed artifact, substrate,
+attachment, provider composition, commands, and clean-account proof, are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -556,7 +552,8 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       provisioning only, not an attached service node or a composed production
       driver.
 - [x] Expand the provider action model through one content-addressed, fixed
-      15-role AWS resource graph. ProviderSpec V3 pins the graph identity;
+      AWS resource graph. ResourceGraph V2 now contains 18 roles and
+      ProviderSpec V4 pins its identity;
       Plan/Action V3 requires canonical apply order or exact reverse destroy
       order, while Inspection V4 always reports canonical apply order.
       Binding/Head V2 record exact dependency lineage and role-level lifecycle.
@@ -567,7 +564,7 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       and planned state; every later destroy frontier re-proves prior purges
       remain absent; finalization binds every role to its exact plan target.
       Health receipts advance to V2/`whr2` and require a substrate binding
-      rooted in its six exact graph dependencies. This is strict deterministic
+      rooted in its exact graph dependencies. This is strict deterministic
       contract/controller proof, not implementation of the remaining AWS
       resource drivers.
 - [x] Implement the fixed `network-vpc` role through a narrow direct-EC2
@@ -721,17 +718,19 @@ contract. Controller-shaped retained-volume, direct VPC, standalone
 internet-gateway, derived VPC/gateway-attachment, direct subnet, and direct
 route-table resources can create, inspect, and reconcile their exact effects
 under deterministic mocks.
-The portable capability model expands into a fixed 15-role graph, with one
+The portable capability model expands into a fixed 18-role graph, with one
 recoverable action per modeled resource or relationship, exact binding
 lineage, canonical apply/reverse-destroy ordering, and retained-volume versus
-purged-attachment lifecycle. Those six resource drivers are not yet composed
-into a complete provider, and the runtime path still does not attach, format,
-or mount the retained volumes or fulfill a service capability.
+purged-attachment lifecycle. Runtime identity is explicitly decomposed into
+an IAM role, derived inline policy, instance profile, and derived profile/role
+association so each provider effect can settle durably. The implemented
+resource drivers are not yet composed into a complete provider, and the
+runtime path still does not attach, format, or mount the retained volumes or
+fulfill a service capability.
 
-1. Implement the default IPv4 route, subnet/route-table association, and
-   application security group, then the remaining
-   independently recoverable AWS identity, node, volume-attachment, and
-   managed-artifact resources;
+1. Implement the independently recoverable AWS runtime-role, inline-policy,
+   instance-profile, and role/profile-association effects, then the managed
+   artifact, node, and volume-attachment resources;
    build the provider router, inspection, `createPlan`, and complete controller
    composition; and wire resident-service activation and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
@@ -745,9 +744,17 @@ or mount the retained volumes or fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [direct EC2 route-table resource
-checkpoint](llm/checkpoints/2026-07-21-v33-direct-ec2-route-table-resource.md).
-Its parent is the [direct EC2 subnet resource
+The current restart point is the [runtime-identity resource-graph
+checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md).
+Its parent is the [direct EC2 security-group resource
+checkpoint](llm/checkpoints/2026-07-21-v36-direct-ec2-security-group-resource.md),
+whose parent is the [derived subnet/route-table association
+checkpoint](llm/checkpoints/2026-07-21-v35-derived-subnet-route-table-association.md),
+whose parent is the [derived default IPv4 route
+checkpoint](llm/checkpoints/2026-07-21-v34-derived-default-ipv4-route.md), whose
+parent is the [direct EC2 route-table resource
+checkpoint](llm/checkpoints/2026-07-21-v33-direct-ec2-route-table-resource.md),
+whose parent is the [direct EC2 subnet resource
 checkpoint](llm/checkpoints/2026-07-21-v32-direct-ec2-subnet-resource.md), whose
 parent is the [tagged direct-EC2 recovery kernel
 checkpoint](llm/checkpoints/2026-07-21-v31-tagged-direct-ec2-recovery-kernel.md),
