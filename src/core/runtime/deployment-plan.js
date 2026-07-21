@@ -25,16 +25,20 @@ import {
   DEPLOYMENT_REVISION_ID_PREFIX,
   validateDeploymentRevision,
 } from './deployment-revision.js';
+import {
+  validateAwsSingleNodeProviderSpec,
+  validateAwsSingleNodeProviderSpecContext,
+} from './deployment-aws-provider-spec.js';
 import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const DEPLOYMENT_PLAN_SCHEMA_VERSION = 1;
+export const DEPLOYMENT_PLAN_SCHEMA_VERSION = 2;
 export const DEPLOYMENT_PLAN_KIND = 'deploymentPlan';
-export const DEPLOYMENT_PLAN_ID_DOMAIN = 'wharfie:deployment-plan:v1';
-export const DEPLOYMENT_PLAN_ID_PREFIX = 'wpl1';
-export const DEPLOYMENT_ACTION_ID_DOMAIN = 'wharfie:deployment-action:v1';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win1';
+export const DEPLOYMENT_PLAN_ID_DOMAIN = 'wharfie:deployment-plan:v2';
+export const DEPLOYMENT_PLAN_ID_PREFIX = 'wpl2';
+export const DEPLOYMENT_ACTION_ID_DOMAIN = 'wharfie:deployment-action:v2';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win2';
 
 export const DEPLOYMENT_PLAN_OPERATIONS = Object.freeze([
   'apply',
@@ -62,6 +66,7 @@ const PLAN_INPUT_KEYS = new Set([
   'operation',
   'deploymentRevision',
   'providerScope',
+  'providerSpec',
   'deploymentInstanceId',
   'incarnationId',
   'basis',
@@ -337,6 +342,7 @@ function createSummary(actions) {
  * credential scope, and that every managed finite capability is represented.
  * @param {Readonly<Record<string, any>>} deploymentRevision - Exact desired tuple.
  * @param {Readonly<Record<string, any>>} providerScope - Resolved provider scope.
+ * @param {Readonly<Record<string, any>>} providerSpec - Exact resolved provider choices.
  * @param {Readonly<Record<string, any>>} profile - Exact profile revision.
  * @param {Readonly<Record<string, any>>[]} actions - Canonical plan actions.
  * @param {string} path - Human-readable path.
@@ -345,10 +351,15 @@ function createSummary(actions) {
 function assertPlanContext(
   deploymentRevision,
   providerScope,
+  providerSpec,
   profile,
   actions,
   path,
 ) {
+  validateAwsSingleNodeProviderSpecContext(providerSpec, {
+    profile,
+    providerScope,
+  });
   if (
     deploymentRevision.profileRevisionId !== profile.profileRevisionId ||
     deploymentRevision.appId !== profile.appId
@@ -423,6 +434,20 @@ function createPlanPayload(input, path, context = {}) {
     input.providerScope,
     `${path}.providerScope`,
   );
+  const providerSpec = validateAwsSingleNodeProviderSpec(
+    input.providerSpec,
+    `${path}.providerSpec`,
+  );
+  if (providerSpec.providerScopeId !== providerScope.providerScopeId) {
+    throw new Error(
+      `${path}.providerSpec does not match the exact provider scope.`,
+    );
+  }
+  if (providerSpec.profileRevisionId !== deploymentRevision.profileRevisionId) {
+    throw new Error(
+      `${path}.providerSpec does not match the exact deployment profile revision.`,
+    );
+  }
   assertDeploymentInstanceId(
     input.deploymentInstanceId,
     `${path}.deploymentInstanceId`,
@@ -478,6 +503,7 @@ function createPlanPayload(input, path, context = {}) {
         deploymentRevisionId: deploymentRevision.deploymentRevisionId,
         deploymentInstanceId: input.deploymentInstanceId,
         incarnationId: input.incarnationId,
+        providerSpecId: providerSpec.providerSpecId,
         action,
       },
       valuePath: actionPath,
@@ -497,6 +523,7 @@ function createPlanPayload(input, path, context = {}) {
     assertPlanContext(
       deploymentRevision,
       providerScope,
+      providerSpec,
       profile,
       actions,
       path,
@@ -508,6 +535,7 @@ function createPlanPayload(input, path, context = {}) {
     operation: input.operation,
     deploymentRevision,
     providerScope,
+    providerSpec,
     deploymentInstanceId: input.deploymentInstanceId,
     incarnationId: input.incarnationId,
     basis,
@@ -555,7 +583,7 @@ export function validateDeploymentPlan(value, valuePath = 'deploymentPlan') {
   const document = cloneJsonObject(value, valuePath);
   assertKeys(document, PLAN_DOCUMENT_KEYS, valuePath);
   if (document.schemaVersion !== DEPLOYMENT_PLAN_SCHEMA_VERSION) {
-    throw new TypeError(`${valuePath}.schemaVersion must be the integer 1.`);
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 2.`);
   }
   if (document.kind !== DEPLOYMENT_PLAN_KIND) {
     throw new TypeError(`${valuePath}.kind must be '${DEPLOYMENT_PLAN_KIND}'.`);
@@ -572,6 +600,7 @@ export function validateDeploymentPlan(value, valuePath = 'deploymentPlan') {
           operation: document.operation,
           deploymentRevision: document.deploymentRevision,
           providerScope: document.providerScope,
+          providerSpec: document.providerSpec,
           deploymentInstanceId: document.deploymentInstanceId,
           incarnationId: document.incarnationId,
           basis: document.basis,
@@ -620,6 +649,7 @@ export function validateDeploymentPlanContext(value, context) {
   assertPlanContext(
     plan.deploymentRevision,
     plan.providerScope,
+    plan.providerSpec,
     profile,
     plan.actions,
     'deploymentPlan',

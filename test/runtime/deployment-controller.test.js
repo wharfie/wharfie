@@ -7,6 +7,10 @@ import {
   sha256Base64Url,
 } from '../../src/core/runtime/content-id.js';
 import {
+  AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
+  createAwsSingleNodeProviderSpec,
+} from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import {
   createDeploymentHead,
   validateDeploymentHead,
 } from '../../src/core/runtime/deployment-head.js';
@@ -91,6 +95,33 @@ function providerResourceId(resourceKey) {
   return `provider-resource-${resourceKey}`;
 }
 
+/** @param {Readonly<Record<string, any>>} profile @param {Readonly<Record<string, any>>} providerScope @param {string} [imageId] */
+function makeProviderSpec(
+  profile,
+  providerScope,
+  imageId = 'ami-0123456789abcdef0',
+) {
+  return createAwsSingleNodeProviderSpec({
+    profile,
+    providerScope,
+    machineImage: {
+      sourceParameter: {
+        name: AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS.x86_64,
+        version: 42,
+      },
+      imageId,
+      ownerAccountId: '137112412989',
+      architecture: 'x86_64',
+      imageType: 'machine',
+      rootDeviceType: 'ebs',
+      virtualizationType: 'hvm',
+      enaSupport: true,
+    },
+    bootstrapDigest: digest('fixed bootstrap'),
+    runtimeIdentityPolicyDigest: digest('fixed runtime identity policy'),
+  });
+}
+
 /** @returns {Readonly<Record<string, any>>} */
 function makeContext() {
   const profile = validateDeploymentProfile(
@@ -134,10 +165,12 @@ function makeContext() {
       region: 'us-east-1',
     }),
   );
+  const providerSpec = makeProviderSpec(profile, providerScope);
   return Object.freeze({
     profile,
     deploymentRevision,
     providerScope,
+    providerSpec,
     deploymentInstanceId: getDeploymentInstanceId({
       deploymentRevision,
       providerScope,
@@ -149,7 +182,7 @@ function makeContext() {
 /**
  * @param {Readonly<Record<string, any>>} base
  * @param {Readonly<Record<string, any>>} inspection
- * @param {'apply'|'destroy'} operation
+ * @param {'apply'|'reconcile'|'destroy'} operation
  * @param {string} [variant]
  */
 function makePlan(base, inspection, operation, variant = 'original') {
@@ -161,9 +194,7 @@ function makePlan(base, inspection, operation, variant = 'original') {
     const state = {
       providerType: resource.providerType,
       providerResourceId:
-        operation === 'destroy'
-          ? providerResourceId(resource.resourceKey)
-          : null,
+        operation === 'apply' ? null : providerResourceId(resource.resourceKey),
       stateDigest: digest(resource.resourceKey),
     };
     if (operation === 'apply') {
@@ -175,6 +206,18 @@ function makePlan(base, inspection, operation, variant = 'original') {
         destructive: false,
         reason: 'missing',
         before: null,
+        after: state,
+      };
+    }
+    if (operation === 'reconcile') {
+      return {
+        resourceKey,
+        capability: { kind: resource.capability, version: 1 },
+        management: 'managed',
+        action: 'noop',
+        destructive: false,
+        reason: 'already-converged',
+        before: state,
         after: state,
       };
     }
@@ -194,6 +237,7 @@ function makePlan(base, inspection, operation, variant = 'original') {
       operation,
       deploymentRevision: base.deploymentRevision,
       providerScope: base.providerScope,
+      providerSpec: base.providerSpec,
       deploymentInstanceId: base.deploymentInstanceId,
       incarnationId: base.incarnationId,
       basis: {
@@ -246,6 +290,7 @@ function makeAbsentInspection(base) {
     {
       deploymentRevision: base.deploymentRevision,
       providerScope: base.providerScope,
+      providerSpecId: base.providerSpec.providerSpecId,
       deploymentInstanceId: base.deploymentInstanceId,
       controlState: {
         status: 'absent',
@@ -256,7 +301,7 @@ function makeAbsentInspection(base) {
       status: 'absent',
       resources: [],
     },
-    { profile: base.profile },
+    { profile: base.profile, providerSpec: base.providerSpec },
   );
 }
 
@@ -346,6 +391,7 @@ function makeLiveInspection(
     {
       deploymentRevision: base.deploymentRevision,
       providerScope: base.providerScope,
+      providerSpecId: base.providerSpec.providerSpecId,
       deploymentInstanceId: base.deploymentInstanceId,
       controlState: {
         status: 'present',
@@ -356,16 +402,21 @@ function makeLiveInspection(
       status,
       resources,
     },
-    { profile: base.profile },
+    { profile: base.profile, providerSpec: base.providerSpec },
   );
 }
 
-/** @param {Readonly<Record<string, any>>|null} [initialHead] */
-function makeStore(initialHead = null) {
+/** @param {Readonly<Record<string, any>>|null} [initialHead] @param {Readonly<Record<string, any>>[]} [initialPlans] */
+function makeStore(initialHead = null, initialPlans = []) {
   let head =
     initialHead === null ? null : validateDeploymentHead(clone(initialHead));
   /** @type {Map<string, Readonly<Record<string, any>>>} */
-  const plans = new Map();
+  const plans = new Map(
+    initialPlans.map((plan) => {
+      const canonical = validateDeploymentPlan(clone(plan));
+      return [canonical.planId, canonical];
+    }),
+  );
   /** @type {Map<string, Readonly<Record<string, any>>>} */
   const profiles = new Map();
   /** @type {null|((previous: Readonly<Record<string, any>>|null, next: Readonly<Record<string, any>>) => void|Promise<void>)} */
@@ -443,15 +494,33 @@ function makeProvider(base, store, physical) {
   let inspectionStateDriftResourceKey = null;
   /** @type {Map<string, number>} */
   const executeCount = new Map();
+  let providerSpecResolutionCount = 0;
+  let providerSpecValidationCount = 0;
+  /** @type {Readonly<Record<string, any>>|null} */
+  let validatedProviderSpecOverride = null;
   const api = {
     async resolveScope() {
       return clone(resolvedScope);
     },
-    async inspect() {
+    async resolveProviderSpec() {
+      providerSpecResolutionCount += 1;
+      return clone(base.providerSpec);
+    },
+    /** @param {Record<string, any>} context */
+    async validateProviderSpec(context) {
+      providerSpecValidationCount += 1;
+      return clone(validatedProviderSpecOverride || context.providerSpec);
+    },
+    /** @param {Record<string, any>} context */
+    async inspect(context) {
+      const contextualBase = Object.freeze({
+        ...base,
+        providerSpec: context.providerSpec,
+      });
       return store.head === null
-        ? makeAbsentInspection(base)
+        ? makeAbsentInspection(contextualBase)
         : makeLiveInspection(
-            base,
+            contextualBase,
             store.head,
             physical,
             inspectionEvidence,
@@ -464,7 +533,12 @@ function makeProvider(base, store, physical) {
         context.operation ||
         context.plan?.operation ||
         (store.head?.phase === 'READY' ? 'destroy' : 'apply');
-      return makePlan(base, context.inspection, operation, variant);
+      return makePlan(
+        Object.freeze({ ...base, providerSpec: context.providerSpec }),
+        context.inspection,
+        operation,
+        variant,
+      );
     },
     /** @param {Record<string, any>} context */
     async executeAction(context) {
@@ -508,6 +582,12 @@ function makeProvider(base, store, physical) {
   return {
     api,
     executeCount,
+    get providerSpecResolutionCount() {
+      return providerSpecResolutionCount;
+    },
+    get providerSpecValidationCount() {
+      return providerSpecValidationCount;
+    },
     /** @param {'original'|'changed'} value */
     setVariant(value) {
       variant = value;
@@ -515,6 +595,10 @@ function makeProvider(base, store, physical) {
     /** @param {Readonly<Record<string, any>>} value */
     setResolvedScope(value) {
       resolvedScope = value;
+    },
+    /** @param {Readonly<Record<string, any>>|null} value */
+    setValidatedProviderSpec(value) {
+      validatedProviderSpecOverride = value;
     },
     /** @param {'conflict'|'missing'|'unknown'|null} value */
     setInspectionEvidence(value) {
@@ -597,7 +681,43 @@ function makeReadyState(corruption = null) {
       ),
     },
   });
-  return { base, physical, head };
+  return { base, physical, head, applyPlan };
+}
+
+/**
+ * @param {ReturnType<typeof makeReadyState>} ready
+ * @param {Readonly<Record<string, any>>} plan
+ * @param {'create'|'update'|'reconcile'} operationKind
+ * @param {string[]} [actionIds]
+ */
+function replaceReadySettledPlan(
+  ready,
+  plan,
+  operationKind,
+  actionIds = plan.actions.map(
+    (/** @type {Readonly<Record<string, any>>} */ action) => action.actionId,
+  ),
+) {
+  return createDeploymentHead({
+    deploymentInstanceId: ready.head.deploymentInstanceId,
+    providerScope: ready.head.providerScope,
+    incarnationId: ready.head.incarnationId,
+    generation: ready.head.generation,
+    phase: 'READY',
+    settledDeploymentRevisionId: ready.head.settledDeploymentRevisionId,
+    targetDeploymentRevisionId: ready.head.targetDeploymentRevisionId,
+    resourceBindings: ready.head.resourceBindings,
+    activeOperation: null,
+    lastOperation: {
+      kind: operationKind,
+      planId: plan.planId,
+      intents: actionIds.map((actionId, index) => ({
+        actionId,
+        status: 'settled',
+        ownershipNonce: ready.head.lastOperation.intents[index].ownershipNonce,
+      })),
+    },
+  });
 }
 
 /** @param {{head?: Readonly<Record<string, any>>|null, physical?: Map<string, Readonly<Record<string, any>>>}} [options] */
@@ -631,6 +751,7 @@ describe('deployment controller crash recovery', () => {
   it('resumes after the durable intent CAS and executes each logical action once', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
+    expect(harness.provider.providerSpecResolutionCount).toBe(1);
     let injected = false;
     harness.store.setAfterCas((_previous, next) => {
       if (!injected && next.activeOperation?.intents[0].status === 'intended') {
@@ -657,6 +778,8 @@ describe('deployment controller crash recovery', () => {
     });
 
     expect(head.phase).toBe('READY');
+    expect(harness.provider.providerSpecResolutionCount).toBe(1);
+    expect(harness.provider.providerSpecValidationCount).toBe(1);
     for (const action of plan.actions) {
       expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
     }
@@ -825,6 +948,173 @@ describe('deployment controller crash recovery', () => {
 });
 
 describe('deployment controller fencing', () => {
+  it('refuses a valid alternate provider spec that bypasses READY planning', async () => {
+    const ready = makeReadyState();
+    const store = makeStore(ready.head, [ready.applyPlan]);
+    const provider = makeProvider(ready.base, store, ready.physical);
+    const controller = createDeploymentController({
+      store: store.api,
+      provider: provider.api,
+      createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
+      createDeploymentIncarnationId: () => ready.base.incarnationId,
+    });
+    const alternateBase = Object.freeze({
+      ...ready.base,
+      providerSpec: makeProviderSpec(
+        ready.base.profile,
+        ready.base.providerScope,
+        'ami-fedcba98765432100',
+      ),
+    });
+    const forgedInspection = makeLiveInspection(
+      alternateBase,
+      ready.head,
+      ready.physical,
+    );
+    const forgedPlan = makePlan(alternateBase, forgedInspection, 'destroy');
+
+    await expect(
+      controller.converge({ plan: forgedPlan, profile: ready.base.profile }),
+    ).rejects.toThrow(/last settled provider specification/i);
+
+    expect(store.head?.headId).toBe(ready.head.headId);
+    expect(store.stats).toEqual({ puts: 0, casAttempts: 0, casSuccesses: 0 });
+    expect(provider.providerSpecResolutionCount).toBe(0);
+    expect(provider.providerSpecValidationCount).toBe(0);
+    expect(provider.executeCount.size).toBe(0);
+  });
+
+  it('rejects mismatched settled-plan kind, generation, intents, and operation basis', async () => {
+    for (const corruption of ['kind', 'generation', 'intent', 'operation']) {
+      const ready = makeReadyState();
+      let storedPlan = ready.applyPlan;
+      let settledKind = 'create';
+      /** @type {string[]|undefined} */
+      let actionIds;
+
+      if (corruption === 'kind') {
+        settledKind = 'update';
+      } else if (corruption === 'generation') {
+        storedPlan = createDeploymentPlan(
+          {
+            operation: ready.applyPlan.operation,
+            deploymentRevision: ready.applyPlan.deploymentRevision,
+            providerScope: ready.applyPlan.providerScope,
+            providerSpec: ready.applyPlan.providerSpec,
+            deploymentInstanceId: ready.applyPlan.deploymentInstanceId,
+            incarnationId: ready.applyPlan.incarnationId,
+            basis: {
+              ...ready.applyPlan.basis,
+              headGeneration: ready.head.generation,
+            },
+            actions: /** @type {Record<string, any>[]} */ (
+              clone(ready.applyPlan.actions)
+            ).map((action) => {
+              delete action.actionId;
+              return action;
+            }),
+          },
+          { profile: ready.base.profile },
+        );
+      } else if (corruption === 'intent') {
+        const corruptedActionIds = ready.applyPlan.actions.map(
+          (/** @type {Readonly<Record<string, any>>} */ action) =>
+            action.actionId,
+        );
+        corruptedActionIds[0] = semanticId(
+          'wda2',
+          'wharfie:test:foreign-deployment-action:v2',
+          { action: 1 },
+        );
+        actionIds = corruptedActionIds;
+      } else {
+        const reconcileInspection = makeLiveInspection(
+          ready.base,
+          ready.head,
+          ready.physical,
+        );
+        const reconcilePlan = makePlan(
+          ready.base,
+          reconcileInspection,
+          'reconcile',
+        );
+        storedPlan = createDeploymentPlan(
+          {
+            operation: 'reconcile',
+            deploymentRevision: reconcilePlan.deploymentRevision,
+            providerScope: reconcilePlan.providerScope,
+            providerSpec: reconcilePlan.providerSpec,
+            deploymentInstanceId: reconcilePlan.deploymentInstanceId,
+            incarnationId: reconcilePlan.incarnationId,
+            basis: {
+              ...reconcilePlan.basis,
+              headGeneration: ready.head.generation - 1,
+              settledDeploymentRevisionId: null,
+            },
+            actions: /** @type {Record<string, any>[]} */ (
+              clone(reconcilePlan.actions)
+            ).map((action) => {
+              delete action.actionId;
+              return action;
+            }),
+          },
+          { profile: ready.base.profile },
+        );
+      }
+
+      const head = replaceReadySettledPlan(
+        ready,
+        storedPlan,
+        /** @type {'create'|'update'|'reconcile'} */ (settledKind),
+        actionIds,
+      );
+      const store = makeStore(head, [storedPlan]);
+      const provider = makeProvider(ready.base, store, ready.physical);
+      const controller = createDeploymentController({
+        store: store.api,
+        provider: provider.api,
+        createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
+        createDeploymentIncarnationId: () => ready.base.incarnationId,
+      });
+
+      await expect(
+        controller.plan({
+          operation: 'destroy',
+          deploymentRevision: ready.base.deploymentRevision,
+          profile: ready.base.profile,
+        }),
+      ).rejects.toThrow(/last settled plan does not match/i);
+      expect(store.stats.casSuccesses).toBe(0);
+      expect(provider.providerSpecResolutionCount).toBe(0);
+      expect(provider.executeCount.size).toBe(0);
+    }
+  });
+
+  it('requires provider validation of a submitted new-incarnation spec', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    harness.provider.setValidatedProviderSpec(
+      makeProviderSpec(
+        harness.base.profile,
+        harness.base.providerScope,
+        'ami-fedcba98765432100',
+      ),
+    );
+
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).rejects.toThrow(/did not reproduce the exact pinned provider/i);
+
+    expect(harness.provider.providerSpecResolutionCount).toBe(1);
+    expect(harness.provider.providerSpecValidationCount).toBe(1);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+    expect(harness.provider.executeCount.size).toBe(0);
+  });
+
   it('rejects a stale preview before persisting a plan, changing a head, or causing effects', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
@@ -969,7 +1259,7 @@ describe('deployment controller destroy ownership', () => {
     'refuses a fresh destroy when current provider ownership is %s',
     async (evidence) => {
       const ready = makeReadyState();
-      const store = makeStore(ready.head);
+      const store = makeStore(ready.head, [ready.applyPlan]);
       const provider = makeProvider(ready.base, store, ready.physical);
       const controller = createDeploymentController({
         store: store.api,
@@ -982,6 +1272,8 @@ describe('deployment controller destroy ownership', () => {
         deploymentRevision: ready.base.deploymentRevision,
         profile: ready.base.profile,
       });
+      expect(provider.providerSpecResolutionCount).toBe(0);
+      expect(provider.providerSpecValidationCount).toBe(0);
       provider.setInspectionEvidence(evidence);
 
       await expect(
@@ -1002,7 +1294,7 @@ describe('deployment controller destroy ownership', () => {
     'refuses a destroy with a %s durable binding',
     async (corruption) => {
       const ready = makeReadyState(corruption);
-      const store = makeStore(ready.head);
+      const store = makeStore(ready.head, [ready.applyPlan]);
       const provider = makeProvider(ready.base, store, ready.physical);
       const controller = createDeploymentController({
         store: store.api,
@@ -1028,7 +1320,7 @@ describe('deployment controller destroy ownership', () => {
 
   it('refuses a fresh apply while a destroyed tombstone retains resource bindings', async () => {
     const ready = makeReadyState();
-    const store = makeStore(ready.head);
+    const store = makeStore(ready.head, [ready.applyPlan]);
     const provider = makeProvider(ready.base, store, ready.physical);
     const freshIncarnationId = createDeploymentIncarnationId(
       Buffer.alloc(32, 91),

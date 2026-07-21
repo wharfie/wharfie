@@ -48,7 +48,8 @@ The initial fixed fulfillment provides:
 - one small managed resident node;
 - retained application and control state on encrypted attached storage;
 - private provider object storage for exact artifacts, purged on destroy;
-- a host-only SSM runtime identity;
+- a host identity limited to SSM management, exact artifact reads, and exact
+  service-health receipt writes;
 - public outbound network access with no inbound rule; and
 - no managed ingress.
 
@@ -99,6 +100,21 @@ capability all use that same snapshot. The public authority exposes neither
 credentials nor the SDK client's credential-bearing configuration, and
 repeated scope checks fail closed if the caller identity changes during the
 invocation.
+
+Mutable regional prerequisites are resolved only while previewing a new
+incarnation and reduced to one secret-free, content-addressed
+`AwsSingleNodeProviderSpecV1`. It pins the exact SSM public-parameter name and
+version, AMI ID/owner/architecture, bootstrap and runtime-policy digests,
+instance and metadata shape, retained-volume and artifact behavior, fixed
+network, and service-health timing. `DeploymentPlanV2` embeds the complete
+specification; every action ID binds its `providerSpecId`, and
+`DeploymentInspectionV2` binds the same ID.
+
+Converge and recovery validate the submitted or stored specification and never
+resolve “latest” again. A deployment already in `READY` loads the specification
+from its last settled plan for update, reconcile, and destroy. Changing the
+profile or target inside an incarnation is refused; a fresh apply after destroy
+may resolve a new specification.
 
 Each create-to-destroy lifetime has a fresh unpredictable incarnation ID.
 Managed resource bindings contain an immutable provider ID, provider scope,
@@ -299,7 +315,14 @@ PITR, resolves ambiguous responses through bounded exact readback, never
 adopts incompatible state, and never deletes the table. Focused SDK mocks prove
 the request and recovery boundary; no live AWS resource claim is made.
 
-The fixed artifact-staging boundary and AWS resource driver, source and
-packaged deployment commands, and clean-account lifecycle proof remain
-unfinished. A document, table tag, or content ID still never proves that an
-application resource effect occurred.
+The fourth slice introduces AWS provider contract version 2 plus fresh `wpl2`
+and `win2` namespaces. The immutable provider specification fixes all current
+machine-image and fulfillment choices, plans embed it, inspections bind it,
+and controller tests prove that only initial preview resolves provider
+prerequisites while converge, crash recovery, and resident destroy reuse the
+stored specification.
+
+The retained control bucket, fixed artifact-staging and service-health receipt
+boundaries, AWS resource driver, source and packaged deployment commands, and
+clean-account lifecycle proof remain unfinished. A document, table tag, or
+content ID still never proves that an application resource effect occurred.

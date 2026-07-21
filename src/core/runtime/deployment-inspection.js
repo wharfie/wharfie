@@ -23,6 +23,10 @@ import {
   validateDeploymentProfile,
 } from './deployment-profile.js';
 import {
+  AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX,
+  validateAwsSingleNodeProviderSpecContext,
+} from './deployment-aws-provider-spec.js';
+import {
   DEPLOYMENT_CAPABILITIES,
   assertDeploymentIncarnationId,
   validateProviderResourceId,
@@ -32,11 +36,11 @@ import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 1;
+export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 2;
 export const DEPLOYMENT_INSPECTION_KIND = 'deploymentInspection';
 export const DEPLOYMENT_INSPECTION_ID_DOMAIN =
-  'wharfie:deployment-inspection:v1';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win1';
+  'wharfie:deployment-inspection:v2';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win2';
 export const DEPLOYMENT_INSPECTION_STATUSES = Object.freeze([
   'absent',
   'converged',
@@ -51,6 +55,7 @@ export const DEPLOYMENT_INSPECTION_STATUSES = Object.freeze([
 const INPUT_KEYS = new Set([
   'deploymentRevision',
   'providerScope',
+  'providerSpecId',
   'deploymentInstanceId',
   'controlState',
   'incarnationId',
@@ -432,10 +437,20 @@ function assertStatusEvidence(
  * Prove that a live inspection covers the exact finite profile capabilities.
  * @param {Readonly<Record<string, any>>} payload - Canonical inspection payload.
  * @param {Readonly<Record<string, any>>} profile - Exact deployment profile.
+ * @param {unknown} providerSpec - Exact resolved provider specification.
  * @param {string} path - Human-readable value path.
  * @returns {void}
  */
-function assertInspectionContext(payload, profile, path) {
+function assertInspectionContext(payload, profile, providerSpec, path) {
+  const canonicalProviderSpec = validateAwsSingleNodeProviderSpecContext(
+    providerSpec,
+    { profile, providerScope: payload.providerScope },
+  );
+  if (payload.providerSpecId !== canonicalProviderSpec.providerSpecId) {
+    throw new Error(
+      `${path}.providerSpecId does not match the exact provider specification.`,
+    );
+  }
   if (
     payload.deploymentRevision.profileRevisionId !==
       profile.profileRevisionId ||
@@ -554,6 +569,11 @@ function createPayload(value, path) {
     input.providerScope,
     `${path}.providerScope`,
   );
+  assertDomainSeparatedSha256Id(
+    input.providerSpecId,
+    AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX,
+    `${path}.providerSpecId`,
+  );
   const controlState = validateControlState(
     input.controlState,
     `${path}.controlState`,
@@ -614,6 +634,7 @@ function createPayload(value, path) {
     kind: DEPLOYMENT_INSPECTION_KIND,
     deploymentRevision,
     providerScope,
+    providerSpecId: input.providerSpecId,
     deploymentInstanceId: input.deploymentInstanceId,
     controlState,
     incarnationId: input.incarnationId,
@@ -626,13 +647,18 @@ function createPayload(value, path) {
 /**
  * Create a deterministic redacted provider inspection.
  * @param {unknown} value - Inspection evidence without derived ID.
- * @param {{profile?: unknown}} [context] - Exact immutable profile context.
+ * @param {{profile?: unknown, providerSpec?: unknown}} [context] - Exact immutable profile and resolved provider context.
  * @returns {Readonly<Record<string, any>>} - Canonical inspection.
  */
 export function createDeploymentInspection(value, context = {}) {
   if (!Object.prototype.hasOwnProperty.call(context, 'profile')) {
     throw new TypeError(
       'deploymentInspection context.profile is required to bind provider evidence.',
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(context, 'providerSpec')) {
+    throw new TypeError(
+      'deploymentInspection context.providerSpec is required to bind provider evidence.',
     );
   }
   const profile = validateDeploymentProfile(
@@ -642,7 +668,12 @@ export function createDeploymentInspection(value, context = {}) {
   const payload = deepFreeze(
     sortCanonicalJsonValue(createPayload(value, 'deploymentInspection')),
   );
-  assertInspectionContext(payload, profile, 'deploymentInspection');
+  assertInspectionContext(
+    payload,
+    profile,
+    context.providerSpec,
+    'deploymentInspection',
+  );
   const inspectionId = createCanonicalJsonSha256Id({
     domain: DEPLOYMENT_INSPECTION_ID_DOMAIN,
     prefix: DEPLOYMENT_INSPECTION_ID_PREFIX,
@@ -664,7 +695,7 @@ export function validateDeploymentInspection(
   const document = cloneJsonObject(value, valuePath);
   assertAllKeys(document, DOCUMENT_KEYS, valuePath);
   if (document.schemaVersion !== DEPLOYMENT_INSPECTION_SCHEMA_VERSION) {
-    throw new TypeError(`${valuePath}.schemaVersion must be the integer 1.`);
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 2.`);
   }
   if (document.kind !== DEPLOYMENT_INSPECTION_KIND) {
     throw new TypeError(
@@ -682,6 +713,7 @@ export function validateDeploymentInspection(
         {
           deploymentRevision: document.deploymentRevision,
           providerScope: document.providerScope,
+          providerSpecId: document.providerSpecId,
           deploymentInstanceId: document.deploymentInstanceId,
           controlState: document.controlState,
           incarnationId: document.incarnationId,
@@ -711,7 +743,7 @@ export function validateDeploymentInspection(
 /**
  * Re-resolve the immutable profile before using inspection evidence to mutate.
  * @param {unknown} value - Candidate inspection.
- * @param {{profile: unknown}} context - Exact immutable profile.
+ * @param {{profile: unknown, providerSpec: unknown}} context - Exact immutable profile and resolved provider specification.
  * @returns {Readonly<Record<string, any>>} - Fully cross-checked inspection.
  */
 export function validateDeploymentInspectionContext(value, context) {
@@ -720,7 +752,12 @@ export function validateDeploymentInspectionContext(value, context) {
     context?.profile,
     'deploymentInspection context.profile',
   );
-  assertInspectionContext(inspection, profile, 'deploymentInspection');
+  assertInspectionContext(
+    inspection,
+    profile,
+    context?.providerSpec,
+    'deploymentInspection',
+  );
   return inspection;
 }
 

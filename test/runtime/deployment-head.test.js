@@ -47,12 +47,12 @@ const TARGET_REVISION_ID = semanticId(
 
 /** @param {number} index @returns {string} */
 function actionId(index) {
-  return semanticId('wda1', 'wharfie:test:deployment-action:v1', { index });
+  return semanticId('wda2', 'wharfie:test:deployment-action:v2', { index });
 }
 
 /** @param {string} kind @param {number} index @returns {string} */
 function planId(kind, index = 1) {
-  return semanticId('wpl1', 'wharfie:test:deployment-plan:v1', {
+  return semanticId('wpl2', 'wharfie:test:deployment-plan:v2', {
     kind,
     index,
   });

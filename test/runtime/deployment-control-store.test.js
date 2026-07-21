@@ -14,6 +14,10 @@ import {
   DeploymentControlStoreIntegrityError,
 } from '../../src/core/runtime/deployment-control-store.js';
 import {
+  AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
+  createAwsSingleNodeProviderSpec,
+} from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import {
   createCanonicalJsonSha256Id,
   createSha256Id,
   sha256Base64Url,
@@ -24,6 +28,7 @@ import {
   DEPLOYMENT_ACTION_ID_DOMAIN,
   DEPLOYMENT_PLAN_ID_DOMAIN,
   DEPLOYMENT_PLAN_ID_PREFIX,
+  DEPLOYMENT_PLAN_SCHEMA_VERSION,
   validateDeploymentPlan,
 } from '../../src/core/runtime/deployment-plan.js';
 import {
@@ -117,20 +122,40 @@ function makeDocuments() {
     deploymentRevision,
     providerScope,
   });
+  const providerSpec = createAwsSingleNodeProviderSpec({
+    profile,
+    providerScope,
+    machineImage: {
+      sourceParameter: {
+        name: AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS.x86_64,
+        version: 1,
+      },
+      imageId: 'ami-0123456789abcdef0',
+      ownerAccountId: '137112412989',
+      architecture: 'x86_64',
+      imageType: 'machine',
+      rootDeviceType: 'ebs',
+      virtualizationType: 'hvm',
+      enaSupport: true,
+    },
+    bootstrapDigest: digest('bootstrap'),
+    runtimeIdentityPolicyDigest: digest('runtime identity policy'),
+  });
   const incarnationId = createDeploymentIncarnationId(Buffer.alloc(32, 17));
   const plan = createDeploymentPlan(
     {
       operation: 'apply',
       deploymentRevision,
       providerScope,
+      providerSpec,
       deploymentInstanceId,
       incarnationId,
       basis: {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win1',
-          'wharfie:test:deployment-inspection:v1',
+          'win2',
+          'wharfie:test:deployment-inspection:v2',
           { inspection: 1 },
         ),
       },
@@ -219,17 +244,19 @@ function makeMaximumDocuments() {
             basePlan.deploymentRevision.deploymentRevisionId,
           deploymentInstanceId: basePlan.deploymentInstanceId,
           incarnationId: basePlan.incarnationId,
+          providerSpecId: basePlan.providerSpec.providerSpecId,
           action,
         },
       }),
     };
   });
   const planPayload = {
-    schemaVersion: 1,
+    schemaVersion: DEPLOYMENT_PLAN_SCHEMA_VERSION,
     kind: 'deploymentPlan',
     operation,
     deploymentRevision: basePlan.deploymentRevision,
     providerScope: basePlan.providerScope,
+    providerSpec: basePlan.providerSpec,
     deploymentInstanceId: basePlan.deploymentInstanceId,
     incarnationId: basePlan.incarnationId,
     basis: {
@@ -541,7 +568,7 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
         tableName: TABLE_NAME,
       });
       const oversizedPlanId = semanticId(
-        'wpl1',
+        'wpl2',
         'wharfie:test:oversized-plan:v1',
         { plan: 1 },
       );

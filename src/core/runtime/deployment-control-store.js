@@ -29,7 +29,7 @@ export const DEPLOYMENT_CONTROL_RECORD_TYPES = Object.freeze({
 
 export const DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES = Object.freeze({
   head: 'head/v1/',
-  plan: 'plan/v1/',
+  plan: 'plan/v2/',
   profile: 'profile/v2/',
 });
 

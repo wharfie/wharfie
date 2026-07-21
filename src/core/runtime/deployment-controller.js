@@ -4,6 +4,7 @@ import {
   createDeploymentHead,
   validateDeploymentHead,
 } from './deployment-head.js';
+import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import { validateDeploymentInspectionContext } from './deployment-inspection.js';
 import {
   validateDeploymentPlan,
@@ -66,9 +67,9 @@ export class AmbiguousDeploymentActionError extends Error {
 
 /** Durable ownership evidence is missing or does not identify the plan target. */
 export class DeploymentOwnershipError extends Error {
-  /** @param {string} message */
-  constructor(message) {
-    super(message);
+  /** @param {string} message @param {{cause?: unknown}} [options] */
+  constructor(message, options = {}) {
+    super(message, options);
     this.name = 'DeploymentOwnershipError';
     this.code = 'DEPLOYMENT_OWNERSHIP_CONFLICT';
   }
@@ -168,6 +169,8 @@ export function createDeploymentController(dependencies) {
       provider,
       [
         'resolveScope',
+        'resolveProviderSpec',
+        'validateProviderSpec',
         'inspect',
         'createPlan',
         'executeAction',
@@ -364,6 +367,10 @@ export function createDeploymentController(dependencies) {
 
   /** @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} profile @returns {Promise<void>} */
   async function assertPlanProviderScope(plan, profile) {
+    validateAwsSingleNodeProviderSpecContext(plan.providerSpec, {
+      profile,
+      providerScope: plan.providerScope,
+    });
     await assertFreshProviderScope(
       {
         operation: plan.operation,
@@ -372,6 +379,118 @@ export function createDeploymentController(dependencies) {
       },
       plan.providerScope,
     );
+  }
+
+  /**
+   * Resolve mutable provider prerequisites only for a new incarnation. A
+   * resident deployment keeps using the exact provider specification stored
+   * by its last settled plan, including for update, reconcile, and destroy.
+   * @param {Record<string, any>} request - Exact desired deployment tuple.
+   * @param {Readonly<Record<string, any>>|null} head - Durable predecessor.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Pinned provider spec.
+   */
+  async function selectProviderSpec(request, head) {
+    if (head !== null && head.phase === 'READY') {
+      const priorValue = await store.readPlan(head.lastOperation.planId);
+      if (priorValue === null) {
+        throw new Error(
+          'The last settled deployment plan is missing from durable storage.',
+        );
+      }
+      const priorPlan = validateDeploymentPlan(
+        priorValue,
+        'last settled deployment plan',
+      );
+      const expectedOperationKind =
+        priorPlan.operation === 'destroy'
+          ? 'destroy'
+          : priorPlan.basis.settledDeploymentRevisionId === null
+            ? 'create'
+            : priorPlan.basis.settledDeploymentRevisionId ===
+                priorPlan.deploymentRevision.deploymentRevisionId
+              ? 'reconcile'
+              : 'update';
+      const operationMatchesBasis =
+        priorPlan.operation === 'destroy'
+          ? expectedOperationKind === 'destroy'
+          : priorPlan.operation === 'reconcile'
+            ? expectedOperationKind === 'reconcile'
+            : expectedOperationKind !== 'destroy';
+      if (
+        priorPlan.planId !== head.lastOperation.planId ||
+        !operationMatchesBasis ||
+        head.lastOperation.kind !== expectedOperationKind ||
+        priorPlan.deploymentInstanceId !== head.deploymentInstanceId ||
+        priorPlan.incarnationId !== head.incarnationId ||
+        priorPlan.deploymentRevision.deploymentRevisionId !==
+          head.settledDeploymentRevisionId ||
+        !sameJson(priorPlan.providerScope, head.providerScope) ||
+        priorPlan.basis.headGeneration >= head.generation ||
+        head.lastOperation.intents.length !== priorPlan.actions.length ||
+        head.lastOperation.intents.some(
+          (
+            /** @type {Readonly<Record<string, any>>} */ intent,
+            /** @type {number} */ index,
+          ) => intent.actionId !== priorPlan.actions[index].actionId,
+        )
+      ) {
+        throw new DeploymentControllerConflictError(
+          'The last settled plan does not match the exact durable deployment head.',
+        );
+      }
+      try {
+        return validateAwsSingleNodeProviderSpecContext(
+          priorPlan.providerSpec,
+          {
+            profile: request.profile,
+            providerScope: request.providerScope,
+          },
+        );
+      } catch (error) {
+        throw new DeploymentOwnershipError(
+          'Changing the provider profile or target within a deployment incarnation is not supported; destroy and apply a fresh incarnation.',
+          { cause: error },
+        );
+      }
+    }
+
+    return validateAwsSingleNodeProviderSpecContext(
+      await provider.resolveProviderSpec(
+        Object.freeze({
+          operation: request.operation,
+          deploymentRevision: request.deploymentRevision,
+          providerScope: request.providerScope,
+          deploymentInstanceId: request.deploymentInstanceId,
+          incarnationId: request.incarnationId,
+          profile: request.profile,
+          head,
+        }),
+      ),
+      { profile: request.profile, providerScope: request.providerScope },
+    );
+  }
+
+  /**
+   * Ask the provider driver to validate an exact pinned specification without
+   * selecting newer prerequisites. The returned evidence must reproduce the
+   * complete submitted document exactly.
+   * @param {Record<string, any>} request - Exact desired deployment tuple.
+   * @param {Readonly<Record<string, any>>|null} head - Durable predecessor.
+   * @returns {Promise<void>} - Returns after exact provider validation.
+   */
+  async function assertProviderSpecValid(request, head) {
+    const validated = validateAwsSingleNodeProviderSpecContext(
+      await provider.validateProviderSpec(providerContext(request, head)),
+      {
+        profile: request.profile,
+        providerScope: request.providerScope,
+      },
+    );
+    if (!sameJson(validated, request.providerSpec)) {
+      throw new StaleDeploymentPlanError(
+        'Provider validation did not reproduce the exact pinned provider specification.',
+      );
+    }
   }
 
   /** @param {Record<string, any>} request @param {Readonly<Record<string, any>>|null} head @returns {Record<string, any>} */
@@ -383,6 +502,7 @@ export function createDeploymentController(dependencies) {
       deploymentInstanceId: request.deploymentInstanceId,
       incarnationId: request.incarnationId,
       profile: request.profile,
+      providerSpec: request.providerSpec,
       head,
     });
   }
@@ -393,6 +513,7 @@ export function createDeploymentController(dependencies) {
     if (
       !sameJson(inspection.deploymentRevision, request.deploymentRevision) ||
       !sameJson(inspection.providerScope, request.providerScope) ||
+      inspection.providerSpecId !== request.providerSpec.providerSpecId ||
       inspection.deploymentInstanceId !== request.deploymentInstanceId ||
       inspection.incarnationId !== expectedIncarnation ||
       inspection.headGeneration !== (head?.generation || 0)
@@ -424,6 +545,7 @@ export function createDeploymentController(dependencies) {
       plan.operation !== request.operation ||
       !sameJson(plan.deploymentRevision, request.deploymentRevision) ||
       !sameJson(plan.providerScope, request.providerScope) ||
+      !sameJson(plan.providerSpec, request.providerSpec) ||
       plan.deploymentInstanceId !== request.deploymentInstanceId ||
       plan.incarnationId !== request.incarnationId ||
       plan.basis.headGeneration !== (head?.generation || 0) ||
@@ -516,12 +638,13 @@ export function createDeploymentController(dependencies) {
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
       profile,
+      providerSpec: plan.providerSpec,
     };
     const inspection = validateDeploymentInspectionContext(
       await provider.inspect(
         Object.freeze({ ...providerContext(request, head), plan }),
       ),
-      { profile },
+      { profile, providerSpec: plan.providerSpec },
     );
     assertInspectionAuthority(inspection, request, head);
     return inspection;
@@ -613,10 +736,14 @@ export function createDeploymentController(dependencies) {
   /** @param {Record<string, any>} request @param {Readonly<Record<string, any>>|null} head @returns {Promise<Readonly<Record<string, any>>>} */
   async function createFreshPlan(request, head) {
     await assertFreshProviderScope(request, request.providerScope);
+    validateAwsSingleNodeProviderSpecContext(request.providerSpec, {
+      profile: request.profile,
+      providerScope: request.providerScope,
+    });
     const context = providerContext(request, head);
     const inspection = validateDeploymentInspectionContext(
       await provider.inspect(context),
-      { profile: request.profile },
+      { profile: request.profile, providerSpec: request.providerSpec },
     );
     assertInspectionAuthority(inspection, request, head);
     const plan = validateDeploymentPlanContext(
@@ -931,6 +1058,7 @@ export function createDeploymentController(dependencies) {
       inspection.headGeneration !== head.generation ||
       inspection.incarnationId !== head.incarnationId ||
       inspection.deploymentInstanceId !== head.deploymentInstanceId ||
+      inspection.providerSpecId !== plan.providerSpec.providerSpecId ||
       !sameJson(inspection.deploymentRevision, plan.deploymentRevision) ||
       !sameJson(inspection.providerScope, head.providerScope)
     ) {
@@ -1001,13 +1129,14 @@ export function createDeploymentController(dependencies) {
                 deploymentInstanceId: plan.deploymentInstanceId,
                 incarnationId: plan.incarnationId,
                 profile,
+                providerSpec: plan.providerSpec,
               },
               head,
             ),
             plan,
           }),
         ),
-        { profile },
+        { profile, providerSpec: plan.providerSpec },
       );
       assertFinalInspection(inspection, plan, head);
     } catch {
@@ -1245,7 +1374,8 @@ export function createDeploymentController(dependencies) {
       incarnationId,
     };
     assertLifecycleRequest(request, head);
-    return await createFreshPlan(request, head);
+    const providerSpec = await selectProviderSpec(request, head);
+    return await createFreshPlan({ ...request, providerSpec }, head);
   }
 
   /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
@@ -1293,8 +1423,22 @@ export function createDeploymentController(dependencies) {
       deploymentInstanceId: submittedPlan.deploymentInstanceId,
       incarnationId: submittedPlan.incarnationId,
       profile,
+      providerSpec: submittedPlan.providerSpec,
     };
     assertLifecycleRequest(request, head);
+
+    if (head !== null && head.phase === 'READY') {
+      const settledProviderSpec = await selectProviderSpec(request, head);
+      if (!sameJson(settledProviderSpec, submittedPlan.providerSpec)) {
+        throw new StaleDeploymentPlanError(
+          'Submitted deployment plan does not use the last settled provider specification.',
+        );
+      }
+    } else {
+      // A new incarnation has no prior accepted plan lineage. Validate the
+      // submitted fixed provider receipt without selecting newer defaults.
+      await assertProviderSpecValid(request, head);
+    }
 
     // This is the authority boundary: re-read above, then re-inspect and
     // regenerate immediately before the first durable mutation.

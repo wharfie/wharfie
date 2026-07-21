@@ -6,6 +6,10 @@ import {
   sha256Base64Url,
 } from '../../src/core/runtime/content-id.js';
 import {
+  AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
+  createAwsSingleNodeProviderSpec,
+} from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import {
   createDeploymentInspection,
   validateDeploymentInspection,
   validateDeploymentInspectionContext,
@@ -89,6 +93,34 @@ function makeDeploymentRevision(profile = makeProfile()) {
   });
 }
 
+/**
+ * @param {ReturnType<typeof makeProfile>} profile
+ * @param {Readonly<Record<string, any>>} providerScope
+ */
+function makeProviderSpec(profile, providerScope) {
+  return createAwsSingleNodeProviderSpec({
+    profile,
+    providerScope,
+    machineImage: {
+      sourceParameter: {
+        name: AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS.x86_64,
+        version: 42,
+      },
+      imageId: 'ami-0123456789abcdef0',
+      ownerAccountId: '137112412989',
+      architecture: 'x86_64',
+      imageType: 'machine',
+      rootDeviceType: 'ebs',
+      virtualizationType: 'hvm',
+      enaSupport: true,
+    },
+    bootstrapDigest: digest('fixed host bootstrap'),
+    runtimeIdentityPolicyDigest: digest(
+      'host SSM artifact read health write identity',
+    ),
+  });
+}
+
 /** @returns {ReturnType<typeof createDeploymentPlan>} */
 function makePlan() {
   const profile = makeProfile();
@@ -102,17 +134,19 @@ function makePlan() {
     deploymentRevision,
     providerScope,
   });
+  const providerSpec = makeProviderSpec(profile, providerScope);
   return createDeploymentPlan(
     {
       operation: 'apply',
       deploymentRevision,
       providerScope,
+      providerSpec,
       deploymentInstanceId,
       incarnationId: createDeploymentIncarnationId(Buffer.alloc(32, 1)),
       basis: {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
-        inspectionId: semanticId('win1', 'wharfie:test:inspection:v1', {
+        inspectionId: semanticId('win2', 'wharfie:test:inspection:v2', {
           absent: true,
         }),
       },
@@ -184,7 +218,7 @@ function makePlan() {
           after: {
             providerType: 'instance-profile',
             providerResourceId: null,
-            stateDigest: digest('host-only SSM identity'),
+            stateDigest: digest('host SSM artifact read health write identity'),
           },
         },
         {
@@ -265,10 +299,12 @@ function makeInspection(status, resources = makeConvergedResources()) {
     accountId: '123456789012',
     region: 'us-east-1',
   });
+  const providerSpec = makeProviderSpec(profile, providerScope);
   return createDeploymentInspection(
     {
       deploymentRevision,
       providerScope,
+      providerSpecId: providerSpec.providerSpecId,
       deploymentInstanceId: getDeploymentInstanceId({
         deploymentRevision,
         providerScope,
@@ -285,7 +321,7 @@ function makeInspection(status, resources = makeConvergedResources()) {
       status,
       resources: status === 'absent' ? [] : resources,
     },
-    { profile },
+    { profile, providerSpec },
   );
 }
 
@@ -361,10 +397,10 @@ describe('deployment plans', () => {
     const second = makePlan();
 
     expect(second).toEqual(first);
-    expect(first.planId).toMatch(/^wpl1_[A-Za-z0-9_-]{43}$/);
+    expect(first.planId).toMatch(/^wpl2_[A-Za-z0-9_-]{43}$/);
     expect(first.actions).toHaveLength(6);
     for (const action of first.actions) {
-      expect(action.actionId).toMatch(/^wda1_[A-Za-z0-9_-]{43}$/);
+      expect(action.actionId).toMatch(/^wda2_[A-Za-z0-9_-]{43}$/);
     }
     expect(first.summary).toEqual({
       create: 6,
@@ -411,6 +447,7 @@ describe('deployment plans', () => {
       operation: plan.operation,
       deploymentRevision: plan.deploymentRevision,
       providerScope: plan.providerScope,
+      providerSpec: plan.providerSpec,
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
       basis: plan.basis,
@@ -433,6 +470,7 @@ describe('deployment plans', () => {
       operation: 'destroy',
       deploymentRevision: plan.deploymentRevision,
       providerScope: plan.providerScope,
+      providerSpec: plan.providerSpec,
       deploymentInstanceId: plan.deploymentInstanceId,
       incarnationId: plan.incarnationId,
       basis: plan.basis,
@@ -477,6 +515,7 @@ describe('deployment plans', () => {
           operation: plan.operation,
           deploymentRevision: plan.deploymentRevision,
           providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
           deploymentInstanceId: plan.deploymentInstanceId,
           incarnationId: plan.incarnationId,
           basis: plan.basis,
@@ -506,6 +545,7 @@ describe('deployment plans', () => {
           operation: plan.operation,
           deploymentRevision: plan.deploymentRevision,
           providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
           deploymentInstanceId: plan.deploymentInstanceId,
           incarnationId: plan.incarnationId,
           basis: plan.basis,
@@ -537,6 +577,7 @@ describe('deployment plans', () => {
           operation: 'apply',
           deploymentRevision,
           providerScope,
+          providerSpec: reference.providerSpec,
           deploymentInstanceId: getDeploymentInstanceId({
             deploymentRevision,
             providerScope,
@@ -547,7 +588,7 @@ describe('deployment plans', () => {
         },
         { profile },
       ),
-    ).toThrow(/provider scope does not match.*profile.*region/i);
+    ).toThrow(/providerSpec.*exact provider scope/i);
   });
 
   it('does not permit duplicate capabilities or arbitrary provider types', () => {
@@ -568,6 +609,7 @@ describe('deployment plans', () => {
           operation: plan.operation,
           deploymentRevision: plan.deploymentRevision,
           providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
           deploymentInstanceId: plan.deploymentInstanceId,
           incarnationId: plan.incarnationId,
           basis: plan.basis,
@@ -590,6 +632,7 @@ describe('deployment plans', () => {
           operation: plan.operation,
           deploymentRevision: plan.deploymentRevision,
           providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
           deploymentInstanceId: plan.deploymentInstanceId,
           incarnationId: plan.incarnationId,
           basis: plan.basis,
@@ -615,6 +658,7 @@ describe('deployment plans', () => {
           operation: 'destroy',
           deploymentRevision: plan.deploymentRevision,
           providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
           deploymentInstanceId: plan.deploymentInstanceId,
           incarnationId: plan.incarnationId,
           basis: plan.basis,
@@ -639,6 +683,7 @@ describe('deployment plans', () => {
           operation: plan.operation,
           deploymentRevision: plan.deploymentRevision,
           providerScope: plan.providerScope,
+          providerSpec: plan.providerSpec,
           deploymentInstanceId: plan.deploymentInstanceId,
           incarnationId: plan.incarnationId,
           basis: plan.basis,
@@ -662,7 +707,7 @@ describe('deployment inspections', () => {
     const second = makeInspection('converged', resources);
 
     expect(second).toEqual(first);
-    expect(first.inspectionId).toMatch(/^win1_[A-Za-z0-9_-]{43}$/);
+    expect(first.inspectionId).toMatch(/^win2_[A-Za-z0-9_-]{43}$/);
     expect(
       first.resources.map(
         (/** @type {Record<string, any>} */ resource) => resource.resourceKey,
@@ -676,9 +721,12 @@ describe('deployment inspections', () => {
       'substrate',
     ]);
     expect(validateDeploymentInspection(clone(first))).toEqual(first);
+    const profile = makeProfile();
+    const providerSpec = makeProviderSpec(profile, first.providerScope);
     expect(
       validateDeploymentInspectionContext(clone(first), {
-        profile: makeProfile(),
+        profile,
+        providerSpec,
       }),
     ).toEqual(first);
     expect(Object.isFrozen(first)).toBe(true);
@@ -703,10 +751,12 @@ describe('deployment inspections', () => {
       accountId: '123456789012',
       region: 'us-east-1',
     });
+    const providerSpec = makeProviderSpec(profile, providerScope);
     const inspection = createDeploymentInspection(
       {
         deploymentRevision,
         providerScope,
+        providerSpecId: providerSpec.providerSpecId,
         deploymentInstanceId: getDeploymentInstanceId({
           deploymentRevision,
           providerScope,
@@ -717,7 +767,7 @@ describe('deployment inspections', () => {
         status: 'unknown',
         resources: [],
       },
-      { profile },
+      { profile, providerSpec },
     );
 
     expect(inspection).toMatchObject({
@@ -735,7 +785,7 @@ describe('deployment inspections', () => {
             evidence: 'authoritative-not-found',
           },
         },
-        { profile },
+        { profile, providerSpec },
       ),
     ).toThrow(/not supported|authoritative head absence/i);
   });

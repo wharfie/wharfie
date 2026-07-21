@@ -494,8 +494,13 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       deletion protection, AWS-owned encryption, disabled TTL, and 35-day
       point-in-time recovery. Focused mocks prove transitional reads and lost
       create/update response recovery; a live-account proof remains open.
+- [x] Introduce the fresh provider contract and plan/inspection namespaces that
+      pin the exact regional AMI receipt, bootstrap and runtime-policy digests,
+      instance/metadata shape, storage, network, and health timing. Only a new
+      incarnation resolves mutable prerequisites; converge and recovery use the
+      content-addressed provider specification already embedded in the plan.
 
-- [ ] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, runtime identity/secret references, networking, and optional ingress.
+- [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
 - [ ] Define the provider contract for `plan`, `apply`, `inspect`, `reconcile`, and `destroy`.
 - [ ] Separate portable requirements from provider-specific deployment profiles.
@@ -583,10 +588,11 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Define recovery-safe provider artifact staging and pin the exact regional
-   machine-image/provider specification in the immutable plan. Define the
-   narrow artifact-read/status-write runtime identity and provider-visible
-   read-only service-health receipt at the same boundary.
+1. Define recovery-safe provider artifact staging and its retained control
+   bucket, then add the provider-visible read-only service-health receipt. The
+   exact regional provider specification and narrow
+   SSM/artifact-read/health-write identity are now pinned by the immutable
+   plan.
 2. Implement the fixed AWS driver as independently recoverable resource
    capabilities, then compose it and the retained table with the strict
    recovery protocol. Mount source and packaged `plan`, `apply`, `inspect`,
@@ -598,8 +604,10 @@ receipts remain bound to `0d927463`.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [AWS deployment-control
-checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md). Its
+The current restart point is the [pinned AWS provider-spec
+checkpoint](llm/checkpoints/2026-07-20-v22-pinned-aws-provider-spec.md). Its
+parent is the [AWS deployment-control
+checkpoint](llm/checkpoints/2026-07-20-v21-aws-deployment-control.md), whose
 parent is the [recoverable deployment-controller
 checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md),
 whose parent is the [bounded packaged-runtime extraction

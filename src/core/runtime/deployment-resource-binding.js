@@ -20,7 +20,7 @@ import { assertManifestIsSecretFree } from './manifest-security.js';
 export const DEPLOYMENT_INCARNATION_ID_DOMAIN =
   'wharfie:deployment-incarnation:v1';
 export const DEPLOYMENT_INCARNATION_ID_PREFIX = 'wic1';
-export const DEPLOYMENT_ACTION_ID_PREFIX = 'wda1';
+export const DEPLOYMENT_ACTION_ID_PREFIX = 'wda2';
 export const DEPLOYMENT_RESOURCE_BINDING_SCHEMA_VERSION = 1;
 export const DEPLOYMENT_RESOURCE_BINDING_KIND = 'deploymentResourceBinding';
 export const DEPLOYMENT_RESOURCE_BINDING_ID_DOMAIN =

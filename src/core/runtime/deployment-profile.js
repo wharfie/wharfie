@@ -19,7 +19,7 @@ export const DEPLOYMENT_MODE = Object.freeze({
   version: 1,
 });
 export const DEPLOYMENT_PROVIDER_KIND = 'aws';
-export const DEPLOYMENT_PROVIDER_CONTRACT_VERSION = 1;
+export const DEPLOYMENT_PROVIDER_CONTRACT_VERSION = 2;
 export const DEPLOYMENT_CAPABILITY_IDS = Object.freeze({
   node: 'resident-node',
   applicationState: 'application-state',
@@ -79,7 +79,10 @@ export const AWS_SINGLE_NODE_CONFIGURATION = deepFreeze({
     storage: 'private-provider-object',
     onDestroy: 'purge',
   },
-  runtimeIdentity: { management: 'managed', kind: 'host-ssm-only' },
+  runtimeIdentity: {
+    management: 'managed',
+    kind: 'host-ssm-artifact-read-health-write',
+  },
   networking: {
     management: 'managed',
     kind: 'public-egress-no-ingress',
@@ -96,7 +99,7 @@ export const AWS_SINGLE_NODE_CONFIGURATION = deepFreeze({
  * @property {string} appId - Application allowed to use this profile.
  * @property {import('./build-target.js').BuildTarget} target - Exact artifact target.
  * @property {{kind: 'single-node-systemd-user', version: 1}} mode - Fixed first deployment mode.
- * @property {{kind: 'aws', contractVersion: 1, scope: {region: string}, configuration: typeof AWS_SINGLE_NODE_CONFIGURATION}} provider - Fixed finite AWS fulfillment choice.
+ * @property {{kind: 'aws', contractVersion: 2, scope: {region: string}, configuration: typeof AWS_SINGLE_NODE_CONFIGURATION}} provider - Fixed finite AWS fulfillment choice.
  */
 
 /**
@@ -244,7 +247,7 @@ function validateProvider(value, valuePath) {
     throw new TypeError(`${valuePath}.kind must be 'aws'.`);
   }
   if (provider.contractVersion !== DEPLOYMENT_PROVIDER_CONTRACT_VERSION) {
-    throw new TypeError(`${valuePath}.contractVersion must be the integer 1.`);
+    throw new TypeError(`${valuePath}.contractVersion must be the integer 2.`);
   }
   const scope = cloneJsonObject(provider.scope, `${valuePath}.scope`);
   assertAllKeys(scope, SCOPE_KEYS, `${valuePath}.scope`);
