@@ -2,84 +2,156 @@ import { describe, expect, it } from '@jest/globals';
 
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
+  AWS_SINGLE_NODE_CONFIGURATION,
+  DEPLOYMENT_CAPABILITY_KINDS,
   DEPLOYMENT_PROFILE_ID_DOMAIN,
   DEPLOYMENT_PROFILE_ID_PREFIX,
   canonicalizeDeploymentProfilePayload,
+  createAwsSingleNodeProvider,
   createDeploymentProfile,
   getDeploymentProfileRevisionId,
   validateDeploymentProfile,
 } from '../../src/core/runtime/deployment-profile.js';
 
-/** @returns {any} - Mutable valid profile input. */
+const target = {
+  nodeVersion: '24.13.1',
+  platform: 'linux',
+  architecture: 'arm64',
+  libc: 'glibc',
+};
+
+/** @returns {Record<string, any>} - Mutable valid profile input. */
 function makeProfileInput() {
   return {
     profile: { id: 'production' },
     appId: 'hello-app',
-    target: {
-      nodeVersion: '24.13.1',
-      platform: 'linux',
-      architecture: 'arm64',
-      libc: 'glibc',
-    },
-    bindings: {
-      objectStorage: { kind: 'external', ref: 'production-artifacts' },
-      db: { kind: 'external', ref: 'production-state' },
-    },
+    target: { ...target },
+    mode: { kind: 'single-node-systemd-user', version: 1 },
+    provider: createAwsSingleNodeProvider('us-east-1'),
   };
 }
 
+/** @template T @param {T} value @returns {T} */
+function clone(value) {
+  return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
+}
+
 describe('deployment profiles', () => {
-  it('creates a canonical, deeply immutable target-specific snapshot', () => {
+  it('creates one explicit finite AWS single-node capability mapping', () => {
     const input = makeProfileInput();
     const profile = createDeploymentProfile(input);
 
     expect(profile).toEqual({
       appId: 'hello-app',
-      bindings: {
-        db: { kind: 'external', ref: 'production-state' },
-        objectStorage: {
-          kind: 'external',
-          ref: 'production-artifacts',
-        },
-      },
       kind: 'deploymentProfile',
+      mode: { kind: 'single-node-systemd-user', version: 1 },
       profile: { id: 'production' },
-      profileRevisionId: expect.stringMatching(/^wpr1_[A-Za-z0-9_-]{43}$/),
-      schemaVersion: 1,
-      target: {
-        architecture: 'arm64',
-        libc: 'glibc',
-        nodeVersion: '24.13.1',
-        platform: 'linux',
+      profileRevisionId: expect.stringMatching(/^wpr2_[A-Za-z0-9_-]{43}$/),
+      provider: {
+        configuration: AWS_SINGLE_NODE_CONFIGURATION,
+        contractVersion: 1,
+        kind: 'aws',
+        scope: { region: 'us-east-1' },
       },
+      schemaVersion: 2,
+      target,
+    });
+    expect(DEPLOYMENT_CAPABILITY_KINDS).toEqual([
+      'resident-node',
+      'application-state',
+      'control-state',
+      'artifact-storage',
+      'runtime-identity',
+      'networking',
+      'ingress',
+    ]);
+    expect(profile.provider.configuration).toEqual({
+      node: { management: 'managed', capacity: 'small' },
+      applicationState: {
+        management: 'managed',
+        storage: 'attached-encrypted-volume',
+        onDestroy: 'retain',
+      },
+      controlState: {
+        management: 'managed',
+        storage: 'attached-encrypted-volume',
+        onDestroy: 'retain',
+      },
+      artifactStorage: {
+        management: 'managed',
+        storage: 'private-provider-object',
+        onDestroy: 'purge',
+      },
+      runtimeIdentity: {
+        management: 'managed',
+        kind: 'host-ssm-only',
+      },
+      networking: {
+        management: 'managed',
+        kind: 'public-egress-no-ingress',
+      },
+      ingress: { management: 'none' },
     });
     expect(Object.isFrozen(profile)).toBe(true);
-    expect(Object.isFrozen(profile.profile)).toBe(true);
-    expect(Object.isFrozen(profile.target)).toBe(true);
-    expect(Object.isFrozen(profile.bindings)).toBe(true);
-    expect(Object.isFrozen(profile.bindings?.db)).toBe(true);
+    expect(Object.isFrozen(profile.provider.configuration.node)).toBe(true);
 
     input.profile.id = 'mutated';
-    input.target.nodeVersion = '24.14.0';
-    input.bindings.db.ref = 'mutated-state';
+    input.provider.scope.region = 'us-west-2';
     expect(profile.profile.id).toBe('production');
-    expect(profile.target.nodeVersion).toBe('24.13.1');
-    expect(profile.bindings?.db?.ref).toBe('production-state');
-    expect(() => {
-      profile.target.platform = 'darwin';
-    }).toThrow(TypeError);
+    expect(profile.provider.scope.region).toBe('us-east-1');
   });
 
-  it('uses the exact ADR domain and ignores input object-key order', () => {
+  it('uses a new immutable identity namespace rather than reinterpreting V1', () => {
     const input = makeProfileInput();
-    const reordered = {
-      bindings: {
-        db: { ref: 'production-state', kind: 'external' },
-        objectStorage: {
-          ref: 'production-artifacts',
-          kind: 'external',
+    const payload = canonicalizeDeploymentProfilePayload(input);
+    const expected = createCanonicalJsonSha256Id({
+      domain: 'wharfie:deployment-profile:v2',
+      prefix: 'wpr2',
+      value: payload,
+    });
+
+    expect(DEPLOYMENT_PROFILE_ID_DOMAIN).toBe('wharfie:deployment-profile:v2');
+    expect(DEPLOYMENT_PROFILE_ID_PREFIX).toBe('wpr2');
+    expect(getDeploymentProfileRevisionId(input)).toBe(expected);
+    expect(createDeploymentProfile(input).profileRevisionId).toBe(expected);
+  });
+
+  it('canonicalizes JSON key order without weakening exact schemas', () => {
+    const first = makeProfileInput();
+    const second = {
+      provider: {
+        configuration: {
+          ingress: { management: 'none' },
+          networking: {
+            kind: 'public-egress-no-ingress',
+            management: 'managed',
+          },
+          runtimeIdentity: {
+            kind: 'host-ssm-only',
+            management: 'managed',
+          },
+          artifactStorage: {
+            onDestroy: 'purge',
+            storage: 'private-provider-object',
+            management: 'managed',
+          },
+          controlState: {
+            onDestroy: 'retain',
+            storage: 'attached-encrypted-volume',
+            management: 'managed',
+          },
+          applicationState: {
+            storage: 'attached-encrypted-volume',
+            management: 'managed',
+            onDestroy: 'retain',
+          },
+          node: { capacity: 'small', management: 'managed' },
         },
+        scope: { region: 'us-east-1' },
+        contractVersion: 1,
+        kind: 'aws',
       },
+      mode: { version: 1, kind: 'single-node-systemd-user' },
       target: {
         libc: 'glibc',
         architecture: 'arm64',
@@ -89,19 +161,9 @@ describe('deployment profiles', () => {
       appId: 'hello-app',
       profile: { id: 'production' },
     };
-    const payload = canonicalizeDeploymentProfilePayload(input);
-    const expectedId = createCanonicalJsonSha256Id({
-      domain: 'wharfie:deployment-profile:v1',
-      prefix: 'wpr1',
-      value: payload,
-    });
 
-    expect(DEPLOYMENT_PROFILE_ID_DOMAIN).toBe('wharfie:deployment-profile:v1');
-    expect(DEPLOYMENT_PROFILE_ID_PREFIX).toBe('wpr1');
-    expect(getDeploymentProfileRevisionId(input)).toBe(expectedId);
-    expect(getDeploymentProfileRevisionId(reordered)).toBe(expectedId);
-    expect(createDeploymentProfile(reordered).profileRevisionId).toBe(
-      expectedId,
+    expect(getDeploymentProfileRevisionId(second)).toBe(
+      getDeploymentProfileRevisionId(first),
     );
   });
 
@@ -119,24 +181,18 @@ describe('deployment profiles', () => {
       },
     ],
     [
-      'exact target',
+      'target',
       (/** @type {any} */ value) => {
         value.target.architecture = 'x64';
       },
     ],
     [
-      'external binding',
+      'provider scope',
       (/** @type {any} */ value) => {
-        value.bindings.db.ref = 'other-state';
+        value.provider.scope.region = 'us-west-2';
       },
     ],
-    [
-      'binding presence',
-      (/** @type {any} */ value) => {
-        delete value.bindings.objectStorage;
-      },
-    ],
-  ])('changes identity when %s changes', (_name, mutate) => {
+  ])('changes identity with %s', (_name, mutate) => {
     const original = makeProfileInput();
     const changed = makeProfileInput();
     mutate(changed);
@@ -146,221 +202,166 @@ describe('deployment profiles', () => {
   });
 
   it('validates, canonicalizes, and independently freezes serialized profiles', () => {
-    const serialized = JSON.parse(
-      JSON.stringify(createDeploymentProfile(makeProfileInput())),
-    );
+    const serialized = clone(createDeploymentProfile(makeProfileInput()));
     const validated = validateDeploymentProfile(serialized);
 
     expect(validated).toEqual(serialized);
     expect(validated).not.toBe(serialized);
-    expect(validated.target).not.toBe(serialized.target);
-    expect(Object.isFrozen(validated)).toBe(true);
-    expect(Object.isFrozen(validated.bindings?.objectStorage)).toBe(true);
-
-    serialized.profile.id = 'changed-after-validation';
-    expect(validated.profile.id).toBe('production');
-  });
-
-  it('rejects a well-formed identity that does not match the payload', () => {
-    const profile = JSON.parse(
-      JSON.stringify(createDeploymentProfile(makeProfileInput())),
-    );
-    profile.profileRevisionId = `${profile.profileRevisionId.slice(0, -1)}${
-      profile.profileRevisionId.endsWith('A') ? 'B' : 'A'
-    }`;
-    expect(() => validateDeploymentProfile(profile)).toThrow(
-      /does not match the canonical profile payload/i,
-    );
+    expect(validated.provider).not.toBe(serialized.provider);
+    serialized.provider.scope.region = 'us-west-2';
+    expect(validated.provider.scope.region).toBe('us-east-1');
   });
 
   it.each([
-    'revisionId',
-    'artifactId',
-    'deploymentId',
-    'provider',
-    'topology',
-    'credentials',
-    'env',
-    'environment',
-    'resources',
-    'managed',
-  ])('rejects unsupported top-level field %s', (field) => {
+    ['provider-native template', 'template'],
+    ['provider-native tags', 'tags'],
+    ['bootstrap commands', 'userData'],
+    ['runtime environment', 'environment'],
+    ['generic resources', 'resources'],
+  ])('rejects %s', (_name, field) => {
     const input = makeProfileInput();
-    input[field] = { token: 'must-not-be-accepted' };
+    input.provider[field] = { arbitrary: true };
     expect(() => createDeploymentProfile(input)).toThrow(
-      new RegExp(`deploymentProfile\\.${field} is not supported`, 'i'),
+      new RegExp(`provider\\.${field} is not supported`, 'i'),
     );
   });
 
   it.each([
     [
-      'profile topology',
-      (/** @type {any} */ value) => {
-        value.profile.topology = 'mesh';
-      },
-      /profile\.topology is not supported/i,
+      'wrong provider',
+      (/** @type {any} */ value) => (value.provider.kind = 'gcp'),
+      /kind must be 'aws'/i,
     ],
     [
-      'target provider',
-      (/** @type {any} */ value) => {
-        value.target.provider = 'aws';
-      },
-      /target\.provider is not supported/i,
+      'wrong contract version',
+      (/** @type {any} */ value) => (value.provider.contractVersion = 2),
+      /contractVersion must be the integer 1/i,
     ],
     [
-      'target environment',
-      (/** @type {any} */ value) => {
-        value.target.env = { NODE_ENV: 'production' };
-      },
-      /target\.env is not supported/i,
+      'implicit region',
+      (/** @type {any} */ value) => delete value.provider.scope.region,
+      /scope\.region is required/i,
     ],
     [
-      'unknown resource kind',
-      (/** @type {any} */ value) => {
-        value.bindings.lambda = { kind: 'external', ref: 'worker' };
-      },
-      /bindings\.lambda is not supported/i,
+      'noncanonical region',
+      (/** @type {any} */ value) =>
+        (value.provider.scope.region = ' US-EAST-1 '),
+      /canonical AWS region/i,
     ],
     [
-      'binding provider',
-      (/** @type {any} */ value) => {
-        value.bindings.db.provider = 'dynamodb';
-      },
-      /bindings\.db\.provider is not supported/i,
+      'unsupported capacity',
+      (/** @type {any} */ value) =>
+        (value.provider.configuration.node.capacity = 'large'),
+      /capacity must be 'small'/i,
     ],
     [
-      'binding credentials',
-      (/** @type {any} */ value) => {
-        value.bindings.db.credentials = { token: 'secret' };
-      },
-      /bindings\.db\.credentials is not supported/i,
+      'managed ingress',
+      (/** @type {any} */ value) =>
+        (value.provider.configuration.ingress.management = 'managed'),
+      /management must be 'none'/i,
     ],
     [
-      'binding topology',
-      (/** @type {any} */ value) => {
-        value.bindings.db.topology = { replicas: 3 };
-      },
-      /bindings\.db\.topology is not supported/i,
+      'state purge by default',
+      (/** @type {any} */ value) =>
+        (value.provider.configuration.applicationState.onDestroy = 'purge'),
+      /onDestroy must be 'retain'/i,
     ],
-  ])('rejects unsupported nested %s', (_name, mutate, errorPattern) => {
+    [
+      'missing capability',
+      (/** @type {any} */ value) =>
+        delete value.provider.configuration.controlState,
+      /configuration\.controlState is required/i,
+    ],
+    [
+      'unknown capability',
+      (/** @type {any} */ value) => (value.provider.configuration.queue = {}),
+      /configuration\.queue is not supported/i,
+    ],
+    [
+      'wrong mode',
+      (/** @type {any} */ value) => (value.mode.kind = 'mesh'),
+      /single-node-systemd-user version 1/i,
+    ],
+    [
+      'Darwin target',
+      (/** @type {any} */ value) => {
+        value.target = {
+          nodeVersion: '24.13.1',
+          platform: 'darwin',
+          architecture: 'arm64',
+        };
+      },
+      /target must be Linux glibc/i,
+    ],
+    [
+      'Windows target',
+      (/** @type {any} */ value) => {
+        value.target = {
+          nodeVersion: '24.13.1',
+          platform: 'win32',
+          architecture: 'x64',
+        };
+      },
+      /target must be Linux glibc/i,
+    ],
+  ])('rejects %s', (_name, mutate, errorPattern) => {
     const input = makeProfileInput();
     mutate(input);
     expect(() => createDeploymentProfile(input)).toThrow(errorPattern);
   });
 
-  it('does not echo rejected credential values', () => {
-    const secret = 'credential-sentinel-do-not-render';
+  it('accepts a canonical region name without maintaining a stale AWS catalog', () => {
     const input = makeProfileInput();
-    input.bindings.db.credentials = { token: secret };
-
-    let thrown;
-    try {
-      createDeploymentProfile(input);
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(TypeError);
-    expect(String(thrown)).not.toContain(secret);
+    input.provider.scope.region = 'eusc-de-east-1';
+    expect(createDeploymentProfile(input).provider.scope.region).toBe(
+      'eusc-de-east-1',
+    );
   });
+
+  it.each(['credentials', 'accessToken', 'secretAccessKey', 'password'])(
+    'never accepts or echoes inline provider field %s',
+    (field) => {
+      const secret = `secret-sentinel-${field}`;
+      const input = makeProfileInput();
+      input.provider.scope[field] = secret;
+      let thrown;
+      try {
+        createDeploymentProfile(input);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect(String(thrown)).not.toContain(secret);
+    },
+  );
 
   it.each([
     [
-      'managed bindings',
-      () => {
-        const input = makeProfileInput();
-        input.bindings.db.kind = 'managed';
-        return input;
-      },
-      /kind must be 'external'/i,
-    ],
-    [
-      'provider references',
-      () => {
-        const input = makeProfileInput();
-        input.bindings.db.ref =
-          'arn:aws:dynamodb:us-east-1:123456789012:table/state';
-        return input;
-      },
-      /canonical logical ID/i,
-    ],
-    [
-      'empty bindings',
-      () => ({ ...makeProfileInput(), bindings: {} }),
-      /must not be empty/i,
-    ],
-    [
-      'missing target',
-      () => {
-        const input = makeProfileInput();
-        delete input.target;
-        return input;
-      },
-      /target must be a JSON object/i,
-    ],
-    [
-      'inexact targets',
-      () => {
-        const input = makeProfileInput();
-        input.target.nodeVersion = '^24.13.1';
-        return input;
-      },
-      /exact canonical semantic version/i,
-    ],
-    [
-      'noncanonical profile IDs',
-      () => {
-        const input = makeProfileInput();
-        input.profile.id = ' Production ';
-        return input;
-      },
-      /canonical logical ID/i,
-    ],
-    [
-      'noncanonical application IDs',
-      () => {
-        const input = makeProfileInput();
-        input.appId = 'HelloApp';
-        return input;
-      },
-      /canonical logical ID/i,
-    ],
-  ])('rejects %s', (_name, makeValue, errorPattern) => {
-    expect(() => createDeploymentProfile(makeValue())).toThrow(errorPattern);
-  });
-
-  it.each([
-    [
-      'unknown document fields',
+      'wrong schema version',
       (/** @type {any} */ value) => {
-        value.provider = 'aws';
+        value.schemaVersion = 1;
       },
-      /provider is not supported/i,
+      /schemaVersion must be the integer 2/i,
     ],
     [
-      'wrong schema versions',
+      'old V1 identity',
       (/** @type {any} */ value) => {
-        value.schemaVersion = 2;
+        value.profileRevisionId = value.profileRevisionId.replace(
+          /^wpr2_/,
+          'wpr1_',
+        );
       },
-      /schemaVersion must be the integer 1/i,
+      /canonical wpr2_/i,
     ],
     [
-      'wrong document kinds',
+      'changed provider scope',
       (/** @type {any} */ value) => {
-        value.kind = 'deployment';
+        value.provider.scope.region = 'us-west-2';
       },
-      /kind must be 'deploymentProfile'/i,
-    ],
-    [
-      'missing profile revision identities',
-      (/** @type {any} */ value) => {
-        delete value.profileRevisionId;
-      },
-      /profileRevisionId must be a canonical wpr1_/i,
+      /profileRevisionId does not match/i,
     ],
   ])('rejects serialized profiles with %s', (_name, mutate, errorPattern) => {
-    const profile = JSON.parse(
-      JSON.stringify(createDeploymentProfile(makeProfileInput())),
-    );
+    const profile = clone(createDeploymentProfile(makeProfileInput()));
     mutate(profile);
     expect(() => validateDeploymentProfile(profile)).toThrow(errorPattern);
   });

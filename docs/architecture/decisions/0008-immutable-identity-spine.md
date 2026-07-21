@@ -163,6 +163,10 @@ running; it does not treat that runtime observation as an embedded self-claim.
 
 ### Deployment profiles
 
+> **Superseded for managed deployment:** ADR 0021 introduces the fresh strict
+> `DeploymentProfileV2`/`wpr2` namespace. The V1 definition below remains the
+> historical meaning of `wpr1` and is never reinterpreted.
+
 `DeploymentProfileV1` is deliberately narrow. It contains only:
 
 - a human-authored `profile.id` using Wharfie's canonical logical-ID grammar;

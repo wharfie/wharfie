@@ -1,6 +1,9 @@
 # Wharfie roadmap
 
-**Status:** Linux SEA systemd user-service crash/reboot and two-release activation recovery are proven on a real host; stale-runtime cleanup and provider-backed self-deployment are next · **Last updated:** 2026-07-20
+**Status:** The strict single-node deployment identity, inspection, planning,
+and crash-recovery protocol is proven against a deterministic provider; the
+provider-backed AWS control store and driver are next · **Last updated:**
+2026-07-20
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -474,6 +477,13 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 
 **Goal:** let an application create only the substrate it needs and operate itself on one remote node.
 
+- [x] Establish the strict V2 single-node AWS profile, deployment revision,
+      credential-derived provider scope, owned-resource binding, inspection,
+      deterministic plan, durable head, and provider-neutral crash-resumable
+      controller contracts. A deterministic fake proves stale-plan refusal,
+      CAS races, response-loss recovery, and exact final inspection without
+      claiming that cloud resources exist.
+
 - [ ] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, runtime identity/secret references, networking, and optional ingress.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
 - [ ] Define the provider contract for `plan`, `apply`, `inspect`, `reconcile`, and `destroy`.
@@ -562,15 +572,24 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-1. Add the smallest provider-backed path that can create, inspect, update, and
-   remove one durable node through the operator's credential chain.
-2. Begin provider-backed coordinator recovery only after the single-node
+1. Implement the smallest provider-backed control store and fixed AWS driver
+   that can create, inspect, update, and remove one durable node through the
+   operator's credential chain, reusing the strict recovery protocol already
+   proven against the deterministic provider.
+2. Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
+   `destroy` commands, requiring apply and reconcile to re-observe the
+   currently running SEA.
+3. Prove the complete lifecycle in a clean account through the user's ordinary
+   credential chain, including interruption and response-loss recovery.
+4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [bounded packaged-runtime extraction
-checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md).
-Its parent is the [real-host activation proof
+The current restart point is the [recoverable deployment-controller
+checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md).
+Its parent is the [bounded packaged-runtime extraction
+checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md), whose
+parent is the [real-host activation proof
 checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md), whose
 parent is the [recoverable systemd activation
 checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md),

@@ -152,13 +152,21 @@ Multi-host leases and heartbeats and public run history/listing are still later
 work. The npm package remains deliberately private. It is not ready for
 production use.
 
+The first provider deployment authority is now defined in pure core. A strict
+AWS-shaped one-node profile, running-SEA deployment identity, exact provider
+scope and ownership bindings, deterministic plans and inspections, and a CAS
+deployment head support crash-resumable convergence against a deterministic
+fake. The provider-backed store, AWS driver, operator commands, and
+clean-account proof remain unfinished.
+
 ## Start here
 
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Bounded runtime extraction checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md) — the current handoff for crash-safe packaged native extraction cleanup and the provider-backed next vertical.
+- [Recoverable deployment-controller checkpoint](llm/checkpoints/2026-07-20-v20-recoverable-deployment-controller.md) — the current handoff for strict single-node deployment identity, planning, ownership, and provider-neutral crash recovery.
+- [Bounded runtime extraction checkpoint](llm/checkpoints/2026-07-20-v19-bounded-runtime-extraction.md) — the preceding handoff for crash-safe packaged native extraction cleanup and the provider-backed next vertical.
 - [Real-host activation proof checkpoint](llm/checkpoints/2026-07-20-v18-real-host-activation-proof.md) — the preceding handoff for checksummed two-release update, rollback, response-loss, and failed-target source-restoration evidence.
 - [Recoverable systemd activation checkpoint](llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md) — the preceding handoff for durable single-node release activation and manager/CLI integration.
 - [Systemd reboot-proof checkpoint](llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md) — the preceding handoff for checksummed real-VM crash, boot, workflow-continuation, lifecycle, and uninstall evidence.
