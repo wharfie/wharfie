@@ -49,6 +49,7 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
 const NETWORK_RESOURCE_METHODS = Object.freeze([
   'attachInternetGateway',
   'createInternetGateway',
+  'createRoute',
   'createRouteTable',
   'createSubnet',
   'createVpc',
@@ -59,6 +60,7 @@ const NETWORK_RESOURCE_METHODS = Object.freeze([
   'describeVpcAttribute',
   'detachInternetGateway',
   'deleteInternetGateway',
+  'deleteRoute',
   'deleteRouteTable',
   'deleteSubnet',
   'deleteVpc',
@@ -155,6 +157,7 @@ async function loadHarness({
           input,
         };
       }
+      if (method === 'createRoute') return { Return: true, input };
       if (method === 'createRouteTable') {
         return {
           RouteTable: { RouteTableId: 'rtb-00000000000000001' },
@@ -179,6 +182,7 @@ async function loadHarness({
       if (method === 'attachInternetGateway') return { input };
       if (method === 'detachInternetGateway') return { input };
       if (method === 'deleteInternetGateway') return { input };
+      if (method === 'deleteRoute') return { Return: true, input };
       if (method === 'deleteRouteTable') return { input };
       if (method === 'deleteSubnet') return { input };
       if (method === 'deleteVpc') return { input };
@@ -310,6 +314,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    CreateRouteCommand: class CreateRouteCommand {
+      input;
+      operation = 'createRoute';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateRouteTableCommand: class CreateRouteTableCommand {
       input;
       operation = 'createRouteTable';
@@ -409,6 +421,14 @@ async function loadHarness({
     DeleteInternetGatewayCommand: class DeleteInternetGatewayCommand {
       input;
       operation = 'deleteInternetGateway';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DeleteRouteCommand: class DeleteRouteCommand {
+      input;
+      operation = 'deleteRoute';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -1062,6 +1082,15 @@ describe('AWS deployment invocation authority', () => {
         },
         input: createInternetGatewayInput,
       });
+      const createRouteInput = {
+        DestinationCidrBlock: '0.0.0.0/0',
+        GatewayId: 'igw-00000000000000001',
+        RouteTableId: 'rtb-00000000000000001',
+      };
+      await expect(client.createRoute(createRouteInput)).resolves.toEqual({
+        Return: true,
+        input: createRouteInput,
+      });
       const createInput = { CidrBlock: '10.42.0.0/16' };
       await expect(client.createVpc(createInput)).resolves.toMatchObject({
         Vpc: { VpcId: 'vpc-00000000000000001' },
@@ -1144,6 +1173,14 @@ describe('AWS deployment invocation authority', () => {
       await expect(
         client.deleteInternetGateway(deleteInternetGatewayInput),
       ).resolves.toEqual({ input: deleteInternetGatewayInput });
+      const deleteRouteInput = {
+        DestinationCidrBlock: '0.0.0.0/0',
+        RouteTableId: 'rtb-00000000000000001',
+      };
+      await expect(client.deleteRoute(deleteRouteInput)).resolves.toEqual({
+        Return: true,
+        input: deleteRouteInput,
+      });
       const deleteRouteTableInput = {
         RouteTableId: 'rtb-00000000000000001',
       };
@@ -1163,6 +1200,7 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.ec2Send.mock.calls).toEqual([
         ['attachInternetGateway', attachmentInput],
         ['createInternetGateway', createInternetGatewayInput],
+        ['createRoute', createRouteInput],
         ['createVpc', createInput],
         ['createRouteTable', createRouteTableInput],
         ['createSubnet', createSubnetInput],
@@ -1173,6 +1211,7 @@ describe('AWS deployment invocation authority', () => {
         ['describeVpcAttribute', attributeInput],
         ['detachInternetGateway', detachInput],
         ['deleteInternetGateway', deleteInternetGatewayInput],
+        ['deleteRoute', deleteRouteInput],
         ['deleteRouteTable', deleteRouteTableInput],
         ['deleteSubnet', deleteSubnetInput],
         ['deleteVpc', deleteInput],
@@ -1210,6 +1249,9 @@ describe('AWS deployment invocation authority', () => {
     ['IncorrectState', 'deleteVpc', 400],
     ['Gateway.NotAttached', 'detachInternetGateway', 400],
     ['Resource.AlreadyAssociated', 'attachInternetGateway', 400],
+    ['RouteAlreadyExists', 'createRoute', 400],
+    ['InvalidGatewayID.NotFound', 'createRoute', 400],
+    ['InvalidRoute.NotFound', 'deleteRoute', 400],
   ])(
     'preserves only the %s network resource classification',
     async (name, method, status) => {

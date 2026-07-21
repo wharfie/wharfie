@@ -4,11 +4,13 @@ import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import {
   AttachInternetGatewayCommand,
   CreateInternetGatewayCommand,
+  CreateRouteCommand,
   CreateRouteTableCommand,
   CreateSubnetCommand,
   CreateVpcCommand,
   CreateVolumeCommand,
   DeleteInternetGatewayCommand,
+  DeleteRouteCommand,
   DeleteRouteTableCommand,
   DeleteSubnetCommand,
   DeleteVpcCommand,
@@ -107,12 +109,15 @@ const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'Gateway.NotAttached',
   'IdempotentParameterMismatch',
   'IncorrectState',
+  'InvalidGatewayID.NotFound',
   'InvalidInternetGatewayID.NotFound',
+  'InvalidRoute.NotFound',
   'InvalidRouteTableID.NotFound',
   'InvalidSubnetID.NotFound',
   'InvalidSubnetId.NotFound',
   'InvalidVpcID.NotFound',
   'Resource.AlreadyAssociated',
+  'RouteAlreadyExists',
 ]);
 const S3_CONTROL_ERROR_NAMES = new Set([
   'ConditionalRequestConflict',
@@ -146,6 +151,7 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @typedef NetworkResourceClient
  * @property {(input: import('@aws-sdk/client-ec2').AttachInternetGatewayCommandInput) => Promise<any>} attachInternetGateway - Attach one exact internet gateway to one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput) => Promise<any>} createInternetGateway - Create one exact internet gateway.
+ * @property {(input: import('@aws-sdk/client-ec2').CreateRouteCommandInput) => Promise<any>} createRoute - Create one exact route.
  * @property {(input: import('@aws-sdk/client-ec2').CreateRouteTableCommandInput) => Promise<any>} createRouteTable - Create one exact route table.
  * @property {(input: import('@aws-sdk/client-ec2').CreateSubnetCommandInput) => Promise<any>} createSubnet - Create one exact subnet.
  * @property {(input: import('@aws-sdk/client-ec2').CreateVpcCommandInput) => Promise<any>} createVpc - Create one exact VPC.
@@ -156,6 +162,7 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVpcAttributeCommandInput) => Promise<any>} describeVpcAttribute - Read one exact VPC attribute.
  * @property {(input: import('@aws-sdk/client-ec2').DetachInternetGatewayCommandInput) => Promise<any>} detachInternetGateway - Detach one exact internet gateway from one exact VPC.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput) => Promise<any>} deleteInternetGateway - Delete one exact internet gateway.
+ * @property {(input: import('@aws-sdk/client-ec2').DeleteRouteCommandInput) => Promise<any>} deleteRoute - Delete one exact route.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteRouteTableCommandInput) => Promise<any>} deleteRouteTable - Delete one exact route table.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteSubnetCommandInput) => Promise<any>} deleteSubnet - Delete one exact subnet.
  * @property {(input: import('@aws-sdk/client-ec2').DeleteVpcCommandInput) => Promise<any>} deleteVpc - Delete one exact VPC.
@@ -893,6 +900,9 @@ export async function createAwsDeploymentAuthority(options) {
       createInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new CreateInternetGatewayCommand(input))),
+      createRoute: (
+        /** @type {import('@aws-sdk/client-ec2').CreateRouteCommandInput} */ input,
+      ) => call(() => client.send(new CreateRouteCommand(input))),
       createRouteTable: (
         /** @type {import('@aws-sdk/client-ec2').CreateRouteTableCommandInput} */ input,
       ) => call(() => client.send(new CreateRouteTableCommand(input))),
@@ -923,6 +933,9 @@ export async function createAwsDeploymentAuthority(options) {
       deleteInternetGateway: (
         /** @type {import('@aws-sdk/client-ec2').DeleteInternetGatewayCommandInput} */ input,
       ) => call(() => client.send(new DeleteInternetGatewayCommand(input))),
+      deleteRoute: (
+        /** @type {import('@aws-sdk/client-ec2').DeleteRouteCommandInput} */ input,
+      ) => call(() => client.send(new DeleteRouteCommand(input))),
       deleteRouteTable: (
         /** @type {import('@aws-sdk/client-ec2').DeleteRouteTableCommandInput} */ input,
       ) => call(() => client.send(new DeleteRouteTableCommand(input))),
