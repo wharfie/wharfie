@@ -97,6 +97,16 @@ const S3_CONTROL_OPERATION_ERROR =
   'AWS deployment S3 control operation failed.';
 const S3_CONTROL_CLOSED_ERROR = 'AWS deployment S3 control client is closed.';
 const S3_CONTROL_CLOSE_ERROR = 'AWS deployment S3 control client close failed.';
+const MANAGED_ARTIFACT_RESOURCE_CREATION_ERROR =
+  'AWS deployment managed-artifact resource client creation failed.';
+const MANAGED_ARTIFACT_RESOURCE_OPERATION_ERROR =
+  'AWS deployment managed-artifact resource operation failed.';
+const MANAGED_ARTIFACT_RESOURCE_CLOSED_ERROR =
+  'AWS deployment managed-artifact resource client is closed.';
+const MANAGED_ARTIFACT_RESOURCE_CLOSE_ERROR =
+  'AWS deployment managed-artifact resource client close failed.';
+const MANAGED_ARTIFACT_RESOURCE_VERSION_ERROR =
+  'AWS deployment managed-artifact delete requires an exact non-null object version ID.';
 const PROVIDER_SPEC_READ_CREATION_ERROR =
   'AWS deployment provider-spec read client creation failed.';
 const PROVIDER_SPEC_READ_OPERATION_ERROR =
@@ -183,6 +193,17 @@ const S3_CONTROL_ERROR_NAMES = new Set([
   'ReplicationConfigurationNotFoundError',
   'ServerSideEncryptionConfigurationNotFoundError',
 ]);
+const MANAGED_ARTIFACT_RESOURCE_ERROR_NAMES = new Set([
+  'BadDigest',
+  'ConditionalRequestConflict',
+  'InvalidObjectState',
+  'NoSuchBucket',
+  'NoSuchKey',
+  'NoSuchVersion',
+  'NotFound',
+  'PreconditionFailed',
+]);
+const S3_VERSION_ID_MAX_UTF8_BYTES = 1024;
 
 /**
  * @typedef DynamoDBControlClient
@@ -192,6 +213,15 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-dynamodb').DescribeTimeToLiveCommandInput) => Promise<any>} describeTimeToLive - Read TTL state.
  * @property {(input: import('@aws-sdk/client-dynamodb').ListTagsOfResourceCommandInput) => Promise<any>} listTagsOfResource - Read table tags.
  * @property {(input: import('@aws-sdk/client-dynamodb').UpdateContinuousBackupsCommandInput) => Promise<any>} updateContinuousBackups - Strengthen backup state.
+ * @property {() => Promise<void>} close - Close the caller-owned SDK client.
+ */
+
+/**
+ * @typedef ManagedArtifactResourceClient
+ * @property {(input: import('@aws-sdk/client-s3').CopyObjectCommandInput) => Promise<any>} copyObject - Conditionally copy one exact staged version to its managed current key.
+ * @property {(input: import('@aws-sdk/client-s3').HeadObjectCommandInput) => Promise<any>} headObject - Read exact current or versioned object metadata.
+ * @property {(input: import('@aws-sdk/client-s3').ListObjectVersionsCommandInput) => Promise<any>} listObjectVersions - Enumerate bounded managed-key history for purge.
+ * @property {(input: import('@aws-sdk/client-s3').DeleteObjectCommandInput & {VersionId: string}) => Promise<any>} deleteObjectVersion - Permanently delete one exact object version or delete marker without creating a delete marker.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
 
@@ -328,6 +358,57 @@ function sanitizeS3ControlError(value) {
     error.$metadata = Object.freeze({ httpStatusCode: status });
   }
   return error;
+}
+
+/**
+ * Preserve only the S3 classifications needed for conditional publication,
+ * exact-version reads, and ownership-safe purge. Raw SDK messages, request
+ * IDs, access classifications, causes, and credential-bearing configuration
+ * never cross the narrow authority boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeManagedArtifactResourceError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(MANAGED_ARTIFACT_RESOURCE_OPERATION_ERROR)
+    );
+  error.name = MANAGED_ARTIFACT_RESOURCE_ERROR_NAMES.has(candidate.name)
+    ? candidate.name
+    : 'AwsDeploymentManagedArtifactResourceError';
+  error.code = 'AWS_DEPLOYMENT_MANAGED_ARTIFACT_RESOURCE_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
+}
+
+/** @param {unknown} value @returns {value is string} */
+function isUsableS3VersionId(value) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value === 'null' ||
+    Buffer.byteLength(value, 'utf8') > S3_VERSION_ID_MAX_UTF8_BYTES
+  ) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const low = value.charCodeAt(index + 1);
+      if (!(low >= 0xdc00 && low <= 0xdfff)) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -548,6 +629,7 @@ function scopeFromCallerIdentity(value, region) {
  *   createDynamoDB: (options?: {readOnly?: boolean}) => import('../lib/db/base.js').DBClient,
  *   createDynamoDBControlClient: () => Readonly<DynamoDBControlClient>,
  *   createS3ControlClient: () => Readonly<S3ControlClient>,
+ *   createManagedArtifactResourceClient: () => Readonly<ManagedArtifactResourceClient>,
  *   createProviderSpecReadClient: () => Readonly<ProviderSpecReadClient>,
  *   createVolumeResourceClient: () => Readonly<VolumeResourceClient>,
  *   createNetworkResourceClient: () => Readonly<NetworkResourceClient>,
@@ -801,6 +883,75 @@ export async function createAwsDeploymentAuthority(options) {
       headObject: (
         /** @type {import('@aws-sdk/client-s3').HeadObjectCommandInput} */ input,
       ) => call(() => client.headObject(input)),
+      close: closeClient,
+    });
+  }
+
+  /** @returns {Readonly<ManagedArtifactResourceClient>} - Caller-owned narrow managed-artifact client. */
+  function createManagedArtifactResourceClient() {
+    assertOpen();
+    /** @type {S3} */
+    let client;
+    try {
+      client = new S3({
+        // Conditional copy and exact-version deletion settle only through the
+        // driver's explicit readback. Hidden SDK retries must not multiply one
+        // authorized effect.
+        ...BaseAWS.config({ maxAttempts: 1 }),
+        region,
+        credentials,
+      });
+    } catch {
+      throw new Error(MANAGED_ARTIFACT_RESOURCE_CREATION_ERROR);
+    }
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) {
+        throw new Error(MANAGED_ARTIFACT_RESOURCE_CLOSED_ERROR);
+      }
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeManagedArtifactResourceError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        try {
+          client.destroy();
+        } catch {
+          throw new Error(MANAGED_ARTIFACT_RESOURCE_CLOSE_ERROR);
+        }
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      copyObject: (
+        /** @type {import('@aws-sdk/client-s3').CopyObjectCommandInput} */ input,
+      ) => call(() => client.copyObject(input)),
+      headObject: (
+        /** @type {import('@aws-sdk/client-s3').HeadObjectCommandInput} */ input,
+      ) => call(() => client.headObject(input)),
+      listObjectVersions: (
+        /** @type {import('@aws-sdk/client-s3').ListObjectVersionsCommandInput} */ input,
+      ) => call(() => client.listObjectVersions(input)),
+      deleteObjectVersion: (
+        /** @type {import('@aws-sdk/client-s3').DeleteObjectCommandInput & {VersionId: string}} */ input,
+      ) => {
+        if (!isPlainObject(input) || !isUsableS3VersionId(input.VersionId)) {
+          throw new TypeError(MANAGED_ARTIFACT_RESOURCE_VERSION_ERROR);
+        }
+        return call(() => client.deleteObject(input));
+      },
       close: closeClient,
     });
   }
@@ -1242,6 +1393,7 @@ export async function createAwsDeploymentAuthority(options) {
     createDynamoDB,
     createDynamoDBControlClient,
     createS3ControlClient,
+    createManagedArtifactResourceClient,
     createProviderSpecReadClient,
     createVolumeResourceClient,
     createNetworkResourceClient,

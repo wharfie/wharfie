@@ -599,10 +599,12 @@ permissions cannot reinterpret an existing specification.
 `DeploymentPlanV3` contains exactly one independently recoverable action for
 each graph role. Apply and reconcile use the graph's one canonical topological
 order; destroy uses its exact reverse. Reconcile may create an authoritatively
-missing role with no durable binding in an existing deployment. Each action
-repeats the exact role, provider type, ownership mode, dependencies, and
-role-level destroy policy. The volumes are retained while their attachment
-relationships are purged.
+missing role with no durable binding in an existing deployment. The managed
+artifact has the one explicit exception described below: its deterministic
+current-object identity may be recreated by an update under the original
+binding after authoritative absence. Each action repeats the exact role,
+provider type, ownership mode, dependencies, and role-level destroy policy.
+The volumes are retained while their attachment relationships are purged.
 
 `DeploymentResourceBindingV2` records the same role metadata plus exact
 dependency binding IDs. Direct resources prove provider-visible ownership;
@@ -625,6 +627,60 @@ incarnation, logical resource key, creating action ID, and an independently
 random ownership nonce. External references, when a later contract admits
 them, are verify-only and carry no manufactured ownership. Names and tags by
 themselves do not authorize update or deletion.
+
+### The managed artifact is one stable current object with bounded history authority
+
+The fixed artifact role owns exactly one incarnation-scoped S3 key:
+
+```text
+artifact/v1/<deploymentInstanceId>/<incarnationId>/current
+```
+
+The key's exact ARN is both the planned provider resource ID and the durable
+binding identity. An allocated S3 VersionId, ETag, stage intent, or stage
+receipt never changes that identity. The desired-state digest binds the exact
+deployment, profile, fixed artifact-storage contract, incarnation,
+destination, and selected application artifact using only plan-time authority; provider
+observations and staging-attempt identities are settlement evidence, not
+desired identity.
+
+Before publication, the driver revalidates the immutable stage intent and
+receipt and heads the receipt's exact staged VersionId. It requires the exact
+checksum, length, metadata, encryption, storage class, content type, and source
+ETag, then uses server-side `CopyObject` from that explicitly versioned source.
+`CopySourceIfMatch` fences the source. A fresh destination or an
+authoritatively missing current object uses `If-None-Match: *`; replacement of
+an observed current version uses that version's opaque ETag as `If-Match`.
+Neither a successful copy response nor a conditional error proves settlement.
+Only bounded exact destination readback can establish the resulting current
+VersionId and complete immutable metadata.
+
+Every create, update, and destroy first lists the complete bounded history for
+the exact key. The evidence walk admits at most sixteen 1,000-entry pages and
+16,000 exact-key entries across content versions and delete markers, rejects
+malformed or cycling cursors and impossible latest-version evidence, and heads
+every content version. All content versions must reproduce the binding's
+immutable ownership core and their own exact application state; foreign,
+malformed, or checksum-inconsistent history blocks before mutation. A fresh
+create therefore requires an empty history, except that exactly one current
+version with the same action, ownership nonce, stage receipt, and desired state
+may be adopted as response-loss recovery. It never adopts arbitrary
+pre-existing content.
+
+Destroy removes only entries from that completely audited exact-key history.
+It deletes every content version and delete marker through an explicit
+VersionId, rechecks an individual VersionId after an ambiguous delete response,
+and settles only when the exact history is empty. It never sends an
+unversioned delete that could merely install another marker.
+
+The artifact is the sole fixed-graph resource allowed to remain durably bound
+while its current provider object is authoritatively absent. Reconcile models
+that repair as `update`, preserves the stable ARN, binding receipt, and
+ownership nonce, and conditionally recreates the current object only after the
+same full history audit. A retained exact-key delete marker is compatible with
+that audit; foreign or malformed content is not. Every other bound resource
+still blocks on missing current state unless a later accepted contract grants
+it an equally explicit recreation rule.
 
 ### Plans are previews, not authority
 
@@ -803,18 +859,20 @@ final readiness.
 
 This contract validates the claimed role and node identities against durable
 bindings; it does not prove that the credentials used to publish belong to that
-exact STS role session. The runtime IAM policy, live caller-identity proof,
-privileged observer, and production publisher wiring remain separate future
-work. In particular, this decision does not claim that a not-yet-implemented
-IAM policy enforces `If-None-Match` or `If-Match`; those headers are currently
-fences in the application publication protocol.
+exact STS role session. Live caller-identity proof, the privileged observer,
+and production publisher wiring remain separate future work. ProviderSpec V5
+now pins the exact runtime IAM policy, but this decision does not claim that
+IAM enforces `If-None-Match` or `If-Match`; those headers remain fences in the
+application publication protocol.
 
 `converged` requires complete provider-defined resource-graph coverage,
 verified ownership, exact desired/observed state, and a resident service status
 proving the target artifact and revision healthy. `reconcile` may create an
 authoritatively absent role only when no durable binding exists; missing
 retained state that still has a binding, unverifiable ownership, or
-infrastructure drift that would require node replacement remains blocked.
+infrastructure drift that would require node replacement remains blocked. The
+sole current exception is the managed artifact's stable-identity update after
+authoritative absence and complete bounded history validation.
 
 Destroy regenerates its plan from the current head and fresh inspection,
 deletes only exact managed bindings whose ownership is re-proven, never mutates
@@ -1129,9 +1187,21 @@ profiles are account-global while EC2 observation is regional, that final
 fence depends on Wharfie's explicit rule that the managed profile is exclusive
 to this deployment and is never used outside its configured region.
 
-The managed-artifact, substrate, and attachment drivers, source and packaged
-deployment commands, production composition, privileged publisher wiring,
-live STS session proof, and clean-account lifecycle proof remain unfinished. A
-document, bucket/table tag, SSM result, EC2 description, health
-receipt, or content ID still never proves that an application resource effect
-occurred or that a particular live AWS principal published it.
+The twenty-second slice implements the managed artifact as one stable,
+controller-compatible S3 current-object effect. The provider binding is the
+exact `artifact/v1/<deploymentInstanceId>/<incarnationId>/current` ARN rather
+than a mutable VersionId. Publication validates and copies the receipt's exact
+staged version, applies source ETag and destination create/update CAS, and
+settles only from complete readback. A bounded full-history audit validates
+every exact-key content version before mutation; physical destroy explicitly
+deletes every owned content version and marker by VersionId and proves empty
+history. The controller grants only this role missing-with-binding recreation,
+modeled as an update that preserves its binding and ownership authority.
+
+The substrate node and two volume-attachment drivers are the next graph
+effects. Source and packaged deployment commands, production composition,
+privileged publisher wiring, live STS session proof, and clean-account
+lifecycle proof remain unfinished. A document, bucket/table tag, SSM result,
+EC2 description, health receipt, or content ID still never proves that an
+application resource effect occurred or that a particular live AWS principal
+published it.

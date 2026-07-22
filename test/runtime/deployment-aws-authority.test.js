@@ -35,6 +35,20 @@ const S3_CONTROL_METHODS = Object.freeze([
   'putObject',
   'headObject',
 ]);
+const MANAGED_ARTIFACT_RESOURCE_METHODS = Object.freeze([
+  'copyObject',
+  'headObject',
+  'listObjectVersions',
+  'deleteObjectVersion',
+]);
+const S3_SDK_METHODS = Object.freeze([
+  ...new Set([
+    ...S3_CONTROL_METHODS,
+    'copyObject',
+    'listObjectVersions',
+    'deleteObject',
+  ]),
+]);
 const PROVIDER_SPEC_READ_METHODS = Object.freeze([
   'getParameter',
   'describeAvailabilityZones',
@@ -316,7 +330,7 @@ async function loadHarness({
       constructor(/** @type {Record<string, any>} */ config) {
         if (s3ConstructionError) throw s3ConstructionError;
         s3Configs.push(config);
-        for (const method of S3_CONTROL_METHODS) {
+        for (const method of S3_SDK_METHODS) {
           /** @type {Record<string, any>} */ (this)[method] = (
             /** @type {unknown} */ input,
           ) => s3Send(method, input);
@@ -722,6 +736,8 @@ describe('AWS deployment invocation authority', () => {
       const db = authority.createDynamoDB({ readOnly: true });
       const controlClient = authority.createDynamoDBControlClient();
       const s3ControlClient = authority.createS3ControlClient();
+      const managedArtifactResourceClient =
+        authority.createManagedArtifactResourceClient();
       const providerSpecReadClient = authority.createProviderSpecReadClient();
       const volumeResourceClient = authority.createVolumeResourceClient();
       const networkResourceClient = authority.createNetworkResourceClient();
@@ -731,6 +747,18 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.dynamoConfigs[1].credentials).toBe(credentials);
       expect(harness.s3Configs[0].region).toBe('us-east-1');
       expect(harness.s3Configs[0].credentials).toBe(credentials);
+      expect(harness.s3Configs[1].region).toBe('us-east-1');
+      expect(harness.s3Configs[1].credentials).toBe(credentials);
+      expect(harness.s3Configs[1]).not.toBe(harness.s3Configs[0]);
+      expect(harness.s3Configs[1].retryStrategy).not.toBe(
+        harness.s3Configs[0].retryStrategy,
+      );
+      await expect(
+        harness.s3Configs[0].retryStrategy.maxAttempts(),
+      ).resolves.toBe(20);
+      await expect(
+        harness.s3Configs[1].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
       expect(harness.ssmConfigs[0].region).toBe('us-east-1');
       expect(harness.ssmConfigs[0].credentials).toBe(credentials);
       expect(harness.ec2Configs[0].region).toBe('us-east-1');
@@ -751,11 +779,13 @@ describe('AWS deployment invocation authority', () => {
       ).resolves.toBe(1);
       expect(Object.isFrozen(controlClient)).toBe(true);
       expect(Object.isFrozen(s3ControlClient)).toBe(true);
+      expect(Object.isFrozen(managedArtifactResourceClient)).toBe(true);
       expect(Object.isFrozen(providerSpecReadClient)).toBe(true);
       expect(Object.isFrozen(volumeResourceClient)).toBe(true);
       expect(Object.isFrozen(networkResourceClient)).toBe(true);
       expect(controlClient).not.toHaveProperty('config');
       expect(s3ControlClient).not.toHaveProperty('config');
+      expect(managedArtifactResourceClient).not.toHaveProperty('config');
       expect(providerSpecReadClient).not.toHaveProperty('config');
       expect(volumeResourceClient).not.toHaveProperty('config');
       expect(networkResourceClient).not.toHaveProperty('config');
@@ -766,6 +796,18 @@ describe('AWS deployment invocation authority', () => {
       await s3ControlClient.headBucket({ Bucket: 'control-bucket' });
       expect(harness.s3Send).toHaveBeenCalledWith('headBucket', {
         Bucket: 'control-bucket',
+      });
+      await managedArtifactResourceClient.copyObject({
+        Bucket: 'control-bucket',
+        Key: 'artifact/current',
+        CopySource: 'control-bucket/stage/versioned',
+        IfNoneMatch: '*',
+      });
+      expect(harness.s3Send).toHaveBeenCalledWith('copyObject', {
+        Bucket: 'control-bucket',
+        Key: 'artifact/current',
+        CopySource: 'control-bucket/stage/versioned',
+        IfNoneMatch: '*',
       });
       await providerSpecReadClient.getParameter({ Name: '/wharfie/image' });
       expect(harness.ssmSend).toHaveBeenCalledWith({
@@ -799,6 +841,7 @@ describe('AWS deployment invocation authority', () => {
       await db.close();
       await controlClient.close();
       await s3ControlClient.close();
+      await managedArtifactResourceClient.close();
       await providerSpecReadClient.close();
       await volumeResourceClient.close();
       await networkResourceClient.close();
@@ -837,6 +880,99 @@ describe('AWS deployment invocation authority', () => {
       await authority.close();
     }
   });
+
+  it('exposes only conditional copy, exact reads, version listing, and exact-version delete for managed artifacts', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createManagedArtifactResourceClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...MANAGED_ARTIFACT_RESOURCE_METHODS, 'close'].sort(),
+      );
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(client).not.toHaveProperty('getObject');
+      expect(client).not.toHaveProperty('putObject');
+      expect(client).not.toHaveProperty('deleteObject');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      const copy = {
+        Bucket: 'control-bucket',
+        Key: 'artifact/v1/deployment/incarnation/current',
+        CopySource: 'control-bucket/stage%2Fv1%2Fartifact?versionId=version-1',
+        IfNoneMatch: '*',
+        ExpectedBucketOwner: IDENTITY.Account,
+      };
+      await expect(client.copyObject(copy)).resolves.toEqual({});
+      expect(harness.s3Send).toHaveBeenLastCalledWith('copyObject', copy);
+
+      const head = {
+        Bucket: 'control-bucket',
+        Key: 'artifact/v1/deployment/incarnation/current',
+        ChecksumMode: 'ENABLED',
+        ExpectedBucketOwner: IDENTITY.Account,
+      };
+      await expect(client.headObject(head)).resolves.toEqual({});
+      expect(harness.s3Send).toHaveBeenLastCalledWith('headObject', head);
+
+      const list = {
+        Bucket: 'control-bucket',
+        Prefix: 'artifact/v1/deployment/incarnation/current',
+        MaxKeys: 1000,
+        ExpectedBucketOwner: IDENTITY.Account,
+      };
+      await expect(client.listObjectVersions(list)).resolves.toEqual({});
+      expect(harness.s3Send).toHaveBeenLastCalledWith(
+        'listObjectVersions',
+        list,
+      );
+
+      const deletion = {
+        Bucket: 'control-bucket',
+        Key: 'artifact/v1/deployment/incarnation/current',
+        VersionId: 'opaque-version-1',
+        ExpectedBucketOwner: IDENTITY.Account,
+      };
+      await expect(client.deleteObjectVersion(deletion)).resolves.toEqual({});
+      expect(harness.s3Send).toHaveBeenLastCalledWith('deleteObject', deletion);
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it.each([undefined, null, '', 'null', '\ud800', 'v'.repeat(1025)])(
+    'makes marker-creating delete unrepresentable for VersionId %p',
+    async (VersionId) => {
+      const harness = await loadHarness();
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createManagedArtifactResourceClient();
+      try {
+        expect(() =>
+          client.deleteObjectVersion({
+            Bucket: 'control-bucket',
+            Key: 'artifact/v1/deployment/incarnation/current',
+            VersionId,
+            ExpectedBucketOwner: IDENTITY.Account,
+          }),
+        ).toThrow(
+          'AWS deployment managed-artifact delete requires an exact non-null object version ID.',
+        );
+        expect(harness.s3Send).not.toHaveBeenCalled();
+      } finally {
+        await client.close();
+        await authority.close();
+      }
+    },
+  );
 
   it('exposes only the exact narrow provider-spec read surface', async () => {
     const harness = await loadHarness();
@@ -1842,6 +1978,141 @@ describe('AWS deployment invocation authority', () => {
     await operationAuthority.close();
   });
 
+  it('normalizes managed-artifact construction failures without exposing provider detail', async () => {
+    const harness = await loadHarness({
+      s3ConstructionError: new Error('managed-artifact-construction-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    expect(() => authority.createManagedArtifactResourceClient()).toThrow(
+      'AWS deployment managed-artifact resource client creation failed.',
+    );
+    await authority.close();
+  });
+
+  it.each([
+    'BadDigest',
+    'ConditionalRequestConflict',
+    'InvalidObjectState',
+    'NoSuchBucket',
+    'NoSuchKey',
+    'NoSuchVersion',
+    'NotFound',
+    'PreconditionFailed',
+  ])('preserves only actionable managed-artifact S3 name %s', async (name) => {
+    const providerError = Object.assign(new Error('artifact-provider-secret'), {
+      name,
+      code: 'provider-code-secret',
+      $metadata: {
+        httpStatusCode: name === 'ConditionalRequestConflict' ? 409 : 412,
+        requestId: 'provider-request-secret',
+      },
+    });
+    const harness = await loadHarness({ s3MethodError: providerError });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = authority.createManagedArtifactResourceClient();
+
+    const observed = await client
+      .copyObject({
+        Bucket: 'control-bucket',
+        Key: 'artifact/current',
+        CopySource: 'control-bucket/stage?versionId=version-1',
+        IfNoneMatch: '*',
+      })
+      .catch((/** @type {unknown} */ error) => error);
+    expect(observed).not.toBe(providerError);
+    expect(observed).toMatchObject({
+      name,
+      code: 'AWS_DEPLOYMENT_MANAGED_ARTIFACT_RESOURCE_OPERATION',
+      message: 'AWS deployment managed-artifact resource operation failed.',
+      $metadata: {
+        httpStatusCode: name === 'ConditionalRequestConflict' ? 409 : 412,
+      },
+    });
+    expect(JSON.stringify(observed)).not.toMatch(
+      /artifact-provider-secret|provider-code-secret|provider-request-secret/,
+    );
+
+    await client.close();
+    await authority.close();
+  });
+
+  it.each([
+    [403, true],
+    [599, true],
+    [399, false],
+    [600, false],
+    ['500', false],
+  ])(
+    'keeps unknown managed-artifact failures generic and safely handles status %p',
+    async (status, preservesStatus) => {
+      const providerError = Object.assign(new Error('artifact-access-secret'), {
+        name: 'AccessDenied',
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ s3MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createManagedArtifactResourceClient();
+
+      const observed = await client
+        .headObject({ Bucket: 'control-bucket', Key: 'artifact/current' })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name: 'AwsDeploymentManagedArtifactResourceError',
+        code: 'AWS_DEPLOYMENT_MANAGED_ARTIFACT_RESOURCE_OPERATION',
+        message: 'AWS deployment managed-artifact resource operation failed.',
+      });
+      if (preservesStatus) {
+        expect(observed).toHaveProperty('$metadata.httpStatusCode', status);
+      } else {
+        expect(observed).not.toHaveProperty('$metadata');
+      }
+      expect(JSON.stringify(observed)).not.toMatch(
+        /AccessDenied|artifact-access-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it('closes the managed-artifact SDK client idempotently and refuses every reuse', async () => {
+    const harness = await loadHarness({
+      s3CloseError: new Error('managed-artifact-close-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createManagedArtifactResourceClient()
+    );
+
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment managed-artifact resource client close failed.',
+    );
+    expect(harness.s3Destroy).toHaveBeenCalledTimes(1);
+    for (const method of MANAGED_ARTIFACT_RESOURCE_METHODS) {
+      const input =
+        method === 'deleteObjectVersion' ? { VersionId: 'version-1' } : {};
+      await expect(client[method](input)).rejects.toThrow(
+        'AWS deployment managed-artifact resource client is closed.',
+      );
+    }
+    await authority.close();
+  });
+
   it.each([
     [
       { Account: 'not-an-account', Arn: IDENTITY.Arn },
@@ -1947,6 +2218,9 @@ describe('AWS deployment invocation authority', () => {
     const s3ControlClient = /** @type {Record<string, any>} */ (
       authority.createS3ControlClient()
     );
+    const managedArtifactResourceClient = /** @type {Record<string, any>} */ (
+      authority.createManagedArtifactResourceClient()
+    );
     const providerSpecReadClient = /** @type {Record<string, any>} */ (
       authority.createProviderSpecReadClient()
     );
@@ -1981,6 +2255,9 @@ describe('AWS deployment invocation authority', () => {
     expect(() => authority.createS3ControlClient()).toThrow(
       'AWS deployment authority is closed.',
     );
+    expect(() => authority.createManagedArtifactResourceClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
     expect(() => authority.createProviderSpecReadClient()).toThrow(
       'AWS deployment authority is closed.',
     );
@@ -1995,6 +2272,12 @@ describe('AWS deployment invocation authority', () => {
     );
     await expect(
       s3ControlClient.headBucket({ Bucket: 'still-caller-owned' }),
+    ).resolves.toEqual({});
+    await expect(
+      managedArtifactResourceClient.headObject({
+        Bucket: 'still-caller-owned',
+        Key: 'artifact/current',
+      }),
     ).resolves.toEqual({});
     await expect(
       providerSpecReadClient.getParameter({ Name: '/still/caller-owned' }),
@@ -2058,6 +2341,20 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment S3 control client is closed.',
       );
     }
+    const firstManagedArtifactClose = managedArtifactResourceClient.close();
+    expect(managedArtifactResourceClient.close()).toBe(
+      firstManagedArtifactClose,
+    );
+    await firstManagedArtifactClose;
+    for (const method of MANAGED_ARTIFACT_RESOURCE_METHODS) {
+      const input =
+        method === 'deleteObjectVersion' ? { VersionId: 'version-1' } : {};
+      await expect(
+        managedArtifactResourceClient[method](input),
+      ).rejects.toThrow(
+        'AWS deployment managed-artifact resource client is closed.',
+      );
+    }
     const firstProviderSpecClose = providerSpecReadClient.close();
     expect(providerSpecReadClient.close()).toBe(firstProviderSpecClose);
     await firstProviderSpecClose;
@@ -2094,7 +2391,7 @@ describe('AWS deployment invocation authority', () => {
     }
     expect(harness.documentDestroy).toHaveBeenCalledTimes(1);
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
-    expect(harness.s3Destroy).toHaveBeenCalledTimes(1);
+    expect(harness.s3Destroy).toHaveBeenCalledTimes(2);
     expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
     expect(harness.ec2Destroy).toHaveBeenCalledTimes(4);
     expect(harness.iamDestroy).toHaveBeenCalledTimes(1);

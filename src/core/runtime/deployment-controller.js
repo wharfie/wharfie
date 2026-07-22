@@ -720,6 +720,32 @@ export function createDeploymentController(dependencies) {
         );
       }
       assertBindingMatchesAction(action, binding, head);
+      // A deterministic provider identity can be recreated under its original
+      // binding after authoritative external deletion. The provider must call
+      // this an update (never a second create/adoption) and bind the exact
+      // desired state; execution re-proves dependencies before mutating.
+      if (
+        action.resourceKey === 'artifact' &&
+        action.action === 'update' &&
+        resource.presence === 'absent'
+      ) {
+        if (
+          resource.presenceEvidence !== 'authoritative-not-found' ||
+          resource.ownership !== 'missing' ||
+          resource.providerIdentity !== null ||
+          resource.bindingId !== null ||
+          resource.dependencyBindings !== null ||
+          resource.observedDigest !== null ||
+          resource.desiredDigest === null ||
+          action.after === null ||
+          !sameJson(resource.desiredDigest, action.after.stateDigest)
+        ) {
+          throw new DeploymentOwnershipError(
+            `Update for '${action.resourceKey}' lacks authoritative absence and exact desired-state evidence.`,
+          );
+        }
+        continue;
+      }
       if (action.action === 'delete' && resource.presence === 'absent') {
         if (resource.presenceEvidence !== 'authoritative-not-found') {
           throw new DeploymentOwnershipError(
@@ -818,7 +844,35 @@ export function createDeploymentController(dependencies) {
       resource.presence === 'absent' &&
       resource.presenceEvidence === 'authoritative-not-found'
     ) {
-      return false;
+      // The artifact binding names its current immutable object, while delete
+      // owns the entire versioned key namespace. Current-object absence does
+      // not prove that noncurrent versions and delete markers are gone, so the
+      // provider must still audit and purge that history.
+      return action.resourceKey === 'artifact';
+    }
+    if (
+      action.resourceKey === 'artifact' &&
+      action.action === 'update' &&
+      resource !== undefined &&
+      resource.presence === 'absent'
+    ) {
+      if (
+        resource.presenceEvidence !== 'authoritative-not-found' ||
+        resource.ownership !== 'missing' ||
+        resource.providerIdentity !== null ||
+        resource.bindingId !== null ||
+        resource.dependencyBindings !== null ||
+        resource.observedDigest !== null ||
+        resource.desiredDigest === null ||
+        action.after === null ||
+        !sameJson(resource.desiredDigest, action.after.stateDigest)
+      ) {
+        throw new DeploymentOwnershipError(
+          `Update for '${action.resourceKey}' lacks fresh authoritative absence and desired-state evidence.`,
+        );
+      }
+      assertCreateDependencyEvidence(action, inspection, head, plan);
+      return true;
     }
     if (
       resource === undefined ||

@@ -196,7 +196,21 @@ held bytes are also cross-checked against the SEA's embedded app, revision, and
 runtime target. Converge requires that receipt and regenerates provider
 authority after staging before accepting a plan; resume revalidates the
 retained version without historical local bytes, while destroy deliberately
-does not require it. A host-owned provider-visible V3/`whr3` health receipt
+does not require it. The fixed graph's managed artifact now has one
+incarnation-stable S3 identity at
+`artifact/v1/<deploymentInstanceId>/<incarnationId>/current`; its exact ARN,
+not an allocated object version, is the durable provider binding. Create and
+update revalidate and server-side copy the receipt's exact staged VersionId,
+fence that source with its ETag, and use destination `If-None-Match: *` or the
+current ETag as `If-Match`. Settlement comes only from exact current-version
+readback. Before mutation, the driver walks the complete bounded exact-key
+version and delete-marker history and validates every content version's
+immutable ownership and state. Destroy purges every owned entry by explicit
+VersionId. The artifact is the sole graph role that reconcile may recreate
+under an existing binding after authoritative current-object absence; it does
+so as a conditional update only after the retained history is safe.
+
+A host-owned provider-visible V3/`whr3` health receipt
 now binds the exact deployment, operation/head lineage, running release,
 service session, durable generations, process, and heartbeat sequence to both
 the resident-node binding/EC2 instance ID and runtime-role binding/immutable
@@ -239,8 +253,8 @@ also fences role membership and current-region EC2 use; the account-global IAM
 profile relies on Wharfie's explicit exclusive-profile/single-region contract.
 
 These modules do not yet attach, format, mount, or fulfill a complete service
-capability. The managed artifact, node, and volume attachments, privileged host
-observer, complete AWS
+capability. The substrate node and its two volume attachments are the next
+resource effects. The privileged host observer, complete AWS
 driver/router/inspection/`createPlan`, operator commands, production
 composition, and clean-account proof remain unfinished.
 
@@ -250,7 +264,8 @@ composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Recoverable runtime-identity checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md) — the current handoff for ProviderSpec V5, exact least-privilege IAM, and all four recoverable runtime-identity effects.
+- [Recoverable managed-artifact checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md) — the current handoff for stable managed-current identity, exact staged-version conditional copy, bounded history proof, and explicit-version purge.
+- [Recoverable runtime-identity checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md) — the preceding handoff for ProviderSpec V5, exact least-privilege IAM, and all four recoverable runtime-identity effects.
 - [Exact runtime service-health checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md) — the preceding handoff for V3 role/node-addressed health, PUT-first conditional publication, and Inspection V5 authority.
 - [Runtime-identity graph checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md) — the preceding handoff for the fixed 18-role graph and recoverable IAM effect boundaries.
 - [Direct EC2 internet-gateway resource checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md) — the preceding handoff for the standalone gateway lifecycle, attachment-independent intrinsic state, and attachment-fenced purge.

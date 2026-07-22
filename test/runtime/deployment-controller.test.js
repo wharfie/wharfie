@@ -226,8 +226,15 @@ function makeArtifactStageBundle(
  * @param {Readonly<Record<string, any>>} inspection
  * @param {'apply'|'reconcile'|'destroy'} operation
  * @param {string} [variant]
+ * @param {Readonly<Record<string, any>>[]} [durableBindings]
  */
-function makePlan(base, inspection, operation, variant = 'original') {
+function makePlan(
+  base,
+  inspection,
+  operation,
+  variant = 'original',
+  durableBindings = [],
+) {
   const orderedResourceKeys =
     operation === 'destroy'
       ? getAwsSingleNodeResourceDestroyOrder()
@@ -241,9 +248,18 @@ function makePlan(base, inspection, operation, variant = 'original') {
       (/** @type {Readonly<Record<string, any>>} */ candidate) =>
         candidate.resourceKey === resourceKey,
     );
+    const missingWithBinding =
+      operation === 'reconcile' &&
+      observation?.presence === 'absent' &&
+      durableBindings.some(
+        (/** @type {Readonly<Record<string, any>>} */ binding) =>
+          binding.resourceKey === resourceKey,
+      );
     const create =
       operation === 'apply' ||
-      (operation === 'reconcile' && observation?.presence === 'absent');
+      (operation === 'reconcile' &&
+        observation?.presence === 'absent' &&
+        !missingWithBinding);
     const state = {
       providerType: resource.providerType,
       providerResourceId: create ? null : providerResourceId(resourceKey),
@@ -274,10 +290,11 @@ function makePlan(base, inspection, operation, variant = 'original') {
     if (operation === 'reconcile') {
       return {
         ...graphFields,
-        action: 'noop',
+        action: missingWithBinding ? 'update' : 'noop',
         destructive: false,
-        reason:
-          index === 0 && variant === 'changed'
+        reason: missingWithBinding
+          ? 'drift'
+          : index === 0 && variant === 'changed'
             ? 'deployment-change'
             : 'already-converged',
         before: state,
@@ -880,6 +897,7 @@ function makeProvider(base, store, physical, events = []) {
         context.inspection,
         operation,
         variant,
+        store.head?.resourceBindings || [],
       );
     },
     /** @param {Record<string, any>} context */
@@ -909,6 +927,17 @@ function makeProvider(base, store, physical, events = []) {
             context.head.resourceBindings,
           ),
         );
+      } else if (
+        action.action === 'update' &&
+        !physical.has(action.resourceKey)
+      ) {
+        const priorBinding = context.head.resourceBindings.find(
+          (/** @type {Readonly<Record<string, any>>} */ binding) =>
+            binding.resourceKey === action.resourceKey,
+        );
+        if (priorBinding !== undefined) {
+          physical.set(action.resourceKey, priorBinding);
+        }
       }
       if (crashAfterEffectActionId === action.actionId) {
         crashAfterEffectActionId = null;
@@ -2332,6 +2361,105 @@ describe('deployment controller crash recovery', () => {
     expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
   });
 
+  it('recreates an authoritatively missing deterministic resource without changing its durable binding', async () => {
+    const resourceKey = 'artifact';
+    const ready = makeReadyState();
+    const priorBinding = ready.head.resourceBindings.find(
+      (/** @type {Readonly<Record<string, any>>} */ binding) =>
+        binding.resourceKey === resourceKey,
+    );
+    if (priorBinding === undefined) {
+      throw new Error('Missing artifact test binding.');
+    }
+    ready.physical.delete(resourceKey);
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'reconcile');
+    const action = plan.actions.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === resourceKey,
+    );
+
+    expect(action).toMatchObject({
+      action: 'update',
+      reason: 'drift',
+      before: {
+        providerResourceId: priorBinding.providerResourceId,
+      },
+      after: {
+        providerResourceId: priorBinding.providerResourceId,
+      },
+    });
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+    const settledBinding = head.resourceBindings.find(
+      (/** @type {Readonly<Record<string, any>>} */ binding) =>
+        binding.resourceKey === resourceKey,
+    );
+
+    expect(head.phase).toBe('READY');
+    expect(settledBinding).toEqual(priorBinding);
+    expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+  });
+
+  it('does not generalize in-place absence recovery to provider-allocated resources', async () => {
+    const ready = makeReadyState();
+    ready.physical.delete('network-vpc');
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+
+    await expect(planWith(harness, 'reconcile')).rejects.toThrow(
+      /not authorized by exact fresh provider ownership and state evidence/i,
+    );
+
+    expect(harness.provider.executeCount.size).toBe(0);
+    expect(harness.artifactStager.stageCount).toBe(0);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+  });
+
+  it('settles missing-artifact recreation after a lost effect response without executing twice', async () => {
+    const ready = makeReadyState();
+    ready.physical.delete('artifact');
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'reconcile');
+    const action = plan.actions.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === 'artifact',
+    );
+    if (action === undefined) throw new Error('Missing artifact action.');
+    harness.provider.crashAfterPhysicalEffect(action.actionId);
+
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).rejects.toThrow('injected crash after physical effect');
+    expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+    expect(harness.physical.has('artifact')).toBe(true);
+
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: harness.base.deploymentInstanceId,
+      }),
+    ).resolves.toMatchObject({ phase: 'READY' });
+    expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+  });
+
   it('rejects a created binding that settles against the wrong dependency binding', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
@@ -2899,7 +3027,67 @@ describe('deployment controller destroy ownership', () => {
     },
   );
 
-  it('settles an already absent delete without repeating the provider effect', async () => {
+  it('executes an already absent artifact delete so the provider can purge retained history', async () => {
+    const ready = makeReadyState();
+    ready.physical.delete('artifact');
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'destroy');
+    const action = plan.actions.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === 'artifact',
+    );
+    if (action === undefined) throw new Error('Missing artifact action.');
+    let retainedHistoryPresent = true;
+    const executeAction = harness.provider.api.executeAction;
+    const verifySettlement = harness.provider.api.verifySettlement;
+    harness.provider.api.executeAction = async (context) => {
+      await executeAction(context);
+      if (context.action.actionId === action.actionId) {
+        retainedHistoryPresent = false;
+      }
+    };
+    harness.provider.api.verifySettlement = async (context) => {
+      if (
+        context.action.actionId === action.actionId &&
+        retainedHistoryPresent
+      ) {
+        return { status: 'not-converged' };
+      }
+      return await verifySettlement(context);
+    };
+
+    expect(action).toMatchObject({
+      resourceKey: 'artifact',
+      action: 'delete',
+      onDestroy: 'purge',
+    });
+
+    const head = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(head.phase).toBe('DESTROYED');
+    expect(retainedHistoryPresent).toBe(false);
+    expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
+    expect(
+      harness.provider.verifyContexts.some(
+        (context) => context.action.actionId === action.actionId,
+      ),
+    ).toBe(true);
+    expect(
+      head.resourceBindings.map(
+        (/** @type {Readonly<Record<string, any>>} */ binding) =>
+          binding.resourceKey,
+      ),
+    ).toEqual(['application-state', 'control-state']);
+  });
+
+  it('settles an already absent non-artifact delete without repeating the provider effect', async () => {
     const ready = makeReadyState();
     ready.physical.delete('control-state-attachment');
     const harness = makeHarness({

@@ -7,7 +7,8 @@ template; Plan/Action V3, Inspection V5, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
 destroy policy. Strict controller-compatible drivers now cover the retained
-EBS volume, all eight network effects, and all four runtime-identity effects.
+EBS volume, all eight network effects, all four runtime-identity effects, and
+the managed-current artifact.
 The directly owned network containers share one narrow tagged
 EC2 recovery kernel while retaining distinct intrinsic, natural-slot, and
 destroy contracts; derived relationships prove both endpoints before mutation.
@@ -19,9 +20,9 @@ bindings plus immutable IAM RoleId and EC2 instance ID at
 `health/v3/<RoleId>:<InstanceId>`. Initial publication is a conditional
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
 Inspection V5/`win5` correlates both identities before readiness. Live STS
-caller proof and the privileged production publisher remain unwired. Managed
-artifact, substrate, attachment, provider composition, commands, and
-clean-account proof are next ·
+caller proof and the privileged production publisher remain unwired. The
+substrate node and its two volume attachments are the next graph effects,
+followed by provider composition, commands, and clean-account proof ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -653,6 +654,18 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       token-retention horizon is undocumented and no API-call exactly-once
       claim is made. This is deterministic-mock proof, not a live-account
       lifecycle claim.
+- [x] Implement the fixed managed-current artifact role at the stable
+      `artifact/v1/<deploymentInstanceId>/<incarnationId>/current` S3 identity.
+      Create and update copy the exact retained stage VersionId with source
+      ETag validation and destination `If-None-Match`/`If-Match` CAS, then
+      settle only from exact readback. Every mutation first completes a
+      bounded audit of the exact key's content versions and delete markers;
+      foreign or malformed history blocks, while destroy deletes every owned
+      entry by explicit VersionId and verifies empty history. This is the sole
+      resource role allowed to recreate authoritative current-object absence
+      under its original durable binding, and it does so as an update after
+      the full history audit. Deterministic mocks prove the resource boundary,
+      not a live-account lifecycle or complete provider composition.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -762,12 +775,21 @@ object listing or `ListBucket` as an absence oracle. Later heartbeats retain
 ETag compare-and-swap, and Inspection V5/`win5` is the final readiness
 envelope. The binding checks do not prove the publisher's live STS caller
 identity, and the privileged production publisher is not wired. The
-implemented resource drivers are not yet composed into a complete provider,
-and the runtime path still does not attach, format, or mount the retained
-volumes or fulfill a service capability.
+managed-current artifact now has the stable binding ARN for
+`artifact/v1/<deploymentInstanceId>/<incarnationId>/current`. It copies only
+the exact staged VersionId, fences the source with its ETag and the destination
+with conditional CAS, and settles from exact current-version readback. Its
+mutation boundary audits the complete bounded exact-key
+content-version/delete-marker history, blocks on foreign ownership, and purges
+only explicit VersionIds. Reconcile alone may repair authoritative
+current-object absence beneath the existing artifact binding by issuing a
+conditional update after that audit. The implemented
+resource drivers are not yet composed into a complete provider, and the
+runtime path still does not create the substrate node or attach, format, or
+mount the retained volumes to fulfill a service capability.
 
-1. Implement the managed artifact, node, and volume-attachment resources;
-   build the provider router, inspection, `createPlan`, and complete controller
+1. Implement the substrate node and two volume-attachment resources; build the
+   provider router, inspection, `createPlan`, and complete controller
    composition; and wire resident-service activation and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
@@ -780,9 +802,11 @@ volumes or fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [recoverable runtime-identity
-checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md).
-Its parent is the [exact runtime service-health
+The current restart point is the [recoverable managed-artifact
+checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md).
+Its parent is the [recoverable runtime-identity
+checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md),
+whose parent is the [exact runtime service-health
 checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md),
 whose parent is the [runtime-identity resource-graph
 checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md),
