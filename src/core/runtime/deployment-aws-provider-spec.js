@@ -16,16 +16,20 @@ import {
   validateProviderScope,
 } from './deployment-provider-scope.js';
 import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from './deployment-resource-graph.js';
+import {
+  AWS_SINGLE_NODE_NODE_BOOTSTRAP_CONTRACT_VERSION,
+  AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST,
+} from './deployment-aws-node-bootstrap-contract.js';
 import { AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST } from './deployment-aws-runtime-identity-contract.js';
 import { DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS } from './deployment-service-health-contract.js';
 import { cloneJsonObject } from './json-value.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 5;
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 6;
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_KIND = 'awsSingleNodeProviderSpec';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN =
-  'wharfie:aws-single-node-provider-spec:v5';
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap5';
+  'wharfie:aws-single-node-provider-spec:v6';
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap6';
 export const AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION = 3;
 
 export const AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS = Object.freeze({
@@ -40,7 +44,6 @@ const FACTORY_KEYS = new Set([
   'machineImage',
   'placement',
   'storage',
-  'bootstrapDigest',
 ]);
 const PAYLOAD_KEYS = new Set([
   'schemaVersion',
@@ -66,16 +69,75 @@ const MACHINE_IMAGE_KEYS = new Set([
   'rootDeviceType',
   'virtualizationType',
   'enaSupport',
+  'rootDeviceName',
+  'rootBlockDevice',
 ]);
 const SOURCE_PARAMETER_KEYS = new Set(['name', 'version']);
+const ROOT_BLOCK_DEVICE_KEYS = new Set([
+  'snapshotId',
+  'volumeType',
+  'volumeSizeGiB',
+  'encrypted',
+  'deleteOnTermination',
+]);
 const PLACEMENT_KEYS = new Set(['availabilityZoneId']);
 const STORAGE_KEYS = new Set(['ebsKmsKeyArn']);
-const NODE_KEYS = new Set(['instanceType', 'metadataOptions', 'bootstrap']);
+const NODE_KEYS = new Set([
+  'instanceType',
+  'tenancy',
+  'purchaseOption',
+  'ebsOptimized',
+  'monitoring',
+  'cpuCredits',
+  'capacityReservationPreference',
+  'instanceInitiatedShutdownBehavior',
+  'terminationProtection',
+  'stopProtection',
+  'hibernation',
+  'enclave',
+  'maintenanceAutoRecovery',
+  'metadataOptions',
+  'privateDnsNameOptions',
+  'primaryNetworkInterface',
+  'rootVolume',
+  'bootstrap',
+]);
 const METADATA_OPTIONS_KEYS = new Set([
   'httpEndpoint',
   'httpTokens',
   'httpPutResponseHopLimit',
+  'httpProtocolIpv6',
   'instanceMetadataTags',
+]);
+const PRIMARY_NETWORK_INTERFACE_KEYS = new Set([
+  'deviceIndex',
+  'networkCardIndex',
+  'interfaceType',
+  'description',
+  'associatePublicIpv4',
+  'deleteOnTermination',
+  'sourceDestCheck',
+  'secondaryPrivateIpv4AddressCount',
+  'ipv6AddressCount',
+]);
+const PRIVATE_DNS_NAME_OPTIONS_KEYS = new Set([
+  'hostnameType',
+  'enableResourceNameDnsARecord',
+  'enableResourceNameDnsAaaaRecord',
+]);
+const ROOT_VOLUME_KEYS = new Set([
+  'contractVersion',
+  'storage',
+  'deviceName',
+  'snapshotId',
+  'volumeType',
+  'sizeGiB',
+  'iops',
+  'throughputMiBps',
+  'encrypted',
+  'multiAttach',
+  'deleteOnTermination',
+  'onDestroy',
 ]);
 const BOOTSTRAP_KEYS = new Set(['contractVersion', 'digest']);
 const CAPABILITIES_KEYS = new Set([
@@ -133,6 +195,8 @@ const SERVICE_HEALTH_KEYS = new Set([
 ]);
 
 const AMI_ID_PATTERN = /^ami-[0-9a-f]{8,32}$/;
+const SNAPSHOT_ID_PATTERN = /^snap-[0-9a-f]{8,32}$/;
+const ROOT_DEVICE_NAME_PATTERN = /^\/dev\/(?:xvd|sd)[a-z](?:[1-9][0-9]*)?$/;
 const AWS_ACCOUNT_ID_PATTERN = /^[0-9]{12}$/;
 const AVAILABILITY_ZONE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-az[1-9][0-9]*$/;
 const KMS_KEY_ARN_PATTERN =
@@ -144,7 +208,41 @@ const FIXED_METADATA_OPTIONS = Object.freeze({
   httpEndpoint: 'enabled',
   httpTokens: 'required',
   httpPutResponseHopLimit: 1,
+  httpProtocolIpv6: 'disabled',
   instanceMetadataTags: 'disabled',
+});
+
+const FIXED_NODE_BEHAVIOR = Object.freeze({
+  tenancy: 'default',
+  purchaseOption: 'on-demand',
+  ebsOptimized: true,
+  monitoring: false,
+  cpuCredits: 'standard',
+  capacityReservationPreference: 'none',
+  instanceInitiatedShutdownBehavior: 'stop',
+  terminationProtection: false,
+  stopProtection: false,
+  hibernation: false,
+  enclave: false,
+  maintenanceAutoRecovery: 'default',
+});
+
+const FIXED_PRIMARY_NETWORK_INTERFACE = Object.freeze({
+  deviceIndex: 0,
+  networkCardIndex: 0,
+  interfaceType: 'interface',
+  description: 'Wharfie single-node primary network interface.',
+  associatePublicIpv4: true,
+  deleteOnTermination: true,
+  sourceDestCheck: true,
+  secondaryPrivateIpv4AddressCount: 0,
+  ipv6AddressCount: 0,
+});
+
+const FIXED_PRIVATE_DNS_NAME_OPTIONS = Object.freeze({
+  hostnameType: 'ip-name',
+  enableResourceNameDnsARecord: false,
+  enableResourceNameDnsAaaaRecord: false,
 });
 
 const FIXED_APPLICATION_VOLUME = Object.freeze({
@@ -293,6 +391,43 @@ function validateMachineImage(value, path) {
       `${path} does not match the fixed machine-image contract.`,
     );
   }
+  if (
+    typeof image.rootDeviceName !== 'string' ||
+    !ROOT_DEVICE_NAME_PATTERN.test(image.rootDeviceName)
+  ) {
+    throw new TypeError(
+      `${path}.rootDeviceName must be a canonical AWS EBS root device name.`,
+    );
+  }
+  const rootBlockDevice = cloneJsonObject(
+    image.rootBlockDevice,
+    `${path}.rootBlockDevice`,
+  );
+  assertAllKeys(
+    rootBlockDevice,
+    ROOT_BLOCK_DEVICE_KEYS,
+    `${path}.rootBlockDevice`,
+  );
+  if (
+    typeof rootBlockDevice.snapshotId !== 'string' ||
+    !SNAPSHOT_ID_PATTERN.test(rootBlockDevice.snapshotId)
+  ) {
+    throw new TypeError(
+      `${path}.rootBlockDevice.snapshotId must be a canonical AWS snapshot ID.`,
+    );
+  }
+  if (
+    rootBlockDevice.volumeType !== 'gp3' ||
+    !Number.isSafeInteger(rootBlockDevice.volumeSizeGiB) ||
+    rootBlockDevice.volumeSizeGiB < 8 ||
+    rootBlockDevice.volumeSizeGiB > 64 ||
+    rootBlockDevice.encrypted !== false ||
+    rootBlockDevice.deleteOnTermination !== true
+  ) {
+    throw new TypeError(
+      `${path}.rootBlockDevice does not match the fixed machine-image root contract.`,
+    );
+  }
   return deepFreeze({
     sourceParameter: {
       name: sourceParameter.name,
@@ -305,6 +440,14 @@ function validateMachineImage(value, path) {
     rootDeviceType: 'ebs',
     virtualizationType: 'hvm',
     enaSupport: true,
+    rootDeviceName: image.rootDeviceName,
+    rootBlockDevice: {
+      snapshotId: rootBlockDevice.snapshotId,
+      volumeType: 'gp3',
+      volumeSizeGiB: rootBlockDevice.volumeSizeGiB,
+      encrypted: false,
+      deleteOnTermination: true,
+    },
   });
 }
 
@@ -340,8 +483,26 @@ function validateStorage(value, path) {
   return deepFreeze({ ebsKmsKeyArn: storage.ebsKmsKeyArn });
 }
 
-/** @param {unknown} value @param {string} path @returns {Readonly<Record<string, any>>} */
-function validateNode(value, path) {
+/** @param {Readonly<Record<string, any>>} machineImage @returns {Readonly<Record<string, any>>} */
+function fixedRootVolume(machineImage) {
+  return deepFreeze({
+    contractVersion: 1,
+    storage: 'ebs-volume',
+    deviceName: machineImage.rootDeviceName,
+    snapshotId: machineImage.rootBlockDevice.snapshotId,
+    volumeType: 'gp3',
+    sizeGiB: machineImage.rootBlockDevice.volumeSizeGiB,
+    iops: 3000,
+    throughputMiBps: 125,
+    encrypted: true,
+    multiAttach: false,
+    deleteOnTermination: true,
+    onDestroy: 'purge',
+  });
+}
+
+/** @param {unknown} value @param {Readonly<Record<string, any>>} machineImage @param {string} path @returns {Readonly<Record<string, any>>} */
+function validateNode(value, machineImage, path) {
   const node = cloneJsonObject(value, path);
   assertAllKeys(node, NODE_KEYS, path);
   if (node.instanceType !== 't3.small' && node.instanceType !== 't4g.small') {
@@ -349,28 +510,70 @@ function validateNode(value, path) {
       `${path}.instanceType is not supported by the fixed provider contract.`,
     );
   }
+  for (const [key, expected] of Object.entries(FIXED_NODE_BEHAVIOR)) {
+    if (node[key] !== expected) {
+      throw new TypeError(
+        `${path}.${key} does not match the fixed provider contract.`,
+      );
+    }
+  }
   const metadataOptions = validateFixedObject(
     node.metadataOptions,
     FIXED_METADATA_OPTIONS,
     METADATA_OPTIONS_KEYS,
     `${path}.metadataOptions`,
   );
+  const primaryNetworkInterface = validateFixedObject(
+    node.primaryNetworkInterface,
+    FIXED_PRIMARY_NETWORK_INTERFACE,
+    PRIMARY_NETWORK_INTERFACE_KEYS,
+    `${path}.primaryNetworkInterface`,
+  );
+  const privateDnsNameOptions = validateFixedObject(
+    node.privateDnsNameOptions,
+    FIXED_PRIVATE_DNS_NAME_OPTIONS,
+    PRIVATE_DNS_NAME_OPTIONS_KEYS,
+    `${path}.privateDnsNameOptions`,
+  );
+  const rootVolume = validateFixedObject(
+    node.rootVolume,
+    fixedRootVolume(machineImage),
+    ROOT_VOLUME_KEYS,
+    `${path}.rootVolume`,
+  );
   const bootstrap = cloneJsonObject(node.bootstrap, `${path}.bootstrap`);
   assertAllKeys(bootstrap, BOOTSTRAP_KEYS, `${path}.bootstrap`);
-  if (bootstrap.contractVersion !== 1) {
+  if (
+    bootstrap.contractVersion !==
+    AWS_SINGLE_NODE_NODE_BOOTSTRAP_CONTRACT_VERSION
+  ) {
     throw new TypeError(
-      `${path}.bootstrap.contractVersion must be the integer 1.`,
+      `${path}.bootstrap.contractVersion must identify the exact node bootstrap contract.`,
+    );
+  }
+  const bootstrapDigest = validateSha256Digest(
+    bootstrap.digest,
+    `${path}.bootstrap.digest`,
+  );
+  if (
+    bootstrapDigest.algorithm !==
+      AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST.algorithm ||
+    bootstrapDigest.value !== AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST.value
+  ) {
+    throw new TypeError(
+      `${path}.bootstrap.digest must identify the exact node bootstrap template.`,
     );
   }
   return deepFreeze({
     instanceType: node.instanceType,
+    ...FIXED_NODE_BEHAVIOR,
     metadataOptions,
+    privateDnsNameOptions,
+    primaryNetworkInterface,
+    rootVolume,
     bootstrap: {
-      contractVersion: 1,
-      digest: validateSha256Digest(
-        bootstrap.digest,
-        `${path}.bootstrap.digest`,
-      ),
+      contractVersion: AWS_SINGLE_NODE_NODE_BOOTSTRAP_CONTRACT_VERSION,
+      digest: AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST,
     },
   });
 }
@@ -512,7 +715,7 @@ function validatePayload(value, path) {
   );
   const placement = validatePlacement(payload.placement, `${path}.placement`);
   const storage = validateStorage(payload.storage, `${path}.storage`);
-  const node = validateNode(payload.node, `${path}.node`);
+  const node = validateNode(payload.node, machineImage, `${path}.node`);
   const expectedInstanceType =
     machineImage.architecture === 'x86_64' ? 't3.small' : 't4g.small';
   if (node.instanceType !== expectedInstanceType) {
@@ -607,7 +810,7 @@ function assertContext(spec, context, path) {
  * Create the exact provider inputs selected for one AWS single-node plan.
  * Mutable discovery state is reduced to an explicit AMI ID and parameter
  * version before entering this boundary.
- * @param {unknown} value - Exact profile/scope, image receipt, and bootstrap digest.
+ * @param {unknown} value - Exact profile, scope, image, placement, and storage receipts.
  * @returns {Readonly<Record<string, any>>} - Immutable content-addressed specification.
  */
 export function createAwsSingleNodeProviderSpec(value) {
@@ -654,13 +857,14 @@ export function createAwsSingleNodeProviderSpec(value) {
       storage,
       node: {
         instanceType: architecture === 'x86_64' ? 't3.small' : 't4g.small',
+        ...FIXED_NODE_BEHAVIOR,
         metadataOptions: FIXED_METADATA_OPTIONS,
+        privateDnsNameOptions: FIXED_PRIVATE_DNS_NAME_OPTIONS,
+        primaryNetworkInterface: FIXED_PRIMARY_NETWORK_INTERFACE,
+        rootVolume: fixedRootVolume(machineImage),
         bootstrap: {
-          contractVersion: 1,
-          digest: validateSha256Digest(
-            input.bootstrapDigest,
-            'awsProviderSpec input.bootstrapDigest',
-          ),
+          contractVersion: AWS_SINGLE_NODE_NODE_BOOTSTRAP_CONTRACT_VERSION,
+          digest: AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST,
         },
       },
       capabilities: {

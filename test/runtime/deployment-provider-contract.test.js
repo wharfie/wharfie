@@ -127,13 +127,20 @@ function makeProviderSpec(profile, providerScope) {
       rootDeviceType: 'ebs',
       virtualizationType: 'hvm',
       enaSupport: true,
+      rootDeviceName: '/dev/xvda',
+      rootBlockDevice: {
+        snapshotId: 'snap-0123456789abcdef0',
+        volumeType: 'gp3',
+        volumeSizeGiB: 8,
+        encrypted: false,
+        deleteOnTermination: true,
+      },
     },
     placement: { availabilityZoneId: 'use1-az1' },
     storage: {
       ebsKmsKeyArn:
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
-    bootstrapDigest: digest('fixed host bootstrap'),
   });
 }
 
@@ -566,8 +573,8 @@ describe('deployment plans', () => {
     expect(second).toEqual(first);
     expect(first.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
     expect(first.providerSpec).toMatchObject({
-      schemaVersion: 5,
-      providerSpecId: expect.stringMatching(/^wap5_[A-Za-z0-9_-]{43}$/),
+      schemaVersion: 6,
+      providerSpecId: expect.stringMatching(/^wap6_[A-Za-z0-9_-]{43}$/),
       resourceGraphId: AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId,
     });
     expect(first.actions).toHaveLength(18);

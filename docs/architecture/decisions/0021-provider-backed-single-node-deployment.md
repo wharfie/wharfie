@@ -107,11 +107,12 @@ invocation.
 
 Mutable regional prerequisites are resolved only while previewing a new
 incarnation and reduced to one secret-free, content-addressed
-`AwsSingleNodeProviderSpecV5` in the fresh `wap5` identity namespace. It pins
-the exact SSM public-parameter name and version, AMI ID/owner/architecture,
-one standard Availability Zone ID that offers the fixed instance type, the
-account's exact regional default EBS KMS key ARN, bootstrap and runtime-policy
-digests, instance and metadata shape, retained-volume and attachment behavior,
+`AwsSingleNodeProviderSpecV6` in the fresh `wap6` identity namespace. It pins
+the exact SSM public-parameter name and version, AMI ID/owner/architecture and
+sole EBS root device/snapshot receipt, one standard Availability Zone ID that
+offers the fixed instance type, the account's exact regional default EBS KMS
+key ARN, code-owned bootstrap and runtime-policy digests, complete instance,
+private-DNS, metadata, primary-ENI, encrypted root-volume, retained-volume and attachment behavior,
 fixed network, service-health timing, publication, and retention, plus the
 content ID of the exact finite physical-resource graph. Each
 application and control volume is explicitly `gp3`, 8 GiB, 3,000 IOPS, 125
@@ -159,7 +160,10 @@ for the one frozen AMI ID with Amazon ownership scoped in the request.
 One candidate is admissible only when the unique EC2 image is the exact
 architecture-specific AL2023 image associated back to the same public SSM
 parameter and is Amazon-owned, public, available, Linux, machine-image, EBS
-rooted, HVM virtualized, and ENA capable. These checks use the provider's
+rooted, HVM virtualized, and ENA capable. ProviderSpec V6 additionally requires
+exactly one EBS block-device mapping at the image's canonical root device,
+with one canonical snapshot, `gp3` source type, a bounded 8-64 GiB source
+size, an unencrypted public snapshot, and delete-on-termination enabled. These checks use the provider's
 documented
 [`Image` fields](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Image.html),
 not its identifier or SSM value alone. An authoritatively missing SSM
@@ -592,7 +596,7 @@ roles are the artifact object; two retained volumes; VPC; internet gateway and
 attachment; subnet; route table, default IPv4 route, and subnet association;
 security group; runtime IAM role, derived inline policy, instance profile, and
 derived role/profile association; resident node; and two volume attachments.
-`AwsSingleNodeProviderSpecV5` pins the graph's `wrg2` identity and exact
+`AwsSingleNodeProviderSpecV6` pins the graph's `wrg2` identity and exact
 runtime-policy template, so changing topology, lifecycle, or runtime
 permissions cannot reinterpret an existing specification.
 
@@ -860,7 +864,7 @@ final readiness.
 This contract validates the claimed role and node identities against durable
 bindings; it does not prove that the credentials used to publish belong to that
 exact STS role session. Live caller-identity proof, the privileged observer,
-and production publisher wiring remain separate future work. ProviderSpec V5
+and production publisher wiring remain separate future work. ProviderSpec V6
 now pins the exact runtime IAM policy, but this decision does not claim that
 IAM enforces `If-None-Match` or `If-Match`; those headers remain fences in the
 application publication protocol.
@@ -1197,6 +1201,40 @@ every exact-key content version before mutation; physical destroy explicitly
 deletes every owned content version and marker by VersionId and proves empty
 history. The controller grants only this role missing-with-binding recreation,
 modeled as an update that preserves its binding and ownership authority.
+
+The twenty-third slice advances the provider specification to V6/`wap6`
+before any node mutation is implemented. Caller-supplied bootstrap digests are
+removed. A code-owned, domain-separated bootstrap contract renders one exact
+LF-terminated UTF-8 user-data body below EC2's 16 KiB raw limit. It creates a
+locked `wharfie-runtime` account and fixed host/application directories,
+enables systemd lingering and the Amazon SSM agent, and installs an idempotent
+root-owned `IPAddressDeny` drop-in on that user's systemd manager. The drop-in
+rejects IPv4 IMDS traffic from the future application-service subtree without
+depending on a host firewall package. It embeds
+no deployment identity, credential, artifact location, or application bytes,
+and deliberately starts no application service before the later attachment
+and host-configuration effects settle.
+
+The AL2023 host contract targets systemd on supported cgroup v2, but
+`IPAddressDeny` still depends on cgroup-BPF enforcement. This slice proves the
+exact bytes and shell syntax, not successful boot or the live network denial. A
+pinned-AMI smoke test must prove both before production security claims.
+
+V6 also pins the AMI's sole root device, snapshot, source volume type/size,
+encryption, and delete policy, then derives the exact encrypted `gp3` root
+volume that a future `RunInstances` request must create with the pinned KMS
+key. It fixes on-demand/default-tenancy behavior, EBS optimization, monitoring,
+standard burst credits, no capacity reservation, stop-on-guest-shutdown, both
+API protections disabled, no hibernation or enclave, default maintenance
+recovery, IMDSv2-only IPv4 metadata with tags and IPv6 disabled, private-DNS
+options, and the sole public-IPv4 primary ENI contract. The credential-bound
+authority gains a separate EC2 client with one SDK transport attempt and only
+`RunInstances`, `StartInstances`, `DescribeInstances`,
+`DescribeInstanceAttribute`, `DescribeVolumes`, `TerminateInstances`, and
+`close`. The future driver must use `StartInstances` plus exact readback to
+recover its stop-on-guest-shutdown lifecycle. This slice does not claim
+that an instance exists; those methods are authority for the next recoverable
+resource driver.
 
 The substrate node and two volume-attachment drivers are the next graph
 effects. Source and packaged deployment commands, production composition,

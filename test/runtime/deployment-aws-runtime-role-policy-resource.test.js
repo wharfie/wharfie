@@ -100,13 +100,20 @@ function makeProviderSpec(profile, providerScope) {
       rootDeviceType: 'ebs',
       virtualizationType: 'hvm',
       enaSupport: true,
+      rootDeviceName: '/dev/xvda',
+      rootBlockDevice: {
+        snapshotId: 'snap-0123456789abcdef0',
+        volumeType: 'gp3',
+        volumeSizeGiB: 8,
+        encrypted: false,
+        deleteOnTermination: true,
+      },
     },
     placement: { availabilityZoneId: 'use1-az1' },
     storage: {
       ebsKmsKeyArn:
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
-    bootstrapDigest: digest('runtime role policy bootstrap'),
   });
 }
 
@@ -654,11 +661,11 @@ function providerError(name, message = 'provider-secret-detail') {
 }
 
 describe('AWS single-node runtime role policy identity', () => {
-  it('pins ProviderSpec V5, the exact policy template, desired state, and RoleId-derived identity', () => {
+  it('pins ProviderSpec V6, the exact policy template, desired state, and RoleId-derived identity', () => {
     const fixture = makeFixture();
     const authority = runtimeAuthority(fixture.base);
 
-    expect(fixture.base.providerSpec.schemaVersion).toBe(5);
+    expect(fixture.base.providerSpec.schemaVersion).toBe(6);
     expect(
       fixture.base.providerSpec.capabilities.runtimeIdentity.policyDigest,
     ).toEqual(AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST);

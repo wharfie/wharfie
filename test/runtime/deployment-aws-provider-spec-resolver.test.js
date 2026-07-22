@@ -34,6 +34,8 @@ import {
 const NOW = Date.parse('2026-01-01T00:00:00.000Z');
 const X64_AMI = 'ami-0123456789abcdef0';
 const ARM64_AMI = 'ami-0fedcba9876543210';
+const X64_ROOT_SNAPSHOT = 'snap-0123456789abcdef0';
+const ARM64_ROOT_SNAPSHOT = 'snap-0fedcba9876543210';
 const AMAZON_ACCOUNT_ID = '137112412989';
 const PRIMARY_AZ_ID = 'use1-az2';
 const SECONDARY_AZ_ID = 'use1-az4';
@@ -181,6 +183,22 @@ function imageResponse(
         PublicSsmParameterName: name.slice(1),
         ImageAllowed: true,
         DeprecationTime: deprecationTime,
+        RootDeviceName: '/dev/xvda',
+        BlockDeviceMappings: [
+          {
+            DeviceName: '/dev/xvda',
+            Ebs: {
+              SnapshotId:
+                fixture.profile.target.architecture === 'x64'
+                  ? X64_ROOT_SNAPSHOT
+                  : ARM64_ROOT_SNAPSHOT,
+              VolumeType: 'gp3',
+              VolumeSize: 8,
+              Encrypted: false,
+              DeleteOnTermination: true,
+            },
+          },
+        ],
       },
     ],
   };
@@ -308,12 +326,11 @@ function makeClient({
   });
 }
 
-/** @param {ReturnType<typeof makeFixture>} fixture @param {ReturnType<typeof makeClient>} client @param {{maxAttempts?: number, waitForRetry?: (attempt: number) => Promise<void>, bootstrapDigest?: ReturnType<typeof digest>, now?: () => number}} [overrides] */
+/** @param {ReturnType<typeof makeFixture>} fixture @param {ReturnType<typeof makeClient>} client @param {{maxAttempts?: number, waitForRetry?: (attempt: number) => Promise<void>, now?: () => number}} [overrides] */
 function makeResolver(fixture, client, overrides = {}) {
   return createAwsSingleNodeProviderSpecResolver({
     client,
     providerScope: fixture.providerScope,
-    bootstrapDigest: overrides.bootstrapDigest || digest('bootstrap-v1'),
     now: overrides.now || (() => NOW),
     maxAttempts: overrides.maxAttempts ?? 1,
     waitForRetry: overrides.waitForRetry || (async () => {}),
@@ -340,10 +357,20 @@ function expectedSpec(fixture, version = 87, ebsKmsKeyArn = EBS_KMS_KEY_ARN) {
       rootDeviceType: 'ebs',
       virtualizationType: 'hvm',
       enaSupport: true,
+      rootDeviceName: '/dev/xvda',
+      rootBlockDevice: {
+        snapshotId:
+          fixture.profile.target.architecture === 'x64'
+            ? X64_ROOT_SNAPSHOT
+            : ARM64_ROOT_SNAPSHOT,
+        volumeType: 'gp3',
+        volumeSizeGiB: 8,
+        encrypted: false,
+        deleteOnTermination: true,
+      },
     },
     placement: { availabilityZoneId: PRIMARY_AZ_ID },
     storage: { ebsKmsKeyArn },
-    bootstrapDigest: digest('bootstrap-v1'),
   });
 }
 
@@ -374,10 +401,54 @@ describe('AWS single-node provider-spec resolver', () => {
           sourceParameter: { name: parameterName, version: 87 },
           imageId,
           architecture: imageArchitecture,
+          rootDeviceName: '/dev/xvda',
+          rootBlockDevice: {
+            snapshotId:
+              targetArchitecture === 'x64'
+                ? X64_ROOT_SNAPSHOT
+                : ARM64_ROOT_SNAPSHOT,
+            volumeType: 'gp3',
+            volumeSizeGiB: 8,
+            encrypted: false,
+            deleteOnTermination: true,
+          },
         },
         placement: { availabilityZoneId: PRIMARY_AZ_ID },
         storage: { ebsKmsKeyArn: EBS_KMS_KEY_ARN },
-        node: { instanceType },
+        node: {
+          instanceType,
+          tenancy: 'default',
+          purchaseOption: 'on-demand',
+          ebsOptimized: true,
+          monitoring: false,
+          cpuCredits: 'standard',
+          capacityReservationPreference: 'none',
+          instanceInitiatedShutdownBehavior: 'stop',
+          terminationProtection: false,
+          stopProtection: false,
+          hibernation: false,
+          enclave: false,
+          maintenanceAutoRecovery: 'default',
+          metadataOptions: { httpProtocolIpv6: 'disabled' },
+          privateDnsNameOptions: {
+            hostnameType: 'ip-name',
+            enableResourceNameDnsARecord: false,
+            enableResourceNameDnsAaaaRecord: false,
+          },
+          primaryNetworkInterface: {
+            description: 'Wharfie single-node primary network interface.',
+          },
+          rootVolume: {
+            deviceName: '/dev/xvda',
+            snapshotId:
+              targetArchitecture === 'x64'
+                ? X64_ROOT_SNAPSHOT
+                : ARM64_ROOT_SNAPSHOT,
+            sizeGiB: 8,
+            encrypted: true,
+            deleteOnTermination: true,
+          },
+        },
       });
       expect(Object.isFrozen(spec)).toBe(true);
       expect(client.getParameter).toHaveBeenCalledWith({
@@ -681,6 +752,86 @@ describe('AWS single-node provider-spec resolver', () => {
       'invalid deprecation',
       (/** @type {any} */ value) =>
         (value.Images[0].DeprecationTime = '2027-02-30T00:00:00Z'),
+    ],
+    [
+      'root device name',
+      (/** @type {any} */ value) => (value.Images[0].RootDeviceName = 'xvda'),
+    ],
+    [
+      'missing block-device mappings',
+      (/** @type {any} */ value) => delete value.Images[0].BlockDeviceMappings,
+    ],
+    [
+      'empty block-device mappings',
+      (/** @type {any} */ value) => (value.Images[0].BlockDeviceMappings = []),
+    ],
+    [
+      'multiple block-device mappings',
+      (/** @type {any} */ value) =>
+        value.Images[0].BlockDeviceMappings.push({
+          DeviceName: '/dev/sdf',
+          Ebs: { ...value.Images[0].BlockDeviceMappings[0].Ebs },
+        }),
+    ],
+    [
+      'malformed root mapping',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0] = null),
+    ],
+    [
+      'root mapping device mismatch',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].DeviceName = '/dev/sda1'),
+    ],
+    [
+      'root mapping virtual name',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].VirtualName = 'ephemeral0'),
+    ],
+    [
+      'root mapping no-device marker',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].NoDevice = ''),
+    ],
+    [
+      'missing root EBS receipt',
+      (/** @type {any} */ value) =>
+        delete value.Images[0].BlockDeviceMappings[0].Ebs,
+    ],
+    [
+      'root snapshot ID',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].Ebs.SnapshotId = 'latest'),
+    ],
+    [
+      'root volume type',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].Ebs.VolumeType = 'gp2'),
+    ],
+    [
+      'root volume minimum size',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].Ebs.VolumeSize = 7),
+    ],
+    [
+      'root volume maximum size',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].Ebs.VolumeSize = 65),
+    ],
+    [
+      'root volume integral size',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].Ebs.VolumeSize = 8.5),
+    ],
+    [
+      'encrypted public root snapshot',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].Ebs.Encrypted = true),
+    ],
+    [
+      'retained image root',
+      (/** @type {any} */ value) =>
+        (value.Images[0].BlockDeviceMappings[0].Ebs.DeleteOnTermination = false),
     ],
   ])('rejects EC2 %s drift immediately', async (_name, mutate) => {
     const fixture = makeFixture();
@@ -1471,30 +1622,49 @@ describe('AWS single-node provider-spec resolver', () => {
     expect(client.getParameter).not.toHaveBeenCalled();
   });
 
-  it('reproduces the bootstrap digest and rejects a valid spec pinned to different behavior', async () => {
-    const fixture = makeFixture();
-    const spec = createAwsSingleNodeProviderSpec({
-      profile: fixture.profile,
-      providerScope: fixture.providerScope,
-      machineImage: expectedSpec(fixture).machineImage,
-      placement: { availabilityZoneId: PRIMARY_AZ_ID },
-      storage: { ebsKmsKeyArn: EBS_KMS_KEY_ARN },
-      bootstrapDigest: digest('different-bootstrap'),
-    });
-    const parameter = parameterResponse(fixture);
-    parameter.Parameter.Selector = ':87';
-    const client = makeClient({
-      parameters: [parameter],
-      images: [imageResponse(fixture)],
-    });
-    const resolver = makeResolver(fixture, client);
+  it.each([
+    [
+      'root device name',
+      (/** @type {any} */ image) => (image.rootDeviceName = '/dev/sda1'),
+    ],
+    [
+      'root snapshot',
+      (/** @type {any} */ image) =>
+        (image.rootBlockDevice.snapshotId = 'snap-0aaaaaaaaaaaaaaaa'),
+    ],
+    [
+      'root size',
+      (/** @type {any} */ image) => (image.rootBlockDevice.volumeSizeGiB = 16),
+    ],
+  ])(
+    'reproduces and rejects a valid spec pinned to a different image %s receipt',
+    async (_name, mutate) => {
+      const fixture = makeFixture();
+      const expected = expectedSpec(fixture);
+      const machineImage = JSON.parse(JSON.stringify(expected.machineImage));
+      mutate(machineImage);
+      const spec = createAwsSingleNodeProviderSpec({
+        profile: fixture.profile,
+        providerScope: fixture.providerScope,
+        machineImage,
+        placement: { availabilityZoneId: PRIMARY_AZ_ID },
+        storage: { ebsKmsKeyArn: EBS_KMS_KEY_ARN },
+      });
+      const parameter = parameterResponse(fixture);
+      parameter.Parameter.Selector = ':87';
+      const client = makeClient({
+        parameters: [parameter],
+        images: [imageResponse(fixture)],
+      });
+      const resolver = makeResolver(fixture, client);
 
-    await expect(
-      resolver.validateProviderSpec(makeContext(fixture, spec)),
-    ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
-    expect(client.getParameter).toHaveBeenCalledTimes(1);
-    expect(client.describeImages).toHaveBeenCalledTimes(1);
-  });
+      await expect(
+        resolver.validateProviderSpec(makeContext(fixture, spec)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeProviderSpecConflictError);
+      expect(client.getParameter).toHaveBeenCalledTimes(1);
+      expect(client.describeImages).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('validates the exact bounded factory surface', () => {
     const fixture = makeFixture();
@@ -1502,7 +1672,6 @@ describe('AWS single-node provider-spec resolver', () => {
     const base = {
       client,
       providerScope: fixture.providerScope,
-      bootstrapDigest: digest('bootstrap-v1'),
       now: () => NOW,
     };
 
@@ -1515,6 +1684,12 @@ describe('AWS single-node provider-spec resolver', () => {
     expect(() =>
       createAwsSingleNodeProviderSpecResolver({ ...base, extra: true }),
     ).toThrow(/extra/);
+    expect(() =>
+      createAwsSingleNodeProviderSpecResolver({
+        ...base,
+        bootstrapDigest: digest('caller-selected-bootstrap'),
+      }),
+    ).toThrow(/bootstrapDigest is not supported/i);
     expect(() =>
       createAwsSingleNodeProviderSpecResolver({
         ...base,

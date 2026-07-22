@@ -63,10 +63,10 @@ tombstone lets a new target SEA automatically reproject and prove the retained
 source before it requests the normal durable update; unexplained missing
 projection state still requires the exact selected SEA. Workflow cancellation
 has durable cursor authority and
-active-owner delivery. Branches,
-an early-signal inbox, managed-effect workflow successors, schedules,
-provider-backed deployment, multi-host leases/heartbeats, and the trusted-node
-mesh remain roadmap work; Wharfie is not production ready.
+active-owner delivery. Branches, an early-signal inbox, managed-effect workflow
+successors, schedules, complete provider-backed deployment, multi-host
+leases/heartbeats, and the trusted-node mesh remain roadmap work; Wharfie is
+not production ready.
 
 ## Start locally
 
@@ -101,22 +101,17 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [direct EC2 route-table resource
-checkpoint](../llm/checkpoints/2026-07-21-v33-direct-ec2-route-table-resource.md).
-The managed route table reuses the schema-2 tagged direct-resource recovery
-kernel beneath the exact VPC binding and adds a durable 64-hex EC2
-`ClientToken` derived from the action ID and ownership nonce. Its fixed state
-is one nonmain, unassociated route table with the active local VPC-CIDR route,
-no virtual-gateway propagation, and purge lifecycle. Create must observe that
-pristine state; no-op accepts only the fixed later default-route and
-subnet-association descendants, and reverse destroy waits for them to
-disappear before deletion. AWS documents that an identical token-and-parameter
-retry performs no further action and a mismatch fails, so Wharfie claims at
-most one successful create effect in the Region, not API-call exactly-once
-execution; AWS does not document the token-retention horizon. The
-retained-volume, VPC, gateway, gateway-attachment, subnet, and route-table
-drivers are implemented. The default IPv4 route is next, followed by the
-subnet association and security group before the remaining identity, node,
-attachment, and complete AWS driver composition. Its parent is the [direct EC2
-subnet resource
-checkpoint](../llm/checkpoints/2026-07-21-v32-direct-ec2-subnet-resource.md).
+The current restart handoff is the [exact EC2 node-launch contract
+checkpoint](../llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md).
+ProviderSpec V6 pins the exact AMI root receipt and every launch default used by
+Wharfie, including the primary ENI, encrypted root volume, metadata, lifecycle,
+and private-DNS shape. The bounded exact user-data bytes are code-owned and
+prepare the locked runtime account, lingering, SSM, and a systemd-native IMDS
+restriction on the runtime user-manager subtree without staging or starting the
+app. A separate single-attempt EC2 authority exposes only launch, stopped-node
+recovery, exact instance/attribute/root-volume reads, termination, and close.
+This is contract and authority proof, not a claim that an instance exists or
+that the restriction has run on the pinned AMI. The recoverable substrate node
+is next, followed by its two retained-volume attachments and complete AWS
+provider composition. Its parent is the [recoverable managed-artifact
+checkpoint](../llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md).

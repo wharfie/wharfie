@@ -60,6 +60,14 @@ const VOLUME_RESOURCE_METHODS = Object.freeze([
   'createVolume',
   'describeVolumes',
 ]);
+const NODE_RESOURCE_METHODS = Object.freeze([
+  'runInstances',
+  'startInstances',
+  'describeInstances',
+  'describeInstanceAttribute',
+  'describeVolumes',
+  'terminateInstances',
+]);
 const NETWORK_RESOURCE_METHODS = Object.freeze([
   'associateRouteTable',
   'attachInternetGateway',
@@ -196,6 +204,38 @@ async function loadHarness({
       }
       if (method === 'describeVolumes') return { Volumes: [], input };
       if (method === 'describeInstances') return { Reservations: [], input };
+      if (method === 'describeInstanceAttribute') {
+        return { InstanceId: 'i-00000000000000001', input };
+      }
+      if (method === 'runInstances') {
+        return {
+          ReservationId: 'r-00000000000000001',
+          Instances: [{ InstanceId: 'i-00000000000000001' }],
+          input,
+        };
+      }
+      if (method === 'startInstances') {
+        return {
+          StartingInstances: [
+            {
+              InstanceId: 'i-00000000000000001',
+              CurrentState: { Name: 'pending' },
+            },
+          ],
+          input,
+        };
+      }
+      if (method === 'terminateInstances') {
+        return {
+          TerminatingInstances: [
+            {
+              InstanceId: 'i-00000000000000001',
+              CurrentState: { Name: 'shutting-down' },
+            },
+          ],
+          input,
+        };
+      }
       if (method === 'createInternetGateway') {
         return {
           InternetGateway: {
@@ -506,6 +546,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    DescribeInstanceAttributeCommand: class DescribeInstanceAttributeCommand {
+      input;
+      operation = 'describeInstanceAttribute';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     DescribeInstancesCommand: class DescribeInstancesCommand {
       input;
       operation = 'describeInstances';
@@ -664,6 +712,30 @@ async function loadHarness({
         this.input = input;
       }
     },
+    RunInstancesCommand: class RunInstancesCommand {
+      input;
+      operation = 'runInstances';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    StartInstancesCommand: class StartInstancesCommand {
+      input;
+      operation = 'startInstances';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    TerminateInstancesCommand: class TerminateInstancesCommand {
+      input;
+      operation = 'terminateInstances';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
   }));
   const documentClient = {
     query: jest.fn(),
@@ -740,6 +812,7 @@ describe('AWS deployment invocation authority', () => {
         authority.createManagedArtifactResourceClient();
       const providerSpecReadClient = authority.createProviderSpecReadClient();
       const volumeResourceClient = authority.createVolumeResourceClient();
+      const nodeResourceClient = authority.createNodeResourceClient();
       const networkResourceClient = authority.createNetworkResourceClient();
       expect(harness.dynamoConfigs[0].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[0].credentials).toBe(credentials);
@@ -767,9 +840,15 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.ec2Configs[1].credentials).toBe(credentials);
       expect(harness.ec2Configs[2].region).toBe('us-east-1');
       expect(harness.ec2Configs[2].credentials).toBe(credentials);
+      expect(harness.ec2Configs[3].region).toBe('us-east-1');
+      expect(harness.ec2Configs[3].credentials).toBe(credentials);
       expect(harness.ec2Configs[2]).not.toBe(harness.ec2Configs[1]);
+      expect(harness.ec2Configs[3]).not.toBe(harness.ec2Configs[2]);
       expect(harness.ec2Configs[2].retryStrategy).not.toBe(
         harness.ec2Configs[1].retryStrategy,
+      );
+      expect(harness.ec2Configs[3].retryStrategy).not.toBe(
+        harness.ec2Configs[2].retryStrategy,
       );
       await expect(
         harness.ec2Configs[1].retryStrategy.maxAttempts(),
@@ -777,17 +856,22 @@ describe('AWS deployment invocation authority', () => {
       await expect(
         harness.ec2Configs[2].retryStrategy.maxAttempts(),
       ).resolves.toBe(1);
+      await expect(
+        harness.ec2Configs[3].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
       expect(Object.isFrozen(controlClient)).toBe(true);
       expect(Object.isFrozen(s3ControlClient)).toBe(true);
       expect(Object.isFrozen(managedArtifactResourceClient)).toBe(true);
       expect(Object.isFrozen(providerSpecReadClient)).toBe(true);
       expect(Object.isFrozen(volumeResourceClient)).toBe(true);
+      expect(Object.isFrozen(nodeResourceClient)).toBe(true);
       expect(Object.isFrozen(networkResourceClient)).toBe(true);
       expect(controlClient).not.toHaveProperty('config');
       expect(s3ControlClient).not.toHaveProperty('config');
       expect(managedArtifactResourceClient).not.toHaveProperty('config');
       expect(providerSpecReadClient).not.toHaveProperty('config');
       expect(volumeResourceClient).not.toHaveProperty('config');
+      expect(nodeResourceClient).not.toHaveProperty('config');
       expect(networkResourceClient).not.toHaveProperty('config');
       await controlClient.describeTable({ TableName: 'control-table' });
       expect(harness.dynamoSend).toHaveBeenCalledWith('describeTable', {
@@ -829,6 +913,12 @@ describe('AWS deployment invocation authority', () => {
         ClientToken: 'volume-token',
         Size: 8,
       });
+      await nodeResourceClient.describeInstances({
+        InstanceIds: ['i-00000000000000001'],
+      });
+      expect(harness.ec2Send).toHaveBeenCalledWith('describeInstances', {
+        InstanceIds: ['i-00000000000000001'],
+      });
       await networkResourceClient.createVpc({ CidrBlock: '10.42.0.0/16' });
       expect(harness.ec2Send).toHaveBeenCalledWith('createVpc', {
         CidrBlock: '10.42.0.0/16',
@@ -844,6 +934,7 @@ describe('AWS deployment invocation authority', () => {
       await managedArtifactResourceClient.close();
       await providerSpecReadClient.close();
       await volumeResourceClient.close();
+      await nodeResourceClient.close();
       await networkResourceClient.close();
       await authority.close();
     } finally {
@@ -1330,6 +1421,241 @@ describe('AWS deployment invocation authority', () => {
     await expect(
       client.describeVolumes({ VolumeIds: ['vol-00000000000000001'] }),
     ).rejects.toThrow('AWS deployment volume resource client is closed.');
+    await authority.close();
+  });
+
+  it('exposes only the exact narrow node resource surface and dispatches every operation with one snapshot', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createNodeResourceClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...NODE_RESOURCE_METHODS, 'close'].sort(),
+      );
+      expect(Object.isFrozen(client)).toBe(true);
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      expect(harness.ec2Configs).toHaveLength(1);
+      expect(harness.ec2Configs[0]).toMatchObject({ region: 'us-east-1' });
+      expect(harness.ec2Configs[0].credentials).toBe(
+        harness.stsConfigs[0].credentials,
+      );
+      await expect(
+        harness.ec2Configs[0].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
+
+      const runInput = {
+        ClientToken:
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        ImageId: 'ami-00000000000000001',
+        MinCount: 1,
+        MaxCount: 1,
+      };
+      await expect(client.runInstances(runInput)).resolves.toMatchObject({
+        Instances: [{ InstanceId: 'i-00000000000000001' }],
+        input: runInput,
+      });
+      const startInput = {
+        InstanceIds: ['i-00000000000000001'],
+      };
+      await expect(client.startInstances(startInput)).resolves.toMatchObject({
+        StartingInstances: [
+          {
+            InstanceId: 'i-00000000000000001',
+            CurrentState: { Name: 'pending' },
+          },
+        ],
+        input: startInput,
+      });
+      const describeInstancesInput = {
+        InstanceIds: ['i-00000000000000001'],
+      };
+      await expect(
+        client.describeInstances(describeInstancesInput),
+      ).resolves.toEqual({
+        Reservations: [],
+        input: describeInstancesInput,
+      });
+      const describeAttributeInput = {
+        InstanceId: 'i-00000000000000001',
+        Attribute: 'userData',
+      };
+      await expect(
+        client.describeInstanceAttribute(describeAttributeInput),
+      ).resolves.toEqual({
+        InstanceId: 'i-00000000000000001',
+        input: describeAttributeInput,
+      });
+      const describeVolumesInput = {
+        VolumeIds: ['vol-00000000000000001'],
+      };
+      await expect(
+        client.describeVolumes(describeVolumesInput),
+      ).resolves.toEqual({ Volumes: [], input: describeVolumesInput });
+      const terminateInput = {
+        InstanceIds: ['i-00000000000000001'],
+      };
+      await expect(
+        client.terminateInstances(terminateInput),
+      ).resolves.toMatchObject({
+        TerminatingInstances: [
+          {
+            InstanceId: 'i-00000000000000001',
+            CurrentState: { Name: 'shutting-down' },
+          },
+        ],
+        input: terminateInput,
+      });
+      expect(harness.ec2Send.mock.calls).toEqual([
+        ['runInstances', runInput],
+        ['startInstances', startInput],
+        ['describeInstances', describeInstancesInput],
+        ['describeInstanceAttribute', describeAttributeInput],
+        ['describeVolumes', describeVolumesInput],
+        ['terminateInstances', terminateInput],
+      ]);
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it('replaces node resource client construction failures', async () => {
+    const harness = await loadHarness({
+      ec2ConstructionError: new Error('node-construction-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+
+    expect(() => authority.createNodeResourceClient()).toThrow(
+      'AWS deployment node resource client creation failed.',
+    );
+    expect(harness.ec2Configs).toHaveLength(0);
+    expect(harness.ec2Destroy).not.toHaveBeenCalled();
+    await authority.close();
+  });
+
+  it.each([
+    ['IdempotentParameterMismatch', 'runInstances', 400],
+    ['InvalidInstanceID.NotFound', 'describeInstances', 404],
+    ['InvalidInstanceId.NotFound', 'describeInstanceAttribute', 404],
+    ['InvalidVolume.NotFound', 'describeVolumes', 404],
+    ['IncorrectInstanceState', 'terminateInstances', 400],
+    ['OperationNotPermitted', 'terminateInstances', 400],
+  ])(
+    'preserves only the %s node resource classification',
+    async (name, method, status) => {
+      const providerError = Object.assign(new Error('node-secret'), {
+        name,
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = /** @type {Record<string, any>} */ (
+        authority.createNodeResourceClient()
+      );
+
+      const observed = await client[method]({ operationMarker: method }).catch(
+        (/** @type {unknown} */ error) => error,
+      );
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name,
+        code: 'AWS_DEPLOYMENT_NODE_RESOURCE_OPERATION',
+        message: 'AWS deployment node resource operation failed.',
+        $metadata: { httpStatusCode: status },
+      });
+      expect(JSON.stringify(observed)).not.toMatch(
+        /node-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it.each([
+    [403, true],
+    [399, false],
+    [600, false],
+    ['403', false],
+  ])(
+    'keeps unknown node failures generic and safely handles status %p',
+    async (status, preservesStatus) => {
+      const providerError = Object.assign(new Error('node-access-secret'), {
+        name: 'AccessDeniedException',
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createNodeResourceClient();
+
+      const observed = await client
+        .describeInstances({ InstanceIds: ['i-00000000000000001'] })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name: 'AwsDeploymentNodeResourceError',
+        code: 'AWS_DEPLOYMENT_NODE_RESOURCE_OPERATION',
+        message: 'AWS deployment node resource operation failed.',
+      });
+      if (preservesStatus) {
+        expect(observed).toHaveProperty('$metadata.httpStatusCode', status);
+      } else {
+        expect(observed).not.toHaveProperty('$metadata');
+      }
+      expect(JSON.stringify(observed)).not.toMatch(
+        /AccessDenied|node-access-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it('closes the node resource SDK client idempotently and refuses every reuse', async () => {
+    const harness = await loadHarness({
+      ec2CloseError: new Error('node-close-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createNodeResourceClient()
+    );
+
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment node resource client close failed.',
+    );
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    for (const method of NODE_RESOURCE_METHODS) {
+      await expect(client[method]({})).rejects.toThrow(
+        'AWS deployment node resource client is closed.',
+      );
+    }
     await authority.close();
   });
 
@@ -2227,6 +2553,9 @@ describe('AWS deployment invocation authority', () => {
     const volumeResourceClient = /** @type {Record<string, any>} */ (
       authority.createVolumeResourceClient()
     );
+    const nodeResourceClient = /** @type {Record<string, any>} */ (
+      authority.createNodeResourceClient()
+    );
     const networkResourceClient = /** @type {Record<string, any>} */ (
       authority.createNetworkResourceClient()
     );
@@ -2262,6 +2591,9 @@ describe('AWS deployment invocation authority', () => {
       'AWS deployment authority is closed.',
     );
     expect(() => authority.createVolumeResourceClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
+    expect(() => authority.createNodeResourceClient()).toThrow(
       'AWS deployment authority is closed.',
     );
     expect(() => authority.createNetworkResourceClient()).toThrow(
@@ -2301,6 +2633,11 @@ describe('AWS deployment invocation authority', () => {
         VolumeIds: ['vol-00000000000000001'],
       }),
     ).resolves.toMatchObject({ Volumes: [] });
+    await expect(
+      nodeResourceClient.describeInstances({
+        InstanceIds: ['i-00000000000000001'],
+      }),
+    ).resolves.toMatchObject({ Reservations: [] });
     await expect(
       networkResourceClient.createVpc({ CidrBlock: '10.42.0.0/16' }),
     ).resolves.toMatchObject({
@@ -2371,6 +2708,14 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment volume resource client is closed.',
       );
     }
+    const firstNodeClose = nodeResourceClient.close();
+    expect(nodeResourceClient.close()).toBe(firstNodeClose);
+    await firstNodeClose;
+    for (const method of NODE_RESOURCE_METHODS) {
+      await expect(nodeResourceClient[method]({})).rejects.toThrow(
+        'AWS deployment node resource client is closed.',
+      );
+    }
     const firstNetworkClose = networkResourceClient.close();
     expect(networkResourceClient.close()).toBe(firstNetworkClose);
     await firstNetworkClose;
@@ -2393,7 +2738,7 @@ describe('AWS deployment invocation authority', () => {
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
     expect(harness.s3Destroy).toHaveBeenCalledTimes(2);
     expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
-    expect(harness.ec2Destroy).toHaveBeenCalledTimes(4);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(5);
     expect(harness.iamDestroy).toHaveBeenCalledTimes(1);
   });
 });

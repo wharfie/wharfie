@@ -153,12 +153,13 @@ work. The npm package remains deliberately private. It is not ready for
 production use.
 
 The first provider deployment authority is now defined. A strict AWS-shaped
-one-node profile now resolves one schema-V5, `wap5` content-addressed provider
-specification that pins the exact regional AMI and parameter version, a stable
-standard Availability Zone ID that offers the fixed instance type, the exact
-regional/account default EBS KMS key ARN, bootstrap and identity policy
-digests, including the code-owned exact runtime-policy template, instance
-shape, metadata controls, explicit retained-volume
+one-node profile now resolves one schema-V6, `wap6` content-addressed provider
+specification that pins the exact regional AMI, parameter version, sole EBS
+root mapping and snapshot, a stable standard Availability Zone ID that offers
+the fixed instance type, and the exact regional/account default EBS KMS key
+ARN. The same document owns the complete on-demand instance, private-DNS,
+primary-ENI, encrypted root-volume, metadata, and lifecycle shape plus the
+code-owned bootstrap and runtime-policy digests. It also pins explicit retained-volume
 performance and attachment contracts, network, service-health timing, and the
 content ID of one fixed 18-role physical-resource graph. Runtime identity is
 four independently recoverable effects: an IAM role, its derived inline
@@ -243,7 +244,7 @@ provider exactly-once execution.
 
 The four runtime-identity drivers independently create and recover one
 EC2-only IAM role, its exact least-privilege inline policy, one tagged instance
-profile, and their bidirectionally verified membership. ProviderSpec V5 owns
+profile, and their bidirectionally verified membership. ProviderSpec V6 owns
 the policy-template digest; callers cannot substitute one. The concrete policy
 grants only the modern Session Manager channels, the exact managed-artifact
 object, and role-session-scoped V3 health reads and conditional writes, while
@@ -252,9 +253,27 @@ IDs, ownership, trust, policy shape, and dependency lineage. Profile deletion
 also fences role membership and current-region EC2 use; the account-global IAM
 profile relies on Wharfie's explicit exclusive-profile/single-region contract.
 
+The node launch prerequisite is now code rather than a caller-supplied hash.
+One bounded, deterministic EC2 user-data contract creates the locked
+`wharfie-runtime` account and fixed directories, enables lingering and the SSM
+agent, and installs a root-owned systemd restriction that denies the runtime
+user-manager subtree access to IPv4 instance metadata. It intentionally
+downloads no application and starts no application service before the retained
+volumes are attached.
+The credential snapshot also exposes a separate single-attempt node authority
+containing only `RunInstances`, stopped-node recovery, exact instance,
+attribute, and volume reads, `TerminateInstances`, and `close`; the recoverable
+substrate driver is the next effect and these methods are not yet production
+composition.
+
+The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
+but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
+test must still prove bootstrap completion and denied IMDS access before this
+becomes a production security claim.
+
 These modules do not yet attach, format, mount, or fulfill a complete service
-capability. The substrate node and its two volume attachments are the next
-resource effects. The privileged host observer, complete AWS
+capability. The substrate node driver and its two volume attachments are the
+next resource effects. The privileged host observer, complete AWS
 driver/router/inspection/`createPlan`, operator commands, production
 composition, and clean-account proof remain unfinished.
 
@@ -264,8 +283,9 @@ composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Recoverable managed-artifact checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md) — the current handoff for stable managed-current identity, exact staged-version conditional copy, bounded history proof, and explicit-version purge.
-- [Recoverable runtime-identity checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md) — the preceding handoff for ProviderSpec V5, exact least-privilege IAM, and all four recoverable runtime-identity effects.
+- [Exact EC2 node-launch contract checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md) — the current handoff for ProviderSpec V6, deterministic bootstrap bytes, and narrow recoverable node authority.
+- [Recoverable managed-artifact checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md) — the preceding handoff for stable managed-current identity, exact staged-version conditional copy, bounded history proof, and explicit-version purge.
+- [Recoverable runtime-identity checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md) — the earlier handoff for ProviderSpec V5, exact least-privilege IAM, and all four recoverable runtime-identity effects.
 - [Exact runtime service-health checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md) — the preceding handoff for V3 role/node-addressed health, PUT-first conditional publication, and Inspection V5 authority.
 - [Runtime-identity graph checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md) — the preceding handoff for the fixed 18-role graph and recoverable IAM effect boundaries.
 - [Direct EC2 internet-gateway resource checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md) — the preceding handoff for the standalone gateway lifecycle, attachment-independent intrinsic state, and attachment-fenced purge.

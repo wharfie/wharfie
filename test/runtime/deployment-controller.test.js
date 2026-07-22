@@ -119,13 +119,20 @@ function makeProviderSpec(
       rootDeviceType: 'ebs',
       virtualizationType: 'hvm',
       enaSupport: true,
+      rootDeviceName: '/dev/xvda',
+      rootBlockDevice: {
+        snapshotId: 'snap-0123456789abcdef0',
+        volumeType: 'gp3',
+        volumeSizeGiB: 8,
+        encrypted: false,
+        deleteOnTermination: true,
+      },
     },
     placement: { availabilityZoneId: 'use1-az1' },
     storage: {
       ebsKmsKeyArn:
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
-    bootstrapDigest: digest('fixed bootstrap'),
   });
 }
 
@@ -1558,6 +1565,19 @@ describe('deployment controller crash recovery', () => {
               Architecture: 'x86_64',
               ImageType: 'machine',
               RootDeviceType: 'ebs',
+              RootDeviceName: '/dev/xvda',
+              BlockDeviceMappings: [
+                {
+                  DeviceName: '/dev/xvda',
+                  Ebs: {
+                    SnapshotId: 'snap-0123456789abcdef0',
+                    VolumeType: 'gp3',
+                    VolumeSize: 8,
+                    Encrypted: false,
+                    DeleteOnTermination: true,
+                  },
+                },
+              ],
               VirtualizationType: 'hvm',
               EnaSupport: true,
               State: 'available',
@@ -1616,7 +1636,6 @@ describe('deployment controller crash recovery', () => {
     const resolver = createAwsSingleNodeProviderSpecResolver({
       client,
       providerScope: harness.base.providerScope,
-      bootstrapDigest: digest('fixed bootstrap'),
       now: () => HEALTH_NOW,
       maxAttempts: 1,
       waitForRetry: async () => {},

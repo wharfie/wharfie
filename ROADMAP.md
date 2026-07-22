@@ -2,8 +2,9 @@
 
 **Status:** The strict single-node deployment protocol now expands its small
 portable capability model into one fixed 18-role AWS resource graph. Provider
-specification V5 pins that graph and the code-owned exact runtime-policy
-template; Plan/Action V3, Inspection V5, Binding V2,
+specification V6 pins that graph, the code-owned exact runtime-policy template,
+the exact node-launch contract, and the digest of one code-owned bootstrap;
+Plan/Action V3, Inspection V5, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
 destroy policy. Strict controller-compatible drivers now cover the retained
@@ -21,8 +22,9 @@ bindings plus immutable IAM RoleId and EC2 instance ID at
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
 Inspection V5/`win5` correlates both identities before readiness. Live STS
 caller proof and the privileged production publisher remain unwired. The
-substrate node and its two volume attachments are the next graph effects,
-followed by provider composition, commands, and clean-account proof ·
+credential snapshot now exposes a separate single-attempt node authority. The
+recoverable substrate node and its two volume attachments are the next graph
+effects, followed by provider composition, commands, and clean-account proof ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -666,6 +668,20 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       under its original durable binding, and it does so as an update after
       the full history audit. Deterministic mocks prove the resource boundary,
       not a live-account lifecycle or complete provider composition.
+- [x] Advance the provider specification to V6/`wap6` before launching a node.
+      The exact AMI receipt now includes its sole EBS root device, snapshot,
+      source shape, and delete behavior; the node contract fixes every launch
+      default Wharfie will rely on, including on-demand lifecycle, private DNS,
+      metadata, primary ENI, encrypted `gp3` root volume, protections, credit
+      mode, and shutdown behavior. Bootstrap bytes and their digest are
+      code-owned, bounded, deterministic, secret-free user data that prepares
+      the locked runtime account, lingering, SSM, and a systemd-native IMDS
+      restriction on the runtime user-manager subtree without starting the
+      app. A separate single-attempt EC2 authority exposes only launch,
+      stopped-node recovery, exact instance/attribute/root-volume reads,
+      termination, and close. This is launch authority and contract proof; a
+      pinned-AMI bootstrap/IMDS smoke test remains required, and the
+      recoverable substrate resource is next.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -755,11 +771,11 @@ packaged commands before uninstall preserved the completed ledger. The current
 checksummed receipts are bound to commit `939e0f2`; the earlier V16 reboot-only
 receipts remain bound to `0d927463`.
 
-The regional provider specification now pins its exact image, stable placement,
-instance-type availability, default EBS KMS key ARN, and volume/attachment
-contract. Controller-shaped retained-volume, direct VPC, standalone
-internet-gateway, derived VPC/gateway-attachment, direct subnet, and direct
-route-table resources can create, inspect, and reconcile their exact effects
+The regional ProviderSpec V6 now pins its exact image and sole EBS root receipt,
+stable placement, instance-type availability, default EBS KMS key ARN, the
+digest of code-owned bootstrap bytes, complete node/primary-ENI defaults, and
+volume/attachment contracts. Controller-shaped retained-volume and all eight
+network resource effects can create, inspect, and reconcile their exact effects
 under deterministic mocks.
 The portable capability model expands into a fixed 18-role graph, with one
 recoverable action per modeled resource or relationship, exact binding
@@ -788,7 +804,8 @@ resource drivers are not yet composed into a complete provider, and the
 runtime path still does not create the substrate node or attach, format, or
 mount the retained volumes to fulfill a service capability.
 
-1. Implement the substrate node and two volume-attachment resources; build the
+1. Implement the substrate node against the exact V6 launch contract, then its
+   two volume-attachment resources; build the
    provider router, inspection, `createPlan`, and complete controller
    composition; and wire resident-service activation and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
@@ -802,9 +819,11 @@ mount the retained volumes to fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [recoverable managed-artifact
-checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md).
-Its parent is the [recoverable runtime-identity
+The current restart point is the [exact EC2 node-launch contract
+checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md).
+Its parent is the [recoverable managed-artifact
+checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md),
+whose parent is the [recoverable runtime-identity
 checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md),
 whose parent is the [exact runtime service-health
 checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md),

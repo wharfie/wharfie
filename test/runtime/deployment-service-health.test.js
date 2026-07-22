@@ -18,7 +18,6 @@ import {
 import {
   createCanonicalJsonSha256Id,
   createSha256Id,
-  sha256Base64Url,
 } from '../../src/core/runtime/content-id.js';
 import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
 import {
@@ -42,11 +41,6 @@ const RUNTIME_ROLE_ID = 'AROA1234567890EXAMPLE';
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
   return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
-}
-
-/** @param {string} value @returns {{algorithm: 'sha256', value: string}} */
-function digest(value) {
-  return { algorithm: 'sha256', value: sha256Base64Url(value) };
 }
 
 /** @param {string} prefix @param {string} domain @param {unknown} value @returns {string} */
@@ -151,13 +145,20 @@ function makeProviderSpec(profile, providerScope) {
       rootDeviceType: 'ebs',
       virtualizationType: 'hvm',
       enaSupport: true,
+      rootDeviceName: '/dev/xvda',
+      rootBlockDevice: {
+        snapshotId: 'snap-0123456789abcdef0',
+        volumeType: 'gp3',
+        volumeSizeGiB: 8,
+        encrypted: false,
+        deleteOnTermination: true,
+      },
     },
     placement: { availabilityZoneId: 'use1-az1' },
     storage: {
       ebsKmsKeyArn:
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
-    bootstrapDigest: digest('health bootstrap'),
   });
 }
 

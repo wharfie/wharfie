@@ -107,12 +107,19 @@ function makeProviderSpec(profile, providerScope, version = 17) {
       rootDeviceType: 'ebs',
       virtualizationType: 'hvm',
       enaSupport: true,
+      rootDeviceName: '/dev/xvda',
+      rootBlockDevice: {
+        snapshotId: 'snap-0123456789abcdef0',
+        volumeType: 'gp3',
+        volumeSizeGiB: 8,
+        encrypted: false,
+        deleteOnTermination: true,
+      },
     },
     placement: { availabilityZoneId: 'use1-az1' },
     storage: {
       ebsKmsKeyArn: `arn:${providerScope.partition}:kms:${providerScope.region}:${providerScope.accountId}:key/11111111-2222-3333-4444-555555555555`,
     },
-    bootstrapDigest: digest('bootstrap-v1'),
   });
 }
 

@@ -104,13 +104,20 @@ function makeProviderSpec(
       rootDeviceType: 'ebs',
       virtualizationType: 'hvm',
       enaSupport: true,
+      rootDeviceName: '/dev/xvda',
+      rootBlockDevice: {
+        snapshotId: 'snap-0123456789abcdef0',
+        volumeType: 'gp3',
+        volumeSizeGiB: 8,
+        encrypted: false,
+        deleteOnTermination: true,
+      },
     },
     placement: { availabilityZoneId: AVAILABILITY_ZONE_ID },
     storage: {
       ebsKmsKeyArn:
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
-    bootstrapDigest: digest('route-table resource bootstrap'),
   });
 }
 

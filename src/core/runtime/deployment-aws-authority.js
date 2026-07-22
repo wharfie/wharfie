@@ -19,6 +19,7 @@ import {
   DeleteVpcCommand,
   DescribeAvailabilityZonesCommand,
   DescribeImagesCommand,
+  DescribeInstanceAttributeCommand,
   DescribeInstancesCommand,
   DescribeInternetGatewaysCommand,
   DescribeInstanceTypeOfferingsCommand,
@@ -32,6 +33,9 @@ import {
   DetachInternetGatewayCommand,
   EC2Client,
   GetEbsDefaultKmsKeyIdCommand,
+  RunInstancesCommand,
+  StartInstancesCommand,
+  TerminateInstancesCommand,
 } from '@aws-sdk/client-ec2';
 import {
   AddRoleToInstanceProfileCommand,
@@ -123,6 +127,14 @@ const VOLUME_RESOURCE_CLOSED_ERROR =
   'AWS deployment volume resource client is closed.';
 const VOLUME_RESOURCE_CLOSE_ERROR =
   'AWS deployment volume resource client close failed.';
+const NODE_RESOURCE_CREATION_ERROR =
+  'AWS deployment node resource client creation failed.';
+const NODE_RESOURCE_OPERATION_ERROR =
+  'AWS deployment node resource operation failed.';
+const NODE_RESOURCE_CLOSED_ERROR =
+  'AWS deployment node resource client is closed.';
+const NODE_RESOURCE_CLOSE_ERROR =
+  'AWS deployment node resource client close failed.';
 const NETWORK_RESOURCE_CREATION_ERROR =
   'AWS deployment network resource client creation failed.';
 const NETWORK_RESOURCE_OPERATION_ERROR =
@@ -146,6 +158,14 @@ const PROVIDER_SPEC_READ_ERROR_NAMES = new Set([
 const VOLUME_RESOURCE_ERROR_NAMES = new Set([
   'IdempotentParameterMismatch',
   'InvalidVolume.NotFound',
+]);
+const NODE_RESOURCE_ERROR_NAMES = new Set([
+  'IdempotentParameterMismatch',
+  'InvalidInstanceID.NotFound',
+  'InvalidInstanceId.NotFound',
+  'InvalidVolume.NotFound',
+  'IncorrectInstanceState',
+  'OperationNotPermitted',
 ]);
 const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'DependencyViolation',
@@ -266,6 +286,17 @@ const S3_VERSION_ID_MAX_UTF8_BYTES = 1024;
  * @typedef VolumeResourceClient
  * @property {(input: import('@aws-sdk/client-ec2').CreateVolumeCommandInput) => Promise<any>} createVolume - Create one exact EBS volume.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVolumesCommandInput) => Promise<any>} describeVolumes - Read exact EBS volume state.
+ * @property {() => Promise<void>} close - Close the caller-owned SDK client.
+ */
+
+/**
+ * @typedef NodeResourceClient
+ * @property {(input: import('@aws-sdk/client-ec2').RunInstancesCommandInput) => Promise<any>} runInstances - Launch one exact substrate node.
+ * @property {(input: import('@aws-sdk/client-ec2').StartInstancesCommandInput) => Promise<any>} startInstances - Recover one exact stopped substrate node.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeInstancesCommandInput) => Promise<any>} describeInstances - Read exact or bounded-discovery instance state.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeInstanceAttributeCommandInput) => Promise<any>} describeInstanceAttribute - Read one exact instance attribute.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeVolumesCommandInput) => Promise<any>} describeVolumes - Read exact root-volume state.
+ * @property {(input: import('@aws-sdk/client-ec2').TerminateInstancesCommandInput) => Promise<any>} terminateInstances - Terminate one exact substrate node.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
 
@@ -467,6 +498,34 @@ function sanitizeVolumeResourceError(value) {
 }
 
 /**
+ * Preserve only the EC2 classifications required for idempotent node launch,
+ * authoritative absence, and deletion recovery. Raw SDK messages, request
+ * IDs, access details, causes, and credential-bearing configuration never
+ * cross this boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeNodeResourceError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(NODE_RESOURCE_OPERATION_ERROR)
+    );
+  error.name = NODE_RESOURCE_ERROR_NAMES.has(candidate.name)
+    ? candidate.name
+    : 'AwsDeploymentNodeResourceError';
+  error.code = 'AWS_DEPLOYMENT_NODE_RESOURCE_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
+}
+
+/**
  * Preserve only the network-resource classifications needed for authoritative
  * absence and dependency-fenced deletion. Raw SDK messages, request IDs,
  * access details, causes, and credential-bearing configuration never cross
@@ -632,6 +691,7 @@ function scopeFromCallerIdentity(value, region) {
  *   createManagedArtifactResourceClient: () => Readonly<ManagedArtifactResourceClient>,
  *   createProviderSpecReadClient: () => Readonly<ProviderSpecReadClient>,
  *   createVolumeResourceClient: () => Readonly<VolumeResourceClient>,
+ *   createNodeResourceClient: () => Readonly<NodeResourceClient>,
  *   createNetworkResourceClient: () => Readonly<NetworkResourceClient>,
  *   createRuntimeIdentityResourceClient: () => Readonly<RuntimeIdentityResourceClient>,
  *   close: () => Promise<void>,
@@ -1104,6 +1164,73 @@ export async function createAwsDeploymentAuthority(options) {
     });
   }
 
+  /** @returns {Readonly<NodeResourceClient>} - Caller-owned narrow EC2 node resource client. */
+  function createNodeResourceClient() {
+    assertOpen();
+    /** @type {EC2Client} */
+    let client;
+    try {
+      client = new EC2Client({
+        // Node mutations use explicit provider recovery identities. Keep SDK
+        // transport retries from hiding an ambiguous launch or termination.
+        ...BaseAWS.config({ maxAttempts: 1 }),
+        region,
+        credentials,
+      });
+    } catch {
+      throw new Error(NODE_RESOURCE_CREATION_ERROR);
+    }
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) throw new Error(NODE_RESOURCE_CLOSED_ERROR);
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeNodeResourceError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        try {
+          client.destroy();
+        } catch {
+          throw new Error(NODE_RESOURCE_CLOSE_ERROR);
+        }
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      runInstances: (
+        /** @type {import('@aws-sdk/client-ec2').RunInstancesCommandInput} */ input,
+      ) => call(() => client.send(new RunInstancesCommand(input))),
+      startInstances: (
+        /** @type {import('@aws-sdk/client-ec2').StartInstancesCommandInput} */ input,
+      ) => call(() => client.send(new StartInstancesCommand(input))),
+      describeInstances: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeInstancesCommandInput} */ input,
+      ) => call(() => client.send(new DescribeInstancesCommand(input))),
+      describeInstanceAttribute: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeInstanceAttributeCommandInput} */ input,
+      ) => call(() => client.send(new DescribeInstanceAttributeCommand(input))),
+      describeVolumes: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeVolumesCommandInput} */ input,
+      ) => call(() => client.send(new DescribeVolumesCommand(input))),
+      terminateInstances: (
+        /** @type {import('@aws-sdk/client-ec2').TerminateInstancesCommandInput} */ input,
+      ) => call(() => client.send(new TerminateInstancesCommand(input))),
+      close: closeClient,
+    });
+  }
+
   /** @returns {Readonly<NetworkResourceClient>} - Caller-owned narrow network resource client. */
   function createNetworkResourceClient() {
     assertOpen();
@@ -1396,6 +1523,7 @@ export async function createAwsDeploymentAuthority(options) {
     createManagedArtifactResourceClient,
     createProviderSpecReadClient,
     createVolumeResourceClient,
+    createNodeResourceClient,
     createNetworkResourceClient,
     createRuntimeIdentityResourceClient,
     close,

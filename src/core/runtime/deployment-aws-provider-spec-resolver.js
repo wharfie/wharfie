@@ -1,6 +1,5 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact provider-boundary contracts are clearer than parser-specific expansions. */
 
-import { validateSha256Digest } from './application-revision.js';
 import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
@@ -23,17 +22,11 @@ export const AWS_SINGLE_NODE_PROVIDER_SPEC_RESOLVER_MAX_ATTEMPTS = 10;
 const FACTORY_KEYS = new Set([
   'client',
   'providerScope',
-  'bootstrapDigest',
   'now',
   'maxAttempts',
   'waitForRetry',
 ]);
-const FACTORY_REQUIRED_KEYS = new Set([
-  'client',
-  'providerScope',
-  'bootstrapDigest',
-  'now',
-]);
+const FACTORY_REQUIRED_KEYS = new Set(['client', 'providerScope', 'now']);
 const RESOLVE_CONTEXT_KEYS = new Set([
   'operation',
   'deploymentRevision',
@@ -55,6 +48,8 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
   'getEbsDefaultKmsKeyId',
 ]);
 const AMI_ID_PATTERN = /^ami-[0-9a-f]{8,32}$/;
+const SNAPSHOT_ID_PATTERN = /^snap-[0-9a-f]{8,32}$/;
+const ROOT_DEVICE_NAME_PATTERN = /^\/dev\/(?:xvd|sd)[a-z](?:[1-9][0-9]*)?$/;
 const AWS_ACCOUNT_ID_PATTERN = /^[0-9]{12}$/;
 const AVAILABILITY_ZONE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-az[1-9][0-9]*$/;
 const KMS_KEY_ARN_PATTERN =
@@ -383,6 +378,37 @@ function validateImageResponse(value, selection, architecture, now) {
   if (image.State !== 'available') {
     throw new AwsSingleNodeProviderSpecConflictError();
   }
+  if (
+    typeof image.RootDeviceName !== 'string' ||
+    !ROOT_DEVICE_NAME_PATTERN.test(image.RootDeviceName) ||
+    !Array.isArray(image.BlockDeviceMappings) ||
+    image.BlockDeviceMappings.length !== 1 ||
+    !isPlainObject(image.BlockDeviceMappings[0])
+  ) {
+    throw new AwsSingleNodeProviderSpecConflictError();
+  }
+  const rootMapping = image.BlockDeviceMappings[0];
+  if (
+    rootMapping.DeviceName !== image.RootDeviceName ||
+    rootMapping.VirtualName !== undefined ||
+    rootMapping.NoDevice !== undefined ||
+    !isPlainObject(rootMapping.Ebs)
+  ) {
+    throw new AwsSingleNodeProviderSpecConflictError();
+  }
+  const rootEbs = rootMapping.Ebs;
+  if (
+    typeof rootEbs.SnapshotId !== 'string' ||
+    !SNAPSHOT_ID_PATTERN.test(rootEbs.SnapshotId) ||
+    rootEbs.VolumeType !== 'gp3' ||
+    !Number.isSafeInteger(rootEbs.VolumeSize) ||
+    rootEbs.VolumeSize < 8 ||
+    rootEbs.VolumeSize > 64 ||
+    rootEbs.Encrypted !== false ||
+    rootEbs.DeleteOnTermination !== true
+  ) {
+    throw new AwsSingleNodeProviderSpecConflictError();
+  }
   return deepFreeze({
     sourceParameter: {
       name: selection.name,
@@ -395,6 +421,14 @@ function validateImageResponse(value, selection, architecture, now) {
     rootDeviceType: 'ebs',
     virtualizationType: 'hvm',
     enaSupport: true,
+    rootDeviceName: image.RootDeviceName,
+    rootBlockDevice: {
+      snapshotId: rootEbs.SnapshotId,
+      volumeType: 'gp3',
+      volumeSizeGiB: rootEbs.VolumeSize,
+      encrypted: false,
+      deleteOnTermination: true,
+    },
   });
 }
 
@@ -561,7 +595,7 @@ function validateEbsDefaultKmsKeyResponse(value, providerScope) {
  * Build the strict AWS single-node SSM/EC2 resolver around one caller-owned,
  * credential-bound read client. This boundary never closes or replaces the
  * client and never exposes raw provider errors.
- * @param {unknown} options - Exact client, scope, bootstrap digest, clock, and retry policy.
+ * @param {unknown} options - Exact client, scope, clock, and retry policy.
  * @returns {Readonly<{resolveProviderSpec: (context: unknown) => Promise<Readonly<Record<string, any>>>, validateProviderSpec: (context: unknown) => Promise<Readonly<Record<string, any>>>}>} - Provider controller ports.
  */
 export function createAwsSingleNodeProviderSpecResolver(options) {
@@ -588,12 +622,6 @@ export function createAwsSingleNodeProviderSpecResolver(options) {
   const providerScope = validateProviderScope(
     options.providerScope,
     'awsProviderSpecResolver options.providerScope',
-  );
-  const bootstrapDigest = deepFreeze(
-    validateSha256Digest(
-      options.bootstrapDigest,
-      'awsProviderSpecResolver options.bootstrapDigest',
-    ),
   );
   if (typeof options.now !== 'function') {
     throw new TypeError('awsProviderSpecResolver now must be a function.');
@@ -916,7 +944,6 @@ export function createAwsSingleNodeProviderSpecResolver(options) {
         machineImage,
         placement,
         storage,
-        bootstrapDigest,
       });
     } catch {
       throw new AwsSingleNodeProviderSpecConflictError();
