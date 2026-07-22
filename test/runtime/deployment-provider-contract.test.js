@@ -134,9 +134,6 @@ function makeProviderSpec(profile, providerScope) {
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
     bootstrapDigest: digest('fixed host bootstrap'),
-    runtimeIdentityPolicyDigest: digest(
-      'host SSM artifact read health write identity',
-    ),
   });
 }
 
@@ -569,8 +566,8 @@ describe('deployment plans', () => {
     expect(second).toEqual(first);
     expect(first.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
     expect(first.providerSpec).toMatchObject({
-      schemaVersion: 4,
-      providerSpecId: expect.stringMatching(/^wap4_[A-Za-z0-9_-]{43}$/),
+      schemaVersion: 5,
+      providerSpecId: expect.stringMatching(/^wap5_[A-Za-z0-9_-]{43}$/),
       resourceGraphId: AWS_SINGLE_NODE_RESOURCE_GRAPH.resourceGraphId,
     });
     expect(first.actions).toHaveLength(18);

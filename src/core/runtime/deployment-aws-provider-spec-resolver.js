@@ -24,7 +24,6 @@ const FACTORY_KEYS = new Set([
   'client',
   'providerScope',
   'bootstrapDigest',
-  'runtimeIdentityPolicyDigest',
   'now',
   'maxAttempts',
   'waitForRetry',
@@ -33,7 +32,6 @@ const FACTORY_REQUIRED_KEYS = new Set([
   'client',
   'providerScope',
   'bootstrapDigest',
-  'runtimeIdentityPolicyDigest',
   'now',
 ]);
 const RESOLVE_CONTEXT_KEYS = new Set([
@@ -563,7 +561,7 @@ function validateEbsDefaultKmsKeyResponse(value, providerScope) {
  * Build the strict AWS single-node SSM/EC2 resolver around one caller-owned,
  * credential-bound read client. This boundary never closes or replaces the
  * client and never exposes raw provider errors.
- * @param {unknown} options - Exact client, scope, behavior digests, clock, and retry policy.
+ * @param {unknown} options - Exact client, scope, bootstrap digest, clock, and retry policy.
  * @returns {Readonly<{resolveProviderSpec: (context: unknown) => Promise<Readonly<Record<string, any>>>, validateProviderSpec: (context: unknown) => Promise<Readonly<Record<string, any>>>}>} - Provider controller ports.
  */
 export function createAwsSingleNodeProviderSpecResolver(options) {
@@ -595,12 +593,6 @@ export function createAwsSingleNodeProviderSpecResolver(options) {
     validateSha256Digest(
       options.bootstrapDigest,
       'awsProviderSpecResolver options.bootstrapDigest',
-    ),
-  );
-  const runtimeIdentityPolicyDigest = deepFreeze(
-    validateSha256Digest(
-      options.runtimeIdentityPolicyDigest,
-      'awsProviderSpecResolver options.runtimeIdentityPolicyDigest',
     ),
   );
   if (typeof options.now !== 'function') {
@@ -925,7 +917,6 @@ export function createAwsSingleNodeProviderSpecResolver(options) {
         placement,
         storage,
         bootstrapDigest,
-        runtimeIdentityPolicyDigest,
       });
     } catch {
       throw new AwsSingleNodeProviderSpecConflictError();

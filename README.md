@@ -153,11 +153,12 @@ work. The npm package remains deliberately private. It is not ready for
 production use.
 
 The first provider deployment authority is now defined. A strict AWS-shaped
-one-node profile now resolves one schema-V4, `wap4` content-addressed provider
+one-node profile now resolves one schema-V5, `wap5` content-addressed provider
 specification that pins the exact regional AMI and parameter version, a stable
 standard Availability Zone ID that offers the fixed instance type, the exact
 regional/account default EBS KMS key ARN, bootstrap and identity policy
-digests, instance shape, metadata controls, explicit retained-volume
+digests, including the code-owned exact runtime-policy template, instance
+shape, metadata controls, explicit retained-volume
 performance and attachment contracts, network, service-health timing, and the
 content ID of one fixed 18-role physical-resource graph. Runtime identity is
 four independently recoverable effects: an IAM role, its derived inline
@@ -185,7 +186,8 @@ Linux/EBS/HVM/ENA image association, exact pinned zone/instance offering, and
 exact default EBS key without selecting a newer default or replacement zone.
 Frozen-candidate bounded retries distinguish missing, contradictory, and
 unresolved provider evidence. The same snapshot also exposes narrow
-caller-owned S3 and EBS-volume capabilities. Wharfie can bootstrap one retained,
+caller-owned S3, EBS-volume, and IAM/EC2 runtime-identity capabilities. Wharfie
+can bootstrap one retained,
 versioned control bucket with no bucket policy, wait through S3's documented
 first-enable propagation interval, persist an immutable stage intent before
 streaming the running SEA through a held descriptor, and accept only exact
@@ -224,9 +226,21 @@ group. Direct resources use the shared tagged recovery kernel while derived
 relationships bind exact endpoint lineage; duplicate or contradictory
 provider evidence blocks rather than being adopted, deleted, or described as
 provider exactly-once execution.
+
+The four runtime-identity drivers independently create and recover one
+EC2-only IAM role, its exact least-privilege inline policy, one tagged instance
+profile, and their bidirectionally verified membership. ProviderSpec V5 owns
+the policy-template digest; callers cannot substitute one. The concrete policy
+grants only the modern Session Manager channels, the exact managed-artifact
+object, and role-session-scoped V3 health reads and conditional writes, while
+denying health deletion. Every privilege-bearing step re-proves immutable IAM
+IDs, ownership, trust, policy shape, and dependency lineage. Profile deletion
+also fences role membership and current-region EC2 use; the account-global IAM
+profile relies on Wharfie's explicit exclusive-profile/single-region contract.
+
 These modules do not yet attach, format, mount, or fulfill a complete service
-capability. The four runtime-identity effects, managed artifact, node and
-volume attachments, privileged host observer, complete AWS
+capability. The managed artifact, node, and volume attachments, privileged host
+observer, complete AWS
 driver/router/inspection/`createPlan`, operator commands, production
 composition, and clean-account proof remain unfinished.
 
@@ -236,7 +250,8 @@ composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Exact runtime service-health checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md) — the current handoff for V3 role/node-addressed health, PUT-first conditional publication, and Inspection V5 authority.
+- [Recoverable runtime-identity checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md) — the current handoff for ProviderSpec V5, exact least-privilege IAM, and all four recoverable runtime-identity effects.
+- [Exact runtime service-health checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md) — the preceding handoff for V3 role/node-addressed health, PUT-first conditional publication, and Inspection V5 authority.
 - [Runtime-identity graph checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md) — the preceding handoff for the fixed 18-role graph and recoverable IAM effect boundaries.
 - [Direct EC2 internet-gateway resource checkpoint](llm/checkpoints/2026-07-21-v29-direct-ec2-internet-gateway-resource.md) — the preceding handoff for the standalone gateway lifecycle, attachment-independent intrinsic state, and attachment-fenced purge.
 - [Direct EC2 VPC resource checkpoint](llm/checkpoints/2026-07-21-v28-direct-ec2-vpc-resource.md) — the preceding handoff for the narrow single-attempt network authority, atomically tagged VPC lifecycle, and explicit no-token ambiguity boundary.

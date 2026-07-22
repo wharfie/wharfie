@@ -308,14 +308,12 @@ function makeClient({
   });
 }
 
-/** @param {ReturnType<typeof makeFixture>} fixture @param {ReturnType<typeof makeClient>} client @param {{maxAttempts?: number, waitForRetry?: (attempt: number) => Promise<void>, bootstrapDigest?: ReturnType<typeof digest>, runtimeIdentityPolicyDigest?: ReturnType<typeof digest>, now?: () => number}} [overrides] */
+/** @param {ReturnType<typeof makeFixture>} fixture @param {ReturnType<typeof makeClient>} client @param {{maxAttempts?: number, waitForRetry?: (attempt: number) => Promise<void>, bootstrapDigest?: ReturnType<typeof digest>, now?: () => number}} [overrides] */
 function makeResolver(fixture, client, overrides = {}) {
   return createAwsSingleNodeProviderSpecResolver({
     client,
     providerScope: fixture.providerScope,
     bootstrapDigest: overrides.bootstrapDigest || digest('bootstrap-v1'),
-    runtimeIdentityPolicyDigest:
-      overrides.runtimeIdentityPolicyDigest || digest('runtime-policy-v1'),
     now: overrides.now || (() => NOW),
     maxAttempts: overrides.maxAttempts ?? 1,
     waitForRetry: overrides.waitForRetry || (async () => {}),
@@ -346,7 +344,6 @@ function expectedSpec(fixture, version = 87, ebsKmsKeyArn = EBS_KMS_KEY_ARN) {
     placement: { availabilityZoneId: PRIMARY_AZ_ID },
     storage: { ebsKmsKeyArn },
     bootstrapDigest: digest('bootstrap-v1'),
-    runtimeIdentityPolicyDigest: digest('runtime-policy-v1'),
   });
 }
 
@@ -1474,7 +1471,7 @@ describe('AWS single-node provider-spec resolver', () => {
     expect(client.getParameter).not.toHaveBeenCalled();
   });
 
-  it('reproduces behavior digests and rejects a valid spec pinned to different behavior', async () => {
+  it('reproduces the bootstrap digest and rejects a valid spec pinned to different behavior', async () => {
     const fixture = makeFixture();
     const spec = createAwsSingleNodeProviderSpec({
       profile: fixture.profile,
@@ -1483,7 +1480,6 @@ describe('AWS single-node provider-spec resolver', () => {
       placement: { availabilityZoneId: PRIMARY_AZ_ID },
       storage: { ebsKmsKeyArn: EBS_KMS_KEY_ARN },
       bootstrapDigest: digest('different-bootstrap'),
-      runtimeIdentityPolicyDigest: digest('different-runtime-policy'),
     });
     const parameter = parameterResponse(fixture);
     parameter.Parameter.Selector = ':87';
@@ -1507,7 +1503,6 @@ describe('AWS single-node provider-spec resolver', () => {
       client,
       providerScope: fixture.providerScope,
       bootstrapDigest: digest('bootstrap-v1'),
-      runtimeIdentityPolicyDigest: digest('runtime-policy-v1'),
       now: () => NOW,
     };
 
@@ -1520,6 +1515,12 @@ describe('AWS single-node provider-spec resolver', () => {
     expect(() =>
       createAwsSingleNodeProviderSpecResolver({ ...base, extra: true }),
     ).toThrow(/extra/);
+    expect(() =>
+      createAwsSingleNodeProviderSpecResolver({
+        ...base,
+        runtimeIdentityPolicyDigest: digest('caller-selected-runtime-policy'),
+      }),
+    ).toThrow(/runtimeIdentityPolicyDigest is not supported/i);
     expect(() =>
       createAwsSingleNodeProviderSpecResolver({
         ...base,

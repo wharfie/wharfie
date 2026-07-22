@@ -107,7 +107,7 @@ invocation.
 
 Mutable regional prerequisites are resolved only while previewing a new
 incarnation and reduced to one secret-free, content-addressed
-`AwsSingleNodeProviderSpecV4` in the fresh `wap4` identity namespace. It pins
+`AwsSingleNodeProviderSpecV5` in the fresh `wap5` identity namespace. It pins
 the exact SSM public-parameter name and version, AMI ID/owner/architecture,
 one standard Availability Zone ID that offers the fixed instance type, the
 account's exact regional default EBS KMS key ARN, bootstrap and runtime-policy
@@ -592,8 +592,9 @@ roles are the artifact object; two retained volumes; VPC; internet gateway and
 attachment; subnet; route table, default IPv4 route, and subnet association;
 security group; runtime IAM role, derived inline policy, instance profile, and
 derived role/profile association; resident node; and two volume attachments.
-`AwsSingleNodeProviderSpecV4` pins the graph's `wrg2` identity, so changing
-topology or lifecycle cannot reinterpret an existing specification.
+`AwsSingleNodeProviderSpecV5` pins the graph's `wrg2` identity and exact
+runtime-policy template, so changing topology, lifecycle, or runtime
+permissions cannot reinterpret an existing specification.
 
 `DeploymentPlanV3` contains exactly one independently recoverable action for
 each graph role. Apply and reconcile use the graph's one canonical topological
@@ -1103,9 +1104,34 @@ key, while earlier V1/V2 current objects are not migrated or collected. A
 future explicit retained-state collector must prove when any such current
 object may be removed.
 
-The IAM contract and authority, four independently recoverable runtime-identity
-drivers, source and packaged deployment commands, production composition,
-privileged publisher wiring, and clean-account lifecycle proof remain
-unfinished. A document, bucket/table tag, SSM result, EC2 description, health
+The twenty-first slice defines and implements the four runtime-identity
+effects. ProviderSpec V5/`wap5` removes the caller-supplied policy digest and
+pins a digest derived from the same exact policy renderer used for concrete
+roles. Deterministic account-global role and instance-profile names bind the
+provider scope, deployment instance, and incarnation. The role trusts only
+EC2, has no permissions boundary or managed policy, and receives one inline
+policy granting only modern Session Manager channels, the exact stable managed
+artifact object, and `${aws:userid}`-scoped V3 health reads and conditional
+writes; object and version deletion are explicitly denied.
+
+The role, inline policy, instance profile, and role/profile association have
+independent controller ports and durable bindings. Direct IAM containers use
+13 atomic ownership tags and immutable RoleId/InstanceProfileId readback.
+Derived effects re-prove exact dependency lineage and provider endpoints before
+mutation, and the final association corroborates membership from both
+`GetInstanceProfile` and bounded `ListInstanceProfilesForRole` reads. Its
+plan-time state digest binds deterministic names; provider-allocated IDs belong
+only to the synthetic provider identity and dependency-binding lineage, so a
+fresh plan never predicts future AWS IDs. Destruction refuses foreign or
+drifted state. Instance-profile deletion additionally requires no roles and no
+nonterminated use found by a bounded current-region EC2 query. Because IAM
+profiles are account-global while EC2 observation is regional, that final
+fence depends on Wharfie's explicit rule that the managed profile is exclusive
+to this deployment and is never used outside its configured region.
+
+The managed-artifact, substrate, and attachment drivers, source and packaged
+deployment commands, production composition, privileged publisher wiring,
+live STS session proof, and clean-account lifecycle proof remain unfinished. A
+document, bucket/table tag, SSM result, EC2 description, health
 receipt, or content ID still never proves that an application resource effect
 occurred or that a particular live AWS principal published it.

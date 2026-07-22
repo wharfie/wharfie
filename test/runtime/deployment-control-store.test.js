@@ -135,7 +135,6 @@ function makeDocuments() {
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
     bootstrapDigest: digest('bootstrap'),
-    runtimeIdentityPolicyDigest: digest('runtime identity policy'),
   });
   const incarnationId = createDeploymentIncarnationId(Buffer.alloc(32, 17));
   const plan = createDeploymentPlan(

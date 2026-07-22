@@ -106,7 +106,6 @@ function makeProviderSpec(profile, providerScope, overrides = {}) {
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
     bootstrapDigest: digest('volume test bootstrap'),
-    runtimeIdentityPolicyDigest: digest('volume test runtime identity policy'),
   });
 }
 

@@ -19,6 +19,7 @@ import {
   DeleteVpcCommand,
   DescribeAvailabilityZonesCommand,
   DescribeImagesCommand,
+  DescribeInstancesCommand,
   DescribeInternetGatewaysCommand,
   DescribeInstanceTypeOfferingsCommand,
   DescribeRouteTablesCommand,
@@ -32,6 +33,25 @@ import {
   EC2Client,
   GetEbsDefaultKmsKeyIdCommand,
 } from '@aws-sdk/client-ec2';
+import {
+  AddRoleToInstanceProfileCommand,
+  CreateInstanceProfileCommand,
+  CreateRoleCommand,
+  DeleteInstanceProfileCommand,
+  DeleteRoleCommand,
+  DeleteRolePolicyCommand,
+  GetInstanceProfileCommand,
+  GetRoleCommand,
+  GetRolePolicyCommand,
+  IAMClient,
+  ListAttachedRolePoliciesCommand,
+  ListInstanceProfilesForRoleCommand,
+  ListInstanceProfileTagsCommand,
+  ListRolePoliciesCommand,
+  ListRoleTagsCommand,
+  PutRolePolicyCommand,
+  RemoveRoleFromInstanceProfileCommand,
+} from '@aws-sdk/client-iam';
 import { S3 } from '@aws-sdk/client-s3';
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
@@ -101,6 +121,14 @@ const NETWORK_RESOURCE_CLOSED_ERROR =
   'AWS deployment network resource client is closed.';
 const NETWORK_RESOURCE_CLOSE_ERROR =
   'AWS deployment network resource client close failed.';
+const RUNTIME_IDENTITY_RESOURCE_CREATION_ERROR =
+  'AWS deployment runtime-identity resource client creation failed.';
+const RUNTIME_IDENTITY_RESOURCE_OPERATION_ERROR =
+  'AWS deployment runtime-identity resource operation failed.';
+const RUNTIME_IDENTITY_RESOURCE_CLOSED_ERROR =
+  'AWS deployment runtime-identity resource client is closed.';
+const RUNTIME_IDENTITY_RESOURCE_CLOSE_ERROR =
+  'AWS deployment runtime-identity resource client close failed.';
 const PROVIDER_SPEC_READ_ERROR_NAMES = new Set([
   'ParameterNotFound',
   'ParameterVersionNotFound',
@@ -128,6 +156,16 @@ const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'InvalidVpcID.NotFound',
   'Resource.AlreadyAssociated',
   'RouteAlreadyExists',
+]);
+const RUNTIME_IDENTITY_RESOURCE_ERROR_NAMES = new Map([
+  ['ConcurrentModification', 'ConcurrentModification'],
+  ['ConcurrentModificationException', 'ConcurrentModification'],
+  ['DeleteConflict', 'DeleteConflict'],
+  ['DeleteConflictException', 'DeleteConflict'],
+  ['EntityAlreadyExists', 'EntityAlreadyExists'],
+  ['EntityAlreadyExistsException', 'EntityAlreadyExists'],
+  ['NoSuchEntity', 'NoSuchEntity'],
+  ['NoSuchEntityException', 'NoSuchEntity'],
 ]);
 const S3_CONTROL_ERROR_NAMES = new Set([
   'ConditionalRequestConflict',
@@ -223,6 +261,28 @@ const S3_CONTROL_ERROR_NAMES = new Set([
  * @property {(input: import('@aws-sdk/client-s3').PutObjectCommandInput) => Promise<any>} putObject - Put one exact object.
  * @property {(input: import('@aws-sdk/client-s3').HeadObjectCommandInput) => Promise<any>} headObject - Read exact object metadata.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
+ */
+
+/**
+ * @typedef RuntimeIdentityResourceClient
+ * @property {(input: import('@aws-sdk/client-iam').CreateRoleCommandInput) => Promise<any>} createRole - Create one exact runtime role.
+ * @property {(input: import('@aws-sdk/client-iam').GetRoleCommandInput) => Promise<any>} getRole - Read one exact runtime role.
+ * @property {(input: import('@aws-sdk/client-iam').DeleteRoleCommandInput) => Promise<any>} deleteRole - Delete one exact runtime role.
+ * @property {(input: import('@aws-sdk/client-iam').ListRoleTagsCommandInput) => Promise<any>} listRoleTags - Read one runtime role's tags.
+ * @property {(input: import('@aws-sdk/client-iam').ListRolePoliciesCommandInput) => Promise<any>} listRolePolicies - Read one runtime role's inline-policy names.
+ * @property {(input: import('@aws-sdk/client-iam').ListAttachedRolePoliciesCommandInput) => Promise<any>} listAttachedRolePolicies - Read one runtime role's attached managed policies.
+ * @property {(input: import('@aws-sdk/client-iam').PutRolePolicyCommandInput) => Promise<any>} putRolePolicy - Put one exact inline runtime policy.
+ * @property {(input: import('@aws-sdk/client-iam').GetRolePolicyCommandInput) => Promise<any>} getRolePolicy - Read one exact inline runtime policy.
+ * @property {(input: import('@aws-sdk/client-iam').DeleteRolePolicyCommandInput) => Promise<any>} deleteRolePolicy - Delete one exact inline runtime policy.
+ * @property {(input: import('@aws-sdk/client-iam').CreateInstanceProfileCommandInput) => Promise<any>} createInstanceProfile - Create one exact runtime instance profile.
+ * @property {(input: import('@aws-sdk/client-iam').GetInstanceProfileCommandInput) => Promise<any>} getInstanceProfile - Read one exact runtime instance profile.
+ * @property {(input: import('@aws-sdk/client-iam').DeleteInstanceProfileCommandInput) => Promise<any>} deleteInstanceProfile - Delete one exact runtime instance profile.
+ * @property {(input: import('@aws-sdk/client-iam').ListInstanceProfileTagsCommandInput) => Promise<any>} listInstanceProfileTags - Read one runtime instance profile's tags.
+ * @property {(input: import('@aws-sdk/client-iam').AddRoleToInstanceProfileCommandInput) => Promise<any>} addRoleToInstanceProfile - Associate one exact runtime role and profile.
+ * @property {(input: import('@aws-sdk/client-iam').RemoveRoleFromInstanceProfileCommandInput) => Promise<any>} removeRoleFromInstanceProfile - Remove one exact runtime role and profile association.
+ * @property {(input: import('@aws-sdk/client-iam').ListInstanceProfilesForRoleCommandInput) => Promise<any>} listInstanceProfilesForRole - Read every instance profile associated with one runtime role.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeInstancesCommandInput) => Promise<any>} describeInstances - Fence instance-profile deletion against EC2 usage.
+ * @property {() => Promise<void>} close - Close both caller-owned SDK clients.
  */
 
 /**
@@ -353,6 +413,35 @@ function sanitizeNetworkResourceError(value) {
   return error;
 }
 
+/**
+ * Preserve only the IAM classifications needed for idempotent create,
+ * authoritative absence, and dependency-fenced deletion. The SDK has emitted
+ * both suffixed and unsuffixed names for these modeled IAM errors, so both map
+ * to one stable boundary name. Raw messages, request IDs, access details,
+ * causes, and credential-bearing configuration never cross this boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeRuntimeIdentityResourceError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(RUNTIME_IDENTITY_RESOURCE_OPERATION_ERROR)
+    );
+  error.name =
+    RUNTIME_IDENTITY_RESOURCE_ERROR_NAMES.get(candidate.name) ??
+    'AwsDeploymentRuntimeIdentityResourceError';
+  error.code = 'AWS_DEPLOYMENT_RUNTIME_IDENTITY_RESOURCE_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
+}
+
 /** @param {Record<string, any>} value @param {Set<string>} keys @returns {boolean} */
 function hasExactKeys(value, keys) {
   const actual = Object.keys(value);
@@ -462,6 +551,7 @@ function scopeFromCallerIdentity(value, region) {
  *   createProviderSpecReadClient: () => Readonly<ProviderSpecReadClient>,
  *   createVolumeResourceClient: () => Readonly<VolumeResourceClient>,
  *   createNetworkResourceClient: () => Readonly<NetworkResourceClient>,
+ *   createRuntimeIdentityResourceClient: () => Readonly<RuntimeIdentityResourceClient>,
  *   close: () => Promise<void>,
  * }>>} - Credential-bound AWS authority.
  */
@@ -979,6 +1069,162 @@ export async function createAwsDeploymentAuthority(options) {
     });
   }
 
+  /** @returns {Readonly<RuntimeIdentityResourceClient>} - Caller-owned narrow IAM and EC2 runtime-identity resource client. */
+  function createRuntimeIdentityResourceClient() {
+    assertOpen();
+    /** @type {IAMClient | undefined} */
+    let iamClient;
+    /** @type {EC2Client | undefined} */
+    let ec2Client;
+    try {
+      iamClient = new IAMClient({
+        // IAM mutations do not carry provider idempotency tokens. Recovery is
+        // explicit exact readback, so transport retries must not duplicate one
+        // authorized effect.
+        ...BaseAWS.config({ maxAttempts: 1 }),
+        region,
+        credentials,
+      });
+      ec2Client = new EC2Client({
+        ...BaseAWS.config({ maxAttempts: 1 }),
+        region,
+        credentials,
+      });
+    } catch {
+      try {
+        iamClient?.destroy();
+      } catch {
+        // The fixed construction failure is the useful boundary error.
+      }
+      try {
+        ec2Client?.destroy();
+      } catch {
+        // The fixed construction failure is the useful boundary error.
+      }
+      throw new Error(RUNTIME_IDENTITY_RESOURCE_CREATION_ERROR);
+    }
+    const runtimeIamClient = iamClient;
+    const runtimeEc2Client = ec2Client;
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) {
+        throw new Error(RUNTIME_IDENTITY_RESOURCE_CLOSED_ERROR);
+      }
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeRuntimeIdentityResourceError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        let failed = false;
+        try {
+          runtimeIamClient.destroy();
+        } catch {
+          failed = true;
+        }
+        try {
+          runtimeEc2Client.destroy();
+        } catch {
+          failed = true;
+        }
+        if (failed) throw new Error(RUNTIME_IDENTITY_RESOURCE_CLOSE_ERROR);
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      createRole: (
+        /** @type {import('@aws-sdk/client-iam').CreateRoleCommandInput} */ input,
+      ) => call(() => runtimeIamClient.send(new CreateRoleCommand(input))),
+      getRole: (
+        /** @type {import('@aws-sdk/client-iam').GetRoleCommandInput} */ input,
+      ) => call(() => runtimeIamClient.send(new GetRoleCommand(input))),
+      deleteRole: (
+        /** @type {import('@aws-sdk/client-iam').DeleteRoleCommandInput} */ input,
+      ) => call(() => runtimeIamClient.send(new DeleteRoleCommand(input))),
+      listRoleTags: (
+        /** @type {import('@aws-sdk/client-iam').ListRoleTagsCommandInput} */ input,
+      ) => call(() => runtimeIamClient.send(new ListRoleTagsCommand(input))),
+      listRolePolicies: (
+        /** @type {import('@aws-sdk/client-iam').ListRolePoliciesCommandInput} */ input,
+      ) =>
+        call(() => runtimeIamClient.send(new ListRolePoliciesCommand(input))),
+      listAttachedRolePolicies: (
+        /** @type {import('@aws-sdk/client-iam').ListAttachedRolePoliciesCommandInput} */ input,
+      ) =>
+        call(() =>
+          runtimeIamClient.send(new ListAttachedRolePoliciesCommand(input)),
+        ),
+      putRolePolicy: (
+        /** @type {import('@aws-sdk/client-iam').PutRolePolicyCommandInput} */ input,
+      ) => call(() => runtimeIamClient.send(new PutRolePolicyCommand(input))),
+      getRolePolicy: (
+        /** @type {import('@aws-sdk/client-iam').GetRolePolicyCommandInput} */ input,
+      ) => call(() => runtimeIamClient.send(new GetRolePolicyCommand(input))),
+      deleteRolePolicy: (
+        /** @type {import('@aws-sdk/client-iam').DeleteRolePolicyCommandInput} */ input,
+      ) =>
+        call(() => runtimeIamClient.send(new DeleteRolePolicyCommand(input))),
+      createInstanceProfile: (
+        /** @type {import('@aws-sdk/client-iam').CreateInstanceProfileCommandInput} */ input,
+      ) =>
+        call(() =>
+          runtimeIamClient.send(new CreateInstanceProfileCommand(input)),
+        ),
+      getInstanceProfile: (
+        /** @type {import('@aws-sdk/client-iam').GetInstanceProfileCommandInput} */ input,
+      ) =>
+        call(() => runtimeIamClient.send(new GetInstanceProfileCommand(input))),
+      deleteInstanceProfile: (
+        /** @type {import('@aws-sdk/client-iam').DeleteInstanceProfileCommandInput} */ input,
+      ) =>
+        call(() =>
+          runtimeIamClient.send(new DeleteInstanceProfileCommand(input)),
+        ),
+      listInstanceProfileTags: (
+        /** @type {import('@aws-sdk/client-iam').ListInstanceProfileTagsCommandInput} */ input,
+      ) =>
+        call(() =>
+          runtimeIamClient.send(new ListInstanceProfileTagsCommand(input)),
+        ),
+      addRoleToInstanceProfile: (
+        /** @type {import('@aws-sdk/client-iam').AddRoleToInstanceProfileCommandInput} */ input,
+      ) =>
+        call(() =>
+          runtimeIamClient.send(new AddRoleToInstanceProfileCommand(input)),
+        ),
+      removeRoleFromInstanceProfile: (
+        /** @type {import('@aws-sdk/client-iam').RemoveRoleFromInstanceProfileCommandInput} */ input,
+      ) =>
+        call(() =>
+          runtimeIamClient.send(
+            new RemoveRoleFromInstanceProfileCommand(input),
+          ),
+        ),
+      listInstanceProfilesForRole: (
+        /** @type {import('@aws-sdk/client-iam').ListInstanceProfilesForRoleCommandInput} */ input,
+      ) =>
+        call(() =>
+          runtimeIamClient.send(new ListInstanceProfilesForRoleCommand(input)),
+        ),
+      describeInstances: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeInstancesCommandInput} */ input,
+      ) =>
+        call(() => runtimeEc2Client.send(new DescribeInstancesCommand(input))),
+      close: closeClient,
+    });
+  }
+
   /** @returns {Promise<void>} */
   async function close() {
     if (closed) return;
@@ -999,6 +1245,7 @@ export async function createAwsDeploymentAuthority(options) {
     createProviderSpecReadClient,
     createVolumeResourceClient,
     createNetworkResourceClient,
+    createRuntimeIdentityResourceClient,
     close,
   });
 }

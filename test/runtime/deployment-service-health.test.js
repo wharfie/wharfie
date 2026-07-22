@@ -158,7 +158,6 @@ function makeProviderSpec(profile, providerScope) {
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
     bootstrapDigest: digest('health bootstrap'),
-    runtimeIdentityPolicyDigest: digest('health runtime identity'),
   });
 }
 

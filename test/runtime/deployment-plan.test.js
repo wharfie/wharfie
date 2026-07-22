@@ -113,7 +113,6 @@ function makeProviderSpec(profile, providerScope, version = 17) {
       ebsKmsKeyArn: `arn:${providerScope.partition}:kms:${providerScope.region}:${providerScope.accountId}:key/11111111-2222-3333-4444-555555555555`,
     },
     bootstrapDigest: digest('bootstrap-v1'),
-    runtimeIdentityPolicyDigest: digest('runtime-policy-v1'),
   });
 }
 

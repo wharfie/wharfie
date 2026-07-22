@@ -116,9 +116,6 @@ function makeProviderSpec(
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
     bootstrapDigest: digest('attachment test bootstrap'),
-    runtimeIdentityPolicyDigest: digest(
-      'attachment test runtime identity policy',
-    ),
   });
 }
 

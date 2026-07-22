@@ -2,25 +2,26 @@
 
 **Status:** The strict single-node deployment protocol now expands its small
 portable capability model into one fixed 18-role AWS resource graph. Provider
-specification V4 pins that graph; Plan/Action V3, Inspection V5, Binding V2,
+specification V5 pins that graph and the code-owned exact runtime-policy
+template; Plan/Action V3, Inspection V5, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
 destroy policy. Strict controller-compatible drivers now cover the retained
-EBS volume and all eight network effects: VPC, internet gateway and attachment,
-subnet, route table, default IPv4 route, subnet/route-table association, and
-security group. The directly owned network containers share one narrow tagged
+EBS volume, all eight network effects, and all four runtime-identity effects.
+The directly owned network containers share one narrow tagged
 EC2 recovery kernel while retaining distinct intrinsic, natural-slot, and
 destroy contracts; derived relationships prove both endpoints before mutation.
-Runtime identity is now split into four explicit graph effects so its role,
-inline policy, instance profile, and role/profile membership can recover
-independently. Service health V3/`whr3` binds the exact runtime-role and node
+Runtime identity now has exact EC2-only trust, least-privilege policy,
+account-global names and immutable IDs, atomic ownership tags, independent
+role/policy/profile/association recovery, and deletion fences. Service health
+V3/`whr3` binds the exact runtime-role and node
 bindings plus immutable IAM RoleId and EC2 instance ID at
 `health/v3/<RoleId>:<InstanceId>`. Initial publication is a conditional
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
 Inspection V5/`win5` correlates both identities before readiness. Live STS
-caller proof and the privileged production publisher remain unwired. The IAM
-contracts and drivers, followed by managed artifact, substrate, attachment,
-provider composition, commands, and clean-account proof, are next ·
+caller proof and the privileged production publisher remain unwired. Managed
+artifact, substrate, attachment, provider composition, commands, and
+clean-account proof are next ·
 **Last updated:** 2026-07-21
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -559,7 +560,7 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       driver.
 - [x] Expand the provider action model through one content-addressed, fixed
       AWS resource graph. ResourceGraph V2 now contains 18 roles and
-      ProviderSpec V4 pins its identity;
+      ProviderSpec V5 now pins its identity and exact runtime-policy template;
       Plan/Action V3 requires canonical apply order or exact reverse destroy
       order, while Inspection V4 always reports canonical apply order.
       Binding/Head V2 record exact dependency lineage and role-level lifecycle.
@@ -583,6 +584,19 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       transport never lists and needs no `ListBucket` absence proof. This is a
       deterministic contract/transport boundary, not STS proof of the live
       publisher, an IAM policy implementation, or production observer wiring.
+- [x] Implement ProviderSpec V5 and all four independently recoverable
+      runtime-identity effects. Code now owns the exact policy-template digest;
+      callers cannot substitute it. Deterministic account-global names, exact
+      EC2-only trust, immutable IAM IDs, 13 atomic ownership tags, and bounded
+      readback fence direct role/profile ownership. The derived inline policy
+      grants only modern Session Manager, one managed artifact object, and
+      role-session-scoped V3 health access. The final association re-proves the
+      role, exact policy, absence of additional policies, profile, and both
+      membership views before making credentials usable. Its desired digest is
+      plan-time deterministic; allocated endpoint IDs remain in provider
+      identity and binding lineage. This is deterministic-mock proof, not live
+      STS caller proof, production composition, or an account-global EC2-use
+      scan.
 - [x] Implement the fixed `network-vpc` role through a narrow direct-EC2
       authority and controller-compatible resource driver. SDK transport
       attempts are capped at one because `CreateVpc` has no `ClientToken`;
@@ -752,29 +766,25 @@ implemented resource drivers are not yet composed into a complete provider,
 and the runtime path still does not attach, format, or mount the retained
 volumes or fulfill a service capability.
 
-1. Define the exact IAM names, trust and inline-policy documents, state
-   digests, identity evidence, and narrow AWS authority; then implement the
-   independently recoverable runtime-role, inline-policy, instance-profile,
-   and role/profile-association effects. Do not treat the V3 health key or its
-   conditional publication protocol as proof that an IAM policy or STS caller
-   check already exists.
-2. Implement the managed artifact, node, and volume-attachment resources;
+1. Implement the managed artifact, node, and volume-attachment resources;
    build the provider router, inspection, `createPlan`, and complete controller
    composition; and wire resident-service activation and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
-3. Install and wire the privileged host observer outside the application UID,
+2. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
    recovery and the publishing caller's exact STS role/session identity.
-4. Begin provider-backed coordinator recovery only after the single-node
+3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [exact runtime service-health
-checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md).
-Its parent is the [runtime-identity resource-graph
+The current restart point is the [recoverable runtime-identity
+checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md).
+Its parent is the [exact runtime service-health
+checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md),
+whose parent is the [runtime-identity resource-graph
 checkpoint](llm/checkpoints/2026-07-21-v37-runtime-identity-resource-graph.md),
 whose parent is the [direct EC2 security-group resource
 checkpoint](llm/checkpoints/2026-07-21-v36-direct-ec2-security-group-resource.md),

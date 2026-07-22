@@ -21,6 +21,7 @@ import {
 } from '../../src/core/runtime/deployment-profile.js';
 import { createAwsProviderScope } from '../../src/core/runtime/deployment-provider-scope.js';
 import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from '../../src/core/runtime/deployment-resource-graph.js';
+import { AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST } from '../../src/core/runtime/deployment-aws-runtime-identity-contract.js';
 
 /** @param {string} value @returns {{algorithm: 'sha256', value: string}} */
 function digest(value) {
@@ -96,7 +97,6 @@ function makeFixture(architecture = 'x64') {
           'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
       },
       bootstrapDigest: digest('bootstrap contract'),
-      runtimeIdentityPolicyDigest: digest('runtime identity policy'),
     },
   };
 }
@@ -108,9 +108,9 @@ describe('AWS single-node provider specifications', () => {
     const { providerSpecId: _providerSpecId, ...payload } = spec;
 
     expect(spec).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: 'awsSingleNodeProviderSpec',
-      providerSpecId: expect.stringMatching(/^wap4_[A-Za-z0-9_-]{43}$/),
+      providerSpecId: expect.stringMatching(/^wap5_[A-Za-z0-9_-]{43}$/),
       providerContractVersion: 3,
       providerScopeId: fixture.providerScope.providerScopeId,
       profileRevisionId: fixture.profile.profileRevisionId,
@@ -174,7 +174,7 @@ describe('AWS single-node provider specifications', () => {
           artifactAccess: 'read',
           serviceHealthAccess: 'read-write-current-object',
           applicationInstanceMetadata: 'blocked',
-          policyDigest: digest('runtime identity policy'),
+          policyDigest: AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST,
         },
         networking: {
           contractVersion: 1,
@@ -198,19 +198,19 @@ describe('AWS single-node provider specifications', () => {
     });
     expect(spec.providerSpecId).toBe(
       createCanonicalJsonSha256Id({
-        domain: 'wharfie:aws-single-node-provider-spec:v4',
-        prefix: 'wap4',
+        domain: 'wharfie:aws-single-node-provider-spec:v5',
+        prefix: 'wap5',
         value: payload,
       }),
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(4);
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION).toBe(5);
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_KIND).toBe(
       'awsSingleNodeProviderSpec',
     );
     expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN).toBe(
-      'wharfie:aws-single-node-provider-spec:v4',
+      'wharfie:aws-single-node-provider-spec:v5',
     );
-    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap4');
+    expect(AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX).toBe('wap5');
     expect(AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION).toBe(3);
     expect(Object.isFrozen(spec)).toBe(true);
     expect(Object.isFrozen(spec.machineImage.sourceParameter)).toBe(true);
@@ -247,10 +247,6 @@ describe('AWS single-node provider specifications', () => {
     const fixture = makeFixture();
     const first = createAwsSingleNodeProviderSpec(fixture.input);
     const reordered = {
-      runtimeIdentityPolicyDigest: {
-        value: fixture.input.runtimeIdentityPolicyDigest.value,
-        algorithm: 'sha256',
-      },
       bootstrapDigest: {
         value: fixture.input.bootstrapDigest.value,
         algorithm: 'sha256',
@@ -317,12 +313,6 @@ describe('AWS single-node provider specifications', () => {
       'bootstrap contract',
       (/** @type {any} */ value) => {
         value.bootstrapDigest = digest('changed bootstrap');
-      },
-    ],
-    [
-      'runtime identity policy',
-      (/** @type {any} */ value) => {
-        value.runtimeIdentityPolicyDigest = digest('changed policy');
       },
     ],
     [
@@ -462,6 +452,14 @@ describe('AWS single-node provider specifications', () => {
       validateAwsSingleNodeProviderSpec(runtimeIdentityDrift),
     ).toThrow(/fixed provider contract/i);
 
+    const runtimePolicyDrift = clone(original);
+    runtimePolicyDrift.capabilities.runtimeIdentity.policyDigest = digest(
+      'different runtime policy template',
+    );
+    expect(() => validateAwsSingleNodeProviderSpec(runtimePolicyDrift)).toThrow(
+      /exact runtime IAM policy template/i,
+    );
+
     const instanceDrift = clone(original);
     instanceDrift.node.instanceType = 't4g.small';
     expect(() => validateAwsSingleNodeProviderSpec(instanceDrift)).toThrow(
@@ -475,21 +473,21 @@ describe('AWS single-node provider specifications', () => {
     );
   });
 
-  it('rejects superseded V3 schema and identity authority', () => {
+  it('rejects superseded V4 schema and identity authority', () => {
     const current = createAwsSingleNodeProviderSpec(makeFixture().input);
 
     const oldSchema = /** @type {any} */ (clone(current));
-    oldSchema.schemaVersion = 3;
+    oldSchema.schemaVersion = 4;
     expect(() => validateAwsSingleNodeProviderSpec(oldSchema)).toThrow(
-      /schemaVersion must be the integer 4/i,
+      /schemaVersion must be the integer 5/i,
     );
 
     const oldIdentityNamespace = /** @type {any} */ (clone(current));
     oldIdentityNamespace.providerSpecId =
-      oldIdentityNamespace.providerSpecId.replace(/^wap4_/, 'wap3_');
+      oldIdentityNamespace.providerSpecId.replace(/^wap5_/, 'wap4_');
     expect(() =>
       validateAwsSingleNodeProviderSpec(oldIdentityNamespace),
-    ).toThrow(/canonical wap4_/i);
+    ).toThrow(/canonical wap5_/i);
   });
 
   it('cross-checks the exact profile, provider scope, and target', () => {
@@ -540,6 +538,17 @@ describe('AWS single-node provider specifications', () => {
         }),
       ).toThrow(/KmsKeyArn does not match the exact provider scope/i);
     }
+  });
+
+  it('rejects a caller-supplied runtime policy digest', () => {
+    const fixture = makeFixture();
+    /** @type {any} */ (fixture.input).runtimeIdentityPolicyDigest = digest(
+      'caller-selected runtime policy',
+    );
+
+    expect(() => createAwsSingleNodeProviderSpec(fixture.input)).toThrow(
+      /runtimeIdentityPolicyDigest is not supported/i,
+    );
   });
 
   it('rejects unsupported or secret-like input without echoing its value', () => {

@@ -16,15 +16,16 @@ import {
   validateProviderScope,
 } from './deployment-provider-scope.js';
 import { AWS_SINGLE_NODE_RESOURCE_GRAPH } from './deployment-resource-graph.js';
+import { AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST } from './deployment-aws-runtime-identity-contract.js';
 import { DEPLOYMENT_SERVICE_HEALTH_NONCURRENT_EXPIRATION_DAYS } from './deployment-service-health-contract.js';
 import { cloneJsonObject } from './json-value.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 4;
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_SCHEMA_VERSION = 5;
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_KIND = 'awsSingleNodeProviderSpec';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_DOMAIN =
-  'wharfie:aws-single-node-provider-spec:v4';
-export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap4';
+  'wharfie:aws-single-node-provider-spec:v5';
+export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wap5';
 export const AWS_SINGLE_NODE_PROVIDER_CONTRACT_VERSION = 3;
 
 export const AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS = Object.freeze({
@@ -40,7 +41,6 @@ const FACTORY_KEYS = new Set([
   'placement',
   'storage',
   'bootstrapDigest',
-  'runtimeIdentityPolicyDigest',
 ]);
 const PAYLOAD_KEYS = new Set([
   'schemaVersion',
@@ -417,6 +417,19 @@ function validateCapabilities(value, path) {
       `${path}.runtimeIdentity does not match the fixed provider contract.`,
     );
   }
+  const policyDigest = validateSha256Digest(
+    runtimeIdentity.policyDigest,
+    `${path}.runtimeIdentity.policyDigest`,
+  );
+  if (
+    policyDigest.algorithm !==
+      AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST.algorithm ||
+    policyDigest.value !== AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST.value
+  ) {
+    throw new TypeError(
+      `${path}.runtimeIdentity.policyDigest must identify the exact runtime IAM policy template.`,
+    );
+  }
   const networking = validateFixedObject(
     capabilities.networking,
     FIXED_NETWORKING,
@@ -439,10 +452,7 @@ function validateCapabilities(value, path) {
       artifactAccess: 'read',
       serviceHealthAccess: 'read-write-current-object',
       applicationInstanceMetadata: 'blocked',
-      policyDigest: validateSha256Digest(
-        runtimeIdentity.policyDigest,
-        `${path}.runtimeIdentity.policyDigest`,
-      ),
+      policyDigest: AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST,
     },
     networking,
     serviceHealth,
@@ -597,7 +607,7 @@ function assertContext(spec, context, path) {
  * Create the exact provider inputs selected for one AWS single-node plan.
  * Mutable discovery state is reduced to an explicit AMI ID and parameter
  * version before entering this boundary.
- * @param {unknown} value - Exact profile/scope, image receipt, and behavior digests.
+ * @param {unknown} value - Exact profile/scope, image receipt, and bootstrap digest.
  * @returns {Readonly<Record<string, any>>} - Immutable content-addressed specification.
  */
 export function createAwsSingleNodeProviderSpec(value) {
@@ -663,10 +673,7 @@ export function createAwsSingleNodeProviderSpec(value) {
           artifactAccess: 'read',
           serviceHealthAccess: 'read-write-current-object',
           applicationInstanceMetadata: 'blocked',
-          policyDigest: validateSha256Digest(
-            input.runtimeIdentityPolicyDigest,
-            'awsProviderSpec input.runtimeIdentityPolicyDigest',
-          ),
+          policyDigest: AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST,
         },
         networking: FIXED_NETWORKING,
         serviceHealth: FIXED_SERVICE_HEALTH,

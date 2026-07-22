@@ -126,7 +126,6 @@ function makeProviderSpec(
         'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555',
     },
     bootstrapDigest: digest('fixed bootstrap'),
-    runtimeIdentityPolicyDigest: digest('fixed runtime identity policy'),
   });
 }
 
@@ -1589,7 +1588,6 @@ describe('deployment controller crash recovery', () => {
       client,
       providerScope: harness.base.providerScope,
       bootstrapDigest: digest('fixed bootstrap'),
-      runtimeIdentityPolicyDigest: digest('fixed runtime identity policy'),
       now: () => HEALTH_NOW,
       maxAttempts: 1,
       waitForRetry: async () => {},

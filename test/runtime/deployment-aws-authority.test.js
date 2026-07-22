@@ -70,10 +70,29 @@ const NETWORK_RESOURCE_METHODS = Object.freeze([
   'deleteSubnet',
   'deleteVpc',
 ]);
+const RUNTIME_IDENTITY_RESOURCE_METHODS = Object.freeze([
+  'createRole',
+  'getRole',
+  'deleteRole',
+  'listRoleTags',
+  'listRolePolicies',
+  'listAttachedRolePolicies',
+  'putRolePolicy',
+  'getRolePolicy',
+  'deleteRolePolicy',
+  'createInstanceProfile',
+  'getInstanceProfile',
+  'deleteInstanceProfile',
+  'listInstanceProfileTags',
+  'addRoleToInstanceProfile',
+  'removeRoleFromInstanceProfile',
+  'listInstanceProfilesForRole',
+  'describeInstances',
+]);
 
 /**
  * Install isolated AWS SDK doubles before importing the authority module.
- * @param {{credentials?: unknown, identities?: unknown[], s3ConstructionError?: unknown, s3MethodError?: unknown, s3CloseError?: unknown, ssmConstructionError?: unknown, ec2ConstructionError?: unknown, ssmMethodError?: unknown, ec2MethodError?: unknown, ssmCloseError?: unknown, ec2CloseError?: unknown}} [options] - Mock outcomes.
+ * @param {{credentials?: unknown, identities?: unknown[], s3ConstructionError?: unknown, s3MethodError?: unknown, s3CloseError?: unknown, ssmConstructionError?: unknown, ec2ConstructionError?: unknown, iamConstructionError?: unknown, ssmMethodError?: unknown, ec2MethodError?: unknown, iamMethodError?: unknown, ssmCloseError?: unknown, ec2CloseError?: unknown, iamCloseError?: unknown}} [options] - Mock outcomes.
  * @returns {Promise<Record<string, any>>} - Module and SDK observations.
  */
 async function loadHarness({
@@ -84,10 +103,13 @@ async function loadHarness({
   s3CloseError,
   ssmConstructionError,
   ec2ConstructionError,
+  iamConstructionError,
   ssmMethodError,
   ec2MethodError,
+  iamMethodError,
   ssmCloseError,
   ec2CloseError,
+  iamCloseError,
 } = {}) {
   jest.resetModules();
   const credentialProvider = jest.fn(async () => {
@@ -105,6 +127,8 @@ async function loadHarness({
   const ssmConfigs = [];
   /** @type {Record<string, any>[]} */
   const ec2Configs = [];
+  /** @type {Record<string, any>[]} */
+  const iamConfigs = [];
   const stsDestroy = jest.fn();
   const dynamoDestroy = jest.fn();
   const dynamoSend = jest.fn(
@@ -128,6 +152,9 @@ async function loadHarness({
   });
   const ec2Destroy = jest.fn(() => {
     if (ec2CloseError) throw ec2CloseError;
+  });
+  const iamDestroy = jest.fn(() => {
+    if (iamCloseError) throw iamCloseError;
   });
   const ssmSend = jest.fn(async (/** @type {unknown} */ input) => {
     if (ssmMethodError) throw ssmMethodError;
@@ -154,6 +181,7 @@ async function loadHarness({
         return { VolumeId: 'vol-00000000000000001', input };
       }
       if (method === 'describeVolumes') return { Volumes: [], input };
+      if (method === 'describeInstances') return { Reservations: [], input };
       if (method === 'createInternetGateway') {
         return {
           InternetGateway: {
@@ -207,6 +235,12 @@ async function loadHarness({
       if (method === 'deleteSubnet') return { input };
       if (method === 'deleteVpc') return { input };
       throw new Error(`Unexpected EC2 method: ${method}`);
+    },
+  );
+  const iamSend = jest.fn(
+    async (/** @type {string} */ method, /** @type {unknown} */ input) => {
+      if (iamMethodError) throw iamMethodError;
+      return { operation: method, input };
     },
   );
   const responses = [...identities];
@@ -317,6 +351,58 @@ async function loadHarness({
       }
     },
   }));
+  jest.unstable_mockModule('@aws-sdk/client-iam', () => {
+    /** @param {string} operation - Mock operation identity. */
+    const createCommand = (operation) =>
+      class Command {
+        operation = operation;
+        input;
+
+        constructor(/** @type {unknown} */ input) {
+          this.input = input;
+        }
+      };
+    return {
+      AddRoleToInstanceProfileCommand: createCommand(
+        'addRoleToInstanceProfile',
+      ),
+      CreateInstanceProfileCommand: createCommand('createInstanceProfile'),
+      CreateRoleCommand: createCommand('createRole'),
+      DeleteInstanceProfileCommand: createCommand('deleteInstanceProfile'),
+      DeleteRoleCommand: createCommand('deleteRole'),
+      DeleteRolePolicyCommand: createCommand('deleteRolePolicy'),
+      GetInstanceProfileCommand: createCommand('getInstanceProfile'),
+      GetRoleCommand: createCommand('getRole'),
+      GetRolePolicyCommand: createCommand('getRolePolicy'),
+      IAMClient: class IAMClient {
+        constructor(/** @type {Record<string, any>} */ config) {
+          if (iamConstructionError) throw iamConstructionError;
+          iamConfigs.push(config);
+        }
+
+        send(/** @type {{operation: string, input: unknown}} */ command) {
+          return iamSend(command.operation, command.input);
+        }
+
+        destroy() {
+          iamDestroy();
+        }
+      },
+      ListAttachedRolePoliciesCommand: createCommand(
+        'listAttachedRolePolicies',
+      ),
+      ListInstanceProfilesForRoleCommand: createCommand(
+        'listInstanceProfilesForRole',
+      ),
+      ListInstanceProfileTagsCommand: createCommand('listInstanceProfileTags'),
+      ListRolePoliciesCommand: createCommand('listRolePolicies'),
+      ListRoleTagsCommand: createCommand('listRoleTags'),
+      PutRolePolicyCommand: createCommand('putRolePolicy'),
+      RemoveRoleFromInstanceProfileCommand: createCommand(
+        'removeRoleFromInstanceProfile',
+      ),
+    };
+  });
   jest.unstable_mockModule('@aws-sdk/client-ec2', () => ({
     AssociateRouteTableCommand: class AssociateRouteTableCommand {
       input;
@@ -401,6 +487,14 @@ async function loadHarness({
     DescribeImagesCommand: class DescribeImagesCommand {
       input;
       operation = 'describeImages';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DescribeInstancesCommand: class DescribeInstancesCommand {
+      input;
+      operation = 'describeInstances';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -581,6 +675,7 @@ async function loadHarness({
     s3Configs,
     ssmConfigs,
     ec2Configs,
+    iamConfigs,
     stsSend,
     stsDestroy,
     dynamoDestroy,
@@ -590,8 +685,10 @@ async function loadHarness({
     s3Send,
     ssmDestroy,
     ec2Destroy,
+    iamDestroy,
     ssmSend,
     ec2Send,
+    iamSend,
   };
 }
 
@@ -1479,6 +1576,215 @@ describe('AWS deployment invocation authority', () => {
     await authority.close();
   });
 
+  it('exposes only the exact runtime-identity surface and dispatches every operation with one snapshot', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createRuntimeIdentityResourceClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...RUNTIME_IDENTITY_RESOURCE_METHODS, 'close'].sort(),
+      );
+      expect(Object.isFrozen(client)).toBe(true);
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      expect(harness.iamConfigs).toHaveLength(1);
+      expect(harness.ec2Configs).toHaveLength(1);
+      expect(harness.iamConfigs[0]).toMatchObject({ region: 'us-east-1' });
+      expect(harness.ec2Configs[0]).toMatchObject({ region: 'us-east-1' });
+      expect(harness.iamConfigs[0].credentials).toBe(
+        harness.stsConfigs[0].credentials,
+      );
+      expect(harness.ec2Configs[0].credentials).toBe(
+        harness.stsConfigs[0].credentials,
+      );
+      expect(Object.isFrozen(harness.iamConfigs[0].credentials)).toBe(true);
+      await expect(
+        harness.iamConfigs[0].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
+      await expect(
+        harness.ec2Configs[0].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
+
+      for (const method of RUNTIME_IDENTITY_RESOURCE_METHODS) {
+        const input = { operationMarker: method };
+        await expect(client[method](input)).resolves.toMatchObject({ input });
+        if (method === 'describeInstances') {
+          expect(harness.ec2Send).toHaveBeenLastCalledWith(method, input);
+        } else {
+          expect(harness.iamSend).toHaveBeenLastCalledWith(method, input);
+        }
+      }
+      expect(harness.iamSend).toHaveBeenCalledTimes(
+        RUNTIME_IDENTITY_RESOURCE_METHODS.length - 1,
+      );
+      expect(harness.ec2Send).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it('replaces runtime-identity construction failures and cleans up partial construction', async () => {
+    const iamHarness = await loadHarness({
+      iamConstructionError: new Error('iam-construction-secret'),
+    });
+    const iamAuthority = await iamHarness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    expect(() => iamAuthority.createRuntimeIdentityResourceClient()).toThrow(
+      'AWS deployment runtime-identity resource client creation failed.',
+    );
+    expect(iamHarness.iamConfigs).toHaveLength(0);
+    expect(iamHarness.ec2Configs).toHaveLength(0);
+    expect(iamHarness.iamDestroy).not.toHaveBeenCalled();
+    expect(iamHarness.ec2Destroy).not.toHaveBeenCalled();
+    await iamAuthority.close();
+
+    const ec2Harness = await loadHarness({
+      ec2ConstructionError: new Error('ec2-construction-secret'),
+      iamCloseError: new Error('partial-close-secret'),
+    });
+    const ec2Authority = await ec2Harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    expect(() => ec2Authority.createRuntimeIdentityResourceClient()).toThrow(
+      'AWS deployment runtime-identity resource client creation failed.',
+    );
+    expect(ec2Harness.iamConfigs).toHaveLength(1);
+    expect(ec2Harness.ec2Configs).toHaveLength(0);
+    expect(ec2Harness.iamDestroy).toHaveBeenCalledTimes(1);
+    expect(ec2Harness.ec2Destroy).not.toHaveBeenCalled();
+    await ec2Authority.close();
+  });
+
+  it.each([
+    ['ConcurrentModification', 'ConcurrentModification'],
+    ['ConcurrentModificationException', 'ConcurrentModification'],
+    ['DeleteConflict', 'DeleteConflict'],
+    ['DeleteConflictException', 'DeleteConflict'],
+    ['EntityAlreadyExists', 'EntityAlreadyExists'],
+    ['EntityAlreadyExistsException', 'EntityAlreadyExists'],
+    ['NoSuchEntity', 'NoSuchEntity'],
+    ['NoSuchEntityException', 'NoSuchEntity'],
+  ])(
+    'canonicalizes the %s runtime-identity classification without provider details',
+    async (providerName, boundaryName) => {
+      const providerError = Object.assign(new Error('iam-operation-secret'), {
+        name: providerName,
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: 409,
+          requestId: 'provider-request-secret',
+        },
+        cause: { credentials: CREDENTIALS },
+      });
+      const harness = await loadHarness({ iamMethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createRuntimeIdentityResourceClient();
+
+      const observed = await client
+        .getRole({ RoleName: 'wharfie-runtime-role' })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name: boundaryName,
+        code: 'AWS_DEPLOYMENT_RUNTIME_IDENTITY_RESOURCE_OPERATION',
+        message: 'AWS deployment runtime-identity resource operation failed.',
+        $metadata: { httpStatusCode: 409 },
+      });
+      expect(JSON.stringify(observed)).not.toMatch(
+        /iam-operation-secret|provider-code-secret|provider-request-secret|AKIA|never-print/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it.each([
+    [403, true],
+    [399, false],
+    [600, false],
+    ['403', false],
+  ])(
+    'keeps unknown runtime-identity failures generic and safely handles status %p',
+    async (status, preservesStatus) => {
+      const providerError = Object.assign(new Error('iam-access-secret'), {
+        name: 'AccessDeniedException',
+        code: 'provider-code-secret',
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createRuntimeIdentityResourceClient();
+
+      const observed = await client
+        .describeInstances({
+          Filters: [{ Name: 'iam-instance-profile.id', Values: ['AIPAID'] }],
+        })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name: 'AwsDeploymentRuntimeIdentityResourceError',
+        code: 'AWS_DEPLOYMENT_RUNTIME_IDENTITY_RESOURCE_OPERATION',
+        message: 'AWS deployment runtime-identity resource operation failed.',
+      });
+      if (preservesStatus) {
+        expect(observed).toHaveProperty('$metadata.httpStatusCode', status);
+      } else {
+        expect(observed).not.toHaveProperty('$metadata');
+      }
+      expect(JSON.stringify(observed)).not.toMatch(
+        /AccessDenied|iam-access-secret|provider-code-secret|provider-request-secret/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it('closes both runtime-identity SDK clients idempotently and refuses every reuse', async () => {
+    const harness = await loadHarness({
+      iamCloseError: new Error('iam-close-secret'),
+      ec2CloseError: new Error('ec2-close-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createRuntimeIdentityResourceClient()
+    );
+
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment runtime-identity resource client close failed.',
+    );
+    expect(harness.iamDestroy).toHaveBeenCalledTimes(1);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    for (const method of RUNTIME_IDENTITY_RESOURCE_METHODS) {
+      await expect(client[method]({})).rejects.toThrow(
+        'AWS deployment runtime-identity resource client is closed.',
+      );
+    }
+    await authority.close();
+  });
+
   it('normalizes S3 failures while preserving only allowlisted operation identity', async () => {
     const constructionHarness = await loadHarness({
       s3ConstructionError: new Error('construction-secret'),
@@ -1650,6 +1956,9 @@ describe('AWS deployment invocation authority', () => {
     const networkResourceClient = /** @type {Record<string, any>} */ (
       authority.createNetworkResourceClient()
     );
+    const runtimeIdentityResourceClient = /** @type {Record<string, any>} */ (
+      authority.createRuntimeIdentityResourceClient()
+    );
 
     await authority.close();
     await authority.close();
@@ -1659,6 +1968,7 @@ describe('AWS deployment invocation authority', () => {
     expect(harness.s3Destroy).not.toHaveBeenCalled();
     expect(harness.ssmDestroy).not.toHaveBeenCalled();
     expect(harness.ec2Destroy).not.toHaveBeenCalled();
+    expect(harness.iamDestroy).not.toHaveBeenCalled();
     await expect(authority.resolveScope()).rejects.toThrow(
       'AWS deployment authority is closed.',
     );
@@ -1678,6 +1988,9 @@ describe('AWS deployment invocation authority', () => {
       'AWS deployment authority is closed.',
     );
     expect(() => authority.createNetworkResourceClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
+    expect(() => authority.createRuntimeIdentityResourceClient()).toThrow(
       'AWS deployment authority is closed.',
     );
     await expect(
@@ -1715,6 +2028,21 @@ describe('AWS deployment invocation authority', () => {
         VpcIds: ['vpc-00000000000000001'],
       }),
     ).resolves.toMatchObject({ Vpcs: [] });
+    await expect(
+      runtimeIdentityResourceClient.getRole({
+        RoleName: 'still-caller-owned',
+      }),
+    ).resolves.toMatchObject({ operation: 'getRole' });
+    await expect(
+      runtimeIdentityResourceClient.describeInstances({
+        Filters: [
+          {
+            Name: 'iam-instance-profile.id',
+            Values: ['still-caller-owned'],
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ Reservations: [] });
 
     await db.close();
     await controlClient.close();
@@ -1754,10 +2082,21 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment network resource client is closed.',
       );
     }
+    const firstRuntimeIdentityClose = runtimeIdentityResourceClient.close();
+    expect(runtimeIdentityResourceClient.close()).toBe(
+      firstRuntimeIdentityClose,
+    );
+    await firstRuntimeIdentityClose;
+    for (const method of RUNTIME_IDENTITY_RESOURCE_METHODS) {
+      await expect(runtimeIdentityResourceClient[method]({})).rejects.toThrow(
+        'AWS deployment runtime-identity resource client is closed.',
+      );
+    }
     expect(harness.documentDestroy).toHaveBeenCalledTimes(1);
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
     expect(harness.s3Destroy).toHaveBeenCalledTimes(1);
     expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
-    expect(harness.ec2Destroy).toHaveBeenCalledTimes(3);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(4);
+    expect(harness.iamDestroy).toHaveBeenCalledTimes(1);
   });
 });
