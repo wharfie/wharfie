@@ -38,7 +38,13 @@ only `Force:false` detach from an exact running or stopped node because V43
 never mounts either device. Typed endpoint absence must retain one identical
 signature through the full attachment retry window. One immutable action
 router now constructs all 16 drivers over six caller-owned narrow clients and
-maps the exact 18 resource keys without cloning authority or fanning out.
+maps the exact 18 resource keys without cloning authority or fanning out. One
+pure desired-resource boundary now turns the exact seven-part deployment
+authority into a deeply frozen, apply-ordered 18-role target catalog. It
+recomputes every desired digest, revalidates every durable binding's complete
+graph, context, dependency lineage, and direct or derived provider identity,
+and preallocates only the managed artifact's deterministic ARN. It neither
+observes nor adopts provider state and never predicts a non-artifact AWS ID.
 Shared read-only observation, deterministic planning, owned provider
 composition, commands, guest storage/service projection, and clean-account
 proof follow ·
@@ -757,6 +763,16 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       client family and exact two-port driver result. This slice does not yet
       implement aggregate inspection, deterministic planning, owned client
       composition, or a live AWS lifecycle.
+- [x] Project the complete graph through one pure AWS desired-resource target
+      catalog. Its exact seven-key input binds the deployment revision,
+      profile, provider scope, ProviderSpec, deployment-instance ID,
+      incarnation ID, and nullable durable head. It produces a deeply frozen
+      apply-ordered 18-role catalog, derives every desired-state digest fresh,
+      and accepts a durable provider ID only after complete binding, graph,
+      context, dependency-lineage, and direct or derived identity
+      revalidation. Only the managed-current artifact has a deterministic ARN
+      before binding; no observation, adoption, or speculative non-artifact ID
+      enters this planning input boundary.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -874,10 +890,9 @@ mutation boundary audits the complete bounded exact-key
 content-version/delete-marker history, blocks on foreign ownership, and purges
 only explicit VersionIds. Reconcile alone may repair authoritative
 current-object absence beneath the existing artifact binding by issuing a
-conditional update after that audit. The implemented
-resource drivers are not yet composed into a complete provider, and the
-runtime path still does not route the implemented substrate or attachment
-drivers. One generic attachment effect now covers both fixed retained-volume
+conditional update after that audit. The implemented resource drivers are not
+yet composed into a complete provider. One generic attachment effect now
+covers both fixed retained-volume
 roles with exact dual-view readback, response-loss recovery,
 `DeleteOnTermination=false`, fail-closed no-op after external loss, and only
 non-forced detach. V43 can detach from an exact running or stopped node only
@@ -885,10 +900,23 @@ because it never mounts either device; future guest use must add a
 quiesce/unmount or stop dependency first. Guest format, mount, unmount,
 quiescence, and service activation remain unimplemented.
 
-1. Build the provider router, inspection, deterministic `createPlan`, and
-   complete controller composition across the implemented 18-role graph; then
-   wire guest storage projection, resident-service activation, and host
-   observation.
+The immutable action router reaches all 18 resource roles through the 16
+implemented drivers. A separate pure target catalog projects the fixed graph
+from exactly the deployment revision, profile, provider scope, ProviderSpec,
+deployment-instance ID, incarnation ID, and nullable durable head. It derives
+all desired digests fresh and revalidates complete binding graph, context,
+lineage, and provider identity before carrying any durable ID forward. Seven
+relationship IDs are recomputed from their exact endpoint bindings; the three
+pre-existing network relationship formulas are now validated, exported, and
+reused by their downstream effects for that shared proof. Only the managed
+artifact ARN is known without a binding. The catalog does not inspect or adopt
+AWS state and does not guess provider-allocated IDs.
+
+1. Derive deterministic `createPlan` output from the desired-target catalog,
+   then expose the drivers' authoritative read kernels through a shared
+   observation boundary and build aggregate inspection and complete controller
+   composition across the implemented 18-role graph. Then wire guest storage
+   projection, resident-service activation, and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
@@ -900,9 +928,13 @@ quiescence, and service activation remain unimplemented.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [recoverable retained-volume attachments
-checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md).
-Its parent is the [recoverable AWS substrate-node
+The current restart point is the [AWS desired-resource targets
+checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md).
+Its parent is the [AWS resource action router
+checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md), whose
+parent is the [recoverable retained-volume attachments
+checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md),
+whose parent is the [recoverable AWS substrate-node
 checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md),
 whose parent is the [exact EC2 node-launch contract
 checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md),

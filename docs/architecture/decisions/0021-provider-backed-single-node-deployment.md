@@ -1430,6 +1430,33 @@ exact two-port result but neither resolves credentials nor closes clients; the
 future owned provider composition must fence and close every client it obtains
 from the invocation authority.
 
+The twenty-seventh slice adds the pure desired-resource input to deterministic
+planning. `createAwsSingleNodeDesiredResourceTargetCatalog` accepts exactly
+seven fields: deployment revision, profile, provider scope, ProviderSpec,
+deployment-instance ID, incarnation ID, and a nullable durable head. It emits
+one deeply frozen catalog entry for every graph role in canonical apply order,
+including the graph contract and a target with provider type, provider-resource
+ID, and a freshly derived desired-state digest.
+
+The catalog never treats a head as trusted merely because it has already been
+persisted. Every binding must reproduce its exact graph markers, management and
+ownership modes, destroy policy, deployment context, dependency-binding
+receipts, and provider type. Direct AWS identifiers are checked against their
+resource family, while all seven derived relationship identifiers are
+recomputed from their exact durable endpoints. The existing internet-gateway
+attachment, default IPv4 route, and subnet/route-table association formulas are
+now exported so planning and effects share the same identity algorithm without
+changing its domain, prefix, or ordering. Those newly public helpers reject
+malformed fixed-CIDR or EC2 identifiers before hashing, and downstream effects
+reuse them instead of retaining private copies.
+
+Only the managed-current artifact has an identity derivable before provider
+mutation, so its exact stable ARN is present even with no head. Every other
+unbound provider-resource ID remains null, including a missing derived binding
+whose dependencies already exist. Observation is deliberately not an input:
+this boundary neither adopts discovered resources nor copies observed digests
+or speculates about future provider-allocated IDs.
+
 Source and packaged deployment commands, shared authoritative resource
 observation, deterministic planning, aggregate inspection, owned provider and
 controller composition, guest storage/service projection,

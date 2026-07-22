@@ -6,13 +6,11 @@ import {
 } from './canonical-order.js';
 import { createCanonicalJsonSha256Id, sha256Base64Url } from './content-id.js';
 import {
-  AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_DOMAIN,
-  AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_PREFIX,
+  getAwsSingleNodeDefaultIpv4RouteProviderResourceId,
   getAwsSingleNodeDefaultIpv4RouteStateDigest,
 } from './deployment-aws-default-ipv4-route-resource.js';
 import {
-  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
-  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
+  getAwsSingleNodeInternetGatewayAttachmentProviderResourceId,
   getAwsSingleNodeInternetGatewayAttachmentStateDigest,
 } from './deployment-aws-internet-gateway-attachment-resource.js';
 import { getAwsSingleNodeInternetGatewayStateDigest } from './deployment-aws-internet-gateway-resource.js';
@@ -317,34 +315,24 @@ export function getAwsSingleNodeSubnetRouteTableAssociationStateDigest(value) {
   });
 }
 
-/** @param {string} internetGatewayId @param {string} vpcId @returns {string} */
-function internetGatewayAttachmentProviderResourceId(internetGatewayId, vpcId) {
-  return createCanonicalJsonSha256Id({
-    domain:
-      AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
-    prefix:
-      AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
-    value: { internetGatewayId, vpcId },
-    valuePath: 'awsSingleNodeInternetGatewayAttachment provider identity',
-  });
-}
-
-/** @param {string} destinationCidrBlock @param {string} internetGatewayId @param {string} routeTableId @returns {string} */
-function defaultIpv4RouteProviderResourceId(
-  destinationCidrBlock,
-  internetGatewayId,
-  routeTableId,
-) {
-  return createCanonicalJsonSha256Id({
-    domain: AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_DOMAIN,
-    prefix: AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_PREFIX,
-    value: { destinationCidrBlock, internetGatewayId, routeTableId },
-    valuePath: 'awsSingleNodeDefaultIpv4Route provider identity',
-  });
-}
-
 /** @param {string} routeTableId @param {string} subnetId @returns {string} */
-function providerResourceId(routeTableId, subnetId) {
+export function getAwsSingleNodeSubnetRouteTableAssociationProviderResourceId(
+  routeTableId,
+  subnetId,
+) {
+  if (
+    typeof routeTableId !== 'string' ||
+    !ROUTE_TABLE_ID_PATTERN.test(routeTableId)
+  ) {
+    throw new TypeError(
+      'awsSingleNodeSubnetRouteTableAssociation routeTableId must be a canonical EC2 route table ID.',
+    );
+  }
+  if (typeof subnetId !== 'string' || !SUBNET_ID_PATTERN.test(subnetId)) {
+    throw new TypeError(
+      'awsSingleNodeSubnetRouteTableAssociation subnetId must be a canonical EC2 subnet ID.',
+    );
+  }
   return createCanonicalJsonSha256Id({
     domain:
       AWS_SINGLE_NODE_SUBNET_ROUTE_TABLE_ASSOCIATION_PROVIDER_RESOURCE_ID_DOMAIN,
@@ -501,13 +489,13 @@ function resolveDependencyAuthority(
     routeTableBinding,
   ]);
   const expectedAttachmentProviderResourceId =
-    internetGatewayAttachmentProviderResourceId(
+    getAwsSingleNodeInternetGatewayAttachmentProviderResourceId(
       internetGatewayBinding.providerResourceId,
       vpcBinding.providerResourceId,
     );
   const destinationCidrBlock = providerSpec.capabilities.networking.egressCidr;
   const expectedDefaultRouteProviderResourceId =
-    defaultIpv4RouteProviderResourceId(
+    getAwsSingleNodeDefaultIpv4RouteProviderResourceId(
       destinationCidrBlock,
       internetGatewayBinding.providerResourceId,
       routeTableBinding.providerResourceId,
@@ -580,7 +568,11 @@ function resolveDependencyAuthority(
     routeTableId,
     subnetId,
     vpcId: vpcBinding.providerResourceId,
-    providerResourceId: providerResourceId(routeTableId, subnetId),
+    providerResourceId:
+      getAwsSingleNodeSubnetRouteTableAssociationProviderResourceId(
+        routeTableId,
+        subnetId,
+      ),
   });
 }
 
@@ -1628,5 +1620,6 @@ export default {
   AwsSingleNodeSubnetRouteTableAssociationResourceConflictError,
   AwsSingleNodeSubnetRouteTableAssociationResourceUnknownError,
   createAwsSingleNodeSubnetRouteTableAssociationResource,
+  getAwsSingleNodeSubnetRouteTableAssociationProviderResourceId,
   getAwsSingleNodeSubnetRouteTableAssociationStateDigest,
 };

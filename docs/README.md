@@ -101,16 +101,26 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [AWS resource action router
+The current restart handoff is the [AWS desired-resource targets
+checkpoint](../llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md).
+One pure boundary now projects the exact deployment revision, profile,
+provider scope, ProviderSpec, deployment-instance ID, incarnation ID, and
+nullable durable head into a deeply frozen, apply-ordered 18-role target
+catalog. It derives every desired digest fresh and carries an existing provider
+ID forward only after complete binding, graph, context, lineage, and direct or
+derived identity revalidation. The managed artifact ARN is the sole
+preallocated provider ID; observations, adoption, and speculative
+non-artifact IDs are outside this boundary.
+
+Its parent is the [AWS resource action router
 checkpoint](../llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md).
-One immutable controller action boundary now constructs the 16 implemented
+One immutable controller action boundary constructs the 16 implemented
 resource drivers once over six caller-owned narrow clients and routes every
 one of the fixed graph's 18 resource keys. It forwards the original authority
 context without cloning or weakening it, never fans out, and rejects malformed
 or unknown routes with one fixed non-echoing error before a handler runs. The
-router deliberately owns no credentials or client lifecycle.
-
-Its parent is the [recoverable retained-volume attachments
+router deliberately owns no credentials or client lifecycle. V44's parent is
+the [recoverable retained-volume attachments
 checkpoint](../llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md).
 One generic controller-compatible driver implements both derived graph roles:
 application state at `/dev/sdf` and control state at `/dev/sdg`. Each synthetic

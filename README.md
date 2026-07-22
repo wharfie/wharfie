@@ -311,6 +311,17 @@ routes through one fixed non-echoing error before resource I/O. Each selected
 driver still performs the complete action, intent, scope, ownership, and
 dependency proof.
 
+One pure desired-resource boundary now projects the fixed graph into a deeply
+frozen, apply-ordered 18-role target catalog. Its exact seven-key input is the
+deployment revision, profile, provider scope, provider specification,
+deployment-instance ID, incarnation ID, and nullable durable head. Every
+desired digest is freshly derived from that authority. Existing bindings are
+reused only after their complete graph, context, lineage, and direct or derived
+provider identity have been revalidated. The managed artifact ARN is the sole
+provider identity that can be allocated before a binding exists; the catalog
+does not consume observations, adopt provider state, or speculate about future
+AWS IDs.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -330,8 +341,9 @@ commands, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [AWS resource action router checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md) — the current handoff for exhaustive 18-key execute/settle routing over the six caller-owned narrow resource clients.
-- [Recoverable retained-volume attachments checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md) — the parent handoff for both exact derived EBS relationships, dual-view response-loss recovery, retained delete behavior, and non-forced detach.
+- [AWS desired-resource targets checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md) — the current handoff for the pure, deterministic 18-role target catalog and complete durable-binding identity revalidation.
+- [AWS resource action router checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md) — the parent handoff for exhaustive 18-key execute/settle routing over the six caller-owned narrow resource clients.
+- [Recoverable retained-volume attachments checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md) — the preceding handoff for both exact derived EBS relationships, dual-view response-loss recovery, retained delete behavior, and non-forced detach.
 - [Recoverable AWS substrate-node checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md) — the parent handoff for exact launch, response-loss recovery, stopped-node restart, and terminal-instance/root-absence deletion evidence.
 - [Exact EC2 node-launch contract checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md) — the preceding handoff for ProviderSpec V6, deterministic bootstrap bytes, and narrow recoverable node authority.
 - [Recoverable managed-artifact checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md) — the preceding handoff for stable managed-current identity, exact staged-version conditional copy, bounded history proof, and explicit-version purge.

@@ -6,8 +6,7 @@ import {
 } from './canonical-order.js';
 import { createCanonicalJsonSha256Id, sha256Base64Url } from './content-id.js';
 import {
-  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
-  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
+  getAwsSingleNodeInternetGatewayAttachmentProviderResourceId,
   getAwsSingleNodeInternetGatewayAttachmentStateDigest,
 } from './deployment-aws-internet-gateway-attachment-resource.js';
 import {
@@ -295,24 +294,33 @@ export function getAwsSingleNodeDefaultIpv4RouteStateDigest(value) {
   });
 }
 
-/** @param {string} internetGatewayId @param {string} vpcId @returns {string} */
-function internetGatewayAttachmentProviderResourceId(internetGatewayId, vpcId) {
-  return createCanonicalJsonSha256Id({
-    domain:
-      AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
-    prefix:
-      AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
-    value: { internetGatewayId, vpcId },
-    valuePath: 'awsSingleNodeInternetGatewayAttachment provider identity',
-  });
-}
-
 /** @param {string} destinationCidrBlock @param {string} internetGatewayId @param {string} routeTableId @returns {string} */
-function providerResourceId(
+export function getAwsSingleNodeDefaultIpv4RouteProviderResourceId(
   destinationCidrBlock,
   internetGatewayId,
   routeTableId,
 ) {
+  if (destinationCidrBlock !== '0.0.0.0/0') {
+    throw new TypeError(
+      "awsSingleNodeDefaultIpv4Route destinationCidrBlock must be '0.0.0.0/0'.",
+    );
+  }
+  if (
+    typeof internetGatewayId !== 'string' ||
+    !INTERNET_GATEWAY_ID_PATTERN.test(internetGatewayId)
+  ) {
+    throw new TypeError(
+      'awsSingleNodeDefaultIpv4Route internetGatewayId must be a canonical EC2 internet gateway ID.',
+    );
+  }
+  if (
+    typeof routeTableId !== 'string' ||
+    !ROUTE_TABLE_ID_PATTERN.test(routeTableId)
+  ) {
+    throw new TypeError(
+      'awsSingleNodeDefaultIpv4Route routeTableId must be a canonical EC2 route table ID.',
+    );
+  }
   return createCanonicalJsonSha256Id({
     domain: AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_DOMAIN,
     prefix: AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_PREFIX,
@@ -456,7 +464,7 @@ function resolveDependencyAuthority(
   ]);
   const routeTableDependencies = dependencyReceipts([vpcBinding]);
   const expectedAttachmentProviderResourceId =
-    internetGatewayAttachmentProviderResourceId(
+    getAwsSingleNodeInternetGatewayAttachmentProviderResourceId(
       internetGatewayBinding.providerResourceId,
       vpcBinding.providerResourceId,
     );
@@ -509,7 +517,7 @@ function resolveDependencyAuthority(
     internetGatewayId,
     routeTableId,
     vpcId,
-    providerResourceId: providerResourceId(
+    providerResourceId: getAwsSingleNodeDefaultIpv4RouteProviderResourceId(
       destinationCidrBlock,
       internetGatewayId,
       routeTableId,
@@ -1428,5 +1436,6 @@ export default {
   AwsSingleNodeDefaultIpv4RouteResourceConflictError,
   AwsSingleNodeDefaultIpv4RouteResourceUnknownError,
   createAwsSingleNodeDefaultIpv4RouteResource,
+  getAwsSingleNodeDefaultIpv4RouteProviderResourceId,
   getAwsSingleNodeDefaultIpv4RouteStateDigest,
 };

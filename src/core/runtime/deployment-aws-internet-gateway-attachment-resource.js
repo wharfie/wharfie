@@ -208,7 +208,23 @@ export function getAwsSingleNodeInternetGatewayAttachmentStateDigest(value) {
 }
 
 /** @param {string} internetGatewayId @param {string} vpcId @returns {string} */
-function providerResourceId(internetGatewayId, vpcId) {
+export function getAwsSingleNodeInternetGatewayAttachmentProviderResourceId(
+  internetGatewayId,
+  vpcId,
+) {
+  if (
+    typeof internetGatewayId !== 'string' ||
+    !INTERNET_GATEWAY_ID_PATTERN.test(internetGatewayId)
+  ) {
+    throw new TypeError(
+      'awsSingleNodeInternetGatewayAttachment internetGatewayId must be a canonical EC2 internet gateway ID.',
+    );
+  }
+  if (typeof vpcId !== 'string' || !VPC_ID_PATTERN.test(vpcId)) {
+    throw new TypeError(
+      'awsSingleNodeInternetGatewayAttachment vpcId must be a canonical EC2 VPC ID.',
+    );
+  }
   return createCanonicalJsonSha256Id({
     domain:
       AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
@@ -329,7 +345,11 @@ function resolveDependencyAuthority(plan, head, actionIndex, providerScope) {
     dependencyBindings,
     internetGatewayId,
     vpcId,
-    providerResourceId: providerResourceId(internetGatewayId, vpcId),
+    providerResourceId:
+      getAwsSingleNodeInternetGatewayAttachmentProviderResourceId(
+        internetGatewayId,
+        vpcId,
+      ),
   });
 }
 
@@ -1012,5 +1032,6 @@ export default {
   AwsSingleNodeInternetGatewayAttachmentResourceConflictError,
   AwsSingleNodeInternetGatewayAttachmentResourceUnknownError,
   createAwsSingleNodeInternetGatewayAttachmentResource,
+  getAwsSingleNodeInternetGatewayAttachmentProviderResourceId,
   getAwsSingleNodeInternetGatewayAttachmentStateDigest,
 };
