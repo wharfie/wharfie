@@ -101,27 +101,29 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [recoverable AWS substrate-node
+The current restart handoff is the [recoverable retained-volume attachments
+checkpoint](../llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md).
+One generic controller-compatible driver now implements both derived graph
+roles: application state at `/dev/sdf` and control state at `/dev/sdg`. Each
+synthetic relationship identity binds its exact retained volume, substrate
+instance, fixed device, EBS card zero, `DeleteOnTermination=false`, and purge
+lifecycle. The driver re-proves the exact volume/substrate binding receipts and
+their complete upstream closure before any provider call.
+
+Create uses exact `AttachVolume`, independent exact instance and volume reads,
+and exact `ModifyInstanceAttribute` when the two views do not yet prove
+`DeleteOnTermination=false`. Only matching attached/in-use pair, device, card,
+and retained-delete evidence settles the effect, so lost attach or modify
+responses recover through readback. No-op fails closed if an externally removed
+settled relationship is absent. Because V43 never mounts or uses either device,
+destroy may detach the exact relationship from a running or stopped node, but
+always sends `DetachVolume` with `Force:false`; busy, detaching, and lagging
+`in-use`/no-row evidence is retryable, while no one-sided sample settles
+deletion. Typed endpoint absence
+must retain one identical signature through the full bounded retry window,
+while dual exact present views with no attachment settle delete immediately.
+The slice does not format, mount, unmount, or quiesce a guest filesystem;
+future guest use must
+add a quiesce/unmount or stop dependency before detach. It does not yet compose
+the provider end to end. Its parent is the [recoverable AWS substrate-node
 checkpoint](../llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md).
-ProviderSpec V6 pins the exact AMI root receipt and every launch default used by
-Wharfie, including the primary ENI, encrypted root volume, metadata, lifecycle,
-and private-DNS shape. The bounded exact user-data bytes are code-owned and
-prepare the locked runtime account, lingering, SSM, and a systemd-native IMDS
-restriction on the runtime user-manager subtree without staging or starting the
-app. The controller-compatible substrate driver uses one replay-stable launch
-token, atomic instance/root ownership tags, all eight direct dependency
-receipts, and independent instance, attribute, credit, and volume evidence.
-It proves Amazon-owned auto-assigned public-IPv4 provenance and requires every
-non-root mapping to preserve `DeleteOnTermination=false`, without yet claiming
-attachment ownership. It can restart an exactly validated stopped node and
-repeats that full root proof before termination. Delete settlement joins an
-exact owned `terminated` record or typed exact-ID instance absence with terminal
-root evidence: bounded root-tag absence or one exact owned unattached `deleted`
-root tombstone. A remaining exact root ID must be typed not-found, while a
-successful empty exact response is unknown. Joint instance/root tag absence
-covers provider tombstones that have both aged out only after remaining stable
-through the configured retry window. This remains deterministic driver proof,
-not a claim that the bootstrap restriction has run on the pinned AMI or that
-the provider is composed end to end. The two retained-volume attachments are
-next. Its parent is the [exact EC2 node-launch contract
-checkpoint](../llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md).

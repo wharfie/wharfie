@@ -753,6 +753,77 @@ settle early nor wait forever on provider tombstone retention. These rules
 provide recoverable logical effects; they do not claim an EC2 API request
 executes exactly once.
 
+### Each retained-volume attachment is one exact derived relationship
+
+The application-state and control-state attachment roles use one generic
+provider effect, parameterized only by their fixed graph role and ProviderSpec
+capability. The application volume occupies `/dev/sdf`; the control volume
+occupies `/dev/sdg`. Each uses EBS card zero, requires
+`DeleteOnTermination=false`, and is purged while its underlying volume remains
+retained. A `wva1` synthetic provider ID binds the exact ProviderSpec
+relationship descriptor, substrate instance ID, retained volume ID, device,
+card, delete behavior, and lifecycle. The binding records only the exact
+volume and substrate receipts. Before any provider call, the driver re-proves
+those dependencies and their complete action, intent, provider-identity, and
+transitive binding closure.
+
+Attachment I/O uses a separately owned EC2 client with one SDK transport
+attempt and only `AttachVolume`, `DetachVolume`,
+`ModifyInstanceAttribute`, exact `DescribeInstances`, exact
+`DescribeVolumes`, and `close`. It shares the invocation's frozen ordinary
+credential snapshot and explicit region without exposing either. Raw provider
+messages, request IDs, causes, credentials, and nonallowlisted classifications
+do not cross the authority boundary.
+
+The derived relationship has no tags of its own and is never inferred from a
+mutation response. Every observation reads both exact dependency IDs. The
+instance view must have the expected account, Availability Zone ID, canonical
+lifecycle, unique device and volume mappings, no AWS-managed operator on the
+intended mapping, and either no desired mapping or the exact pair/device/card.
+The volume view must have the expected ID and zone,
+single-attach rather than Multi-Attach behavior, no AWS-managed operator, and
+either no attachment or one exact pair/device/card. Settlement requires both
+views to agree on the relationship, stable attachment state, and
+`DeleteOnTermination=false`. Once both views prove the exact attached pair, a
+missing, true, or temporarily disagreeing delete flag safely drives the same
+idempotent correction and remains unsettled. Successful exact responses with
+empty arrays are unknown rather than absence; typed exact-ID NotFound
+participates only in delete recovery.
+
+Fresh create requires both views to show the volume available and the desired
+slot empty. The driver sends exact `AttachVolume` for the volume, instance,
+device, and card zero, then returns to dual readback. Attaching, detaching,
+one-sided, pending-node, stopping-node, and shutting-down-node samples remain
+transitional. Once both views prove the exact attached/in-use relationship,
+delete behavior not yet proven false in both views is corrected with exact
+`ModifyInstanceAttribute` for that one block-device mapping. Attach and modify
+responses are nonauthoritative; only a later dual read in which both views
+agree on `attached`, `in-use`, the pair, device, card zero, and
+`DeleteOnTermination=false` settles the binding. Lost responses therefore
+recover without claiming provider API-call exactly-once execution.
+
+A no-op under an existing durable binding repeats the same proof but is not
+authorized to repair an externally removed relationship. Exact absence blocks
+instead of silently issuing a new attach. Contradictory device reuse, another
+attachment, mismatched endpoints, Multi-Attach, managed-resource evidence, or
+terminal/error resource state also blocks.
+
+Reverse destroy first repairs delete behavior not yet proven false in both
+views so instance termination can never collect the retained volume. It calls
+exact `DetachVolume` only when both views prove the relationship attached, and
+it always sends `Force:false`. The exact substrate may be running or stopped
+because V43 never mounts or uses either device. A response does not settle
+deletion. Busy, detaching, and lagging `in-use`/no-row samples are retryable;
+no one-sided or transitional sample settles deletion. Dual exact present views
+with no attachment settle deletion immediately. Typed endpoint absence instead
+settles only when the identical
+`instance`, `volume`, or `instance-and-volume` NotFound signature survives the
+complete bounded retry window; the driver accepts two through ten attempts and
+defaults to three. This relationship effect does not format, mount, unmount,
+flush, or quiesce guest storage. Future guest use must add a quiesce/unmount or
+stop dependency before attachment deletion; forced detach is not an escape
+hatch.
+
 ### Plans are previews, not authority
 
 `plan` performs no mutation. A plan is deterministic for one exact deployment
@@ -1319,7 +1390,8 @@ requires logical and exact instance identity plus attributes, standard CPU
 credits, sole ENI with Amazon auto-assigned public-address provenance,
 bootstrap, encrypted root-volume evidence, and
 `DeleteOnTermination=false` for every non-root mapping. Attachment ownership
-remains deferred to the next graph effects. Stopped create/no-op recovery
+was deliberately deferred to the following graph effects. Stopped create/no-op
+recovery
 performs the same full proof before `StartInstances`, and destroy repeats it
 before termination. Purge settlement joins an exact owned `terminated` record
 or typed exact-ID instance absence with terminal root evidence: bounded root-tag
@@ -1330,8 +1402,22 @@ that have both aged out only after remaining stable through the configured
 retry window. These are deterministic driver contracts, not a live AWS
 lifecycle or API-call exactly-once claim.
 
-The two volume-attachment drivers are the next graph effects. Source and
-packaged deployment commands, production composition,
+The twenty-fifth slice implements both volume-attachment roles through one
+generic derived-relationship driver and one separate single-attempt EC2
+authority. Its `wva1` identity binds the settled instance/volume pair and fixed
+ProviderSpec device contract. Exact instance and volume reads must agree before
+`AttachVolume`, before correcting `DeleteOnTermination` through
+`ModifyInstanceAttribute`, and before settlement. Lost mutation responses are
+recovered through the same dual evidence. No-op blocks externally missing
+relationships, while destroy may detach from an exact running or stopped node
+because this slice never mounts the devices and always sends `DetachVolume`
+with `Force:false`. Identical typed endpoint-absence signatures must survive
+the complete retry window. This is deterministic driver proof and does not
+claim guest mount, unmount, quiescence, or a live AWS lifecycle; future guest
+use must add an explicit quiesce/unmount or stop dependency before detach.
+
+Source and packaged deployment commands, production provider routing,
+inspection and controller composition, guest storage/service projection,
 privileged publisher wiring, live STS session proof, and clean-account
 lifecycle proof remain unfinished. A document, bucket/table tag, SSM result,
 EC2 description, health receipt, or content ID still never proves that an

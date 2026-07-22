@@ -4,6 +4,7 @@ import { DynamoDB } from '@aws-sdk/client-dynamodb';
 import {
   AssociateRouteTableCommand,
   AttachInternetGatewayCommand,
+  AttachVolumeCommand,
   CreateInternetGatewayCommand,
   CreateRouteCommand,
   CreateRouteTableCommand,
@@ -32,8 +33,10 @@ import {
   DescribeVolumesCommand,
   DisassociateRouteTableCommand,
   DetachInternetGatewayCommand,
+  DetachVolumeCommand,
   EC2Client,
   GetEbsDefaultKmsKeyIdCommand,
+  ModifyInstanceAttributeCommand,
   RunInstancesCommand,
   StartInstancesCommand,
   TerminateInstancesCommand,
@@ -136,6 +139,14 @@ const NODE_RESOURCE_CLOSED_ERROR =
   'AWS deployment node resource client is closed.';
 const NODE_RESOURCE_CLOSE_ERROR =
   'AWS deployment node resource client close failed.';
+const VOLUME_ATTACHMENT_RESOURCE_CREATION_ERROR =
+  'AWS deployment volume-attachment resource client creation failed.';
+const VOLUME_ATTACHMENT_RESOURCE_OPERATION_ERROR =
+  'AWS deployment volume-attachment resource operation failed.';
+const VOLUME_ATTACHMENT_RESOURCE_CLOSED_ERROR =
+  'AWS deployment volume-attachment resource client is closed.';
+const VOLUME_ATTACHMENT_RESOURCE_CLOSE_ERROR =
+  'AWS deployment volume-attachment resource client close failed.';
 const NETWORK_RESOURCE_CREATION_ERROR =
   'AWS deployment network resource client creation failed.';
 const NETWORK_RESOURCE_OPERATION_ERROR =
@@ -167,6 +178,22 @@ const NODE_RESOURCE_ERROR_NAMES = new Set([
   'InvalidVolume.NotFound',
   'IncorrectInstanceState',
   'OperationNotPermitted',
+]);
+const VOLUME_ATTACHMENT_RESOURCE_ERROR_NAMES = new Set([
+  'AttachmentLimitExceeded',
+  'IncorrectInstanceState',
+  'IncorrectState',
+  'InvalidAttachment.NotFound',
+  'InvalidDevice.InUse',
+  'InvalidInstanceID.NotFound',
+  'InvalidInstanceId.NotFound',
+  'InvalidInstanceAttributeValue',
+  'InvalidVolume.NotFound',
+  'InvalidVolume.ZoneMismatch',
+  'OperationNotPermitted',
+  'UnsupportedOperation',
+  'UnsupportedOperationException',
+  'VolumeInUse',
 ]);
 const NETWORK_RESOURCE_ERROR_NAMES = new Set([
   'DependencyViolation',
@@ -299,6 +326,16 @@ const S3_VERSION_ID_MAX_UTF8_BYTES = 1024;
  * @property {(input: import('@aws-sdk/client-ec2').DescribeInstanceCreditSpecificationsCommandInput) => Promise<any>} describeInstanceCreditSpecifications - Read exact burst-credit state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVolumesCommandInput) => Promise<any>} describeVolumes - Read exact root-volume state.
  * @property {(input: import('@aws-sdk/client-ec2').TerminateInstancesCommandInput) => Promise<any>} terminateInstances - Terminate one exact substrate node.
+ * @property {() => Promise<void>} close - Close the caller-owned SDK client.
+ */
+
+/**
+ * @typedef VolumeAttachmentResourceClient
+ * @property {(input: import('@aws-sdk/client-ec2').AttachVolumeCommandInput) => Promise<any>} attachVolume - Attach one exact retained volume to one exact node device.
+ * @property {(input: import('@aws-sdk/client-ec2').DetachVolumeCommandInput) => Promise<any>} detachVolume - Non-forcibly detach one exact retained volume from one exact node device.
+ * @property {(input: import('@aws-sdk/client-ec2').ModifyInstanceAttributeCommandInput) => Promise<any>} modifyInstanceAttribute - Set exact retained-volume deletion behavior on one node mapping.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeInstancesCommandInput) => Promise<any>} describeInstances - Read exact node-side attachment state.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeVolumesCommandInput) => Promise<any>} describeVolumes - Read exact volume-side attachment state.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
  */
 
@@ -528,6 +565,34 @@ function sanitizeNodeResourceError(value) {
 }
 
 /**
+ * Preserve only the EC2 classifications required to recover ambiguous
+ * retained-volume attach, mapping, and detach attempts or report a stable
+ * provider refusal. Raw SDK messages, request IDs, access details, causes,
+ * and credential-bearing configuration never cross this boundary.
+ * @param {unknown} value - Raw SDK failure.
+ * @returns {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} - Sanitized classified failure.
+ */
+function sanitizeVolumeAttachmentResourceError(value) {
+  const candidate =
+    value !== null && typeof value === 'object'
+      ? /** @type {Record<string, any>} */ (value)
+      : {};
+  const error =
+    /** @type {Error & {code: string, $metadata?: Readonly<{httpStatusCode: number}>}} */ (
+      new Error(VOLUME_ATTACHMENT_RESOURCE_OPERATION_ERROR)
+    );
+  error.name = VOLUME_ATTACHMENT_RESOURCE_ERROR_NAMES.has(candidate.name)
+    ? candidate.name
+    : 'AwsDeploymentVolumeAttachmentResourceError';
+  error.code = 'AWS_DEPLOYMENT_VOLUME_ATTACHMENT_RESOURCE_OPERATION';
+  const status = candidate.$metadata?.httpStatusCode;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) {
+    error.$metadata = Object.freeze({ httpStatusCode: status });
+  }
+  return error;
+}
+
+/**
  * Preserve only the network-resource classifications needed for authoritative
  * absence and dependency-fenced deletion. Raw SDK messages, request IDs,
  * access details, causes, and credential-bearing configuration never cross
@@ -694,6 +759,7 @@ function scopeFromCallerIdentity(value, region) {
  *   createProviderSpecReadClient: () => Readonly<ProviderSpecReadClient>,
  *   createVolumeResourceClient: () => Readonly<VolumeResourceClient>,
  *   createNodeResourceClient: () => Readonly<NodeResourceClient>,
+ *   createVolumeAttachmentResourceClient: () => Readonly<VolumeAttachmentResourceClient>,
  *   createNetworkResourceClient: () => Readonly<NetworkResourceClient>,
  *   createRuntimeIdentityResourceClient: () => Readonly<RuntimeIdentityResourceClient>,
  *   close: () => Promise<void>,
@@ -1239,6 +1305,73 @@ export async function createAwsDeploymentAuthority(options) {
     });
   }
 
+  /** @returns {Readonly<VolumeAttachmentResourceClient>} - Caller-owned narrow retained-volume attachment client. */
+  function createVolumeAttachmentResourceClient() {
+    assertOpen();
+    /** @type {EC2Client} */
+    let client;
+    try {
+      client = new EC2Client({
+        // Attachment mutations have no provider idempotency token. Perform one
+        // SDK attempt, then let the driver recover solely from exact dual
+        // instance/volume readback.
+        ...BaseAWS.config({ maxAttempts: 1 }),
+        region,
+        credentials,
+      });
+    } catch {
+      throw new Error(VOLUME_ATTACHMENT_RESOURCE_CREATION_ERROR);
+    }
+    let clientClosed = false;
+    /** @type {Promise<void> | undefined} */
+    let closePromise;
+
+    /** @param {() => Promise<any>} operation @returns {Promise<any>} */
+    async function call(operation) {
+      if (clientClosed) {
+        throw new Error(VOLUME_ATTACHMENT_RESOURCE_CLOSED_ERROR);
+      }
+      try {
+        return await operation();
+      } catch (error) {
+        throw sanitizeVolumeAttachmentResourceError(error);
+      }
+    }
+
+    /** @returns {Promise<void>} */
+    function closeClient() {
+      if (closePromise) return closePromise;
+      clientClosed = true;
+      closePromise = (async () => {
+        try {
+          client.destroy();
+        } catch {
+          throw new Error(VOLUME_ATTACHMENT_RESOURCE_CLOSE_ERROR);
+        }
+      })();
+      return closePromise;
+    }
+
+    return Object.freeze({
+      attachVolume: (
+        /** @type {import('@aws-sdk/client-ec2').AttachVolumeCommandInput} */ input,
+      ) => call(() => client.send(new AttachVolumeCommand(input))),
+      detachVolume: (
+        /** @type {import('@aws-sdk/client-ec2').DetachVolumeCommandInput} */ input,
+      ) => call(() => client.send(new DetachVolumeCommand(input))),
+      modifyInstanceAttribute: (
+        /** @type {import('@aws-sdk/client-ec2').ModifyInstanceAttributeCommandInput} */ input,
+      ) => call(() => client.send(new ModifyInstanceAttributeCommand(input))),
+      describeInstances: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeInstancesCommandInput} */ input,
+      ) => call(() => client.send(new DescribeInstancesCommand(input))),
+      describeVolumes: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeVolumesCommandInput} */ input,
+      ) => call(() => client.send(new DescribeVolumesCommand(input))),
+      close: closeClient,
+    });
+  }
+
   /** @returns {Readonly<NetworkResourceClient>} - Caller-owned narrow network resource client. */
   function createNetworkResourceClient() {
     assertOpen();
@@ -1532,6 +1665,7 @@ export async function createAwsDeploymentAuthority(options) {
     createProviderSpecReadClient,
     createVolumeResourceClient,
     createNodeResourceClient,
+    createVolumeAttachmentResourceClient,
     createNetworkResourceClient,
     createRuntimeIdentityResourceClient,
     close,

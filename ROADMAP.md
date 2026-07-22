@@ -7,9 +7,10 @@ the exact node-launch contract, and the digest of one code-owned bootstrap;
 Plan/Action V3, Inspection V5, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
-destroy policy. Strict controller-compatible drivers now cover the retained
-EBS volume, all eight network effects, all four runtime-identity effects, and
-the managed-current artifact and substrate node.
+destroy policy. Strict controller-compatible drivers now cover both retained
+EBS volumes, all eight network effects, all four runtime-identity effects, the
+managed-current artifact, the substrate node, and both derived retained-volume
+attachments.
 The directly owned network containers share one narrow tagged
 EC2 recovery kernel while retaining distinct intrinsic, natural-slot, and
 destroy contracts; derived relationships prove both endpoints before mutation.
@@ -29,10 +30,14 @@ restarts a validated stopped instance, and repeats the full proof before
 termination. Purge settles only when an exact owned `terminated` record or
 typed exact-ID instance absence agrees with terminal root evidence: bounded
 root-tag absence or one exact owned unattached `deleted` tombstone; any
-remaining exact root ID must be typed not-found. The two retained-volume
-attachments are the next graph effects. Joint logical absence must remain
-stable through the node driver's retry window. Provider composition, commands,
-and clean-account proof follow ·
+remaining exact root ID must be typed not-found. One generic attachment driver
+now binds either retained volume to its exact node/device/card-zero slot,
+settles only from matching instance and volume evidence with
+`DeleteOnTermination=false`, blocks no-op repair after external loss, and uses
+only `Force:false` detach from an exact running or stopped node because V43
+never mounts either device. Typed endpoint absence must retain one identical
+signature through the full attachment retry window. Provider composition,
+commands, guest storage/service projection, and clean-account proof follow ·
 **Last updated:** 2026-07-22
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -713,6 +718,31 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       handles provider tombstones that have both aged out. Mutation responses
       remain locators only, no API-call exactly-once claim is made, and
       live-account bootstrap/IMDS/lifecycle proof remains outstanding.
+- [x] Implement both derived retained-volume attachment roles with one generic
+      controller-compatible driver. Its plan-time desired-state digest binds
+      the fixed capability, role, ProviderSpec device, EBS card zero,
+      `DeleteOnTermination=false`, and purge lifecycle without
+      provider-allocated IDs. Its `wva1` relationship identity additionally
+      binds the exact retained volume and substrate instance; each durable
+      binding records only those two receipts after the full upstream closure
+      is re-proved. Create
+      issues exact `AttachVolume`, uses independent exact instance and volume
+      reads, corrects retained delete behavior through exact
+      `ModifyInstanceAttribute`, and settles only when both views agree on the
+      pair, device, card, attached/in-use state, and false delete flag. Mutation
+      responses remain nonauthoritative, making attach and modify response loss
+      recoverable. No-op blocks rather than recreating an externally removed
+      settled relationship. Because V43 never mounts or uses either device,
+      reverse destroy may detach from an exact running or stopped node but
+      always sends `DetachVolume` with `Force:false`; busy, detaching, and
+      lagging `in-use`/no-row evidence is retryable, while no one-sided sample
+      settles. Typed endpoint
+      absence converges only after the identical instance/volume/both signature
+      survives the full bounded retry window, while dual exact present views
+      with no attachment settle immediately. This slice does not format, mount,
+      unmount, or quiesce guest storage; future use must add a quiesce/unmount or
+      stop dependency before detach. It is deterministic-mock proof rather than
+      complete provider composition or a live AWS claim.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -832,12 +862,19 @@ only explicit VersionIds. Reconcile alone may repair authoritative
 current-object absence beneath the existing artifact binding by issuing a
 conditional update after that audit. The implemented
 resource drivers are not yet composed into a complete provider, and the
-runtime path still does not route the implemented substrate driver or attach,
-format, or mount the retained volumes to fulfill a service capability.
+runtime path still does not route the implemented substrate or attachment
+drivers. One generic attachment effect now covers both fixed retained-volume
+roles with exact dual-view readback, response-loss recovery,
+`DeleteOnTermination=false`, fail-closed no-op after external loss, and only
+non-forced detach. V43 can detach from an exact running or stopped node only
+because it never mounts either device; future guest use must add a
+quiesce/unmount or stop dependency first. Guest format, mount, unmount,
+quiescence, and service activation remain unimplemented.
 
-1. Implement the two retained-volume attachment resources, then build the
-   provider router, inspection, `createPlan`, and complete controller
-   composition; and wire resident-service activation and host observation.
+1. Build the provider router, inspection, deterministic `createPlan`, and
+   complete controller composition across the implemented 18-role graph; then
+   wire guest storage projection, resident-service activation, and host
+   observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
@@ -849,9 +886,11 @@ format, or mount the retained volumes to fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [recoverable AWS substrate-node
-checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md).
-Its parent is the [exact EC2 node-launch contract
+The current restart point is the [recoverable retained-volume attachments
+checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md).
+Its parent is the [recoverable AWS substrate-node
+checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md),
+whose parent is the [exact EC2 node-launch contract
 checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md),
 whose parent is the [recoverable managed-artifact
 checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md),

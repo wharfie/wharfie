@@ -278,19 +278,42 @@ unattached `deleted` tombstone. When a root ID remains available but no deleted
 tombstone does, typed `InvalidVolume.NotFound` is required and a successful
 empty exact response remains unknown. Joint bounded instance- and root-tag
 absence must remain stable through the configured retry window and covers
-provider tombstones that have both aged out. These ports are not yet production
-composition.
+provider tombstones that have both aged out. The two derived retained-volume
+attachment roles now share one generic controller-compatible driver and a
+separate single-attempt EC2 authority. Their content-addressed relationship
+identity binds the exact retained volume, substrate instance, fixed device,
+card zero, `DeleteOnTermination=false`, and purge lifecycle; their durable
+bindings record only the exact volume and substrate receipts after the complete
+upstream closure is re-proved.
+
+Attachment convergence is evidence-driven rather than response-driven. Create
+issues exact `AttachVolume`, re-reads both the instance block-device mapping and
+the volume attachment, applies exact `ModifyInstanceAttribute` when
+`DeleteOnTermination` is not yet false, and settles only when both views agree
+on the pair, device, card, attached/in-use state, and retained delete behavior.
+This recovers lost attach or modify responses without claiming API-call
+exactly-once execution. A durable no-op whose relationship disappeared blocks
+instead of silently recreating externally removed state. Reverse destroy can
+detach the exact relationship from a running or stopped node because V43 never
+mounts or uses either device, but it always sends `Force:false`. Busy,
+detaching, and a lagging `in-use` volume after both attachment rows disappear
+remain retryable; no one-sided sample settles absence. Typed endpoint absence
+must repeat with the identical
+instance/volume/both signature through the full bounded retry window, while
+dual exact present views with no attachment can settle delete immediately.
+These ports are not yet production composition.
 
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
 becomes a production security claim.
 
-These modules do not yet attach, format, mount, or fulfill a complete service
-capability. The substrate node's two retained-volume attachments are the next
-resource effects. The privileged host observer, complete AWS
-driver/router/inspection/`createPlan`, operator commands, production
-composition, and clean-account proof remain unfinished.
+These modules now implement both retained-volume attachment effects under
+deterministic mocks, but do not format, mount, unmount, quiesce, or fulfill a
+complete service capability. Future guest use must add a quiesce/unmount or
+stop dependency before attachment deletion. The privileged host observer,
+complete AWS driver/router/inspection/`createPlan`, operator commands,
+production composition, and clean-account proof remain unfinished.
 
 ## Start here
 
@@ -298,8 +321,9 @@ composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Recoverable AWS substrate-node checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md) — the current handoff for exact launch, response-loss recovery, stopped-node restart, and terminal-instance/root-absence deletion evidence.
-- [Exact EC2 node-launch contract checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md) — the parent handoff for ProviderSpec V6, deterministic bootstrap bytes, and narrow recoverable node authority.
+- [Recoverable retained-volume attachments checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md) — the current handoff for both exact derived EBS relationships, dual-view response-loss recovery, retained delete behavior, and non-forced detach.
+- [Recoverable AWS substrate-node checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md) — the parent handoff for exact launch, response-loss recovery, stopped-node restart, and terminal-instance/root-absence deletion evidence.
+- [Exact EC2 node-launch contract checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md) — the preceding handoff for ProviderSpec V6, deterministic bootstrap bytes, and narrow recoverable node authority.
 - [Recoverable managed-artifact checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md) — the preceding handoff for stable managed-current identity, exact staged-version conditional copy, bounded history proof, and explicit-version purge.
 - [Recoverable runtime-identity checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md) — the earlier handoff for ProviderSpec V5, exact least-privilege IAM, and all four recoverable runtime-identity effects.
 - [Exact runtime service-health checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md) — the preceding handoff for V3 role/node-addressed health, PUT-first conditional publication, and Inspection V5 authority.

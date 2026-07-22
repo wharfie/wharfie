@@ -69,6 +69,13 @@ const NODE_RESOURCE_METHODS = Object.freeze([
   'describeVolumes',
   'terminateInstances',
 ]);
+const VOLUME_ATTACHMENT_RESOURCE_METHODS = Object.freeze([
+  'attachVolume',
+  'detachVolume',
+  'modifyInstanceAttribute',
+  'describeInstances',
+  'describeVolumes',
+]);
 const NETWORK_RESOURCE_METHODS = Object.freeze([
   'associateRouteTable',
   'attachInternetGateway',
@@ -203,6 +210,25 @@ async function loadHarness({
       if (method === 'createVolume') {
         return { VolumeId: 'vol-00000000000000001', input };
       }
+      if (method === 'attachVolume') {
+        return {
+          VolumeId: 'vol-00000000000000001',
+          InstanceId: 'i-00000000000000001',
+          Device: '/dev/sdf',
+          State: 'attaching',
+          input,
+        };
+      }
+      if (method === 'detachVolume') {
+        return {
+          VolumeId: 'vol-00000000000000001',
+          InstanceId: 'i-00000000000000001',
+          Device: '/dev/sdf',
+          State: 'detaching',
+          input,
+        };
+      }
+      if (method === 'modifyInstanceAttribute') return { input };
       if (method === 'describeVolumes') return { Volumes: [], input };
       if (method === 'describeInstances') return { Reservations: [], input };
       if (method === 'describeInstanceAttribute') {
@@ -478,6 +504,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    AttachVolumeCommand: class AttachVolumeCommand {
+      input;
+      operation = 'attachVolume';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     CreateInternetGatewayCommand: class CreateInternetGatewayCommand {
       input;
       operation = 'createInternetGateway';
@@ -686,6 +720,14 @@ async function loadHarness({
         this.input = input;
       }
     },
+    DetachVolumeCommand: class DetachVolumeCommand {
+      input;
+      operation = 'detachVolume';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
     DescribeVpcAttributeCommand: class DescribeVpcAttributeCommand {
       input;
       operation = 'describeVpcAttribute';
@@ -719,6 +761,14 @@ async function loadHarness({
     GetEbsDefaultKmsKeyIdCommand: class GetEbsDefaultKmsKeyIdCommand {
       input;
       operation = 'getEbsDefaultKmsKeyId';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    ModifyInstanceAttributeCommand: class ModifyInstanceAttributeCommand {
+      input;
+      operation = 'modifyInstanceAttribute';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -825,6 +875,8 @@ describe('AWS deployment invocation authority', () => {
       const providerSpecReadClient = authority.createProviderSpecReadClient();
       const volumeResourceClient = authority.createVolumeResourceClient();
       const nodeResourceClient = authority.createNodeResourceClient();
+      const volumeAttachmentResourceClient =
+        authority.createVolumeAttachmentResourceClient();
       const networkResourceClient = authority.createNetworkResourceClient();
       expect(harness.dynamoConfigs[0].region).toBe('us-east-1');
       expect(harness.dynamoConfigs[0].credentials).toBe(credentials);
@@ -854,13 +906,19 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.ec2Configs[2].credentials).toBe(credentials);
       expect(harness.ec2Configs[3].region).toBe('us-east-1');
       expect(harness.ec2Configs[3].credentials).toBe(credentials);
+      expect(harness.ec2Configs[4].region).toBe('us-east-1');
+      expect(harness.ec2Configs[4].credentials).toBe(credentials);
       expect(harness.ec2Configs[2]).not.toBe(harness.ec2Configs[1]);
       expect(harness.ec2Configs[3]).not.toBe(harness.ec2Configs[2]);
+      expect(harness.ec2Configs[4]).not.toBe(harness.ec2Configs[3]);
       expect(harness.ec2Configs[2].retryStrategy).not.toBe(
         harness.ec2Configs[1].retryStrategy,
       );
       expect(harness.ec2Configs[3].retryStrategy).not.toBe(
         harness.ec2Configs[2].retryStrategy,
+      );
+      expect(harness.ec2Configs[4].retryStrategy).not.toBe(
+        harness.ec2Configs[3].retryStrategy,
       );
       await expect(
         harness.ec2Configs[1].retryStrategy.maxAttempts(),
@@ -871,12 +929,16 @@ describe('AWS deployment invocation authority', () => {
       await expect(
         harness.ec2Configs[3].retryStrategy.maxAttempts(),
       ).resolves.toBe(1);
+      await expect(
+        harness.ec2Configs[4].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
       expect(Object.isFrozen(controlClient)).toBe(true);
       expect(Object.isFrozen(s3ControlClient)).toBe(true);
       expect(Object.isFrozen(managedArtifactResourceClient)).toBe(true);
       expect(Object.isFrozen(providerSpecReadClient)).toBe(true);
       expect(Object.isFrozen(volumeResourceClient)).toBe(true);
       expect(Object.isFrozen(nodeResourceClient)).toBe(true);
+      expect(Object.isFrozen(volumeAttachmentResourceClient)).toBe(true);
       expect(Object.isFrozen(networkResourceClient)).toBe(true);
       expect(controlClient).not.toHaveProperty('config');
       expect(s3ControlClient).not.toHaveProperty('config');
@@ -884,6 +946,7 @@ describe('AWS deployment invocation authority', () => {
       expect(providerSpecReadClient).not.toHaveProperty('config');
       expect(volumeResourceClient).not.toHaveProperty('config');
       expect(nodeResourceClient).not.toHaveProperty('config');
+      expect(volumeAttachmentResourceClient).not.toHaveProperty('config');
       expect(networkResourceClient).not.toHaveProperty('config');
       await controlClient.describeTable({ TableName: 'control-table' });
       expect(harness.dynamoSend).toHaveBeenCalledWith('describeTable', {
@@ -931,6 +994,12 @@ describe('AWS deployment invocation authority', () => {
       expect(harness.ec2Send).toHaveBeenCalledWith('describeInstances', {
         InstanceIds: ['i-00000000000000001'],
       });
+      await volumeAttachmentResourceClient.describeVolumes({
+        VolumeIds: ['vol-00000000000000001'],
+      });
+      expect(harness.ec2Send).toHaveBeenCalledWith('describeVolumes', {
+        VolumeIds: ['vol-00000000000000001'],
+      });
       await networkResourceClient.createVpc({ CidrBlock: '10.42.0.0/16' });
       expect(harness.ec2Send).toHaveBeenCalledWith('createVpc', {
         CidrBlock: '10.42.0.0/16',
@@ -947,6 +1016,7 @@ describe('AWS deployment invocation authority', () => {
       await providerSpecReadClient.close();
       await volumeResourceClient.close();
       await nodeResourceClient.close();
+      await volumeAttachmentResourceClient.close();
       await networkResourceClient.close();
       await authority.close();
     } finally {
@@ -1679,6 +1749,290 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment node resource client is closed.',
       );
     }
+    await authority.close();
+  });
+
+  it('exposes only the exact narrow volume-attachment surface and dispatches every operation with one snapshot', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createVolumeAttachmentResourceClient()
+    );
+    try {
+      expect(Object.keys(client).sort()).toEqual(
+        [...VOLUME_ATTACHMENT_RESOURCE_METHODS, 'close'].sort(),
+      );
+      expect(Object.isFrozen(client)).toBe(true);
+      expect(client).not.toHaveProperty('config');
+      expect(client).not.toHaveProperty('credentials');
+      expect(client).not.toHaveProperty('destroy');
+      expect(client).not.toHaveProperty('send');
+      expect(client).not.toHaveProperty('createVolume');
+      expect(client).not.toHaveProperty('runInstances');
+      expect(client).not.toHaveProperty('createVpc');
+      expect(JSON.stringify(client)).not.toMatch(/AKIA|never-print/);
+
+      expect(harness.ec2Configs).toHaveLength(1);
+      expect(harness.ec2Configs[0]).toMatchObject({ region: 'us-east-1' });
+      expect(harness.ec2Configs[0].credentials).toBe(
+        harness.stsConfigs[0].credentials,
+      );
+      await expect(
+        harness.ec2Configs[0].retryStrategy.maxAttempts(),
+      ).resolves.toBe(1);
+
+      const attachInput = {
+        Device: '/dev/sdf',
+        EbsCardIndex: 0,
+        InstanceId: 'i-00000000000000001',
+        VolumeId: 'vol-00000000000000001',
+      };
+      await expect(client.attachVolume(attachInput)).resolves.toMatchObject({
+        Device: '/dev/sdf',
+        InstanceId: 'i-00000000000000001',
+        State: 'attaching',
+        VolumeId: 'vol-00000000000000001',
+        input: attachInput,
+      });
+      const detachInput = {
+        Device: '/dev/sdf',
+        Force: false,
+        InstanceId: 'i-00000000000000001',
+        VolumeId: 'vol-00000000000000001',
+      };
+      await expect(client.detachVolume(detachInput)).resolves.toMatchObject({
+        Device: '/dev/sdf',
+        InstanceId: 'i-00000000000000001',
+        State: 'detaching',
+        VolumeId: 'vol-00000000000000001',
+        input: detachInput,
+      });
+      const modifyInput = {
+        InstanceId: 'i-00000000000000001',
+        BlockDeviceMappings: [
+          {
+            DeviceName: '/dev/sdf',
+            Ebs: {
+              DeleteOnTermination: false,
+              VolumeId: 'vol-00000000000000001',
+            },
+          },
+        ],
+      };
+      await expect(
+        client.modifyInstanceAttribute(modifyInput),
+      ).resolves.toEqual({ input: modifyInput });
+      const describeInstancesInput = {
+        InstanceIds: ['i-00000000000000001'],
+      };
+      await expect(
+        client.describeInstances(describeInstancesInput),
+      ).resolves.toEqual({
+        Reservations: [],
+        input: describeInstancesInput,
+      });
+      const describeVolumesInput = {
+        VolumeIds: ['vol-00000000000000001'],
+      };
+      await expect(
+        client.describeVolumes(describeVolumesInput),
+      ).resolves.toEqual({ Volumes: [], input: describeVolumesInput });
+      expect(harness.ec2Send.mock.calls).toEqual([
+        ['attachVolume', attachInput],
+        ['detachVolume', detachInput],
+        ['modifyInstanceAttribute', modifyInput],
+        ['describeInstances', describeInstancesInput],
+        ['describeVolumes', describeVolumesInput],
+      ]);
+    } finally {
+      await client.close();
+      await authority.close();
+    }
+  });
+
+  it('replaces volume-attachment client construction failures', async () => {
+    const harness = await loadHarness({
+      ec2ConstructionError: new Error('attachment-construction-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+
+    expect(() => authority.createVolumeAttachmentResourceClient()).toThrow(
+      'AWS deployment volume-attachment resource client creation failed.',
+    );
+    expect(harness.ec2Configs).toHaveLength(0);
+    expect(harness.ec2Destroy).not.toHaveBeenCalled();
+    await authority.close();
+  });
+
+  it.each([
+    ['InvalidInstanceID.NotFound', 'describeInstances', 404],
+    ['InvalidInstanceId.NotFound', 'modifyInstanceAttribute', 404],
+    ['InvalidVolume.NotFound', 'describeVolumes', 404],
+    ['InvalidAttachment.NotFound', 'detachVolume', 400],
+    ['InvalidDevice.InUse', 'attachVolume', 400],
+    ['InvalidInstanceAttributeValue', 'modifyInstanceAttribute', 400],
+    ['InvalidVolume.ZoneMismatch', 'attachVolume', 400],
+    ['IncorrectState', 'attachVolume', 400],
+    ['IncorrectInstanceState', 'modifyInstanceAttribute', 400],
+    ['VolumeInUse', 'attachVolume', 400],
+    ['AttachmentLimitExceeded', 'attachVolume', 400],
+    ['OperationNotPermitted', 'detachVolume', 400],
+    ['UnsupportedOperation', 'modifyInstanceAttribute', 400],
+    ['UnsupportedOperationException', 'detachVolume', 400],
+  ])(
+    'preserves only the %s volume-attachment classification',
+    async (name, method, status) => {
+      const providerError = Object.assign(new Error('attachment-secret'), {
+        name,
+        code: 'provider-code-secret',
+        cause: new Error('provider-cause-secret'),
+        credentials: CREDENTIALS,
+        $metadata: {
+          httpStatusCode: status,
+          requestId: 'provider-request-secret',
+        },
+      });
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = /** @type {Record<string, any>} */ (
+        authority.createVolumeAttachmentResourceClient()
+      );
+
+      const observed = await client[method]({ operationMarker: method }).catch(
+        (/** @type {unknown} */ error) => error,
+      );
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name,
+        code: 'AWS_DEPLOYMENT_VOLUME_ATTACHMENT_RESOURCE_OPERATION',
+        message: 'AWS deployment volume-attachment resource operation failed.',
+        $metadata: { httpStatusCode: status },
+      });
+      expect(observed).not.toHaveProperty('cause');
+      expect(observed).not.toHaveProperty('credentials');
+      expect(JSON.stringify(observed)).not.toMatch(
+        /attachment-secret|provider-cause-secret|provider-code-secret|provider-request-secret|AKIA|never-print/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it.each([
+    [403, true],
+    [399, false],
+    [600, false],
+    ['403', false],
+  ])(
+    'keeps unknown volume-attachment failures generic and safely handles status %p',
+    async (status, preservesStatus) => {
+      const providerError = Object.assign(
+        new Error('attachment-access-secret'),
+        {
+          name: 'AccessDeniedException',
+          code: 'provider-code-secret',
+          cause: new Error('provider-cause-secret'),
+          credentials: CREDENTIALS,
+          $metadata: {
+            httpStatusCode: status,
+            requestId: 'provider-request-secret',
+          },
+        },
+      );
+      const harness = await loadHarness({ ec2MethodError: providerError });
+      const authority = await harness.createAwsDeploymentAuthority({
+        region: 'us-east-1',
+      });
+      const client = authority.createVolumeAttachmentResourceClient();
+
+      const observed = await client
+        .describeVolumes({ VolumeIds: ['vol-00000000000000001'] })
+        .catch((/** @type {unknown} */ error) => error);
+      expect(observed).not.toBe(providerError);
+      expect(observed).toMatchObject({
+        name: 'AwsDeploymentVolumeAttachmentResourceError',
+        code: 'AWS_DEPLOYMENT_VOLUME_ATTACHMENT_RESOURCE_OPERATION',
+        message: 'AWS deployment volume-attachment resource operation failed.',
+      });
+      if (preservesStatus) {
+        expect(observed).toHaveProperty('$metadata.httpStatusCode', status);
+      } else {
+        expect(observed).not.toHaveProperty('$metadata');
+      }
+      expect(observed).not.toHaveProperty('cause');
+      expect(observed).not.toHaveProperty('credentials');
+      expect(JSON.stringify(observed)).not.toMatch(
+        /AccessDenied|attachment-access-secret|provider-cause-secret|provider-code-secret|provider-request-secret|AKIA|never-print/,
+      );
+
+      await client.close();
+      await authority.close();
+    },
+  );
+
+  it('closes the volume-attachment SDK client idempotently and refuses every reuse', async () => {
+    const harness = await loadHarness({
+      ec2CloseError: new Error('attachment-close-secret'),
+    });
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const client = /** @type {Record<string, any>} */ (
+      authority.createVolumeAttachmentResourceClient()
+    );
+
+    const firstClose = client.close();
+    expect(client.close()).toBe(firstClose);
+    await expect(firstClose).rejects.toThrow(
+      'AWS deployment volume-attachment resource client close failed.',
+    );
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    for (const method of VOLUME_ATTACHMENT_RESOURCE_METHODS) {
+      await expect(client[method]({})).rejects.toThrow(
+        'AWS deployment volume-attachment resource client is closed.',
+      );
+    }
+    await authority.close();
+  });
+
+  it('keeps the volume-attachment SDK client isolated from adjacent EC2 clients', async () => {
+    const harness = await loadHarness();
+    const authority = await harness.createAwsDeploymentAuthority({
+      region: 'us-east-1',
+    });
+    const volumeClient = authority.createVolumeResourceClient();
+    const nodeClient = authority.createNodeResourceClient();
+    const attachmentClient = authority.createVolumeAttachmentResourceClient();
+    const networkClient = authority.createNetworkResourceClient();
+
+    expect(harness.ec2Configs).toHaveLength(4);
+    expect(new Set(harness.ec2Configs)).toHaveProperty('size', 4);
+    await attachmentClient.close();
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(1);
+    await expect(
+      volumeClient.describeVolumes({
+        VolumeIds: ['vol-00000000000000001'],
+      }),
+    ).resolves.toMatchObject({ Volumes: [] });
+    await expect(
+      nodeClient.describeInstances({
+        InstanceIds: ['i-00000000000000001'],
+      }),
+    ).resolves.toMatchObject({ Reservations: [] });
+    await expect(
+      networkClient.describeVpcs({ VpcIds: ['vpc-00000000000000001'] }),
+    ).resolves.toMatchObject({ Vpcs: [] });
+    await volumeClient.close();
+    await nodeClient.close();
+    await networkClient.close();
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(4);
     await authority.close();
   });
 
@@ -2579,6 +2933,9 @@ describe('AWS deployment invocation authority', () => {
     const nodeResourceClient = /** @type {Record<string, any>} */ (
       authority.createNodeResourceClient()
     );
+    const volumeAttachmentResourceClient = /** @type {Record<string, any>} */ (
+      authority.createVolumeAttachmentResourceClient()
+    );
     const networkResourceClient = /** @type {Record<string, any>} */ (
       authority.createNetworkResourceClient()
     );
@@ -2617,6 +2974,9 @@ describe('AWS deployment invocation authority', () => {
       'AWS deployment authority is closed.',
     );
     expect(() => authority.createNodeResourceClient()).toThrow(
+      'AWS deployment authority is closed.',
+    );
+    expect(() => authority.createVolumeAttachmentResourceClient()).toThrow(
       'AWS deployment authority is closed.',
     );
     expect(() => authority.createNetworkResourceClient()).toThrow(
@@ -2661,6 +3021,11 @@ describe('AWS deployment invocation authority', () => {
         InstanceIds: ['i-00000000000000001'],
       }),
     ).resolves.toMatchObject({ Reservations: [] });
+    await expect(
+      volumeAttachmentResourceClient.describeVolumes({
+        VolumeIds: ['vol-00000000000000001'],
+      }),
+    ).resolves.toMatchObject({ Volumes: [] });
     await expect(
       networkResourceClient.createVpc({ CidrBlock: '10.42.0.0/16' }),
     ).resolves.toMatchObject({
@@ -2739,6 +3104,16 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment node resource client is closed.',
       );
     }
+    const firstVolumeAttachmentClose = volumeAttachmentResourceClient.close();
+    expect(volumeAttachmentResourceClient.close()).toBe(
+      firstVolumeAttachmentClose,
+    );
+    await firstVolumeAttachmentClose;
+    for (const method of VOLUME_ATTACHMENT_RESOURCE_METHODS) {
+      await expect(volumeAttachmentResourceClient[method]({})).rejects.toThrow(
+        'AWS deployment volume-attachment resource client is closed.',
+      );
+    }
     const firstNetworkClose = networkResourceClient.close();
     expect(networkResourceClient.close()).toBe(firstNetworkClose);
     await firstNetworkClose;
@@ -2761,7 +3136,7 @@ describe('AWS deployment invocation authority', () => {
     expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
     expect(harness.s3Destroy).toHaveBeenCalledTimes(2);
     expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
-    expect(harness.ec2Destroy).toHaveBeenCalledTimes(5);
+    expect(harness.ec2Destroy).toHaveBeenCalledTimes(6);
     expect(harness.iamDestroy).toHaveBeenCalledTimes(1);
   });
 });
