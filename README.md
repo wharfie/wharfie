@@ -301,7 +301,15 @@ remain retryable; no one-sided sample settles absence. Typed endpoint absence
 must repeat with the identical
 instance/volume/both signature through the full bounded retry window, while
 dual exact present views with no attachment can settle delete immediately.
-These ports are not yet production composition.
+One immutable action router now composes all 16 resource-driver factories over
+six caller-owned narrow clients and maps every one of the 18 graph resource
+keys to exactly one handler. The two volume roles share one volume driver and
+the two attachment roles share one attachment driver; all other roles retain
+their distinct handler. The router forwards the original controller authority
+unchanged, never fans out, owns no clients, and rejects malformed or unknown
+routes through one fixed non-echoing error before resource I/O. Each selected
+driver still performs the complete action, intent, scope, ownership, and
+dependency proof.
 
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
@@ -312,8 +320,9 @@ These modules now implement both retained-volume attachment effects under
 deterministic mocks, but do not format, mount, unmount, quiesce, or fulfill a
 complete service capability. Future guest use must add a quiesce/unmount or
 stop dependency before attachment deletion. The privileged host observer,
-complete AWS driver/router/inspection/`createPlan`, operator commands,
-production composition, and clean-account proof remain unfinished.
+shared read-only resource observation, aggregate AWS inspection,
+deterministic `createPlan`, owned provider/authority composition, operator
+commands, and clean-account proof remain unfinished.
 
 ## Start here
 
@@ -321,7 +330,8 @@ production composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Recoverable retained-volume attachments checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md) — the current handoff for both exact derived EBS relationships, dual-view response-loss recovery, retained delete behavior, and non-forced detach.
+- [AWS resource action router checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md) — the current handoff for exhaustive 18-key execute/settle routing over the six caller-owned narrow resource clients.
+- [Recoverable retained-volume attachments checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md) — the parent handoff for both exact derived EBS relationships, dual-view response-loss recovery, retained delete behavior, and non-forced detach.
 - [Recoverable AWS substrate-node checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md) — the parent handoff for exact launch, response-loss recovery, stopped-node restart, and terminal-instance/root-absence deletion evidence.
 - [Exact EC2 node-launch contract checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md) — the preceding handoff for ProviderSpec V6, deterministic bootstrap bytes, and narrow recoverable node authority.
 - [Recoverable managed-artifact checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md) — the preceding handoff for stable managed-current identity, exact staged-version conditional copy, bounded history proof, and explicit-version purge.

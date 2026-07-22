@@ -101,14 +101,23 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [recoverable retained-volume attachments
+The current restart handoff is the [AWS resource action router
+checkpoint](../llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md).
+One immutable controller action boundary now constructs the 16 implemented
+resource drivers once over six caller-owned narrow clients and routes every
+one of the fixed graph's 18 resource keys. It forwards the original authority
+context without cloning or weakening it, never fans out, and rejects malformed
+or unknown routes with one fixed non-echoing error before a handler runs. The
+router deliberately owns no credentials or client lifecycle.
+
+Its parent is the [recoverable retained-volume attachments
 checkpoint](../llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md).
-One generic controller-compatible driver now implements both derived graph
-roles: application state at `/dev/sdf` and control state at `/dev/sdg`. Each
-synthetic relationship identity binds its exact retained volume, substrate
-instance, fixed device, EBS card zero, `DeleteOnTermination=false`, and purge
-lifecycle. The driver re-proves the exact volume/substrate binding receipts and
-their complete upstream closure before any provider call.
+One generic controller-compatible driver implements both derived graph roles:
+application state at `/dev/sdf` and control state at `/dev/sdg`. Each synthetic
+relationship identity binds its exact retained volume, substrate instance,
+fixed device, EBS card zero, `DeleteOnTermination=false`, and purge lifecycle.
+The driver re-proves the exact volume/substrate binding receipts and their
+complete upstream closure before any provider call.
 
 Create uses exact `AttachVolume`, independent exact instance and volume reads,
 and exact `ModifyInstanceAttribute` when the two views do not yet prove
@@ -124,6 +133,8 @@ must retain one identical signature through the full bounded retry window,
 while dual exact present views with no attachment settle delete immediately.
 The slice does not format, mount, unmount, or quiesce a guest filesystem;
 future guest use must
-add a quiesce/unmount or stop dependency before detach. It does not yet compose
-the provider end to end. Its parent is the [recoverable AWS substrate-node
+add a quiesce/unmount or stop dependency before detach. Shared read-only
+resource observations, aggregate inspection, deterministic planning, owned
+provider composition, and command wiring remain unfinished. The attachment
+checkpoint's parent is the [recoverable AWS substrate-node
 checkpoint](../llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md).

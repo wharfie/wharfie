@@ -1416,8 +1416,23 @@ the complete retry window. This is deterministic driver proof and does not
 claim guest mount, unmount, quiescence, or a live AWS lifecycle; future guest
 use must add an explicit quiesce/unmount or stop dependency before detach.
 
-Source and packaged deployment commands, production provider routing,
-inspection and controller composition, guest storage/service projection,
+The twenty-sixth slice composes the complete action surface without claiming a
+complete provider. One immutable router constructs all 16 resource-driver
+factories exactly once over six caller-owned narrow clients: managed artifact,
+volume, network, runtime identity, node, and volume attachment. It covers the
+18 resource keys in canonical graph order, sharing only the generic volume and
+attachment handlers across their two exact capability roles. Both execution
+and settlement dispatch solely by `resourceKey`, receive the original
+controller authority object unchanged, and never fan out. A malformed or
+unknown route produces one fixed non-echoing error before any resource handler
+runs. The router validates the six closable client families and every factory's
+exact two-port result but neither resolves credentials nor closes clients; the
+future owned provider composition must fence and close every client it obtains
+from the invocation authority.
+
+Source and packaged deployment commands, shared authoritative resource
+observation, deterministic planning, aggregate inspection, owned provider and
+controller composition, guest storage/service projection,
 privileged publisher wiring, live STS session proof, and clean-account
 lifecycle proof remain unfinished. A document, bucket/table tag, SSM result,
 EC2 description, health receipt, or content ID still never proves that an

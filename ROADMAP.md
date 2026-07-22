@@ -36,8 +36,12 @@ settles only from matching instance and volume evidence with
 `DeleteOnTermination=false`, blocks no-op repair after external loss, and uses
 only `Force:false` detach from an exact running or stopped node because V43
 never mounts either device. Typed endpoint absence must retain one identical
-signature through the full attachment retry window. Provider composition,
-commands, guest storage/service projection, and clean-account proof follow ·
+signature through the full attachment retry window. One immutable action
+router now constructs all 16 drivers over six caller-owned narrow clients and
+maps the exact 18 resource keys without cloning authority or fanning out.
+Shared read-only observation, deterministic planning, owned provider
+composition, commands, guest storage/service projection, and clean-account
+proof follow ·
 **Last updated:** 2026-07-22
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -743,6 +747,16 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       unmount, or quiesce guest storage; future use must add a quiesce/unmount or
       stop dependency before detach. It is deterministic-mock proof rather than
       complete provider composition or a live AWS claim.
+- [x] Route the complete 18-role graph through one immutable AWS action
+      boundary. Six exact caller-owned narrow clients feed 16 driver instances;
+      the two retained volumes and two attachments share only their respective
+      generic drivers. Both execution and settlement dispatch by exact
+      `resourceKey`, preserve the original controller authority object, never
+      fan out, and fail with one fixed non-echoing error before driver I/O when
+      the route is malformed or unsupported. Construction validates every
+      client family and exact two-port driver result. This slice does not yet
+      implement aggregate inspection, deterministic planning, owned client
+      composition, or a live AWS lifecycle.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
