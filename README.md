@@ -322,6 +322,19 @@ provider identity that can be allocated before a binding exists; the catalog
 does not consume observations, adopt provider state, or speculate about future
 AWS IDs.
 
+One pure controller-compatible planner now joins that catalog to one already
+validated InspectionV5 document through the controller's exact nine-key
+`createPlan` call. It derives a complete deterministic PlanV3 with all 18
+actions and an exact head-generation, settled-revision, and inspection basis.
+An absent head produces only ordered creates. A READY head can reconcile the
+settled revision or project a different revision; only the deterministic artifact
+may update in place, while missing unbound leaves may be created and every
+other unsupported absence, drift, ownership conflict, or adoption attempt
+fails closed. Destroy reverses graph order into 16 purge deletes and two
+retained-volume no-ops, including safe convergence when provider effects are
+already ahead of the durable READY head. Planning performs no provider I/O,
+clock sampling, or random generation.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -331,9 +344,12 @@ These modules now implement both retained-volume attachment effects under
 deterministic mocks, but do not format, mount, unmount, quiesce, or fulfill a
 complete service capability. Future guest use must add a quiesce/unmount or
 stop dependency before attachment deletion. The privileged host observer,
-shared read-only resource observation, aggregate AWS inspection,
-deterministic `createPlan`, owned provider/authority composition, operator
-commands, and clean-account proof remain unfinished.
+shared read-only resource observation, aggregate AWS inspection, owned
+provider/authority composition, operator commands, and clean-account proof
+remain unfinished. Fresh apply from a DESTROYED tombstone is also currently
+unsupported: InspectionV5 requires retained resources to remain exactly bound,
+while the controller permits a fresh incarnation only after those bindings are
+gone.
 
 ## Start here
 
@@ -341,7 +357,8 @@ commands, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [AWS desired-resource targets checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md) — the current handoff for the pure, deterministic 18-role target catalog and complete durable-binding identity revalidation.
+- [Deterministic AWS deployment planning checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md) — the current handoff for exact controller-compatible 18-action planning, no-adoption reconciliation, and reverse destroy derivation.
+- [AWS desired-resource targets checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md) — the parent handoff for the pure, deterministic 18-role target catalog and complete durable-binding identity revalidation.
 - [AWS resource action router checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md) — the parent handoff for exhaustive 18-key execute/settle routing over the six caller-owned narrow resource clients.
 - [Recoverable retained-volume attachments checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md) — the preceding handoff for both exact derived EBS relationships, dual-view response-loss recovery, retained delete behavior, and non-forced detach.
 - [Recoverable AWS substrate-node checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md) — the parent handoff for exact launch, response-loss recovery, stopped-node restart, and terminal-instance/root-absence deletion evidence.

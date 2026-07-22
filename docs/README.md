@@ -101,18 +101,30 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [AWS desired-resource targets
+The current restart handoff is the [deterministic AWS deployment planning
+checkpoint](../llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md).
+One pure boundary accepts exactly the controller's nine `createPlan` fields and
+combines the desired-resource catalog with its already context- and
+freshness-validated InspectionV5 evidence. It emits a complete deterministic
+18-action PlanV3 whose basis names the exact inspection, head generation, and
+settled revision. Null-head apply creates in graph order. READY apply or
+reconcile no-ops exact resources, updates only the deterministic artifact,
+creates only absent unbound roles, and refuses adoption or unsupported repair
+through a fixed non-echoing error. Destroy reverses the graph into 16 purge
+deletes plus two retained-volume no-ops and can reconcile provider effects that
+are already ahead of durable READY state. The planner performs no provider I/O,
+clock sampling, or random generation.
+
+Its parent is the [AWS desired-resource targets
 checkpoint](../llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md).
-One pure boundary now projects the exact deployment revision, profile,
+That pure seven-key boundary projects the exact deployment revision, profile,
 provider scope, ProviderSpec, deployment-instance ID, incarnation ID, and
 nullable durable head into a deeply frozen, apply-ordered 18-role target
 catalog. It derives every desired digest fresh and carries an existing provider
 ID forward only after complete binding, graph, context, lineage, and direct or
 derived identity revalidation. The managed artifact ARN is the sole
-preallocated provider ID; observations, adoption, and speculative
-non-artifact IDs are outside this boundary.
-
-Its parent is the [AWS resource action router
+preallocated provider ID; observations, adoption, and speculative non-artifact
+IDs are outside this boundary. V45's parent is the [AWS resource action router
 checkpoint](../llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md).
 One immutable controller action boundary constructs the 16 implemented
 resource drivers once over six caller-owned narrow clients and routes every
@@ -144,7 +156,9 @@ while dual exact present views with no attachment settle delete immediately.
 The slice does not format, mount, unmount, or quiesce a guest filesystem;
 future guest use must
 add a quiesce/unmount or stop dependency before detach. Shared read-only
-resource observations, aggregate inspection, deterministic planning, owned
-provider composition, and command wiring remain unfinished. The attachment
-checkpoint's parent is the [recoverable AWS substrate-node
+resource observations, aggregate inspection, owned provider composition, and
+command wiring remain unfinished. Fresh apply from a DESTROYED tombstone is
+also unsupported until the retained-binding requirements shared by
+InspectionV5 and the controller are reconciled. The attachment checkpoint's
+parent is the [recoverable AWS substrate-node
 checkpoint](../llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md).

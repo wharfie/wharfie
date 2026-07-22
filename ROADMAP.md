@@ -45,9 +45,14 @@ recomputes every desired digest, revalidates every durable binding's complete
 graph, context, dependency lineage, and direct or derived provider identity,
 and preallocates only the managed artifact's deterministic ARN. It neither
 observes nor adopts provider state and never predicts a non-artifact AWS ID.
-Shared read-only observation, deterministic planning, owned provider
-composition, commands, guest storage/service projection, and clean-account
-proof follow ·
+One pure nine-key planner now combines those targets with the controller's
+already context- and freshness-validated InspectionV5 evidence. It derives all
+18 deterministic actions and their exact durable basis without I/O, a clock,
+or randomness; permits only artifact updates and unbound missing creates;
+rejects adoption and unsupported non-artifact repair; and reverses destroy into
+16 purge deletes plus two retained-volume no-ops. Shared read-only observation,
+aggregate inspection, owned provider composition, commands, guest
+storage/service projection, and clean-account proof follow ·
 **Last updated:** 2026-07-22
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -773,6 +778,21 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       revalidation. Only the managed-current artifact has a deterministic ARN
       before binding; no observation, adoption, or speculative non-artifact ID
       enters this planning input boundary.
+- [x] Derive the controller-compatible AWS plan through one pure exact nine-key
+      boundary. The planner structurally validates the InspectionV5 document
+      that the controller has already context- and freshness-validated, then
+      binds its ID and the exact head generation and settled revision into one
+      deterministic complete 18-action PlanV3. Null-head apply creates the
+      graph in topological order. READY apply/reconcile preserves exact
+      resources, updates only the stable managed artifact, creates only
+      authoritatively absent unbound roles, and refuses adoption or unsupported
+      non-artifact repair with one fixed non-echoing error. Reverse destroy
+      emits 16 purge deletes and two retained-volume no-ops, handles provider
+      effects already ahead of the durable head, and honors the current
+      driver-specific drift-delete limits. READY desired-target projection now
+      permits prospective revisions; operation lifecycle checks remain in the
+      planner and controller. Fresh apply from DESTROYED remains unreachable
+      under the current retained-binding InspectionV5/controller contract.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -912,11 +932,20 @@ reused by their downstream effects for that shared proof. Only the managed
 artifact ARN is known without a binding. The catalog does not inspect or adopt
 AWS state and does not guess provider-allocated IDs.
 
-1. Derive deterministic `createPlan` output from the desired-target catalog,
-   then expose the drivers' authoritative read kernels through a shared
-   observation boundary and build aggregate inspection and complete controller
-   composition across the implemented 18-role graph. Then wire guest storage
-   projection, resident-service activation, and host observation.
+The exact nine-key planner now consumes that catalog and the controller's
+already validated InspectionV5 evidence to derive one deterministic complete
+PlanV3. Null-head apply creates all roles; READY planning no-ops exact state,
+updates only the managed artifact, creates only absent unbound roles, and
+refuses adoption or unsupported repair. Reverse destroy emits 16 purge deletes
+and two retained-volume no-ops, including effect-ahead recovery. Planning is
+pure and binds the exact inspection and durable basis. Fresh apply from a
+DESTROYED tombstone remains unsupported until retained InspectionV5 evidence
+and the controller's empty-binding reapply rule are reconciled.
+
+1. Expose the drivers' authoritative read kernels through a shared observation
+   boundary and build aggregate inspection and complete controller composition
+   across the implemented 18-role graph. Then wire guest storage projection,
+   resident-service activation, and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
@@ -928,9 +957,11 @@ AWS state and does not guess provider-allocated IDs.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [AWS desired-resource targets
-checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md).
-Its parent is the [AWS resource action router
+The current restart point is the [deterministic AWS deployment planning
+checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md).
+Its parent is the [AWS desired-resource targets
+checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md),
+whose parent is the [AWS resource action router
 checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md), whose
 parent is the [recoverable retained-volume attachments
 checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md),

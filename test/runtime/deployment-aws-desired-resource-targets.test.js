@@ -840,7 +840,7 @@ describe('AWS single-node desired resource targets', () => {
     }
   });
 
-  it('rejects a head revision mismatch', () => {
+  it('projects a prospective revision across a different READY settled revision', () => {
     const base = makeBase();
     const otherRevisionId = semanticId(
       'wdr1',
@@ -850,11 +850,14 @@ describe('AWS single-node desired resource targets', () => {
     const head = makeReadyHead(base, makeBindings(base), {
       deploymentRevisionId: otherRevisionId,
     });
-    expect(() =>
-      createAwsSingleNodeDesiredResourceTargetCatalog(
-        catalogOptions(base, head),
-      ),
-    ).toThrow(/revision/i);
+    const catalog = createAwsSingleNodeDesiredResourceTargetCatalog(
+      catalogOptions(base, head),
+    );
+
+    expect(catalog).toHaveLength(18);
+    expect(catalogEntry(catalog, 'artifact').target.stateDigest).toEqual(
+      desiredDigest(base, 'artifact'),
+    );
   });
 
   it.each([

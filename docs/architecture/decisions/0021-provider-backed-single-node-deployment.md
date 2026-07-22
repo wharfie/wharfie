@@ -1457,11 +1457,55 @@ whose dependencies already exist. Observation is deliberately not an input:
 this boundary neither adopts discovered resources nor copies observed digests
 or speculates about future provider-allocated IDs.
 
+The twenty-eighth slice adds the pure production plan derivation boundary.
+`createAwsSingleNodeDeploymentPlan` accepts exactly the nine fields passed to
+the provider's controller port: operation, deployment revision, profile,
+provider scope, ProviderSpec, deployment-instance ID, incarnation ID, nullable
+head, and InspectionV5 evidence. The controller has already validated that
+inspection against its immutable context and sampled-clock freshness before it
+calls the planner. The pure planner therefore revalidates the serialized
+InspectionV5 structure and content identity, then independently binds its
+deployment tuple, provider-spec ID, control-state evidence, incarnation, head
+generation, resource order, graph roles, desired digests, provider identities,
+and durable binding receipts. It cannot call the full contextual validator
+again because the exact controller port deliberately carries no clock.
+
+Plan derivation performs no provider I/O, clock sampling, random generation,
+or adoption. An absent head and authoritative absent inspection yield all 18
+creates in topological order. A READY head may project either its settled
+revision or a prospective revision; V45's target catalog no longer mistakes
+READY's previous target revision for the authority of a future apply. Exact
+owned resources become no-ops. An authoritatively absent unbound role becomes
+a create, but a discovered unbound role is never adopted. The managed-current
+artifact is the sole bound role that may update in place, whether its current
+object drifted or is authoritatively absent; every other bound absence or state
+drift is unsupported. Unsupported evidence fails through one fixed non-echoing
+error before any effect.
+
+Destroy requires the complete 18-binding graph and reverses dependency order
+into 16 purge deletes plus retained-data no-ops for the application-state and
+control-state volumes. A purge already authoritatively absent still receives a
+delete action so its binding can settle away; the artifact action also runs to
+purge noncurrent object history. Present purge roles bind `before` to the fresh
+observed digest. The artifact and both volume attachments additionally require
+that digest to equal desired state because their current delete drivers enforce
+that stronger contract; the other thirteen purge roles accept a non-null fresh
+drifted digest after exact ownership proof. A READY head with already-destroyed
+provider evidence is valid destroy recovery: the plan converges provider
+effects that ran ahead of durable state.
+
+Fresh apply from a DESTROYED tombstone remains unreachable under the current
+fixed retained-volume contract. The controller admits a fresh incarnation only
+when the tombstone has no retained bindings, while InspectionV5 requires each
+retained role to remain present with verified ownership and therefore resolve
+to an exact head binding. V46 rejects this state rather than weakening either
+proof; a future lifecycle revision must reconcile those requirements
+explicitly.
+
 Source and packaged deployment commands, shared authoritative resource
-observation, deterministic planning, aggregate inspection, owned provider and
-controller composition, guest storage/service projection,
-privileged publisher wiring, live STS session proof, and clean-account
-lifecycle proof remain unfinished. A document, bucket/table tag, SSM result,
-EC2 description, health receipt, or content ID still never proves that an
-application resource effect occurred or that a particular live AWS principal
-published it.
+observation, aggregate inspection, owned provider and controller composition,
+guest storage/service projection, privileged publisher wiring, live STS
+session proof, and clean-account lifecycle proof remain unfinished. A
+document, bucket/table tag, SSM result, EC2 description, health receipt, or
+content ID still never proves that an application resource effect occurred or
+that a particular live AWS principal published it.

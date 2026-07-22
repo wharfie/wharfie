@@ -485,7 +485,7 @@ export function createAwsSingleNodeDesiredResourceTargetCatalog(value) {
   }
   if (
     head !== null &&
-    (head.phase === 'CONVERGING' || head.phase === 'READY'
+    (head.phase === 'CONVERGING'
       ? head.targetDeploymentRevisionId !==
         deploymentRevision.deploymentRevisionId
       : head.phase === 'DESTROYING'
