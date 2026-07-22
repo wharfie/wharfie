@@ -686,6 +686,73 @@ that audit; foreign or malformed content is not. Every other bound resource
 still blocks on missing current state unless a later accepted contract grants
 it an equally explicit recreation rule.
 
+### The substrate node is one recoverable EC2 instance effect
+
+The substrate desired-state digest contains only plan-time launch authority:
+ProviderSpec V6's machine-image receipt, placement, KMS identity and complete
+node contract, the deterministic instance-profile name, and purge lifecycle.
+Provider-allocated instance, root-volume, ENI, subnet, security-group and
+instance-profile IDs are not predicted by the digest. The action instead
+requires the exact eight direct dependency receipts and re-proves the complete
+thirteen-resource upstream action, intent, provider-identity and transitive
+binding closure before any provider call.
+
+`RunInstances` receives one 64-character lowercase hexadecimal client token
+derived from the durable create action and ownership nonce. The request fixes
+one AMI and instance, placement and default tenancy, on-demand behavior,
+instance profile, primary ENI, metadata and private-DNS options, lifecycle and
+protection settings, exact bootstrap bytes, and one encrypted root mapping.
+The same launch atomically tags the instance and root volume with complete
+schema-2 action, scope, incarnation, nonce and state ownership; their resource
+kind tags remain distinct. A successful response supplies only an ephemeral
+candidate ID and never a durable receipt.
+
+Settlement uses bounded logical tag discovery and exact-ID
+`DescribeInstances`, then corroborates all four mutable instance attributes,
+`DescribeInstanceCreditSpecifications`, the primary ENI and the exact root
+mapping and `DescribeVolumes` state. Logical and exact identities must agree;
+duplicate, malformed, foreign or drifted evidence blocks or remains unknown.
+A running primary ENI must carry matching Amazon-owned, auto-assigned public
+IPv4 association provenance rather than merely a syntactically valid address.
+Every later non-root EBS mapping must also prove
+`DeleteOnTermination=false`, so terminating the node cannot implicitly delete
+a retained descendant. Those mappings' ownership, exact pair, device and
+attachment lifecycle remain the separate attachment effects; this slice proves
+only their non-deletion safety invariant.
+
+Only exact `running` evidence converges desired presence. `pending` and
+`stopping` remain non-converged. A stopped create or no-op is fully revalidated
+without requiring its released ephemeral public IPv4 address, then
+`StartInstances` may recover the same owned identity; fresh readback must still
+prove running settlement. A still-valid Amazon-owned ephemeral association in
+a newly stopped sample is transient until release; foreign or contradictory
+association evidence conflicts. `shutting-down` or `terminated` state blocks a
+non-delete action rather than implicitly replacing the durable binding.
+
+Destroy repeats the complete static instance, four-attribute, CPU-credit, ENI,
+block-mapping and exact root-volume proof before it calls
+`TerminateInstances` for a running or stopped exact owned instance. It never
+treats the mutation response as settlement. `OperationNotPermitted` receives a
+fresh identity/state read: an unchanged actionable state conflicts, a concurrent
+state transition remains unsettled, and terminal or absent evidence proceeds to
+normal settlement. Other ambiguous failures remain readback-driven. Delete then requires either an
+exact owned `terminated` tombstone corroborated by logical instance discovery,
+or typed exact-ID instance absence with bounded logical instance discovery also
+empty. Root-volume evidence must independently be terminal: bounded tag
+discovery is empty, or it identifies one exact owned unattached `deleted`
+tombstone. When a root ID remains available without that tombstone, exact
+`DescribeVolumes` must return typed `InvalidVolume.NotFound`; a successful
+`{Volumes: []}` response is unknown, not absence. If both provider tombstones
+have aged out and no root ID remains, the joint bounded instance/root tag
+absence plus typed exact instance absence is authoritative logical absence only
+after remaining stable through the configured retry window. The node driver
+therefore accepts two through ten attempts and defaults to three. The future
+provider inspector must project only that combined evidence as
+`absent`/`authoritative-not-found`, so controller destroy rechecks neither
+settle early nor wait forever on provider tombstone retention. These rules
+provide recoverable logical effects; they do not claim an EC2 API request
+executes exactly once.
+
 ### Plans are previews, not authority
 
 `plan` performs no mutation. A plan is deterministic for one exact deployment
@@ -794,7 +861,15 @@ observations, and the existing service status proof. A serialized inspection
 is evidence for humans and planning, not standalone authorization. `unknown`
 and `conflict` are first-class results even when no head or incarnation can be
 read. `absent` requires an authoritative provider-locator not-found result;
-an empty caller-supplied array is not absence.
+an empty caller-supplied array is not absence. For an exactly bound and owned
+EC2 substrate instance, authoritative logical absence requires an exact owned
+`terminated` record or typed exact-ID instance absence plus terminal root
+evidence: bounded root-tag absence or one exact owned unattached `deleted`
+tombstone. Any remaining exact root ID must yield typed
+`InvalidVolume.NotFound`; a successful empty exact response remains `unknown`.
+When both tombstones have aged out and no root ID remains, typed exact instance
+absence plus joint bounded instance and root tag absence is sufficient only
+after that joint negative remains stable through the configured retry window.
 
 One host-owned `DeploymentServiceHealthReceiptV3` (`whr3`) may be published to
 the deterministic current object:
@@ -1230,14 +1305,33 @@ recovery, IMDSv2-only IPv4 metadata with tags and IPv6 disabled, private-DNS
 options, and the sole public-IPv4 primary ENI contract. The credential-bound
 authority gains a separate EC2 client with one SDK transport attempt and only
 `RunInstances`, `StartInstances`, `DescribeInstances`,
-`DescribeInstanceAttribute`, `DescribeVolumes`, `TerminateInstances`, and
-`close`. The future driver must use `StartInstances` plus exact readback to
-recover its stop-on-guest-shutdown lifecycle. This slice does not claim
+`DescribeInstanceAttribute`, `DescribeInstanceCreditSpecifications`,
+`DescribeVolumes`, `TerminateInstances`, and `close`. This slice does not claim
 that an instance exists; those methods are authority for the next recoverable
 resource driver.
 
-The substrate node and two volume-attachment drivers are the next graph
-effects. Source and packaged deployment commands, production composition,
+The twenty-fourth slice implements that substrate resource. Its intrinsic
+digest includes the exact V6 launch contract and deterministic profile name,
+while its binding carries the eight direct dependency receipts and execution
+revalidates the thirteen-resource upstream closure. A stable action/nonce token
+and atomic instance/root tags recover ambiguous launch responses. Settlement
+requires logical and exact instance identity plus attributes, standard CPU
+credits, sole ENI with Amazon auto-assigned public-address provenance,
+bootstrap, encrypted root-volume evidence, and
+`DeleteOnTermination=false` for every non-root mapping. Attachment ownership
+remains deferred to the next graph effects. Stopped create/no-op recovery
+performs the same full proof before `StartInstances`, and destroy repeats it
+before termination. Purge settlement joins an exact owned `terminated` record
+or typed exact-ID instance absence with terminal root evidence: bounded root-tag
+absence or one exact owned unattached `deleted` root tombstone. Any remaining
+exact root ID must be typed not-found, while successful empty exact evidence is
+unknown. Joint bounded instance/root tag absence handles provider tombstones
+that have both aged out only after remaining stable through the configured
+retry window. These are deterministic driver contracts, not a live AWS
+lifecycle or API-call exactly-once claim.
+
+The two volume-attachment drivers are the next graph effects. Source and
+packaged deployment commands, production composition,
 privileged publisher wiring, live STS session proof, and clean-account
 lifecycle proof remain unfinished. A document, bucket/table tag, SSM result,
 EC2 description, health receipt, or content ID still never proves that an

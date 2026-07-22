@@ -19,6 +19,7 @@ import {
   DeleteVpcCommand,
   DescribeAvailabilityZonesCommand,
   DescribeImagesCommand,
+  DescribeInstanceCreditSpecificationsCommand,
   DescribeInstanceAttributeCommand,
   DescribeInstancesCommand,
   DescribeInternetGatewaysCommand,
@@ -295,6 +296,7 @@ const S3_VERSION_ID_MAX_UTF8_BYTES = 1024;
  * @property {(input: import('@aws-sdk/client-ec2').StartInstancesCommandInput) => Promise<any>} startInstances - Recover one exact stopped substrate node.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeInstancesCommandInput) => Promise<any>} describeInstances - Read exact or bounded-discovery instance state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeInstanceAttributeCommandInput) => Promise<any>} describeInstanceAttribute - Read one exact instance attribute.
+ * @property {(input: import('@aws-sdk/client-ec2').DescribeInstanceCreditSpecificationsCommandInput) => Promise<any>} describeInstanceCreditSpecifications - Read exact burst-credit state.
  * @property {(input: import('@aws-sdk/client-ec2').DescribeVolumesCommandInput) => Promise<any>} describeVolumes - Read exact root-volume state.
  * @property {(input: import('@aws-sdk/client-ec2').TerminateInstancesCommandInput) => Promise<any>} terminateInstances - Terminate one exact substrate node.
  * @property {() => Promise<void>} close - Close the caller-owned SDK client.
@@ -1221,6 +1223,12 @@ export async function createAwsDeploymentAuthority(options) {
       describeInstanceAttribute: (
         /** @type {import('@aws-sdk/client-ec2').DescribeInstanceAttributeCommandInput} */ input,
       ) => call(() => client.send(new DescribeInstanceAttributeCommand(input))),
+      describeInstanceCreditSpecifications: (
+        /** @type {import('@aws-sdk/client-ec2').DescribeInstanceCreditSpecificationsCommandInput} */ input,
+      ) =>
+        call(() =>
+          client.send(new DescribeInstanceCreditSpecificationsCommand(input)),
+        ),
       describeVolumes: (
         /** @type {import('@aws-sdk/client-ec2').DescribeVolumesCommandInput} */ input,
       ) => call(() => client.send(new DescribeVolumesCommand(input))),

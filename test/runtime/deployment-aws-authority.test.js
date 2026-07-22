@@ -65,6 +65,7 @@ const NODE_RESOURCE_METHODS = Object.freeze([
   'startInstances',
   'describeInstances',
   'describeInstanceAttribute',
+  'describeInstanceCreditSpecifications',
   'describeVolumes',
   'terminateInstances',
 ]);
@@ -206,6 +207,9 @@ async function loadHarness({
       if (method === 'describeInstances') return { Reservations: [], input };
       if (method === 'describeInstanceAttribute') {
         return { InstanceId: 'i-00000000000000001', input };
+      }
+      if (method === 'describeInstanceCreditSpecifications') {
+        return { InstanceCreditSpecifications: [], input };
       }
       if (method === 'runInstances') {
         return {
@@ -549,6 +553,14 @@ async function loadHarness({
     DescribeInstanceAttributeCommand: class DescribeInstanceAttributeCommand {
       input;
       operation = 'describeInstanceAttribute';
+
+      constructor(/** @type {unknown} */ input) {
+        this.input = input;
+      }
+    },
+    DescribeInstanceCreditSpecificationsCommand: class DescribeInstanceCreditSpecificationsCommand {
+      input;
+      operation = 'describeInstanceCreditSpecifications';
 
       constructor(/** @type {unknown} */ input) {
         this.input = input;
@@ -1494,6 +1506,15 @@ describe('AWS deployment invocation authority', () => {
         InstanceId: 'i-00000000000000001',
         input: describeAttributeInput,
       });
+      const describeCreditInput = {
+        InstanceIds: ['i-00000000000000001'],
+      };
+      await expect(
+        client.describeInstanceCreditSpecifications(describeCreditInput),
+      ).resolves.toEqual({
+        InstanceCreditSpecifications: [],
+        input: describeCreditInput,
+      });
       const describeVolumesInput = {
         VolumeIds: ['vol-00000000000000001'],
       };
@@ -1519,6 +1540,7 @@ describe('AWS deployment invocation authority', () => {
         ['startInstances', startInput],
         ['describeInstances', describeInstancesInput],
         ['describeInstanceAttribute', describeAttributeInput],
+        ['describeInstanceCreditSpecifications', describeCreditInput],
         ['describeVolumes', describeVolumesInput],
         ['terminateInstances', terminateInput],
       ]);
@@ -1548,6 +1570,7 @@ describe('AWS deployment invocation authority', () => {
     ['IdempotentParameterMismatch', 'runInstances', 400],
     ['InvalidInstanceID.NotFound', 'describeInstances', 404],
     ['InvalidInstanceId.NotFound', 'describeInstanceAttribute', 404],
+    ['InvalidInstanceID.NotFound', 'describeInstanceCreditSpecifications', 404],
     ['InvalidVolume.NotFound', 'describeVolumes', 404],
     ['IncorrectInstanceState', 'terminateInstances', 400],
     ['OperationNotPermitted', 'terminateInstances', 400],

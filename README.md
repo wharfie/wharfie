@@ -261,9 +261,24 @@ user-manager subtree access to IPv4 instance metadata. It intentionally
 downloads no application and starts no application service before the retained
 volumes are attached.
 The credential snapshot also exposes a separate single-attempt node authority
-containing only `RunInstances`, stopped-node recovery, exact instance,
-attribute, and volume reads, `TerminateInstances`, and `close`; the recoverable
-substrate driver is the next effect and these methods are not yet production
+containing only launch, stopped-node recovery, exact instance, attribute,
+CPU-credit and root-volume reads, termination, and `close`. The recoverable
+substrate driver consumes that authority: it binds the eight fixed direct
+dependencies, launches one exact instance with a replay-stable token and atomic
+instance/root-volume ownership tags, and settles only from bounded tagged
+discovery plus independent exact readback. Running evidence proves an
+Amazon-owned, auto-assigned public IPv4 association, while every later non-root
+mapping must preserve `DeleteOnTermination=false` so node termination cannot
+implicitly delete a retained descendant. A stopped owned node is validated and
+restarted in place. Destroy repeats the complete instance and root-volume proof
+before termination. Delete settles only after an exact owned `terminated`
+record or typed exact-ID instance absence is joined with terminal root evidence:
+bounded root-tag discovery is empty, or it identifies one exact owned
+unattached `deleted` tombstone. When a root ID remains available but no deleted
+tombstone does, typed `InvalidVolume.NotFound` is required and a successful
+empty exact response remains unknown. Joint bounded instance- and root-tag
+absence must remain stable through the configured retry window and covers
+provider tombstones that have both aged out. These ports are not yet production
 composition.
 
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
@@ -272,8 +287,8 @@ test must still prove bootstrap completion and denied IMDS access before this
 becomes a production security claim.
 
 These modules do not yet attach, format, mount, or fulfill a complete service
-capability. The substrate node driver and its two volume attachments are the
-next resource effects. The privileged host observer, complete AWS
+capability. The substrate node's two retained-volume attachments are the next
+resource effects. The privileged host observer, complete AWS
 driver/router/inspection/`createPlan`, operator commands, production
 composition, and clean-account proof remain unfinished.
 
@@ -283,7 +298,8 @@ composition, and clean-account proof remain unfinished.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Exact EC2 node-launch contract checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md) — the current handoff for ProviderSpec V6, deterministic bootstrap bytes, and narrow recoverable node authority.
+- [Recoverable AWS substrate-node checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md) — the current handoff for exact launch, response-loss recovery, stopped-node restart, and terminal-instance/root-absence deletion evidence.
+- [Exact EC2 node-launch contract checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md) — the parent handoff for ProviderSpec V6, deterministic bootstrap bytes, and narrow recoverable node authority.
 - [Recoverable managed-artifact checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md) — the preceding handoff for stable managed-current identity, exact staged-version conditional copy, bounded history proof, and explicit-version purge.
 - [Recoverable runtime-identity checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md) — the earlier handoff for ProviderSpec V5, exact least-privilege IAM, and all four recoverable runtime-identity effects.
 - [Exact runtime service-health checkpoint](llm/checkpoints/2026-07-21-v38-exact-runtime-service-health.md) — the preceding handoff for V3 role/node-addressed health, PUT-first conditional publication, and Inspection V5 authority.

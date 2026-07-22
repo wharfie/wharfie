@@ -9,7 +9,7 @@ and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
 destroy policy. Strict controller-compatible drivers now cover the retained
 EBS volume, all eight network effects, all four runtime-identity effects, and
-the managed-current artifact.
+the managed-current artifact and substrate node.
 The directly owned network containers share one narrow tagged
 EC2 recovery kernel while retaining distinct intrinsic, natural-slot, and
 destroy contracts; derived relationships prove both endpoints before mutation.
@@ -22,10 +22,18 @@ bindings plus immutable IAM RoleId and EC2 instance ID at
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
 Inspection V5/`win5` correlates both identities before readiness. Live STS
 caller proof and the privileged production publisher remain unwired. The
-credential snapshot now exposes a separate single-attempt node authority. The
-recoverable substrate node and its two volume attachments are the next graph
-effects, followed by provider composition, commands, and clean-account proof ·
-**Last updated:** 2026-07-21
+recoverable node launches with a stable token and atomic instance/root tags,
+settles from exact instance/attribute/credit/volume evidence, proves an
+Amazon-owned auto-assigned public address and non-root volume survival,
+restarts a validated stopped instance, and repeats the full proof before
+termination. Purge settles only when an exact owned `terminated` record or
+typed exact-ID instance absence agrees with terminal root evidence: bounded
+root-tag absence or one exact owned unattached `deleted` tombstone; any
+remaining exact root ID must be typed not-found. The two retained-volume
+attachments are the next graph effects. Joint logical absence must remain
+stable through the node driver's retry window. Provider composition, commands,
+and clean-account proof follow ·
+**Last updated:** 2026-07-22
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -680,8 +688,31 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       app. A separate single-attempt EC2 authority exposes only launch,
       stopped-node recovery, exact instance/attribute/root-volume reads,
       termination, and close. This is launch authority and contract proof; a
-      pinned-AMI bootstrap/IMDS smoke test remains required, and the
-      recoverable substrate resource is next.
+      pinned-AMI bootstrap/IMDS smoke test remains required. The following
+      checked slice implements the recoverable substrate resource.
+- [x] Implement the recoverable substrate node against ProviderSpec V6. Its
+      intrinsic digest includes the complete launch contract and deterministic
+      instance-profile name while its binding records all eight direct graph
+      dependencies; thirteen upstream actions, receipts, provider identities,
+      and transitive lineages are re-proved before any call. `RunInstances`
+      uses one action-plus-nonce 64-hex token and atomically applies complete
+      schema-2 ownership tags to the instance and encrypted root volume.
+      Settlement requires bounded tagged discovery to agree with exact-ID
+      instance, four mutable attributes, CPU-credit, primary-ENI, and root
+      volume evidence. A running ENI must prove Amazon-owned auto-assigned
+      public-IPv4 provenance, and every non-root mapping must prove
+      `DeleteOnTermination=false`; attachment ownership itself remains deferred.
+      Full readback fences stopped-node restart and is repeated before destroy
+      terminates the exact owned instance. Purge settlement joins an exact owned
+      `terminated` record or typed exact-ID instance absence with terminal root
+      evidence: empty bounded root-tag discovery or one exact owned unattached
+      `deleted` root tombstone. When an exact root ID remains without that
+      tombstone, only typed `InvalidVolume.NotFound` proves exact absence; a
+      successful empty exact response is unknown. Joint bounded instance/root
+      tag absence must remain stable through the configured retry window and
+      handles provider tombstones that have both aged out. Mutation responses
+      remain locators only, no API-call exactly-once claim is made, and
+      live-account bootstrap/IMDS/lifecycle proof remains outstanding.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -801,11 +832,10 @@ only explicit VersionIds. Reconcile alone may repair authoritative
 current-object absence beneath the existing artifact binding by issuing a
 conditional update after that audit. The implemented
 resource drivers are not yet composed into a complete provider, and the
-runtime path still does not create the substrate node or attach, format, or
-mount the retained volumes to fulfill a service capability.
+runtime path still does not route the implemented substrate driver or attach,
+format, or mount the retained volumes to fulfill a service capability.
 
-1. Implement the substrate node against the exact V6 launch contract, then its
-   two volume-attachment resources; build the
+1. Implement the two retained-volume attachment resources, then build the
    provider router, inspection, `createPlan`, and complete controller
    composition; and wire resident-service activation and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
@@ -819,9 +849,11 @@ mount the retained volumes to fulfill a service capability.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [exact EC2 node-launch contract
-checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md).
-Its parent is the [recoverable managed-artifact
+The current restart point is the [recoverable AWS substrate-node
+checkpoint](llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md).
+Its parent is the [exact EC2 node-launch contract
+checkpoint](llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md),
+whose parent is the [recoverable managed-artifact
 checkpoint](llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md),
 whose parent is the [recoverable runtime-identity
 checkpoint](llm/checkpoints/2026-07-21-v39-recoverable-runtime-identity.md),

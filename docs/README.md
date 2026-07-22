@@ -101,17 +101,27 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [exact EC2 node-launch contract
-checkpoint](../llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md).
+The current restart handoff is the [recoverable AWS substrate-node
+checkpoint](../llm/checkpoints/2026-07-22-v42-recoverable-substrate-node.md).
 ProviderSpec V6 pins the exact AMI root receipt and every launch default used by
 Wharfie, including the primary ENI, encrypted root volume, metadata, lifecycle,
 and private-DNS shape. The bounded exact user-data bytes are code-owned and
 prepare the locked runtime account, lingering, SSM, and a systemd-native IMDS
 restriction on the runtime user-manager subtree without staging or starting the
-app. A separate single-attempt EC2 authority exposes only launch, stopped-node
-recovery, exact instance/attribute/root-volume reads, termination, and close.
-This is contract and authority proof, not a claim that an instance exists or
-that the restriction has run on the pinned AMI. The recoverable substrate node
-is next, followed by its two retained-volume attachments and complete AWS
-provider composition. Its parent is the [recoverable managed-artifact
-checkpoint](../llm/checkpoints/2026-07-21-v40-recoverable-managed-artifact.md).
+app. The controller-compatible substrate driver uses one replay-stable launch
+token, atomic instance/root ownership tags, all eight direct dependency
+receipts, and independent instance, attribute, credit, and volume evidence.
+It proves Amazon-owned auto-assigned public-IPv4 provenance and requires every
+non-root mapping to preserve `DeleteOnTermination=false`, without yet claiming
+attachment ownership. It can restart an exactly validated stopped node and
+repeats that full root proof before termination. Delete settlement joins an
+exact owned `terminated` record or typed exact-ID instance absence with terminal
+root evidence: bounded root-tag absence or one exact owned unattached `deleted`
+root tombstone. A remaining exact root ID must be typed not-found, while a
+successful empty exact response is unknown. Joint instance/root tag absence
+covers provider tombstones that have both aged out only after remaining stable
+through the configured retry window. This remains deterministic driver proof,
+not a claim that the bootstrap restriction has run on the pinned AMI or that
+the provider is composed end to end. The two retained-volume attachments are
+next. Its parent is the [exact EC2 node-launch contract
+checkpoint](../llm/checkpoints/2026-07-21-v41-exact-node-launch-contract.md).
