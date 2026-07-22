@@ -327,13 +327,22 @@ validated InspectionV5 document through the controller's exact nine-key
 `createPlan` call. It derives a complete deterministic PlanV3 with all 18
 actions and an exact head-generation, settled-revision, and inspection basis.
 An absent head produces only ordered creates. A READY head can reconcile the
-settled revision or project a different revision; only the deterministic artifact
-may update in place, while missing unbound leaves may be created and every
-other unsupported absence, drift, ownership conflict, or adoption attempt
-fails closed. Destroy reverses graph order into 16 purge deletes and two
+settled revision or project a different revision; only the deterministic
+artifact may update in place. Missing unbound leaves may be created; every
+other unsupported absence, drift, ownership conflict, or adoption attempt fails
+closed. Destroy reverses graph order into 16 purge deletes and two
 retained-volume no-ops, including safe convergence when provider effects are
 already ahead of the durable READY head. Planning performs no provider I/O,
 clock sampling, or random generation.
+
+One shared read-only resource-observation boundary now normalizes the finite
+evidence that those plans consume. It admits only exact present, authoritative
+absent, or access-unknown evidence; keeps ownership conflict distinct from
+state drift; requires provider identities and normalized digests for exact
+owned presence; and deliberately excludes service-level `healthy` claims.
+An immutable router accepts only 16 one-method observer families, maps all 18
+graph roles to exactly one observer, validates the returned evidence against
+the routed role, and never receives a mutation method or client lifecycle.
 
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
@@ -344,12 +353,12 @@ These modules now implement both retained-volume attachment effects under
 deterministic mocks, but do not format, mount, unmount, quiesce, or fulfill a
 complete service capability. Future guest use must add a quiesce/unmount or
 stop dependency before attachment deletion. The privileged host observer,
-shared read-only resource observation, aggregate AWS inspection, owned
-provider/authority composition, operator commands, and clean-account proof
-remain unfinished. Fresh apply from a DESTROYED tombstone is also currently
-unsupported: InspectionV5 requires retained resources to remain exactly bound,
-while the controller permits a fresh incarnation only after those bindings are
-gone.
+adapters over the drivers' authoritative read kernels, aggregate AWS
+inspection, owned provider/authority composition, operator commands, and
+clean-account proof remain unfinished. Fresh apply from a DESTROYED tombstone
+is also currently unsupported: InspectionV5 requires retained resources to
+remain exactly bound, while the controller permits a fresh incarnation only
+after those bindings are gone.
 
 ## Start here
 
@@ -357,7 +366,8 @@ gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Deterministic AWS deployment planning checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md) — the current handoff for exact controller-compatible 18-action planning, no-adoption reconciliation, and reverse destroy derivation.
+- [AWS resource-observation boundary checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md) — the current handoff for strict raw evidence normalization and mutation-incapable routing across all 18 graph roles.
+- [Deterministic AWS deployment planning checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md) — the parent handoff for exact controller-compatible 18-action planning, no-adoption reconciliation, and reverse destroy derivation.
 - [AWS desired-resource targets checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md) — the parent handoff for the pure, deterministic 18-role target catalog and complete durable-binding identity revalidation.
 - [AWS resource action router checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md) — the parent handoff for exhaustive 18-key execute/settle routing over the six caller-owned narrow resource clients.
 - [Recoverable retained-volume attachments checkpoint](llm/checkpoints/2026-07-22-v43-recoverable-volume-attachments.md) — the preceding handoff for both exact derived EBS relationships, dual-view response-loss recovery, retained delete behavior, and non-forced detach.

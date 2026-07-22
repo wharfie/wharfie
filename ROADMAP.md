@@ -50,9 +50,12 @@ already context- and freshness-validated InspectionV5 evidence. It derives all
 18 deterministic actions and their exact durable basis without I/O, a clock,
 or randomness; permits only artifact updates and unbound missing creates;
 rejects adoption and unsupported non-artifact repair; and reverses destroy into
-16 purge deletes plus two retained-volume no-ops. Shared read-only observation,
-aggregate inspection, owned provider composition, commands, guest
-storage/service projection, and clean-account proof follow ·
+16 purge deletes plus two retained-volume no-ops. One strict read-only boundary
+now normalizes exact, absent, unknown, conflict, digest, identity, and raw
+health evidence and routes all 18 roles through 16 mutation-incapable observer
+families. Driver read-kernel adapters, aggregate inspection, owned provider
+composition, commands, guest storage/service projection, and clean-account
+proof follow ·
 **Last updated:** 2026-07-22
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -793,6 +796,19 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       permits prospective revisions; operation lifecycle checks remain in the
       planner and controller. Fresh apply from DESTROYED remains unreachable
       under the current retained-binding InspectionV5/controller contract.
+- [x] Define one strict read-only AWS resource-observation boundary. Its exact
+      six-field result separates presence, ownership, provider identity,
+      normalized observed digest, and raw resource health without allowing a
+      resource driver to claim service-level healthy status. Absent and unknown
+      evidence have fixed null identity/digest and health combinations; exact
+      present evidence requires the graph role's provider type, while conflict
+      remains distinct from owned drift. One immutable router accepts only 16
+      exact one-method observer families, rejects mutation-capable ports, and
+      routes every one of the 18 graph keys exactly once by desired target. It
+      validates the awaited result against that role, forwards the original
+      context unchanged, never fans out, and owns no credentials or lifecycle.
+      Existing driver read kernels still require separate observation-authority
+      adapters before this boundary can produce aggregate InspectionV5.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -942,10 +958,16 @@ pure and binds the exact inspection and durable basis. Fresh apply from a
 DESTROYED tombstone remains unsupported until retained InspectionV5 evidence
 and the controller's empty-binding reapply rule are reconciled.
 
-1. Expose the drivers' authoritative read kernels through a shared observation
-   boundary and build aggregate inspection and complete controller composition
-   across the implemented 18-role graph. Then wire guest storage projection,
-   resident-service activation, and host observation.
+The shared raw observation contract and exhaustive read-only router now exist
+without admitting mutation ports. They normalize role-correlated provider
+identity, digest, ownership, absence, uncertainty, conflict, and raw health;
+the current action drivers do not yet implement those observer ports.
+
+1. Adapt the drivers' authoritative read kernels to the shared observation
+   boundary without duplicating their AWS decoders, then build aggregate
+   inspection and complete controller composition across the implemented
+   18-role graph. Then wire guest storage projection, resident-service
+   activation, and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
@@ -957,9 +979,11 @@ and the controller's empty-binding reapply rule are reconciled.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [deterministic AWS deployment planning
-checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md).
-Its parent is the [AWS desired-resource targets
+The current restart point is the [AWS resource-observation boundary
+checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md).
+Its parent is the [deterministic AWS deployment planning
+checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md),
+whose parent is the [AWS desired-resource targets
 checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md),
 whose parent is the [AWS resource action router
 checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md), whose

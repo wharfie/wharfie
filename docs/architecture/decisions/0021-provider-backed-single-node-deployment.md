@@ -1502,10 +1502,46 @@ to an exact head binding. V46 rejects this state rather than weakening either
 proof; a future lifecycle revision must reconcile those requirements
 explicitly.
 
+The twenty-ninth slice defines the shared raw resource-observation boundary
+before any action driver's private reader is exposed. One canonical six-field
+result carries only resource key, presence, ownership, provider identity,
+normalized observed digest, and raw resource health. `absent` means
+authoritative not-found and therefore carries missing ownership, no identity or
+digest, and absent health. `unknown` means access or response evidence could
+not establish state and likewise carries no invented identity or digest.
+Present exact or external ownership requires the graph role's provider type and
+a normalized digest; ownership conflict remains distinct and may omit a digest
+rather than echoing untrusted provider metadata as state.
+
+Raw observers cannot claim `healthy`. Nonresident infrastructure is
+`not-applicable`. An exactly owned substrate may expose starting, degraded,
+stopped, or failed physical state; a conflicting substrate may additionally
+leave that physical health unknown. Exact ownership with unknown provider
+presence instead uses the complete unknown observation union. Only the later
+aggregate's exact, fresh, context-bound service-health receipt may upgrade the
+substrate and the whole inspection to healthy and converged.
+
+`createAwsSingleNodeResourceObservationRouter` accepts exactly 16 one-method
+observer families and maps them exhaustively over the graph's 18 apply-ordered
+resource keys. The two volume roles share one generic observer, as do the two
+volume-attachment roles. A selected observer receives the original context
+once; the router never fans out, closes a client, or admits an execute, delete,
+or settlement port. Its awaited result is revalidated against the selected
+resource key, and malformed or unsupported routes fail through one fixed
+non-echoing error before observer I/O.
+
+This is the target contract for the next extraction, not a claim that current
+provider observation is complete. The existing 16 action factories still keep
+their AWS read kernels private behind mutation-specific plan, action, intent,
+and ownership-nonce validation. The next slice must give those readers a
+separate steady-binding or current-create observation authority, preserve their
+bounded absence and propagation rules, and reuse their decoders without calling
+settlement or fabricating a mutation action.
+
 Source and packaged deployment commands, shared authoritative resource
-observation, aggregate inspection, owned provider and controller composition,
-guest storage/service projection, privileged publisher wiring, live STS
-session proof, and clean-account lifecycle proof remain unfinished. A
+driver adapters, aggregate inspection, owned provider and controller
+composition, guest storage/service projection, privileged publisher wiring,
+live STS session proof, and clean-account lifecycle proof remain unfinished. A
 document, bucket/table tag, SSM result, EC2 description, health receipt, or
 content ID still never proves that an application resource effect occurred or
 that a particular live AWS principal published it.

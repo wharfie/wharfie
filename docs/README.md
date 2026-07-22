@@ -101,7 +101,21 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [deterministic AWS deployment planning
+The current restart handoff is the [AWS resource-observation boundary
+checkpoint](../llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md).
+One strict six-field result now separates exact provider presence,
+authoritative absence, access uncertainty, ownership conflict, normalized
+observed state, and raw resource health. Exact present evidence is correlated
+to the fixed graph's provider type; absent and unknown evidence cannot carry
+identity or state. Service-level healthy status is deliberately outside this
+raw boundary. One immutable router accepts only 16 exact one-method observer
+families, maps all 18 graph roles, forwards one original context without
+fanout, validates the awaited result against its routed role, and admits no
+mutation or client-close method. The existing action drivers still need
+read-only authority adapters; this checkpoint does not claim aggregate
+InspectionV5.
+
+Its parent is the [deterministic AWS deployment planning
 checkpoint](../llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md).
 One pure boundary accepts exactly the controller's nine `createPlan` fields and
 combines the desired-resource catalog with its already context- and
@@ -155,8 +169,8 @@ must retain one identical signature through the full bounded retry window,
 while dual exact present views with no attachment settle delete immediately.
 The slice does not format, mount, unmount, or quiesce a guest filesystem;
 future guest use must
-add a quiesce/unmount or stop dependency before detach. Shared read-only
-resource observations, aggregate inspection, owned provider composition, and
+add a quiesce/unmount or stop dependency before detach. Read-only driver
+observation adapters, aggregate inspection, owned provider composition, and
 command wiring remain unfinished. Fresh apply from a DESTROYED tombstone is
 also unsupported until the retained-binding requirements shared by
 InspectionV5 and the controller are reconciled. The attachment checkpoint's
