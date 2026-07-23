@@ -1185,6 +1185,59 @@ describe('AWS single-node retained EBS volume transient convergence', () => {
 });
 
 describe('AWS single-node retained EBS volume contradictory evidence', () => {
+  it('blocks definite size drift before treating creating lifecycle as transient', async () => {
+    const fixture = makeFixture();
+    const { client, waitForRetry, resource } = makePorts(fixture, {
+      maxAttempts: 3,
+    });
+    client.createVolume.mockResolvedValue({ VolumeId: VOLUME_IDS.application });
+    const volume = makeVolume(fixture);
+    client.describeVolumes.mockResolvedValue({
+      Volumes: [
+        {
+          ...volume,
+          Size: volume.Size + 1,
+          State: 'creating',
+        },
+      ],
+    });
+
+    await resource.executeAction(fixture.context);
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    expect(client.describeVolumes).toHaveBeenCalledTimes(1);
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
+  it('blocks definite size drift before treating incomplete create ownership tags as propagation', async () => {
+    const fixture = makeFixture();
+    const { client, waitForRetry, resource } = makePorts(fixture, {
+      maxAttempts: 3,
+    });
+    client.createVolume.mockResolvedValue({ VolumeId: VOLUME_IDS.application });
+    const volume = makeVolume(fixture);
+    const incompleteTags = volume.Tags.filter(
+      (/** @type {VolumeTag} */ tag) => tag.Key !== 'wharfie:ownership-nonce',
+    );
+    client.describeVolumes.mockResolvedValue({
+      Volumes: [
+        {
+          ...volume,
+          Size: volume.Size + 1,
+          Tags: incompleteTags,
+        },
+      ],
+    });
+
+    await resource.executeAction(fixture.context);
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    expect(client.describeVolumes).toHaveBeenCalledTimes(1);
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
   it.each(
     /** @type {Array<[string, (volume: AnyRecord) => AnyRecord]>} */ ([
       [

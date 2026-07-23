@@ -2,7 +2,11 @@
 
 import { validateSha256Digest } from './application-revision.js';
 import { sortCanonicalJsonValue } from './canonical-order.js';
-import { validateProviderResourceId } from './deployment-resource-binding.js';
+import {
+  assertDeploymentActionId,
+  validateOwnershipNonce,
+  validateProviderResourceId,
+} from './deployment-resource-binding.js';
 import {
   getAwsSingleNodeResourceApplyOrder,
   getAwsSingleNodeResourceDefinition,
@@ -30,6 +34,10 @@ export const AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH = Object.freeze([
   'unknown',
   'not-applicable',
 ]);
+export const AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS = Object.freeze([
+  'none',
+  'replay-safe-create',
+]);
 export const AWS_SINGLE_NODE_RESOURCE_OBSERVATION_ROUTE_UNSUPPORTED =
   'AWS_SINGLE_NODE_RESOURCE_OBSERVATION_ROUTE_UNSUPPORTED';
 
@@ -40,6 +48,7 @@ const OBSERVATION_KEYS = new Set([
   'providerIdentity',
   'observedDigest',
   'health',
+  'execution',
 ]);
 const PROVIDER_IDENTITY_KEYS = new Set(['providerType', 'providerResourceId']);
 const ROUTER_KEYS = new Set(['observers']);
@@ -65,6 +74,7 @@ const OBSERVER_PORT_KEYS = new Set(['observe']);
 const PRESENCES = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_PRESENCES);
 const OWNERSHIP = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_OWNERSHIP);
 const HEALTH = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH);
+const EXECUTIONS = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS);
 const SUBSTRATE_PRESENT_HEALTH = new Set([
   'starting',
   'degraded',
@@ -75,6 +85,8 @@ const ROUTE_COVERAGE_ERROR =
   'AWS single-node resource observation router coverage is invalid.';
 const PRESENT_OBSERVATION_ERROR =
   'awsSingleNodeResourceObservation present evidence has an unsupported identity, ownership, digest, or health combination.';
+const REPLAY_SAFE_CREATE_AUTHORITY_ERROR =
+  'AWS single-node resource observation replay-safe create execution does not match its exact current action authority.';
 
 /** One observation request cannot be routed to an exact graph resource. */
 export class AwsSingleNodeResourceObservationRouteUnsupportedError extends Error {
@@ -191,6 +203,11 @@ export function validateAwsSingleNodeResourceObservation(
       'awsSingleNodeResourceObservation.health is not supported.',
     );
   }
+  if (!EXECUTIONS.has(observation.execution)) {
+    throw new TypeError(
+      'awsSingleNodeResourceObservation.execution is not supported.',
+    );
+  }
   const providerIdentity = validateProviderIdentity(
     observation.providerIdentity,
     definition,
@@ -209,7 +226,8 @@ export function validateAwsSingleNodeResourceObservation(
     (observation.ownership !== 'missing' ||
       providerIdentity !== null ||
       observedDigest !== null ||
-      observation.health !== 'absent')
+      observation.health !== 'absent' ||
+      observation.execution !== 'none')
   ) {
     throw new Error(
       'awsSingleNodeResourceObservation absent evidence must be missing, unidentified, undigested, and absent-health.',
@@ -240,6 +258,7 @@ export function validateAwsSingleNodeResourceObservation(
       providerIdentity === null ||
       !['verified', 'external', 'conflict'].includes(observation.ownership) ||
       !healthIsValid ||
+      observation.execution !== 'none' ||
       (ownershipIsVerifiedOrExternal && observedDigest === null)
     ) {
       throw new Error(PRESENT_OBSERVATION_ERROR);
@@ -254,6 +273,7 @@ export function validateAwsSingleNodeResourceObservation(
       providerIdentity,
       observedDigest,
       health: observation.health,
+      execution: observation.execution,
     }),
   );
 }
@@ -304,6 +324,48 @@ function resolveRoute(context, routes) {
     return { resourceKey, observer };
   } catch {
     throw new AwsSingleNodeResourceObservationRouteUnsupportedError();
+  }
+}
+
+/**
+ * A replay recommendation is valid only for the exact current managed create.
+ * Observer-specific authority validation remains responsible for proving the
+ * complete deployment context before it can return this result.
+ * @param {unknown} context - Exact observation authority passed to the observer.
+ * @param {string} resourceKey - Exact routed graph role.
+ * @returns {void}
+ */
+function assertReplaySafeCreateAuthority(context, resourceKey) {
+  try {
+    if (
+      !isPlainObject(context) ||
+      !Object.hasOwn(context, 'currentAction') ||
+      !isPlainObject(context.currentAction) ||
+      !Object.hasOwn(context.currentAction, 'action') ||
+      !Object.hasOwn(context.currentAction, 'ownershipNonce') ||
+      !isPlainObject(context.currentAction.action) ||
+      !Object.hasOwn(context.currentAction.action, 'action') ||
+      !Object.hasOwn(context.currentAction.action, 'actionId') ||
+      !Object.hasOwn(context.currentAction.action, 'management') ||
+      !Object.hasOwn(context.currentAction.action, 'ownershipMode') ||
+      !Object.hasOwn(context.currentAction.action, 'resourceKey') ||
+      context.currentAction.action.action !== 'create' ||
+      context.currentAction.action.management !== 'managed' ||
+      context.currentAction.action.ownershipMode !== 'direct' ||
+      context.currentAction.action.resourceKey !== resourceKey
+    ) {
+      throw new Error(REPLAY_SAFE_CREATE_AUTHORITY_ERROR);
+    }
+    assertDeploymentActionId(
+      context.currentAction.action.actionId,
+      'awsSingleNodeResourceObservation current actionId',
+    );
+    validateOwnershipNonce(
+      context.currentAction.ownershipNonce,
+      'awsSingleNodeResourceObservation current ownershipNonce',
+    );
+  } catch {
+    throw new Error(REPLAY_SAFE_CREATE_AUTHORITY_ERROR);
   }
 }
 
@@ -376,13 +438,21 @@ export function createAwsSingleNodeResourceObservationRouter(options) {
   async function observeResource(context) {
     const { resourceKey, observer } = resolveRoute(context, routes);
     const observation = await observer.observe(context);
-    return validateAwsSingleNodeResourceObservation(observation, resourceKey);
+    const validated = validateAwsSingleNodeResourceObservation(
+      observation,
+      resourceKey,
+    );
+    if (validated.execution === 'replay-safe-create') {
+      assertReplaySafeCreateAuthority(context, resourceKey);
+    }
+    return validated;
   }
 
   return Object.freeze({ observeResource });
 }
 
 export default {
+  AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_OWNERSHIP,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_PRESENCES,

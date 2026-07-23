@@ -800,18 +800,22 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       planner and controller. Fresh apply from DESTROYED remains unreachable
       under the current retained-binding InspectionV5/controller contract.
 - [x] Define one strict read-only AWS resource-observation boundary. Its exact
-      six-field result separates presence, ownership, provider identity,
-      normalized observed digest, and raw resource health without allowing a
-      resource driver to claim service-level healthy status. Absent and unknown
-      evidence have fixed null identity/digest and health combinations; exact
-      present evidence requires the graph role's provider type, while conflict
-      remains distinct from owned drift. One immutable router accepts only 16
-      exact one-method observer families, rejects mutation-capable ports, and
-      routes every one of the 18 graph keys exactly once by desired target. It
-      validates the awaited result against that role, forwards the original
-      context unchanged, never fans out, and owns no credentials or lifecycle.
-      Existing driver read kernels still require separate observation-authority
-      adapters before this boundary can produce aggregate InspectionV5.
+      seven-field result separates presence, ownership, provider identity,
+      normalized observed digest, raw resource health, and narrowly bounded
+      execution advice without allowing a resource driver to claim
+      service-level healthy status. Absent and unknown evidence have fixed null
+      identity/digest and health combinations; exact present evidence requires
+      the graph role's provider type, while conflict remains distinct from
+      owned drift. `replay-safe-create` is valid only on the unknown union and
+      only when the router can correlate a canonical action ID and ownership
+      nonce to the exact routed managed/direct current create. One immutable
+      router accepts only 16 exact one-method observer families, rejects
+      mutation-capable ports, and routes every one of the 18 graph keys exactly
+      once by desired target. It validates the awaited result against that
+      role, forwards the original context unchanged, never fans out, and owns
+      no credentials or lifecycle. Existing driver read kernels still require
+      separate observation-authority adapters before this boundary can produce
+      aggregate InspectionV5.
 - [x] Derive one exact read-only authority for each resource observation. The
       pure eleven-field constructor validates the deployment revision, profile,
       provider scope, ProviderSpec, instance, incarnation, non-null head,
@@ -829,6 +833,18 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       exposes none. Null heads remain the aggregate's absent fast path, while
       valid DESTROYED heads fail through one fixed unsupported reincarnation
       error.
+- [x] Adapt both retained EBS volume roles to the shared read-only boundary.
+      The exact `{describeVolumes}` observer revalidates V48 authority and its
+      factory scope, uses only bound-ID reads or stable-tag discovery, proves
+      immutable ownership through durable creation-era plan history, and
+      derives observed digests from actual EBS configuration so owned drift
+      remains visible. Bound NotFound and every uncertain lifecycle or response
+      remain unknown. Unbound no-action discovery never adopts a candidate and
+      declares absence only after an entirely clean bounded empty history.
+      Current-create discovery emits `replay-safe-create` only after the same
+      all-clean-empty proof and exact action-ID/nonce token validation. The
+      mutation driver and observer now share strict tag, response, lifecycle,
+      and state-digest decoders without sharing mutation authority.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -980,9 +996,14 @@ and the controller's empty-binding reapply rule are reconciled.
 
 The shared raw observation contract and exhaustive read-only router now exist
 without admitting mutation ports. They normalize role-correlated provider
-identity, digest, ownership, absence, uncertainty, conflict, and raw health;
-the current action drivers do not yet implement those observer ports. One pure
-authority constructor now revalidates the exact desired tuple, active plan, and
+identity, digest, ownership, absence, uncertainty, conflict, and raw health,
+while separately carrying either no execution advice or one exact
+`replay-safe-create` recommendation. That recommendation never turns an empty
+eventually consistent read into an absence claim and is accepted only for a
+canonical action ID and nonce on the routed managed/direct current create. The
+retained-volume driver now shares its exact EBS evidence kernel with the first
+observer port; the other 14 implementation families remain private. One pure
+authority constructor revalidates the exact desired tuple, active plan, and
 last-settled provider lineage, recreates the V45 catalog, derives the target's
 durable binding, and exposes only a controller-reachable CAS-claimed intended
 action. It never turns a pending frontier into action authority.
@@ -1003,9 +1024,11 @@ action. It never turns a pending frontier into action authority.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [AWS resource-observation authority
-checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md).
-Its parent is the [AWS resource-observation boundary
+The current restart point is the [retained-volume observer
+checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md).
+Its parent is the [AWS resource-observation authority
+checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md),
+whose parent is the [AWS resource-observation boundary
 checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md),
 whose parent is the [deterministic AWS deployment planning
 checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md),

@@ -31,14 +31,15 @@ method.
 
 ## Canonical raw observation
 
-`validateAwsSingleNodeResourceObservation` accepts exactly six fields:
+`validateAwsSingleNodeResourceObservation` accepts exactly seven fields:
 
 - `resourceKey`;
 - `presence`;
 - `ownership`;
 - `providerIdentity`;
 - `observedDigest`;
-- `health`.
+- `health`; and
+- `execution`.
 
 The result is canonicalized and deeply frozen. The resource key must name one
 of the fixed AWS single-node graph roles. Any provider identity must use that
@@ -52,6 +53,24 @@ The finite evidence combinations are:
 - `present`: a concrete provider identity and verified, external, or conflict
   ownership. Verified or external presence requires a normalized digest;
   conflict may omit it when state cannot be trusted safely.
+
+`execution` is either `none` or `replay-safe-create`. Present and absent
+evidence always use `none`. Unknown evidence normally uses `none`, but may use
+`replay-safe-create` without changing its provider-truth fields. The router
+accepts that recommendation only when it can correlate a canonical deployment
+action ID and valid ownership nonce to the exact routed managed/direct current
+create. Observer-specific authority validation must still prove the complete
+V48 deployment context before producing it.
+
+This distinction was added when the first EC2 observer made the provider
+consistency semantics concrete. EC2 documents an eventually consistent API,
+so a bounded empty `DescribeVolumes` result cannot truthfully become physical
+absence. `CreateVolume`, however, accepts a client token for idempotency.
+Wharfie can therefore preserve unknown observation truth while separately
+authorizing replay through the same action-ID-and-nonce-derived token. See
+[AWS EC2 eventual consistency](https://docs.aws.amazon.com/ec2/latest/devguide/eventual-consistency.html)
+and the
+[CreateVolume API](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateVolume.html).
 
 The raw health vocabulary is `starting`, `degraded`, `stopped`, `failed`,
 `absent`, `unknown`, or `not-applicable`. It deliberately excludes `healthy`.
@@ -113,6 +132,11 @@ and validates the awaited observation against the selected resource key. A
 malformed or unsupported route fails before observer I/O through one fixed,
 non-echoing `AwsSingleNodeResourceObservationRouteUnsupportedError` with code
 `AWS_SINGLE_NODE_RESOURCE_OBSERVATION_ROUTE_UNSUPPORTED`.
+
+A replay-safe result is rejected unless that same context contains the exact
+routed managed/direct create, a canonical deployment action ID, and a valid
+ownership nonce. This router-level correlation does not replace each
+observer's complete V48 authority validation.
 
 The router owns no credential, AWS client, retry loop, clock, or close method.
 Those lifetimes belong to the future provider invocation composition. Each
@@ -185,7 +209,7 @@ Three existing later-boundary gaps remain explicit:
 Use pinned Node 24.13.1, serial Jest, no coverage, and no Jest cache. Do not run
 the repository's coverage-default test scripts for this slice.
 
-The focused observation contract and router suite passes 59/59 tests:
+The focused observation contract and router suite passes 62/62 tests:
 
 ```text
 TZ=UTC /Users/josephvandrunen/.nvm/versions/node/v24.13.1/bin/node ./test/run-jest.js --runInBand --coverage=false --no-cache test/runtime/deployment-aws-resource-observation.test.js

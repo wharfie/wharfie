@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import {
+  AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_OWNERSHIP,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_PRESENCES,
@@ -71,6 +72,7 @@ const DIGEST = Object.freeze({
   algorithm: 'sha256',
   value: Buffer.alloc(32, 0x47).toString('base64url'),
 });
+const ACTION_ID = `wda3_${Buffer.alloc(32, 0x48).toString('base64url')}`;
 
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
@@ -112,6 +114,7 @@ function presentObservation(resourceKey, overrides = {}) {
     providerIdentity: providerIdentity(resourceKey),
     observedDigest: clone(DIGEST),
     health: resourceKey === 'substrate' ? 'starting' : 'not-applicable',
+    execution: 'none',
     ...overrides,
   };
 }
@@ -125,11 +128,16 @@ function absentObservation(resourceKey) {
     providerIdentity: null,
     observedDigest: null,
     health: 'absent',
+    execution: 'none',
   };
 }
 
-/** @param {string} resourceKey @returns {Record<string, any>} */
-function unknownObservation(resourceKey) {
+/**
+ * @param {string} resourceKey
+ * @param {Record<string, any>} [overrides]
+ * @returns {Record<string, any>}
+ */
+function unknownObservation(resourceKey, overrides = {}) {
   return {
     resourceKey,
     presence: 'unknown',
@@ -137,6 +145,8 @@ function unknownObservation(resourceKey) {
     providerIdentity: null,
     observedDigest: null,
     health: 'unknown',
+    execution: 'none',
+    ...overrides,
   };
 }
 
@@ -188,6 +198,10 @@ describe('AWS single-node resource observation contract', () => {
       'unknown',
       'not-applicable',
     ]);
+    expect(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS).toEqual([
+      'none',
+      'replay-safe-create',
+    ]);
     expect(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH).not.toContain(
       'healthy',
     );
@@ -200,11 +214,18 @@ describe('AWS single-node resource observation contract', () => {
     expect(Object.isFrozen(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH)).toBe(
       true,
     );
+    expect(
+      Object.isFrozen(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS),
+    ).toBe(true);
   });
 
   it.each([
     ['absent', absentObservation('artifact')],
     ['unknown', unknownObservation('artifact')],
+    [
+      'replay-safe create',
+      unknownObservation('artifact', { execution: 'replay-safe-create' }),
+    ],
   ])('accepts and deeply freezes the exact %s union', (_name, input) => {
     const result = validateAwsSingleNodeResourceObservation(input, 'artifact');
 
@@ -325,7 +346,7 @@ describe('AWS single-node resource observation contract', () => {
     ).toThrow(TypeError);
   });
 
-  it('rejects unsupported presence, ownership, and health vocabulary values', () => {
+  it('rejects unsupported presence, ownership, health, and execution vocabulary values', () => {
     const valid = presentObservation('artifact');
     /** @type {Array<[string, unknown]>} */
     const invalidValues = [
@@ -335,6 +356,8 @@ describe('AWS single-node resource observation contract', () => {
       ['ownership', null],
       ['health', 'healthy'],
       ['health', null],
+      ['execution', 'create'],
+      ['execution', null],
     ];
     for (const [field, value] of invalidValues) {
       expect(() =>
@@ -357,6 +380,7 @@ describe('AWS single-node resource observation contract', () => {
       { ...valid, observedDigest: clone(DIGEST) },
       { ...valid, health: 'unknown' },
       { ...valid, health: 'not-applicable' },
+      { ...valid, execution: 'replay-safe-create' },
     ];
 
     for (const observation of invalid) {
@@ -395,6 +419,7 @@ describe('AWS single-node resource observation contract', () => {
       { ...valid, observedDigest: null },
       { ...valid, ownership: 'external', observedDigest: null },
       { ...valid, health: 'absent' },
+      { ...valid, execution: 'replay-safe-create' },
     ];
 
     for (const observation of invalid) {
@@ -586,6 +611,188 @@ describe('AWS single-node resource observation router', () => {
     expect(observed.providerIdentity).not.toBe(raw.providerIdentity);
     expect(observed.observedDigest).not.toBe(raw.observedDigest);
     expectDeepFrozen(observed);
+  });
+
+  it('accepts replay-safe create only for the exact routed current create authority', async () => {
+    const ownershipNonce = Buffer.alloc(32, 0x49).toString('base64url');
+    const validContexts = [
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce,
+        },
+      },
+      {
+        target: { resourceKey: 'control-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'control-state',
+          },
+          ownershipNonce,
+        },
+      },
+    ];
+
+    for (const context of validContexts) {
+      const observers = createObservers();
+      observers.volume.observe.mockImplementationOnce(async () =>
+        unknownObservation(context.target.resourceKey, {
+          execution: 'replay-safe-create',
+        }),
+      );
+      const router = createAwsSingleNodeResourceObservationRouter({
+        observers,
+      });
+
+      await expect(router.observeResource(context)).resolves.toEqual(
+        unknownObservation(context.target.resourceKey, {
+          execution: 'replay-safe-create',
+        }),
+      );
+    }
+  });
+
+  it('rejects replay-safe create without the exact current create action and nonce proof', async () => {
+    const ownershipNonce = Buffer.alloc(32, 0x49).toString('base64url');
+    const invalidContexts = [
+      { target: { resourceKey: 'application-state' } },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: null,
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'delete',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce,
+        },
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'control-state',
+          },
+          ownershipNonce,
+        },
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce: null,
+        },
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce: 'not-a-valid-nonce',
+        },
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce,
+        },
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: 'not-an-action-id',
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce,
+        },
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'external',
+            ownershipMode: 'external',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce,
+        },
+      },
+      {
+        target: { resourceKey: 'application-state' },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'derived',
+            resourceKey: 'application-state',
+          },
+          ownershipNonce,
+        },
+      },
+    ];
+
+    for (const context of invalidContexts) {
+      const observers = createObservers();
+      observers.volume.observe.mockImplementationOnce(async () =>
+        unknownObservation('application-state', {
+          execution: 'replay-safe-create',
+        }),
+      );
+      const router = createAwsSingleNodeResourceObservationRouter({
+        observers,
+      });
+
+      await expect(router.observeResource(context)).rejects.toThrow(
+        'AWS single-node resource observation replay-safe create execution does not match its exact current action authority.',
+      );
+      expect(observers.volume.observe).toHaveBeenCalledTimes(1);
+      expect(totalObserverCalls(observers)).toBe(1);
+    }
   });
 
   it('rejects invalid observer output, including a valid observation for the wrong routed key', async () => {

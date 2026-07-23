@@ -18,13 +18,32 @@ import {
   createDeploymentResourceBinding,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
+import {
+  AWS_SINGLE_NODE_VOLUME_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VOLUME_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_VOLUME_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VOLUME_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_VOLUME_STATE_DIGEST_DOMAIN,
+  AwsSingleNodeVolumeEvidenceConflictError,
+  AwsSingleNodeVolumeEvidenceTransientError,
+  AwsSingleNodeVolumeEvidenceUnknownError,
+  AwsSingleNodeVolumeLifecycleUnknownError,
+  createAwsSingleNodeVolumeStateDigest,
+  decodeAwsSingleNodeExactVolumeResponse,
+  decodeAwsSingleNodeVolumeActualState,
+  decodeAwsSingleNodeVolumeDiscoveryPage,
+  decodeAwsSingleNodeVolumeEvidence,
+  getAwsSingleNodeVolumeDiscoveryFilters,
+  getAwsSingleNodeVolumeOwnershipTags,
+} from './deployment-aws-volume-evidence.js';
 
-export const AWS_SINGLE_NODE_VOLUME_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_VOLUME_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_VOLUME_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_VOLUME_DISCOVERY_MAX_RESULTS = 500;
-export const AWS_SINGLE_NODE_VOLUME_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ebs-volume-state:v1';
+export {
+  AWS_SINGLE_NODE_VOLUME_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VOLUME_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_VOLUME_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VOLUME_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_VOLUME_STATE_DIGEST_DOMAIN,
+};
 export const AWS_SINGLE_NODE_VOLUME_CREATE_CLIENT_TOKEN_DOMAIN =
   'wharfie:aws-single-node-ebs-volume-create-client-token:v1';
 
@@ -51,14 +70,6 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
 ]);
 const VOLUME_CAPABILITIES = new Set(['application-state', 'control-state']);
 const VOLUME_ID_PATTERN = /^vol-[0-9a-f]{8,32}$/;
-const MAX_VOLUME_TAGS = 50;
-
-const BASE_RESERVED_TAGS = Object.freeze({
-  'wharfie:managed-by': 'wharfie',
-  'wharfie:resource-kind': 'single-node-state-volume',
-  'wharfie:retention': 'retain',
-  'wharfie:schema-version': '2',
-});
 
 /** Exact controller authority or present provider evidence is contradictory. */
 export class AwsSingleNodeVolumeResourceConflictError extends Error {
@@ -77,10 +88,6 @@ export class AwsSingleNodeVolumeResourceUnknownError extends Error {
     this.code = 'AWS_SINGLE_NODE_VOLUME_RESOURCE_UNKNOWN';
   }
 }
-
-class ProviderResponseUnknownError extends Error {}
-class VolumeEvidenceConflictError extends Error {}
-class VolumeEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -177,9 +184,7 @@ export function getAwsSingleNodeVolumeStateDigest(value, capabilityKind) {
     );
   }
   const volume = volumeConfiguration(providerSpec, capabilityKind);
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEbsVolumeState',
+  return createAwsSingleNodeVolumeStateDigest({
     availabilityZoneId: providerSpec.placement.availabilityZoneId,
     kmsKeyArn: providerSpec.storage.ebsKmsKeyArn,
     volumeType: volume.volumeType,
@@ -190,29 +195,27 @@ export function getAwsSingleNodeVolumeStateDigest(value, capabilityKind) {
     encrypted: volume.encrypted,
     onDestroy: volume.onDestroy,
   });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_VOLUME_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
+}
+
+/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, string>>} */
+function ownershipTags(authority) {
+  return getAwsSingleNodeVolumeOwnershipTags({
+    capabilityKind: authority.action.capability.kind,
+    roleKind: authority.action.role.kind,
+    providerScopeId: authority.plan.providerScope.providerScopeId,
+    deploymentInstanceId: authority.plan.deploymentInstanceId,
+    incarnationId: authority.plan.incarnationId,
+    resourceKey: authority.action.resourceKey,
+    createdByActionId:
+      authority.priorBinding?.createdByActionId ?? authority.action.actionId,
+    ownershipNonce: authority.ownershipNonce,
   });
 }
 
 /** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, string>>} */
 function requiredTags(authority) {
   return deepFreeze({
-    ...BASE_RESERVED_TAGS,
-    'wharfie:capability': authority.action.capability.kind,
-    'wharfie:role': authority.action.role.kind,
-    'wharfie:provider-scope-id': authority.plan.providerScope.providerScopeId,
-    'wharfie:deployment-instance-id': authority.plan.deploymentInstanceId,
-    'wharfie:incarnation-id': authority.plan.incarnationId,
-    'wharfie:resource-key': authority.action.resourceKey,
-    'wharfie:created-by-action-id':
-      authority.priorBinding?.createdByActionId ?? authority.action.actionId,
-    'wharfie:ownership-nonce': authority.ownershipNonce,
+    ...ownershipTags(authority),
     'wharfie:state-digest': authority.stateDigest.value,
   });
 }
@@ -288,22 +291,16 @@ function createVolumeRequest(authority) {
   });
 }
 
-/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Array<{Name: string, Values: string[]}>>} */
+/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Array<Readonly<{Name: string, Values: readonly string[]}>>>} */
 function discoveryFilters(authority) {
-  const tags = requiredTags(authority);
-  const locatorKeys = [
-    'wharfie:managed-by',
-    'wharfie:resource-kind',
-    'wharfie:capability',
-    'wharfie:role',
-    'wharfie:provider-scope-id',
-    'wharfie:deployment-instance-id',
-    'wharfie:incarnation-id',
-    'wharfie:resource-key',
-  ];
-  return deepFreeze(
-    locatorKeys.map((key) => ({ Name: `tag:${key}`, Values: [tags[key]] })),
-  );
+  return getAwsSingleNodeVolumeDiscoveryFilters({
+    capabilityKind: authority.action.capability.kind,
+    roleKind: authority.action.role.kind,
+    providerScopeId: authority.plan.providerScope.providerScopeId,
+    deploymentInstanceId: authority.plan.deploymentInstanceId,
+    incarnationId: authority.plan.incarnationId,
+    resourceKey: authority.action.resourceKey,
+  });
 }
 
 /** @param {unknown} value @param {Readonly<Record<string, any>>} providerScope @returns {Readonly<Record<string, any>>} */
@@ -469,114 +466,6 @@ function candidateVolumeId(value) {
     : null;
 }
 
-/** @param {unknown} response @param {string|null} exactVolumeId @returns {Readonly<Record<string, any>>|null} */
-function oneVolumeFromResponse(response, exactVolumeId) {
-  if (!isPlainObject(response) || !Array.isArray(response.Volumes)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new VolumeEvidenceConflictError();
-  }
-  if (response.Volumes.length === 0) return null;
-  if (response.Volumes.length !== 1) throw new VolumeEvidenceConflictError();
-  const volume = response.Volumes[0];
-  if (!isPlainObject(volume)) throw new ProviderResponseUnknownError();
-  if (
-    typeof volume.VolumeId !== 'string' ||
-    !VOLUME_ID_PATTERN.test(volume.VolumeId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (exactVolumeId !== null && volume.VolumeId !== exactVolumeId) {
-    throw new VolumeEvidenceConflictError();
-  }
-  return volume;
-}
-
-/** @param {unknown} response @returns {{volumes: Readonly<Record<string, any>>[], nextToken: string|null}} */
-function discoveryPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.Volumes)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  const volumes = [];
-  for (const volume of response.Volumes) {
-    if (!isPlainObject(volume)) throw new ProviderResponseUnknownError();
-    if (
-      typeof volume.VolumeId !== 'string' ||
-      !VOLUME_ID_PATTERN.test(volume.VolumeId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    volumes.push(volume);
-  }
-  return { volumes, nextToken };
-}
-
-/** @param {unknown} tagsValue @param {Readonly<Record<string, string>>} expected @param {boolean} allowPropagation @returns {void} */
-function validateTags(tagsValue, expected, allowPropagation) {
-  if (!Array.isArray(tagsValue)) {
-    if (allowPropagation && (tagsValue === undefined || tagsValue === null)) {
-      throw new VolumeEvidenceTransientError();
-    }
-    throw new ProviderResponseUnknownError();
-  }
-  if (tagsValue.length > MAX_VOLUME_TAGS) {
-    throw new VolumeEvidenceConflictError();
-  }
-  const observed = new Map();
-  for (const tag of tagsValue) {
-    if (
-      !isPlainObject(tag) ||
-      typeof tag.Key !== 'string' ||
-      tag.Key.length === 0 ||
-      typeof tag.Value !== 'string'
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (observed.has(tag.Key)) {
-      throw new VolumeEvidenceConflictError();
-    }
-    observed.set(tag.Key, tag.Value);
-  }
-  for (const [key, value] of observed) {
-    const reserved = Object.hasOwn(expected, key);
-    if (key.startsWith('wharfie:') && !reserved) {
-      throw new VolumeEvidenceConflictError();
-    }
-    if (reserved && expected[key] !== value) {
-      throw new VolumeEvidenceConflictError();
-    }
-  }
-  const complete = Object.entries(expected).every(
-    ([key, value]) => observed.get(key) === value,
-  );
-  if (!complete) {
-    if (allowPropagation) throw new VolumeEvidenceTransientError();
-    throw new VolumeEvidenceConflictError();
-  }
-}
-
-/** @param {unknown} operator @returns {void} */
-function validateOperator(operator) {
-  if (operator === undefined || operator === null) return;
-  if (!isPlainObject(operator) || typeof operator.Managed !== 'boolean') {
-    throw new ProviderResponseUnknownError();
-  }
-  if (operator.Managed || operator.Principal !== undefined) {
-    throw new VolumeEvidenceConflictError();
-  }
-}
-
 /**
  * Validate only the retained volume's intrinsic identity, ownership, and
  * lifecycle. Attachment evidence belongs to the separate attachment resource;
@@ -587,67 +476,25 @@ function validateOperator(operator) {
  * @returns {void}
  */
 function validateVolumeEvidence(volume, authority) {
-  const configuration = authority.volumeConfiguration;
-  const expectedTags = requiredTags(authority);
-  if (
-    typeof volume.AvailabilityZoneId !== 'string' ||
-    typeof volume.VolumeType !== 'string' ||
-    !Number.isSafeInteger(volume.Size) ||
-    !Number.isSafeInteger(volume.Iops) ||
-    !Number.isSafeInteger(volume.Throughput) ||
-    typeof volume.MultiAttachEnabled !== 'boolean' ||
-    typeof volume.Encrypted !== 'boolean' ||
-    typeof volume.KmsKeyId !== 'string' ||
-    typeof volume.State !== 'string' ||
-    !(volume.CreateTime instanceof Date) ||
-    !Number.isFinite(volume.CreateTime.getTime())
-  ) {
-    throw new ProviderResponseUnknownError();
+  const actualState = decodeAwsSingleNodeVolumeActualState(
+    volume,
+    authority.plan.providerScope.region,
+  );
+  if (!sameJson(actualState.observedDigest, authority.stateDigest)) {
+    throw new AwsSingleNodeVolumeEvidenceConflictError();
   }
-  if (
-    volume.AvailabilityZoneId !==
-      authority.providerSpec.placement.availabilityZoneId ||
-    volume.VolumeType !== configuration.volumeType ||
-    volume.Size !== configuration.sizeGiB ||
-    volume.Iops !== configuration.iops ||
-    volume.Throughput !== configuration.throughputMiBps ||
-    volume.MultiAttachEnabled !== configuration.multiAttach ||
-    volume.Encrypted !== configuration.encrypted ||
-    volume.KmsKeyId !== authority.providerSpec.storage.ebsKmsKeyArn ||
-    (volume.SnapshotId !== undefined &&
-      volume.SnapshotId !== null &&
-      volume.SnapshotId !== '') ||
-    (volume.SourceVolumeId !== undefined && volume.SourceVolumeId !== null) ||
-    (volume.OutpostArn !== undefined && volume.OutpostArn !== null) ||
-    (volume.FastRestored !== undefined && volume.FastRestored !== false) ||
-    (volume.VolumeInitializationRate !== undefined &&
-      volume.VolumeInitializationRate !== null) ||
-    (volume.SseType !== undefined && volume.SseType !== 'sse-kms')
-  ) {
-    throw new VolumeEvidenceConflictError();
-  }
-  if (
-    volume.AvailabilityZone !== undefined &&
-    typeof volume.AvailabilityZone !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    volume.AvailabilityZone !== undefined &&
-    !new RegExp(`^${authority.plan.providerScope.region}[a-z]$`, 'u').test(
-      volume.AvailabilityZone,
-    )
-  ) {
-    throw new VolumeEvidenceConflictError();
-  }
-  validateOperator(volume.Operator);
-  validateTags(volume.Tags, expectedTags, authority.action.action === 'create');
-
-  if (volume.State === 'creating') {
-    throw new VolumeEvidenceTransientError();
-  }
-  if (volume.State !== 'available' && volume.State !== 'in-use') {
-    throw new VolumeEvidenceConflictError();
+  try {
+    decodeAwsSingleNodeVolumeEvidence(volume, {
+      allowTagPropagation: authority.action.action === 'create',
+      expectedOwnershipTags: ownershipTags(authority),
+      expectedStateDigestValue: authority.stateDigest.value,
+      region: authority.plan.providerScope.region,
+    });
+  } catch (error) {
+    if (error instanceof AwsSingleNodeVolumeLifecycleUnknownError) {
+      throw new AwsSingleNodeVolumeEvidenceConflictError();
+    }
+    throw error;
   }
 }
 
@@ -716,9 +563,9 @@ export function createAwsSingleNodeVolumeResource(options) {
       );
     } catch (error) {
       if (errorNamed(error, 'InvalidVolume.NotFound')) return null;
-      throw new ProviderResponseUnknownError();
+      throw new AwsSingleNodeVolumeEvidenceUnknownError();
     }
-    return oneVolumeFromResponse(response, volumeId);
+    return decodeAwsSingleNodeExactVolumeResponse(response, volumeId);
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>|null>} */
@@ -742,12 +589,12 @@ export function createAwsSingleNodeVolumeResource(options) {
           }),
         );
       } catch {
-        throw new ProviderResponseUnknownError();
+        throw new AwsSingleNodeVolumeEvidenceUnknownError();
       }
-      const observed = discoveryPage(response);
+      const observed = decodeAwsSingleNodeVolumeDiscoveryPage(response);
       for (const volume of observed.volumes) {
         if (volumes.has(volume.VolumeId)) {
-          throw new VolumeEvidenceConflictError();
+          throw new AwsSingleNodeVolumeEvidenceConflictError();
         }
         volumes.set(volume.VolumeId, volume);
       }
@@ -756,13 +603,15 @@ export function createAwsSingleNodeVolumeResource(options) {
         page === AWS_SINGLE_NODE_VOLUME_MAX_DISCOVERY_PAGES ||
         seenTokens.has(observed.nextToken)
       ) {
-        throw new ProviderResponseUnknownError();
+        throw new AwsSingleNodeVolumeEvidenceUnknownError();
       }
       seenTokens.add(observed.nextToken);
       nextToken = observed.nextToken;
     }
     if (volumes.size === 0) return null;
-    if (volumes.size !== 1) throw new VolumeEvidenceConflictError();
+    if (volumes.size !== 1) {
+      throw new AwsSingleNodeVolumeEvidenceConflictError();
+    }
     return [...volumes.values()][0];
   }
 
@@ -829,17 +678,17 @@ export function createAwsSingleNodeVolumeResource(options) {
           return deepFreeze({ status: 'converged', binding });
         }
       } catch (error) {
-        if (error instanceof VolumeEvidenceConflictError) {
+        if (error instanceof AwsSingleNodeVolumeEvidenceConflictError) {
           return Object.freeze({ status: 'blocked' });
         }
         if (
-          !(error instanceof ProviderResponseUnknownError) &&
-          !(error instanceof VolumeEvidenceTransientError)
+          !(error instanceof AwsSingleNodeVolumeEvidenceUnknownError) &&
+          !(error instanceof AwsSingleNodeVolumeEvidenceTransientError)
         ) {
           throw error;
         }
         if (attempt === maxAttempts) {
-          if (error instanceof ProviderResponseUnknownError) {
+          if (error instanceof AwsSingleNodeVolumeEvidenceUnknownError) {
             throw new AwsSingleNodeVolumeResourceUnknownError();
           }
           return Object.freeze({ status: 'not-converged' });

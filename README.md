@@ -336,10 +336,14 @@ already ahead of the durable READY head. Planning performs no provider I/O,
 clock sampling, or random generation.
 
 One shared read-only resource-observation boundary now normalizes the finite
-evidence that those plans consume. It admits only exact present, authoritative
-absent, or access-unknown evidence; keeps ownership conflict distinct from
-state drift; requires provider identities and normalized digests for exact
-owned presence; and deliberately excludes service-level `healthy` claims.
+evidence that those plans consume. Its exact seven fields admit only exact
+present, authoritative absent, or provider-unknown evidence; keep ownership
+conflict distinct from state drift; require provider identities and normalized
+digests for exact owned presence; and deliberately exclude service-level
+`healthy` claims. The seventh field keeps provider truth separate from a
+narrow execution recommendation: an eventually consistent empty read remains
+unknown, while a fully authorized managed/direct current create may say that
+replaying its action-ID-and-ownership-nonce-derived idempotency token is safe.
 An immutable router accepts only 16 one-method observer families, maps all 18
 graph roles to exactly one observer, validates the returned evidence against
 the routed role, and never receives a mutation method or client lifecycle.
@@ -356,6 +360,16 @@ remains inspectable without mutation authority. READY carries only the settled
 plan, an initial create only the active plan, and a resident active operation
 carries both. DESTROYED reincarnation remains explicitly unsupported.
 
+The first provider observer now covers both retained EBS volume roles through
+one exact caller-owned `describeVolumes` port. Bound state is read only by its
+durable ID, ownership is checked against creation-era plan history, and the
+observed digest comes from actual EBS configuration so verified drift is not
+mistaken for a tag conflict. Unbound reads never adopt. Only a completely clean
+bounded empty no-action scan is absent; the same current-create scan remains
+unknown but may carry replay-safe advice for the exact stable EC2 client token.
+The observer and mutation driver share strict EBS evidence decoders without
+sharing mutation authority.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -365,8 +379,8 @@ These modules now implement both retained-volume attachment effects under
 deterministic mocks, but do not format, mount, unmount, quiesce, or fulfill a
 complete service capability. Future guest use must add a quiesce/unmount or
 stop dependency before attachment deletion. The privileged host observer,
-adapters over the drivers' authoritative read kernels, aggregate AWS
-inspection, owned provider/authority composition, operator commands, and
+the remaining adapters over the drivers' authoritative read kernels, aggregate
+AWS inspection, owned provider/authority composition, operator commands, and
 clean-account proof remain unfinished. Fresh apply from a DESTROYED tombstone
 is also currently unsupported: InspectionV5 requires retained resources to
 remain exactly bound, while the controller permits a fresh incarnation only
@@ -378,7 +392,8 @@ after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [AWS resource-observation authority checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md) — the current handoff for exact target, binding, active-plan, and CAS-claimed current-action read authority.
+- [Retained-volume observer checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md) — the current handoff for the first strict provider reader, actual EBS drift, creation-era ownership, and truth-preserving idempotent replay advice.
+- [AWS resource-observation authority checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md) — the parent handoff for exact target, binding, active-plan, and CAS-claimed current-action read authority.
 - [AWS resource-observation boundary checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md) — the parent handoff for strict raw evidence normalization and mutation-incapable routing across all 18 graph roles.
 - [Deterministic AWS deployment planning checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md) — the parent handoff for exact controller-compatible 18-action planning, no-adoption reconciliation, and reverse destroy derivation.
 - [AWS desired-resource targets checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md) — the parent handoff for the pure, deterministic 18-role target catalog and complete durable-binding identity revalidation.

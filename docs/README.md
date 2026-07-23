@@ -101,7 +101,19 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [AWS resource-observation authority
+The current restart handoff is the [retained-volume observer
+checkpoint](../llm/checkpoints/2026-07-23-v49-retained-volume-observer.md).
+Both retained EBS volume roles now have one exact read-only observer backed by
+the mutation driver's shared tag, response, lifecycle, and state-digest
+decoders. It revalidates V48 authority and factory scope before I/O, reads a
+binding only by exact ID, refuses unbound adoption, derives drift from actual
+provider configuration, and proves the immutable state-digest tag from durable
+creation-era plan history. Bound NotFound remains unknown. An entirely clean
+bounded empty current-create discovery remains unknown too, but may separately
+carry `replay-safe-create` after exact action-ID and nonce validation; any
+earlier uncertainty removes that advice.
+
+Its parent is the [AWS resource-observation authority
 checkpoint](../llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md).
 One pure exact eleven-field constructor now validates a desired deployment
 tuple, non-null durable head, nullable active and last-settled plans, and one
@@ -117,18 +129,21 @@ reachability exposes its action and ownership nonce; `pending` remains
 inspectable without action authority. Null heads stay the aggregate absent fast
 path, and DESTROYED reincarnation fails through a fixed unsupported result.
 
-Its parent is the [AWS resource-observation boundary
+V48's parent is the [AWS resource-observation boundary
 checkpoint](../llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md).
-One strict six-field result now separates exact provider presence,
-authoritative absence, access uncertainty, ownership conflict, normalized
-observed state, and raw resource health. Exact present evidence is correlated
-to the fixed graph's provider type; absent and unknown evidence cannot carry
-identity or state. Service-level healthy status is deliberately outside this
-raw boundary. One immutable router accepts only 16 exact one-method observer
-families, maps all 18 graph roles, forwards one original context without
-fanout, validates the awaited result against its routed role, and admits no
-mutation or client-close method. The existing action drivers still need
-read-only authority adapters; this checkpoint does not claim aggregate
+One strict seven-field result now separates exact provider presence,
+authoritative absence, provider uncertainty, ownership conflict, normalized
+observed state, raw resource health, and narrow execution advice. Exact present
+evidence is correlated to the fixed graph's provider type; absent and unknown
+evidence cannot carry identity or state. An eventually consistent empty read
+therefore remains unknown; only an exact routed managed/direct current create
+with a canonical action ID and ownership nonce may additionally carry
+`replay-safe-create`. Service-level healthy status is deliberately outside
+this raw boundary. One immutable router accepts only 16 exact one-method
+observer families, maps all 18 graph roles, forwards one original context
+without fanout, validates the awaited result against its routed role, and
+admits no mutation or client-close method. The existing action drivers still
+need read-only authority adapters; this checkpoint does not claim aggregate
 InspectionV5.
 
 V47's parent is the [deterministic AWS deployment planning

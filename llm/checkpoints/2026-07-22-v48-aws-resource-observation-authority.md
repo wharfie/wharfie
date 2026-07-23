@@ -14,7 +14,7 @@ Nodes are trusted. One coordinator is acceptable initially when its durable
 authority can be recovered. V1 compatibility, trustless mesh, general-purpose
 cloud IaC, and a web UI are outside the current scope.
 
-V47 defined a strict six-field raw resource observation and an exhaustive
+V47 defined a strict seven-field raw resource observation and an exhaustive
 read-only router for the fixed 18-role graph. It intentionally did not define
 how one driver receives ownership authority. The existing action contexts are
 not suitable: they require an already active mutation plan, current action

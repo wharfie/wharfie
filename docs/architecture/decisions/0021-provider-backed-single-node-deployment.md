@@ -1503,15 +1503,19 @@ proof; a future lifecycle revision must reconcile those requirements
 explicitly.
 
 The twenty-ninth slice defines the shared raw resource-observation boundary
-before any action driver's private reader is exposed. One canonical six-field
-result carries only resource key, presence, ownership, provider identity,
-normalized observed digest, and raw resource health. `absent` means
-authoritative not-found and therefore carries missing ownership, no identity or
-digest, and absent health. `unknown` means access or response evidence could
-not establish state and likewise carries no invented identity or digest.
-Present exact or external ownership requires the graph role's provider type and
-a normalized digest; ownership conflict remains distinct and may omit a digest
-rather than echoing untrusted provider metadata as state.
+before any action driver's private reader is exposed. One canonical
+seven-field result carries only resource key, presence, ownership, provider
+identity, normalized observed digest, raw resource health, and bounded
+execution advice. `absent` means authoritative not-found and therefore carries
+missing ownership, no identity or digest, absent health, and no execution
+advice. `unknown` means access or response evidence could not establish state
+and likewise carries no invented identity or digest. It normally carries no
+execution advice. The sole additional value, `replay-safe-create`, preserves
+that unknown provider truth while saying that an exact routed managed/direct
+current create may be replayed through its canonical action ID and ownership
+nonce. Present exact or external ownership requires the graph role's provider
+type and a normalized digest; ownership conflict remains distinct and may omit
+a digest rather than echoing untrusted provider metadata as state.
 
 Raw observers cannot claim `healthy`. Nonresident infrastructure is
 `not-applicable`. An exactly owned substrate may expose starting, degraded,
@@ -1528,7 +1532,11 @@ volume-attachment roles. A selected observer receives the original context
 once; the router never fans out, closes a client, or admits an execute, delete,
 or settlement port. Its awaited result is revalidated against the selected
 resource key, and malformed or unsupported routes fail through one fixed
-non-echoing error before observer I/O.
+non-echoing error before observer I/O. Before accepting
+`replay-safe-create`, the router additionally requires the exact routed
+managed/direct create shape, a canonical deployment action ID, and a valid
+ownership nonce. The observer remains responsible for proving the complete V48
+deployment authority that binds those values.
 
 This is the target contract for the next extraction, not a claim that current
 provider observation is complete. The existing 16 action factories still keep
@@ -1586,6 +1594,42 @@ DESTROYED head fails through one fixed non-echoing unsupported error because
 the retained-resource reincarnation contract is still unresolved. The
 constructor performs no provider I/O, clock sampling, randomness, adoption, or
 client lifecycle.
+
+The thirty-first slice implements the first V47 observer for both retained EBS
+volume roles. `createAwsSingleNodeVolumeResourceObserver` accepts exactly one
+caller-owned `describeVolumes` port, the exact provider scope, and bounded
+retry options. It re-creates the V48 authority, compares its derived binding
+and current action, and accepts only managed, direct, dependency-free,
+retained `application-state` or `control-state` targets. Bound creates,
+unbound noncreates, scope substitutions, and malformed role-specific IDs fail
+before provider I/O.
+
+A bound volume is read only by its exact ID. Ownership tags use the binding's
+creation action and nonce plus a creation-era state digest derived from durable
+plan history, never the prospective target or an active action's observed
+`before` digest. The returned observed digest is independently derived from
+actual normalized EBS configuration, so exact ownership and state drift remain
+separate. NotFound, empty exact responses, access failure, malformed
+envelopes, and unsupported lifecycle states remain unknown rather than
+claiming absence.
+
+An unbound intended create searches only by stable locator tags and validates
+the complete current action/nonce/state receipt before returning verified
+presence. If and only if every bounded attempt is a successful, complete,
+empty discovery, it returns unknown provider truth plus
+`replay-safe-create`; the existing action-ID-and-nonce-derived EC2 client token
+makes that replay idempotent. Any earlier candidate, propagation state, access
+failure, malformed page, or wait failure removes that advice even when a later
+read is empty. An unbound target without a current action performs collision
+detection only: returned stable tags must corroborate the query, a candidate
+is never adopted, and absence requires the same all-clean-empty history.
+
+The mutation driver and observer share pure EBS tag, response, lifecycle, and
+actual-state digest decoders. The descriptor has an exact finite schema and
+keeps readable supported drift distinct from malformed evidence. Mutation
+settlement retains its stricter blocked/not-converged mapping; sharing evidence
+does not give the observer an execute or settlement port. Aggregate
+InspectionV5 and controller consumption of replay advice remain later work.
 
 Source and packaged deployment commands, shared authoritative resource
 driver adapters, aggregate inspection, owned provider and controller
