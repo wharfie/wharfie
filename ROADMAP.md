@@ -845,6 +845,21 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       all-clean-empty proof and exact action-ID/nonce token validation. The
       mutation driver and observer now share strict tag, response, lifecycle,
       and state-digest decoders without sharing mutation authority.
+- [x] Adapt the directly owned VPC and standalone internet gateway to the
+      shared read-only boundary. One stateless tagged-EC2 evidence layer now
+      owns stable locator and complete receipt tags, bounded plural discovery,
+      exact-ID corroboration, and collision-only tag validation while the
+      existing recovery kernel retains mutation-only create fencing and
+      candidate memory. Both observers re-prove V48 authority and use exact-ID
+      reads only for durable bindings; bound NotFound remains unknown.
+      Supported VPC CIDR, tenancy, default, IPv6, DNS, and block-mode drift is
+      hashed from actual provider state rather than mislabeled as ownership
+      conflict. Internet-gateway attachment state remains a separate graph
+      role. Clean unbound emptiness may prove absence, but neither current
+      create emits replay advice because neither create API accepts a client
+      token. Observation authority now also closes the response-receipt gap:
+      every settled non-delete action must retain its exact durable binding,
+      while a settled delete must be unbound, before provider I/O.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -1001,12 +1016,14 @@ while separately carrying either no execution advice or one exact
 `replay-safe-create` recommendation. That recommendation never turns an empty
 eventually consistent read into an absence claim and is accepted only for a
 canonical action ID and nonce on the routed managed/direct current create. The
-retained-volume driver now shares its exact EBS evidence kernel with the first
-observer port; the other 14 implementation families remain private. One pure
-authority constructor revalidates the exact desired tuple, active plan, and
-last-settled provider lineage, recreates the V45 catalog, derives the target's
-durable binding, and exposes only a controller-reachable CAS-claimed intended
-action. It never turns a pending frontier into action authority.
+retained-volume, VPC, and internet-gateway drivers now share their exact
+evidence decoders with read-only observer ports. A stateless tagged-EC2 layer
+separates tags and bounded identity reads from mutation-only response recovery.
+The remaining 13 implementation families stay private. One pure authority
+constructor revalidates the exact desired tuple, active plan, and last-settled
+provider lineage, recreates the V45 catalog, derives the target's durable
+binding, and exposes only a controller-reachable CAS-claimed intended action.
+It never turns a pending frontier into action authority.
 
 1. Adapt the drivers' authoritative read kernels to the shared observation
    boundary without duplicating their AWS decoders, then build aggregate
@@ -1024,9 +1041,11 @@ action. It never turns a pending frontier into action authority.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [retained-volume observer
-checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md).
-Its parent is the [AWS resource-observation authority
+The current restart point is the [tagged-EC2 VPC and internet-gateway observer
+checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md).
+Its parent is the [retained-volume observer
+checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md), whose
+parent is the [AWS resource-observation authority
 checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md),
 whose parent is the [AWS resource-observation boundary
 checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md),

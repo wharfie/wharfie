@@ -1,11 +1,6 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
-import { sortCanonicalJsonValue } from './canonical-order.js';
-import { sha256Base64Url } from './content-id.js';
-import {
-  validateAwsSingleNodeProviderSpec,
-  validateAwsSingleNodeProviderSpecContext,
-} from './deployment-aws-provider-spec.js';
+import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
 import { validateDeploymentProfile } from './deployment-profile.js';
@@ -20,13 +15,28 @@ import {
   AwsTaggedEc2RecoveryUnknownError as ProviderResponseUnknownError,
   createAwsTaggedEc2RecoveryKernel,
 } from './deployment-aws-tagged-ec2-recovery.js';
+import {
+  AWS_SINGLE_NODE_VPC_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_VPC_STATE_DIGEST_DOMAIN,
+  decodeAwsSingleNodeExactVpcResponse,
+  decodeAwsSingleNodeVpcAttributeResponse,
+  decodeAwsSingleNodeVpcDiscoveryPage,
+  decodeAwsSingleNodeVpcIdentity,
+  decodeAwsSingleNodeVpcRecordState,
+  getAwsSingleNodeVpcStateDigest,
+} from './deployment-aws-vpc-evidence.js';
 
-export const AWS_SINGLE_NODE_VPC_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS = 100;
-export const AWS_SINGLE_NODE_VPC_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-vpc-state:v1';
+export {
+  AWS_SINGLE_NODE_VPC_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VPC_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_VPC_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_VPC_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_VPC_STATE_DIGEST_DOMAIN,
+  getAwsSingleNodeVpcStateDigest,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -52,8 +62,6 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
   'deleteVpc',
 ]);
 const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
-const VPC_CIDR_ASSOCIATION_ID_PATTERN = /^vpc-cidr-assoc-[0-9a-f]{8,32}$/;
-const DHCP_OPTIONS_ID_PATTERN = /^dopt-[0-9a-f]{8,32}$/;
 const MAX_VPC_TAGS = 50;
 
 const BASE_RESERVED_TAGS = Object.freeze({
@@ -145,40 +153,6 @@ function errorNamed(error, name) {
 async function defaultWaitForRetry(attempt) {
   const delay = Math.min(2000 * 2 ** Math.max(0, attempt - 1), 30_000);
   await new Promise((resolve) => setTimeout(resolve, delay));
-}
-
-/**
- * Derive the exact provider-observable VPC state. Relationship resources are
- * intentionally excluded; each is a later independently recoverable graph
- * effect.
- * @param {unknown} value - Exact AWS single-node provider specification.
- * @returns {Readonly<{algorithm: 'sha256', value: string}>} - State digest.
- */
-export function getAwsSingleNodeVpcStateDigest(value) {
-  const providerSpec = validateAwsSingleNodeProviderSpec(
-    value,
-    'awsSingleNodeVpcState providerSpec',
-  );
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEc2VpcState',
-    cidrBlock: providerSpec.capabilities.networking.vpcCidr,
-    instanceTenancy: 'default',
-    isDefault: false,
-    ipv6: false,
-    enableDnsSupport: true,
-    enableDnsHostnames: false,
-    internetGatewayBlockMode: 'off',
-    onDestroy: 'purge',
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_VPC_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
-  });
 }
 
 /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {Readonly<import('@aws-sdk/client-ec2').CreateVpcCommandInput>} */
@@ -388,155 +362,10 @@ function candidateVpcId(value) {
     : null;
 }
 
-/** @param {unknown} response @param {string} exactVpcId @returns {Readonly<Record<string, any>>|null} */
-function oneVpcFromResponse(response, exactVpcId) {
-  if (!isPlainObject(response) || !Array.isArray(response.Vpcs)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new VpcEvidenceConflictError();
-  }
-  if (response.Vpcs.length === 0) throw new ProviderResponseUnknownError();
-  if (response.Vpcs.length !== 1) throw new VpcEvidenceConflictError();
-  const vpc = response.Vpcs[0];
-  if (
-    !isPlainObject(vpc) ||
-    typeof vpc.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(vpc.VpcId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (vpc.VpcId !== exactVpcId) throw new VpcEvidenceConflictError();
-  return vpc;
-}
-
-/** @param {unknown} response @returns {{vpcs: Readonly<Record<string, any>>[], nextToken: string|null}} */
-function discoveryPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.Vpcs)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  const vpcs = [];
-  for (const vpc of response.Vpcs) {
-    if (
-      !isPlainObject(vpc) ||
-      typeof vpc.VpcId !== 'string' ||
-      !VPC_ID_PATTERN.test(vpc.VpcId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    vpcs.push(vpc);
-  }
-  return { vpcs, nextToken };
-}
-
-/** @param {unknown} value @param {string} expectedState @param {boolean} allowPropagation @returns {void} */
-function validateCidrAssociations(value, expectedState, allowPropagation) {
-  if (!Array.isArray(value)) {
-    if (allowPropagation && (value === undefined || value === null)) {
-      throw new VpcEvidenceTransientError();
-    }
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.length === 0 && allowPropagation) {
-    throw new VpcEvidenceTransientError();
-  }
-  if (value.length !== 1) throw new VpcEvidenceConflictError();
-  const association = value[0];
-  if (
-    !isPlainObject(association) ||
-    typeof association.AssociationId !== 'string' ||
-    !VPC_CIDR_ASSOCIATION_ID_PATTERN.test(association.AssociationId) ||
-    typeof association.CidrBlock !== 'string' ||
-    !isPlainObject(association.CidrBlockState) ||
-    typeof association.CidrBlockState.State !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    association.CidrBlockState.StatusMessage !== undefined &&
-    association.CidrBlockState.StatusMessage !== null &&
-    typeof association.CidrBlockState.StatusMessage !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (association.CidrBlock !== expectedState) {
-    throw new VpcEvidenceConflictError();
-  }
-  if (association.CidrBlockState.State === 'associating') {
-    throw new VpcEvidenceTransientError();
-  }
-  if (
-    association.CidrBlockState.State !== 'associated' ||
-    (association.CidrBlockState.StatusMessage !== undefined &&
-      association.CidrBlockState.StatusMessage !== null)
-  ) {
-    throw new VpcEvidenceConflictError();
-  }
-}
-
-/** @param {unknown} value @returns {void} */
-function validateIpv6Associations(value) {
-  if (value === undefined) return;
-  if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  if (value.length === 0) return;
-  for (const association of value) {
-    if (
-      !isPlainObject(association) ||
-      typeof association.AssociationId !== 'string' ||
-      !VPC_CIDR_ASSOCIATION_ID_PATTERN.test(association.AssociationId) ||
-      typeof association.Ipv6CidrBlock !== 'string' ||
-      association.Ipv6CidrBlock.length === 0 ||
-      !isPlainObject(association.Ipv6CidrBlockState) ||
-      typeof association.Ipv6CidrBlockState.State !== 'string' ||
-      (association.Ipv6CidrBlockState.StatusMessage !== undefined &&
-        association.Ipv6CidrBlockState.StatusMessage !== null &&
-        typeof association.Ipv6CidrBlockState.StatusMessage !== 'string')
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  throw new VpcEvidenceConflictError();
-}
-
-/** @param {unknown} value @returns {void} */
-function validateBlockPublicAccessStates(value) {
-  if (
-    !isPlainObject(value) ||
-    typeof value.InternetGatewayBlockMode !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.InternetGatewayBlockMode === 'off') return;
-  if (
-    value.InternetGatewayBlockMode === 'block-ingress' ||
-    value.InternetGatewayBlockMode === 'block-bidirectional'
-  ) {
-    throw new VpcEvidenceConflictError();
-  }
-  throw new ProviderResponseUnknownError();
-}
-
 /** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
 function validateVpcOwnershipEvidence(vpc, authority, recovery) {
-  if (
-    typeof vpc.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(vpc.VpcId) ||
-    typeof vpc.OwnerId !== 'string' ||
-    typeof vpc.State !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (vpc.OwnerId !== authority.plan.providerScope.accountId) {
+  const identity = decodeAwsSingleNodeVpcIdentity(vpc);
+  if (identity.ownerId !== authority.plan.providerScope.accountId) {
     throw new VpcEvidenceConflictError();
   }
   recovery.validateTags(
@@ -544,8 +373,8 @@ function validateVpcOwnershipEvidence(vpc, authority, recovery) {
     recovery.requiredTags(authority),
     authority.action.action === 'create',
   );
-  if (vpc.State === 'pending') throw new VpcEvidenceTransientError();
-  if (vpc.State !== 'available') throw new VpcEvidenceConflictError();
+  if (identity.state === 'pending') throw new VpcEvidenceTransientError();
+  if (identity.state !== 'available') throw new VpcEvidenceConflictError();
 }
 
 /** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
@@ -561,29 +390,19 @@ function validateVpcDeletionEvidence(vpc, authority, recovery) {
 function validateVpcBaseEvidence(vpc, authority, recovery) {
   const expectedCidr = authority.providerSpec.capabilities.networking.vpcCidr;
   validateVpcOwnershipEvidence(vpc, authority, recovery);
+  const state = decodeAwsSingleNodeVpcRecordState(
+    vpc,
+    authority.action.action === 'create',
+  );
   if (
-    typeof vpc.CidrBlock !== 'string' ||
-    typeof vpc.InstanceTenancy !== 'string' ||
-    typeof vpc.IsDefault !== 'boolean' ||
-    typeof vpc.DhcpOptionsId !== 'string' ||
-    !DHCP_OPTIONS_ID_PATTERN.test(vpc.DhcpOptionsId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  validateIpv6Associations(vpc.Ipv6CidrBlockAssociationSet);
-  validateBlockPublicAccessStates(vpc.BlockPublicAccessStates);
-  if (
-    vpc.CidrBlock !== expectedCidr ||
-    vpc.InstanceTenancy !== 'default' ||
-    vpc.IsDefault
+    state.cidrBlock !== expectedCidr ||
+    state.instanceTenancy !== 'default' ||
+    state.isDefault ||
+    state.ipv6 ||
+    state.internetGatewayBlockMode !== 'off'
   ) {
     throw new VpcEvidenceConflictError();
   }
-  validateCidrAssociations(
-    vpc.CidrBlockAssociationSet,
-    expectedCidr,
-    authority.action.action === 'create',
-  );
 }
 
 /**
@@ -657,7 +476,7 @@ export function createAwsSingleNodeVpcResource(options) {
       if (errorNamed(error, 'InvalidVpcID.NotFound')) return null;
       throw new ProviderResponseUnknownError();
     }
-    return oneVpcFromResponse(response, vpcId);
+    return decodeAwsSingleNodeExactVpcResponse(response, vpcId);
   }
 
   /** @param {Readonly<Record<string, any>>} request @returns {Promise<{records: Readonly<Record<string, any>>[], nextToken: string|null}>} */
@@ -668,8 +487,7 @@ export function createAwsSingleNodeVpcResource(options) {
     } catch {
       throw new ProviderResponseUnknownError();
     }
-    const observed = discoveryPage(response);
-    return { records: observed.vpcs, nextToken: observed.nextToken };
+    return decodeAwsSingleNodeVpcDiscoveryPage(response);
   }
 
   const recovery = createAwsTaggedEc2RecoveryKernel({
@@ -683,40 +501,8 @@ export function createAwsSingleNodeVpcResource(options) {
     readExact: describeExactOnce,
   });
 
-  /** @param {unknown} response @param {string} vpcId @param {'enableDnsSupport'|'enableDnsHostnames'} attribute @param {'EnableDnsSupport'|'EnableDnsHostnames'} responseKey @param {boolean} expected @returns {void} */
-  function validateAttributeResponse(
-    response,
-    vpcId,
-    attribute,
-    responseKey,
-    expected,
-  ) {
-    if (!isPlainObject(response)) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (
-      typeof response.VpcId !== 'string' ||
-      !VPC_ID_PATTERN.test(response.VpcId) ||
-      !isPlainObject(response[responseKey]) ||
-      typeof response[responseKey].Value !== 'boolean'
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (response.VpcId !== vpcId) throw new VpcEvidenceConflictError();
-    const otherKey =
-      attribute === 'enableDnsSupport'
-        ? 'EnableDnsHostnames'
-        : 'EnableDnsSupport';
-    if (
-      response[responseKey].Value !== expected ||
-      (response[otherKey] !== undefined && response[otherKey] !== null)
-    ) {
-      throw new VpcEvidenceConflictError();
-    }
-  }
-
-  /** @param {string} vpcId @param {'enableDnsSupport'|'enableDnsHostnames'} attribute @param {'EnableDnsSupport'|'EnableDnsHostnames'} responseKey @param {boolean} expected @returns {Promise<void>} */
-  async function readAttribute(vpcId, attribute, responseKey, expected) {
+  /** @param {string} vpcId @param {'enableDnsSupport'|'enableDnsHostnames'} attribute @param {boolean} expected @returns {Promise<void>} */
+  async function readAttribute(vpcId, attribute, expected) {
     let response;
     try {
       response = await client.describeVpcAttribute(
@@ -728,24 +514,18 @@ export function createAwsSingleNodeVpcResource(options) {
       }
       throw new ProviderResponseUnknownError();
     }
-    validateAttributeResponse(
+    const observed = decodeAwsSingleNodeVpcAttributeResponse(
       response,
       vpcId,
       attribute,
-      responseKey,
-      expected,
     );
+    if (observed !== expected) throw new VpcEvidenceConflictError();
   }
 
   /** @param {string} vpcId @returns {Promise<void>} */
   async function validateVpcAttributes(vpcId) {
-    await readAttribute(vpcId, 'enableDnsSupport', 'EnableDnsSupport', true);
-    await readAttribute(
-      vpcId,
-      'enableDnsHostnames',
-      'EnableDnsHostnames',
-      false,
-    );
+    await readAttribute(vpcId, 'enableDnsSupport', true);
+    await readAttribute(vpcId, 'enableDnsHostnames', false);
   }
 
   /** @param {Readonly<Record<string, any>>} vpc @param {Readonly<Record<string, any>>} authority @returns {Promise<void>} */

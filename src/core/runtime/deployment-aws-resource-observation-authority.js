@@ -310,6 +310,299 @@ function assertBindingMatchesAction(action, binding, dependencyBindings) {
   }
 }
 
+/** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} intent @param {Readonly<Record<string, any>>|undefined} binding @param {ReadonlyArray<Readonly<{bindingId: string, resourceKey: string}>>} dependencyBindings @returns {void} */
+function assertSettledCreateBinding(
+  action,
+  intent,
+  binding,
+  dependencyBindings,
+) {
+  const state = action.after;
+  if (
+    action.before !== null ||
+    state === null ||
+    binding === undefined ||
+    binding.resourceKey !== action.resourceKey ||
+    !sameJson(binding.capability, action.capability) ||
+    !sameJson(binding.role, action.role) ||
+    binding.management !== action.management ||
+    binding.ownershipMode !==
+      (action.management === 'external' ? 'external' : action.ownershipMode) ||
+    binding.onDestroy !== action.onDestroy ||
+    !sameJson(binding.dependencyBindings, dependencyBindings) ||
+    binding.providerType !== state.providerType ||
+    (state.providerResourceId !== null &&
+      binding.providerResourceId !== state.providerResourceId)
+  ) {
+    planConflict();
+  }
+  if (action.management === 'managed') {
+    if (
+      binding.createdByActionId !== action.actionId ||
+      intent.ownershipNonce !== binding.ownershipNonce
+    ) {
+      planConflict();
+    }
+  } else if (intent.ownershipNonce !== null) {
+    planConflict();
+  }
+}
+
+/** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} target @param {Readonly<Record<string, any>>|undefined} binding @returns {void} */
+function assertSettledCreateTarget(action, target, binding) {
+  assertActionTargetMetadata(action, target);
+  const state = action.after;
+  if (
+    state === null ||
+    action.before !== null ||
+    binding === undefined ||
+    state.providerType !== target.target.providerType ||
+    !sameJson(state.stateDigest, target.target.stateDigest) ||
+    binding.providerResourceId !== target.target.providerResourceId ||
+    (state.providerResourceId !== null &&
+      state.providerResourceId !== target.target.providerResourceId)
+  ) {
+    planConflict();
+  }
+}
+
+/** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} intent @returns {void} */
+function assertCreateIntentOwnership(action, intent) {
+  if (action.management === 'managed') {
+    if (intent.ownershipNonce === null) planConflict();
+    validateOwnershipNonce(
+      intent.ownershipNonce,
+      'awsSingleNodeResourceObservationAuthority create ownershipNonce',
+    );
+  } else if (intent.ownershipNonce !== null) {
+    planConflict();
+  }
+}
+
+/** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} intent @param {Readonly<Record<string, any>>|undefined} binding @returns {void} */
+function assertNoncreateIntentOwnership(action, intent, binding) {
+  if (action.management === 'managed') {
+    if (
+      binding === undefined ||
+      intent.ownershipNonce !== binding.ownershipNonce
+    ) {
+      planConflict();
+    }
+  } else if (intent.ownershipNonce !== null) {
+    planConflict();
+  }
+}
+
+/** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} intent @param {Readonly<Record<string, any>>|undefined} binding @param {ReadonlyArray<Readonly<{bindingId: string, resourceKey: string}>>} dependencyBindings @returns {void} */
+function assertSettledNoncreateBinding(
+  action,
+  intent,
+  binding,
+  dependencyBindings,
+) {
+  assertBindingMatchesAction(action, binding, dependencyBindings);
+  const state = action.after;
+  if (
+    state === null ||
+    binding === undefined ||
+    binding.providerType !== state.providerType ||
+    (state.providerResourceId !== null &&
+      binding.providerResourceId !== state.providerResourceId)
+  ) {
+    planConflict();
+  }
+  assertNoncreateIntentOwnership(action, intent, binding);
+}
+
+/** @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} operation @param {string} resourceKey @returns {{actionIndex: number, action: Readonly<Record<string, any>>, intent: Readonly<Record<string, any>>}} */
+function targetReceipt(plan, operation, resourceKey) {
+  const matchingIndexes = plan.actions
+    .map(
+      (
+        /** @type {Readonly<Record<string, any>>} */ action,
+        /** @type {number} */ index,
+      ) => (action.resourceKey === resourceKey ? index : -1),
+    )
+    .filter((/** @type {number} */ index) => index >= 0);
+  if (matchingIndexes.length !== 1) planConflict();
+  const actionIndex = matchingIndexes[0];
+  const action = plan.actions[actionIndex];
+  const intent = operation.intents[actionIndex];
+  if (
+    intent === undefined ||
+    intent.actionId !== action.actionId ||
+    (intent.status !== 'pending' &&
+      intent.status !== 'intended' &&
+      intent.status !== 'settled')
+  ) {
+    planConflict();
+  }
+  return { actionIndex, action, intent };
+}
+
+/** @param {Readonly<Record<string, any>>} target @param {Readonly<Record<string, any>>|undefined} binding @param {Map<string, Readonly<Record<string, any>>>} targetByKey @param {Map<string, Readonly<Record<string, any>>>} bindingByKey @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} operation @param {Readonly<Record<string, any>>} head @param {boolean} active @returns {{actionIndex: number, action: Readonly<Record<string, any>>, intent: Readonly<Record<string, any>>}} */
+function assertTargetDurableReceipt(
+  target,
+  binding,
+  targetByKey,
+  bindingByKey,
+  plan,
+  operation,
+  head,
+  active,
+) {
+  const receipt = targetReceipt(plan, operation, target.resourceKey);
+  const { actionIndex, action, intent } = receipt;
+  if (active && action.action === 'create' && intent.status === 'settled') {
+    assertSettledCreateTarget(action, target, binding);
+  } else if (active) {
+    assertActionTarget(action, target);
+  } else {
+    assertActionTargetMetadata(action, target);
+  }
+  if (intent.status === 'intended') return receipt;
+
+  if (intent.status === 'pending') {
+    if (action.action === 'create') {
+      if (binding !== undefined || action.before !== null) planConflict();
+      assertCreateIntentOwnership(action, intent);
+      if (active && actionIndex === operation.nextActionIndex) {
+        assertCreateDependencyReceipts(
+          action,
+          actionIndex,
+          plan,
+          head,
+          targetByKey,
+          bindingByKey,
+        );
+      }
+      return receipt;
+    }
+    const dependencyBindings = expectedDependencyBindings(action, bindingByKey);
+    assertBindingMatchesAction(action, binding, dependencyBindings);
+    assertNoncreateIntentOwnership(action, intent, binding);
+    return receipt;
+  }
+
+  if (action.after === null) {
+    if (
+      binding !== undefined ||
+      action.before === null ||
+      action.before.providerResourceId === null
+    ) {
+      planConflict();
+    }
+    if (action.management === 'managed') {
+      if (intent.ownershipNonce === null) planConflict();
+      validateOwnershipNonce(
+        intent.ownershipNonce,
+        'awsSingleNodeResourceObservationAuthority delete ownershipNonce',
+      );
+    } else if (intent.ownershipNonce !== null) {
+      planConflict();
+    }
+    return receipt;
+  }
+  const dependencyBindings = expectedDependencyBindings(action, bindingByKey);
+  if (action.action === 'create') {
+    assertSettledCreateBinding(action, intent, binding, dependencyBindings);
+    return receipt;
+  }
+  assertSettledNoncreateBinding(action, intent, binding, dependencyBindings);
+  return receipt;
+}
+
+/** @param {Readonly<Record<string, any>>} target @param {Readonly<Record<string, any>>|undefined} binding @param {Map<string, Readonly<Record<string, any>>>} bindingByKey @param {{actionIndex: number, action: Readonly<Record<string, any>>, intent: Readonly<Record<string, any>>}} activeReceipt @param {Readonly<Record<string, any>>} settledPlan @param {Readonly<Record<string, any>>} lastOperation @returns {void} */
+function assertPredecessorReceipt(
+  target,
+  binding,
+  bindingByKey,
+  activeReceipt,
+  settledPlan,
+  lastOperation,
+) {
+  const predecessor = targetReceipt(
+    settledPlan,
+    lastOperation,
+    target.resourceKey,
+  );
+  const priorAction = predecessor.action;
+  const priorIntent = predecessor.intent;
+  const activeAction = activeReceipt.action;
+  const activeIntent = activeReceipt.intent;
+  if (priorIntent.status !== 'settled') planConflict();
+  assertActionTargetMetadata(priorAction, target);
+
+  if (priorAction.after === null) {
+    if (priorAction.management === 'managed') {
+      if (priorIntent.ownershipNonce === null) planConflict();
+      validateOwnershipNonce(
+        priorIntent.ownershipNonce,
+        'awsSingleNodeResourceObservationAuthority predecessor delete ownershipNonce',
+      );
+    } else if (priorIntent.ownershipNonce !== null) {
+      planConflict();
+    }
+    if (activeAction.action !== 'create' || activeAction.before !== null) {
+      planConflict();
+    }
+    return;
+  }
+  if (activeAction.action === 'create' || activeAction.before === null) {
+    planConflict();
+  }
+  if (
+    activeAction.before.providerResourceId === null ||
+    activeAction.before.providerType !== priorAction.after.providerType ||
+    (priorAction.after.providerResourceId !== null &&
+      activeAction.before.providerResourceId !==
+        priorAction.after.providerResourceId)
+  ) {
+    planConflict();
+  }
+  if (activeAction.management === 'managed') {
+    if (
+      priorIntent.ownershipNonce === null ||
+      activeIntent.ownershipNonce !== priorIntent.ownershipNonce
+    ) {
+      planConflict();
+    }
+    validateOwnershipNonce(
+      priorIntent.ownershipNonce,
+      'awsSingleNodeResourceObservationAuthority predecessor ownershipNonce',
+    );
+  } else if (
+    priorIntent.ownershipNonce !== null ||
+    activeIntent.ownershipNonce !== null
+  ) {
+    planConflict();
+  }
+
+  if (activeIntent.status === 'settled' && activeAction.after === null) {
+    if (binding !== undefined) planConflict();
+    return;
+  }
+  const dependencyBindings = expectedDependencyBindings(
+    priorAction,
+    bindingByKey,
+  );
+  if (priorAction.action === 'create') {
+    assertSettledCreateBinding(
+      priorAction,
+      priorIntent,
+      binding,
+      dependencyBindings,
+    );
+    return;
+  }
+  assertSettledNoncreateBinding(
+    priorAction,
+    priorIntent,
+    binding,
+    dependencyBindings,
+  );
+}
+
 /** @param {Readonly<Record<string, any>>} action @param {number} actionIndex @param {Readonly<Record<string, any>>} intent @param {Readonly<Record<string, any>>} target @param {Readonly<Record<string, any>>|undefined} binding @param {Map<string, Readonly<Record<string, any>>>} targetByKey @param {Map<string, Readonly<Record<string, any>>>} bindingByKey @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} head @returns {void} */
 function assertIntendedActionAuthority(
   action,
@@ -565,6 +858,39 @@ export function createAwsSingleNodeResourceObservationAuthority(value) {
     ),
   );
   const binding = bindingByKey.get(target.resourceKey) ?? null;
+  if (plan !== null && head.activeOperation !== null) {
+    const activeReceipt = assertTargetDurableReceipt(
+      target,
+      binding ?? undefined,
+      targetByKey,
+      bindingByKey,
+      plan,
+      head.activeOperation,
+      head,
+      true,
+    );
+    if (settledPlan !== null && head.lastOperation !== null) {
+      assertPredecessorReceipt(
+        target,
+        binding ?? undefined,
+        bindingByKey,
+        activeReceipt,
+        settledPlan,
+        head.lastOperation,
+      );
+    }
+  } else if (settledPlan !== null && head.lastOperation !== null) {
+    assertTargetDurableReceipt(
+      target,
+      binding ?? undefined,
+      targetByKey,
+      bindingByKey,
+      settledPlan,
+      head.lastOperation,
+      head,
+      false,
+    );
+  }
 
   let currentAction = null;
   if (plan !== null && head.activeOperation !== null) {

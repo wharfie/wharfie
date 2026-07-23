@@ -84,11 +84,12 @@ function expectDeepFrozen(value) {
 }
 
 /**
- * @param {{accountId?: string, incarnationByte?: number}} [options]
+ * @param {{accountId?: string, incarnationByte?: number, revision?: number}} [options]
  * @returns {Readonly<AnyRecord>}
  */
 function makeBase(options = {}) {
   const accountId = options.accountId ?? '123456789012';
+  const revision = options.revision ?? 1;
   const profile = createDeploymentProfile({
     profile: { id: 'production' },
     appId: 'volume-resource-observer-test',
@@ -109,11 +110,11 @@ function makeBase(options = {}) {
     revisionId: semanticId(
       'wrv1',
       'wharfie:test:volume-resource-observer-revision:v1',
-      { appId: profile.appId },
+      { appId: profile.appId, revision },
     ),
     artifactId: createSha256Id({
       prefix: 'waf1',
-      payload: 'volume resource observer artifact',
+      payload: `volume resource observer artifact ${revision}`,
     }),
     profileRevisionId: profile.profileRevisionId,
   };
@@ -505,11 +506,12 @@ function makeSettledVolumeState(base, settledStateDigest) {
  */
 function makeHistoricalBoundFixture(options = {}) {
   const status = options.status ?? 'ready';
-  const base = makeBase();
+  const settledBase = makeBase({ revision: 1 });
+  const base = status === 'ready' ? makeBase({ revision: 2 }) : settledBase;
   const settledStateDigest = digest(
     `durable settled volume state for ${status}`,
   );
-  const settled = makeSettledVolumeState(base, settledStateDigest);
+  const settled = makeSettledVolumeState(settledBase, settledStateDigest);
   /** @type {Readonly<AnyRecord>|null} */
   let plan = null;
   let head = settled.head;
@@ -687,19 +689,10 @@ function replacePartialCreateBinding(fixture, replacementBinding) {
     makeTargets(fixture.base, head),
     fixture.resourceKey,
   );
-  const authority = createAwsSingleNodeResourceObservationAuthority({
-    operation: 'apply',
-    deploymentRevision: fixture.base.deploymentRevision,
-    profile: fixture.base.profile,
-    providerScope: fixture.base.providerScope,
-    providerSpec: fixture.base.providerSpec,
-    deploymentInstanceId: fixture.base.deploymentInstanceId,
-    incarnationId: fixture.base.incarnationId,
-    head,
-    plan: fixture.plan,
-    settledPlan: null,
-    target,
-  });
+  const authority = /** @type {AnyRecord} */ (clone(fixture.authority));
+  authority.head = head;
+  authority.target = target;
+  authority.binding = replacementBinding;
   return Object.freeze({
     ...fixture,
     head,

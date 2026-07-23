@@ -1,7 +1,19 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
-import { sortCanonicalJsonValue } from './canonical-order.js';
-import { sha256Base64Url } from './content-id.js';
+import {
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_BASE_TAGS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ID_PATTERN,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_TAGS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_STATE_DIGEST_DOMAIN,
+  createAwsSingleNodeInternetGatewayStateDigest,
+  decodeAwsSingleNodeExactInternetGatewayResponse,
+  decodeAwsSingleNodeInternetGatewayDiscoveryPage,
+  decodeAwsSingleNodeInternetGatewayIntrinsicEvidence,
+} from './deployment-aws-internet-gateway-evidence.js';
 import {
   validateAwsSingleNodeProviderSpec,
   validateAwsSingleNodeProviderSpecContext,
@@ -21,12 +33,13 @@ import {
   createAwsTaggedEc2RecoveryKernel,
 } from './deployment-aws-tagged-ec2-recovery.js';
 
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS = 100;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-internet-gateway-state:v1';
+export {
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_STATE_DIGEST_DOMAIN,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -50,7 +63,6 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
   'describeInternetGateways',
   'deleteInternetGateway',
 ]);
-const INTERNET_GATEWAY_ID_PATTERN = /^igw-[0-9a-f]{8,32}$/;
 const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
 const INTERNET_GATEWAY_ATTACHMENT_STATES = new Set([
   'available',
@@ -59,15 +71,6 @@ const INTERNET_GATEWAY_ATTACHMENT_STATES = new Set([
   'detaching',
   'detached',
 ]);
-const MAX_INTERNET_GATEWAY_TAGS = 50;
-
-const BASE_RESERVED_TAGS = Object.freeze({
-  'wharfie:managed-by': 'wharfie',
-  'wharfie:resource-kind': 'single-node-internet-gateway',
-  'wharfie:retention': 'purge',
-  'wharfie:schema-version': '2',
-});
-
 /** Exact controller authority or present provider evidence is contradictory. */
 export class AwsSingleNodeInternetGatewayResourceConflictError extends Error {
   constructor() {
@@ -165,19 +168,7 @@ export function getAwsSingleNodeInternetGatewayStateDigest(value) {
     value,
     'awsSingleNodeInternetGatewayState providerSpec',
   );
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEc2InternetGatewayState',
-    onDestroy: 'purge',
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_INTERNET_GATEWAY_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
-  });
+  return createAwsSingleNodeInternetGatewayStateDigest();
 }
 
 /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {Readonly<import('@aws-sdk/client-ec2').CreateInternetGatewayCommandInput>} */
@@ -203,7 +194,9 @@ function bindingMatchesAuthority(
   return (
     binding.management === 'managed' &&
     binding.providerType === 'ec2-internet-gateway' &&
-    INTERNET_GATEWAY_ID_PATTERN.test(binding.providerResourceId) &&
+    AWS_SINGLE_NODE_INTERNET_GATEWAY_ID_PATTERN.test(
+      binding.providerResourceId,
+    ) &&
     binding.deploymentInstanceId === plan.deploymentInstanceId &&
     binding.resourceKey === 'network-internet-gateway' &&
     binding.providerScopeId === providerScope.providerScopeId &&
@@ -390,66 +383,9 @@ function candidateInternetGatewayId(value) {
   }
   const internetGatewayId = value.InternetGateway.InternetGatewayId;
   return typeof internetGatewayId === 'string' &&
-    INTERNET_GATEWAY_ID_PATTERN.test(internetGatewayId)
+    AWS_SINGLE_NODE_INTERNET_GATEWAY_ID_PATTERN.test(internetGatewayId)
     ? internetGatewayId
     : null;
-}
-
-/** @param {unknown} response @param {string} exactInternetGatewayId @returns {Readonly<Record<string, any>>} */
-function oneInternetGatewayFromResponse(response, exactInternetGatewayId) {
-  if (!isPlainObject(response) || !Array.isArray(response.InternetGateways)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new InternetGatewayEvidenceConflictError();
-  }
-  if (response.InternetGateways.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.InternetGateways.length !== 1) {
-    throw new InternetGatewayEvidenceConflictError();
-  }
-  const internetGateway = response.InternetGateways[0];
-  if (
-    !isPlainObject(internetGateway) ||
-    typeof internetGateway.InternetGatewayId !== 'string' ||
-    !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (internetGateway.InternetGatewayId !== exactInternetGatewayId) {
-    throw new InternetGatewayEvidenceConflictError();
-  }
-  return internetGateway;
-}
-
-/** @param {unknown} response @returns {{internetGateways: Readonly<Record<string, any>>[], nextToken: string|null}} */
-function discoveryPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.InternetGateways)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  const internetGateways = [];
-  for (const internetGateway of response.InternetGateways) {
-    if (
-      !isPlainObject(internetGateway) ||
-      typeof internetGateway.InternetGatewayId !== 'string' ||
-      !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    internetGateways.push(internetGateway);
-  }
-  return { internetGateways, nextToken };
 }
 
 /** @param {Readonly<Record<string, any>>} internetGateway @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
@@ -458,16 +394,10 @@ function validateInternetGatewayOwnershipEvidence(
   authority,
   recovery,
 ) {
-  if (
-    typeof internetGateway.InternetGatewayId !== 'string' ||
-    !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId) ||
-    typeof internetGateway.OwnerId !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (internetGateway.OwnerId !== authority.plan.providerScope.accountId) {
-    throw new InternetGatewayEvidenceConflictError();
-  }
+  decodeAwsSingleNodeInternetGatewayIntrinsicEvidence(
+    internetGateway,
+    authority.plan.providerScope.accountId,
+  );
   recovery.validateTags(
     internetGateway.Tags,
     recovery.requiredTags(authority),
@@ -569,7 +499,10 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
       if (errorNamed(error, 'InvalidInternetGatewayID.NotFound')) return null;
       throw new ProviderResponseUnknownError();
     }
-    return oneInternetGatewayFromResponse(response, internetGatewayId);
+    return decodeAwsSingleNodeExactInternetGatewayResponse(
+      response,
+      internetGatewayId,
+    );
   }
 
   /** @param {Readonly<Record<string, any>>} request @returns {Promise<{records: Readonly<Record<string, any>>[], nextToken: string|null}>} */
@@ -580,20 +513,16 @@ export function createAwsSingleNodeInternetGatewayResource(options) {
     } catch {
       throw new ProviderResponseUnknownError();
     }
-    const observed = discoveryPage(response);
-    return {
-      records: observed.internetGateways,
-      nextToken: observed.nextToken,
-    };
+    return decodeAwsSingleNodeInternetGatewayDiscoveryPage(response);
   }
 
   const recovery = createAwsTaggedEc2RecoveryKernel({
-    baseTags: BASE_RESERVED_TAGS,
+    baseTags: AWS_SINGLE_NODE_INTERNET_GATEWAY_BASE_TAGS,
     discoveryMaxResults: AWS_SINGLE_NODE_INTERNET_GATEWAY_DISCOVERY_MAX_RESULTS,
     idKey: 'InternetGatewayId',
-    idPattern: INTERNET_GATEWAY_ID_PATTERN,
+    idPattern: AWS_SINGLE_NODE_INTERNET_GATEWAY_ID_PATTERN,
     maxDiscoveryPages: AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_DISCOVERY_PAGES,
-    maxTags: MAX_INTERNET_GATEWAY_TAGS,
+    maxTags: AWS_SINGLE_NODE_INTERNET_GATEWAY_MAX_TAGS,
     readDiscoveryPage,
     readExact: describeExactOnce,
   });

@@ -1631,6 +1631,47 @@ settlement retains its stricter blocked/not-converged mapping; sharing evidence
 does not give the observer an execute or settlement port. Aggregate
 InspectionV5 and controller consumption of replay advice remain later work.
 
+The thirty-second slice begins the directly owned tagged-EC2 observers with the
+VPC and standalone internet gateway. A new stateless evidence kernel owns the
+fixed locator and receipt tags, canonical discovery filters, collision-only
+tag proof, bounded plural discovery, and exact-ID corroboration. The existing
+recovery kernel delegates those operations while retaining only its
+mutation-shaped authority adapter, non-idempotent create-attempt fence, and
+ephemeral response candidates. The observer cannot reach any of that mutable
+state.
+
+Each observer re-creates the target-local observation authority, compares its
+derived binding and current action, and accepts only its exact managed, direct,
+purge role and constructor scope. A bound VPC or gateway is read only by its
+durable ID; typed NotFound and successful empty exact responses remain unknown,
+and locator discovery can never select a replacement. Creation-era receipt
+tags come from durable plan history rather than prospective desired state.
+
+The VPC observer additionally performs the two exact DNS attribute reads after
+identity and ownership proof. Its normalized actual-state digest includes
+primary IPv4 CIDR, tenancy, default status, IPv6 presence, DNS support and
+hostnames, internet-gateway block mode, and purge lifecycle. Supported
+differences remain verified drift. Physical contradictions and propagation
+remain unknown; only provider identity/account or immutable reserved-tag
+contradictions become ownership conflict. Internet-gateway attachment state is
+excluded because the graph owns it as a separate derived relationship; the
+gateway mutation delete path retains its stricter detached-state fence.
+
+Unbound no-action reads are collision detection only and require an entirely
+clean empty history before declaring absence. Current-create reads require the
+complete current receipt before returning verified presence but never emit
+replay advice. EC2's reads are eventually consistent and neither `CreateVpc`
+nor `CreateInternetGateway` accepts a client token, so a clean empty read cannot
+make response-loss replay safe. Route-table creation has a separate stable
+client-token proof and remains a later observer.
+
+This slice also closes a durable-receipt hole in the shared observation
+authority. A settled create, update, or no-op must still have the exact
+resource binding implied by its action and intent; a settled delete must have
+removed it. Pending creates remain unbound, while pending non-create actions
+must retain their binding. These checks cover both active and last-settled
+plans and run before any observer can call its provider port.
+
 Source and packaged deployment commands, shared authoritative resource
 driver adapters, aggregate inspection, owned provider and controller
 composition, guest storage/service projection, privileged publisher wiring,

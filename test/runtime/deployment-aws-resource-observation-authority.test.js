@@ -1166,7 +1166,7 @@ describe('AWS single-node resource observation authority', () => {
     }
   });
 
-  it('derives the exact durable binding for every target and null for an unbound target', () => {
+  it('derives the exact durable binding for every target', () => {
     const base = makeBase();
     const ready = makeReadyState(base);
     const head = ready.head;
@@ -1181,29 +1181,227 @@ describe('AWS single-node resource observation authority', () => {
       expect(authority.binding).toEqual(bindingByKey.get(target.resourceKey));
       expect(authority.binding).not.toBe(bindingByKey.get(target.resourceKey));
     }
+  });
 
-    const omitted = 'control-state-attachment';
-    const partialBindings = ready.bindings.filter(
-      (binding) => binding.resourceKey !== omitted,
+  it('rejects a settled create whose durable resource binding is missing', () => {
+    const base = makeBase();
+    const plan = makeCreatePlan(base);
+    const settledAction = plan.actions[0];
+    const settledHead = makeActiveCreateHead(base, plan, { frontier: 1 });
+    const missingBindingHead = makeActiveCreateHead(base, plan, {
+      frontier: 1,
+      resourceBindings: settledHead.resourceBindings.filter(
+        (/** @type {Readonly<AnyRecord>} */ binding) =>
+          binding.resourceKey !== settledAction.resourceKey,
+      ),
+    });
+    const target = targetFor(
+      makeTargets(base, missingBindingHead),
+      settledAction.resourceKey,
     );
-    const partialHead = makeReadyHead(
+    expect(missingBindingHead.activeOperation.intents[0].status).toBe(
+      'settled',
+    );
+
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'apply', missingBindingHead, plan, target),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
+  });
+
+  it('rejects a settled reconcile noop whose durable resource binding is missing', () => {
+    const base = makeBase();
+    const created = makeReadyState(base);
+    const reconcilePlan = makeReconcilePlan(base, created.head);
+    const reconcileIntents = makePlanIntents(reconcilePlan, created.head).map(
+      (intent) => ({ ...intent, status: 'settled' }),
+    );
+    const settledAction = reconcilePlan.actions.at(-1);
+    if (settledAction === undefined) {
+      throw new Error('Expected one settled reconcile action.');
+    }
+    expect(settledAction.action).toBe('noop');
+    const missingBindingHead = makeReadyHead(
+      base,
+      reconcilePlan,
+      created.bindings.filter(
+        (binding) => binding.resourceKey !== settledAction.resourceKey,
+      ),
+      reconcileIntents,
+      { operationKind: 'reconcile' },
+    );
+    const target = targetFor(
+      makeTargets(base, missingBindingHead),
+      settledAction.resourceKey,
+    );
+    expect(missingBindingHead.lastOperation.intents.at(-1).status).toBe(
+      'settled',
+    );
+
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'reconcile', missingBindingHead, null, target, {
+          settledPlan: reconcilePlan,
+        }),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
+  });
+
+  it('rejects an active create that launders an omitted predecessor settled binding', () => {
+    const base = makeBase();
+    const ready = makeReadyState(base);
+    const omittedResourceKey = 'control-state-attachment';
+    const omittedReadyHead = makeReadyHead(
       base,
       ready.plan,
-      partialBindings,
+      ready.bindings.filter(
+        (binding) => binding.resourceKey !== omittedResourceKey,
+      ),
       ready.intents,
     );
-    const unbound = createAwsSingleNodeResourceObservationAuthority(
-      authorityInput(
-        base,
-        'apply',
-        partialHead,
-        null,
-        targetFor(makeTargets(base, partialHead), omitted),
-        { settledPlan: ready.plan },
-      ),
+    const bindingByKey = bindingsByKey(omittedReadyHead);
+    const targets = makeTargets(base, omittedReadyHead);
+    const repairPlan = createDeploymentPlan(
+      {
+        operation: 'reconcile',
+        deploymentRevision: base.deploymentRevision,
+        providerScope: base.providerScope,
+        providerSpec: base.providerSpec,
+        deploymentInstanceId: base.deploymentInstanceId,
+        incarnationId: base.incarnationId,
+        basis: {
+          headGeneration: omittedReadyHead.generation,
+          settledDeploymentRevisionId:
+            omittedReadyHead.settledDeploymentRevisionId,
+          inspectionId: activeInspectionId(
+            'reconcile-laundered-create',
+            base,
+            omittedReadyHead,
+          ),
+        },
+        actions: targets.map((target) => {
+          const binding = bindingByKey.get(target.resourceKey);
+          if (binding === undefined) {
+            if (target.resourceKey !== omittedResourceKey) {
+              throw new Error(
+                `Unexpected omitted repair binding '${target.resourceKey}'.`,
+              );
+            }
+            return {
+              resourceKey: target.resourceKey,
+              capability: target.capability,
+              role: target.role,
+              management: target.management,
+              ownershipMode: target.ownershipMode,
+              dependsOn: target.dependsOn,
+              onDestroy: target.onDestroy,
+              action: 'create',
+              destructive: false,
+              reason: 'missing',
+              before: null,
+              after: target.target,
+            };
+          }
+          const state = boundState(target, binding);
+          return {
+            resourceKey: target.resourceKey,
+            capability: target.capability,
+            role: target.role,
+            management: target.management,
+            ownershipMode: target.ownershipMode,
+            dependsOn: target.dependsOn,
+            onDestroy: target.onDestroy,
+            action: 'noop',
+            destructive: false,
+            reason: 'already-converged',
+            before: state,
+            after: state,
+          };
+        }),
+      },
+      { profile: base.profile },
     );
-    expect(unbound.binding).toBeNull();
+    const actionIndex = repairPlan.actions.findIndex(
+      (/** @type {Readonly<AnyRecord>} */ action) =>
+        action.resourceKey === omittedResourceKey,
+    );
+    const activeHead = makeActiveResidentHead(
+      base,
+      repairPlan,
+      omittedReadyHead,
+      'reconcile',
+      { frontier: actionIndex, currentStatus: 'intended' },
+    );
+    const target = targetFor(makeTargets(base, activeHead), omittedResourceKey);
+
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'reconcile', activeHead, repairPlan, target, {
+          settledPlan: ready.plan,
+        }),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
   });
+
+  it.each([
+    ['noop', 'control-state-attachment'],
+    ['update', 'artifact'],
+  ])(
+    'rejects an active %s whose binding rewrites the predecessor create receipt',
+    (actionKind, resourceKey) => {
+      const settled = makeBase({ revision: 1 });
+      const desired =
+        actionKind === 'update' ? makeBase({ revision: 2 }) : settled;
+      const ready = makeReadyState(settled);
+      const forgedCreatedByActionId = semanticId(
+        'wda3',
+        'wharfie:test:resource-observation-authority-rewritten-create-receipt:v1',
+        { actionKind, resourceKey },
+      );
+      const forgedBindings = makeBindings(settled, {
+        plan: ready.plan,
+        intents: ready.intents,
+        createdByActionIds: new Map([[resourceKey, forgedCreatedByActionId]]),
+      });
+      const forgedReadyHead = makeReadyHead(
+        settled,
+        ready.plan,
+        forgedBindings,
+        ready.intents,
+      );
+      const activePlan =
+        actionKind === 'update'
+          ? makeUpdatePlan(settled, desired, forgedReadyHead)
+          : makeReconcilePlan(settled, forgedReadyHead);
+      const actionIndex = activePlan.actions.findIndex(
+        (/** @type {Readonly<AnyRecord>} */ action) =>
+          action.resourceKey === resourceKey,
+      );
+      expect(activePlan.actions[actionIndex].action).toBe(actionKind);
+      const activeHead = makeActiveResidentHead(
+        desired,
+        activePlan,
+        forgedReadyHead,
+        actionKind === 'update' ? 'update' : 'reconcile',
+        { frontier: actionIndex, currentStatus: 'intended' },
+      );
+      const target = targetFor(makeTargets(desired, activeHead), resourceKey);
+
+      expect(() =>
+        createAwsSingleNodeResourceObservationAuthority(
+          authorityInput(
+            desired,
+            actionKind === 'update' ? 'apply' : 'reconcile',
+            activeHead,
+            activePlan,
+            target,
+            { settledPlan: ready.plan },
+          ),
+        ),
+      ).toThrow(/plan does not match the exact active operation/i);
+    },
+  );
 
   it('derives one exact target-local intended action and ownership nonce', () => {
     const base = makeBase();
@@ -1397,6 +1595,51 @@ describe('AWS single-node resource observation authority', () => {
     ).toThrow(/plan does not match the exact active operation/i);
   });
 
+  it('rejects a current pending create whose prior settled dependency binding is missing', () => {
+    const base = makeBase();
+    const plan = makeCreatePlan(base);
+    const actionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<AnyRecord>} */ action) =>
+        action.dependsOn.length > 0,
+    );
+    expect(actionIndex).toBeGreaterThan(0);
+    const action = plan.actions[actionIndex];
+    const pendingHead = makeActiveCreateHead(base, plan, {
+      frontier: actionIndex,
+      currentStatus: 'pending',
+    });
+    const missingDependencyKey = action.dependsOn[0];
+    const missingDependencyHead = makeActiveCreateHead(base, plan, {
+      frontier: actionIndex,
+      currentStatus: 'pending',
+      resourceBindings: pendingHead.resourceBindings.filter(
+        (/** @type {Readonly<AnyRecord>} */ binding) =>
+          binding.resourceKey !== missingDependencyKey,
+      ),
+    });
+    const target = targetFor(
+      makeTargets(base, missingDependencyHead),
+      action.resourceKey,
+    );
+    expect(
+      missingDependencyHead.activeOperation.intents[actionIndex].status,
+    ).toBe('pending');
+    expect(
+      missingDependencyHead.activeOperation.intents[
+        plan.actions.findIndex(
+          (/** @type {Readonly<AnyRecord>} */ candidate) =>
+            candidate.resourceKey === missingDependencyKey,
+        )
+      ].status,
+    ).toBe('settled');
+
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'apply', missingDependencyHead, plan, target),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
+  });
+
   it('derives exact target-local intended actions for active reconcile, update, and destroy operation kinds', () => {
     const resident = makeBase({ revision: 1 });
     const ready = makeReadyState(resident);
@@ -1586,6 +1829,69 @@ describe('AWS single-node resource observation authority', () => {
           forgedDestroyTarget,
           { settledPlan: ready.plan },
         ),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
+  });
+
+  it.each([
+    ['null', null],
+    ['wrong', nonce(250)],
+  ])(
+    'rejects a settled managed delete with a %s predecessor ownership nonce',
+    (_case, forgedOwnershipNonce) => {
+      const base = makeBase();
+      const ready = makeReadyState(base);
+      const destroyPlan = makeDestroyPlan(base, ready.head);
+      const deletedAction = destroyPlan.actions[0];
+      expect(deletedAction.action).toBe('delete');
+      const forgedHead = makeActiveResidentHead(
+        base,
+        destroyPlan,
+        ready.head,
+        'destroy',
+        {
+          frontier: 1,
+          ownershipNonces: new Map([[0, forgedOwnershipNonce]]),
+        },
+      );
+      const target = targetFor(
+        makeTargets(base, forgedHead),
+        deletedAction.resourceKey,
+      );
+      expect(forgedHead.activeOperation.intents[0]).toMatchObject({
+        actionId: deletedAction.actionId,
+        status: 'settled',
+        ownershipNonce: forgedOwnershipNonce,
+      });
+
+      expect(() =>
+        createAwsSingleNodeResourceObservationAuthority(
+          authorityInput(base, 'destroy', forgedHead, destroyPlan, target, {
+            settledPlan: ready.plan,
+          }),
+        ),
+      ).toThrow(/plan does not match the exact active operation/i);
+    },
+  );
+
+  it('rejects a pending managed create without a preallocated ownership nonce', () => {
+    const base = makeBase();
+    const plan = makeCreatePlan(base);
+    const head = makeActiveCreateHead(base, plan, {
+      currentStatus: 'pending',
+      ownershipNonces: new Map([[0, null]]),
+    });
+    const action = plan.actions[0];
+    const target = targetFor(makeTargets(base, head), action.resourceKey);
+    expect(head.activeOperation.intents[0]).toMatchObject({
+      actionId: action.actionId,
+      status: 'pending',
+      ownershipNonce: null,
+    });
+
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'apply', head, plan, target),
       ),
     ).toThrow(/plan does not match the exact active operation/i);
   });

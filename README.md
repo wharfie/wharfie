@@ -370,6 +370,20 @@ unknown but may carry replay-safe advice for the exact stable EC2 client token.
 The observer and mutation driver share strict EBS evidence decoders without
 sharing mutation authority.
 
+The next two observers cover the directly owned VPC and standalone internet
+gateway. Their mutation drivers now delegate stateless tags, bounded discovery,
+exact reads, and strict resource decoders to a shared tagged-EC2 evidence
+layer, while create-attempt fencing and response candidate memory remain
+mutation-only. Bound observation is exact-ID-only and never searches for a
+replacement. The VPC digest is derived from actual CIDR, tenancy, default,
+IPv6, DNS, and block-mode state; readable differences remain verified drift.
+Unbound no-action absence still requires an entirely clean empty history.
+Neither current-create observer emits replay advice because neither EC2 create
+API accepts a client token. The shared observation authority now also requires
+each settled create, update, or no-op receipt to retain its exact durable
+binding, while a settled delete must be unbound, before any observer can reach
+provider I/O.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -392,7 +406,8 @@ after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Retained-volume observer checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md) — the current handoff for the first strict provider reader, actual EBS drift, creation-era ownership, and truth-preserving idempotent replay advice.
+- [Tagged-EC2 VPC and internet-gateway observer checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md) — the current handoff for stateless tagged identity evidence, exact bound reads, actual VPC drift, and conservative no-token response-loss semantics.
+- [Retained-volume observer checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md) — the parent handoff for the first strict provider reader, actual EBS drift, creation-era ownership, and truth-preserving idempotent replay advice.
 - [AWS resource-observation authority checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md) — the parent handoff for exact target, binding, active-plan, and CAS-claimed current-action read authority.
 - [AWS resource-observation boundary checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md) — the parent handoff for strict raw evidence normalization and mutation-incapable routing across all 18 graph roles.
 - [Deterministic AWS deployment planning checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md) — the parent handoff for exact controller-compatible 18-action planning, no-adoption reconciliation, and reverse destroy derivation.

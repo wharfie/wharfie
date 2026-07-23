@@ -101,19 +101,29 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [retained-volume observer
-checkpoint](../llm/checkpoints/2026-07-23-v49-retained-volume-observer.md).
-Both retained EBS volume roles now have one exact read-only observer backed by
-the mutation driver's shared tag, response, lifecycle, and state-digest
-decoders. It revalidates V48 authority and factory scope before I/O, reads a
-binding only by exact ID, refuses unbound adoption, derives drift from actual
-provider configuration, and proves the immutable state-digest tag from durable
-creation-era plan history. Bound NotFound remains unknown. An entirely clean
-bounded empty current-create discovery remains unknown too, but may separately
-carry `replay-safe-create` after exact action-ID and nonce validation; any
-earlier uncertainty removes that advice.
+The current restart handoff is the [tagged-EC2 VPC and internet-gateway
+observer
+checkpoint](../llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md).
+A stateless tagged-EC2 evidence layer now supplies exact tags, bounded locator
+discovery, exact reads, and collision proof without admitting mutation state.
+The VPC and standalone gateway observers revalidate V48 authority before I/O,
+read durable bindings only by exact ID, refuse unbound adoption, and never
+offer replay advice for their non-idempotent create APIs. The VPC hashes actual
+CIDR, tenancy, default, IPv6, DNS, and block-mode state so readable drift stays
+distinct from ownership conflict. Bound NotFound remains unknown, while
+unbound no-action absence requires an entirely clean empty history.
+Observation authority also rejects settled create, update, or no-op receipts
+whose durable binding disappeared, and rejects settled deletes that remain
+bound, before either observer can perform provider I/O.
 
-Its parent is the [AWS resource-observation authority
+Its parent is the [retained-volume observer
+checkpoint](../llm/checkpoints/2026-07-23-v49-retained-volume-observer.md).
+Both retained EBS volume roles share their strict evidence decoders with one
+read-only observer. A completely clean current-create scan may separately
+carry `replay-safe-create` only because the exact action and nonce reproduce an
+idempotent `CreateVolume` client token.
+
+That checkpoint's parent is the [AWS resource-observation authority
 checkpoint](../llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md).
 One pure exact eleven-field constructor now validates a desired deployment
 tuple, non-null durable head, nullable active and last-settled plans, and one
