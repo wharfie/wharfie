@@ -101,8 +101,18 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [tagged-EC2 VPC and internet-gateway
-observer
+The current restart handoff is the [subnet and security-group observer
+checkpoint](../llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md).
+Those two directly owned resources add dependency-bound natural-slot
+corroboration to the shared read-only evidence model. Current-create presence
+requires stable locator, VPC-local natural slot, and independent exact-ID
+agreement. Durable bindings are still read only by exact ID, physical drift is
+hashed from actual state, and unbound candidates remain collisions rather than
+adoptions. An early create history without its VPC binding cannot prove
+natural-slot absence. Neither create API accepts a client token, so neither
+observer emits replay advice.
+
+Its parent is the [tagged-EC2 VPC and internet-gateway observer
 checkpoint](../llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md).
 A stateless tagged-EC2 evidence layer now supplies exact tags, bounded locator
 discovery, exact reads, and collision proof without admitting mutation state.
@@ -116,7 +126,7 @@ Observation authority also rejects settled create, update, or no-op receipts
 whose durable binding disappeared, and rejects settled deletes that remain
 bound, before either observer can perform provider I/O.
 
-Its parent is the [retained-volume observer
+That checkpoint's parent is the [retained-volume observer
 checkpoint](../llm/checkpoints/2026-07-23-v49-retained-volume-observer.md).
 Both retained EBS volume roles share their strict evidence decoders with one
 read-only observer. A completely clean current-create scan may separately

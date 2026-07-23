@@ -56,10 +56,13 @@ health evidence and routes all 18 roles through 16 mutation-incapable observer
 families. A pure eleven-field authority boundary now recreates the desired
 catalog, pins resident provider choices through the exact last-settled plan,
 and derives the exact durable binding plus only a controller-reachable,
-CAS-claimed current action, while pending frontiers remain read-only. Driver
-read-kernel adapters, aggregate inspection, owned provider composition,
-commands, guest storage/service projection, and clean-account proof follow ·
-**Last updated:** 2026-07-22
+CAS-claimed current action, while pending frontiers remain read-only.
+Read-only provider adapters now cover both retained volumes and the directly
+owned VPC, internet gateway, subnet, and application security group. The latter
+two add dependency-bound natural-slot corroboration without claiming
+non-idempotent create replay. Remaining driver read-kernel adapters, aggregate
+inspection, owned provider composition, commands, guest storage/service
+projection, and clean-account proof follow · **Last updated:** 2026-07-23
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -860,6 +863,17 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       token. Observation authority now also closes the response-receipt gap:
       every settled non-delete action must retain its exact durable binding,
       while a settled delete must be unbound, before provider I/O.
+- [x] Adapt the directly owned subnet and application security group to the
+      shared read-only boundary. Their mutation drivers and observers share
+      strict response, natural-slot, identity, and actual-state evidence while
+      mutation-only attempt fences and response candidates remain private.
+      Bound reads use only durable IDs. Current-create presence requires stable
+      locator, VPC-local natural slot, and exact-ID agreement; unbound
+      candidates are collisions and never adoptions. Early create histories
+      without a settled VPC cannot prove natural-slot absence. Readable subnet
+      and permission drift remains verified through actual digests. Neither
+      observer emits replay advice because neither create API accepts a client
+      token.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -1016,14 +1030,14 @@ while separately carrying either no execution advice or one exact
 `replay-safe-create` recommendation. That recommendation never turns an empty
 eventually consistent read into an absence claim and is accepted only for a
 canonical action ID and nonce on the routed managed/direct current create. The
-retained-volume, VPC, and internet-gateway drivers now share their exact
-evidence decoders with read-only observer ports. A stateless tagged-EC2 layer
-separates tags and bounded identity reads from mutation-only response recovery.
-The remaining 13 implementation families stay private. One pure authority
-constructor revalidates the exact desired tuple, active plan, and last-settled
-provider lineage, recreates the V45 catalog, derives the target's durable
-binding, and exposes only a controller-reachable CAS-claimed intended action.
-It never turns a pending frontier into action authority.
+retained-volume, VPC, internet-gateway, subnet, and security-group drivers now
+share their exact evidence decoders with read-only observer ports. A stateless
+tagged-EC2 layer separates tags and bounded identity reads from mutation-only
+response recovery. The remaining 11 implementation families stay private. One
+pure authority constructor revalidates the exact desired tuple, active plan,
+and last-settled provider lineage, recreates the V45 catalog, derives the
+target's durable binding, and exposes only a controller-reachable CAS-claimed
+intended action. It never turns a pending frontier into action authority.
 
 1. Adapt the drivers' authoritative read kernels to the shared observation
    boundary without duplicating their AWS decoders, then build aggregate
@@ -1041,9 +1055,11 @@ It never turns a pending frontier into action authority.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [tagged-EC2 VPC and internet-gateway observer
-checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md).
-Its parent is the [retained-volume observer
+The current restart point is the [subnet and security-group observer
+checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md).
+Its parent is the [tagged-EC2 VPC and internet-gateway observer
+checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md),
+whose parent is the [retained-volume observer
 checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md), whose
 parent is the [AWS resource-observation authority
 checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md),

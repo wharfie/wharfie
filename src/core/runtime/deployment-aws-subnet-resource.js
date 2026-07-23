@@ -1,11 +1,24 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
-import { sortCanonicalJsonValue } from './canonical-order.js';
-import { sha256Base64Url } from './content-id.js';
+import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import {
-  validateAwsSingleNodeProviderSpec,
-  validateAwsSingleNodeProviderSpecContext,
-} from './deployment-aws-provider-spec.js';
+  AWS_SINGLE_NODE_SUBNET_BASE_TAGS,
+  AWS_SINGLE_NODE_SUBNET_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SUBNET_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_SUBNET_ID_PATTERN,
+  AWS_SINGLE_NODE_SUBNET_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SUBNET_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_SUBNET_MAX_TAGS,
+  AWS_SINGLE_NODE_SUBNET_STATE_DIGEST_DOMAIN,
+  AWS_SINGLE_NODE_SUBNET_VPC_ID_PATTERN,
+  createAwsSingleNodeSubnetNaturalSlot,
+  decodeAwsSingleNodeCreateSubnetCandidateId,
+  decodeAwsSingleNodeExactSubnetResponse,
+  decodeAwsSingleNodeSubnetDiscoveryPage,
+  decodeAwsSingleNodeSubnetIdentity,
+  decodeAwsSingleNodeSubnetRecordState,
+  getAwsSingleNodeSubnetStateDigest,
+} from './deployment-aws-subnet-evidence.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
 import { validateDeploymentProfile } from './deployment-profile.js';
@@ -21,12 +34,14 @@ import {
   createAwsTaggedEc2RecoveryKernel,
 } from './deployment-aws-tagged-ec2-recovery.js';
 
-export const AWS_SINGLE_NODE_SUBNET_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_SUBNET_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_SUBNET_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_SUBNET_DISCOVERY_MAX_RESULTS = 100;
-export const AWS_SINGLE_NODE_SUBNET_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-subnet-state:v1';
+export {
+  AWS_SINGLE_NODE_SUBNET_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SUBNET_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_SUBNET_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SUBNET_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_SUBNET_STATE_DIGEST_DOMAIN,
+  getAwsSingleNodeSubnetStateDigest,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -52,24 +67,6 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
 ]);
 const RESOURCE_KEY = 'network-subnet';
 const PROVIDER_TYPE = 'ec2-subnet';
-const SUBNET_ID_PATTERN = /^subnet-[0-9a-f]{8,32}$/;
-const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
-const SUBNET_CIDR_ASSOCIATION_ID_PATTERN = /^subnet-cidr-assoc-[0-9a-f]{8,32}$/;
-const SUBNET_STATES = new Set([
-  'pending',
-  'available',
-  'unavailable',
-  'failed',
-  'failed-insufficient-capacity',
-]);
-const MAX_SUBNET_TAGS = 50;
-
-const BASE_RESERVED_TAGS = Object.freeze({
-  'wharfie:managed-by': 'wharfie',
-  'wharfie:resource-kind': 'single-node-subnet',
-  'wharfie:retention': 'purge',
-  'wharfie:schema-version': '2',
-});
 
 const VPC_DEPENDENCY = Object.freeze({
   resourceKey: 'network-vpc',
@@ -183,40 +180,6 @@ async function defaultWaitForRetry(attempt) {
   await new Promise((resolve) => setTimeout(resolve, delay));
 }
 
-/**
- * Derive the exact intrinsic subnet state. The dynamically allocated parent
- * VPC identity belongs to the binding's dependency lineage rather than this
- * plan-time digest.
- * @param {unknown} value - Exact AWS single-node provider specification.
- * @returns {Readonly<{algorithm: 'sha256', value: string}>} - State digest.
- */
-export function getAwsSingleNodeSubnetStateDigest(value) {
-  const providerSpec = validateAwsSingleNodeProviderSpec(
-    value,
-    'awsSingleNodeSubnetState providerSpec',
-  );
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEc2SubnetState',
-    cidrBlock: providerSpec.capabilities.networking.subnetCidr,
-    availabilityZoneId: providerSpec.placement.availabilityZoneId,
-    defaultForAz: false,
-    ipv6Native: false,
-    assignIpv6AddressOnCreation: false,
-    mapPublicIpOnLaunch: false,
-    internetGatewayBlockMode: 'off',
-    onDestroy: 'purge',
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_SUBNET_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
-  });
-}
-
 /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {Readonly<import('@aws-sdk/client-ec2').CreateSubnetCommandInput>} */
 function createSubnetRequest(authority, recovery) {
   return deepFreeze({
@@ -237,7 +200,7 @@ function vpcDependencyBindingMatches(binding, plan, providerScope) {
   return (
     binding.management === 'managed' &&
     binding.providerType === VPC_DEPENDENCY.providerType &&
-    VPC_ID_PATTERN.test(binding.providerResourceId) &&
+    AWS_SINGLE_NODE_SUBNET_VPC_ID_PATTERN.test(binding.providerResourceId) &&
     binding.deploymentInstanceId === plan.deploymentInstanceId &&
     binding.resourceKey === VPC_DEPENDENCY.resourceKey &&
     binding.providerScopeId === providerScope.providerScopeId &&
@@ -337,7 +300,7 @@ function bindingMatchesAuthority(
   return (
     binding.management === 'managed' &&
     binding.providerType === PROVIDER_TYPE &&
-    SUBNET_ID_PATTERN.test(binding.providerResourceId) &&
+    AWS_SINGLE_NODE_SUBNET_ID_PATTERN.test(binding.providerResourceId) &&
     binding.deploymentInstanceId === plan.deploymentInstanceId &&
     binding.resourceKey === RESOURCE_KEY &&
     binding.providerScopeId === providerScope.providerScopeId &&
@@ -523,131 +486,12 @@ function validateActionContext(value, providerScope) {
   });
 }
 
-/** @param {unknown} value @returns {string|null} */
-function candidateSubnetId(value) {
-  if (!isPlainObject(value) || !isPlainObject(value.Subnet)) return null;
-  return typeof value.Subnet.SubnetId === 'string' &&
-    SUBNET_ID_PATTERN.test(value.Subnet.SubnetId)
-    ? value.Subnet.SubnetId
-    : null;
-}
-
-/** @param {unknown} response @param {string} exactSubnetId @returns {Readonly<Record<string, any>>} */
-function oneSubnetFromResponse(response, exactSubnetId) {
-  if (!isPlainObject(response) || !Array.isArray(response.Subnets)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new SubnetEvidenceConflictError();
-  }
-  if (response.Subnets.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.Subnets.length !== 1) {
-    throw new SubnetEvidenceConflictError();
-  }
-  const subnet = response.Subnets[0];
-  if (
-    !isPlainObject(subnet) ||
-    typeof subnet.SubnetId !== 'string' ||
-    !SUBNET_ID_PATTERN.test(subnet.SubnetId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (subnet.SubnetId !== exactSubnetId) {
-    throw new SubnetEvidenceConflictError();
-  }
-  return subnet;
-}
-
-/** @param {unknown} response @returns {{subnets: Readonly<Record<string, any>>[], nextToken: string|null}} */
-function discoveryPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.Subnets)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  const subnets = [];
-  for (const subnet of response.Subnets) {
-    if (
-      !isPlainObject(subnet) ||
-      typeof subnet.SubnetId !== 'string' ||
-      !SUBNET_ID_PATTERN.test(subnet.SubnetId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    subnets.push(subnet);
-  }
-  return { subnets, nextToken };
-}
-
-/** @param {unknown} value @returns {void} */
-function validateIpv6Associations(value) {
-  if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  if (value.length === 0) return;
-  for (const association of value) {
-    if (
-      !isPlainObject(association) ||
-      typeof association.AssociationId !== 'string' ||
-      !SUBNET_CIDR_ASSOCIATION_ID_PATTERN.test(association.AssociationId) ||
-      typeof association.Ipv6CidrBlock !== 'string' ||
-      association.Ipv6CidrBlock.length === 0 ||
-      !isPlainObject(association.Ipv6CidrBlockState) ||
-      typeof association.Ipv6CidrBlockState.State !== 'string' ||
-      (association.Ipv6CidrBlockState.StatusMessage !== undefined &&
-        association.Ipv6CidrBlockState.StatusMessage !== null &&
-        typeof association.Ipv6CidrBlockState.StatusMessage !== 'string')
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  throw new SubnetEvidenceConflictError();
-}
-
-/** @param {unknown} value @returns {void} */
-function validateBlockPublicAccessStates(value) {
-  if (
-    !isPlainObject(value) ||
-    typeof value.InternetGatewayBlockMode !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.InternetGatewayBlockMode === 'off') return;
-  if (
-    value.InternetGatewayBlockMode === 'block-ingress' ||
-    value.InternetGatewayBlockMode === 'block-bidirectional'
-  ) {
-    throw new SubnetEvidenceConflictError();
-  }
-  throw new ProviderResponseUnknownError();
-}
-
 /** @param {Readonly<Record<string, any>>} subnet @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
 function validateSubnetOwnershipEvidence(subnet, authority, recovery) {
+  const identity = decodeAwsSingleNodeSubnetIdentity(subnet);
   if (
-    typeof subnet.SubnetId !== 'string' ||
-    !SUBNET_ID_PATTERN.test(subnet.SubnetId) ||
-    typeof subnet.OwnerId !== 'string' ||
-    typeof subnet.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(subnet.VpcId) ||
-    typeof subnet.State !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (!SUBNET_STATES.has(subnet.State)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    subnet.OwnerId !== authority.plan.providerScope.accountId ||
-    subnet.VpcId !== authority.vpcId
+    identity.ownerId !== authority.plan.providerScope.accountId ||
+    identity.vpcId !== authority.vpcId
   ) {
     throw new SubnetEvidenceConflictError();
   }
@@ -656,10 +500,10 @@ function validateSubnetOwnershipEvidence(subnet, authority, recovery) {
     recovery.requiredTags(authority),
     authority.action.action === 'create',
   );
-  if (subnet.State === 'pending' || subnet.State === 'unavailable') {
+  if (identity.state === 'pending' || identity.state === 'unavailable') {
     throw new SubnetEvidenceTransientError();
   }
-  if (subnet.State !== 'available') {
+  if (identity.state !== 'available') {
     throw new SubnetEvidenceConflictError();
   }
 }
@@ -676,27 +520,18 @@ function validateSubnetDeletionEvidence(subnet, authority, recovery) {
 /** @param {Readonly<Record<string, any>>} subnet @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
 function validateSubnetBaseEvidence(subnet, authority, recovery) {
   validateSubnetOwnershipEvidence(subnet, authority, recovery);
+  const state = decodeAwsSingleNodeSubnetRecordState(subnet);
   if (
-    typeof subnet.CidrBlock !== 'string' ||
-    typeof subnet.AvailabilityZoneId !== 'string' ||
-    typeof subnet.DefaultForAz !== 'boolean' ||
-    typeof subnet.Ipv6Native !== 'boolean' ||
-    typeof subnet.AssignIpv6AddressOnCreation !== 'boolean' ||
-    typeof subnet.MapPublicIpOnLaunch !== 'boolean'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  validateIpv6Associations(subnet.Ipv6CidrBlockAssociationSet);
-  validateBlockPublicAccessStates(subnet.BlockPublicAccessStates);
-  if (
-    subnet.CidrBlock !==
+    state.cidrBlock !==
       authority.providerSpec.capabilities.networking.subnetCidr ||
-    subnet.AvailabilityZoneId !==
+    state.availabilityZoneId !==
       authority.providerSpec.placement.availabilityZoneId ||
-    subnet.DefaultForAz ||
-    subnet.Ipv6Native ||
-    subnet.AssignIpv6AddressOnCreation ||
-    subnet.MapPublicIpOnLaunch
+    state.defaultForAz ||
+    state.ipv6Native ||
+    state.ipv6CidrAssociations.length !== 0 ||
+    state.assignIpv6AddressOnCreation ||
+    state.mapPublicIpOnLaunch ||
+    state.internetGatewayBlockMode !== 'off'
   ) {
     throw new SubnetEvidenceConflictError();
   }
@@ -781,7 +616,7 @@ export function createAwsSingleNodeSubnetResource(options) {
       if (subnetNotFound(error)) return null;
       throw new ProviderResponseUnknownError();
     }
-    return oneSubnetFromResponse(response, subnetId);
+    return decodeAwsSingleNodeExactSubnetResponse(response, subnetId);
   }
 
   /** @param {Readonly<Record<string, any>>} request @returns {Promise<{records: Readonly<Record<string, any>>[], nextToken: string|null}>} */
@@ -792,35 +627,32 @@ export function createAwsSingleNodeSubnetResource(options) {
     } catch {
       throw new ProviderResponseUnknownError();
     }
-    const observed = discoveryPage(response);
-    return { records: observed.subnets, nextToken: observed.nextToken };
+    return decodeAwsSingleNodeSubnetDiscoveryPage(response);
   }
 
   const recovery = createAwsTaggedEc2RecoveryKernel({
-    baseTags: BASE_RESERVED_TAGS,
+    baseTags: AWS_SINGLE_NODE_SUBNET_BASE_TAGS,
     discoveryMaxResults: AWS_SINGLE_NODE_SUBNET_DISCOVERY_MAX_RESULTS,
     idKey: 'SubnetId',
-    idPattern: SUBNET_ID_PATTERN,
+    idPattern: AWS_SINGLE_NODE_SUBNET_ID_PATTERN,
     maxDiscoveryPages: AWS_SINGLE_NODE_SUBNET_MAX_DISCOVERY_PAGES,
-    maxTags: MAX_SUBNET_TAGS,
+    maxTags: AWS_SINGLE_NODE_SUBNET_MAX_TAGS,
     readDiscoveryPage,
     readExact: describeExactOnce,
   });
 
-  /** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Array<{Name: string, Values: string[]}>>} */
-  function naturalSlotFilters(authority) {
-    return deepFreeze([
-      { Name: 'vpc-id', Values: [authority.vpcId] },
-      {
-        Name: 'cidr-block',
-        Values: [authority.providerSpec.capabilities.networking.subnetCidr],
-      },
-    ]);
+  /** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
+  function naturalSlot(authority) {
+    return createAwsSingleNodeSubnetNaturalSlot({
+      vpcId: authority.vpcId,
+      availabilityZoneId: authority.providerSpec.placement.availabilityZoneId,
+      cidrBlock: authority.providerSpec.capabilities.networking.subnetCidr,
+    });
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>|null>} */
   async function discoverNaturalSlotOnce(authority) {
-    const filters = naturalSlotFilters(authority);
+    const slot = naturalSlot(authority);
     const subnets = new Map();
     const seenTokens = new Set();
     let nextToken = null;
@@ -833,7 +665,7 @@ export function createAwsSingleNodeSubnetResource(options) {
       try {
         response = await client.describeSubnets(
           deepFreeze({
-            Filters: filters,
+            Filters: slot.filters,
             MaxResults: AWS_SINGLE_NODE_SUBNET_DISCOVERY_MAX_RESULTS,
             ...(nextToken === null ? {} : { NextToken: nextToken }),
           }),
@@ -841,8 +673,8 @@ export function createAwsSingleNodeSubnetResource(options) {
       } catch {
         throw new ProviderResponseUnknownError();
       }
-      const observed = discoveryPage(response);
-      for (const subnet of observed.subnets) {
+      const observed = decodeAwsSingleNodeSubnetDiscoveryPage(response);
+      for (const subnet of observed.records) {
         if (subnets.has(subnet.SubnetId)) {
           throw new SubnetEvidenceConflictError();
         }
@@ -967,7 +799,7 @@ export function createAwsSingleNodeSubnetResource(options) {
     } catch {
       throw new AwsSingleNodeSubnetResourceUnknownError();
     }
-    const subnetId = candidateSubnetId(response);
+    const subnetId = decodeAwsSingleNodeCreateSubnetCandidateId(response);
     if (subnetId === null) {
       throw new AwsSingleNodeSubnetResourceUnknownError();
     }

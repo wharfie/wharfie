@@ -1672,6 +1672,32 @@ removed it. Pending creates remain unbound, while pending non-create actions
 must retain their binding. These checks cover both active and last-settled
 plans and run before any observer can call its provider port.
 
+The thirty-third slice adds read-only observers for the directly owned subnet
+and application security group. Their mutation drivers and observers share
+strict exact and paginated response decoders, provider identity, natural-slot
+discovery, and actual-state digests without sharing mutation authority. A
+durable binding is read only by exact provider ID. Current-create presence
+requires stable locator, VPC-local natural slot, and independent exact-ID
+evidence to agree on one complete ownership receipt. Unbound candidates are
+collisions and are never adopted.
+
+The subnet natural slot is the exact VPC, IPv4 CIDR, and availability-zone ID.
+The security-group slot is the exact VPC plus a local case-insensitive
+comparison of `wharfie-single-node`; AWS makes group names case-insensitively
+unique within a VPC even though describe-filter values are case-sensitive.
+Readable subnet and permission differences remain verified physical drift with
+actual digests. Provider account, VPC, exact ID, natural slot, ARN, or reserved
+ownership-tag contradictions remain ownership conflicts.
+
+Both roles depend on the exact durable VPC receipt. Early initial-create
+history may legitimately lack that binding. Locator discovery can still expose
+a collision, but the natural view is unavailable and clean emptiness cannot
+prove absence. Neither observer emits replay advice: `CreateSubnet` and
+`CreateSecurityGroup` have no client-token parameter, and natural uniqueness
+does not make a response-lost create idempotent. The route-table observer
+remains separate because `CreateRouteTable` does accept the stable token that
+its mutation driver already derives from action ID and ownership nonce.
+
 Source and packaged deployment commands, shared authoritative resource
 driver adapters, aggregate inspection, owned provider and controller
 composition, guest storage/service projection, privileged publisher wiring,

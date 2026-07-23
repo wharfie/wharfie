@@ -1,11 +1,25 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
-import { sortCanonicalJsonValue } from './canonical-order.js';
-import { sha256Base64Url } from './content-id.js';
+import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import {
-  validateAwsSingleNodeProviderSpec,
-  validateAwsSingleNodeProviderSpecContext,
-} from './deployment-aws-provider-spec.js';
+  AWS_SINGLE_NODE_SECURITY_GROUP_BASE_TAGS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_DESCRIPTION,
+  AWS_SINGLE_NODE_SECURITY_GROUP_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_ID_PATTERN,
+  AWS_SINGLE_NODE_SECURITY_GROUP_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_SECURITY_GROUP_MAX_TAGS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_NAME,
+  AWS_SINGLE_NODE_SECURITY_GROUP_STATE_DIGEST_DOMAIN,
+  AWS_SINGLE_NODE_SECURITY_GROUP_VPC_ID_PATTERN,
+  createAwsSingleNodeSecurityGroupEvidenceKernel,
+  decodeAwsSingleNodeExactSecurityGroupResponse,
+  decodeAwsSingleNodeSecurityGroupActualState,
+  decodeAwsSingleNodeSecurityGroupDiscoveryPage,
+  decodeAwsSingleNodeSecurityGroupIdentity,
+  getAwsSingleNodeSecurityGroupStateDigest,
+} from './deployment-aws-security-group-evidence.js';
 import { getAwsSingleNodeVpcStateDigest } from './deployment-aws-vpc-resource.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
@@ -22,15 +36,16 @@ import {
   createAwsTaggedEc2RecoveryKernel,
 } from './deployment-aws-tagged-ec2-recovery.js';
 
-export const AWS_SINGLE_NODE_SECURITY_GROUP_NAME = 'wharfie-single-node';
-export const AWS_SINGLE_NODE_SECURITY_GROUP_DESCRIPTION =
-  'Wharfie single-node application security group.';
-export const AWS_SINGLE_NODE_SECURITY_GROUP_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_SECURITY_GROUP_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_SECURITY_GROUP_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_SECURITY_GROUP_DISCOVERY_MAX_RESULTS = 1000;
-export const AWS_SINGLE_NODE_SECURITY_GROUP_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-security-group-state:v1';
+export {
+  AWS_SINGLE_NODE_SECURITY_GROUP_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_DESCRIPTION,
+  AWS_SINGLE_NODE_SECURITY_GROUP_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_SECURITY_GROUP_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_SECURITY_GROUP_NAME,
+  AWS_SINGLE_NODE_SECURITY_GROUP_STATE_DIGEST_DOMAIN,
+  getAwsSingleNodeSecurityGroupStateDigest,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -56,16 +71,10 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
 ]);
 const RESOURCE_KEY = 'network-security-group';
 const PROVIDER_TYPE = 'ec2-security-group';
-const SECURITY_GROUP_ID_PATTERN = /^sg-[0-9a-f]{8,32}$/;
-const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
-const MAX_SECURITY_GROUP_TAGS = 50;
-
-const BASE_RESERVED_TAGS = Object.freeze({
-  'wharfie:managed-by': 'wharfie',
-  'wharfie:resource-kind': 'single-node-security-group',
-  'wharfie:retention': 'purge',
-  'wharfie:schema-version': '2',
-});
+const SECURITY_GROUP_ID_PATTERN = AWS_SINGLE_NODE_SECURITY_GROUP_ID_PATTERN;
+const VPC_ID_PATTERN = AWS_SINGLE_NODE_SECURITY_GROUP_VPC_ID_PATTERN;
+const MAX_SECURITY_GROUP_TAGS = AWS_SINGLE_NODE_SECURITY_GROUP_MAX_TAGS;
+const BASE_RESERVED_TAGS = AWS_SINGLE_NODE_SECURITY_GROUP_BASE_TAGS;
 
 const VPC_DEPENDENCY = Object.freeze({
   resourceKey: 'network-vpc',
@@ -179,44 +188,6 @@ function securityGroupNotFound(error) {
 async function defaultWaitForRetry(attempt) {
   const delay = Math.min(2000 * 2 ** Math.max(0, attempt - 1), 30_000);
   await new Promise((resolve) => setTimeout(resolve, delay));
-}
-
-/**
- * Derive the exact provider-observable no-ingress/public-egress policy.
- * @param {unknown} value - Exact AWS single-node provider specification.
- * @returns {Readonly<{algorithm: 'sha256', value: string}>} - State digest.
- */
-export function getAwsSingleNodeSecurityGroupStateDigest(value) {
-  const providerSpec = validateAwsSingleNodeProviderSpec(
-    value,
-    'awsSingleNodeSecurityGroupState providerSpec',
-  );
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEc2SecurityGroupState',
-    groupName: AWS_SINGLE_NODE_SECURITY_GROUP_NAME,
-    description: AWS_SINGLE_NODE_SECURITY_GROUP_DESCRIPTION,
-    ingressRules: [],
-    egressRules: [
-      {
-        protocol: 'all',
-        ports: 'all',
-        destination: {
-          kind: 'ipv4-cidr',
-          value: providerSpec.capabilities.networking.egressCidr,
-        },
-      },
-    ],
-    onDestroy: 'purge',
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_SECURITY_GROUP_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
-  });
 }
 
 /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {Readonly<import('@aws-sdk/client-ec2').CreateSecurityGroupCommandInput>} */
@@ -554,231 +525,18 @@ function candidateSecurityGroupId(value) {
     : null;
 }
 
-/** @param {unknown} response @param {string} exactSecurityGroupId @returns {Readonly<Record<string, any>>} */
-function oneSecurityGroupFromResponse(response, exactSecurityGroupId) {
-  if (!isPlainObject(response) || !Array.isArray(response.SecurityGroups)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new SecurityGroupEvidenceConflictError();
-  }
-  if (response.SecurityGroups.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.SecurityGroups.length !== 1) {
-    throw new SecurityGroupEvidenceConflictError();
-  }
-  const securityGroup = response.SecurityGroups[0];
-  if (
-    !isPlainObject(securityGroup) ||
-    typeof securityGroup.GroupId !== 'string' ||
-    !SECURITY_GROUP_ID_PATTERN.test(securityGroup.GroupId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (securityGroup.GroupId !== exactSecurityGroupId) {
-    throw new SecurityGroupEvidenceConflictError();
-  }
-  return securityGroup;
-}
-
-/** @param {unknown} response @returns {{securityGroups: Readonly<Record<string, any>>[], nextToken: string|null}} */
-function securityGroupPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.SecurityGroups)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  const securityGroups = [];
-  for (const securityGroup of response.SecurityGroups) {
-    if (
-      !isPlainObject(securityGroup) ||
-      typeof securityGroup.GroupId !== 'string' ||
-      !SECURITY_GROUP_ID_PATTERN.test(securityGroup.GroupId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    securityGroups.push(securityGroup);
-  }
-  return { securityGroups, nextToken };
-}
-
-/** @param {unknown} value @returns {void} */
-function validateOptionalDescription(value) {
-  if (value === undefined || value === null) return;
-  if (typeof value !== 'string') throw new ProviderResponseUnknownError();
-}
-
-/** @param {unknown} value @param {string} key @returns {Readonly<Record<string, any>>[]} */
-function validateRangeArray(value, key) {
-  if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  for (const item of value) {
-    if (
-      !isPlainObject(item) ||
-      typeof item[key] !== 'string' ||
-      item[key].length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    validateOptionalDescription(item.Description);
-  }
-  return value;
-}
-
-/** @param {unknown} value @returns {Readonly<Record<string, any>>[]} */
-function validateUserIdGroupPairs(value) {
-  if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  for (const pair of value) {
-    if (!isPlainObject(pair)) throw new ProviderResponseUnknownError();
-    const identifiers = [
-      pair.GroupId,
-      pair.GroupName,
-      pair.UserId,
-      pair.VpcId,
-      pair.VpcPeeringConnectionId,
-    ].filter((candidate) => candidate !== undefined && candidate !== null);
-    if (
-      identifiers.length === 0 ||
-      identifiers.some(
-        (candidate) => typeof candidate !== 'string' || candidate.length === 0,
-      )
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    validateOptionalDescription(pair.Description);
-  }
-  return value;
-}
-
-/** @param {unknown} permission @returns {Readonly<Record<string, any>>} */
-function validatePermissionShape(permission) {
-  if (
-    !isPlainObject(permission) ||
-    typeof permission.IpProtocol !== 'string' ||
-    permission.IpProtocol.length === 0
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  for (const key of ['FromPort', 'ToPort']) {
-    if (
-      permission[key] !== undefined &&
-      permission[key] !== null &&
-      !Number.isSafeInteger(permission[key])
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  const collections = [
-    ['IpRanges', 'CidrIp'],
-    ['Ipv6Ranges', 'CidrIpv6'],
-    ['PrefixListIds', 'PrefixListId'],
-  ];
-  /** @type {Record<string, Readonly<Record<string, any>>[]>} */
-  const normalizedCollections = {};
-  for (const [field, key] of collections) {
-    normalizedCollections[field] =
-      permission[field] === undefined
-        ? []
-        : validateRangeArray(permission[field], key);
-  }
-  normalizedCollections.UserIdGroupPairs =
-    permission.UserIdGroupPairs === undefined
-      ? []
-      : validateUserIdGroupPairs(permission.UserIdGroupPairs);
-  return {
-    ...permission,
-    ...normalizedCollections,
-  };
-}
-
-/** @param {Readonly<Record<string, any>>} value @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateSecurityGroupRules(value, authority) {
-  if (!Array.isArray(value.IpPermissions)) {
-    throw new ProviderResponseUnknownError();
-  }
-  for (const permission of value.IpPermissions) {
-    validatePermissionShape(permission);
-  }
-  if (value.IpPermissions.length !== 0) {
-    throw new SecurityGroupEvidenceConflictError();
-  }
-  if (!Array.isArray(value.IpPermissionsEgress)) {
-    throw new ProviderResponseUnknownError();
-  }
-  const normalizedEgress = value.IpPermissionsEgress.map((permission) =>
-    validatePermissionShape(permission),
-  );
-  if (value.IpPermissionsEgress.length === 0) {
-    if (authority.action.action === 'create') {
-      throw new SecurityGroupEvidenceTransientError();
-    }
-    throw new SecurityGroupEvidenceConflictError();
-  }
-  if (value.IpPermissionsEgress.length !== 1) {
-    throw new SecurityGroupEvidenceConflictError();
-  }
-  const rule = normalizedEgress[0];
-  const ipRanges = rule.IpRanges;
-  if (
-    rule.IpProtocol !== '-1' ||
-    (rule.FromPort !== undefined && rule.FromPort !== null) ||
-    (rule.ToPort !== undefined && rule.ToPort !== null) ||
-    ipRanges.length !== 1 ||
-    ipRanges[0].CidrIp !==
-      authority.providerSpec.capabilities.networking.egressCidr ||
-    (ipRanges[0].Description !== undefined &&
-      ipRanges[0].Description !== null) ||
-    rule.Ipv6Ranges.length !== 0 ||
-    rule.PrefixListIds.length !== 0 ||
-    rule.UserIdGroupPairs.length !== 0
-  ) {
-    throw new SecurityGroupEvidenceConflictError();
-  }
-}
-
 /** @param {Readonly<Record<string, any>>} securityGroup @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
 function validateSecurityGroupEvidence(securityGroup, authority, recovery) {
+  const identity = decodeAwsSingleNodeSecurityGroupIdentity(
+    securityGroup,
+    authority.plan.providerScope,
+    authority.vpcId,
+  );
   if (
-    typeof securityGroup.GroupId !== 'string' ||
-    !SECURITY_GROUP_ID_PATTERN.test(securityGroup.GroupId) ||
-    typeof securityGroup.OwnerId !== 'string' ||
-    securityGroup.OwnerId.length === 0 ||
-    typeof securityGroup.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(securityGroup.VpcId) ||
-    typeof securityGroup.GroupName !== 'string' ||
-    securityGroup.GroupName.length === 0 ||
-    typeof securityGroup.Description !== 'string' ||
-    securityGroup.Description.length === 0
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    securityGroup.OwnerId !== authority.plan.providerScope.accountId ||
-    securityGroup.VpcId !== authority.vpcId ||
-    securityGroup.GroupName !== AWS_SINGLE_NODE_SECURITY_GROUP_NAME ||
-    securityGroup.Description !== AWS_SINGLE_NODE_SECURITY_GROUP_DESCRIPTION
+    identity.groupName !== AWS_SINGLE_NODE_SECURITY_GROUP_NAME ||
+    identity.description !== AWS_SINGLE_NODE_SECURITY_GROUP_DESCRIPTION
   ) {
     throw new SecurityGroupEvidenceConflictError();
-  }
-  if (
-    securityGroup.SecurityGroupArn !== undefined &&
-    securityGroup.SecurityGroupArn !== null
-  ) {
-    if (typeof securityGroup.SecurityGroupArn !== 'string') {
-      throw new ProviderResponseUnknownError();
-    }
-    const expectedArn = `arn:${authority.plan.providerScope.partition}:ec2:${authority.plan.providerScope.region}:${authority.plan.providerScope.accountId}:security-group/${securityGroup.GroupId}`;
-    if (securityGroup.SecurityGroupArn !== expectedArn) {
-      throw new SecurityGroupEvidenceConflictError();
-    }
   }
   if (securityGroup.Tags === null) throw new ProviderResponseUnknownError();
   recovery.validateTags(
@@ -787,29 +545,15 @@ function validateSecurityGroupEvidence(securityGroup, authority, recovery) {
     authority.action.action === 'create',
   );
   if (authority.action.action !== 'delete') {
-    validateSecurityGroupRules(securityGroup, authority);
-  }
-}
-
-/** @param {Readonly<Record<string, any>>} securityGroup @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateNaturalScanRecord(securityGroup, authority) {
-  if (
-    typeof securityGroup.GroupId !== 'string' ||
-    !SECURITY_GROUP_ID_PATTERN.test(securityGroup.GroupId) ||
-    typeof securityGroup.GroupName !== 'string' ||
-    securityGroup.GroupName.length === 0 ||
-    typeof securityGroup.OwnerId !== 'string' ||
-    securityGroup.OwnerId.length === 0 ||
-    typeof securityGroup.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(securityGroup.VpcId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    securityGroup.OwnerId !== authority.plan.providerScope.accountId ||
-    securityGroup.VpcId !== authority.vpcId
-  ) {
-    throw new SecurityGroupEvidenceConflictError();
+    const actual = decodeAwsSingleNodeSecurityGroupActualState(securityGroup, {
+      providerScope: authority.plan.providerScope,
+      vpcId: authority.vpcId,
+      egressCidr: authority.providerSpec.capabilities.networking.egressCidr,
+      allowPropagation: authority.action.action === 'create',
+    });
+    if (!sameJson(actual.observedDigest, authority.stateDigest)) {
+      throw new SecurityGroupEvidenceConflictError();
+    }
   }
 }
 
@@ -906,7 +650,10 @@ export function createAwsSingleNodeSecurityGroupResource(options) {
       if (securityGroupNotFound(error)) return null;
       throw new ProviderResponseUnknownError();
     }
-    return oneSecurityGroupFromResponse(response, securityGroupId);
+    return decodeAwsSingleNodeExactSecurityGroupResponse(
+      response,
+      securityGroupId,
+    );
   }
 
   /** @param {Readonly<Record<string, any>>} request @returns {Promise<{records: Readonly<Record<string, any>>[], nextToken: string|null}>} */
@@ -917,11 +664,7 @@ export function createAwsSingleNodeSecurityGroupResource(options) {
     } catch {
       throw new ProviderResponseUnknownError();
     }
-    const observed = securityGroupPage(response);
-    return {
-      records: observed.securityGroups,
-      nextToken: observed.nextToken,
-    };
+    return decodeAwsSingleNodeSecurityGroupDiscoveryPage(response);
   }
 
   const recovery = createAwsTaggedEc2RecoveryKernel({
@@ -934,61 +677,17 @@ export function createAwsSingleNodeSecurityGroupResource(options) {
     readDiscoveryPage,
     readExact: describeExactOnce,
   });
+  const evidence = createAwsSingleNodeSecurityGroupEvidenceKernel({
+    readDiscoveryPage,
+    readExact: describeExactOnce,
+  });
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>|null>} */
   async function discoverNaturalSlotOnce(authority) {
-    const filters = deepFreeze([{ Name: 'vpc-id', Values: [authority.vpcId] }]);
-    const seenSecurityGroupIds = new Set();
-    const matches = new Map();
-    const seenTokens = new Set();
-    let nextToken = null;
-    for (
-      let page = 1;
-      page <= AWS_SINGLE_NODE_SECURITY_GROUP_MAX_DISCOVERY_PAGES;
-      page += 1
-    ) {
-      let response;
-      try {
-        response = await client.describeSecurityGroups(
-          deepFreeze({
-            Filters: filters,
-            MaxResults: AWS_SINGLE_NODE_SECURITY_GROUP_DISCOVERY_MAX_RESULTS,
-            ...(nextToken === null ? {} : { NextToken: nextToken }),
-          }),
-        );
-      } catch {
-        throw new ProviderResponseUnknownError();
-      }
-      const observed = securityGroupPage(response);
-      for (const securityGroup of observed.securityGroups) {
-        validateNaturalScanRecord(securityGroup, authority);
-        if (seenSecurityGroupIds.has(securityGroup.GroupId)) {
-          throw new SecurityGroupEvidenceConflictError();
-        }
-        seenSecurityGroupIds.add(securityGroup.GroupId);
-        if (
-          securityGroup.GroupName.toLowerCase() ===
-          AWS_SINGLE_NODE_SECURITY_GROUP_NAME.toLowerCase()
-        ) {
-          matches.set(securityGroup.GroupId, securityGroup);
-          if (matches.size > 1) {
-            throw new SecurityGroupEvidenceConflictError();
-          }
-        }
-      }
-      if (observed.nextToken === null) break;
-      if (
-        page === AWS_SINGLE_NODE_SECURITY_GROUP_MAX_DISCOVERY_PAGES ||
-        seenTokens.has(observed.nextToken)
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-      seenTokens.add(observed.nextToken);
-      nextToken = observed.nextToken;
-    }
-    return /** @type {Readonly<Record<string, any>>|null} */ (
-      [...matches.values()][0] ?? null
-    );
+    return evidence.discoverNaturalSlot({
+      expectedOwnerId: authority.plan.providerScope.accountId,
+      vpcId: authority.vpcId,
+    });
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>[]>} */

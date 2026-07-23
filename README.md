@@ -384,6 +384,18 @@ each settled create, update, or no-op receipt to retain its exact durable
 binding, while a settled delete must be unbound, before any observer can reach
 provider I/O.
 
+The subnet and application security group now follow the same read-only
+boundary while retaining independent natural-slot proof. A subnet correlates
+its stable locator with the exact VPC/CIDR/availability-zone slot; the security
+group scans its exact VPC and compares the fixed name locally without case
+because AWS name uniqueness is case-insensitive while filter values are not.
+Both require locator, natural-slot, and exact-ID agreement for current-create
+presence, use only exact-ID reads for durable bindings, and report readable
+physical differences through actual digests rather than ownership conflict.
+An early create history without a settled VPC can detect a tagged collision but
+cannot prove natural-slot absence. Neither observer recommends replay because
+neither create API accepts a client token.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -406,7 +418,8 @@ after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Tagged-EC2 VPC and internet-gateway observer checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md) — the current handoff for stateless tagged identity evidence, exact bound reads, actual VPC drift, and conservative no-token response-loss semantics.
+- [Subnet and security-group observer checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md) — the current handoff for dependency-bound natural-slot corroboration, exact bound reads, actual network drift, and conservative no-token response-loss semantics.
+- [Tagged-EC2 VPC and internet-gateway observer checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md) — the parent handoff for stateless tagged identity evidence, exact bound reads, actual VPC drift, and conservative no-token response-loss semantics.
 - [Retained-volume observer checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md) — the parent handoff for the first strict provider reader, actual EBS drift, creation-era ownership, and truth-preserving idempotent replay advice.
 - [AWS resource-observation authority checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md) — the parent handoff for exact target, binding, active-plan, and CAS-claimed current-action read authority.
 - [AWS resource-observation boundary checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md) — the parent handoff for strict raw evidence normalization and mutation-incapable routing across all 18 graph roles.
