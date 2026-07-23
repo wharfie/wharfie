@@ -101,7 +101,23 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [AWS resource-observation boundary
+The current restart handoff is the [AWS resource-observation authority
+checkpoint](../llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md).
+One pure exact eleven-field constructor now validates a desired deployment
+tuple, non-null durable head, nullable active and last-settled plans, and one
+V45 target. It recreates the full desired catalog, admits exactly one member,
+and derives that role's durable binding. READY requires the plan named by its
+last settled operation; an initial active create requires only its active plan;
+resident active operations require both. The settled plan pins ProviderSpec
+lineage, while an active plan must reproduce the controller's operation kind,
+plan ID, strictly older basis generation, settled revision basis, target
+revision, ordered actions, and durable intent IDs. Only a target-local
+`intended` frontier with exact action state, binding, dependency, and nonce
+reachability exposes its action and ownership nonce; `pending` remains
+inspectable without action authority. Null heads stay the aggregate absent fast
+path, and DESTROYED reincarnation fails through a fixed unsupported result.
+
+Its parent is the [AWS resource-observation boundary
 checkpoint](../llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md).
 One strict six-field result now separates exact provider presence,
 authoritative absence, access uncertainty, ownership conflict, normalized
@@ -115,7 +131,7 @@ mutation or client-close method. The existing action drivers still need
 read-only authority adapters; this checkpoint does not claim aggregate
 InspectionV5.
 
-Its parent is the [deterministic AWS deployment planning
+V47's parent is the [deterministic AWS deployment planning
 checkpoint](../llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md).
 One pure boundary accepts exactly the controller's nine `createPlan` fields and
 combines the desired-resource catalog with its already context- and

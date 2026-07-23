@@ -1538,6 +1538,55 @@ separate steady-binding or current-create observation authority, preserve their
 bounded absence and propagation rules, and reuse their decoders without calling
 settlement or fabricating a mutation action.
 
+The thirtieth slice supplies that pure authority boundary without yet exposing
+a provider read. `createAwsSingleNodeResourceObservationAuthority` accepts
+exactly the requested operation, deployment revision, profile, provider scope,
+ProviderSpec, deployment-instance ID, incarnation ID, non-null durable head,
+nullable active plan, nullable last-settled plan, and one desired resource
+target. It validates every content-addressed document, re-proves the
+revision/profile/application and instance/scope/incarnation tuple, recreates
+the complete V45 desired catalog, and admits the supplied target only when it
+equals exactly one member. The target's durable binding is looked up from the
+validated head and returned as derived authority; callers cannot supply or
+replace it.
+
+Plan presence follows durable provenance rather than caller convenience. A
+READY head requires a null active plan and the exact plan named by
+`lastOperation`. An initial active create requires its exact active plan and no
+settled plan. A resident active update, reconcile, or destroy requires both.
+The last-settled PlanV3 must reproduce the controller's completed-operation
+kind, plan ID, settled revision, provider scope, instance and incarnation,
+strictly older basis generation, action cardinality, and indexed intent IDs.
+Its ProviderSpec must equal the requested choice and remain valid for the
+requested profile and scope. This prevents a structurally valid alternate
+machine image, placement, or storage choice from becoming observation
+authority. Reconcile and destroy still name the exact settled revision, while
+apply may project a prospective revision using only those pinned provider
+choices.
+
+An active PlanV3 must additionally reproduce the requested operation and
+complete deployment tuple, plan ID, controller operation kind, older basis
+generation, settled-revision basis, head target revision, action cardinality,
+and indexed action IDs. The current action is derived, never accepted. Before
+an `intended` frontier becomes authority, its role and state must match the
+canonical target, creates must remain unbound, noncreates must match the exact
+durable binding and dependency lineage, and managed/external ownership nonces
+must reproduce the controller's intent rules. Durable create-dependency
+receipts and earlier destroy-purge settlement are also rechecked; live provider
+presence and absence remain the later observers' job. Only the matching target
+receives the exact action index, content-addressed action, and persisted nonce.
+A `pending` or all-settled frontier yields no current action. A blocked
+operation may retain an intended action so read-only recovery can determine
+whether its effect occurred; this does not grant a new mutation lease or bypass
+controller fencing.
+
+Null heads remain the aggregate inspector's zero-resource authoritative-absent
+fast path and are structurally invalid at this per-resource boundary. A valid
+DESTROYED head fails through one fixed non-echoing unsupported error because
+the retained-resource reincarnation contract is still unresolved. The
+constructor performs no provider I/O, clock sampling, randomness, adoption, or
+client lifecycle.
+
 Source and packaged deployment commands, shared authoritative resource
 driver adapters, aggregate inspection, owned provider and controller
 composition, guest storage/service projection, privileged publisher wiring,

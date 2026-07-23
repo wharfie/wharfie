@@ -53,9 +53,12 @@ rejects adoption and unsupported non-artifact repair; and reverses destroy into
 16 purge deletes plus two retained-volume no-ops. One strict read-only boundary
 now normalizes exact, absent, unknown, conflict, digest, identity, and raw
 health evidence and routes all 18 roles through 16 mutation-incapable observer
-families. Driver read-kernel adapters, aggregate inspection, owned provider
-composition, commands, guest storage/service projection, and clean-account
-proof follow ·
+families. A pure eleven-field authority boundary now recreates the desired
+catalog, pins resident provider choices through the exact last-settled plan,
+and derives the exact durable binding plus only a controller-reachable,
+CAS-claimed current action, while pending frontiers remain read-only. Driver
+read-kernel adapters, aggregate inspection, owned provider composition,
+commands, guest storage/service projection, and clean-account proof follow ·
 **Last updated:** 2026-07-22
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -809,6 +812,23 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       context unchanged, never fans out, and owns no credentials or lifecycle.
       Existing driver read kernels still require separate observation-authority
       adapters before this boundary can produce aggregate InspectionV5.
+- [x] Derive one exact read-only authority for each resource observation. The
+      pure eleven-field constructor validates the deployment revision, profile,
+      provider scope, ProviderSpec, instance, incarnation, non-null head,
+      nullable active and last-settled plans, and one desired target. It
+      recreates the full V45 catalog, accepts only one exact member, and derives
+      rather than trusts its durable binding. READY requires only the plan named
+      by `lastOperation`; an initial active create requires only its active plan;
+      resident active operations require both. The settled plan re-proves the
+      provider choices that the controller pinned for the incarnation. Active
+      observations reproduce plan ID, operation kind, older basis generation,
+      settled/target revision, action order, and intent IDs. Only a target-local
+      `intended` frontier that also passes exact action-state, binding,
+      dependency-lineage, and nonce reachability checks exposes its action
+      index, action, and ownership nonce. A pending or all-settled frontier
+      exposes none. Null heads remain the aggregate's absent fast path, while
+      valid DESTROYED heads fail through one fixed unsupported reincarnation
+      error.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -961,7 +981,11 @@ and the controller's empty-binding reapply rule are reconciled.
 The shared raw observation contract and exhaustive read-only router now exist
 without admitting mutation ports. They normalize role-correlated provider
 identity, digest, ownership, absence, uncertainty, conflict, and raw health;
-the current action drivers do not yet implement those observer ports.
+the current action drivers do not yet implement those observer ports. One pure
+authority constructor now revalidates the exact desired tuple, active plan, and
+last-settled provider lineage, recreates the V45 catalog, derives the target's
+durable binding, and exposes only a controller-reachable CAS-claimed intended
+action. It never turns a pending frontier into action authority.
 
 1. Adapt the drivers' authoritative read kernels to the shared observation
    boundary without duplicating their AWS decoders, then build aggregate
@@ -979,9 +1003,11 @@ the current action drivers do not yet implement those observer ports.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [AWS resource-observation boundary
-checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md).
-Its parent is the [deterministic AWS deployment planning
+The current restart point is the [AWS resource-observation authority
+checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md).
+Its parent is the [AWS resource-observation boundary
+checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md),
+whose parent is the [deterministic AWS deployment planning
 checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md),
 whose parent is the [AWS desired-resource targets
 checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md),

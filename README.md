@@ -344,6 +344,18 @@ An immutable router accepts only 16 one-method observer families, maps all 18
 graph roles to exactly one observer, validates the returned evidence against
 the routed role, and never receives a mutation method or client lifecycle.
 
+One pure observation-authority constructor now derives the exact input for one
+of those role reads. Its eleven caller fields bind the desired deployment
+tuple, non-null durable head, nullable active and last-settled plans, and one
+V45 target. The constructor recreates the complete desired catalog, pins
+resident provider choices through the exact last-settled plan, and derives the
+target's durable binding. It exposes an action and ownership nonce only for the
+one CAS-claimed `intended` frontier role after reproducing the controller's
+target, binding, dependency, and nonce reachability checks. A pending frontier
+remains inspectable without mutation authority. READY carries only the settled
+plan, an initial create only the active plan, and a resident active operation
+carries both. DESTROYED reincarnation remains explicitly unsupported.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -366,7 +378,8 @@ after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [AWS resource-observation boundary checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md) — the current handoff for strict raw evidence normalization and mutation-incapable routing across all 18 graph roles.
+- [AWS resource-observation authority checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md) — the current handoff for exact target, binding, active-plan, and CAS-claimed current-action read authority.
+- [AWS resource-observation boundary checkpoint](llm/checkpoints/2026-07-22-v47-aws-resource-observation-boundary.md) — the parent handoff for strict raw evidence normalization and mutation-incapable routing across all 18 graph roles.
 - [Deterministic AWS deployment planning checkpoint](llm/checkpoints/2026-07-22-v46-deterministic-aws-deployment-planning.md) — the parent handoff for exact controller-compatible 18-action planning, no-adoption reconciliation, and reverse destroy derivation.
 - [AWS desired-resource targets checkpoint](llm/checkpoints/2026-07-22-v45-aws-desired-resource-targets.md) — the parent handoff for the pure, deterministic 18-role target catalog and complete durable-binding identity revalidation.
 - [AWS resource action router checkpoint](llm/checkpoints/2026-07-22-v44-aws-resource-action-router.md) — the parent handoff for exhaustive 18-key execute/settle routing over the six caller-owned narrow resource clients.
