@@ -101,7 +101,18 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [subnet and security-group observer
+The current restart handoff is the [route-table observer
+checkpoint](../llm/checkpoints/2026-07-23-v52-route-table-observer.md). The
+directly owned route table now shares strict provider evidence with its
+mutation driver while keeping mutation authority and response candidates
+private. Bound reads use only the durable ID; current-create presence requires
+the settled VPC receipt plus complete locator and independent exact-ID
+agreement. Its parent digest excludes the separately modeled default route and
+subnet association. A completely clean empty current-create history stays
+unknown but may carry `replay-safe-create` through the exact stable
+`CreateRouteTable` token.
+
+Its parent is the [subnet and security-group observer
 checkpoint](../llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md).
 Those two directly owned resources add dependency-bound natural-slot
 corroboration to the shared read-only evidence model. Current-create presence
@@ -112,7 +123,7 @@ adoptions. An early create history without its VPC binding cannot prove
 natural-slot absence. Neither create API accepts a client token, so neither
 observer emits replay advice.
 
-Its parent is the [tagged-EC2 VPC and internet-gateway observer
+That checkpoint's parent is the [tagged-EC2 VPC and internet-gateway observer
 checkpoint](../llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md).
 A stateless tagged-EC2 evidence layer now supplies exact tags, bounded locator
 discovery, exact reads, and collision proof without admitting mutation state.

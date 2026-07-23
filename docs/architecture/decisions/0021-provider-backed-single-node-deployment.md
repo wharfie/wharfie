@@ -1698,6 +1698,40 @@ does not make a response-lost create idempotent. The route-table observer
 remains separate because `CreateRouteTable` does accept the stable token that
 its mutation driver already derives from action ID and ownership nonce.
 
+The thirty-fourth slice adds the read-only observer for the directly owned
+route table. Its mutation driver and observer share strict create-response,
+exact-ID, paginated discovery, identity, tag, route, association, propagation,
+and actual-state evidence. The mutation driver retains controller authority,
+ephemeral response candidates, create/delete ports, and settlement mappings;
+the observer receives only a caller-owned `describeRouteTables` method, the
+exact provider scope, and bounded retries.
+
+Bound observation uses only the durable route-table ID and exact creation-era
+ownership receipt. Current-create presence requires the exact settled VPC
+dependency plus complete locator and independent exact-ID agreement on one
+pristine table. Unbound no-action discovery detects collisions and never
+adopts. Because route tables have no natural-uniqueness slot, an entirely clean
+empty locator history can prove unbound no-action absence even when no
+VPC-local natural query is available.
+
+The compatible intrinsic digest covers the active local VPC-CIDR route,
+nonmain status, empty virtual-gateway propagation, and purge lifecycle.
+Readable intrinsic provider state produces an actual digest, but the one
+supported default IPv4 route and one supported nonmain subnet association are
+excluded because they are separate graph resources. They therefore do not
+manufacture parent drift after their own actions settle. A fresh
+current-create receipt must still have neither descendant.
+
+`CreateRouteTable` differs from the preceding direct-network create APIs
+because it accepts a client token. The observer recomputes the mutation
+driver's action-ID-and-ownership-nonce-derived token only for the exact current
+managed/direct create. After an entirely clean bounded empty locator history,
+provider truth remains unknown but execution may be `replay-safe-create`.
+Earlier candidates, one-sided evidence, malformed or failed reads, pagination
+errors, or failed waits suppress that advice. This is an at-most-one identical
+request effect inside AWS's documented idempotency boundary, not API-call
+exactly-once execution or an indefinite token-retention claim.
+
 Source and packaged deployment commands, shared authoritative resource
 driver adapters, aggregate inspection, owned provider and controller
 composition, guest storage/service projection, privileged publisher wiring,

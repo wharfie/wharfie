@@ -58,11 +58,14 @@ catalog, pins resident provider choices through the exact last-settled plan,
 and derives the exact durable binding plus only a controller-reachable,
 CAS-claimed current action, while pending frontiers remain read-only.
 Read-only provider adapters now cover both retained volumes and the directly
-owned VPC, internet gateway, subnet, and application security group. The latter
-two add dependency-bound natural-slot corroboration without claiming
-non-idempotent create replay. Remaining driver read-kernel adapters, aggregate
-inspection, owned provider composition, commands, guest storage/service
-projection, and clean-account proof follow · **Last updated:** 2026-07-23
+owned VPC, internet gateway, subnet, route table, and application security
+group. The subnet and security group add dependency-bound natural-slot
+corroboration without claiming non-idempotent create replay; the route table
+adds clean-history client-token replay advice while excluding its separately
+modeled descendants from parent drift. Remaining driver read-kernel adapters,
+aggregate inspection, owned provider composition, commands, guest
+storage/service projection, and clean-account proof follow · **Last updated:**
+2026-07-23
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -874,6 +877,19 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       and permission drift remains verified through actual digests. Neither
       observer emits replay advice because neither create API accepts a client
       token.
+- [x] Adapt the directly owned route table to the shared read-only boundary.
+      The mutation driver and observer share strict create, exact, paginated,
+      identity, route, association, propagation, and actual-state evidence
+      without sharing response candidates or mutation authority. A bound
+      route table is read only by its durable ID. Current-create presence
+      requires the exact settled VPC receipt plus complete locator and
+      independent exact-ID agreement on one pristine resource. Intrinsic local
+      route, nonmain, and virtual-gateway propagation state produces the parent
+      digest; the separately modeled default route and subnet association are
+      excluded. Completely clean empty no-action history is absent, while the
+      same current-create history remains unknown and may carry
+      `replay-safe-create` through its stable action-ID/nonce-derived client
+      token. Any dirty attempt suppresses that advice.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -1030,14 +1046,15 @@ while separately carrying either no execution advice or one exact
 `replay-safe-create` recommendation. That recommendation never turns an empty
 eventually consistent read into an absence claim and is accepted only for a
 canonical action ID and nonce on the routed managed/direct current create. The
-retained-volume, VPC, internet-gateway, subnet, and security-group drivers now
-share their exact evidence decoders with read-only observer ports. A stateless
-tagged-EC2 layer separates tags and bounded identity reads from mutation-only
-response recovery. The remaining 11 implementation families stay private. One
-pure authority constructor revalidates the exact desired tuple, active plan,
-and last-settled provider lineage, recreates the V45 catalog, derives the
-target's durable binding, and exposes only a controller-reachable CAS-claimed
-intended action. It never turns a pending frontier into action authority.
+retained-volume, VPC, internet-gateway, subnet, route-table, and security-group
+drivers now share their exact evidence decoders with read-only observer ports.
+A stateless tagged-EC2 layer separates tags and bounded identity reads from
+mutation-only response recovery. The remaining 10 implementation families stay
+private. One pure authority constructor revalidates the exact desired tuple,
+active plan, and last-settled provider lineage, recreates the V45 catalog,
+derives the target's durable binding, and exposes only a
+controller-reachable CAS-claimed intended action. It never turns a pending
+frontier into action authority.
 
 1. Adapt the drivers' authoritative read kernels to the shared observation
    boundary without duplicating their AWS decoders, then build aggregate
@@ -1055,9 +1072,11 @@ intended action. It never turns a pending frontier into action authority.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [subnet and security-group observer
-checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md).
-Its parent is the [tagged-EC2 VPC and internet-gateway observer
+The current restart point is the [route-table observer
+checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md). Its parent
+is the [subnet and security-group observer
+checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md),
+whose parent is the [tagged-EC2 VPC and internet-gateway observer
 checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md),
 whose parent is the [retained-volume observer
 checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md), whose

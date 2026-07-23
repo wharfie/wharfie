@@ -396,6 +396,16 @@ An early create history without a settled VPC can detect a tagged collision but
 cannot prove natural-slot absence. Neither observer recommends replay because
 neither create API accepts a client token.
 
+The directly owned route table now also has a narrow read-only observer. Bound
+state is exact-ID-only, while a current create requires its settled VPC receipt
+plus complete locator and independent exact-ID agreement. Its actual digest
+covers only intrinsic local-route, nonmain, and virtual-gateway propagation
+state; the fixed default route and subnet association remain separate graph
+roles and do not create false parent drift. A completely clean bounded empty
+current-create history remains unknown but may recommend replay through the
+same action-ID-and-ownership-nonce-derived `CreateRouteTable` client token.
+Any candidate or uncertain read removes that advice.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -418,7 +428,8 @@ after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Subnet and security-group observer checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md) — the current handoff for dependency-bound natural-slot corroboration, exact bound reads, actual network drift, and conservative no-token response-loss semantics.
+- [Route-table observer checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md) — the current handoff for exact bound reads, child-state separation, and client-token-backed response-loss replay advice.
+- [Subnet and security-group observer checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md) — the parent handoff for dependency-bound natural-slot corroboration, exact bound reads, actual network drift, and conservative no-token response-loss semantics.
 - [Tagged-EC2 VPC and internet-gateway observer checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md) — the parent handoff for stateless tagged identity evidence, exact bound reads, actual VPC drift, and conservative no-token response-loss semantics.
 - [Retained-volume observer checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md) — the parent handoff for the first strict provider reader, actual EBS drift, creation-era ownership, and truth-preserving idempotent replay advice.
 - [AWS resource-observation authority checkpoint](llm/checkpoints/2026-07-22-v48-aws-resource-observation-authority.md) — the parent handoff for exact target, binding, active-plan, and CAS-claimed current-action read authority.

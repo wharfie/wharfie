@@ -6,9 +6,22 @@ import {
   sha256Base64Url,
 } from './content-id.js';
 import {
-  validateAwsSingleNodeProviderSpec,
-  validateAwsSingleNodeProviderSpecContext,
-} from './deployment-aws-provider-spec.js';
+  AWS_SINGLE_NODE_ROUTE_TABLE_BASE_TAGS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_ID_PATTERN,
+  AWS_SINGLE_NODE_ROUTE_TABLE_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_ROUTE_TABLE_MAX_TAGS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_STATE_DIGEST_DOMAIN,
+  AWS_SINGLE_NODE_ROUTE_TABLE_VPC_ID_PATTERN,
+  decodeAwsSingleNodeCreateRouteTableCandidateId,
+  decodeAwsSingleNodeExactRouteTableResponse,
+  decodeAwsSingleNodeRouteTableDiscoveryPage,
+  decodeAwsSingleNodeRouteTableRecordState,
+  getAwsSingleNodeRouteTableStateDigest,
+} from './deployment-aws-route-table-evidence.js';
+import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
 import { validateDeploymentProfile } from './deployment-profile.js';
@@ -25,14 +38,17 @@ import {
   createAwsTaggedEc2RecoveryKernel,
 } from './deployment-aws-tagged-ec2-recovery.js';
 
-export const AWS_SINGLE_NODE_ROUTE_TABLE_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_ROUTE_TABLE_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_ROUTE_TABLE_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_ROUTE_TABLE_DISCOVERY_MAX_RESULTS = 100;
-export const AWS_SINGLE_NODE_ROUTE_TABLE_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-route-table-state:v1';
 export const AWS_SINGLE_NODE_ROUTE_TABLE_CREATE_CLIENT_TOKEN_DOMAIN =
   'wharfie:aws-single-node-ec2-route-table-create-client-token:v1';
+
+export {
+  AWS_SINGLE_NODE_ROUTE_TABLE_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_ROUTE_TABLE_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_ROUTE_TABLE_STATE_DIGEST_DOMAIN,
+  getAwsSingleNodeRouteTableStateDigest,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -58,33 +74,6 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
 ]);
 const RESOURCE_KEY = 'network-route-table';
 const PROVIDER_TYPE = 'ec2-route-table';
-const ROUTE_TABLE_ID_PATTERN = /^rtb-[0-9a-f]{8,32}$/;
-const ROUTE_TABLE_ASSOCIATION_ID_PATTERN = /^rtbassoc-[0-9a-f]{8,32}$/;
-const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
-const SUBNET_ID_PATTERN = /^subnet-[0-9a-f]{8,32}$/;
-const INTERNET_GATEWAY_ID_PATTERN = /^igw-[0-9a-f]{8,32}$/;
-const ROUTE_ASSOCIATION_STATES = new Set([
-  'associating',
-  'associated',
-  'disassociating',
-  'disassociated',
-  'failed',
-]);
-const ROUTE_STATES = new Set(['active', 'blackhole']);
-const ROUTE_ORIGINS = new Set([
-  'Advertisement',
-  'CreateRoute',
-  'CreateRouteTable',
-  'EnableVgwRoutePropagation',
-]);
-const MAX_ROUTE_TABLE_TAGS = 50;
-
-const BASE_RESERVED_TAGS = Object.freeze({
-  'wharfie:managed-by': 'wharfie',
-  'wharfie:resource-kind': 'single-node-route-table',
-  'wharfie:retention': 'purge',
-  'wharfie:schema-version': '2',
-});
 
 const VPC_DEPENDENCY = Object.freeze({
   resourceKey: 'network-vpc',
@@ -191,45 +180,63 @@ function routeTableNotFound(error) {
   return errorNamed(error, 'InvalidRouteTableID.NotFound');
 }
 
+/** @param {unknown} error @returns {never} */
+function throwMutationEvidenceError(error) {
+  if (error instanceof RouteTableEvidenceConflictError) {
+    throw new RouteTableEvidenceConflictError();
+  }
+  if (error instanceof RouteTableEvidenceTransientError) {
+    throw new RouteTableEvidenceTransientError();
+  }
+  if (error instanceof ProviderResponseUnknownError) {
+    throw new ProviderResponseUnknownError();
+  }
+  throw error;
+}
+
+/** @param {unknown} value @param {string} expectedClientToken @returns {string} */
+function decodeCreateCandidate(value, expectedClientToken) {
+  try {
+    return decodeAwsSingleNodeCreateRouteTableCandidateId(
+      value,
+      expectedClientToken,
+    );
+  } catch (error) {
+    throwMutationEvidenceError(error);
+  }
+}
+
+/** @param {unknown} response @param {string} routeTableId @returns {Readonly<Record<string, any>>} */
+function decodeExactResponse(response, routeTableId) {
+  try {
+    return decodeAwsSingleNodeExactRouteTableResponse(response, routeTableId);
+  } catch (error) {
+    throwMutationEvidenceError(error);
+  }
+}
+
+/** @param {unknown} response @returns {{records: Readonly<Record<string, any>>[], nextToken: string|null}} */
+function decodeDiscoveryResponse(response) {
+  try {
+    return decodeAwsSingleNodeRouteTableDiscoveryPage(response);
+  } catch (error) {
+    throwMutationEvidenceError(error);
+  }
+}
+
+/** @param {unknown} value @returns {Readonly<Record<string, any>>} */
+function decodeRecordState(value) {
+  try {
+    return decodeAwsSingleNodeRouteTableRecordState(value);
+  } catch (error) {
+    throwMutationEvidenceError(error);
+  }
+}
+
 /** @param {number} attempt @returns {Promise<void>} */
 async function defaultWaitForRetry(attempt) {
   const delay = Math.min(2000 * 2 ** Math.max(0, attempt - 1), 30_000);
   await new Promise((resolve) => setTimeout(resolve, delay));
-}
-
-/**
- * Derive the exact intrinsic route-table state. The dynamically allocated
- * parent VPC identity belongs to dependency lineage rather than this digest.
- * @param {unknown} value - Exact AWS single-node provider specification.
- * @returns {Readonly<{algorithm: 'sha256', value: string}>} - State digest.
- */
-export function getAwsSingleNodeRouteTableStateDigest(value) {
-  const providerSpec = validateAwsSingleNodeProviderSpec(
-    value,
-    'awsSingleNodeRouteTableState providerSpec',
-  );
-  const vpcCidrBlock = providerSpec.capabilities.networking.vpcCidr;
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEc2RouteTableState',
-    localIpv4Route: {
-      destinationCidrBlock: vpcCidrBlock,
-      gatewayId: 'local',
-      origin: 'CreateRouteTable',
-      state: 'active',
-    },
-    main: false,
-    propagatingVirtualGateways: [],
-    onDestroy: 'purge',
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_ROUTE_TABLE_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
-  });
 }
 
 /**
@@ -287,7 +294,9 @@ function vpcDependencyBindingMatches(binding, plan, providerScope) {
   return (
     binding.management === 'managed' &&
     binding.providerType === VPC_DEPENDENCY.providerType &&
-    VPC_ID_PATTERN.test(binding.providerResourceId) &&
+    AWS_SINGLE_NODE_ROUTE_TABLE_VPC_ID_PATTERN.test(
+      binding.providerResourceId,
+    ) &&
     binding.deploymentInstanceId === plan.deploymentInstanceId &&
     binding.resourceKey === VPC_DEPENDENCY.resourceKey &&
     binding.providerScopeId === providerScope.providerScopeId &&
@@ -387,7 +396,7 @@ function bindingMatchesAuthority(
   return (
     binding.management === 'managed' &&
     binding.providerType === PROVIDER_TYPE &&
-    ROUTE_TABLE_ID_PATTERN.test(binding.providerResourceId) &&
+    AWS_SINGLE_NODE_ROUTE_TABLE_ID_PATTERN.test(binding.providerResourceId) &&
     binding.deploymentInstanceId === plan.deploymentInstanceId &&
     binding.resourceKey === RESOURCE_KEY &&
     binding.providerScopeId === providerScope.providerScopeId &&
@@ -579,306 +588,36 @@ function validateActionContext(value, providerScope) {
   });
 }
 
-/** @param {unknown} value @param {string} expectedClientToken @returns {string} */
-function candidateRouteTableId(value, expectedClientToken) {
-  if (!isPlainObject(value) || typeof value.ClientToken !== 'string') {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.ClientToken !== expectedClientToken) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  if (
-    !isPlainObject(value.RouteTable) ||
-    typeof value.RouteTable.RouteTableId !== 'string' ||
-    !ROUTE_TABLE_ID_PATTERN.test(value.RouteTable.RouteTableId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  return value.RouteTable.RouteTableId;
-}
-
-/** @param {unknown} response @param {string} exactRouteTableId @returns {Readonly<Record<string, any>>} */
-function oneRouteTableFromResponse(response, exactRouteTableId) {
-  if (!isPlainObject(response) || !Array.isArray(response.RouteTables)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  if (response.RouteTables.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.RouteTables.length !== 1) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  const routeTable = response.RouteTables[0];
-  if (
-    !isPlainObject(routeTable) ||
-    typeof routeTable.RouteTableId !== 'string' ||
-    !ROUTE_TABLE_ID_PATTERN.test(routeTable.RouteTableId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (routeTable.RouteTableId !== exactRouteTableId) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  return routeTable;
-}
-
-/** @param {unknown} response @returns {{routeTables: Readonly<Record<string, any>>[], nextToken: string|null}} */
-function discoveryPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.RouteTables)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
+/** @param {Readonly<Record<string, any>>} state @param {Readonly<Record<string, any>>} authority @returns {void} */
+function validateLocalRoute(state, authority) {
+  const route = state.localIpv4Route;
+  if (route === null) {
     if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
+      authority.action.action === 'create' &&
+      state.defaultIpv4Routes.length === 0 &&
+      state.otherRoutes.length === 0
     ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  const routeTables = [];
-  for (const routeTable of response.RouteTables) {
-    if (
-      !isPlainObject(routeTable) ||
-      typeof routeTable.RouteTableId !== 'string' ||
-      !ROUTE_TABLE_ID_PATTERN.test(routeTable.RouteTableId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    routeTables.push(routeTable);
-  }
-  return { routeTables, nextToken };
-}
-
-const ROUTE_DESTINATION_KEYS = Object.freeze([
-  'DestinationCidrBlock',
-  'DestinationIpv6CidrBlock',
-  'DestinationPrefixListId',
-]);
-const ROUTE_TARGET_KEYS = Object.freeze([
-  'CarrierGatewayId',
-  'CoreNetworkArn',
-  'EgressOnlyInternetGatewayId',
-  'GatewayId',
-  'InstanceId',
-  'IpAddress',
-  'LocalGatewayId',
-  'NatGatewayId',
-  'NetworkInterfaceId',
-  'OdbNetworkArn',
-  'TransitGatewayId',
-  'VpcPeeringConnectionId',
-]);
-
-/** @param {Readonly<Record<string, any>>} route @param {readonly string[]} keys @returns {string[]} */
-function populatedRouteFields(route, keys) {
-  const populated = [];
-  for (const key of keys) {
-    if (route[key] === undefined || route[key] === null) continue;
-    if (typeof route[key] !== 'string' || route[key].length === 0) {
-      throw new ProviderResponseUnknownError();
-    }
-    populated.push(key);
-  }
-  return populated;
-}
-
-/** @param {Readonly<Record<string, any>>} route @param {boolean} allowOther @returns {'local'|'default'|'other'} */
-function routeKind(route, allowOther) {
-  if (
-    !isPlainObject(route) ||
-    typeof route.Origin !== 'string' ||
-    typeof route.State !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (!ROUTE_STATES.has(route.State)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (!ROUTE_ORIGINS.has(route.Origin)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let hasInstanceOwner = false;
-  if (route.InstanceOwnerId !== undefined && route.InstanceOwnerId !== null) {
-    if (
-      typeof route.InstanceOwnerId !== 'string' ||
-      route.InstanceOwnerId.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    hasInstanceOwner = true;
-  }
-  const destinations = populatedRouteFields(route, ROUTE_DESTINATION_KEYS);
-  const targets = populatedRouteFields(route, ROUTE_TARGET_KEYS);
-  if (destinations.length !== 1 || targets.length !== 1) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  const fixedIpv4GatewayShape =
-    destinations[0] === 'DestinationCidrBlock' &&
-    targets.length === 1 &&
-    targets[0] === 'GatewayId';
-  if (
-    fixedIpv4GatewayShape &&
-    route.GatewayId === 'local' &&
-    route.Origin === 'CreateRouteTable' &&
-    route.State === 'active' &&
-    targets.length === 1 &&
-    !hasInstanceOwner
-  ) {
-    return 'local';
-  }
-  if (
-    fixedIpv4GatewayShape &&
-    route.DestinationCidrBlock === '0.0.0.0/0' &&
-    INTERNET_GATEWAY_ID_PATTERN.test(route.GatewayId) &&
-    route.Origin === 'CreateRoute' &&
-    targets.length === 1 &&
-    !hasInstanceOwner
-  ) {
-    return 'default';
-  }
-  if (route.GatewayId === 'local') {
-    throw new RouteTableEvidenceConflictError();
-  }
-  if (allowOther) return 'other';
-  throw new RouteTableEvidenceConflictError();
-}
-
-/** @param {unknown} value @param {string} routeTableId @param {boolean} deleting @returns {number} */
-function validateAssociations(value, routeTableId, deleting) {
-  if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  if (!deleting && value.length > 1) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  for (const association of value) {
-    if (!isPlainObject(association) || typeof association.Main !== 'boolean') {
-      throw new ProviderResponseUnknownError();
-    }
-    if (association.Main) throw new RouteTableEvidenceConflictError();
-    if (
-      typeof association.RouteTableAssociationId !== 'string' ||
-      !ROUTE_TABLE_ASSOCIATION_ID_PATTERN.test(
-        association.RouteTableAssociationId,
-      ) ||
-      typeof association.RouteTableId !== 'string' ||
-      !ROUTE_TABLE_ID_PATTERN.test(association.RouteTableId) ||
-      !isPlainObject(association.AssociationState) ||
-      typeof association.AssociationState.State !== 'string'
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (
-      association.AssociationState.StatusMessage !== undefined &&
-      association.AssociationState.StatusMessage !== null &&
-      typeof association.AssociationState.StatusMessage !== 'string'
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (association.RouteTableId !== routeTableId) {
-      throw new RouteTableEvidenceConflictError();
-    }
-    if (!ROUTE_ASSOCIATION_STATES.has(association.AssociationState.State)) {
-      throw new ProviderResponseUnknownError();
-    }
-    const subnetPresent =
-      association.SubnetId !== undefined && association.SubnetId !== null;
-    const gatewayPresent =
-      association.GatewayId !== undefined && association.GatewayId !== null;
-    if (
-      (subnetPresent &&
-        (typeof association.SubnetId !== 'string' ||
-          !SUBNET_ID_PATTERN.test(association.SubnetId))) ||
-      (gatewayPresent &&
-        (typeof association.GatewayId !== 'string' ||
-          !/^(?:igw|vgw)-[0-9a-f]{8,32}$/u.test(association.GatewayId)))
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (
-      Number(subnetPresent) + Number(gatewayPresent) !== 1 ||
-      (!deleting && !subnetPresent) ||
-      (association.PublicIpv4Pool !== undefined &&
-        association.PublicIpv4Pool !== null)
-    ) {
-      throw new RouteTableEvidenceConflictError();
-    }
-  }
-  return value.length;
-}
-
-/** @param {unknown} value @returns {number} */
-function validatePropagation(value) {
-  if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  for (const propagation of value) {
-    if (
-      !isPlainObject(propagation) ||
-      typeof propagation.GatewayId !== 'string' ||
-      !/^vgw-[0-9a-f]{8,32}$/u.test(propagation.GatewayId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  return value.length;
-}
-
-/** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {{hasNonlocalRoute: boolean}} */
-function validateRoutes(value, authority) {
-  if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
-  const deleting = authority.action.action === 'delete';
-  if (!deleting && value.length > 2) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  let localRoutes = 0;
-  let defaultRoutes = 0;
-  let otherRoutes = 0;
-  for (const route of value) {
-    const kind = routeKind(route, deleting);
-    if (kind === 'local') {
-      localRoutes += 1;
-      if (
-        route.DestinationCidrBlock !==
-        authority.providerSpec.capabilities.networking.vpcCidr
-      ) {
-        throw new RouteTableEvidenceConflictError();
-      }
-    } else if (kind === 'default') {
-      defaultRoutes += 1;
-    } else {
-      otherRoutes += 1;
-    }
-  }
-  if (localRoutes > 1 || defaultRoutes > 1) {
-    throw new RouteTableEvidenceConflictError();
-  }
-  if (localRoutes === 0) {
-    if (authority.action.action === 'create' && defaultRoutes === 0) {
       throw new RouteTableEvidenceTransientError();
     }
     throw new RouteTableEvidenceConflictError();
   }
-  return {
-    hasNonlocalRoute: defaultRoutes > 0 || otherRoutes > 0,
-  };
+  if (
+    route.destinationCidrBlock !==
+      authority.providerSpec.capabilities.networking.vpcCidr ||
+    route.gatewayId !== 'local' ||
+    route.origin !== 'CreateRouteTable' ||
+    route.state !== 'active'
+  ) {
+    throw new RouteTableEvidenceConflictError();
+  }
 }
 
 /** @param {Readonly<Record<string, any>>} routeTable @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {{associationCount: number, hasNonlocalRoute: boolean, propagationCount: number}} */
 function validateRouteTableOwnershipEvidence(routeTable, authority, recovery) {
+  const state = decodeRecordState(routeTable);
   if (
-    typeof routeTable.RouteTableId !== 'string' ||
-    !ROUTE_TABLE_ID_PATTERN.test(routeTable.RouteTableId) ||
-    typeof routeTable.OwnerId !== 'string' ||
-    typeof routeTable.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(routeTable.VpcId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    routeTable.OwnerId !== authority.plan.providerScope.accountId ||
-    routeTable.VpcId !== authority.vpcId
+    state.ownerId !== authority.plan.providerScope.accountId ||
+    state.vpcId !== authority.vpcId
   ) {
     throw new RouteTableEvidenceConflictError();
   }
@@ -887,20 +626,39 @@ function validateRouteTableOwnershipEvidence(routeTable, authority, recovery) {
     recovery.requiredTags(authority),
     authority.action.action === 'create',
   );
-  const associationCount = validateAssociations(
-    routeTable.Associations,
-    routeTable.RouteTableId,
-    authority.action.action === 'delete',
-  );
-  const propagationCount = validatePropagation(routeTable.PropagatingVgws);
+  const deleting = authority.action.action === 'delete';
+  const associationCount =
+    Number(state.main) +
+    state.subnetAssociations.length +
+    state.otherAssociations.length;
+  const routeCount =
+    Number(state.localIpv4Route !== null) +
+    state.defaultIpv4Routes.length +
+    state.otherRoutes.length;
+  if (
+    state.main ||
+    (!deleting &&
+      (associationCount > 1 ||
+        state.otherAssociations.length !== 0 ||
+        routeCount > 2 ||
+        state.otherRoutes.length !== 0))
+  ) {
+    throw new RouteTableEvidenceConflictError();
+  }
+  const propagationCount = state.propagatingVirtualGateways.length;
   if (
     authority.action.action === 'create' &&
     (associationCount > 0 || propagationCount > 0)
   ) {
     throw new RouteTableEvidenceConflictError();
   }
-  const { hasNonlocalRoute } = validateRoutes(routeTable.Routes, authority);
-  return { associationCount, hasNonlocalRoute, propagationCount };
+  validateLocalRoute(state, authority);
+  return {
+    associationCount,
+    hasNonlocalRoute:
+      state.defaultIpv4Routes.length > 0 || state.otherRoutes.length > 0,
+    propagationCount,
+  };
 }
 
 /** @param {Readonly<Record<string, any>>} routeTable @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} recovery @returns {void} */
@@ -1012,7 +770,7 @@ export function createAwsSingleNodeRouteTableResource(options) {
       if (routeTableNotFound(error)) return null;
       throw new ProviderResponseUnknownError();
     }
-    return oneRouteTableFromResponse(response, routeTableId);
+    return decodeExactResponse(response, routeTableId);
   }
 
   /** @param {Readonly<Record<string, any>>} request @returns {Promise<{records: Readonly<Record<string, any>>[], nextToken: string|null}>} */
@@ -1023,20 +781,16 @@ export function createAwsSingleNodeRouteTableResource(options) {
     } catch {
       throw new ProviderResponseUnknownError();
     }
-    const observed = discoveryPage(response);
-    return {
-      records: observed.routeTables,
-      nextToken: observed.nextToken,
-    };
+    return decodeDiscoveryResponse(response);
   }
 
   const recovery = createAwsTaggedEc2RecoveryKernel({
-    baseTags: BASE_RESERVED_TAGS,
+    baseTags: AWS_SINGLE_NODE_ROUTE_TABLE_BASE_TAGS,
     discoveryMaxResults: AWS_SINGLE_NODE_ROUTE_TABLE_DISCOVERY_MAX_RESULTS,
     idKey: 'RouteTableId',
-    idPattern: ROUTE_TABLE_ID_PATTERN,
+    idPattern: AWS_SINGLE_NODE_ROUTE_TABLE_ID_PATTERN,
     maxDiscoveryPages: AWS_SINGLE_NODE_ROUTE_TABLE_MAX_DISCOVERY_PAGES,
-    maxTags: MAX_ROUTE_TABLE_TAGS,
+    maxTags: AWS_SINGLE_NODE_ROUTE_TABLE_MAX_TAGS,
     readDiscoveryPage,
     readExact: describeExactOnce,
   });
@@ -1159,7 +913,7 @@ export function createAwsSingleNodeRouteTableResource(options) {
     const token = createClientToken(authority);
     let routeTableId;
     try {
-      routeTableId = candidateRouteTableId(response, token);
+      routeTableId = decodeCreateCandidate(response, token);
     } catch (error) {
       if (error instanceof RouteTableEvidenceConflictError) {
         throw new AwsSingleNodeRouteTableResourceConflictError();
