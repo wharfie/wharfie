@@ -393,6 +393,15 @@ function assertNoncreateIntentOwnership(action, intent, binding) {
   }
 }
 
+/** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>|undefined} binding @returns {boolean} */
+function isUnboundExternalVerify(action, binding) {
+  return (
+    binding === undefined &&
+    action.management === 'external' &&
+    action.action === 'verify'
+  );
+}
+
 /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} intent @param {Readonly<Record<string, any>>|undefined} binding @param {ReadonlyArray<Readonly<{bindingId: string, resourceKey: string}>>} dependencyBindings @returns {void} */
 function assertSettledNoncreateBinding(
   action,
@@ -463,8 +472,16 @@ function assertTargetDurableReceipt(
   if (intent.status === 'intended') return receipt;
 
   if (intent.status === 'pending') {
-    if (action.action === 'create') {
-      if (binding !== undefined || action.before !== null) planConflict();
+    const unboundExternalVerify = isUnboundExternalVerify(action, binding);
+    if (action.action === 'create' || unboundExternalVerify) {
+      if (
+        binding !== undefined ||
+        (action.action === 'create' && action.before !== null) ||
+        (unboundExternalVerify &&
+          (action.before === null || action.after === null))
+      ) {
+        planConflict();
+      }
       assertCreateIntentOwnership(action, intent);
       if (active && actionIndex === operation.nextActionIndex) {
         assertCreateDependencyReceipts(
@@ -617,9 +634,10 @@ function assertIntendedActionAuthority(
 ) {
   assertActionTarget(action, target);
   const dependencyBindings = expectedDependencyBindings(action, bindingByKey);
+  const unboundExternalVerify = isUnboundExternalVerify(action, binding);
   if (action.action === 'create') {
     if (binding !== undefined || action.before !== null) planConflict();
-  } else {
+  } else if (!unboundExternalVerify) {
     assertBindingMatchesAction(action, binding, dependencyBindings);
   }
   if (plan.operation === 'destroy' && binding === undefined) planConflict();
@@ -642,7 +660,7 @@ function assertIntendedActionAuthority(
     planConflict();
   }
 
-  if (action.action === 'create') {
+  if (action.action === 'create' || unboundExternalVerify) {
     assertCreateDependencyReceipts(
       action,
       actionIndex,

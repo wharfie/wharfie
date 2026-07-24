@@ -38,6 +38,13 @@ export const AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS = Object.freeze([
   'none',
   'replay-safe-create',
 ]);
+/** Graph roles whose provider create API accepts Wharfie's stable client token. */
+export const AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS = Object.freeze([
+  'application-state',
+  'control-state',
+  'network-route-table',
+  'substrate',
+]);
 export const AWS_SINGLE_NODE_RESOURCE_OBSERVATION_ROUTE_UNSUPPORTED =
   'AWS_SINGLE_NODE_RESOURCE_OBSERVATION_ROUTE_UNSUPPORTED';
 
@@ -75,6 +82,9 @@ const PRESENCES = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_PRESENCES);
 const OWNERSHIP = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_OWNERSHIP);
 const HEALTH = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH);
 const EXECUTIONS = new Set(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS);
+const REPLAY_SAFE_CREATE_RESOURCE_KEYS = new Set(
+  AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS,
+);
 const SUBSTRATE_PRESENT_HEALTH = new Set([
   'starting',
   'degraded',
@@ -87,6 +97,8 @@ const PRESENT_OBSERVATION_ERROR =
   'awsSingleNodeResourceObservation present evidence has an unsupported identity, ownership, digest, or health combination.';
 const REPLAY_SAFE_CREATE_AUTHORITY_ERROR =
   'AWS single-node resource observation replay-safe create execution does not match its exact current action authority.';
+const REPLAY_SAFE_CREATE_RESOURCE_ERROR =
+  'awsSingleNodeResourceObservation replay-safe create execution is not supported for this resourceKey.';
 
 /** One observation request cannot be routed to an exact graph resource. */
 export class AwsSingleNodeResourceObservationRouteUnsupportedError extends Error {
@@ -263,6 +275,12 @@ export function validateAwsSingleNodeResourceObservation(
     ) {
       throw new Error(PRESENT_OBSERVATION_ERROR);
     }
+  }
+  if (
+    observation.execution === 'replay-safe-create' &&
+    !REPLAY_SAFE_CREATE_RESOURCE_KEYS.has(definition.resourceKey)
+  ) {
+    throw new Error(REPLAY_SAFE_CREATE_RESOURCE_ERROR);
   }
 
   return deepFreeze(
@@ -456,6 +474,7 @@ export default {
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_OWNERSHIP,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_PRESENCES,
+  AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_ROUTE_UNSUPPORTED,
   AwsSingleNodeResourceObservationRouteUnsupportedError,
   createAwsSingleNodeResourceObservationRouter,

@@ -300,7 +300,7 @@ function makePlan(base, operation, options = {}) {
             ? null
             : base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:internet-gateway-attachment-inspection:v1',
           { operation },
         ),

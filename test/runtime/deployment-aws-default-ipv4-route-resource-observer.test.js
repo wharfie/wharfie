@@ -211,7 +211,7 @@ function makeCreatePlan(base) {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:default-ipv4-route-resource-observer-inspection:v1',
           {
             deploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
@@ -478,7 +478,7 @@ function makeDeleteFixture() {
         settledDeploymentRevisionId:
           base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:default-route-delete-inspection:v1',
           { headId: readyHead.headId },
         ),

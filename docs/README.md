@@ -101,7 +101,19 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [complete AWS resource observers
+The current restart handoff is the [InspectionV6 aggregate and controller
+checkpoint](../llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md).
+InspectionV6 now content-addresses raw execution advice and requires exact
+head, active-plan, provider-spec, and optional just-settled binding authority.
+The AWS aggregate preflights all 18 resource authorities before provider I/O,
+routes each read once, preserves raw uncertainty and conflict, and joins
+binding lineage plus separately narrowed resident health. The controller
+inspects before claiming a pending intent, performs a first call only after a
+definitely applied CAS, and replays recovery creates only through exact
+stable-token advice. One strict provider composer keeps inspection, planning,
+and mutation ports separate. Production client/command wiring remains next.
+
+Its parent is the [complete AWS resource observers
 checkpoint](../llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md).
 The managed artifact, substrate node, and both retained-volume attachments now
 join the earlier observer families at the shared mutation-incapable raw
@@ -110,11 +122,9 @@ node evidence joins exact instance, attribute, credit, ENI, and root-volume
 proof; and attachment evidence joins exact instance and volume views. Among
 these final V55 families, only the node may recommend a current-create replay,
 and only through its exact stable EC2 client token after a completely clean
-bounded history. All 18 graph roles now have read-only adapters, while
-a lossless aggregate InspectionV6 remains the next slice because V5 cannot
-carry V47's bounded execution advice.
+bounded history. All 18 graph roles have read-only adapters.
 
-Its parent is the [runtime IAM observers
+The V55 checkpoint's parent is the [runtime IAM observers
 checkpoint](../llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md). The
 direct role and instance-profile observers preserve deterministic names,
 immutable provider IDs, complete ownership tags, and supported child

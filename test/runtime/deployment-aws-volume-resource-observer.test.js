@@ -214,7 +214,7 @@ function makeCreatePlan(base) {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:volume-resource-observer-inspection:v1',
           {
             deploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
@@ -576,7 +576,7 @@ function makeHistoricalBoundFixture(options = {}) {
           settledDeploymentRevisionId:
             base.deploymentRevision.deploymentRevisionId,
           inspectionId: semanticId(
-            'win5',
+            'win6',
             'wharfie:test:volume-resource-observer-resident-inspection:v1',
             { status },
           ),

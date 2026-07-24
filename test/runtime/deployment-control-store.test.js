@@ -156,8 +156,8 @@ function makeDocuments() {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win5',
-          'wharfie:test:deployment-inspection:v5',
+          'win6',
+          'wharfie:test:deployment-inspection:v6',
           { inspection: 1 },
         ),
       },
@@ -889,7 +889,7 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
       expect(plan.actions).toHaveLength(18);
       expect(head.resourceBindings).toHaveLength(18);
       expect(plan.planId).toMatch(/^wpl3_[A-Za-z0-9_-]{43}$/);
-      expect(plan.basis.inspectionId).toMatch(/^win5_[A-Za-z0-9_-]{43}$/);
+      expect(plan.basis.inspectionId).toMatch(/^win6_[A-Za-z0-9_-]{43}$/);
       expect(head.headId).toMatch(/^wdh2_[A-Za-z0-9_-]{43}$/);
       expect(head.lastOperation.operationId).toMatch(
         /^wdo2_[A-Za-z0-9_-]{43}$/,

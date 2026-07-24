@@ -322,7 +322,7 @@ function createDestroyActions(targets, inspection, head) {
 
 /**
  * Derive one complete deterministic AWS single-node plan from exact durable
- * authority and an already freshness-validated InspectionV5 document. This
+ * authority and an already freshness-validated InspectionV6 document. This
  * function performs no provider I/O and samples no clock.
  * @param {unknown} value - Exact desired tuple, durable head, and inspection.
  * @returns {Readonly<Record<string, any>>} - Canonical DeploymentPlanV3.

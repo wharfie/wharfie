@@ -289,7 +289,7 @@ function makePlan(base, operation, options = {}) {
             ? null
             : base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:route-table-inspection:v1',
           {
             operation,

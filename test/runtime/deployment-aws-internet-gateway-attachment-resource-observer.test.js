@@ -194,7 +194,7 @@ function makeCreatePlan(base) {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:internet-gateway-attachment-resource-observer-inspection:v1',
           {
             deploymentRevisionId: base.deploymentRevision.deploymentRevisionId,

@@ -210,7 +210,7 @@ function makeCreatePlan(base) {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:subnet-route-table-association-observer-inspection:v1',
           {
             deploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
@@ -487,7 +487,7 @@ function makeCurrentDeleteAuthorityFixture() {
         settledDeploymentRevisionId:
           base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:subnet-route-table-association-observer-destroy-inspection:v1',
           { readyGeneration },
         ),

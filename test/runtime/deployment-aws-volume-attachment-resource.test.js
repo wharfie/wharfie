@@ -489,7 +489,7 @@ function makePlan(base, operation) {
             ? null
             : base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:volume-attachment-inspection:v1',
           { operation },
         ),

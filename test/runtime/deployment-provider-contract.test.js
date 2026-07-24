@@ -260,7 +260,7 @@ function makePlan(operation = 'apply', base = makeBase()) {
           operation === 'apply'
             ? null
             : base.deploymentRevision.deploymentRevisionId,
-        inspectionId: semanticId('win5', 'wharfie:test:inspection:v5', {
+        inspectionId: semanticId('win6', 'wharfie:test:inspection:v6', {
           operation,
         }),
       },
@@ -446,6 +446,7 @@ function makeInspectionAuthority(healthReceiptOverrides = {}) {
               healthReceipt,
             }
           : null,
+        execution: 'none',
       };
     },
   );
@@ -471,9 +472,8 @@ function requireResource(resources, resourceKey) {
 /**
  * @param {string} status
  * @param {Array<Record<string, any>>} [resources]
- * @param {boolean} [includeHead]
  */
-function makeInspection(status, resources, includeHead = true) {
+function makeInspection(status, resources) {
   const authority = makeInspectionAuthority();
   const absent = status === 'absent';
   return createDeploymentInspection(
@@ -493,10 +493,219 @@ function makeInspection(status, resources, includeHead = true) {
     {
       profile: authority.profile,
       providerSpec: authority.providerSpec,
-      ...(absent || !includeHead ? {} : { head: authority.head }),
+      head: absent ? null : authority.head,
+      plan: null,
       now: HEALTH_NOW,
     },
   );
+}
+
+/**
+ * @param {number} [actionIndex]
+ * @param {'pending'|'intended'} [currentStatus]
+ * @param {string|null|undefined} [currentOwnershipNonce]
+ * @returns {Readonly<Record<string, any>>}
+ */
+function makeActiveInspectionAuthority(
+  actionIndex = 1,
+  currentStatus = 'intended',
+  currentOwnershipNonce = undefined,
+) {
+  const base = makeBase();
+  const plan = makePlan('apply', base);
+  const bindingByResourceKey = makeBindings(base, plan);
+  const currentAction = plan.actions[actionIndex];
+  const currentBinding = bindingByResourceKey.get(currentAction.resourceKey);
+  if (currentBinding === undefined) {
+    throw new Error(`Missing current binding '${currentAction.resourceKey}'.`);
+  }
+  const resourceBindings = plan.actions
+    .slice(0, actionIndex)
+    .map((/** @type {Readonly<Record<string, any>>} */ action) =>
+      bindingByResourceKey.get(action.resourceKey),
+    );
+  if (
+    resourceBindings.some(
+      (/** @type {Readonly<Record<string, any>>|undefined} */ binding) =>
+        binding === undefined,
+    )
+  ) {
+    throw new Error('Active fixture is missing a settled resource binding.');
+  }
+  const intents = plan.actions.map(
+    (
+      /** @type {Readonly<Record<string, any>>} */ action,
+      /** @type {number} */ index,
+    ) => {
+      const binding = bindingByResourceKey.get(action.resourceKey);
+      if (binding === undefined) {
+        throw new Error(`Missing intent binding '${action.resourceKey}'.`);
+      }
+      return {
+        actionId: action.actionId,
+        status:
+          index < actionIndex
+            ? 'settled'
+            : index === actionIndex
+              ? currentStatus
+              : 'pending',
+        ownershipNonce:
+          index === actionIndex && currentOwnershipNonce !== undefined
+            ? currentOwnershipNonce
+            : binding.ownershipNonce,
+      };
+    },
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: 1,
+    phase: 'CONVERGING',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    resourceBindings,
+    activeOperation: {
+      kind: 'create',
+      planId: plan.planId,
+      status: 'running',
+      nextActionIndex: actionIndex,
+      intents,
+    },
+    lastOperation: null,
+  });
+  const resources = plan.actions.map(
+    (/** @type {Readonly<Record<string, any>>} */ action) => ({
+      resourceKey: action.resourceKey,
+      capability: action.capability,
+      role: action.role,
+      management: action.management,
+      ownershipMode: action.ownershipMode,
+      dependsOn: action.dependsOn,
+      onDestroy: action.onDestroy,
+      bindingId: null,
+      dependencyBindings: null,
+      presence: 'unknown',
+      presenceEvidence: 'access-failure',
+      ownership: 'unknown',
+      providerIdentity: null,
+      desiredDigest: action.after?.stateDigest ?? null,
+      observedDigest: null,
+      health: 'unknown',
+      service: null,
+      execution: 'none',
+    }),
+  );
+  return Object.freeze({
+    ...base,
+    plan,
+    head,
+    resources,
+    currentAction,
+    pendingBinding: currentBinding,
+  });
+}
+
+/**
+ * @param {ReturnType<typeof makeActiveInspectionAuthority>} authority
+ * @param {string[]} [replayResourceKeys]
+ * @param {{status?: string, plan?: unknown, pendingBinding?: unknown}} [options]
+ */
+function makeActiveInspection(
+  authority,
+  replayResourceKeys = [],
+  options = {},
+) {
+  const resources = clone(authority.resources);
+  for (const resourceKey of replayResourceKeys) {
+    requireResource(resources, resourceKey).execution = 'replay-safe-create';
+  }
+  return createDeploymentInspection(
+    {
+      deploymentRevision: authority.deploymentRevision,
+      providerScope: authority.providerScope,
+      providerSpecId: authority.providerSpec.providerSpecId,
+      deploymentInstanceId: authority.deploymentInstanceId,
+      controlState: { status: 'present', evidence: 'provider-head-read' },
+      incarnationId: authority.incarnationId,
+      headGeneration: authority.head.generation,
+      status: options.status ?? 'in-flight',
+      resources,
+    },
+    {
+      profile: authority.profile,
+      providerSpec: authority.providerSpec,
+      head: authority.head,
+      plan: Object.prototype.hasOwnProperty.call(options, 'plan')
+        ? options.plan
+        : authority.plan,
+      ...(Object.prototype.hasOwnProperty.call(options, 'pendingBinding')
+        ? { pendingBinding: options.pendingBinding }
+        : {}),
+    },
+  );
+}
+
+/** @param {Readonly<Record<string, any>>} value @returns {Record<string, any>} */
+function reidentifyInspection(value) {
+  const payload = /** @type {Record<string, any>} */ (clone(value));
+  delete payload.inspectionId;
+  return {
+    ...payload,
+    inspectionId: semanticId(
+      'win6',
+      'wharfie:deployment-inspection:v6',
+      payload,
+    ),
+  };
+}
+
+/**
+ * @param {'absent'|'unknown'|'conflict'|'unbound'|'bound'} evidence
+ * @param {string} [status]
+ * @returns {Record<string, any>}
+ */
+function makeExternalInspectionEvidence(evidence, status = 'drifted') {
+  const inspection = /** @type {Record<string, any>} */ (
+    clone(makeInspection('converged'))
+  );
+  const resource = requireResource(inspection.resources, 'artifact');
+  resource.management = 'external';
+  resource.execution = 'none';
+  if (evidence === 'bound') {
+    resource.ownership = 'external';
+    return reidentifyInspection(inspection);
+  }
+  resource.bindingId = null;
+  resource.dependencyBindings = null;
+  resource.service = null;
+  if (evidence === 'absent') {
+    resource.presence = 'absent';
+    resource.presenceEvidence = 'authoritative-not-found';
+    resource.ownership = 'missing';
+    resource.providerIdentity = null;
+    resource.observedDigest = null;
+    resource.health = 'absent';
+  } else if (evidence === 'unknown') {
+    resource.presence = 'unknown';
+    resource.presenceEvidence = 'access-failure';
+    resource.ownership = 'unknown';
+    resource.providerIdentity = null;
+    resource.observedDigest = null;
+    resource.health = 'unknown';
+  } else if (evidence === 'conflict') {
+    resource.ownership = 'conflict';
+    resource.observedDigest = null;
+  } else {
+    resource.ownership = 'external';
+  }
+  inspection.status =
+    evidence === 'unknown'
+      ? 'unknown'
+      : evidence === 'conflict'
+        ? 'conflict'
+        : status;
+  return reidentifyInspection(inspection);
 }
 
 describe('provider scopes', () => {
@@ -949,8 +1158,8 @@ describe('deployment inspections', () => {
     const authority = makeInspectionAuthority();
 
     expect(second).toEqual(first);
-    expect(first.schemaVersion).toBe(5);
-    expect(first.inspectionId).toMatch(/^win5_[A-Za-z0-9_-]{43}$/);
+    expect(first.schemaVersion).toBe(6);
+    expect(first.inspectionId).toMatch(/^win6_[A-Za-z0-9_-]{43}$/);
     expect(authority.head.headId).toMatch(/^wdh2_[A-Za-z0-9_-]{43}$/);
     expect(authority.head.lastOperation.operationId).toMatch(
       /^wdo2_[A-Za-z0-9_-]{43}$/,
@@ -976,6 +1185,7 @@ describe('deployment inspections', () => {
         profile: authority.profile,
         providerSpec: authority.providerSpec,
         head: authority.head,
+        plan: null,
         now: HEALTH_NOW,
       }),
     ).toEqual(first);
@@ -983,7 +1193,46 @@ describe('deployment inspections', () => {
       validateDeploymentInspectionContext(clone(first), {
         profile: authority.profile,
         providerSpec: authority.providerSpec,
+        head: null,
+        plan: null,
+        now: HEALTH_NOW,
+      }),
+    ).toThrow(/exact non-null head for present control state/i);
+    expect(() =>
+      validateDeploymentInspectionContext(clone(first), {
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        plan: null,
+        now: HEALTH_NOW,
+      }),
+    ).toThrow(/context\.head is required/i);
+    expect(() =>
+      createDeploymentInspection(
+        {
+          deploymentRevision: first.deploymentRevision,
+          providerScope: first.providerScope,
+          providerSpecId: first.providerSpecId,
+          deploymentInstanceId: first.deploymentInstanceId,
+          controlState: first.controlState,
+          incarnationId: first.incarnationId,
+          headGeneration: first.headGeneration,
+          status: first.status,
+          resources: first.resources,
+        },
+        {
+          profile: authority.profile,
+          providerSpec: authority.providerSpec,
+          plan: null,
+          now: HEALTH_NOW,
+        },
+      ),
+    ).toThrow(/context\.head is required/i);
+    expect(() =>
+      validateDeploymentInspectionContext(clone(first), {
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
         head: authority.head,
+        plan: null,
         now: HEALTH_NOW + 65_001,
       }),
     ).toThrow(/stale/i);
@@ -992,6 +1241,7 @@ describe('deployment inspections', () => {
         profile: authority.profile,
         providerSpec: authority.providerSpec,
         head: authority.head,
+        plan: null,
         now: HEALTH_NOW - 5_001,
       }),
     ).toThrow(/conflict/i);
@@ -1000,13 +1250,278 @@ describe('deployment inspections', () => {
         profile: authority.profile,
         providerSpec: authority.providerSpec,
         head: authority.head,
+        plan: null,
       }),
     ).toThrow(/freshness context\.now/i);
     expect(Object.isFrozen(first)).toBe(true);
   });
 
+  it('content-addresses one structurally safe replay-create advice against the exact current PlanV3 action', () => {
+    const authority = makeActiveInspectionAuthority();
+    const inspection = makeActiveInspection(authority, ['application-state']);
+
+    expect(inspection).toMatchObject({
+      schemaVersion: 6,
+      status: 'in-flight',
+      inspectionId: expect.stringMatching(/^win6_[A-Za-z0-9_-]{43}$/),
+    });
+    expect(
+      requireResource(inspection.resources, 'application-state').execution,
+    ).toBe('replay-safe-create');
+    expect(validateDeploymentInspection(clone(inspection))).toEqual(inspection);
+    expect(
+      validateDeploymentInspectionContext(clone(inspection), {
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: authority.head,
+        plan: authority.plan,
+      }),
+    ).toEqual(inspection);
+
+    const changedExecution = clone(inspection);
+    requireResource(changedExecution.resources, 'application-state').execution =
+      'none';
+    expect(() => validateDeploymentInspection(changedExecution)).toThrow(
+      /inspectionId does not match/i,
+    );
+  });
+
+  it('rejects legacy V5 documents and an otherwise well-formed tampered V6 identity', () => {
+    const legacy = /** @type {Record<string, any>} */ (
+      clone(makeInspection('converged'))
+    );
+    legacy.schemaVersion = 5;
+    legacy.inspectionId = semanticId(
+      'win5',
+      'wharfie:deployment-inspection:v5',
+      { legacy: true },
+    );
+    expect(() => validateDeploymentInspection(legacy)).toThrow(
+      /schemaVersion must be the integer 6/i,
+    );
+
+    const tamperedIdentity = /** @type {Record<string, any>} */ (
+      clone(makeInspection('converged'))
+    );
+    tamperedIdentity.inspectionId = semanticId(
+      'win6',
+      'wharfie:test:tampered-inspection:v6',
+      { tampered: true },
+    );
+    expect(() => validateDeploymentInspection(tamperedIdentity)).toThrow(
+      /inspectionId does not match/i,
+    );
+  });
+
+  it('losslessly represents external absence, access failure, identity conflict, and transient unbound identity', () => {
+    const absent = validateDeploymentInspection(
+      makeExternalInspectionEvidence('absent'),
+    );
+    expect(requireResource(absent.resources, 'artifact')).toMatchObject({
+      management: 'external',
+      presence: 'absent',
+      ownership: 'missing',
+      bindingId: null,
+      dependencyBindings: null,
+    });
+
+    const unknown = validateDeploymentInspection(
+      makeExternalInspectionEvidence('unknown'),
+    );
+    expect(requireResource(unknown.resources, 'artifact')).toMatchObject({
+      management: 'external',
+      presence: 'unknown',
+      ownership: 'unknown',
+      providerIdentity: null,
+    });
+
+    const conflict = validateDeploymentInspection(
+      makeExternalInspectionEvidence('conflict'),
+    );
+    expect(requireResource(conflict.resources, 'artifact')).toMatchObject({
+      management: 'external',
+      presence: 'present',
+      ownership: 'conflict',
+      bindingId: null,
+      dependencyBindings: null,
+    });
+
+    const unbound = validateDeploymentInspection(
+      makeExternalInspectionEvidence('unbound'),
+    );
+    expect(unbound.status).toBe('drifted');
+    expect(requireResource(unbound.resources, 'artifact')).toMatchObject({
+      management: 'external',
+      presence: 'present',
+      ownership: 'external',
+      bindingId: null,
+      dependencyBindings: null,
+      providerIdentity: expect.any(Object),
+      observedDigest: expect.any(Object),
+    });
+
+    expect(
+      validateDeploymentInspection(makeExternalInspectionEvidence('bound'))
+        .status,
+    ).toBe('converged');
+
+    const serviceConflict = /** @type {Record<string, any>} */ (
+      clone(makeInspection('converged'))
+    );
+    const substrate = requireResource(serviceConflict.resources, 'substrate');
+    substrate.management = 'external';
+    substrate.ownership = 'conflict';
+    substrate.bindingId = null;
+    substrate.dependencyBindings = null;
+    substrate.observedDigest = null;
+    substrate.health = 'unknown';
+    substrate.service = null;
+    serviceConflict.status = 'conflict';
+    expect(
+      requireResource(
+        validateDeploymentInspection(reidentifyInspection(serviceConflict))
+          .resources,
+        'substrate',
+      ),
+    ).toMatchObject({
+      management: 'external',
+      ownership: 'conflict',
+      health: 'unknown',
+      service: null,
+    });
+  });
+
+  it('rejects contradictory external ownership, partial lineage, and unbound final evidence', () => {
+    const wrongAbsent = makeExternalInspectionEvidence('absent');
+    requireResource(wrongAbsent.resources, 'artifact').ownership = 'external';
+    expect(() =>
+      validateDeploymentInspection(reidentifyInspection(wrongAbsent)),
+    ).toThrow(/absent resources must report missing ownership/i);
+
+    const wrongUnknown = makeExternalInspectionEvidence('unknown');
+    requireResource(wrongUnknown.resources, 'artifact').ownership = 'external';
+    expect(() =>
+      validateDeploymentInspection(reidentifyInspection(wrongUnknown)),
+    ).toThrow(/unknown resources must report unknown ownership/i);
+
+    const wrongPresent = makeExternalInspectionEvidence('unbound');
+    requireResource(wrongPresent.resources, 'artifact').ownership = 'verified';
+    expect(() =>
+      validateDeploymentInspection(reidentifyInspection(wrongPresent)),
+    ).toThrow(/present external resources must report external or conflict/i);
+
+    const partialLineage = makeExternalInspectionEvidence('unbound');
+    requireResource(partialLineage.resources, 'artifact').bindingId =
+      requireResource(makeConvergedResources(), 'artifact').bindingId;
+    expect(() =>
+      validateDeploymentInspection(reidentifyInspection(partialLineage)),
+    ).toThrow(/complete binding lineage|null lineage/i);
+
+    expect(() =>
+      validateDeploymentInspection(
+        makeExternalInspectionEvidence('unbound', 'converged'),
+      ),
+    ).toThrow(/converged status requires exact present, owned, healthy/i);
+    expect(() =>
+      validateDeploymentInspection(
+        makeExternalInspectionEvidence('unbound', 'destroyed'),
+      ),
+    ).toThrow(/destroyed status cannot rely on unbound external/i);
+  });
+
+  it('context-rejects unbound external identity that omits durable authority or is outside a non-final planning/verify phase', () => {
+    const authority = makeInspectionAuthority();
+    const inFlight = makeExternalInspectionEvidence('unbound', 'in-flight');
+    expect(validateDeploymentInspection(inFlight).status).toBe('in-flight');
+    expect(() =>
+      validateDeploymentInspectionContext(inFlight, {
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: authority.head,
+        plan: null,
+        now: HEALTH_NOW,
+      }),
+    ).toThrow(
+      /exact head with no durable or pending binding|non-final READY-head planning evidence/i,
+    );
+
+    const noHead = makeExternalInspectionEvidence('unbound');
+    expect(() =>
+      validateDeploymentInspectionContext(noHead, {
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        plan: null,
+        now: HEALTH_NOW,
+      }),
+    ).toThrow(/context\.head is required/i);
+  });
+
+  it('rejects two replay advices and advice that is not for the exact current action', () => {
+    const authority = makeActiveInspectionAuthority();
+
+    expect(() =>
+      makeActiveInspection(authority, ['application-state', 'control-state']),
+    ).toThrow(/at most one resource/i);
+    expect(() => makeActiveInspection(authority, ['control-state'])).toThrow(
+      /exact current intended managed direct create action/i,
+    );
+  });
+
+  it('requires in-flight inspection status and an intended action with a nonnull ownership nonce', () => {
+    const authority = makeActiveInspectionAuthority();
+    expect(() =>
+      makeActiveInspection(authority, ['application-state'], {
+        status: 'unknown',
+      }),
+    ).toThrow(/requires in-flight status/i);
+
+    const pending = makeActiveInspectionAuthority(1, 'pending');
+    expect(() => makeActiveInspection(pending, ['application-state'])).toThrow(
+      /exact current intended managed direct create action/i,
+    );
+
+    const missingNonce = makeActiveInspectionAuthority(1, 'intended', null);
+    expect(() =>
+      makeActiveInspection(missingNonce, ['application-state']),
+    ).toThrow(/ownership nonce|exact current intended/i);
+  });
+
+  it('requires the exact nullable active plan and forbids replay advice once a pending binding exists', () => {
+    const authority = makeActiveInspectionAuthority();
+
+    expect(() =>
+      makeActiveInspection(authority, ['application-state'], { plan: null }),
+    ).toThrow(/context\.plan.*exact active plan iff/i);
+    expect(
+      makeActiveInspection(authority, [], {
+        pendingBinding: authority.pendingBinding,
+      }).status,
+    ).toBe('in-flight');
+    expect(() =>
+      makeActiveInspection(authority, ['application-state'], {
+        pendingBinding: authority.pendingBinding,
+      }),
+    ).toThrow(/forbidden after an exact pending binding/i);
+  });
+
+  it('validates pending binding metadata and provider identity against the exact current create/verify action', () => {
+    const authority = makeActiveInspectionAuthority();
+    const wrongProviderBinding = clone(authority.pendingBinding);
+    delete wrongProviderBinding.bindingId;
+    wrongProviderBinding.providerType = 'wrong-provider-type';
+    const canonicalWrongBinding =
+      createDeploymentResourceBinding(wrongProviderBinding);
+
+    expect(() =>
+      makeActiveInspection(authority, [], {
+        pendingBinding: canonicalWrongBinding,
+      }),
+    ).toThrow(/current create\/verify action metadata, provider identity/i);
+  });
+
   it('represents confirmed nonexistence without manufacturing an incarnation', () => {
     const inspection = makeInspection('absent');
+    const authority = makeInspectionAuthority();
 
     expect(inspection).toMatchObject({
       headGeneration: 0,
@@ -1014,6 +1529,22 @@ describe('deployment inspections', () => {
       resources: [],
       status: 'absent',
     });
+    expect(
+      validateDeploymentInspectionContext(clone(inspection), {
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: null,
+        plan: null,
+      }),
+    ).toEqual(inspection);
+    expect(() =>
+      validateDeploymentInspectionContext(clone(inspection), {
+        profile: authority.profile,
+        providerSpec: authority.providerSpec,
+        head: undefined,
+        plan: null,
+      }),
+    ).toThrow(/null only for authoritative absence/i);
   });
 
   it('represents head access failure without inventing absence or an incarnation', () => {
@@ -1040,7 +1571,7 @@ describe('deployment inspections', () => {
         status: 'unknown',
         resources: [],
       },
-      { profile, providerSpec },
+      { profile, providerSpec, head: undefined, plan: null },
     );
 
     expect(inspection).toMatchObject({
@@ -1049,6 +1580,49 @@ describe('deployment inspections', () => {
       incarnationId: null,
       status: 'unknown',
     });
+    expect(
+      validateDeploymentInspectionContext(clone(inspection), {
+        profile,
+        providerSpec,
+        head: undefined,
+        plan: null,
+      }),
+    ).toEqual(inspection);
+    expect(() =>
+      validateDeploymentInspectionContext(clone(inspection), {
+        profile,
+        providerSpec,
+        head: null,
+        plan: null,
+      }),
+    ).toThrow(/explicit undefined for unknown or conflicting/i);
+
+    const conflict = createDeploymentInspection(
+      {
+        deploymentRevision,
+        providerScope,
+        providerSpecId: providerSpec.providerSpecId,
+        deploymentInstanceId: getDeploymentInstanceId({
+          deploymentRevision,
+          providerScope,
+        }),
+        controlState: { status: 'conflict', evidence: 'identity-conflict' },
+        incarnationId: null,
+        headGeneration: 0,
+        status: 'conflict',
+        resources: [],
+      },
+      { profile, providerSpec, head: undefined, plan: null },
+    );
+    expect(conflict.controlState.status).toBe('conflict');
+    expect(() =>
+      validateDeploymentInspectionContext(clone(conflict), {
+        profile,
+        providerSpec,
+        head: null,
+        plan: null,
+      }),
+    ).toThrow(/explicit undefined for unknown or conflicting/i);
     expect(() =>
       createDeploymentInspection(
         {
@@ -1058,7 +1632,7 @@ describe('deployment inspections', () => {
             evidence: 'authoritative-not-found',
           },
         },
-        { profile, providerSpec },
+        { profile, providerSpec, head: undefined, plan: null },
       ),
     ).toThrow(/not supported|authoritative head absence/i);
   });
@@ -1128,14 +1702,14 @@ describe('deployment inspections', () => {
     );
   });
 
-  it('correlates provider health to the independently inspected runtime role resource without head context', () => {
+  it('correlates provider health to the independently inspected runtime role resource', () => {
     const wrongRoleId = makeConvergedResources();
     requireResource(
       wrongRoleId,
       'runtime-role',
     ).providerIdentity.providerResourceId = 'AROA0987654321EXAMPLE';
-    expect(() => makeInspection('converged', wrongRoleId, false)).toThrow(
-      /runtimeRoleId.*exact inspection authority|exact inspection authority/i,
+    expect(() => makeInspection('converged', wrongRoleId)).toThrow(
+      /runtimeRoleId.*exact inspection authority|exact inspection authority|binding evidence does not match/i,
     );
 
     const wrongRoleBinding = makeConvergedResources();
@@ -1145,8 +1719,8 @@ describe('deployment inspections', () => {
     ).bindingId;
     requireResource(wrongRoleBinding, 'runtime-role').bindingId =
       substrateBindingId;
-    expect(() => makeInspection('converged', wrongRoleBinding, false)).toThrow(
-      /runtimeRoleBindingId.*exact inspection authority|exact inspection authority/i,
+    expect(() => makeInspection('converged', wrongRoleBinding)).toThrow(
+      /runtimeRoleBindingId.*exact inspection authority|exact inspection authority|binding evidence does not match/i,
     );
 
     const wrongNodeBinding = makeConvergedResources();
@@ -1155,8 +1729,8 @@ describe('deployment inspections', () => {
       'runtime-role',
     ).bindingId;
     requireResource(wrongNodeBinding, 'substrate').bindingId = roleBindingId;
-    expect(() => makeInspection('converged', wrongNodeBinding, false)).toThrow(
-      /nodeBindingId.*exact inspection authority|exact inspection authority/i,
+    expect(() => makeInspection('converged', wrongNodeBinding)).toThrow(
+      /nodeBindingId.*exact inspection authority|exact inspection authority|binding evidence does not match/i,
     );
   });
 

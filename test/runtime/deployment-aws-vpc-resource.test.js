@@ -262,7 +262,7 @@ function makePlan(base, operation, options = {}) {
           operation === 'apply'
             ? null
             : base.deploymentRevision.deploymentRevisionId,
-        inspectionId: semanticId('win5', 'wharfie:test:vpc-inspection:v1', {
+        inspectionId: semanticId('win6', 'wharfie:test:vpc-inspection:v1', {
           operation,
         }),
       },

@@ -553,7 +553,7 @@ function makeCreatePlan(base, options = {}) {
         settledDeploymentRevisionId:
           options.settledDeploymentRevisionId ?? null,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:resource-observation-authority-inspection:v1',
           {
             operation,
@@ -597,7 +597,7 @@ function boundState(target, binding, stateDigest = target.target.stateDigest) {
 /** @param {string} operation @param {Readonly<AnyRecord>} base @param {Readonly<AnyRecord>} head @returns {string} */
 function activeInspectionId(operation, base, head) {
   return semanticId(
-    'win5',
+    'win6',
     'wharfie:test:resource-observation-authority-active-inspection:v1',
     {
       operation,

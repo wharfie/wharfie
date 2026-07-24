@@ -165,9 +165,10 @@ content ID of one fixed 18-role physical-resource graph. Runtime identity is
 four independently recoverable effects: an IAM role, its derived inline
 policy, an instance profile, and their derived association. DeploymentPlanV3
 expands the small portable capability model into one independently recoverable
-action per graph role, while DeploymentInspectionV5 binds present ownership to
-exact BindingV2 dependency lineage and distinguishes authoritative absence from
-access failure. Apply and reconcile use one canonical topological order;
+action per graph role, while DeploymentInspectionV6 binds present ownership to
+exact BindingV2 dependency lineage, distinguishes authoritative absence from
+access failure, and content-addresses narrowly bounded create-replay advice
+without treating it as provider truth. Apply and reconcile use one canonical topological order;
 destroy reverses it, retaining state volumes while purging their attachments.
 Dependent creates re-prove earlier settled dependency authority, destroy
 re-proves prior purges at every later frontier, and finalization requires each
@@ -222,7 +223,7 @@ bounded exact `GetObject` plus `HeadObject` readback; later successors use the
 current ETag as an opaque compare-and-swap token. The transport never lists
 objects and does not require `ListBucket` to prove first-publication absence.
 The current object supplies version and `LastModified` freshness evidence, and
-only a fresh context-bound receipt can make Inspection V5/`win5` converged.
+only a fresh context-bound receipt can make Inspection V6/`win6` converged.
 The exact `health/v3/` bucket lifecycle makes noncurrent health versions
 eligible for asynchronous expiration after one day without collecting the
 current receipt or staged artifacts. This boundary is proved under
@@ -323,7 +324,7 @@ does not consume observations, adopt provider state, or speculate about future
 AWS IDs.
 
 One pure controller-compatible planner now joins that catalog to one already
-validated InspectionV5 document through the controller's exact nine-key
+validated InspectionV6 document through the controller's exact nine-key
 `createPlan` call. It derives a complete deterministic PlanV3 with all 18
 actions and an exact head-generation, settled-revision, and inspection basis.
 An absent head produces only ordered creates. A READY head can reconcile the
@@ -434,6 +435,26 @@ instance and volume views for both retained volumes; typed endpoint loss must
 retain the identical signature through the full retry window. All 18 graph
 roles can therefore reach V47's mutation-incapable raw observation boundary.
 
+One lossless AWS aggregate now fences the complete desired tuple, active plan,
+last-settled plan, durable head, and optional just-settled binding before any
+provider read. A null head is a zero-I/O absent fast path. Live inspection
+routes all 18 apply-ordered authorities exactly once, preserves raw
+uncertainty, conflict, actual drift, and stable-token replay recommendations,
+then joins exact binding lineage and the separately narrowed resident-health
+proof into InspectionV6. Conflict suppresses replay advice; advice can
+authorize only an identical current create and can never settle it.
+
+The controller now inspects a pending action before changing it to `intended`,
+so a definitely applied intent CAS is required before the first provider call.
+Recovery verifies settlement first and repeats a create only when InspectionV6
+binds `replay-safe-create` to the exact action ID, ownership nonce, desired
+digest, and dependency receipts. Creates without a provider idempotency token
+receive at most one definitely authorized first call and are never guessed
+safe after coordinator ambiguity. One strict provider composer exposes the
+controller's seven methods from separate scope, provider-spec, inspection,
+planning, and mutation ports; the read-only aggregate cannot acquire an action
+method and aggregate-only context cannot leak into the pure planner.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -443,12 +464,13 @@ These modules now implement both retained-volume attachment effects under
 deterministic mocks and expose their read-only evidence, but do not format,
 mount, unmount, quiesce, or fulfill a complete service capability. Future guest
 use must add a quiesce/unmount or stop dependency before attachment deletion.
-Lossless aggregate AWS InspectionV6, owned provider/controller composition,
-the privileged host observer and publisher, operator commands, and
-clean-account proof remain unfinished. V6 must retain V47's bounded execution
-advice because the current InspectionV5 resource shape cannot represent it.
+Production wiring of the aggregate's 16 concrete observer families and
+invocation-owned AWS clients, the privileged host observer and publisher,
+operator commands, and clean-account proof remain unfinished. External
+resource verification is represented by the generic V6 contract but remains
+unreachable through the fixed all-managed AWS profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
-InspectionV5 requires retained resources to remain exactly bound, while the
+InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
 
 ## Start here
@@ -457,7 +479,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Complete AWS resource observers checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md) — the current handoff for complete raw observation coverage, bounded artifact history, joined node/root evidence, stable node-create replay advice, and attachment endpoint-loss proof.
+- [InspectionV6 aggregate and controller checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md) — the current handoff for lossless 18-role aggregation, exact provider composition, pre-intent first-call fencing, and stable-token-only crash replay.
+- [Complete AWS resource observers checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md) — the parent handoff for complete raw observation coverage, bounded artifact history, joined node/root evidence, stable node-create replay advice, and attachment endpoint-loss proof.
 - [Runtime IAM observers checkpoint](llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md) — the parent handoff for immutable IAM identity, exact policy and membership views, actual drift, and conservative no-token replay semantics.
 - [Derived network observers checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md) — the parent handoff for endpoint-lineage receipts, independent relationship views, natural-slot absence, and conservative no-token replay semantics.
 - [Route-table observer checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md) — the parent handoff for exact bound reads, child-state separation, and client-token-backed response-loss replay advice.

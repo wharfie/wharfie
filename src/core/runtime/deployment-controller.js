@@ -446,6 +446,62 @@ export function createDeploymentController(dependencies) {
   }
 
   /**
+   * Resolve and independently bind the exact plan named by the durable last
+   * operation. Active create operations have no settled predecessor and
+   * therefore return null.
+   * @param {Readonly<Record<string, any>>} head - Exact durable head.
+   * @returns {Promise<Readonly<Record<string, any>>|null>} - Exact last-settled plan.
+   */
+  async function readLastSettledPlan(head) {
+    if (head.lastOperation === null) return null;
+    const value = await store.readPlan(head.lastOperation.planId);
+    if (value === null) {
+      throw new Error(
+        'The last settled deployment plan is missing from durable storage.',
+      );
+    }
+    const plan = validateDeploymentPlan(value, 'last settled deployment plan');
+    const expectedOperationKind =
+      plan.operation === 'destroy'
+        ? 'destroy'
+        : plan.basis.settledDeploymentRevisionId === null
+          ? 'create'
+          : plan.basis.settledDeploymentRevisionId ===
+              plan.deploymentRevision.deploymentRevisionId
+            ? 'reconcile'
+            : 'update';
+    const operationMatchesBasis =
+      plan.operation === 'destroy'
+        ? expectedOperationKind === 'destroy'
+        : plan.operation === 'reconcile'
+          ? expectedOperationKind === 'reconcile'
+          : expectedOperationKind !== 'destroy';
+    if (
+      plan.planId !== head.lastOperation.planId ||
+      !operationMatchesBasis ||
+      head.lastOperation.kind !== expectedOperationKind ||
+      plan.deploymentInstanceId !== head.deploymentInstanceId ||
+      plan.incarnationId !== head.incarnationId ||
+      plan.deploymentRevision.deploymentRevisionId !==
+        head.settledDeploymentRevisionId ||
+      !sameJson(plan.providerScope, head.providerScope) ||
+      plan.basis.headGeneration >= head.generation ||
+      head.lastOperation.intents.length !== plan.actions.length ||
+      head.lastOperation.intents.some(
+        (
+          /** @type {Readonly<Record<string, any>>} */ intent,
+          /** @type {number} */ index,
+        ) => intent.actionId !== plan.actions[index].actionId,
+      )
+    ) {
+      throw new DeploymentControllerConflictError(
+        'The last settled plan does not match the exact durable deployment head.',
+      );
+    }
+    return plan;
+  }
+
+  /**
    * Resolve mutable provider prerequisites only for a new incarnation. A
    * resident deployment keeps using the exact provider specification stored
    * by its last settled plan, including for update, reconcile, and destroy.
@@ -455,51 +511,10 @@ export function createDeploymentController(dependencies) {
    */
   async function selectProviderSpec(request, head) {
     if (head !== null && head.phase === 'READY') {
-      const priorValue = await store.readPlan(head.lastOperation.planId);
-      if (priorValue === null) {
-        throw new Error(
-          'The last settled deployment plan is missing from durable storage.',
-        );
-      }
-      const priorPlan = validateDeploymentPlan(
-        priorValue,
-        'last settled deployment plan',
-      );
-      const expectedOperationKind =
-        priorPlan.operation === 'destroy'
-          ? 'destroy'
-          : priorPlan.basis.settledDeploymentRevisionId === null
-            ? 'create'
-            : priorPlan.basis.settledDeploymentRevisionId ===
-                priorPlan.deploymentRevision.deploymentRevisionId
-              ? 'reconcile'
-              : 'update';
-      const operationMatchesBasis =
-        priorPlan.operation === 'destroy'
-          ? expectedOperationKind === 'destroy'
-          : priorPlan.operation === 'reconcile'
-            ? expectedOperationKind === 'reconcile'
-            : expectedOperationKind !== 'destroy';
-      if (
-        priorPlan.planId !== head.lastOperation.planId ||
-        !operationMatchesBasis ||
-        head.lastOperation.kind !== expectedOperationKind ||
-        priorPlan.deploymentInstanceId !== head.deploymentInstanceId ||
-        priorPlan.incarnationId !== head.incarnationId ||
-        priorPlan.deploymentRevision.deploymentRevisionId !==
-          head.settledDeploymentRevisionId ||
-        !sameJson(priorPlan.providerScope, head.providerScope) ||
-        priorPlan.basis.headGeneration >= head.generation ||
-        head.lastOperation.intents.length !== priorPlan.actions.length ||
-        head.lastOperation.intents.some(
-          (
-            /** @type {Readonly<Record<string, any>>} */ intent,
-            /** @type {number} */ index,
-          ) => intent.actionId !== priorPlan.actions[index].actionId,
-        )
-      ) {
+      const priorPlan = await readLastSettledPlan(head);
+      if (priorPlan === null) {
         throw new DeploymentControllerConflictError(
-          'The last settled plan does not match the exact durable deployment head.',
+          'A ready deployment is missing its exact last-settled plan.',
         );
       }
       try {
@@ -774,14 +789,15 @@ export function createDeploymentController(dependencies) {
     }
   }
 
-  /** @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} profile @param {Readonly<Record<string, any>>} head @param {Readonly<Record<string, any>>|undefined} [pendingBinding] @returns {Promise<Readonly<Record<string, any>>>} */
+  /** @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} profile @param {Readonly<Record<string, any>>} head @param {Readonly<Record<string, any>>|null} [pendingBinding] @returns {Promise<Readonly<Record<string, any>>>} */
   async function inspectCurrentOperation(
     plan,
     profile,
     head,
-    pendingBinding = undefined,
+    pendingBinding = null,
   ) {
     await assertPlanProviderScope(plan, profile);
+    const settledPlan = await readLastSettledPlan(head);
     const request = {
       operation: plan.operation,
       deploymentRevision: plan.deploymentRevision,
@@ -792,12 +808,18 @@ export function createDeploymentController(dependencies) {
       providerSpec: plan.providerSpec,
     };
     const observed = await provider.inspect(
-      Object.freeze({ ...providerContext(request, head), plan }),
+      Object.freeze({
+        ...providerContext(request, head),
+        plan,
+        settledPlan,
+        pendingBinding,
+      }),
     );
     const inspection = validateDeploymentInspectionContext(observed, {
       profile,
       providerSpec: plan.providerSpec,
       head,
+      plan,
       pendingBinding,
       now: sampleInspectionNow(),
     });
@@ -817,6 +839,11 @@ export function createDeploymentController(dependencies) {
     );
     if (resource !== undefined) {
       assertResourceMatchesAction(action, resource);
+      if (resource.execution !== 'none') {
+        throw new DeploymentOwnershipError(
+          `Action '${action.resourceKey}' ordinary execution evidence contains recovery-only replay advice.`,
+        );
+      }
     }
     if (action.action === 'create') {
       if (
@@ -895,6 +922,61 @@ export function createDeploymentController(dependencies) {
     return true;
   }
 
+  /**
+   * Authorize only an identical create replay after a durable intended
+   * frontier failed to settle. InspectionV6 has already bound the advice to
+   * the exact action ID and ownership nonce; the controller additionally
+   * correlates desired state and dependency receipts before calling the
+   * provider again.
+   * @param {Readonly<Record<string, any>>} action - Current plan action.
+   * @param {Readonly<Record<string, any>>} inspection - Fresh InspectionV6.
+   * @param {Readonly<Record<string, any>>} head - Exact intended head.
+   * @param {Readonly<Record<string, any>>} plan - Exact active plan.
+   * @returns {true} - Returns only with replay authority.
+   */
+  function assertCreateReplayExecutionEvidence(action, inspection, head, plan) {
+    const resource = inspection.resources.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === action.resourceKey,
+    );
+    const binding = head.resourceBindings.find(
+      (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+        candidate.resourceKey === action.resourceKey,
+    );
+    if (
+      action.action !== 'create' ||
+      action.before !== null ||
+      action.after === null ||
+      binding !== undefined ||
+      resource === undefined
+    ) {
+      throw new DeploymentOwnershipError(
+        `Action '${action.resourceKey}' has no exact replay-safe create authority.`,
+      );
+    }
+    assertResourceMatchesAction(action, resource);
+    if (
+      resource.execution !== 'replay-safe-create' ||
+      resource.presence !== 'unknown' ||
+      resource.presenceEvidence !== 'access-failure' ||
+      resource.ownership !== 'unknown' ||
+      resource.providerIdentity !== null ||
+      resource.bindingId !== null ||
+      resource.dependencyBindings !== null ||
+      resource.observedDigest !== null ||
+      resource.desiredDigest === null ||
+      !sameJson(resource.desiredDigest, action.after.stateDigest) ||
+      resource.health !== 'unknown' ||
+      resource.service !== null
+    ) {
+      throw new DeploymentOwnershipError(
+        `Create for '${action.resourceKey}' lacks exact InspectionV6 replay advice.`,
+      );
+    }
+    assertCreateDependencyEvidence(action, inspection, head, plan);
+    return true;
+  }
+
   /** @param {Readonly<Record<string, any>>} action @param {Readonly<Record<string, any>>} inspection @param {Readonly<Record<string, any>>|null} binding @param {Readonly<Record<string, any>>} head @param {Readonly<Record<string, any>>} plan @returns {void} */
   function assertActionSettlementEvidence(
     action,
@@ -959,12 +1041,21 @@ export function createDeploymentController(dependencies) {
       profile: request.profile,
       providerScope: request.providerScope,
     });
+    const settledPlan = head === null ? null : await readLastSettledPlan(head);
     const context = providerContext(request, head);
-    const observed = await provider.inspect(context);
+    const inspectionContext = Object.freeze({
+      ...context,
+      plan: null,
+      settledPlan,
+      pendingBinding: null,
+    });
+    const observed = await provider.inspect(inspectionContext);
     const inspection = validateDeploymentInspectionContext(observed, {
       profile: request.profile,
       providerSpec: request.providerSpec,
       head,
+      plan: null,
+      pendingBinding: null,
       now: sampleInspectionNow(),
     });
     assertInspectionAuthority(inspection, request, head);
@@ -1608,6 +1699,7 @@ export function createDeploymentController(dependencies) {
   async function finalize(plan, profile, head) {
     await assertPlanProviderScope(plan, profile);
     try {
+      const settledPlan = await readLastSettledPlan(head);
       const observed = await provider.inspect(
         Object.freeze({
           ...providerContext(
@@ -1623,12 +1715,16 @@ export function createDeploymentController(dependencies) {
             head,
           ),
           plan,
+          settledPlan,
+          pendingBinding: null,
         }),
       );
       const inspection = validateDeploymentInspectionContext(observed, {
         profile,
         providerSpec: plan.providerSpec,
         head,
+        plan,
+        pendingBinding: null,
         now: sampleInspectionNow(),
       });
       assertFinalInspection(inspection, plan, head);
@@ -1683,6 +1779,22 @@ export function createDeploymentController(dependencies) {
       /** @type {{status: 'converged', binding: Readonly<Record<string, any>>|null}|{status: 'not-converged'}|{status: 'blocked'}} */
       let settlement;
       if (intent.status === 'pending') {
+        const executionInspection = await inspectCurrentOperation(
+          plan,
+          profile,
+          head,
+        );
+        let shouldExecute;
+        try {
+          shouldExecute = assertActionExecutionEvidence(
+            action,
+            executionInspection,
+            head,
+            plan,
+          );
+        } catch {
+          return (await compareAndSet(head, createBlockedHead(head))).head;
+        }
         const intended = nextHead(head, {
           activeOperation: {
             ...withoutDerivedOperationId(head.activeOperation),
@@ -1701,26 +1813,10 @@ export function createDeploymentController(dependencies) {
         const transition = await compareAndSet(head, intended);
         if (!transition.applied) {
           throw new DeploymentControllerConflictError(
-            'Another controller already claimed this action intent.',
+            'This controller cannot prove that it durably claimed the action intent before execution.',
           );
         }
         head = transition.head;
-        const executionInspection = await inspectCurrentOperation(
-          plan,
-          profile,
-          head,
-        );
-        let shouldExecute;
-        try {
-          shouldExecute = assertActionExecutionEvidence(
-            action,
-            executionInspection,
-            head,
-            plan,
-          );
-        } catch {
-          return (await compareAndSet(head, createBlockedHead(head))).head;
-        }
         if (shouldExecute) {
           await provider.executeAction(
             actionContext(plan, profile, head, actionIndex, artifactStage),
@@ -1751,7 +1847,7 @@ export function createDeploymentController(dependencies) {
           );
           let shouldExecute;
           try {
-            shouldExecute = assertActionExecutionEvidence(
+            shouldExecute = assertCreateReplayExecutionEvidence(
               action,
               executionInspection,
               head,
@@ -1793,9 +1889,11 @@ export function createDeploymentController(dependencies) {
         plan,
         profile,
         head,
-        action.action === 'create' && settlement.binding !== null
+        settlement.binding !== null &&
+          (action.action === 'create' ||
+            (action.action === 'verify' && action.management === 'external'))
           ? settlement.binding
-          : undefined,
+          : null,
       );
       try {
         assertActionSettlementEvidence(

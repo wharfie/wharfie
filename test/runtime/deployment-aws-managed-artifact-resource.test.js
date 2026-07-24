@@ -471,7 +471,7 @@ function makePlan(base, mode, artifactProviderResourceId = location(base).arn) {
               ? base.previousDeploymentRevision.deploymentRevisionId
               : base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:managed-artifact-inspection:v1',
           { mode },
         ),

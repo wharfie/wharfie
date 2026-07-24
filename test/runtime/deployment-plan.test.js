@@ -181,8 +181,8 @@ function makePlanInput(fixture, providerSpec = fixture.providerSpec) {
       headGeneration: 0,
       settledDeploymentRevisionId: null,
       inspectionId: semanticId(
-        'win5',
-        'wharfie:test:deployment-inspection:v5',
+        'win6',
+        'wharfie:test:deployment-inspection:v6',
         { absent: true },
       ),
     },
@@ -296,11 +296,78 @@ function makeHeadAuthority(fixture, pendingResourceKey = null) {
     },
     lastOperation: null,
   });
-  return { bindingByResourceKey, head, pendingBinding };
+  return { bindingByResourceKey, head, pendingBinding, plan };
 }
 
 /** @param {ReturnType<typeof makeFixture>} fixture */
-function makeDestroyedInspectionInput(fixture) {
+function makeDestroyedAuthority(fixture) {
+  const incarnationId = createDeploymentIncarnationId(Buffer.alloc(32, 1));
+  const bindingByResourceKey = new Map();
+  for (const [index, resource] of AWS_SINGLE_NODE_RESOURCE_GRAPH.resources
+    .filter(
+      (/** @type {Readonly<Record<string, any>>} */ resource) =>
+        resource.onDestroy === 'retain',
+    )
+    .entries()) {
+    const binding = createDeploymentResourceBinding({
+      schemaVersion: 2,
+      kind: 'deploymentResourceBinding',
+      deploymentInstanceId: fixture.deploymentInstanceId,
+      incarnationId,
+      resourceKey: resource.resourceKey,
+      capability: resource.capability,
+      role: resource.role,
+      management: 'managed',
+      ownershipMode: resource.ownershipMode,
+      onDestroy: resource.onDestroy,
+      dependencyBindings: [],
+      providerType: resource.providerType,
+      providerResourceId: `provider-${resource.resourceKey}`,
+      providerScopeId: fixture.providerScope.providerScopeId,
+      ownershipNonce: ownershipNonce(index + 20),
+      createdByActionId: semanticId(
+        'wda3',
+        'wharfie:test:destroyed-binding-action:v1',
+        { resourceKey: resource.resourceKey },
+      ),
+    });
+    bindingByResourceKey.set(resource.resourceKey, binding);
+  }
+  const resourceBindings = [...bindingByResourceKey.values()];
+  const head = createDeploymentHead({
+    deploymentInstanceId: fixture.deploymentInstanceId,
+    providerScope: fixture.providerScope,
+    incarnationId,
+    generation: 7,
+    phase: 'DESTROYED',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId: null,
+    resourceBindings,
+    activeOperation: null,
+    lastOperation: {
+      kind: 'destroy',
+      planId: semanticId('wpl3', 'wharfie:test:destroyed-plan:v1', {
+        bindingIds: resourceBindings.map((binding) => binding.bindingId),
+      }),
+      intents: [
+        {
+          actionId: semanticId('wda3', 'wharfie:test:destroyed-action:v1', {
+            destroyed: true,
+          }),
+          status: 'settled',
+          ownershipNonce: ownershipNonce(30),
+        },
+      ],
+    },
+  });
+  return { bindingByResourceKey, head };
+}
+
+/**
+ * @param {ReturnType<typeof makeFixture>} fixture
+ * @param {Map<string, Readonly<Record<string, any>>>} bindingByResourceKey
+ */
+function makeDestroyedInspectionInput(fixture, bindingByResourceKey) {
   return {
     deploymentRevision: fixture.deploymentRevision,
     providerScope: fixture.providerScope,
@@ -313,6 +380,13 @@ function makeDestroyedInspectionInput(fixture) {
     resources: AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.map(
       (/** @type {Readonly<Record<string, any>>} */ resource) => {
         const retained = resource.onDestroy === 'retain';
+        const binding = bindingByResourceKey.get(resource.resourceKey);
+        const exactBinding = retained ? binding : null;
+        if (exactBinding === undefined) {
+          throw new Error(
+            `Missing destroyed fixture binding '${resource.resourceKey}'.`,
+          );
+        }
         return {
           resourceKey: resource.resourceKey,
           capability: resource.capability,
@@ -321,13 +395,9 @@ function makeDestroyedInspectionInput(fixture) {
           ownershipMode: resource.ownershipMode,
           dependsOn: resource.dependsOn,
           onDestroy: resource.onDestroy,
-          bindingId: retained ? bindingId(resource.resourceKey) : null,
-          dependencyBindings: retained
-            ? [...resource.dependsOn].sort().map((resourceKey) => ({
-                resourceKey,
-                bindingId: bindingId(resourceKey),
-              }))
-            : null,
+          bindingId: exactBinding === null ? null : exactBinding.bindingId,
+          dependencyBindings:
+            exactBinding === null ? null : exactBinding.dependencyBindings,
           presence: retained ? 'present' : 'absent',
           presenceEvidence: retained ? 'exact-read' : 'authoritative-not-found',
           ownership: retained ? 'verified' : 'missing',
@@ -343,6 +413,7 @@ function makeDestroyedInspectionInput(fixture) {
             : null,
           health: retained ? 'not-applicable' : 'absent',
           service: null,
+          execution: 'none',
         };
       },
     ),
@@ -392,6 +463,7 @@ function makePresentInspectionInput(fixture, bindingByResourceKey = new Map()) {
         health:
           resource.resourceKey === 'substrate' ? 'starting' : 'not-applicable',
         service: null,
+        execution: 'none',
       }),
     ),
   };
@@ -613,9 +685,23 @@ describe('deployment plan v3', () => {
       /schemaVersion must be the integer 3/i,
     );
   });
+
+  it('binds PlanV3 only to InspectionV6 identities', () => {
+    const fixture = makeFixture();
+    const input = makePlanInput(fixture);
+    input.basis.inspectionId = semanticId(
+      'win5',
+      'wharfie:deployment-inspection:v5',
+      { legacy: true },
+    );
+
+    expect(() =>
+      createDeploymentPlan(input, { profile: fixture.profile }),
+    ).toThrow(/win6/i);
+  });
 });
 
-describe('deployment inspection v5', () => {
+describe('deployment inspection v6', () => {
   it('binds provider evidence to a full context-checked specification', () => {
     const fixture = makeFixture();
     const inspection = createDeploymentInspection(
@@ -633,32 +719,39 @@ describe('deployment inspection v5', () => {
         status: 'absent',
         resources: [],
       },
-      { profile: fixture.profile, providerSpec: fixture.providerSpec },
+      {
+        profile: fixture.profile,
+        providerSpec: fixture.providerSpec,
+        head: null,
+        plan: null,
+      },
     );
 
-    expect(inspection.schemaVersion).toBe(5);
-    expect(inspection.inspectionId).toMatch(/^win5_[A-Za-z0-9_-]{43}$/);
+    expect(inspection.schemaVersion).toBe(6);
+    expect(inspection.inspectionId).toMatch(/^win6_[A-Za-z0-9_-]{43}$/);
     expect(inspection.providerSpecId).toBe(fixture.providerSpec.providerSpecId);
     expect(validateDeploymentInspection(clone(inspection))).toEqual(inspection);
     expect(
       validateDeploymentInspectionContext(clone(inspection), {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
+        head: null,
+        plan: null,
       }),
     ).toEqual(inspection);
 
-    const v4 = /** @type {Record<string, any>} */ (clone(inspection));
-    v4.schemaVersion = 4;
-    expect(() => validateDeploymentInspection(v4)).toThrow(
-      /schemaVersion must be the integer 5/i,
+    const v5 = /** @type {Record<string, any>} */ (clone(inspection));
+    v5.schemaVersion = 5;
+    expect(() => validateDeploymentInspection(v5)).toThrow(
+      /schemaVersion must be the integer 6/i,
     );
     const legacyId = /** @type {Record<string, any>} */ (clone(inspection));
     legacyId.inspectionId = semanticId(
-      'win4',
-      'wharfie:deployment-inspection:v4',
+      'win5',
+      'wharfie:deployment-inspection:v5',
       { legacy: true },
     );
-    expect(() => validateDeploymentInspection(legacyId)).toThrow(/win5/i);
+    expect(() => validateDeploymentInspection(legacyId)).toThrow(/win6/i);
 
     const otherSpec = makeProviderSpec(
       fixture.profile,
@@ -669,15 +762,23 @@ describe('deployment inspection v5', () => {
       validateDeploymentInspectionContext(inspection, {
         profile: fixture.profile,
         providerSpec: otherSpec,
+        head: null,
+        plan: null,
       }),
     ).toThrow(/providerSpecId does not match/i);
   });
 
   it('uses per-role destroy policy for retained volumes and purged attachments', () => {
     const fixture = makeFixture();
+    const authority = makeDestroyedAuthority(fixture);
     const inspection = createDeploymentInspection(
-      makeDestroyedInspectionInput(fixture),
-      { profile: fixture.profile, providerSpec: fixture.providerSpec },
+      makeDestroyedInspectionInput(fixture, authority.bindingByResourceKey),
+      {
+        profile: fixture.profile,
+        providerSpec: fixture.providerSpec,
+        head: authority.head,
+        plan: null,
+      },
     );
 
     expect(
@@ -715,6 +816,7 @@ describe('deployment inspection v5', () => {
       profile: fixture.profile,
       providerSpec: fixture.providerSpec,
       head: authority.head,
+      plan: authority.plan,
     });
     expect(
       inspection.resources.find(
@@ -744,6 +846,7 @@ describe('deployment inspection v5', () => {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
         head: authority.head,
+        plan: authority.plan,
       }),
     ).toThrow(/binding evidence does not match the exact head/i);
   });
@@ -766,6 +869,7 @@ describe('deployment inspection v5', () => {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
         head: authority.head,
+        plan: authority.plan,
       }),
     ).toThrow(/binding evidence does not match the exact head/i);
   });
@@ -811,6 +915,7 @@ describe('deployment inspection v5', () => {
           profile: fixture.profile,
           providerSpec: fixture.providerSpec,
           head,
+          plan: authority.plan,
         },
       ),
     ).toThrow(/does not match the exact AWS single-node resource graph/i);
@@ -832,6 +937,7 @@ describe('deployment inspection v5', () => {
       profile: fixture.profile,
       providerSpec: fixture.providerSpec,
       head: authority.head,
+      plan: authority.plan,
       pendingBinding,
     });
     expect(
@@ -852,9 +958,12 @@ describe('deployment inspection v5', () => {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
         head: authority.head,
+        plan: authority.plan,
         pendingBinding: wrongNonce,
       }),
-    ).toThrow(/current intent ownership authority/i);
+    ).toThrow(
+      /current create.*action metadata|current intent ownership authority/i,
+    );
 
     const unresolvedDependencyInput = /** @type {Record<string, any>} */ (
       clone(pendingBinding)
@@ -871,15 +980,23 @@ describe('deployment inspection v5', () => {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
         head: authority.head,
+        plan: authority.plan,
         pendingBinding: unresolvedDependency,
       }),
-    ).toThrow(/does not resolve to the exact durable head binding/i);
+    ).toThrow(
+      /do not resolve to the exact current create action and durable head|does not resolve to the exact durable head binding/i,
+    );
   });
 
-  it('rejects noncanonical graph order, presence evidence, service role, and v3', () => {
+  it('rejects noncanonical graph order, presence evidence, service role, and v5', () => {
     const fixture = makeFixture();
+    const destroyedAuthority = makeDestroyedAuthority(fixture);
+    const presentAuthority = makeHeadAuthority(fixture);
 
-    const unordered = makeDestroyedInspectionInput(fixture);
+    const unordered = makeDestroyedInspectionInput(
+      fixture,
+      destroyedAuthority.bindingByResourceKey,
+    );
     [unordered.resources[0], unordered.resources[1]] = [
       unordered.resources[1],
       unordered.resources[0],
@@ -888,28 +1005,43 @@ describe('deployment inspection v5', () => {
       createDeploymentInspection(unordered, {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
+        head: destroyedAuthority.head,
+        plan: null,
       }),
     ).toThrow(/topological apply order/i);
 
-    const wrongEvidence = makeDestroyedInspectionInput(fixture);
+    const wrongEvidence = makeDestroyedInspectionInput(
+      fixture,
+      destroyedAuthority.bindingByResourceKey,
+    );
     wrongEvidence.resources[0].presenceEvidence = 'access-failure';
     expect(() =>
       createDeploymentInspection(wrongEvidence, {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
+        head: destroyedAuthority.head,
+        plan: null,
       }),
     ).toThrow(/presenceEvidence must be 'authoritative-not-found'/i);
 
-    const contradictoryAbsence = makeDestroyedInspectionInput(fixture);
+    const contradictoryAbsence = makeDestroyedInspectionInput(
+      fixture,
+      destroyedAuthority.bindingByResourceKey,
+    );
     contradictoryAbsence.resources[0].ownership = 'verified';
     expect(() =>
       createDeploymentInspection(contradictoryAbsence, {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
+        head: destroyedAuthority.head,
+        plan: null,
       }),
-    ).toThrow(/absent managed resources must report missing ownership/i);
+    ).toThrow(/absent (?:managed )?resources must report missing ownership/i);
 
-    const contradictoryUnknown = makePresentInspectionInput(fixture);
+    const contradictoryUnknown = makePresentInspectionInput(
+      fixture,
+      presentAuthority.bindingByResourceKey,
+    );
     contradictoryUnknown.resources[0] = {
       ...contradictoryUnknown.resources[0],
       bindingId: null,
@@ -925,10 +1057,15 @@ describe('deployment inspection v5', () => {
       createDeploymentInspection(contradictoryUnknown, {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
+        head: presentAuthority.head,
+        plan: presentAuthority.plan,
       }),
-    ).toThrow(/unknown managed resources must report unknown ownership/i);
+    ).toThrow(/unknown (?:managed )?resources must report unknown ownership/i);
 
-    const wrongServiceRole = makePresentInspectionInput(fixture);
+    const wrongServiceRole = makePresentInspectionInput(
+      fixture,
+      presentAuthority.bindingByResourceKey,
+    );
     wrongServiceRole.resources[0] = {
       ...wrongServiceRole.resources[0],
       health: 'starting',
@@ -943,17 +1080,27 @@ describe('deployment inspection v5', () => {
       createDeploymentInspection(wrongServiceRole, {
         profile: fixture.profile,
         providerSpec: fixture.providerSpec,
+        head: presentAuthority.head,
+        plan: presentAuthority.plan,
       }),
     ).toThrow(/service is supported only for the substrate node/i);
 
     const inspection = createDeploymentInspection(
-      makeDestroyedInspectionInput(fixture),
-      { profile: fixture.profile, providerSpec: fixture.providerSpec },
+      makeDestroyedInspectionInput(
+        fixture,
+        destroyedAuthority.bindingByResourceKey,
+      ),
+      {
+        profile: fixture.profile,
+        providerSpec: fixture.providerSpec,
+        head: destroyedAuthority.head,
+        plan: null,
+      },
     );
     const oldVersion = /** @type {Record<string, any>} */ (clone(inspection));
-    oldVersion.schemaVersion = 4;
+    oldVersion.schemaVersion = 5;
     expect(() => validateDeploymentInspection(oldVersion)).toThrow(
-      /schemaVersion must be the integer 5/i,
+      /schemaVersion must be the integer 6/i,
     );
   });
 });

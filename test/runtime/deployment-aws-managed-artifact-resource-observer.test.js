@@ -201,7 +201,7 @@ function makeCreatePlan(base) {
         headGeneration: 0,
         settledDeploymentRevisionId: null,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:managed-artifact-observer-inspection:v1',
           {},
         ),
@@ -466,7 +466,7 @@ function makeDeleteFixture() {
         settledDeploymentRevisionId:
           base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:managed-artifact-observer-delete-inspection:v1',
           { headId: readyHead.headId },
         ),

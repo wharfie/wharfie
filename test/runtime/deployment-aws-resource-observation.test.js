@@ -6,6 +6,7 @@ import {
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_OWNERSHIP,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_PRESENCES,
   AWS_SINGLE_NODE_RESOURCE_OBSERVATION_ROUTE_UNSUPPORTED,
+  AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS,
   AwsSingleNodeResourceObservationRouteUnsupportedError,
   createAwsSingleNodeResourceObservationRouter,
   validateAwsSingleNodeResourceObservation,
@@ -67,6 +68,12 @@ const SUBSTRATE_OWNED_HEALTH = Object.freeze([
 const SUBSTRATE_CONFLICT_HEALTH = Object.freeze([
   ...SUBSTRATE_OWNED_HEALTH,
   'unknown',
+]);
+const EXPECTED_REPLAY_SAFE_CREATE_RESOURCE_KEYS = Object.freeze([
+  'application-state',
+  'control-state',
+  'network-route-table',
+  'substrate',
 ]);
 const DIGEST = Object.freeze({
   algorithm: 'sha256',
@@ -202,6 +209,9 @@ describe('AWS single-node resource observation contract', () => {
       'none',
       'replay-safe-create',
     ]);
+    expect(AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS).toEqual(
+      EXPECTED_REPLAY_SAFE_CREATE_RESOURCE_KEYS,
+    );
     expect(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_HEALTH).not.toContain(
       'healthy',
     );
@@ -217,6 +227,19 @@ describe('AWS single-node resource observation contract', () => {
     expect(
       Object.isFrozen(AWS_SINGLE_NODE_RESOURCE_OBSERVATION_EXECUTIONS),
     ).toBe(true);
+    expect(
+      Object.isFrozen(AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS),
+    ).toBe(true);
+    expect(
+      Reflect.set(
+        AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS,
+        0,
+        'artifact',
+      ),
+    ).toBe(false);
+    expect(AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS).toEqual(
+      EXPECTED_REPLAY_SAFE_CREATE_RESOURCE_KEYS,
+    );
   });
 
   it.each([
@@ -224,14 +247,57 @@ describe('AWS single-node resource observation contract', () => {
     ['unknown', unknownObservation('artifact')],
     [
       'replay-safe create',
-      unknownObservation('artifact', { execution: 'replay-safe-create' }),
+      unknownObservation('application-state', {
+        execution: 'replay-safe-create',
+      }),
     ],
   ])('accepts and deeply freezes the exact %s union', (_name, input) => {
-    const result = validateAwsSingleNodeResourceObservation(input, 'artifact');
+    const result = validateAwsSingleNodeResourceObservation(
+      input,
+      input.resourceKey,
+    );
 
     expect(result).toEqual(input);
     expect(result).not.toBe(input);
     expectDeepFrozen(result);
+  });
+
+  it('accepts replay-safe create advice for exactly the four stable-token resource roles', () => {
+    for (const resourceKey of EXPECTED_REPLAY_SAFE_CREATE_RESOURCE_KEYS) {
+      const input = unknownObservation(resourceKey, {
+        execution: 'replay-safe-create',
+      });
+
+      expect(
+        validateAwsSingleNodeResourceObservation(input, resourceKey),
+      ).toEqual(input);
+    }
+  });
+
+  it('rejects replay-safe create advice for every resource role without a stable create token', () => {
+    const unsupportedResourceKeys = AWS_SINGLE_NODE_RESOURCE_GRAPH.resources
+      .map(
+        (/** @type {Readonly<Record<string, any>>} */ resource) =>
+          /** @type {string} */ (resource.resourceKey),
+      )
+      .filter(
+        (/** @type {string} */ resourceKey) =>
+          !EXPECTED_REPLAY_SAFE_CREATE_RESOURCE_KEYS.includes(resourceKey),
+      );
+
+    expect(unsupportedResourceKeys).toHaveLength(14);
+    for (const resourceKey of unsupportedResourceKeys) {
+      expect(() =>
+        validateAwsSingleNodeResourceObservation(
+          unknownObservation(resourceKey, {
+            execution: 'replay-safe-create',
+          }),
+          resourceKey,
+        ),
+      ).toThrow(
+        /replay-safe create execution is not supported for this resourceKey/i,
+      );
+    }
   });
 
   it.each(['verified', 'external', 'conflict'])(
@@ -615,38 +681,27 @@ describe('AWS single-node resource observation router', () => {
 
   it('accepts replay-safe create only for the exact routed current create authority', async () => {
     const ownershipNonce = Buffer.alloc(32, 0x49).toString('base64url');
-    const validContexts = [
-      {
-        target: { resourceKey: 'application-state' },
+    const validContexts = EXPECTED_REPLAY_SAFE_CREATE_RESOURCE_KEYS.map(
+      (resourceKey) => ({
+        target: { resourceKey },
         currentAction: {
           action: {
             action: 'create',
             actionId: ACTION_ID,
             management: 'managed',
             ownershipMode: 'direct',
-            resourceKey: 'application-state',
+            resourceKey,
           },
           ownershipNonce,
         },
-      },
-      {
-        target: { resourceKey: 'control-state' },
-        currentAction: {
-          action: {
-            action: 'create',
-            actionId: ACTION_ID,
-            management: 'managed',
-            ownershipMode: 'direct',
-            resourceKey: 'control-state',
-          },
-          ownershipNonce,
-        },
-      },
-    ];
+      }),
+    );
 
     for (const context of validContexts) {
       const observers = createObservers();
-      observers.volume.observe.mockImplementationOnce(async () =>
+      const observerKey =
+        EXPECTED_RESOURCE_OBSERVER[context.target.resourceKey];
+      observers[observerKey].observe.mockImplementationOnce(async () =>
         unknownObservation(context.target.resourceKey, {
           execution: 'replay-safe-create',
         }),
@@ -660,6 +715,52 @@ describe('AWS single-node resource observation router', () => {
           execution: 'replay-safe-create',
         }),
       );
+    }
+  });
+
+  it('rejects replay-safe create from every routed role without a stable create token even with otherwise exact create authority', async () => {
+    const ownershipNonce = Buffer.alloc(32, 0x49).toString('base64url');
+    const unsupportedResourceKeys = AWS_SINGLE_NODE_RESOURCE_GRAPH.resources
+      .map(
+        (/** @type {Readonly<Record<string, any>>} */ resource) =>
+          /** @type {string} */ (resource.resourceKey),
+      )
+      .filter(
+        (/** @type {string} */ resourceKey) =>
+          !EXPECTED_REPLAY_SAFE_CREATE_RESOURCE_KEYS.includes(resourceKey),
+      );
+
+    expect(unsupportedResourceKeys).toHaveLength(14);
+    for (const resourceKey of unsupportedResourceKeys) {
+      const observers = createObservers();
+      const observerKey = EXPECTED_RESOURCE_OBSERVER[resourceKey];
+      observers[observerKey].observe.mockImplementationOnce(async () =>
+        unknownObservation(resourceKey, {
+          execution: 'replay-safe-create',
+        }),
+      );
+      const router = createAwsSingleNodeResourceObservationRouter({
+        observers,
+      });
+      const context = {
+        target: { resourceKey },
+        currentAction: {
+          action: {
+            action: 'create',
+            actionId: ACTION_ID,
+            management: 'managed',
+            ownershipMode: 'direct',
+            resourceKey,
+          },
+          ownershipNonce,
+        },
+      };
+
+      await expect(router.observeResource(context)).rejects.toThrow(
+        /replay-safe create execution is not supported for this resourceKey/i,
+      );
+      expect(observers[observerKey].observe).toHaveBeenCalledTimes(1);
+      expect(totalObserverCalls(observers)).toBe(1);
     }
   });
 

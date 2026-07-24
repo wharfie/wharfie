@@ -35,12 +35,14 @@ import {
   validateDeploymentResourceRole,
   validateProviderResourceId,
 } from './deployment-resource-binding.js';
+import { AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS } from './deployment-aws-resource-observation.js';
 import {
   AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES,
   getAwsSingleNodeResourceApplyOrder,
   getAwsSingleNodeResourceDefinition,
 } from './deployment-resource-graph.js';
 import { validateDeploymentRevision } from './deployment-revision.js';
+import { validateDeploymentPlanContext } from './deployment-plan.js';
 import {
   getDeploymentServiceHealthObjectLocation,
   validateDeploymentServiceHealthReceiptContext,
@@ -53,11 +55,11 @@ import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 5;
+export const DEPLOYMENT_INSPECTION_SCHEMA_VERSION = 6;
 export const DEPLOYMENT_INSPECTION_KIND = 'deploymentInspection';
 export const DEPLOYMENT_INSPECTION_ID_DOMAIN =
-  'wharfie:deployment-inspection:v5';
-export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win5';
+  'wharfie:deployment-inspection:v6';
+export const DEPLOYMENT_INSPECTION_ID_PREFIX = 'win6';
 export const DEPLOYMENT_INSPECTION_STATUSES = Object.freeze([
   'absent',
   'converged',
@@ -100,6 +102,7 @@ const RESOURCE_KEYS = new Set([
   'observedDigest',
   'health',
   'service',
+  'execution',
 ]);
 const CAPABILITY_KEYS = new Set(['kind', 'version']);
 const PROVIDER_IDENTITY_KEYS = new Set(['providerType', 'providerResourceId']);
@@ -140,6 +143,10 @@ const HEALTH_VALUES = new Set([
   'unknown',
   'not-applicable',
 ]);
+const EXECUTION_VALUES = new Set(['none', 'replay-safe-create']);
+const REPLAY_SAFE_CREATE_RESOURCE_KEYS = new Set(
+  AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS,
+);
 const MAX_INSPECTION_RESOURCES = AWS_SINGLE_NODE_RESOURCE_GRAPH_MAX_RESOURCES;
 
 /** @param {Record<string, any>} value @param {Set<string>} keys @param {string} path @returns {void} */
@@ -407,32 +414,25 @@ function validateResource(value, path) {
   if (!HEALTH_VALUES.has(resource.health)) {
     throw new TypeError(`${path}.health is not supported.`);
   }
-  if (resource.management === 'external' && resource.ownership !== 'external') {
-    throw new Error(
-      `${path} external resources must report external ownership.`,
-    );
-  }
   if (resource.management === 'managed' && resource.ownership === 'external') {
     throw new Error(
       `${path} managed resources cannot report external ownership.`,
     );
   }
-  if (
-    resource.management === 'managed' &&
-    resource.presence === 'absent' &&
-    resource.ownership !== 'missing'
-  ) {
-    throw new Error(
-      `${path} absent managed resources must report missing ownership.`,
-    );
+  if (resource.presence === 'absent' && resource.ownership !== 'missing') {
+    throw new Error(`${path} absent resources must report missing ownership.`);
+  }
+  if (resource.presence === 'unknown' && resource.ownership !== 'unknown') {
+    throw new Error(`${path} unknown resources must report unknown ownership.`);
   }
   if (
-    resource.management === 'managed' &&
-    resource.presence === 'unknown' &&
-    resource.ownership !== 'unknown'
+    resource.management === 'external' &&
+    resource.presence === 'present' &&
+    resource.ownership !== 'external' &&
+    resource.ownership !== 'conflict'
   ) {
     throw new Error(
-      `${path} unknown managed resources must report unknown ownership.`,
+      `${path} present external resources must report external or conflict ownership evidence.`,
     );
   }
   const providerIdentity = validateProviderIdentity(
@@ -453,19 +453,24 @@ function validateResource(value, path) {
     `${path}.dependencyBindings`,
   );
   const bindingId = validateBindingId(resource.bindingId, `${path}.bindingId`);
-  const hasExactBindingEvidence =
+  const hasExactOwnershipEvidence =
     resource.presence === 'present' &&
     ((resource.management === 'managed' && resource.ownership === 'verified') ||
       (resource.management === 'external' &&
         resource.ownership === 'external'));
+  const hasCompleteBindingLineage =
+    bindingId !== null && dependencyBindings !== null;
+  const hasPartialBindingLineage =
+    (bindingId === null) !== (dependencyBindings === null);
   if (
-    (hasExactBindingEvidence &&
-      (bindingId === null || dependencyBindings === null)) ||
-    (!hasExactBindingEvidence &&
-      (bindingId !== null || dependencyBindings !== null))
+    hasPartialBindingLineage ||
+    (hasExactOwnershipEvidence &&
+      resource.management === 'managed' &&
+      !hasCompleteBindingLineage) ||
+    (!hasExactOwnershipEvidence && hasCompleteBindingLineage)
   ) {
     throw new Error(
-      `${path} exact present ownership evidence requires bindingId and dependencyBindings; other evidence requires both to be null.`,
+      `${path} exact managed ownership evidence requires complete binding lineage; exact external evidence may be transiently unbound; all other evidence requires null lineage.`,
     );
   }
   if (
@@ -489,6 +494,9 @@ function validateResource(value, path) {
       ? null
       : validateSha256Digest(resource.observedDigest, `${path}.observedDigest`);
   const service = validateService(resource.service, `${path}.service`);
+  if (!EXECUTION_VALUES.has(resource.execution)) {
+    throw new TypeError(`${path}.execution is not supported.`);
+  }
   if (resource.resourceKey !== 'substrate' && service !== null) {
     throw new Error(
       `${path}.service is supported only for the substrate node.`,
@@ -516,6 +524,24 @@ function validateResource(value, path) {
   if (resource.presence === 'unknown' && resource.health !== 'unknown') {
     throw new Error(`${path}.health must be unknown when presence is unknown.`);
   }
+  if (
+    resource.execution === 'replay-safe-create' &&
+    (!REPLAY_SAFE_CREATE_RESOURCE_KEYS.has(resource.resourceKey) ||
+      resource.presence !== 'unknown' ||
+      resource.presenceEvidence !== 'access-failure' ||
+      resource.ownership !== 'unknown' ||
+      bindingId !== null ||
+      dependencyBindings !== null ||
+      providerIdentity !== null ||
+      desiredDigest === null ||
+      observedDigest !== null ||
+      resource.health !== 'unknown' ||
+      service !== null)
+  ) {
+    throw new Error(
+      `${path} replay-safe create execution requires one supported resource with unknown access-failure evidence, a desired digest, and no invented binding, identity, observed state, or service proof.`,
+    );
+  }
   return deepFreeze({
     resourceKey: resource.resourceKey,
     capability,
@@ -534,12 +560,21 @@ function validateResource(value, path) {
     observedDigest,
     health: resource.health,
     service,
+    execution: resource.execution,
   });
 }
 
 /** @param {Record<string, any>} left @param {Record<string, any>} right @returns {boolean} */
 function digestsEqual(left, right) {
   return left.algorithm === right.algorithm && left.value === right.value;
+}
+
+/** @param {unknown} left @param {unknown} right @returns {boolean} */
+function sameCanonicalJson(left, right) {
+  return (
+    JSON.stringify(sortCanonicalJsonValue(left)) ===
+    JSON.stringify(sortCanonicalJsonValue(right))
+  );
 }
 
 /** @param {string} status @param {Readonly<Record<string, any>>[]} resources @param {Readonly<Record<string, string>>} controlState @param {string|null} incarnationId @param {number} generation @param {string} path @returns {void} */
@@ -634,6 +669,8 @@ function assertStatusEvidence(
           resource.presence !== 'present' ||
           (resource.ownership !== 'verified' &&
             resource.ownership !== 'external') ||
+          resource.bindingId === null ||
+          resource.dependencyBindings === null ||
           resource.desiredDigest === null ||
           resource.observedDigest === null ||
           !digestsEqual(resource.desiredDigest, resource.observedDigest) ||
@@ -653,6 +690,10 @@ function assertStatusEvidence(
       (resource) =>
         resource.presence === 'absent' ||
         resource.ownership === 'missing' ||
+        (resource.management === 'external' &&
+          resource.presence === 'present' &&
+          resource.ownership === 'external' &&
+          resource.bindingId === null) ||
         resource.desiredDigest === null ||
         resource.observedDigest === null ||
         !digestsEqual(resource.desiredDigest, resource.observedDigest),
@@ -673,6 +714,20 @@ function assertStatusEvidence(
       `${path} degraded status requires unhealthy resource evidence.`,
     );
   }
+  if (
+    status === 'destroyed' &&
+    resources.some(
+      (resource) =>
+        resource.management === 'external' &&
+        resource.presence === 'present' &&
+        resource.ownership === 'external' &&
+        (resource.bindingId === null || resource.dependencyBindings === null),
+    )
+  ) {
+    throw new Error(
+      `${path} destroyed status cannot rely on unbound external resource evidence.`,
+    );
+  }
 }
 
 /**
@@ -680,7 +735,8 @@ function assertStatusEvidence(
  * @param {Readonly<Record<string, any>>} payload - Canonical inspection payload.
  * @param {Readonly<Record<string, any>>} profile - Exact deployment profile.
  * @param {unknown} providerSpec - Exact resolved provider specification.
- * @param {unknown} head - Optional exact durable head for full receipt lineage validation.
+ * @param {unknown} head - Required discriminated head authority: exact head, null absence, or undefined uncertainty/conflict.
+ * @param {unknown} plan - Exact active PlanV3, or null without an active operation.
  * @param {unknown} pendingBinding - Optional just-settled binding not yet published in the durable head.
  * @param {unknown} now - Explicit sampled epoch milliseconds for health freshness validation.
  * @param {string} path - Human-readable value path.
@@ -691,6 +747,7 @@ function assertInspectionContext(
   profile,
   providerSpec,
   head,
+  plan,
   pendingBinding,
   now,
   path,
@@ -699,6 +756,18 @@ function assertInspectionContext(
     head === undefined || head === null
       ? head
       : validateDeploymentHead(head, `${path} context.head`);
+  if (
+    (payload.controlState.status === 'present' &&
+      (canonicalHead === undefined || canonicalHead === null)) ||
+    (payload.controlState.status === 'absent' && canonicalHead !== null) ||
+    ((payload.controlState.status === 'unknown' ||
+      payload.controlState.status === 'conflict') &&
+      canonicalHead !== undefined)
+  ) {
+    throw new Error(
+      `${path} context.head must be an exact non-null head for present control state, null only for authoritative absence, and explicit undefined for unknown or conflicting control state.`,
+    );
+  }
   if (
     canonicalHead !== undefined &&
     canonicalHead !== null &&
@@ -737,6 +806,86 @@ function assertInspectionContext(
     );
   }
 
+  const canonicalPlan =
+    plan === null
+      ? null
+      : validateDeploymentPlanContext(plan, {
+          profile,
+        });
+  const activeOperation =
+    canonicalHead === undefined || canonicalHead === null
+      ? null
+      : canonicalHead.activeOperation;
+  if ((activeOperation === null) !== (canonicalPlan === null)) {
+    throw new Error(
+      `${path} context.plan must contain the exact active plan iff context.head has an active operation.`,
+    );
+  }
+
+  /** @type {{actionIndex: number, action: Readonly<Record<string, any>>, intent: Readonly<Record<string, any>>}|null} */
+  let currentActionAuthority = null;
+  if (
+    canonicalPlan !== null &&
+    activeOperation !== null &&
+    canonicalHead !== undefined &&
+    canonicalHead !== null
+  ) {
+    const expectedOperationKind =
+      canonicalPlan.operation === 'destroy'
+        ? 'destroy'
+        : canonicalHead.settledDeploymentRevisionId === null
+          ? 'create'
+          : canonicalHead.settledDeploymentRevisionId ===
+              canonicalPlan.deploymentRevision.deploymentRevisionId
+            ? 'reconcile'
+            : 'update';
+    const expectedPlanOperation =
+      expectedOperationKind === 'destroy'
+        ? 'destroy'
+        : expectedOperationKind === 'reconcile'
+          ? 'reconcile'
+          : 'apply';
+    if (
+      canonicalPlan.operation !== expectedPlanOperation ||
+      !sameCanonicalJson(
+        canonicalPlan.deploymentRevision,
+        payload.deploymentRevision,
+      ) ||
+      !sameCanonicalJson(canonicalPlan.providerScope, payload.providerScope) ||
+      !sameCanonicalJson(canonicalPlan.providerSpec, canonicalProviderSpec) ||
+      canonicalPlan.deploymentInstanceId !== payload.deploymentInstanceId ||
+      canonicalPlan.incarnationId !== payload.incarnationId ||
+      activeOperation.planId !== canonicalPlan.planId ||
+      activeOperation.kind !== expectedOperationKind ||
+      canonicalPlan.basis.headGeneration >= canonicalHead.generation ||
+      canonicalPlan.basis.settledDeploymentRevisionId !==
+        canonicalHead.settledDeploymentRevisionId ||
+      canonicalHead.targetDeploymentRevisionId !==
+        (expectedOperationKind === 'destroy'
+          ? null
+          : payload.deploymentRevision.deploymentRevisionId) ||
+      activeOperation.intents.length !== canonicalPlan.actions.length ||
+      activeOperation.intents.some(
+        (
+          /** @type {Readonly<Record<string, any>>} */ intent,
+          /** @type {number} */ index,
+        ) => intent.actionId !== canonicalPlan.actions[index].actionId,
+      )
+    ) {
+      throw new Error(
+        `${path} context.plan does not match the exact head, revision, scope, provider specification, incarnation, and ordered action identities.`,
+      );
+    }
+    if (activeOperation.nextActionIndex < canonicalPlan.actions.length) {
+      const actionIndex = activeOperation.nextActionIndex;
+      currentActionAuthority = {
+        actionIndex,
+        action: canonicalPlan.actions[actionIndex],
+        intent: activeOperation.intents[actionIndex],
+      };
+    }
+  }
+
   const configurationKeyByCapability = new Map(
     Object.entries(DEPLOYMENT_CAPABILITY_IDS).map(([key, capability]) => [
       capability,
@@ -744,7 +893,7 @@ function assertInspectionContext(
     ]),
   );
 
-  const bindingByResourceKey =
+  const durableBindingByResourceKey =
     canonicalHead !== undefined && canonicalHead !== null
       ? new Map(
           canonicalHead.resourceBindings.map(
@@ -755,6 +904,10 @@ function assertInspectionContext(
           ),
         )
       : null;
+  const bindingByResourceKey =
+    durableBindingByResourceKey === null
+      ? null
+      : new Map(durableBindingByResourceKey);
   const canonicalPendingBinding =
     pendingBinding === undefined || pendingBinding === null
       ? null
@@ -763,19 +916,34 @@ function assertInspectionContext(
           `${path} context.pendingBinding`,
         );
   if (canonicalPendingBinding !== null) {
-    if (canonicalHead === undefined || canonicalHead === null) {
+    if (
+      canonicalHead === undefined ||
+      canonicalHead === null ||
+      canonicalPlan === null ||
+      currentActionAuthority === null
+    ) {
       throw new Error(
-        `${path} context.pendingBinding requires an exact durable head.`,
+        `${path} context.pendingBinding requires an exact active head and plan.`,
       );
     }
-    const operation = canonicalHead.activeOperation;
-    const currentIntent =
-      operation !== null && operation.nextActionIndex < operation.intents.length
-        ? operation.intents[operation.nextActionIndex]
-        : null;
-    if (currentIntent === null || currentIntent.status !== 'intended') {
+    const { action, actionIndex, intent } = currentActionAuthority;
+    const isManagedCreate =
+      action.management === 'managed' &&
+      action.action === 'create' &&
+      action.before === null &&
+      action.after !== null;
+    const isExternalVerify =
+      action.management === 'external' &&
+      action.action === 'verify' &&
+      action.before !== null &&
+      action.after !== null;
+    if (
+      intent.status !== 'intended' ||
+      (!isManagedCreate && !isExternalVerify) ||
+      action.after === null
+    ) {
       throw new Error(
-        `${path} context.pendingBinding requires an active intended current intent.`,
+        `${path} context.pendingBinding requires the exact active intended managed create or external verify action.`,
       );
     }
     if (
@@ -790,25 +958,84 @@ function assertInspectionContext(
       );
     }
     if (
-      bindingByResourceKey === null ||
-      bindingByResourceKey.has(canonicalPendingBinding.resourceKey)
+      durableBindingByResourceKey === null ||
+      durableBindingByResourceKey.has(canonicalPendingBinding.resourceKey)
     ) {
       throw new Error(
         `${path} context.pendingBinding resourceKey must not already exist in the durable head.`,
       );
     }
     if (
-      canonicalPendingBinding.management !== 'managed' ||
-      canonicalPendingBinding.ownershipNonce !== currentIntent.ownershipNonce ||
-      canonicalPendingBinding.createdByActionId !== currentIntent.actionId
+      canonicalPendingBinding.resourceKey !== action.resourceKey ||
+      !sameCanonicalJson(
+        canonicalPendingBinding.capability,
+        action.capability,
+      ) ||
+      !sameCanonicalJson(canonicalPendingBinding.role, action.role) ||
+      canonicalPendingBinding.management !== action.management ||
+      canonicalPendingBinding.ownershipMode !==
+        (action.management === 'external'
+          ? 'external'
+          : action.ownershipMode) ||
+      canonicalPendingBinding.onDestroy !== action.onDestroy ||
+      canonicalPendingBinding.providerType !== action.after.providerType ||
+      (action.after.providerResourceId !== null &&
+        canonicalPendingBinding.providerResourceId !==
+          action.after.providerResourceId) ||
+      (isManagedCreate &&
+        (canonicalPendingBinding.ownershipNonce !== intent.ownershipNonce ||
+          canonicalPendingBinding.createdByActionId !== action.actionId)) ||
+      (isExternalVerify && intent.ownershipNonce !== null)
     ) {
       throw new Error(
-        `${path} context.pendingBinding does not match the current intent ownership authority.`,
+        `${path} context.pendingBinding does not match the exact current create/verify action metadata, provider identity, and ownership authority.`,
       );
     }
-    for (const dependency of canonicalPendingBinding.dependencyBindings) {
+    const expectedDependencyBindings = action.dependsOn
+      .map((/** @type {string} */ resourceKey) => {
+        const dependency = durableBindingByResourceKey.get(resourceKey);
+        if (dependency === undefined) {
+          throw new Error(
+            `${path} context.pendingBinding dependency '${resourceKey}' is absent from the exact durable head.`,
+          );
+        }
+        const dependencyActionIndex = canonicalPlan.actions.findIndex(
+          (/** @type {Readonly<Record<string, any>>} */ candidate) =>
+            candidate.resourceKey === resourceKey,
+        );
+        if (
+          dependencyActionIndex < 0 ||
+          dependencyActionIndex >= actionIndex ||
+          activeOperation.intents[dependencyActionIndex]?.status !== 'settled'
+        ) {
+          throw new Error(
+            `${path} context.pendingBinding dependency '${resourceKey}' is not settled before the exact current create action.`,
+          );
+        }
+        return {
+          resourceKey,
+          bindingId: dependency.bindingId,
+        };
+      })
+      .sort(
+        (
+          /** @type {{resourceKey: string}} */ left,
+          /** @type {{resourceKey: string}} */ right,
+        ) => compareCanonicalStrings(left.resourceKey, right.resourceKey),
+      );
+    if (
+      !sameCanonicalJson(
+        canonicalPendingBinding.dependencyBindings,
+        expectedDependencyBindings,
+      )
+    ) {
+      throw new Error(
+        `${path} context.pendingBinding dependencies do not resolve to the exact current create action and durable head.`,
+      );
+    }
+    for (const dependency of expectedDependencyBindings) {
       if (
-        bindingByResourceKey.get(dependency.resourceKey)?.bindingId !==
+        durableBindingByResourceKey.get(dependency.resourceKey)?.bindingId !==
         dependency.bindingId
       ) {
         throw new Error(
@@ -816,10 +1043,138 @@ function assertInspectionContext(
         );
       }
     }
+    if (bindingByResourceKey === null) {
+      throw new Error(
+        `${path} context.pendingBinding requires durable binding authority.`,
+      );
+    }
     bindingByResourceKey.set(
       canonicalPendingBinding.resourceKey,
       canonicalPendingBinding,
     );
+  }
+
+  const replayAdvice =
+    payload.resources.find(
+      (/** @type {Readonly<Record<string, any>>} */ resource) =>
+        resource.execution === 'replay-safe-create',
+    ) ?? null;
+  if (replayAdvice !== null) {
+    if (canonicalPendingBinding !== null) {
+      throw new Error(
+        `${path} replay-safe create execution advice is forbidden after an exact pending binding has been returned.`,
+      );
+    }
+    const current = currentActionAuthority;
+    const action = current?.action ?? null;
+    const intent = current?.intent ?? null;
+    if (
+      canonicalPlan === null ||
+      activeOperation === null ||
+      durableBindingByResourceKey === null ||
+      current === null ||
+      action === null ||
+      intent === null ||
+      intent.status !== 'intended' ||
+      intent.ownershipNonce === null ||
+      action.action !== 'create' ||
+      action.management !== 'managed' ||
+      action.ownershipMode !== 'direct' ||
+      action.before !== null ||
+      action.after === null ||
+      action.after.providerResourceId !== null ||
+      action.after.stateDigest === null ||
+      action.resourceKey !== replayAdvice.resourceKey ||
+      !sameCanonicalJson(action.capability, replayAdvice.capability) ||
+      !sameCanonicalJson(action.role, replayAdvice.role) ||
+      action.management !== replayAdvice.management ||
+      action.ownershipMode !== replayAdvice.ownershipMode ||
+      !sameCanonicalJson(action.dependsOn, replayAdvice.dependsOn) ||
+      action.onDestroy !== replayAdvice.onDestroy ||
+      !digestsEqual(action.after.stateDigest, replayAdvice.desiredDigest) ||
+      durableBindingByResourceKey.has(action.resourceKey)
+    ) {
+      throw new Error(
+        `${path} replay-safe create execution advice does not match the exact current intended managed direct create action, desired digest, ownership nonce, and empty durable binding slot.`,
+      );
+    }
+  }
+
+  const unboundExternalResources = payload.resources.filter(
+    (/** @type {Readonly<Record<string, any>>} */ resource) =>
+      resource.management === 'external' &&
+      resource.presence === 'present' &&
+      resource.ownership === 'external' &&
+      resource.bindingId === null &&
+      resource.dependencyBindings === null,
+  );
+  for (const resource of unboundExternalResources) {
+    if (
+      canonicalHead === undefined ||
+      canonicalHead === null ||
+      bindingByResourceKey === null ||
+      bindingByResourceKey.has(resource.resourceKey)
+    ) {
+      throw new Error(
+        `${path} unbound external evidence requires an exact head with no durable or pending binding for that resource.`,
+      );
+    }
+    if (activeOperation === null) {
+      if (
+        canonicalHead.phase !== 'READY' ||
+        !['drifted', 'degraded', 'conflict', 'unknown'].includes(payload.status)
+      ) {
+        throw new Error(
+          `${path} unbound external evidence without an active operation is supported only as non-final READY-head planning evidence.`,
+        );
+      }
+      continue;
+    }
+    const actionIndex = canonicalPlan?.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === resource.resourceKey,
+    );
+    const action =
+      actionIndex === undefined || actionIndex < 0
+        ? null
+        : canonicalPlan?.actions[actionIndex];
+    const intent =
+      actionIndex === undefined || actionIndex < 0
+        ? null
+        : activeOperation.intents[actionIndex];
+    if (
+      canonicalPlan === null ||
+      actionIndex === undefined ||
+      actionIndex < 0 ||
+      action === null ||
+      action === undefined ||
+      intent === null ||
+      intent === undefined ||
+      !['in-flight', 'conflict', 'unknown'].includes(payload.status) ||
+      (intent.status !== 'pending' && intent.status !== 'intended') ||
+      action.action !== 'verify' ||
+      action.management !== 'external' ||
+      action.before === null ||
+      action.after === null ||
+      action.after.stateDigest === null ||
+      resource.providerIdentity === null ||
+      resource.observedDigest === null ||
+      resource.desiredDigest === null ||
+      action.after.providerType !== resource.providerIdentity.providerType ||
+      action.after.providerResourceId !==
+        resource.providerIdentity.providerResourceId ||
+      !digestsEqual(action.after.stateDigest, resource.desiredDigest) ||
+      !digestsEqual(action.after.stateDigest, resource.observedDigest) ||
+      !sameCanonicalJson(action.capability, resource.capability) ||
+      !sameCanonicalJson(action.role, resource.role) ||
+      action.ownershipMode !== resource.ownershipMode ||
+      !sameCanonicalJson(action.dependsOn, resource.dependsOn) ||
+      action.onDestroy !== resource.onDestroy
+    ) {
+      throw new Error(
+        `${path} active unbound external evidence must match one unsettled exact external verify action and cannot authorize final settlement.`,
+      );
+    }
   }
 
   if (bindingByResourceKey !== null) {
@@ -909,7 +1264,9 @@ function assertInspectionContext(
           (resource.management === 'managed' &&
             resource.ownership !== 'verified') ||
           (resource.management === 'external' &&
-            resource.ownership !== 'external'))
+            resource.ownership !== 'external') ||
+          resource.bindingId === null ||
+          resource.dependencyBindings === null)
       ) {
         throw new Error(
           `${path} destroyed status requires retained capability '${resource.capability.kind}' to remain present with exact ownership evidence.`,
@@ -924,6 +1281,8 @@ function assertInspectionContext(
 
     const hasExactBindingEvidence =
       resource.presence === 'present' &&
+      resource.bindingId !== null &&
+      resource.dependencyBindings !== null &&
       ((resource.management === 'managed' &&
         resource.ownership === 'verified') ||
         (resource.management === 'external' &&
@@ -1134,6 +1493,19 @@ function createPayload(value, path) {
     }
     seenResourceKeys.add(resource.resourceKey);
   }
+  const replayAdvice = resources.filter(
+    (resource) => resource.execution === 'replay-safe-create',
+  );
+  if (replayAdvice.length > 1) {
+    throw new Error(
+      `${path}.resources can carry replay-safe create execution advice for at most one resource.`,
+    );
+  }
+  if (replayAdvice.length === 1 && input.status !== 'in-flight') {
+    throw new Error(
+      `${path} replay-safe create execution advice requires in-flight status.`,
+    );
+  }
   if (controlState.status === 'present') {
     const expectedResourceOrder = getAwsSingleNodeResourceApplyOrder();
     if (
@@ -1174,7 +1546,7 @@ function createPayload(value, path) {
 /**
  * Create a deterministic redacted provider inspection.
  * @param {unknown} value - Inspection evidence without derived ID.
- * @param {{profile?: unknown, providerSpec?: unknown, head?: unknown, pendingBinding?: unknown, now?: unknown}} [context] - Exact immutable profile, resolved provider context, optional durable/pending binding authority, and explicit sampled time when health evidence is present.
+ * @param {{profile?: unknown, providerSpec?: unknown, head?: unknown, plan?: unknown, pendingBinding?: unknown, now?: unknown}} [context] - Exact immutable profile, resolved provider context, required-own discriminated head authority, nullable active plan, optional pending binding, and explicit sampled time when health evidence is present.
  * @returns {Readonly<Record<string, any>>} - Canonical inspection.
  */
 export function createDeploymentInspection(value, context = {}) {
@@ -1186,6 +1558,16 @@ export function createDeploymentInspection(value, context = {}) {
   if (!Object.prototype.hasOwnProperty.call(context, 'providerSpec')) {
     throw new TypeError(
       'deploymentInspection context.providerSpec is required to bind provider evidence.',
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(context, 'plan')) {
+    throw new TypeError(
+      'deploymentInspection context.plan is required and must be null without an active operation.',
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(context, 'head')) {
+    throw new TypeError(
+      'deploymentInspection context.head is required and must explicitly discriminate present, absent, unknown, or conflicting control state.',
     );
   }
   const profile = validateDeploymentProfile(
@@ -1200,6 +1582,7 @@ export function createDeploymentInspection(value, context = {}) {
     profile,
     context.providerSpec,
     context.head,
+    context.plan,
     context.pendingBinding,
     context.now,
     'deploymentInspection',
@@ -1225,7 +1608,7 @@ export function validateDeploymentInspection(
   const document = cloneJsonObject(value, valuePath);
   assertAllKeys(document, DOCUMENT_KEYS, valuePath);
   if (document.schemaVersion !== DEPLOYMENT_INSPECTION_SCHEMA_VERSION) {
-    throw new TypeError(`${valuePath}.schemaVersion must be the integer 5.`);
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 6.`);
   }
   if (document.kind !== DEPLOYMENT_INSPECTION_KIND) {
     throw new TypeError(
@@ -1273,11 +1656,21 @@ export function validateDeploymentInspection(
 /**
  * Re-resolve the immutable profile before using inspection evidence to mutate.
  * @param {unknown} value - Candidate inspection.
- * @param {{profile: unknown, providerSpec: unknown, head?: unknown, pendingBinding?: unknown, now?: unknown}} context - Exact immutable profile, resolved provider specification, optional durable/pending binding authority, and explicit sampled time when health evidence is present.
+ * @param {{profile: unknown, providerSpec: unknown, head?: unknown, plan: unknown, pendingBinding?: unknown, now?: unknown}} context - Exact immutable profile, resolved provider specification, required-own discriminated head authority, exact nullable active plan, optional pending binding, and explicit sampled time when health evidence is present.
  * @returns {Readonly<Record<string, any>>} - Fully cross-checked inspection.
  */
 export function validateDeploymentInspectionContext(value, context) {
   const inspection = validateDeploymentInspection(value);
+  if (!Object.prototype.hasOwnProperty.call(context ?? {}, 'plan')) {
+    throw new TypeError(
+      'deploymentInspection context.plan is required and must be null without an active operation.',
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(context ?? {}, 'head')) {
+    throw new TypeError(
+      'deploymentInspection context.head is required and must explicitly discriminate present, absent, unknown, or conflicting control state.',
+    );
+  }
   const profile = validateDeploymentProfile(
     context?.profile,
     'deploymentInspection context.profile',
@@ -1287,6 +1680,7 @@ export function validateDeploymentInspectionContext(value, context) {
     profile,
     context?.providerSpec,
     context?.head,
+    context?.plan,
     context?.pendingBinding,
     context?.now,
     'deploymentInspection',

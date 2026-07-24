@@ -390,7 +390,7 @@ function makePlan(base, operation, options = {}) {
             ? null
             : base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:subnet-route-table-association-inspection:v1',
           { operation },
         ),

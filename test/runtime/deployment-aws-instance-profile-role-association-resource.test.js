@@ -315,7 +315,7 @@ function makePlan(base, operation) {
             ? null
             : base.deploymentRevision.deploymentRevisionId,
         inspectionId: semanticId(
-          'win5',
+          'win6',
           'wharfie:test:runtime-association-inspection:v1',
           { operation },
         ),

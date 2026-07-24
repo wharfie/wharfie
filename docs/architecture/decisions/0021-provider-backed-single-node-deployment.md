@@ -1827,13 +1827,57 @@ Current-create emptiness, one-sided evidence, successful empty exact responses,
 and changing negative signatures remain unknown. The observer can neither
 modify retention nor attach, force-detach, settle, or recommend replay.
 
-The existing InspectionV5 resource shape cannot losslessly carry the raw
-observers' bounded execution advice. Aggregate composition therefore requires a
-breaking InspectionV6 successor that content-addresses that advice without
-turning it into provider truth or settlement authority.
+The thirty-eighth slice replaces InspectionV5 with the breaking
+InspectionV6/`win6` contract. Every resource now content-addresses either
+`none` or `replay-safe-create` execution advice. Advice retains the raw unknown
+access-failure union: it cannot invent a provider identity, observed digest,
+binding lineage, absence claim, or service proof. At most one of the four
+stable-token roles may recommend replay, only while the exact active PlanV3
+and durable head identify that same managed/direct `intended` create and
+ownership nonce. Conflict dominates and suppresses every recommendation.
+Legacy V5 documents are rejected rather than migrated.
 
-Source and packaged deployment commands, shared authoritative resource
-aggregation, owned provider and controller composition, guest storage/service
+V6 context validation now requires the exact nullable durable head and active
+plan. A present control-state observation requires a non-null matching head;
+an active head requires its exact PlanV3, action order, operation kind, basis,
+and intent identities. An optional just-settled binding remains outside the
+serialized document and can project lineage only for the exact current create
+or future external verify action. It cannot coexist with replay advice.
+Managed exact presence always requires complete binding lineage. The generic
+contract can preserve unbound external evidence as non-final drift, but the
+current fixed AWS profile remains all-managed and has no external planner
+producer.
+
+The AWS aggregate first recreates all 18 desired targets and V48 authorities.
+Any malformed plan, head, predecessor, target, pending binding, or profile
+fails before observer I/O. Null-head inspection is a zero-I/O absent fast path;
+live inspection routes each apply-ordered role once, revalidates every raw
+result, projects only exact durable or pending lineage, and separately reads
+resident service health only after exact substrate and runtime-role authority.
+It derives conflict, unknown, in-flight, drifted, degraded, converged, or
+destroyed status from the complete evidence rather than trusting an observer
+to claim aggregate readiness.
+
+Controller execution now separates a definite first call from recovery. A
+pending action is inspected before the `pending -> intended` transition, and
+the provider is called only when compare-and-set definitely applied that exact
+successor. An ambiguous write that is merely read back does not authorize the
+first call. Recovery verifies settlement before doing anything else. If an
+`intended` action remains unconverged, only an exact V6
+`replay-safe-create` recommendation can authorize the byte-identical
+stable-token create again; no-token creates and all other actions remain
+blocked rather than being guessed safe. Settlement inspection suppresses
+replay and may project the exact returned binding before durable publication.
+
+One strict provider composer exposes the controller's seven methods from five
+capability-only owners: scope resolution, provider-spec resolution,
+inspection, deterministic planning, and resource mutation. The inspection
+owner cannot carry execute or settlement methods, the mutation router cannot
+be installed as an observer, and aggregate-only plan lineage or pending
+bindings are stripped before the built-in pure planner.
+
+Source and packaged deployment commands, production assembly of the 16
+observer families and invocation-owned AWS clients, guest storage/service
 projection, privileged publisher wiring, live STS session proof, and
 clean-account lifecycle proof remain unfinished. A document, bucket/table tag,
 SSM result, EC2 description, health receipt, or content ID still never proves

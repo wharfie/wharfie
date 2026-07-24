@@ -62,7 +62,6 @@ import { createLedgerServiceId } from '../../src/core/lib/db/tables/ledger-servi
  * @property {Readonly<Record<string, Readonly<AnyRecord>>>} [observedDigests] - Per-role provider observed-digest overrides.
  * @property {Readonly<Record<string, string>>} [providerResourceIds] - Per-role provider identity overrides.
  * @property {string} [status] - Aggregate inspection status override.
- * @property {boolean} [validateAgainstHead] - Whether fixture construction revalidates exact head lineage.
  */
 
 const IDS = Object.freeze({
@@ -82,6 +81,20 @@ const HEALTH_NOW = 1_700_000_000_000;
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
   return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
+}
+
+/** @param {Readonly<AnyRecord>} inspection @returns {AnyRecord} */
+function rehashInspection(inspection) {
+  const payload = /** @type {AnyRecord} */ (clone(inspection));
+  delete payload.inspectionId;
+  return {
+    ...payload,
+    inspectionId: semanticId(
+      'win6',
+      'wharfie:deployment-inspection:v6',
+      payload,
+    ),
+  };
 }
 
 /** @param {string} prefix @param {string} domain @param {unknown} value @returns {string} */
@@ -577,6 +590,7 @@ function makeInspection(base, head, options = {}) {
         observedDigest: null,
         health: 'absent',
         service: null,
+        execution: 'none',
       };
     }
     if (state === 'unknown') {
@@ -599,6 +613,7 @@ function makeInspection(base, head, options = {}) {
         observedDigest: null,
         health: 'unknown',
         service: null,
+        execution: 'none',
       };
     }
     const providerId =
@@ -629,6 +644,7 @@ function makeInspection(base, head, options = {}) {
         health:
           entry.resourceKey === 'substrate' ? 'starting' : 'not-applicable',
         service: null,
+        execution: 'none',
       };
     }
     const dependencyBindings = entry.dependsOn
@@ -665,6 +681,7 @@ function makeInspection(base, head, options = {}) {
       observedDigest,
       health: entry.resourceKey === 'substrate' ? 'starting' : 'not-applicable',
       service: null,
+      execution: 'none',
     };
   });
   const status =
@@ -691,7 +708,8 @@ function makeInspection(base, head, options = {}) {
     {
       profile: base.profile,
       providerSpec: base.providerSpec,
-      ...(options.validateAgainstHead === false ? {} : { head }),
+      head,
+      plan: null,
     },
   );
 }
@@ -778,6 +796,7 @@ function makeConvergedInspection(base, head) {
       profile: base.profile,
       providerSpec: base.providerSpec,
       head,
+      plan: null,
       now: HEALTH_NOW,
     },
   );
@@ -800,7 +819,12 @@ function makeAbsentInspection(base) {
       status: 'absent',
       resources: [],
     },
-    { profile: base.profile, providerSpec: base.providerSpec },
+    {
+      profile: base.profile,
+      providerSpec: base.providerSpec,
+      head: null,
+      plan: null,
+    },
   );
 }
 
@@ -1187,9 +1211,12 @@ describe('AWS single-node deterministic deployment planning', () => {
         omit: new Set(['control-state-attachment']),
       }),
     );
-    const inspection = makeInspection(base, head, {
-      validateAgainstHead: false,
-    });
+    const inspection = makeInspection(
+      base,
+      makeReadyHead(base, makeBindings(base), {
+        generation: head.generation,
+      }),
+    );
 
     expectUnsupported(() =>
       createAwsSingleNodeDeploymentPlan(
@@ -1271,12 +1298,19 @@ describe('AWS single-node deterministic deployment planning', () => {
       ),
     );
 
-    const wrongIdentity = makeInspection(base, head, {
-      providerResourceIds: {
-        substrate: 'i-00000000000000002',
-      },
-      validateAgainstHead: false,
-    });
+    const wrongIdentityInput = /** @type {AnyRecord} */ (
+      clone(makeInspection(base, head))
+    );
+    const wrongIdentityResource = wrongIdentityInput.resources.find(
+      (/** @type {AnyRecord} */ resource) =>
+        resource.resourceKey === 'substrate',
+    );
+    if (wrongIdentityResource === undefined) {
+      throw new Error('Missing fixture substrate.');
+    }
+    wrongIdentityResource.providerIdentity.providerResourceId =
+      'i-00000000000000002';
+    const wrongIdentity = rehashInspection(wrongIdentityInput);
     expectUnsupported(() =>
       createAwsSingleNodeDeploymentPlan(
         planInput(base, 'apply', head, wrongIdentity),
@@ -1334,6 +1368,25 @@ describe('AWS single-node deterministic deployment planning', () => {
     );
   });
 
+  it('rejects legacy InspectionV5 identities before deriving a plan', () => {
+    const base = makeBase();
+    const head = makeReadyHead(base, makeBindings(base));
+    const inspection = /** @type {AnyRecord} */ (
+      clone(makeInspection(base, head))
+    );
+    inspection.inspectionId = semanticId(
+      'win5',
+      'wharfie:deployment-inspection:v5',
+      { legacy: true },
+    );
+
+    expect(() =>
+      createAwsSingleNodeDeploymentPlan(
+        planInput(base, 'apply', head, inspection),
+      ),
+    ).toThrow(/win6/i);
+  });
+
   it('rejects active durable lifecycle phases before deriving a new plan', () => {
     expect.hasAssertions();
     const settled = makeBase(1);
@@ -1344,7 +1397,13 @@ describe('AWS single-node deterministic deployment planning', () => {
       bindings,
       settled.deploymentRevision.deploymentRevisionId,
     );
-    const convergingInspection = makeInspection(desired, converging);
+    const convergingInspection = makeInspection(
+      desired,
+      makeReadyHead(desired, bindings, {
+        deploymentRevisionId: settled.deploymentRevision.deploymentRevisionId,
+        generation: converging.generation,
+      }),
+    );
     expectUnsupported(() =>
       createAwsSingleNodeDeploymentPlan(
         planInput(desired, 'apply', converging, convergingInspection),
@@ -1352,8 +1411,14 @@ describe('AWS single-node deterministic deployment planning', () => {
     );
 
     const base = makeBase();
-    const destroying = makeDestroyingHead(base, makeBindings(base));
-    const destroyingInspection = makeInspection(base, destroying);
+    const destroyingBindings = makeBindings(base);
+    const destroying = makeDestroyingHead(base, destroyingBindings);
+    const destroyingInspection = makeInspection(
+      base,
+      makeReadyHead(base, destroyingBindings, {
+        generation: destroying.generation,
+      }),
+    );
     expectUnsupported(() =>
       createAwsSingleNodeDeploymentPlan(
         planInput(base, 'destroy', destroying, destroyingInspection),

@@ -4,10 +4,11 @@
 portable capability model into one fixed 18-role AWS resource graph. Provider
 specification V6 pins that graph, the code-owned exact runtime-policy template,
 the exact node-launch contract, and the digest of one code-owned bootstrap;
-Plan/Action V3, Inspection V5, Binding V2,
+Plan/Action V3, Inspection V6, Binding V2,
 and Head/Operation V2 give each physical resource or relationship its own
 recoverable action, exact dependency-binding lineage, ownership mode, and
-destroy policy. Strict controller-compatible drivers now cover both retained
+destroy policy. Inspection V6 replaces V5 and content-addresses bounded
+execution advice without weakening provider truth or settlement. Strict controller-compatible drivers now cover both retained
 EBS volumes, all eight network effects, all four runtime-identity effects, the
 managed-current artifact, the substrate node, and both derived retained-volume
 attachments.
@@ -21,7 +22,7 @@ V3/`whr3` binds the exact runtime-role and node
 bindings plus immutable IAM RoleId and EC2 instance ID at
 `health/v3/<RoleId>:<InstanceId>`. Initial publication is a conditional
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
-Inspection V5/`win5` correlates both identities before readiness. Live STS
+Inspection V6/`win6` correlates both identities before readiness. Live STS
 caller proof and the privileged production publisher remain unwired. The
 recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -46,7 +47,7 @@ graph, context, dependency lineage, and direct or derived provider identity,
 and preallocates only the managed artifact's deterministic ARN. It neither
 observes nor adopts provider state and never predicts a non-artifact AWS ID.
 One pure nine-key planner now combines those targets with the controller's
-already context- and freshness-validated InspectionV5 evidence. It derives all
+already context- and freshness-validated InspectionV6 evidence. It derives all
 18 deterministic actions and their exact durable basis without I/O, a clock,
 or randomness; permits only artifact updates and unbound missing creates;
 rejects adoption and unsupported non-artifact repair; and reverses destroy into
@@ -68,8 +69,11 @@ observers retain exact endpoint lineage and independent relationship views
 while treating synthetic IDs as receipts. The artifact audits its complete
 version namespace, the node joins exact instance and root-volume proof, and
 typed attachment endpoint loss requires one stable full-window signature.
-Aggregate inspection, owned provider composition, commands, guest
-storage/service projection, and clean-account proof follow · **Last updated:**
+One aggregate now preflights and routes all 18 observations into V6, while a
+strict provider composer separates read, planning, and mutation ports. The
+controller requires definite intent persistence before first execution and
+replays only exact stable-token creates after recovery. Production AWS wiring,
+commands, guest storage/service projection, and clean-account proof follow · **Last updated:**
 2026-07-24
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -928,6 +932,20 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       typed endpoint loss is authoritative only after one identical negative
       signature survives the full retry window. All 18 graph roles now reach
       V47's 16-family mutation-incapable router.
+- [x] Replace aggregate InspectionV5 with lossless InspectionV6 and compose the
+      controller-facing AWS provider boundary. V6 content-addresses execution
+      advice, requires the exact nullable active plan and durable head, projects
+      only exact durable or just-settled binding lineage, and rejects legacy
+      `win5` identities. The aggregate preflights all 18 V48 authorities before
+      observer I/O, preserves raw uncertainty and stable-token advice, joins
+      resident health separately, and suppresses replay on conflict or pending
+      settlement. The controller inspects pending work before its intent CAS,
+      executes a first call only after a definitely applied transition, and
+      replays recovery creates only through exact `replay-safe-create`
+      evidence. A strict seven-method composer keeps observation and mutation
+      ports disjoint. The fixed AWS profile remains all-managed; generic
+      external verification is represented but has no supported profile or
+      planner producer yet.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -1034,7 +1052,7 @@ their immutable AWS RoleId and EC2 instance ID and addresses exactly
 `health/v3/<RoleId>:<InstanceId>`. Sequence-one publication is PUT-first with
 `If-None-Match: *`, followed by bounded exact body/head readback; it never uses
 object listing or `ListBucket` as an absence oracle. Later heartbeats retain
-ETag compare-and-swap, and Inspection V5/`win5` is the final readiness
+ETag compare-and-swap, and Inspection V6/`win6` is the final readiness
 envelope. The binding checks do not prove the publisher's live STS caller
 identity, and the privileged production publisher is not wired. The
 managed-current artifact now has the stable binding ARN for
@@ -1068,13 +1086,13 @@ artifact ARN is known without a binding. The catalog does not inspect or adopt
 AWS state and does not guess provider-allocated IDs.
 
 The exact nine-key planner now consumes that catalog and the controller's
-already validated InspectionV5 evidence to derive one deterministic complete
+already validated InspectionV6 evidence to derive one deterministic complete
 PlanV3. Null-head apply creates all roles; READY planning no-ops exact state,
 updates only the managed artifact, creates only absent unbound roles, and
 refuses adoption or unsupported repair. Reverse destroy emits 16 purge deletes
 and two retained-volume no-ops, including effect-ahead recovery. Planning is
 pure and binds the exact inspection and durable basis. Fresh apply from a
-DESTROYED tombstone remains unsupported until retained InspectionV5 evidence
+DESTROYED tombstone remains unsupported until retained InspectionV6 evidence
 and the controller's empty-binding reapply rule are reconciled.
 
 The shared raw observation contract and exhaustive read-only router now exist
@@ -1094,9 +1112,15 @@ catalog, derives the target's durable binding, and exposes only a
 controller-reachable CAS-claimed intended action. It never turns a pending
 frontier into action authority.
 
-1. Define and build aggregate InspectionV6, preserving V47 execution advice,
-   and complete controller composition across the implemented 18-role graph.
-   Then wire guest storage projection,
+The aggregate InspectionV6 and strict controller-provider composer now consume
+that complete read boundary. Null head inspection performs no provider I/O;
+live inspection routes every role once only after full plan/head preflight.
+The controller separates definite first execution from crash recovery and
+never repeats a create without exact stable-token advice.
+
+1. Wire the aggregate's 16 observer families, service-health reader, planner,
+   mutation router, and invocation-owned AWS clients into the production
+   deployment command path. Then wire guest storage projection,
    resident-service activation, and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
@@ -1109,9 +1133,11 @@ frontier into action authority.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [complete AWS resource observers
-checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md).
-Its parent is the [runtime IAM observers
+The current restart point is the [InspectionV6 aggregate and controller
+checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md).
+Its parent is the [complete AWS resource observers
+checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md),
+whose parent is the [runtime IAM observers
 checkpoint](llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md), whose
 parent is the [derived network observers
 checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md), whose

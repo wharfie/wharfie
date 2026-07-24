@@ -27,6 +27,7 @@ import {
   getAwsSingleNodeResourceApplyOrder,
   getAwsSingleNodeResourceDestroyOrder,
 } from '../../src/core/runtime/deployment-resource-graph.js';
+import { AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS } from '../../src/core/runtime/deployment-aws-resource-observation.js';
 import {
   createDeploymentServiceHealthReceipt,
   getDeploymentServiceHealthObjectLocation,
@@ -484,7 +485,12 @@ function makeAbsentInspection(base) {
       status: 'absent',
       resources: [],
     },
-    { profile: base.profile, providerSpec: base.providerSpec },
+    {
+      profile: base.profile,
+      providerSpec: base.providerSpec,
+      head: null,
+      plan: null,
+    },
   );
 }
 
@@ -497,6 +503,7 @@ function makeAbsentInspection(base) {
  * @param {Record<string, any>|null} [healthReceiptOverrides]
  * @param {string|null} [reappearedResourceKey]
  * @param {string|null} [finalDigestOverrideResourceKey]
+ * @param {Readonly<Record<string, any>>|null} [activePlan]
  */
 function makeLiveInspection(
   base,
@@ -507,6 +514,7 @@ function makeLiveInspection(
   healthReceiptOverrides = {},
   reappearedResourceKey = null,
   finalDigestOverrideResourceKey = null,
+  activePlan = null,
 ) {
   const durableResourceKeys = new Set(
     head.resourceBindings.map(
@@ -580,6 +588,18 @@ function makeLiveInspection(
     ? 'substrate'
     : RESOURCES.find(({ resourceKey }) => physical.has(resourceKey))
         ?.resourceKey;
+  const currentActionIndex = head.activeOperation?.nextActionIndex ?? -1;
+  const currentAction =
+    activePlan !== null && currentActionIndex < activePlan.actions.length
+      ? activePlan.actions[currentActionIndex]
+      : null;
+  const currentIntent =
+    currentAction === null
+      ? null
+      : head.activeOperation?.intents[currentActionIndex] || null;
+  const replaySafeCreateResourceKeys = new Set(
+    AWS_SINGLE_NODE_RESOURCE_REPLAY_SAFE_CREATE_KEYS,
+  );
   const resources = RESOURCES.map((resource) => {
     const binding = physical.get(resource.resourceKey);
     const reappeared = resource.resourceKey === reappearedResourceKey;
@@ -587,6 +607,13 @@ function makeLiveInspection(
     const hasExactBinding = binding !== undefined && !reappeared;
     const finalDigestOverride =
       resource.resourceKey === finalDigestOverrideResourceKey;
+    const replaySafeCreate =
+      currentAction?.resourceKey === resource.resourceKey &&
+      currentAction.action === 'create' &&
+      currentIntent?.status === 'intended' &&
+      binding === undefined &&
+      !reappeared &&
+      replaySafeCreateResourceKeys.has(resource.resourceKey);
     return {
       resourceKey: resource.resourceKey,
       capability: resource.capability,
@@ -611,12 +638,17 @@ function makeLiveInspection(
         )
           ? binding.dependencyBindings
           : null,
-      presence: present ? 'present' : 'absent',
-      presenceEvidence: present ? 'exact-read' : 'authoritative-not-found',
-      ownership:
-        present &&
-        resource.resourceKey === evidenceResourceKey &&
-        inspectionEvidence !== null
+      presence: replaySafeCreate ? 'unknown' : present ? 'present' : 'absent',
+      presenceEvidence: replaySafeCreate
+        ? 'access-failure'
+        : present
+          ? 'exact-read'
+          : 'authoritative-not-found',
+      ownership: replaySafeCreate
+        ? 'unknown'
+        : present &&
+            resource.resourceKey === evidenceResourceKey &&
+            inspectionEvidence !== null
           ? inspectionEvidence
           : hasExactBinding
             ? 'verified'
@@ -643,13 +675,15 @@ function makeLiveInspection(
                 : resource.resourceKey,
           )
         : null,
-      health: present
-        ? resource.resourceKey === 'substrate'
-          ? claimsHealthy
-            ? 'healthy'
-            : 'starting'
-          : 'not-applicable'
-        : 'absent',
+      health: replaySafeCreate
+        ? 'unknown'
+        : present
+          ? resource.resourceKey === 'substrate'
+            ? claimsHealthy
+              ? 'healthy'
+              : 'starting'
+            : 'not-applicable'
+          : 'absent',
       service:
         present && resource.resourceKey === 'substrate'
           ? {
@@ -659,6 +693,7 @@ function makeLiveInspection(
               healthReceipt,
             }
           : null,
+      execution: replaySafeCreate ? 'replay-safe-create' : 'none',
     };
   });
   return createDeploymentInspection(
@@ -680,6 +715,7 @@ function makeLiveInspection(
       profile: base.profile,
       providerSpec: base.providerSpec,
       head,
+      plan: activePlan,
       pendingBinding,
       now: HEALTH_NOW,
     },
@@ -856,6 +892,10 @@ function makeProvider(base, store, physical, events = []) {
   const executeContexts = [];
   /** @type {Record<string, any>[]} */
   const verifyContexts = [];
+  /** @type {Record<string, any>[]} */
+  const inspectContexts = [];
+  /** @type {Record<string, any>[]} */
+  const planContexts = [];
   let providerSpecResolutionCount = 0;
   let providerSpecValidationCount = 0;
   /** @type {Readonly<Record<string, any>>|null} */
@@ -876,6 +916,7 @@ function makeProvider(base, store, physical, events = []) {
     },
     /** @param {Record<string, any>} context */
     async inspect(context) {
+      inspectContexts.push(context);
       const contextualBase = Object.freeze({
         ...base,
         providerSpec: context.providerSpec,
@@ -891,10 +932,12 @@ function makeProvider(base, store, physical, events = []) {
             healthReceiptOverrides,
             reappearedResourceKey,
             finalDigestOverrideResourceKey,
+            context.plan,
           );
     },
     /** @param {Record<string, any>} context */
     async createPlan(context) {
+      planContexts.push(context);
       const operation =
         context.operation ||
         context.plan?.operation ||
@@ -1012,6 +1055,8 @@ function makeProvider(base, store, physical, events = []) {
     executeCount,
     executeContexts,
     verifyContexts,
+    inspectContexts,
+    planContexts,
     get providerSpecResolutionCount() {
       return providerSpecResolutionCount;
     },
@@ -1350,6 +1395,53 @@ describe('deployment controller artifact staging', () => {
         (context) => context.artifactStage === artifactStage,
       ),
     ).toBe(true);
+
+    const inspectionKeys = [
+      'deploymentInstanceId',
+      'deploymentRevision',
+      'head',
+      'incarnationId',
+      'operation',
+      'pendingBinding',
+      'plan',
+      'profile',
+      'providerScope',
+      'providerSpec',
+      'settledPlan',
+    ];
+    expect(harness.provider.inspectContexts.length).toBeGreaterThan(0);
+    for (const context of harness.provider.inspectContexts) {
+      expect(Object.keys(context).sort()).toEqual(inspectionKeys);
+      expect(Object.isFrozen(context)).toBe(true);
+      expect(context.settledPlan).toBeNull();
+      expect(context.plan).toEqual(context.head?.activeOperation ? plan : null);
+      if (context.pendingBinding !== null) {
+        const actionIndex = context.head.activeOperation.nextActionIndex;
+        expect(context.head.activeOperation.intents[actionIndex].status).toBe(
+          'intended',
+        );
+        expect(context.pendingBinding.resourceKey).toBe(
+          plan.actions[actionIndex].resourceKey,
+        );
+      }
+    }
+    const planningKeys = [
+      'deploymentInstanceId',
+      'deploymentRevision',
+      'head',
+      'incarnationId',
+      'inspection',
+      'operation',
+      'profile',
+      'providerScope',
+      'providerSpec',
+    ];
+    for (const context of harness.provider.planContexts) {
+      expect(Object.keys(context).sort()).toEqual(planningKeys);
+      expect(context).not.toHaveProperty('pendingBinding');
+      expect(context).not.toHaveProperty('plan');
+      expect(context).not.toHaveProperty('settledPlan');
+    }
   });
 
   it.each(['malformed bundle', 'mismatched receipt'])(
@@ -1739,13 +1831,23 @@ describe('deployment controller crash recovery', () => {
     ).toEqual([]);
   });
 
-  it('resumes after the durable intent CAS and executes each logical action once', async () => {
+  it('replays a token-backed create after the durable intent CAS and executes each logical action once', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
+    const replayActionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === 'application-state',
+    );
+    if (replayActionIndex < 0) {
+      throw new Error('Missing token-backed application-state action.');
+    }
     expect(harness.provider.providerSpecResolutionCount).toBe(1);
     let injected = false;
     harness.store.setAfterCas((_previous, next) => {
-      if (!injected && next.activeOperation?.intents[0].status === 'intended') {
+      if (
+        !injected &&
+        next.activeOperation?.intents[replayActionIndex].status === 'intended'
+      ) {
         injected = true;
         throw new Error('injected crash after intent');
       }
@@ -1753,14 +1855,14 @@ describe('deployment controller crash recovery', () => {
 
     await expect(
       harness.controller.converge({ plan, profile: harness.base.profile }),
-    ).rejects.toThrow(
-      /claimed this action intent|injected crash after intent/i,
-    );
-    expect(harness.store.head?.activeOperation?.intents[0].status).toBe(
-      'intended',
-    );
+    ).rejects.toThrow(/durably claimed|injected crash after intent/i);
     expect(
-      harness.provider.executeCount.get(plan.actions[0].actionId) || 0,
+      harness.store.head?.activeOperation?.intents[replayActionIndex].status,
+    ).toBe('intended');
+    expect(
+      harness.provider.executeCount.get(
+        plan.actions[replayActionIndex].actionId,
+      ) || 0,
     ).toBe(0);
 
     harness.store.setAfterCas(null);
@@ -1792,14 +1894,47 @@ describe('deployment controller crash recovery', () => {
     ];
     const resumedArtifactStage = actionContexts[0].artifactStage;
     expect(resumedArtifactStage).toEqual(harness.artifactStager.bundle);
-    expect(
-      actionContexts.every(
-        (context) => context.artifactStage === resumedArtifactStage,
-      ),
-    ).toBe(true);
+    for (const context of actionContexts) {
+      expect(context.artifactStage).toEqual(harness.artifactStager.bundle);
+    }
     for (const action of plan.actions) {
       expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
     }
+  });
+
+  it('never replays a create that lacks exact provider idempotency advice', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const action = plan.actions[0];
+    expect(action).toMatchObject({
+      resourceKey: 'artifact',
+      action: 'create',
+    });
+    harness.store.setAfterCas((_previous, next) => {
+      if (next.activeOperation?.intents[0].status === 'intended') {
+        throw new Error('injected crash after intent');
+      }
+    });
+
+    await expect(
+      harness.controller.converge({ plan, profile: harness.base.profile }),
+    ).rejects.toThrow(/durably claimed|injected crash after intent/i);
+    harness.store.setAfterCas(null);
+
+    const head = await harness.controller.resume({
+      deploymentInstanceId: harness.base.deploymentInstanceId,
+    });
+
+    expect(head).toMatchObject({
+      phase: 'CONVERGING',
+      activeOperation: {
+        nextActionIndex: 0,
+        status: 'blocked',
+      },
+    });
+    expect(head.activeOperation.intents[0].status).toBe('intended');
+    expect(harness.provider.executeCount.get(action.actionId) || 0).toBe(0);
+    expect(harness.physical.has(action.resourceKey)).toBe(false);
   });
 
   it('verifies an intended action after a physical-effect crash without executing it twice', async () => {
@@ -1834,9 +1969,7 @@ describe('deployment controller crash recovery', () => {
 
     await expect(
       harness.controller.converge({ plan, profile: harness.base.profile }),
-    ).rejects.toThrow(
-      /claimed this action intent|injected crash after intent/i,
-    );
+    ).rejects.toThrow(/durably claimed|injected crash after intent/i);
     harness.store.setAfterCas(null);
     expect(harness.store.head?.activeOperation?.intents[0].status).toBe(
       'intended',
@@ -1867,17 +2000,24 @@ describe('deployment controller crash recovery', () => {
   it('allows one of two concurrent resume callers to recover an intended action', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
+    const replayActionIndex = plan.actions.findIndex(
+      (/** @type {Readonly<Record<string, any>>} */ action) =>
+        action.resourceKey === 'application-state',
+    );
+    if (replayActionIndex < 0) {
+      throw new Error('Missing token-backed application-state action.');
+    }
     harness.store.setAfterCas((_previous, next) => {
-      if (next.activeOperation?.intents[0].status === 'intended') {
+      if (
+        next.activeOperation?.intents[replayActionIndex].status === 'intended'
+      ) {
         throw new Error('injected crash after intent');
       }
     });
 
     await expect(
       harness.controller.converge({ plan, profile: harness.base.profile }),
-    ).rejects.toThrow(
-      /claimed this action intent|injected crash after intent/i,
-    );
+    ).rejects.toThrow(/durably claimed|injected crash after intent/i);
     harness.store.setAfterCas(null);
 
     const results = await Promise.allSettled([
@@ -2146,7 +2286,7 @@ describe('deployment controller crash recovery', () => {
         status: 'blocked',
       },
     });
-    expect(head.activeOperation.intents[actionIndex].status).toBe('intended');
+    expect(head.activeOperation.intents[actionIndex].status).toBe('pending');
     expect(
       head.resourceBindings.some(
         (/** @type {Readonly<Record<string, any>>} */ binding) =>
@@ -2233,7 +2373,7 @@ describe('deployment controller crash recovery', () => {
         status: 'blocked',
       },
     });
-    expect(head.activeOperation.intents[actionIndex].status).toBe('intended');
+    expect(head.activeOperation.intents[actionIndex].status).toBe('pending');
     expect(harness.provider.executeCount.get(action.actionId) || 0).toBe(0);
   });
 
@@ -3192,7 +3332,9 @@ describe('deployment controller destroy ownership', () => {
           status: 'blocked',
         },
       });
-      expect(head.activeOperation.intents[actionIndex].status).toBe('intended');
+      expect(head.activeOperation.intents[actionIndex].status).toBe(
+        reappearancePoint === 'execution' ? 'pending' : 'intended',
+      );
       expect(
         head.resourceBindings.some(
           (/** @type {Readonly<Record<string, any>>} */ binding) =>
