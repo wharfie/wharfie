@@ -44,6 +44,11 @@ const RUNTIME_KEYS = new Set([
   'target',
 ]);
 const ARTIFACT_OBSERVATION_KEYS = new Set(['artifactId', 'byteDigest', 'size']);
+const DEPLOYMENT_ARTIFACT_OBSERVATION_KEYS = new Set([
+  'revision',
+  'runtime',
+  'artifact',
+]);
 
 /**
  * @typedef DeploymentRevision
@@ -53,7 +58,7 @@ const ARTIFACT_OBSERVATION_KEYS = new Set(['artifactId', 'byteDigest', 'size']);
  * @property {{id: string}} deployment - Stable human deployment identity.
  * @property {string} appId - Owning application.
  * @property {string} revisionId - Exact embedded logical revision.
- * @property {string} artifactId - Exact held running SEA bytes.
+ * @property {string} artifactId - Exact SEA bytes observed through a held descriptor.
  * @property {string} profileRevisionId - Exact provider fulfillment profile.
  */
 
@@ -182,6 +187,43 @@ function validateArtifactObservation(value, valuePath) {
 }
 
 /**
+ * Validate one already observed artifact's embedded identity and exact held
+ * byte observation. This creates reference evidence only; possession of this
+ * JSON value is not authority to stage the artifact.
+ * @param {unknown} value - Candidate revision, runtime, and byte observation.
+ * @param {string} valuePath - Human-readable value path.
+ * @returns {Readonly<{revision: Readonly<Record<string, any>>, runtime: Readonly<Record<string, any>>, artifact: Readonly<Record<string, any>>}>} - Canonical observation.
+ */
+function validateDeploymentArtifactObservation(value, valuePath) {
+  const observation = cloneJsonObject(value, valuePath);
+  assertAllKeys(observation, DEPLOYMENT_ARTIFACT_OBSERVATION_KEYS, valuePath);
+  const revision = validateApplicationRevision(
+    observation.revision,
+    `${valuePath}.revision`,
+  );
+  const runtime = validateArtifactRuntime(
+    observation.runtime,
+    `${valuePath}.runtime`,
+  );
+  if (
+    runtime.appId !== revision.contract.app.id ||
+    runtime.revisionId !== revision.revisionId
+  ) {
+    throw new Error(
+      `${valuePath} embedded runtime does not match its application revision.`,
+    );
+  }
+  return deepFreeze({
+    revision,
+    runtime,
+    artifact: validateArtifactObservation(
+      observation.artifact,
+      `${valuePath}.artifact`,
+    ),
+  });
+}
+
+/**
  * Read the validated embedded pair and held executable bytes from this running
  * SEA. Production callers cannot redirect either source to another artifact.
  * @param {RunningDeploymentArtifactDependencies} dependencies - Optional test readers.
@@ -220,39 +262,22 @@ async function observeRunningDeploymentArtifact(dependencies) {
     new Set(['revision', 'runtime']),
     'runningArtifact.embedded',
   );
-  const revision = validateApplicationRevision(
-    pair.revision,
-    'runningArtifact.embedded.revision',
+  return validateDeploymentArtifactObservation(
+    {
+      revision: pair.revision,
+      runtime: pair.runtime,
+      artifact: artifactValue,
+    },
+    'runningArtifact',
   );
-  const runtime = validateArtifactRuntime(
-    pair.runtime,
-    'runningArtifact.embedded.runtime',
-  );
-  if (
-    runtime.appId !== revision.contract.app.id ||
-    runtime.revisionId !== revision.revisionId
-  ) {
-    throw new Error(
-      'Running artifact embedded runtime does not match its embedded revision.',
-    );
-  }
-  return {
-    revision,
-    runtime,
-    artifact: validateArtifactObservation(
-      artifactValue,
-      'runningArtifact.artifact',
-    ),
-  };
 }
 
 /**
- * Create a fully cross-checked deployment payload from this exact running SEA.
+ * Validate deployment identity and profile before any artifact observation.
  * @param {unknown} value - Human deployment and full profile.
- * @param {RunningDeploymentArtifactDependencies} dependencies - Test readers.
- * @returns {Promise<Omit<DeploymentRevision, 'deploymentRevisionId'>>} - Canonical payload.
+ * @returns {Readonly<{deployment: Readonly<{id: string}>, profile: Readonly<Record<string, any>>}>} - Canonical selection.
  */
-async function createPayloadFromRunningArtifact(value, dependencies) {
+function validateDeploymentRevisionSelection(value) {
   const input = cloneJsonObject(value, 'deploymentRevision');
   assertAllKeys(input, CREATE_INPUT_KEYS, 'deploymentRevision');
   const deployment = cloneJsonObject(
@@ -265,35 +290,99 @@ async function createPayloadFromRunningArtifact(value, dependencies) {
     input.profile,
     'deploymentRevision.profile',
   );
-  const running = await observeRunningDeploymentArtifact(dependencies);
-  const appId = running.revision.contract.app.id;
-  if (profile.appId !== appId || running.runtime.appId !== appId) {
+  return deepFreeze({
+    deployment: { id: deployment.id },
+    profile,
+  });
+}
+
+/**
+ * Create a fully cross-checked deployment payload from one validated
+ * deployment selection and exact artifact observation.
+ * @param {Readonly<{deployment: Readonly<{id: string}>, profile: Readonly<Record<string, any>>}>} selection - Canonical deployment selection.
+ * @param {unknown} artifactObservation - Exact revision, runtime, and held-byte observation.
+ * @returns {Omit<DeploymentRevision, 'deploymentRevisionId'>} - Canonical payload.
+ */
+function createPayloadFromValidatedSelection(selection, artifactObservation) {
+  const observed = validateDeploymentArtifactObservation(
+    artifactObservation,
+    'deploymentArtifact',
+  );
+  const appId = observed.revision.contract.app.id;
+  if (selection.profile.appId !== appId || observed.runtime.appId !== appId) {
     throw new Error(
-      'Deployment revision, running artifact, and profile must name the same appId.',
+      'Deployment revision, artifact, and profile must name the same appId.',
     );
   }
-  if (running.runtime.revisionId !== running.revision.revisionId) {
-    throw new Error(
-      'Running artifact runtime must name its exact embedded revision.',
-    );
+  if (observed.runtime.revisionId !== observed.revision.revisionId) {
+    throw new Error('Artifact runtime must name its exact embedded revision.');
   }
   if (
-    getBuildTargetId(running.runtime.target) !==
-    getBuildTargetId(profile.target)
+    getBuildTargetId(observed.runtime.target) !==
+    getBuildTargetId(selection.profile.target)
   ) {
-    throw new Error(
-      'Running artifact target must equal the exact profile target.',
-    );
+    throw new Error('Artifact target must equal the exact profile target.');
   }
   return {
     schemaVersion: DEPLOYMENT_REVISION_SCHEMA_VERSION,
     kind: DEPLOYMENT_REVISION_KIND,
-    deployment: { id: deployment.id },
+    deployment: selection.deployment,
     appId,
-    revisionId: running.revision.revisionId,
-    artifactId: running.artifact.artifactId,
-    profileRevisionId: profile.profileRevisionId,
+    revisionId: observed.revision.revisionId,
+    artifactId: observed.artifact.artifactId,
+    profileRevisionId: selection.profile.profileRevisionId,
   };
+}
+
+/**
+ * Create a fully cross-checked deployment payload from one exact artifact
+ * observation.
+ * @param {unknown} value - Human deployment and full profile.
+ * @param {unknown} artifactObservation - Exact revision, runtime, and held-byte observation.
+ * @returns {Omit<DeploymentRevision, 'deploymentRevisionId'>} - Canonical payload.
+ */
+function createPayloadFromArtifactObservation(value, artifactObservation) {
+  return createPayloadFromValidatedSelection(
+    validateDeploymentRevisionSelection(value),
+    artifactObservation,
+  );
+}
+
+/**
+ * Seal one canonical payload as an immutable deployment revision.
+ * @param {unknown} payloadValue - Canonical payload candidate.
+ * @returns {Readonly<DeploymentRevision>} - Canonical deployment revision.
+ */
+function createDeploymentRevisionDocument(payloadValue) {
+  const payload = deepFreeze(
+    sortCanonicalJsonValue(validatePayload(payloadValue, 'deploymentRevision')),
+  );
+  const deploymentRevisionId = createCanonicalJsonSha256Id({
+    domain: DEPLOYMENT_REVISION_ID_DOMAIN,
+    prefix: DEPLOYMENT_REVISION_ID_PREFIX,
+    value: payload,
+    valuePath: 'deploymentRevision',
+  });
+  return deepFreeze(
+    sortCanonicalJsonValue({ ...payload, deploymentRevisionId }),
+  );
+}
+
+/**
+ * Create reference identity from an already observed exact artifact. The
+ * observation is JSON evidence, not staging authority; apply and reconcile
+ * must separately retain or re-observe the named bytes.
+ * @param {unknown} value - Deployment identity and exact profile.
+ * @param {unknown} artifactObservation - Exact revision, runtime, and held-byte observation.
+ * @returns {Readonly<DeploymentRevision>} - Canonical deployment revision.
+ */
+export function createDeploymentRevisionFromArtifactObservation(
+  value,
+  artifactObservation,
+) {
+  return createDeploymentRevisionDocument(
+    createPayloadFromArtifactObservation(value, artifactObservation),
+  );
 }
 
 /**
@@ -308,26 +397,19 @@ export async function createRunningDeploymentRevision(
   value,
   dependencies = {},
 ) {
-  const payload = deepFreeze(
-    sortCanonicalJsonValue(
-      await createPayloadFromRunningArtifact(value, dependencies),
-    ),
-  );
-  const deploymentRevisionId = createCanonicalJsonSha256Id({
-    domain: DEPLOYMENT_REVISION_ID_DOMAIN,
-    prefix: DEPLOYMENT_REVISION_ID_PREFIX,
-    value: payload,
-    valuePath: 'deploymentRevision',
-  });
-  return deepFreeze(
-    sortCanonicalJsonValue({ ...payload, deploymentRevisionId }),
+  const selection = validateDeploymentRevisionSelection(value);
+  const artifactObservation =
+    await observeRunningDeploymentArtifact(dependencies);
+  return createDeploymentRevisionDocument(
+    createPayloadFromValidatedSelection(selection, artifactObservation),
   );
 }
 
 /**
  * Validate a serialized reference document and recompute its identity. This is
  * sufficient for read-only history and, with ownership receipts, destroy. It
- * is not sufficient for apply/reconcile, which must re-observe the running SEA.
+ * is not sufficient for apply/reconcile, which must separately retain or
+ * re-observe the exact named SEA bytes.
  * @param {unknown} value - Candidate serialized deployment revision.
  * @param {string} [valuePath] - Human-readable value path.
  * @returns {Readonly<DeploymentRevision>} - Canonical deployment revision.
@@ -401,6 +483,7 @@ export default {
   DEPLOYMENT_REVISION_ID_PREFIX,
   DEPLOYMENT_REVISION_KIND,
   DEPLOYMENT_REVISION_SCHEMA_VERSION,
+  createDeploymentRevisionFromArtifactObservation,
   createRunningDeploymentRevision,
   validateDeploymentRevision,
   validateRunningDeploymentRevisionContext,

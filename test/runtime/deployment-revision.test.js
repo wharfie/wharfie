@@ -12,6 +12,7 @@ import {
 import {
   DEPLOYMENT_REVISION_ID_DOMAIN,
   DEPLOYMENT_REVISION_ID_PREFIX,
+  createDeploymentRevisionFromArtifactObservation,
   createRunningDeploymentRevision,
   validateDeploymentRevision,
   validateRunningDeploymentRevisionContext,
@@ -175,6 +176,38 @@ describe('deployment revisions', () => {
     expect(Object.isFrozen(deployment)).toBe(true);
   });
 
+  it('builds the same reference synchronously from an exact held-artifact observation', async () => {
+    const fixture = makeFixture();
+    const pair = await fixture.dependencies.readEmbeddedRevisionRuntimePair();
+    const artifact = await fixture.dependencies.inspectRunningArtifact();
+    fixture.dependencies.readEmbeddedRevisionRuntimePair.mockClear();
+    fixture.dependencies.inspectRunningArtifact.mockClear();
+
+    const observed = createDeploymentRevisionFromArtifactObservation(
+      fixture.input,
+      {
+        revision: pair.revision,
+        runtime: pair.runtime,
+        artifact,
+      },
+    );
+
+    expect(observed).not.toBeInstanceOf(Promise);
+    expect(observed).toEqual(
+      await createRunningDeploymentRevision(
+        fixture.input,
+        fixture.dependencies,
+      ),
+    );
+    expect(Object.isFrozen(observed)).toBe(true);
+    expect(
+      fixture.dependencies.readEmbeddedRevisionRuntimePair,
+    ).toHaveBeenCalledTimes(1);
+    expect(fixture.dependencies.inspectRunningArtifact).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
   it('waits for both running-artifact reads and reports the first canonical failure', async () => {
     const fixture = makeFixture();
     const pendingArtifact = deferred();
@@ -209,6 +242,49 @@ describe('deployment revisions', () => {
     pendingArtifact.reject(artifactFailure);
     await expect(observation).rejects.toBe(pairFailure);
     await reported;
+  });
+
+  it('snapshots deployment input before awaiting running-artifact observation', async () => {
+    const fixture = makeFixture();
+    const pair = await fixture.dependencies.readEmbeddedRevisionRuntimePair();
+    const artifact = await fixture.dependencies.inspectRunningArtifact();
+    const pairPending = deferred();
+    const artifactPending = deferred();
+    const dependencies = {
+      readEmbeddedRevisionRuntimePair: jest.fn(() => pairPending.promise),
+      inspectRunningArtifact: jest.fn(() => artifactPending.promise),
+    };
+    const originalProfileRevisionId = fixture.profile.profileRevisionId;
+
+    const pending = createRunningDeploymentRevision(
+      fixture.input,
+      dependencies,
+    );
+    fixture.input.deployment.id = 'staging';
+    fixture.input.profile = makeProfile('us-west-2');
+    pairPending.resolve(pair);
+    artifactPending.resolve(artifact);
+
+    await expect(pending).resolves.toMatchObject({
+      deployment: { id: 'production' },
+      profileRevisionId: originalProfileRevisionId,
+    });
+  });
+
+  it('rejects malformed deployment input before reading the running artifact', async () => {
+    const fixture = makeFixture();
+    const invalidInput = {
+      ...fixture.input,
+      unexpected: true,
+    };
+
+    await expect(
+      createRunningDeploymentRevision(invalidInput, fixture.dependencies),
+    ).rejects.toThrow(/unexpected is not supported/i);
+    expect(
+      fixture.dependencies.readEmbeddedRevisionRuntimePair,
+    ).not.toHaveBeenCalled();
+    expect(fixture.dependencies.inspectRunningArtifact).not.toHaveBeenCalled();
   });
 
   it('changes identity with deployment name, running bytes, or profile', async () => {
@@ -315,7 +391,7 @@ describe('deployment revisions', () => {
     });
     await expect(
       createRunningDeploymentRevision(fixture.input, fixture.dependencies),
-    ).rejects.toThrow(/running artifact target must equal/i);
+    ).rejects.toThrow(/artifact target must equal/i);
   });
 
   it('rejects an observation whose artifact ID does not name its byte digest', async () => {

@@ -16,6 +16,21 @@ import {
 /** @type {string[]} */
 const roots = [];
 
+/** @param {Promise<unknown>} promise @returns {Promise<unknown>} */
+async function captureRejection(promise) {
+  let rejected = false;
+  /** @type {unknown} */
+  let reason;
+  try {
+    await promise;
+  } catch (error) {
+    rejected = true;
+    reason = error;
+  }
+  if (!rejected) throw new Error('Expected promise to reject.');
+  return reason;
+}
+
 afterEach(async () => {
   jest.restoreAllMocks();
   await Promise.all(
@@ -187,5 +202,76 @@ describe('packaged artifact bytes', () => {
     await expect(openHeldArtifactSource(root)).rejects.toThrow(/regular file/);
 
     expect(closeCounts).toEqual([1, 1]);
+  });
+
+  it('preserves validation and descriptor-close failures in deterministic order', async () => {
+    const primaryFailure = undefined;
+    const closeFailure = 'descriptor close failed';
+    const close = jest.fn(async () => {
+      throw closeFailure;
+    });
+    jest.spyOn(fsp, 'open').mockImplementationOnce(
+      async () =>
+        /** @type {any} */ ({
+          stat: async () => {
+            throw primaryFailure;
+          },
+          close,
+        }),
+    );
+
+    const failure = await captureRejection(
+      openHeldArtifactSource(path.resolve('/virtual-selected-sea')),
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(/** @type {AggregateError} */ (failure).errors).toEqual([
+      primaryFailure,
+      closeFailure,
+    ]);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves an arbitrary validation failure unchanged when descriptor close succeeds', async () => {
+    const primaryFailure = Symbol('artifact validation failed');
+    const close = jest.fn(async () => {});
+    jest.spyOn(fsp, 'open').mockImplementationOnce(
+      async () =>
+        /** @type {any} */ ({
+          stat: async () => {
+            throw primaryFailure;
+          },
+          close,
+        }),
+    );
+
+    await expect(
+      captureRejection(
+        openHeldArtifactSource(path.resolve('/virtual-selected-sea')),
+      ),
+    ).resolves.toBe(primaryFailure);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves descriptor-close failure unchanged after successful inspection', async () => {
+    const root = await fsp.mkdtemp(path.join(tmpdir(), 'wharfie-artifact-'));
+    roots.push(root);
+    const artifactPath = path.join(root, 'app');
+    await fsp.writeFile(artifactPath, 'successful descriptor observation');
+    const closeFailure = Object.freeze({ code: 'CLOSE_FAILED' });
+    const originalOpen = fsp.open.bind(fsp);
+    jest.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      const originalClose = handle.close.bind(handle);
+      handle.close = async () => {
+        await originalClose();
+        throw closeFailure;
+      };
+      return handle;
+    });
+
+    await expect(
+      captureRejection(inspectArtifactBytes(artifactPath)),
+    ).resolves.toBe(closeFailure);
   });
 });

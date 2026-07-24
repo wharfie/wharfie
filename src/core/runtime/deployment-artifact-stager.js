@@ -53,6 +53,8 @@ const METADATA_KEYS = new Set([
   'wharfie-digest',
 ]);
 const AUTHORITY_MAX_BYTES = DEPLOYMENT_ARTIFACT_STAGE_DOCUMENT_MAX_BYTES * 3;
+const STAGE_AND_SOURCE_CLOSE_FAILED =
+  'Deployment artifact staging and source cleanup both failed.';
 
 /**
  * A required durable stage record or exact provider object version is absent.
@@ -234,25 +236,48 @@ function assertPortObject(value, path) {
   }
 }
 
-/** @param {unknown} source @returns {asserts source is {observation: Record<string, any>, createReadStream: Function, verifyUnchanged: Function, close: Function}} */
-function assertArtifactSource(source) {
+/**
+ * Snapshot the acquired source methods once while retaining their receiver.
+ * Cleanup captures `close` separately before this validation so a later
+ * getter mutation cannot replace or hide the owned cleanup capability.
+ * @param {unknown} source - Acquired artifact source.
+ * @param {Function|undefined} close - Previously captured close method.
+ * @returns {Readonly<{observation: Record<string, any>, createReadStream: () => any, verifyUnchanged: () => any}>} - Stable source projection.
+ */
+function captureArtifactSource(source, close) {
   if (!isObjectRecord(source)) {
     throw new TypeError(
       'deploymentArtifactStager artifact source must be an object.',
     );
   }
-  if (!isObjectRecord(source.observation)) {
+  if (typeof close !== 'function') {
+    throw new TypeError(
+      'deploymentArtifactStager artifact source.close is required.',
+    );
+  }
+  const observation = source.observation;
+  if (!isObjectRecord(observation)) {
     throw new TypeError(
       'deploymentArtifactStager artifact source.observation must be an object.',
     );
   }
-  for (const method of ['createReadStream', 'verifyUnchanged', 'close']) {
-    if (typeof source[method] !== 'function') {
-      throw new TypeError(
-        `deploymentArtifactStager artifact source.${method} is required.`,
-      );
-    }
+  const createReadStream = source.createReadStream;
+  if (typeof createReadStream !== 'function') {
+    throw new TypeError(
+      'deploymentArtifactStager artifact source.createReadStream is required.',
+    );
   }
+  const verifyUnchanged = source.verifyUnchanged;
+  if (typeof verifyUnchanged !== 'function') {
+    throw new TypeError(
+      'deploymentArtifactStager artifact source.verifyUnchanged is required.',
+    );
+  }
+  return Object.freeze({
+    observation,
+    createReadStream: () => Reflect.apply(createReadStream, source, []),
+    verifyUnchanged: () => Reflect.apply(verifyUnchanged, source, []),
+  });
 }
 
 /** @param {Readonly<Record<string, any>>} intent @param {Readonly<Record<string, any>>} receipt @returns {Readonly<{intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}>} */
@@ -537,111 +562,158 @@ export function createDeploymentArtifactStager(options) {
   async function stageRunningArtifact(value) {
     const authority = validateAuthority(value);
     const source = await openArtifactSource(getRunningExecutablePath());
+    /** @type {Function|undefined} */
+    let sourceClose;
+    let closeLookupFailed = false;
+    /** @type {unknown} */
+    let closeLookupError;
     try {
-      assertArtifactSource(source);
-      try {
-        await validateRunningDeploymentRevisionContext(
-          authority.deploymentRevision,
-          { profile: authority.profile },
-          {
-            inspectRunningArtifact: async () => ({
-              artifactId: source.observation.artifactId,
-              byteDigest: source.observation.byteDigest,
-              size: source.observation.size,
-            }),
-            ...(readEmbeddedRevisionRuntimePair === undefined
-              ? {}
-              : { readEmbeddedRevisionRuntimePair }),
+      if (isObjectRecord(source)) {
+        const candidate = source.close;
+        if (typeof candidate === 'function') sourceClose = candidate;
+      }
+    } catch (error) {
+      closeLookupFailed = true;
+      closeLookupError = error;
+    }
+    let stageFailed = false;
+    /** @type {unknown} */
+    let stageError;
+    /** @type {Readonly<{intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}>|undefined} */
+    let result;
+    try {
+      const artifactSource = captureArtifactSource(source, sourceClose);
+      result = await (async () => {
+        try {
+          await validateRunningDeploymentRevisionContext(
+            authority.deploymentRevision,
+            { profile: authority.profile },
+            {
+              inspectRunningArtifact: async () => ({
+                artifactId: artifactSource.observation.artifactId,
+                byteDigest: artifactSource.observation.byteDigest,
+                size: artifactSource.observation.size,
+              }),
+              ...(readEmbeddedRevisionRuntimePair === undefined
+                ? {}
+                : { readEmbeddedRevisionRuntimePair }),
+            },
+          );
+        } catch (error) {
+          throw new DeploymentArtifactStageConflictError({ cause: error });
+        }
+        const candidateIntent = createDeploymentArtifactStageIntent({
+          providerScope: authority.providerScope,
+          artifact: {
+            artifactId: artifactSource.observation.artifactId,
+            byteDigest: artifactSource.observation.byteDigest,
+            size: artifactSource.observation.size,
+            appId: authority.deploymentRevision.appId,
+            revisionId: authority.deploymentRevision.revisionId,
+            target: authority.profile.target,
           },
+          ownershipNonce: createOwnershipNonce(),
+        });
+        validateDeploymentArtifactStageIntentContext(
+          candidateIntent,
+          authority,
+          'deploymentArtifactStager candidate intent',
         );
-      } catch (error) {
-        throw new DeploymentArtifactStageConflictError({ cause: error });
-      }
-      const candidateIntent = createDeploymentArtifactStageIntent({
-        providerScope: authority.providerScope,
-        artifact: {
-          artifactId: source.observation.artifactId,
-          byteDigest: source.observation.byteDigest,
-          size: source.observation.size,
-          appId: authority.deploymentRevision.appId,
-          revisionId: authority.deploymentRevision.revisionId,
-          target: authority.profile.target,
-        },
-        ownershipNonce: createOwnershipNonce(),
-      });
-      validateDeploymentArtifactStageIntentContext(
-        candidateIntent,
-        authority,
-        'deploymentArtifactStager candidate intent',
-      );
-      const intent = await persistAndReadIntent(candidateIntent, authority);
-      const storedReceipt = await store.readArtifactStageReceipt(intent);
-      if (storedReceipt !== null) {
-        const receipt = await validateReceiptObject(intent, storedReceipt);
+        const intent = await persistAndReadIntent(candidateIntent, authority);
+        const storedReceipt = await store.readArtifactStageReceipt(intent);
+        if (storedReceipt !== null) {
+          const receipt = await validateReceiptObject(intent, storedReceipt);
+          return createBundle(intent, receipt);
+        }
+
+        const putRequest = {
+          Bucket: intent.object.bucketName,
+          Key: intent.object.key,
+          Body: artifactSource.createReadStream(),
+          ContentLength: intent.artifact.size,
+          ChecksumAlgorithm: 'SHA256',
+          ChecksumSHA256: base64UrlSha256ToBase64(
+            intent.artifact.byteDigest.value,
+          ),
+          ServerSideEncryption: 'AES256',
+          StorageClass: 'STANDARD',
+          ContentType: DEPLOYMENT_ARTIFACT_STAGE_CONTENT_TYPE,
+          IfNoneMatch: '*',
+          ExpectedBucketOwner: intent.providerScope.accountId,
+          Metadata: createStageMetadata(intent),
+        };
+        let putFailed = false;
+        /** @type {unknown} */
+        let putError;
+        /** @type {Record<string, any>|undefined} */
+        let putResponse;
+        try {
+          const response = await client.putObject(putRequest);
+          if (isObjectRecord(response)) putResponse = response;
+        } catch (error) {
+          putFailed = true;
+          putError = error;
+        }
+        if (!putFailed) {
+          const verifiedObservation = await artifactSource.verifyUnchanged();
+          if (
+            !exactJsonEqual(verifiedObservation, artifactSource.observation)
+          ) {
+            throw new DeploymentArtifactStageConflictError();
+          }
+        }
+
+        const putVersionId = isUsableVersionId(putResponse?.VersionId)
+          ? putResponse.VersionId
+          : undefined;
+        let evidence;
+        try {
+          evidence = await inspectObject(intent, putVersionId);
+        } catch (error) {
+          if (
+            putFailed &&
+            !(error instanceof DeploymentArtifactStageConflictError)
+          ) {
+            throw new DeploymentArtifactStageUnknownError({ cause: putError });
+          }
+          throw error;
+        }
+        const candidateReceipt = createDeploymentArtifactStageReceipt({
+          intent,
+          object: evidence,
+        });
+        const receipt = await persistAndReadReceipt(candidateReceipt, intent);
         return createBundle(intent, receipt);
-      }
+      })();
+    } catch (error) {
+      stageFailed = true;
+      stageError = error;
+    }
 
-      const putRequest = {
-        Bucket: intent.object.bucketName,
-        Key: intent.object.key,
-        Body: source.createReadStream(),
-        ContentLength: intent.artifact.size,
-        ChecksumAlgorithm: 'SHA256',
-        ChecksumSHA256: base64UrlSha256ToBase64(
-          intent.artifact.byteDigest.value,
-        ),
-        ServerSideEncryption: 'AES256',
-        StorageClass: 'STANDARD',
-        ContentType: DEPLOYMENT_ARTIFACT_STAGE_CONTENT_TYPE,
-        IfNoneMatch: '*',
-        ExpectedBucketOwner: intent.providerScope.accountId,
-        Metadata: createStageMetadata(intent),
-      };
-      let putFailed = false;
-      /** @type {unknown} */
-      let putError;
-      /** @type {Record<string, any>|undefined} */
-      let putResponse;
+    let closeFailed = closeLookupFailed;
+    /** @type {unknown} */
+    let closeError = closeLookupError;
+    if (!closeLookupFailed && sourceClose) {
       try {
-        const response = await client.putObject(putRequest);
-        if (isObjectRecord(response)) putResponse = response;
+        await Reflect.apply(sourceClose, source, []);
       } catch (error) {
-        putFailed = true;
-        putError = error;
-      }
-      if (!putFailed) {
-        const verifiedObservation = await source.verifyUnchanged();
-        if (!exactJsonEqual(verifiedObservation, source.observation)) {
-          throw new DeploymentArtifactStageConflictError();
-        }
-      }
-
-      const putVersionId = isUsableVersionId(putResponse?.VersionId)
-        ? putResponse.VersionId
-        : undefined;
-      let evidence;
-      try {
-        evidence = await inspectObject(intent, putVersionId);
-      } catch (error) {
-        if (
-          putFailed &&
-          !(error instanceof DeploymentArtifactStageConflictError)
-        ) {
-          throw new DeploymentArtifactStageUnknownError({ cause: putError });
-        }
-        throw error;
-      }
-      const candidateReceipt = createDeploymentArtifactStageReceipt({
-        intent,
-        object: evidence,
-      });
-      const receipt = await persistAndReadReceipt(candidateReceipt, intent);
-      return createBundle(intent, receipt);
-    } finally {
-      if (isObjectRecord(source) && typeof source.close === 'function') {
-        await source.close();
+        closeFailed = true;
+        closeError = error;
       }
     }
+    if (stageFailed) {
+      if (closeFailed) {
+        throw new AggregateError(
+          [stageError, closeError],
+          STAGE_AND_SOURCE_CLOSE_FAILED,
+        );
+      }
+      throw stageError;
+    }
+    if (closeFailed) throw closeError;
+    return /** @type {Readonly<{intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}>} */ (
+      result
+    );
   }
 
   return Object.freeze({ stageRunningArtifact, validateStagedArtifact });

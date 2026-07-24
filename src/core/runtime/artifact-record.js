@@ -11,7 +11,6 @@ import {
 import { getBuildTargetId, validateBuildTarget } from './build-target.js';
 import {
   assertDomainSeparatedSha256Id,
-  createSha256Id,
   sha256Base64Url,
 } from './content-id.js';
 import { cloneJsonObject } from './json-value.js';
@@ -51,11 +50,14 @@ const BUILDER_KEYS = new Set([
   'toolchainDigest',
 ]);
 const NODE_KEYS = new Set(['version', 'archive', 'binary']);
+const NODE_REQUIRED_KEYS = new Set(['version', 'binary']);
 const NODE_ARCHIVE_KEYS = new Set(['fileName', 'digest']);
 const NODE_BINARY_KEYS = new Set(['digest']);
 const DEPENDENCIES_KEYS = new Set(['lock', 'digest']);
 const UNSIGNED_SIGNING_KEYS = new Set(['mode']);
 const IDENTITY_SIGNING_KEYS = new Set(['mode', 'signer']);
+const ARTIFACT_OBSERVATION_KEYS = new Set(['artifactId', 'byteDigest', 'size']);
+const ARTIFACT_OBSERVATION_CONTEXT_KEYS = new Set(['observation', 'revision']);
 
 /**
  * @typedef ArtifactProvenance
@@ -85,12 +87,23 @@ const IDENTITY_SIGNING_KEYS = new Set(['mode', 'signer']);
  * @param {Record<string, any>} value - Object to inspect.
  * @param {Set<string>} allowedKeys - Exact supported keys.
  * @param {string} valuePath - Human-readable value path.
+ * @param {Set<string>} [requiredKeys] - Required own keys; defaults to every allowed key.
  * @returns {void}
  */
-function assertExactKeys(value, allowedKeys, valuePath) {
+function assertExactKeys(
+  value,
+  allowedKeys,
+  valuePath,
+  requiredKeys = allowedKeys,
+) {
   for (const key of Object.keys(value)) {
     if (!allowedKeys.has(key)) {
       throw new TypeError(`${valuePath}.${key} is not supported.`);
+    }
+  }
+  for (const key of requiredKeys) {
+    if (!Object.hasOwn(value, key)) {
+      throw new TypeError(`${valuePath}.${key} is required.`);
     }
   }
 }
@@ -173,6 +186,55 @@ function getArtifactBytes(value, valuePath) {
   throw new TypeError(
     `${valuePath} must be a Buffer, Uint8Array, or ArrayBuffer of exact artifact bytes.`,
   );
+}
+
+/**
+ * Validate one trusted exact-byte observation produced through a held
+ * descriptor. The artifact ID and explicit digest are intentionally
+ * redundant so neither can relabel the other.
+ * @param {unknown} value - Candidate held-artifact observation.
+ * @param {string} valuePath - Human-readable value path.
+ * @returns {{artifactId: string, byteDigest: import('./application-revision.js').Sha256Digest, size: number}} - Canonical observation.
+ */
+function validateArtifactObservation(value, valuePath) {
+  const observation = cloneJsonObject(value, valuePath);
+  assertExactKeys(observation, ARTIFACT_OBSERVATION_KEYS, valuePath);
+  assertArtifactId(observation.artifactId, `${valuePath}.artifactId`);
+  const byteDigest = validateSha256Digest(
+    observation.byteDigest,
+    `${valuePath}.byteDigest`,
+  );
+  if (observation.artifactId !== `${ARTIFACT_ID_PREFIX}_${byteDigest.value}`) {
+    throw new Error(
+      `${valuePath}.artifactId must name the exact observed byteDigest.`,
+    );
+  }
+  if (!Number.isSafeInteger(observation.size) || observation.size < 0) {
+    throw new TypeError(
+      `${valuePath}.size must be a nonnegative safe integer.`,
+    );
+  }
+  return {
+    artifactId: observation.artifactId,
+    byteDigest,
+    size: observation.size,
+  };
+}
+
+/**
+ * Derive the exact observation for an in-memory byte container.
+ * @param {unknown} value - Exact artifact bytes.
+ * @param {string} valuePath - Human-readable byte path.
+ * @returns {{artifactId: string, byteDigest: import('./application-revision.js').Sha256Digest, size: number}} - Exact observation.
+ */
+function observeArtifactBytes(value, valuePath) {
+  const bytes = getArtifactBytes(value, valuePath);
+  const digestValue = sha256Base64Url(bytes, valuePath);
+  return {
+    artifactId: `${ARTIFACT_ID_PREFIX}_${digestValue}`,
+    byteDigest: { algorithm: 'sha256', value: digestValue },
+    size: bytes.byteLength,
+  };
 }
 
 /**
@@ -264,7 +326,7 @@ export function validateArtifactProvenance(
   }
 
   const node = cloneJsonObject(provenance.node, `${valuePath}.node`);
-  assertExactKeys(node, NODE_KEYS, `${valuePath}.node`);
+  assertExactKeys(node, NODE_KEYS, `${valuePath}.node`, NODE_REQUIRED_KEYS);
   assertExactSemver(node.version, `${valuePath}.node.version`);
   if (node.version !== target.nodeVersion) {
     throw new Error(`${valuePath}.node.version must equal target.nodeVersion.`);
@@ -356,19 +418,21 @@ export function assertArtifactId(value, valuePath = 'artifactId') {
 
 /**
  * Build the normalized record shared by creation and validation.
- * @param {{ bytes: unknown, revision: unknown, target: unknown, provenance: unknown }} value - Artifact inputs.
+ * @param {{ observation: unknown, revision: unknown, target: unknown, provenance: unknown }} value - Artifact inputs.
  * @param {string} valuePath - Human-readable value path.
  * @returns {ArtifactRecord} - Normalized artifact record.
  */
-function createNormalizedArtifactRecord(value, valuePath) {
-  const bytes = getArtifactBytes(value.bytes, `${valuePath}.bytes`);
+function createNormalizedArtifactRecordFromObservation(value, valuePath) {
+  const observation = validateArtifactObservation(
+    value.observation,
+    `${valuePath}.observation`,
+  );
   const revision = validateApplicationRevision(
     value.revision,
     `${valuePath}.revision`,
   );
   const target = validateBuildTarget(value.target, `${valuePath}.target`);
   const targetId = getBuildTargetId(target, `${valuePath}.target`);
-  const digestValue = sha256Base64Url(bytes, `${valuePath}.bytes`);
   const provenance = validateArtifactProvenance(
     value.provenance,
     target,
@@ -379,12 +443,9 @@ function createNormalizedArtifactRecord(value, valuePath) {
   return {
     schemaVersion: ARTIFACT_RECORD_SCHEMA_VERSION,
     kind: ARTIFACT_RECORD_KIND,
-    artifactId: createSha256Id({
-      prefix: ARTIFACT_ID_PREFIX,
-      payload: bytes,
-    }),
-    byteDigest: { algorithm: 'sha256', value: digestValue },
-    size: bytes.byteLength,
+    artifactId: observation.artifactId,
+    byteDigest: observation.byteDigest,
+    size: observation.size,
     appId: revision.contract.app.id,
     revisionId: revision.revisionId,
     target,
@@ -392,6 +453,24 @@ function createNormalizedArtifactRecord(value, valuePath) {
     format: { ...ARTIFACT_FORMAT },
     provenance,
   };
+}
+
+/**
+ * Build the normalized record from exact in-memory bytes.
+ * @param {{ bytes: unknown, revision: unknown, target: unknown, provenance: unknown }} value - Artifact inputs.
+ * @param {string} valuePath - Human-readable value path.
+ * @returns {ArtifactRecord} - Normalized artifact record.
+ */
+function createNormalizedArtifactRecord(value, valuePath) {
+  return createNormalizedArtifactRecordFromObservation(
+    {
+      observation: observeArtifactBytes(value.bytes, `${valuePath}.bytes`),
+      revision: value.revision,
+      target: value.target,
+      provenance: value.provenance,
+    },
+    valuePath,
+  );
 }
 
 /**
@@ -404,14 +483,14 @@ export function createArtifactRecord(value) {
 }
 
 /**
- * Validate an ArtifactRecordV1 against exact final bytes and its owning
- * ApplicationRevisionV1, recomputing every derived identity.
+ * Validate an ArtifactRecordV1 against one trusted exact-byte observation and
+ * its owning ApplicationRevisionV1.
  * @param {unknown} value - Candidate artifact record.
- * @param {{ bytes: unknown, revision: unknown }} context - Trusted validation context.
- * @param {string} [valuePath] - Human-readable value path.
+ * @param {{ getObservation: () => unknown, revision: unknown }} context - Trusted validation context.
+ * @param {string} valuePath - Human-readable value path.
  * @returns {ArtifactRecord} - Validated independent artifact record.
  */
-export function validateArtifactRecord(value, context, valuePath = 'artifact') {
+function validateArtifactRecordAgainstObservation(value, context, valuePath) {
   const record = cloneJsonObject(value, valuePath);
   assertExactKeys(record, ARTIFACT_KEYS, valuePath);
   if (record.schemaVersion !== ARTIFACT_RECORD_SCHEMA_VERSION) {
@@ -425,7 +504,15 @@ export function validateArtifactRecord(value, context, valuePath = 'artifact') {
   assertArtifactId(record.artifactId, `${valuePath}.artifactId`);
   assertApplicationRevisionId(record.revisionId, `${valuePath}.revisionId`);
   assertLogicalId(record.appId, `${valuePath}.appId`);
-  validateSha256Digest(record.byteDigest, `${valuePath}.byteDigest`);
+  const recordByteDigest = validateSha256Digest(
+    record.byteDigest,
+    `${valuePath}.byteDigest`,
+  );
+  if (record.artifactId !== `${ARTIFACT_ID_PREFIX}_${recordByteDigest.value}`) {
+    throw new Error(
+      `${valuePath}.byteDigest does not match the exact artifact bytes named by artifactId.`,
+    );
+  }
   if (!Number.isSafeInteger(record.size) || record.size < 0) {
     throw new TypeError(
       `${valuePath}.size must be a nonnegative safe integer.`,
@@ -441,9 +528,9 @@ export function validateArtifactRecord(value, context, valuePath = 'artifact') {
   }
   validateArtifactFormat(record.format, `${valuePath}.format`);
 
-  const expected = createNormalizedArtifactRecord(
+  const expected = createNormalizedArtifactRecordFromObservation(
     {
-      bytes: context?.bytes,
+      observation: context.getObservation(),
       revision: context?.revision,
       target,
       provenance: record.provenance,
@@ -470,6 +557,58 @@ export function validateArtifactRecord(value, context, valuePath = 'artifact') {
   return freezeJsonSnapshot(expected);
 }
 
+/**
+ * Validate an ArtifactRecordV1 against exact final bytes and its owning
+ * ApplicationRevisionV1, recomputing every derived identity.
+ * @param {unknown} value - Candidate artifact record.
+ * @param {{ bytes: unknown, revision: unknown }} context - Trusted validation context.
+ * @param {string} [valuePath] - Human-readable value path.
+ * @returns {ArtifactRecord} - Validated independent artifact record.
+ */
+export function validateArtifactRecord(value, context, valuePath = 'artifact') {
+  return validateArtifactRecordAgainstObservation(
+    value,
+    {
+      getObservation: () =>
+        observeArtifactBytes(context?.bytes, `${valuePath}.bytes`),
+      revision: context?.revision,
+    },
+    valuePath,
+  );
+}
+
+/**
+ * Validate an ArtifactRecordV1 without rereading bytes after a trusted held
+ * descriptor has already produced their exact identity.
+ * @param {unknown} value - Candidate artifact record.
+ * @param {{ observation: unknown, revision: unknown }} context - Exact observation and owning revision.
+ * @param {string} [valuePath] - Human-readable value path.
+ * @returns {ArtifactRecord} - Validated independent artifact record.
+ */
+export function validateArtifactRecordObservation(
+  value,
+  context,
+  valuePath = 'artifact',
+) {
+  const normalizedContext = cloneJsonObject(
+    context,
+    `${valuePath} observation context`,
+  );
+  assertExactKeys(
+    normalizedContext,
+    ARTIFACT_OBSERVATION_CONTEXT_KEYS,
+    `${valuePath} observation context`,
+  );
+  return validateArtifactRecordAgainstObservation(
+    value,
+    {
+      getObservation: () => normalizedContext.observation,
+      revision: normalizedContext.revision,
+    },
+    valuePath,
+  );
+}
+
 export default {
   ARTIFACT_FORMAT,
   ARTIFACT_ID_PREFIX,
@@ -480,4 +619,5 @@ export default {
   createArtifactRecord,
   validateArtifactProvenance,
   validateArtifactRecord,
+  validateArtifactRecordObservation,
 };

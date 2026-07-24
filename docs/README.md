@@ -101,8 +101,8 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [one-shot deployment operation runner
-checkpoint](../llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md).
+The current restart handoff is the [selected SEA artifact authority
+checkpoint](../llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md).
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only
 control inspection and require-active, existing-only reconciliation that can
@@ -114,10 +114,18 @@ fences new calls, waits for entered work, and closes the AWS family once.
 The finite operation runner snapshots one exact request before credentials,
 selects explicit require-active, reconcile-existing, or bootstrap policy,
 dispatches one operation, and unconditionally closes that lifetime with
-ordered operation/cleanup failure precedence. There are still no deployment
-commands, selected source-SEA authority, or service-readiness claim.
+ordered operation/cleanup failure precedence.
 
-Its parent is the [read-only deployment inspection
+A closed source-packaging path can now mint an empty frozen token whose private
+WeakMap state binds exactly one fresh generation-backed SEA record to one
+retained descriptor. That token creates one deployment revision from the same
+held-byte observation and can be claimed or discarded only once. It does not
+survive JSON, IPC, or a process exit. There are still no deployment commands,
+durable source-plan staging, or service-readiness claim.
+
+Its parent is the [one-shot deployment operation runner
+checkpoint](../llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md),
+whose parent is the [read-only deployment inspection
 checkpoint](../llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md),
 whose parent is the [owned AWS deployment invocation
 checkpoint](../llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md),

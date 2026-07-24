@@ -22,6 +22,34 @@ const SOURCE_STREAM_REQUIRED_ERROR =
   'Held artifact source must be streamed before verification.';
 const SOURCE_STREAM_INCOMPLETE_ERROR =
   'Held artifact source stream did not finish successfully.';
+const ARTIFACT_VALIDATION_AND_CLOSE_FAILED =
+  'Artifact validation and descriptor cleanup both failed.';
+
+/**
+ * Close a descriptor after validation failed without losing either failure.
+ * Explicit booleans preserve `undefined` and other non-Error rejection reasons.
+ * @param {unknown} primaryError - Validation failure.
+ * @param {() => Promise<void>} close - Descriptor cleanup.
+ * @returns {Promise<never>} - Always rejects with deterministic precedence.
+ */
+async function closeAfterValidationFailure(primaryError, close) {
+  let closeFailed = false;
+  /** @type {unknown} */
+  let closeError;
+  try {
+    await close();
+  } catch (error) {
+    closeFailed = true;
+    closeError = error;
+  }
+  if (closeFailed) {
+    throw new AggregateError(
+      [primaryError, closeError],
+      ARTIFACT_VALIDATION_AND_CLOSE_FAILED,
+    );
+  }
+  throw primaryError;
+}
 
 /**
  * @typedef HeldArtifactObservation
@@ -258,8 +286,9 @@ export async function openHeldArtifactSource(artifactPath) {
       close,
     });
   } catch (error) {
-    await artifactFile.close();
-    throw error;
+    return closeAfterValidationFailure(error, async () => {
+      await artifactFile.close();
+    });
   }
 }
 

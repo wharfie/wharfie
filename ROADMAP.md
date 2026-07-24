@@ -1152,14 +1152,25 @@ deliberate second fence after policy preparation. An operation failure remains
 primary; a simultaneous close failure is retained second in one ordered
 AggregateError.
 
-1. Add one non-serializable, one-shot selected-SEA authority minted directly
-   from a fresh in-process package result and held artifact descriptor. Use
-   that same authority to create the deployment revision and stage the exact
-   bytes; arbitrary paths and unsigned sidecars are not sufficient embedded
-   metadata proof.
+One fresh source package can now mint one non-serializable selected-SEA
+authority. The closed mint snapshots exactly one target and artifact before
+opening and hashing its final path through one retained descriptor. A private
+WeakMap binds that descriptor to the generation-backed revision and record;
+the empty frozen token can bind one deployment revision, then permits exactly
+one synchronous source claim or deterministic discard. An observation-based
+record validator and deployment-revision builder share the exact held-byte
+identity without a second full-buffer read. Artifact-source validation and
+staging also preserve ordered primary/close failures.
+
+1. Consume that authority to durably stage the exact selected bytes before a
+   source-mode plan returns. A later-process converge must take an explicit
+   pre-staged path and validate the exact immutable intent, object version, and
+   receipt; it must never rebuild, reopen a path, or silently fall back to the
+   running Node executable. Direct apply should plan, stage once, then converge
+   from the receipt.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
-   `destroy` commands only after that boundary is proven. Apply and reconcile
-   must re-observe the selected or currently running SEA.
+   `destroy` commands only after that sequencing is proven. Packaged apply and
+   reconcile must continue to re-observe the currently running SEA.
    Then wire guest storage projection, resident-service activation, and host
    observation.
 2. Install and wire the privileged host observer outside the application UID,
@@ -1170,9 +1181,11 @@ AggregateError.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [one-shot deployment operation runner
-checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md).
-Its parent is the [read-only deployment inspection
+The current restart point is the [selected SEA artifact authority
+checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md).
+Its parent is the [one-shot deployment operation runner
+checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md),
+whose parent is the [read-only deployment inspection
 checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md),
 whose parent is the [owned AWS deployment invocation
 checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md),

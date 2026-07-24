@@ -38,6 +38,21 @@ function clone(value) {
   return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
 }
 
+/** @param {Promise<unknown>} promise @returns {Promise<unknown>} */
+async function captureRejection(promise) {
+  let rejected = false;
+  /** @type {unknown} */
+  let reason;
+  try {
+    await promise;
+  } catch (error) {
+    rejected = true;
+    reason = error;
+  }
+  if (!rejected) throw new Error('Expected promise to reject.');
+  return reason;
+}
+
 /** @param {string|Buffer} value @returns {{algorithm: 'sha256', value: string}} */
 function digest(value) {
   return { algorithm: 'sha256', value: sha256Base64Url(value) };
@@ -233,7 +248,7 @@ function makeReceipt(intent, versionId = 'version-1') {
 
 /**
  * @param {Buffer} bytes
- * @param {{observation?: Readonly<Record<string, any>>, verifyError?: Error}} [options]
+ * @param {{observation?: Readonly<Record<string, any>>, verifyError?: Error, closeFailure?: unknown}} [options]
  */
 function makeSource(bytes, options = {}) {
   let consumed = false;
@@ -252,7 +267,9 @@ function makeSource(bytes, options = {}) {
     if (!consumed) throw new Error('test source was not consumed');
     return observation;
   });
-  const close = jest.fn(async () => {});
+  const close = jest.fn(async () => {
+    if (Object.hasOwn(options, 'closeFailure')) throw options.closeFailure;
+  });
   return {
     source: Object.freeze({
       observation,
@@ -668,6 +685,53 @@ describe('deployment artifact stager', () => {
     expect(harness.source.close).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves an undefined stage failure unchanged when source close succeeds', async () => {
+    const fixture = makeFixture();
+    const store = makeStore();
+    store.store.putArtifactStageIntentIfAbsent.mockRejectedValueOnce(undefined);
+    const harness = makeHarness(fixture, { store });
+
+    await expect(
+      captureRejection(harness.stager.stageRunningArtifact(fixture.authority)),
+    ).resolves.toBeUndefined();
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves source-close failure unchanged after successful staging', async () => {
+    const fixture = makeFixture();
+    const closeFailure = Object.freeze({ code: 'SOURCE_CLOSE_FAILED' });
+    const source = makeSource(fixture.bytes, { closeFailure });
+    const harness = makeHarness(fixture, { source });
+
+    await expect(
+      captureRejection(harness.stager.stageRunningArtifact(fixture.authority)),
+    ).resolves.toBe(closeFailure);
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains stage and source-close failures in primary-first order', async () => {
+    const fixture = makeFixture();
+    const store = makeStore();
+    const primaryFailure = undefined;
+    const closeFailure = undefined;
+    store.store.putArtifactStageIntentIfAbsent.mockRejectedValueOnce(
+      primaryFailure,
+    );
+    const source = makeSource(fixture.bytes, { closeFailure });
+    const harness = makeHarness(fixture, { store, source });
+
+    const failure = await captureRejection(
+      harness.stager.stageRunningArtifact(fixture.authority),
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(/** @type {AggregateError} */ (failure).errors).toEqual([
+      primaryFailure,
+      closeFailure,
+    ]);
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     [
       'metadata',
@@ -941,6 +1005,104 @@ describe('deployment artifact stager', () => {
       stager.stageRunningArtifact(fixture.authority),
     ).rejects.toThrow(/source\.verifyUnchanged is required/i);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains malformed-source validation before its close failure', async () => {
+    const fixture = makeFixture();
+    const closeFailure = Symbol('malformed source close failed');
+    const close = jest.fn(async () => {
+      throw closeFailure;
+    });
+    const store = makeStore().store;
+    const client = makeClient().client;
+    const stager = createDeploymentArtifactStager({
+      client,
+      store,
+      openArtifactSource: async () => ({
+        observation: {},
+        createReadStream: () => null,
+        close,
+      }),
+      createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 19)),
+    });
+
+    const failure = await captureRejection(
+      stager.stageRunningArtifact(fixture.authority),
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const errors = /** @type {AggregateError} */ (failure).errors;
+    expect(errors[0]).toBeInstanceOf(TypeError);
+    expect(/** @type {Error} */ (errors[0]).message).toMatch(
+      /source\.verifyUnchanged is required/i,
+    );
+    expect(errors[1]).toBe(closeFailure);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures a stateful source close method exactly once', async () => {
+    const fixture = makeFixture();
+    const base = makeSource(fixture.bytes);
+    let closeReads = 0;
+    const statefulSource = {
+      observation: base.source.observation,
+      createReadStream: base.source.createReadStream,
+      verifyUnchanged: base.source.verifyUnchanged,
+      get close() {
+        closeReads += 1;
+        if (closeReads > 1) {
+          throw new Error('source close was read more than once');
+        }
+        return base.close;
+      },
+    };
+    const source = {
+      ...base,
+      source: statefulSource,
+    };
+    const harness = makeHarness(fixture, { source });
+
+    const bundle = await harness.stager.stageRunningArtifact(fixture.authority);
+    expect(bundle).toEqual({
+      intent: harness.store.state.intent,
+      receipt: harness.store.state.receipt,
+    });
+    expect(closeReads).toBe(1);
+    expect(base.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains source validation before an initial close-lookup failure', async () => {
+    const fixture = makeFixture();
+    const closeLookupFailure = Symbol('source close lookup failed');
+    const source = {
+      observation: fixture.observation,
+      createReadStream: () => null,
+      verifyUnchanged: async () => fixture.observation,
+    };
+    Object.defineProperty(source, 'close', {
+      enumerable: true,
+      get: () => {
+        throw closeLookupFailure;
+      },
+    });
+    const stager = createDeploymentArtifactStager({
+      client: makeClient().client,
+      store: makeStore().store,
+      openArtifactSource: async () => source,
+      createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 23)),
+    });
+
+    const failure = await captureRejection(
+      stager.stageRunningArtifact(fixture.authority),
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const errors = /** @type {AggregateError} */ (failure).errors;
+    expect(errors[0]).toBeInstanceOf(TypeError);
+    expect(/** @type {Error} */ (errors[0]).message).toMatch(
+      /source\.close is required/i,
+    );
+    expect(errors[1]).toBe(closeLookupFailure);
   });
 
   it('enforces the exact factory and public method boundaries', async () => {

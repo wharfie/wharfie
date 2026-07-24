@@ -2018,3 +2018,47 @@ assets, especially for an off-target build. Commands, guest service
 projection, privileged publisher wiring, live STS role/session proof,
 DESTROYED-tombstone reapply, clean-account proof, and exactly-once provider
 effects remain unfinished.
+
+The forty-third slice adds the process-local selected-SEA artifact authority.
+Its only mint calls the closed `packageLocalApp()` dependency itself with one
+canonical target. The fresh result is descriptor-snapshotted synchronously
+before another await, must contain exactly one matching target and artifact,
+and is never accepted from a caller. The record sidecar is ignored as
+authority.
+
+The mint opens the published content-addressed path once and hashes it through
+one retained descriptor. A new observation-based ArtifactRecord validator
+cross-checks the descriptor's artifact ID, digest, and size with the complete
+generation-backed record, application revision, target, target ID, format, and
+provenance without allocating the SEA as another full Buffer. The summary,
+record, revision, requested target, and derived embedded runtime must all agree
+exactly. Path replacement after this point cannot redirect the retained
+descriptor.
+
+The public authority is an empty frozen object. Its revision, record, runtime,
+source, binding, and lifecycle exist only in a module-private WeakMap. Copies,
+spreads, JSON round trips, proxies, arbitrary package results, paths, and
+sidecars cannot recreate the brand. The token may bind one deployment/profile
+tuple, producing a serialized deployment revision from the same descriptor
+observation. It then supports exactly one synchronous transfer of the held
+source or one deterministic discard with a stable close promise. Authority
+cannot cross a worker, IPC, duplicate module instance, or process boundary.
+The successful claim transfers the canonical bound deployment revision,
+profile, and provider scope with the generation evidence and held source, so
+downstream staging never needs to recover context from mutable caller input.
+
+Artifact descriptor opening and running-artifact staging now share explicit
+cleanup precedence. A primary failure is preserved unchanged when close
+succeeds; a lone close failure is preserved after success; simultaneous
+failures produce one ordered AggregateError with primary first and close
+second, including undefined and non-Error rejection reasons.
+
+This slice does not yet consume the selected authority through AWS staging or
+mount deployment commands. A source plan must durably stage the selected bytes
+and exact immutable object-version receipt before returning; a later-process
+converge must validate that pre-staged evidence rather than rebuilding,
+reopening a path, or falling back to the running Node executable. Packaged
+apply and reconcile continue to prove the running SEA. Guest service
+projection, privileged publisher wiring, live STS role/session proof,
+DESTROYED-tombstone reapply, clean-account proof, and exactly-once provider
+effects remain unfinished.

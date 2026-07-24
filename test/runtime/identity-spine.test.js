@@ -15,6 +15,7 @@ import {
   ARTIFACT_ID_PREFIX,
   createArtifactRecord,
   validateArtifactRecord,
+  validateArtifactRecordObservation,
 } from '../../src/core/runtime/artifact-record.js';
 import {
   getBuildTargetId,
@@ -434,6 +435,188 @@ describe('ArtifactRecordV1', () => {
       format: { kind: 'node-sea', version: 1 },
     });
     expect(validateArtifactRecord(record, { bytes, revision })).toEqual(record);
+  });
+
+  it('validates a complete record against an exact held-byte observation', () => {
+    const revision = makeRevision();
+    const bytes = Buffer.from('held descriptor artifact bytes');
+    const record = createArtifactRecord({
+      bytes,
+      revision,
+      target: linuxTarget,
+      provenance: makeProvenance(revision),
+    });
+    const observation = {
+      artifactId: record.artifactId,
+      byteDigest: clone(record.byteDigest),
+      size: record.size,
+    };
+
+    const validated = validateArtifactRecordObservation(record, {
+      observation,
+      revision,
+    });
+
+    expect(validated).toEqual(record);
+    expect(validated).not.toBe(record);
+    expect(Object.isFrozen(validated)).toBe(true);
+    expect(Object.isFrozen(validated.byteDigest)).toBe(true);
+    expect(Object.isFrozen(validated.provenance)).toBe(true);
+  });
+
+  it('rejects held observations with mismatched identity, digest, or size', () => {
+    const revision = makeRevision();
+    const bytes = Buffer.from('held descriptor artifact bytes');
+    const record = createArtifactRecord({
+      bytes,
+      revision,
+      target: linuxTarget,
+      provenance: makeProvenance(revision),
+    });
+    const observation = {
+      artifactId: record.artifactId,
+      byteDigest: clone(record.byteDigest),
+      size: record.size,
+    };
+    const otherDigest = digest('other held bytes');
+
+    expect(() =>
+      validateArtifactRecordObservation(record, {
+        observation: {
+          ...observation,
+          artifactId: `waf1_${otherDigest.value}`,
+          byteDigest: otherDigest,
+        },
+        revision,
+      }),
+    ).toThrow(/artifactId does not match its trusted inputs/i);
+
+    expect(() =>
+      validateArtifactRecordObservation(record, {
+        observation: {
+          ...observation,
+          byteDigest: otherDigest,
+        },
+        revision,
+      }),
+    ).toThrow(/artifactId must name the exact observed byteDigest/i);
+
+    expect(() =>
+      validateArtifactRecordObservation(record, {
+        observation: { ...observation, size: observation.size + 1 },
+        revision,
+      }),
+    ).toThrow(/size does not match its trusted inputs/i);
+  });
+
+  it('strictly validates observation context and all record identity inputs', () => {
+    const revision = makeRevision();
+    const bytes = Buffer.from('strict observation artifact bytes');
+    const record = createArtifactRecord({
+      bytes,
+      revision,
+      target: linuxTarget,
+      provenance: makeProvenance(revision),
+    });
+    const observation = {
+      artifactId: record.artifactId,
+      byteDigest: clone(record.byteDigest),
+      size: record.size,
+    };
+
+    const missingObservationSize = /** @type {any} */ (clone(observation));
+    delete missingObservationSize.size;
+    expect(() =>
+      validateArtifactRecordObservation(record, {
+        observation: missingObservationSize,
+        revision,
+      }),
+    ).toThrow(/observation\.size is required/i);
+
+    expect(() =>
+      validateArtifactRecordObservation(
+        record,
+        /** @type {any} */ ({ observation }),
+      ),
+    ).toThrow(/context\.revision is required/i);
+
+    const missingRecordFormat = /** @type {any} */ (clone(record));
+    delete missingRecordFormat.format;
+    expect(() =>
+      validateArtifactRecordObservation(missingRecordFormat, {
+        observation,
+        revision,
+      }),
+    ).toThrow(/artifact\.format is required/i);
+
+    expect(() =>
+      validateArtifactRecordObservation(record, {
+        observation: { ...observation, path: '/untrusted/artifact' },
+        revision,
+      }),
+    ).toThrow(/observation\.path is not supported/i);
+
+    const extraContext = /** @type {any} */ ({
+      observation,
+      revision,
+      path: '/untrusted/artifact',
+    });
+    expect(() =>
+      validateArtifactRecordObservation(record, extraContext),
+    ).toThrow(/context\.path is not supported/i);
+
+    const extraRecord = { ...clone(record), selected: true };
+    expect(() =>
+      validateArtifactRecordObservation(extraRecord, {
+        observation,
+        revision,
+      }),
+    ).toThrow(/selected is not supported/i);
+
+    const wrongProvenance = clone(record);
+    wrongProvenance.provenance.builder.runtimeDigest = digest('other runtime');
+    expect(() =>
+      validateArtifactRecordObservation(wrongProvenance, {
+        observation,
+        revision,
+      }),
+    ).toThrow(/runtimeDigest must match the owning revision/i);
+
+    const wrongTarget = /** @type {any} */ (clone(record));
+    wrongTarget.target.extra = true;
+    expect(() =>
+      validateArtifactRecordObservation(wrongTarget, {
+        observation,
+        revision,
+      }),
+    ).toThrow(/target\.extra is not supported/i);
+
+    const changedInputs = makeInputs();
+    changedInputs.source.digest = digest('changed source');
+    const wrongRevision = createApplicationRevision({
+      contract: makeContract(),
+      inputs: changedInputs,
+    });
+    expect(() =>
+      validateArtifactRecordObservation(record, {
+        observation,
+        revision: wrongRevision,
+      }),
+    ).toThrow(/revisionId does not match its trusted inputs/i);
+  });
+
+  it('validates record shape before hashing trusted byte input', () => {
+    const revision = makeRevision();
+    const record = /** @type {any} */ ({
+      unexpected: true,
+    });
+
+    expect(() =>
+      validateArtifactRecord(record, {
+        bytes: 'not artifact bytes',
+        revision,
+      }),
+    ).toThrow(/artifact\.unexpected is not supported/i);
   });
 
   it('uses only final bytes for artifactId while retaining strict provenance', () => {
