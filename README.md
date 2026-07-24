@@ -406,6 +406,15 @@ current-create history remains unknown but may recommend replay through the
 same action-ID-and-ownership-nonce-derived `CreateRouteTable` client token.
 Any candidate or uncertain read removes that advice.
 
+The three derived network relationships now have read-only observers over the
+same evidence used by their mutation drivers. The gateway attachment retains
+independent VPC-filtered and exact-gateway views; the default route retains its
+exact route-table slot and gateway lineage; and the subnet association retains
+exact parent reads plus complete subnet-slot discovery. Their synthetic IDs
+remain endpoint-lineage receipts rather than provider evidence. Current-create
+emptiness is unknown, unbound candidates are collisions rather than adoptions,
+and none recommends API replay without a stable provider client token.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
@@ -428,7 +437,8 @@ after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Route-table observer checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md) — the current handoff for exact bound reads, child-state separation, and client-token-backed response-loss replay advice.
+- [Derived network observers checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md) — the current handoff for endpoint-lineage receipts, independent relationship views, natural-slot absence, and conservative no-token replay semantics.
+- [Route-table observer checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md) — the parent handoff for exact bound reads, child-state separation, and client-token-backed response-loss replay advice.
 - [Subnet and security-group observer checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md) — the parent handoff for dependency-bound natural-slot corroboration, exact bound reads, actual network drift, and conservative no-token response-loss semantics.
 - [Tagged-EC2 VPC and internet-gateway observer checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md) — the parent handoff for stateless tagged identity evidence, exact bound reads, actual VPC drift, and conservative no-token response-loss semantics.
 - [Retained-volume observer checkpoint](llm/checkpoints/2026-07-23-v49-retained-volume-observer.md) — the parent handoff for the first strict provider reader, actual EBS drift, creation-era ownership, and truth-preserving idempotent replay advice.

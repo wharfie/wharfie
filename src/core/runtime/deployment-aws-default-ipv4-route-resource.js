@@ -1,10 +1,15 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
+import { compareCanonicalStrings } from './canonical-order.js';
+import { createCanonicalJsonSha256Id } from './content-id.js';
 import {
-  compareCanonicalStrings,
-  sortCanonicalJsonValue,
-} from './canonical-order.js';
-import { createCanonicalJsonSha256Id, sha256Base64Url } from './content-id.js';
+  AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_STATE_DIGEST_DOMAIN,
+  AwsSingleNodeDefaultIpv4RouteMissingLocalEvidenceError,
+  createAwsSingleNodeDefaultIpv4RouteStateDigest,
+  decodeAwsSingleNodeDefaultIpv4RouteEvidence,
+  decodeAwsSingleNodeDefaultIpv4RouteGatewayEvidence,
+} from './deployment-aws-default-ipv4-route-evidence.js';
+import { decodeAwsSingleNodeExactInternetGatewayResponse } from './deployment-aws-internet-gateway-evidence.js';
 import {
   getAwsSingleNodeInternetGatewayAttachmentProviderResourceId,
   getAwsSingleNodeInternetGatewayAttachmentStateDigest,
@@ -19,14 +24,23 @@ import { validateDeploymentProfile } from './deployment-profile.js';
 import { validateProviderScope } from './deployment-provider-scope.js';
 import { getAwsSingleNodeRouteTableStateDigest } from './deployment-aws-route-table-resource.js';
 import {
+  decodeAwsSingleNodeExactRouteTableResponse,
+  decodeAwsSingleNodeRouteTableDiscoveryPage,
+  decodeAwsSingleNodeRouteTableIdentity,
+} from './deployment-aws-route-table-evidence.js';
+import {
   createDeploymentResourceBinding,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
+import {
+  AwsTaggedEc2EvidenceConflictError,
+  AwsTaggedEc2EvidenceTransientError,
+  AwsTaggedEc2EvidenceUnknownError,
+} from './deployment-aws-tagged-ec2-evidence.js';
 
 export const AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_DEFAULT_MAX_ATTEMPTS = 3;
 export const AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-default-ipv4-route-state:v1';
+export { AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_STATE_DIGEST_DOMAIN };
 export const AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_DOMAIN =
   'wharfie:aws-single-node-ec2-default-ipv4-route:v1';
 export const AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_PROVIDER_RESOURCE_ID_PREFIX =
@@ -62,26 +76,12 @@ const INTERNET_GATEWAY_ID_PATTERN = /^igw-[0-9a-f]{8,32}$/;
 const ROUTE_TABLE_ID_PATTERN = /^rtb-[0-9a-f]{8,32}$/;
 const ROUTE_TABLE_ASSOCIATION_ID_PATTERN = /^rtbassoc-[0-9a-f]{8,32}$/;
 const SUBNET_ID_PATTERN = /^subnet-[0-9a-f]{8,32}$/;
-const INTERNET_GATEWAY_ATTACHMENT_STATES = new Set([
-  'available',
-  'attaching',
-  'attached',
-  'detaching',
-  'detached',
-]);
-const ROUTE_STATES = new Set(['active', 'blackhole']);
 const ROUTE_ASSOCIATION_STATES = new Set([
   'associating',
   'associated',
   'disassociating',
   'disassociated',
   'failed',
-]);
-const ROUTE_ORIGINS = new Set([
-  'Advertisement',
-  'CreateRoute',
-  'CreateRouteTable',
-  'EnableVgwRoutePropagation',
 ]);
 const ROUTE_TABLE_MAX_DISCOVERY_PAGES = 16;
 const ROUTE_TABLE_DISCOVERY_MAX_RESULTS = 100;
@@ -101,25 +101,6 @@ const ROUTE_TABLE_LOCATOR_TAG_KEYS = Object.freeze([
   'wharfie:deployment-instance-id',
   'wharfie:incarnation-id',
   'wharfie:resource-key',
-]);
-const ROUTE_DESTINATION_KEYS = Object.freeze([
-  'DestinationCidrBlock',
-  'DestinationIpv6CidrBlock',
-  'DestinationPrefixListId',
-]);
-const ROUTE_TARGET_KEYS = Object.freeze([
-  'CarrierGatewayId',
-  'CoreNetworkArn',
-  'EgressOnlyInternetGatewayId',
-  'GatewayId',
-  'InstanceId',
-  'IpAddress',
-  'LocalGatewayId',
-  'NatGatewayId',
-  'NetworkInterfaceId',
-  'OdbNetworkArn',
-  'TransitGatewayId',
-  'VpcPeeringConnectionId',
 ]);
 const DEPENDENCY_KEYS = Object.freeze([
   'network-internet-gateway-attachment',
@@ -183,6 +164,23 @@ export class AwsSingleNodeDefaultIpv4RouteResourceUnknownError extends Error {
 class ProviderResponseUnknownError extends Error {}
 class DefaultIpv4RouteEvidenceConflictError extends Error {}
 class DefaultIpv4RouteEvidenceTransientError extends Error {}
+
+/** @param {unknown} error @returns {never} */
+function throwDefaultIpv4RouteEvidenceError(error) {
+  if (error instanceof AwsSingleNodeDefaultIpv4RouteMissingLocalEvidenceError) {
+    throw new DefaultIpv4RouteEvidenceConflictError();
+  }
+  if (error instanceof AwsTaggedEc2EvidenceConflictError) {
+    throw new DefaultIpv4RouteEvidenceConflictError();
+  }
+  if (error instanceof AwsTaggedEc2EvidenceTransientError) {
+    throw new DefaultIpv4RouteEvidenceTransientError();
+  }
+  if (error instanceof AwsTaggedEc2EvidenceUnknownError) {
+    throw new ProviderResponseUnknownError();
+  }
+  throw error;
+}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -275,22 +273,12 @@ export function getAwsSingleNodeDefaultIpv4RouteStateDigest(value) {
     value,
     'awsSingleNodeDefaultIpv4RouteState providerSpec',
   );
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEc2DefaultIpv4RouteState',
+  return createAwsSingleNodeDefaultIpv4RouteStateDigest({
     destinationCidrBlock: providerSpec.capabilities.networking.egressCidr,
     targetKind: 'internet-gateway',
     origin: 'CreateRoute',
     state: 'active',
     onDestroy: 'purge',
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_DEFAULT_IPV4_ROUTE_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
   });
 }
 
@@ -890,220 +878,94 @@ function validateRouteTablePropagation(value) {
 
 /** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
 function oneInternetGatewayFromResponse(response, authority) {
-  if (!isPlainObject(response) || !Array.isArray(response.InternetGateways)) {
-    throw new ProviderResponseUnknownError();
+  try {
+    const internetGateway = decodeAwsSingleNodeExactInternetGatewayResponse(
+      response,
+      authority.internetGatewayId,
+    );
+    const evidence = decodeAwsSingleNodeDefaultIpv4RouteGatewayEvidence(
+      internetGateway,
+      {
+        internetGatewayId: authority.internetGatewayId,
+        ownerId: authority.plan.providerScope.accountId,
+        vpcId: authority.vpcId,
+      },
+    );
+    if (evidence.attachment !== 'available') {
+      throw new AwsTaggedEc2EvidenceTransientError();
+    }
+    return internetGateway;
+  } catch (error) {
+    throwDefaultIpv4RouteEvidenceError(error);
   }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (response.InternetGateways.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.InternetGateways.length !== 1) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  const internetGateway = response.InternetGateways[0];
-  if (
-    !isPlainObject(internetGateway) ||
-    typeof internetGateway.InternetGatewayId !== 'string' ||
-    !INTERNET_GATEWAY_ID_PATTERN.test(internetGateway.InternetGatewayId) ||
-    typeof internetGateway.OwnerId !== 'string' ||
-    !Array.isArray(internetGateway.Attachments)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    internetGateway.InternetGatewayId !== authority.internetGatewayId ||
-    internetGateway.OwnerId !== authority.plan.providerScope.accountId ||
-    internetGateway.Attachments.length > 1
-  ) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (internetGateway.Attachments.length === 0) {
-    throw new DefaultIpv4RouteEvidenceTransientError();
-  }
-  const attachment = internetGateway.Attachments[0];
-  if (
-    !isPlainObject(attachment) ||
-    typeof attachment.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(attachment.VpcId) ||
-    typeof attachment.State !== 'string' ||
-    !INTERNET_GATEWAY_ATTACHMENT_STATES.has(attachment.State)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (attachment.VpcId !== authority.vpcId) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (attachment.State !== 'available') {
-    throw new DefaultIpv4RouteEvidenceTransientError();
-  }
-  return internetGateway;
 }
 
 /** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
 function oneRouteTableFromResponse(response, authority) {
-  if (!isPlainObject(response) || !Array.isArray(response.RouteTables)) {
-    throw new ProviderResponseUnknownError();
+  try {
+    const routeTable = decodeAwsSingleNodeExactRouteTableResponse(
+      response,
+      authority.routeTableId,
+    );
+    const identity = decodeAwsSingleNodeRouteTableIdentity(routeTable);
+    if (
+      identity.ownerId !== authority.plan.providerScope.accountId ||
+      identity.vpcId !== authority.vpcId
+    ) {
+      throw new AwsTaggedEc2EvidenceConflictError();
+    }
+    validateRouteTableTags(routeTable.Tags, authority);
+    validateRouteTableAssociations(routeTable.Associations, authority);
+    validateRouteTablePropagation(routeTable.PropagatingVgws);
+    return routeTable;
+  } catch (error) {
+    throwDefaultIpv4RouteEvidenceError(error);
   }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (response.RouteTables.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.RouteTables.length !== 1) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  const routeTable = response.RouteTables[0];
-  if (
-    !isPlainObject(routeTable) ||
-    typeof routeTable.RouteTableId !== 'string' ||
-    !ROUTE_TABLE_ID_PATTERN.test(routeTable.RouteTableId) ||
-    typeof routeTable.OwnerId !== 'string' ||
-    typeof routeTable.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(routeTable.VpcId) ||
-    !Array.isArray(routeTable.Routes)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    routeTable.RouteTableId !== authority.routeTableId ||
-    routeTable.OwnerId !== authority.plan.providerScope.accountId ||
-    routeTable.VpcId !== authority.vpcId
-  ) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  validateRouteTableTags(routeTable.Tags, authority);
-  validateRouteTableAssociations(routeTable.Associations, authority);
-  validateRouteTablePropagation(routeTable.PropagatingVgws);
-  return routeTable;
 }
 
 /** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {{routeTables: Readonly<Record<string, any>>[], nextToken: string|null}} */
 function routeTableDiscoveryPage(response, authority) {
-  if (!isPlainObject(response) || !Array.isArray(response.RouteTables)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
+  try {
+    const page = decodeAwsSingleNodeRouteTableDiscoveryPage(response);
+    const routeTables = [];
+    for (const routeTable of page.records) {
+      const identity = decodeAwsSingleNodeRouteTableIdentity(routeTable);
+      if (
+        identity.ownerId !== authority.plan.providerScope.accountId ||
+        identity.vpcId !== authority.vpcId
+      ) {
+        throw new AwsTaggedEc2EvidenceConflictError();
+      }
+      validateRouteTableTags(routeTable.Tags, authority);
+      routeTables.push(routeTable);
     }
-    nextToken = response.NextToken;
+    return { routeTables, nextToken: page.nextToken };
+  } catch (error) {
+    throwDefaultIpv4RouteEvidenceError(error);
   }
-  const routeTables = [];
-  for (const routeTable of response.RouteTables) {
-    if (
-      !isPlainObject(routeTable) ||
-      typeof routeTable.RouteTableId !== 'string' ||
-      !ROUTE_TABLE_ID_PATTERN.test(routeTable.RouteTableId) ||
-      typeof routeTable.OwnerId !== 'string' ||
-      typeof routeTable.VpcId !== 'string' ||
-      !VPC_ID_PATTERN.test(routeTable.VpcId)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (
-      routeTable.OwnerId !== authority.plan.providerScope.accountId ||
-      routeTable.VpcId !== authority.vpcId
-    ) {
-      throw new DefaultIpv4RouteEvidenceConflictError();
-    }
-    validateRouteTableTags(routeTable.Tags, authority);
-    routeTables.push(routeTable);
-  }
-  return { routeTables, nextToken };
-}
-
-/** @param {Readonly<Record<string, any>>} route @param {readonly string[]} keys @returns {string[]} */
-function populatedRouteFields(route, keys) {
-  const populated = [];
-  for (const key of keys) {
-    if (route[key] === undefined || route[key] === null) continue;
-    if (typeof route[key] !== 'string' || route[key].length === 0) {
-      throw new ProviderResponseUnknownError();
-    }
-    populated.push(key);
-  }
-  return populated;
-}
-
-/** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {'local'|'default'} */
-function routeKind(value, authority) {
-  if (
-    !isPlainObject(value) ||
-    typeof value.Origin !== 'string' ||
-    !ROUTE_ORIGINS.has(value.Origin) ||
-    typeof value.State !== 'string' ||
-    !ROUTE_STATES.has(value.State)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.InstanceOwnerId !== undefined && value.InstanceOwnerId !== null) {
-    if (
-      typeof value.InstanceOwnerId !== 'string' ||
-      value.InstanceOwnerId.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  const destinations = populatedRouteFields(value, ROUTE_DESTINATION_KEYS);
-  const targets = populatedRouteFields(value, ROUTE_TARGET_KEYS);
-  if (destinations.length !== 1 || targets.length !== 1) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (
-    destinations[0] !== 'DestinationCidrBlock' ||
-    targets[0] !== 'GatewayId'
-  ) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (
-    value.DestinationCidrBlock ===
-    authority.providerSpec.capabilities.networking.vpcCidr
-  ) {
-    if (
-      value.GatewayId !== 'local' ||
-      value.Origin !== 'CreateRouteTable' ||
-      value.State !== 'active'
-    ) {
-      throw new DefaultIpv4RouteEvidenceConflictError();
-    }
-    return 'local';
-  }
-  if (value.DestinationCidrBlock !== authority.destinationCidrBlock) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (
-    value.GatewayId !== authority.internetGatewayId ||
-    value.Origin !== 'CreateRoute'
-  ) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  if (value.State !== 'active' && authority.action.action !== 'delete') {
-    throw new DefaultIpv4RouteEvidenceTransientError();
-  }
-  return 'default';
 }
 
 /** @param {Readonly<Record<string, any>>} routeTable @param {Readonly<Record<string, any>>} authority @returns {'present'|'absent'} */
 function logicalRouteState(routeTable, authority) {
-  let localRoutes = 0;
-  let defaultRoutes = 0;
-  for (const route of routeTable.Routes) {
-    const kind = routeKind(route, authority);
-    if (kind === 'local') localRoutes += 1;
-    else defaultRoutes += 1;
+  try {
+    const evidence = decodeAwsSingleNodeDefaultIpv4RouteEvidence(routeTable, {
+      destinationCidrBlock: authority.destinationCidrBlock,
+      internetGatewayId: authority.internetGatewayId,
+      routeTableId: authority.routeTableId,
+      vpcCidr: authority.providerSpec.capabilities.networking.vpcCidr,
+      allowSubnetAssociation: authority.action.action !== 'create',
+    });
+    if (
+      evidence.presence === 'present' &&
+      authority.action.action !== 'delete' &&
+      !sameJson(evidence.observedDigest, authority.stateDigest)
+    ) {
+      throw new AwsTaggedEc2EvidenceTransientError();
+    }
+    return evidence.presence;
+  } catch (error) {
+    throwDefaultIpv4RouteEvidenceError(error);
   }
-  if (localRoutes !== 1 || defaultRoutes > 1) {
-    throw new DefaultIpv4RouteEvidenceConflictError();
-  }
-  return defaultRoutes === 1 ? 'present' : 'absent';
 }
 
 /** @param {unknown[]} errors @returns {void} */

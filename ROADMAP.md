@@ -59,11 +59,12 @@ and derives the exact durable binding plus only a controller-reachable,
 CAS-claimed current action, while pending frontiers remain read-only.
 Read-only provider adapters now cover both retained volumes and the directly
 owned VPC, internet gateway, subnet, route table, and application security
-group. The subnet and security group add dependency-bound natural-slot
-corroboration without claiming non-idempotent create replay; the route table
-adds clean-history client-token replay advice while excluding its separately
-modeled descendants from parent drift. Remaining driver read-kernel adapters,
-aggregate inspection, owned provider composition, commands, guest
+group, plus all three derived network relationships. The direct natural-slot
+resources do not claim non-idempotent create replay; the route table alone adds
+clean-history client-token replay advice. Derived observers retain exact
+endpoint lineage and independent relationship views while treating synthetic
+IDs as receipts and emitting no replay advice. Remaining driver read-kernel
+adapters, aggregate inspection, owned provider composition, commands, guest
 storage/service projection, and clean-account proof follow · **Last updated:**
 2026-07-23
 
@@ -890,6 +891,18 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       same current-create history remains unknown and may carry
       `replay-safe-create` through its stable action-ID/nonce-derived client
       token. Any dirty attempt suppresses that advice.
+- [x] Adapt all three derived network relationships to the shared read-only
+      boundary. The gateway attachment retains complete VPC-filtered discovery
+      plus an independent exact-gateway read; the default route retains its
+      exact route-table slot and gateway/topology proof; and the subnet
+      association retains exact parent reads plus complete subnet-slot
+      discovery. Each observer recreates V48 authority, re-proves direct and
+      transitive binding lineage, and recomputes its synthetic provider ID from
+      exact endpoint IDs before I/O. Bound/current-create presence requires
+      every view to agree. Unbound no-action candidates are collisions, and
+      only an all-clean-empty history is absent. Current-create emptiness stays
+      unknown. Natural slots aid mutation recovery but do not produce
+      `replay-safe-create` without a provider client token.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -1046,21 +1059,22 @@ while separately carrying either no execution advice or one exact
 `replay-safe-create` recommendation. That recommendation never turns an empty
 eventually consistent read into an absence claim and is accepted only for a
 canonical action ID and nonce on the routed managed/direct current create. The
-retained-volume, VPC, internet-gateway, subnet, route-table, and security-group
-drivers now share their exact evidence decoders with read-only observer ports.
-A stateless tagged-EC2 layer separates tags and bounded identity reads from
-mutation-only response recovery. The remaining 10 implementation families stay
-private. One pure authority constructor revalidates the exact desired tuple,
-active plan, and last-settled provider lineage, recreates the V45 catalog,
-derives the target's durable binding, and exposes only a
-controller-reachable CAS-claimed intended action. It never turns a pending
-frontier into action authority.
+retained-volume, five directly owned network-resource, and three derived
+network-relationship drivers now share their exact evidence decoders with
+read-only observer ports. A stateless tagged-EC2 layer separates tags and
+bounded identity reads from mutation-only response recovery. The remaining
+seven implementation families stay private. One pure authority constructor
+revalidates the exact desired tuple, active plan, and last-settled provider
+lineage, recreates the V45 catalog, derives the target's durable binding, and
+exposes only a controller-reachable CAS-claimed intended action. It never turns
+a pending frontier into action authority.
 
-1. Adapt the drivers' authoritative read kernels to the shared observation
-   boundary without duplicating their AWS decoders, then build aggregate
-   inspection and complete controller composition across the implemented
-   18-role graph. Then wire guest storage projection, resident-service
-   activation, and host observation.
+1. Adapt the four runtime-IAM, managed-artifact, substrate-node, and generic
+   retained-volume-attachment read kernels to the shared observation boundary
+   without duplicating their provider decoders, then build aggregate inspection
+   and complete controller composition across the implemented 18-role graph.
+   Then wire guest storage projection, resident-service activation, and host
+   observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
@@ -1072,9 +1086,11 @@ frontier into action authority.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [route-table observer
-checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md). Its parent
-is the [subnet and security-group observer
+The current restart point is the [derived network observers
+checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md). Its
+parent is the [route-table observer
+checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md), whose
+parent is the [subnet and security-group observer
 checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md),
 whose parent is the [tagged-EC2 VPC and internet-gateway observer
 checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md),

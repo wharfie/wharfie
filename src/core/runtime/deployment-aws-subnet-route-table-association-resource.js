@@ -19,6 +19,16 @@ import {
   validateAwsSingleNodeProviderSpecContext,
 } from './deployment-aws-provider-spec.js';
 import { getAwsSingleNodeRouteTableStateDigest } from './deployment-aws-route-table-resource.js';
+import {
+  AwsSingleNodeSubnetRouteTableAssociationEvidenceConflictError as SharedAssociationEvidenceConflictError,
+  AwsSingleNodeSubnetRouteTableAssociationEvidenceTransientError as SharedAssociationEvidenceTransientError,
+  AwsSingleNodeSubnetRouteTableAssociationEvidenceUnknownError as SharedAssociationEvidenceUnknownError,
+  decodeAwsSingleNodeSubnetRouteTableAssociationDiscoveryPage,
+  decodeAwsSingleNodeSubnetRouteTableAssociationExactRouteTableRecord,
+  decodeAwsSingleNodeSubnetRouteTableAssociationExactSubnetRecord,
+  decodeAwsSingleNodeSubnetRouteTableAssociationRecord,
+  reconcileAwsSingleNodeSubnetRouteTableAssociationViews,
+} from './deployment-aws-subnet-route-table-association-evidence.js';
 import { getAwsSingleNodeSubnetStateDigest } from './deployment-aws-subnet-resource.js';
 import { getAwsSingleNodeVpcStateDigest } from './deployment-aws-vpc-resource.js';
 import { validateDeploymentHead } from './deployment-head.js';
@@ -70,22 +80,7 @@ const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
 const INTERNET_GATEWAY_ID_PATTERN = /^igw-[0-9a-f]{8,32}$/;
 const SUBNET_ID_PATTERN = /^subnet-[0-9a-f]{8,32}$/;
 const ROUTE_TABLE_ID_PATTERN = /^rtb-[0-9a-f]{8,32}$/;
-const ROUTE_TABLE_ASSOCIATION_ID_PATTERN = /^rtbassoc-[0-9a-f]{8,32}$/;
 const SUBNET_CIDR_ASSOCIATION_ID_PATTERN = /^subnet-cidr-assoc-[0-9a-f]{8,32}$/;
-const SUBNET_STATES = new Set([
-  'pending',
-  'available',
-  'unavailable',
-  'failed',
-  'failed-insufficient-capacity',
-]);
-const ROUTE_ASSOCIATION_STATES = new Set([
-  'associating',
-  'associated',
-  'disassociating',
-  'disassociated',
-  'failed',
-]);
 const ROUTE_STATES = new Set(['active', 'blackhole']);
 const ROUTE_ORIGINS = new Set([
   'Advertisement',
@@ -197,6 +192,24 @@ export class AwsSingleNodeSubnetRouteTableAssociationResourceUnknownError extend
 class ProviderResponseUnknownError extends Error {}
 class SubnetRouteTableAssociationEvidenceConflictError extends Error {}
 class SubnetRouteTableAssociationEvidenceTransientError extends Error {}
+
+/** @template T @param {() => T} decode @returns {T} */
+function decodeSharedEvidence(decode) {
+  try {
+    return decode();
+  } catch (error) {
+    if (error instanceof SharedAssociationEvidenceConflictError) {
+      throw new SubnetRouteTableAssociationEvidenceConflictError();
+    }
+    if (error instanceof SharedAssociationEvidenceTransientError) {
+      throw new SubnetRouteTableAssociationEvidenceTransientError();
+    }
+    if (error instanceof SharedAssociationEvidenceUnknownError) {
+      throw new ProviderResponseUnknownError();
+    }
+    throw error;
+  }
+}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -896,28 +909,13 @@ function validateBlockPublicAccessStates(value) {
 
 /** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
 function oneSubnetFromResponse(response, authority) {
-  if (!isPlainObject(response) || !Array.isArray(response.Subnets)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new SubnetRouteTableAssociationEvidenceConflictError();
-  }
-  if (response.Subnets.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.Subnets.length !== 1) {
-    throw new SubnetRouteTableAssociationEvidenceConflictError();
-  }
-  const subnet = response.Subnets[0];
+  const subnet = decodeSharedEvidence(() =>
+    decodeAwsSingleNodeSubnetRouteTableAssociationExactSubnetRecord(
+      response,
+      authority.subnetId,
+    ),
+  );
   if (
-    !isPlainObject(subnet) ||
-    typeof subnet.SubnetId !== 'string' ||
-    !SUBNET_ID_PATTERN.test(subnet.SubnetId) ||
-    typeof subnet.OwnerId !== 'string' ||
-    typeof subnet.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(subnet.VpcId) ||
-    typeof subnet.State !== 'string' ||
-    !SUBNET_STATES.has(subnet.State) ||
     typeof subnet.CidrBlock !== 'string' ||
     typeof subnet.AvailabilityZoneId !== 'string' ||
     typeof subnet.DefaultForAz !== 'boolean'
@@ -925,7 +923,6 @@ function oneSubnetFromResponse(response, authority) {
     throw new ProviderResponseUnknownError();
   }
   if (
-    subnet.SubnetId !== authority.subnetId ||
     subnet.OwnerId !== authority.plan.providerScope.accountId ||
     subnet.VpcId !== authority.vpcId ||
     subnet.CidrBlock !==
@@ -961,57 +958,6 @@ function oneSubnetFromResponse(response, authority) {
     throw new SubnetRouteTableAssociationEvidenceConflictError();
   }
   return subnet;
-}
-
-/** @param {unknown} value @param {string} containerRouteTableId @returns {Readonly<Record<string, any>>} */
-function decodeAssociation(value, containerRouteTableId) {
-  if (!isPlainObject(value) || typeof value.Main !== 'boolean') {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.Main) {
-    throw new SubnetRouteTableAssociationEvidenceConflictError();
-  }
-  if (
-    typeof value.RouteTableAssociationId !== 'string' ||
-    !ROUTE_TABLE_ASSOCIATION_ID_PATTERN.test(value.RouteTableAssociationId) ||
-    typeof value.RouteTableId !== 'string' ||
-    !ROUTE_TABLE_ID_PATTERN.test(value.RouteTableId) ||
-    !isPlainObject(value.AssociationState) ||
-    typeof value.AssociationState.State !== 'string' ||
-    !ROUTE_ASSOCIATION_STATES.has(value.AssociationState.State)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    value.AssociationState.StatusMessage !== undefined &&
-    value.AssociationState.StatusMessage !== null &&
-    typeof value.AssociationState.StatusMessage !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.RouteTableId !== containerRouteTableId) {
-    throw new SubnetRouteTableAssociationEvidenceConflictError();
-  }
-  const subnetPresent = value.SubnetId !== undefined && value.SubnetId !== null;
-  const gatewayPresent =
-    value.GatewayId !== undefined && value.GatewayId !== null;
-  if (
-    (subnetPresent &&
-      (typeof value.SubnetId !== 'string' ||
-        !SUBNET_ID_PATTERN.test(value.SubnetId))) ||
-    (gatewayPresent &&
-      (typeof value.GatewayId !== 'string' ||
-        !/^(?:igw|vgw)-[0-9a-f]{8,32}$/u.test(value.GatewayId)))
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    Number(subnetPresent) + Number(gatewayPresent) !== 1 ||
-    (value.PublicIpv4Pool !== undefined && value.PublicIpv4Pool !== null)
-  ) {
-    throw new SubnetRouteTableAssociationEvidenceConflictError();
-  }
-  return value;
 }
 
 /** @param {Readonly<Record<string, any>>} route @param {readonly string[]} keys @returns {string[]} */
@@ -1119,8 +1065,13 @@ function intendedTableAssociation(value, authority) {
   if (!Array.isArray(value)) throw new ProviderResponseUnknownError();
   const matches = [];
   for (const candidate of value) {
-    const association = decodeAssociation(candidate, authority.routeTableId);
-    if (association.SubnetId === authority.subnetId) {
+    const association = decodeSharedEvidence(() =>
+      decodeAwsSingleNodeSubnetRouteTableAssociationRecord(
+        candidate,
+        authority.routeTableId,
+      ),
+    );
+    if (association.subnetId === authority.subnetId) {
       matches.push(association);
     } else if (authority.action.action !== 'delete') {
       throw new SubnetRouteTableAssociationEvidenceConflictError();
@@ -1130,7 +1081,7 @@ function intendedTableAssociation(value, authority) {
     throw new SubnetRouteTableAssociationEvidenceConflictError();
   }
   const match = matches[0] ?? null;
-  if (match?.AssociationState.State === 'failed') {
+  if (match?.state === 'failed') {
     throw new SubnetRouteTableAssociationEvidenceConflictError();
   }
   return match;
@@ -1155,31 +1106,13 @@ function validatePropagation(value, deleting) {
 
 /** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {{routeTable: Readonly<Record<string, any>>, association: Readonly<Record<string, any>>|null}} */
 function oneRouteTableFromResponse(response, authority) {
-  if (!isPlainObject(response) || !Array.isArray(response.RouteTables)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new SubnetRouteTableAssociationEvidenceConflictError();
-  }
-  if (response.RouteTables.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.RouteTables.length !== 1) {
-    throw new SubnetRouteTableAssociationEvidenceConflictError();
-  }
-  const routeTable = response.RouteTables[0];
+  const routeTable = decodeSharedEvidence(() =>
+    decodeAwsSingleNodeSubnetRouteTableAssociationExactRouteTableRecord(
+      response,
+      authority.routeTableId,
+    ),
+  );
   if (
-    !isPlainObject(routeTable) ||
-    typeof routeTable.RouteTableId !== 'string' ||
-    !ROUTE_TABLE_ID_PATTERN.test(routeTable.RouteTableId) ||
-    typeof routeTable.OwnerId !== 'string' ||
-    typeof routeTable.VpcId !== 'string' ||
-    !VPC_ID_PATTERN.test(routeTable.VpcId)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    routeTable.RouteTableId !== authority.routeTableId ||
     routeTable.OwnerId !== authority.plan.providerScope.accountId ||
     routeTable.VpcId !== authority.vpcId
   ) {
@@ -1202,54 +1135,23 @@ function oneRouteTableFromResponse(response, authority) {
 
 /** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {{associations: Readonly<Record<string, any>>[], nextToken: string|null}} */
 function associationDiscoveryPage(response, authority) {
-  if (!isPlainObject(response) || !Array.isArray(response.RouteTables)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
+  const observed = decodeSharedEvidence(() =>
+    decodeAwsSingleNodeSubnetRouteTableAssociationDiscoveryPage(
+      response,
+      authority.subnetId,
+    ),
+  );
+  for (const association of observed.associations) {
     if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  const associations = [];
-  for (const routeTable of response.RouteTables) {
-    if (
-      !isPlainObject(routeTable) ||
-      typeof routeTable.RouteTableId !== 'string' ||
-      !ROUTE_TABLE_ID_PATTERN.test(routeTable.RouteTableId) ||
-      typeof routeTable.OwnerId !== 'string' ||
-      typeof routeTable.VpcId !== 'string' ||
-      !VPC_ID_PATTERN.test(routeTable.VpcId) ||
-      !Array.isArray(routeTable.Associations)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (
-      routeTable.OwnerId !== authority.plan.providerScope.accountId ||
-      routeTable.VpcId !== authority.vpcId
+      association.ownerId !== authority.plan.providerScope.accountId ||
+      association.vpcId !== authority.vpcId ||
+      association.routeTableId !== authority.routeTableId ||
+      association.state === 'failed'
     ) {
       throw new SubnetRouteTableAssociationEvidenceConflictError();
     }
-    let tableMatches = 0;
-    for (const candidate of routeTable.Associations) {
-      const association = decodeAssociation(candidate, routeTable.RouteTableId);
-      if (association.SubnetId !== authority.subnetId) continue;
-      tableMatches += 1;
-      if (association.RouteTableId !== authority.routeTableId) {
-        throw new SubnetRouteTableAssociationEvidenceConflictError();
-      }
-      if (association.AssociationState.State === 'failed') {
-        throw new SubnetRouteTableAssociationEvidenceConflictError();
-      }
-      associations.push(association);
-    }
-    if (tableMatches === 0) throw new ProviderResponseUnknownError();
   }
-  return { associations, nextToken };
+  return observed;
 }
 
 /** @param {unknown[]} errors @returns {void} */
@@ -1404,12 +1306,12 @@ export function createAwsSingleNodeSubnetRouteTableAssociationResource(
       }
       const observed = associationDiscoveryPage(response, authority);
       for (const association of observed.associations) {
-        if (associations.has(association.RouteTableAssociationId)) {
+        if (associations.has(association.associationId)) {
           throw new SubnetRouteTableAssociationEvidenceConflictError();
         }
-        associations.set(association.RouteTableAssociationId, association);
+        associations.set(association.associationId, association);
         if (
-          association.RouteTableId !== authority.routeTableId ||
+          association.routeTableId !== authority.routeTableId ||
           associations.size > 1
         ) {
           throw new SubnetRouteTableAssociationEvidenceConflictError();
@@ -1461,28 +1363,19 @@ export function createAwsSingleNodeSubnetRouteTableAssociationResource(
     ) {
       throw new SubnetRouteTableAssociationEvidenceTransientError();
     }
-    if (exactAssociation === null && slotAssociation === null) {
-      return { state: 'absent' };
-    }
-    if (exactAssociation === null || slotAssociation === null) {
-      throw new SubnetRouteTableAssociationEvidenceTransientError();
-    }
     if (
-      subnet === null ||
-      routeTable === null ||
-      exactAssociation.RouteTableAssociationId !==
-        slotAssociation.RouteTableAssociationId ||
-      exactAssociation.RouteTableId !== slotAssociation.RouteTableId ||
-      exactAssociation.SubnetId !== slotAssociation.SubnetId ||
-      exactAssociation.AssociationState.State !==
-        slotAssociation.AssociationState.State
+      (subnet === null || routeTable === null) &&
+      (exactAssociation !== null || slotAssociation !== null)
     ) {
       throw new SubnetRouteTableAssociationEvidenceTransientError();
     }
-    if (exactAssociation.AssociationState.State !== 'associated') {
-      throw new SubnetRouteTableAssociationEvidenceTransientError();
-    }
-    return { state: 'present', association: exactAssociation };
+    return decodeSharedEvidence(() =>
+      reconcileAwsSingleNodeSubnetRouteTableAssociationViews({
+        exactAssociation,
+        slotAssociations: slotAssociation === null ? [] : [slotAssociation],
+        routeTableId: authority.routeTableId,
+      }),
+    );
   }
 
   /** @param {unknown} value @returns {Promise<void>} */
@@ -1506,7 +1399,7 @@ export function createAwsSingleNodeSubnetRouteTableAssociationResource(
       try {
         await client.disassociateRouteTable(
           deepFreeze({
-            AssociationId: logical.association.RouteTableAssociationId,
+            AssociationId: logical.association.associationId,
           }),
         );
       } catch (error) {

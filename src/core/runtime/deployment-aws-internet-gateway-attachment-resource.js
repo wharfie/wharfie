@@ -1,14 +1,28 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
+import { compareCanonicalStrings } from './canonical-order.js';
 import {
-  compareCanonicalStrings,
-  sortCanonicalJsonValue,
-} from './canonical-order.js';
-import { createCanonicalJsonSha256Id, sha256Base64Url } from './content-id.js';
-import {
-  validateAwsSingleNodeProviderSpec,
-  validateAwsSingleNodeProviderSpecContext,
-} from './deployment-aws-provider-spec.js';
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_INTERNET_GATEWAY_ID_PATTERN,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_STATE_DIGEST_DOMAIN,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_VPC_ID_PATTERN,
+  AwsSingleNodeInternetGatewayAttachmentEvidenceConflictError as InternetGatewayAttachmentEvidenceConflictError,
+  AwsSingleNodeInternetGatewayAttachmentEvidenceTransientError as InternetGatewayAttachmentEvidenceTransientError,
+  AwsSingleNodeInternetGatewayAttachmentEvidenceUnknownError as ProviderResponseUnknownError,
+  decodeAwsSingleNodeBroadInternetGatewayAttachmentState,
+  decodeAwsSingleNodeExactInternetGatewayAttachmentResponse,
+  decodeAwsSingleNodeExactInternetGatewayAttachmentState,
+  decodeAwsSingleNodeInternetGatewayAttachmentDiscoveryPage,
+  getAwsSingleNodeInternetGatewayAttachmentProviderResourceId,
+  getAwsSingleNodeInternetGatewayAttachmentStateDigest,
+  getAwsSingleNodeInternetGatewayAttachmentStrongestEvidenceError,
+} from './deployment-aws-internet-gateway-attachment-evidence.js';
+import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
 import { validateDeploymentProfile } from './deployment-profile.js';
@@ -18,16 +32,17 @@ import {
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
 
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_MAX_DISCOVERY_PAGES = 16;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_DISCOVERY_MAX_RESULTS = 100;
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-ec2-internet-gateway-attachment-state:v1';
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN =
-  'wharfie:aws-single-node-ec2-internet-gateway-attachment:v1';
-export const AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX =
-  'wia1';
+export {
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_DISCOVERY_MAX_RESULTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_MAX_DISCOVERY_PAGES,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
+  AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_STATE_DIGEST_DOMAIN,
+  getAwsSingleNodeInternetGatewayAttachmentProviderResourceId,
+  getAwsSingleNodeInternetGatewayAttachmentStateDigest,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -51,15 +66,6 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
   'describeInternetGateways',
   'detachInternetGateway',
 ]);
-const INTERNET_GATEWAY_ID_PATTERN = /^igw-[0-9a-f]{8,32}$/;
-const VPC_ID_PATTERN = /^vpc-[0-9a-f]{8,32}$/;
-const INTERNET_GATEWAY_ATTACHMENT_STATES = new Set([
-  'available',
-  'attaching',
-  'attached',
-  'detaching',
-  'detached',
-]);
 const RESOURCE_KEY = 'network-internet-gateway-attachment';
 const PROVIDER_TYPE = 'ec2-internet-gateway-attachment';
 const DEPENDENCY_DEFINITIONS = Object.freeze([
@@ -67,13 +73,14 @@ const DEPENDENCY_DEFINITIONS = Object.freeze([
     resourceKey: 'network-vpc',
     providerType: 'ec2-vpc',
     role: Object.freeze({ kind: 'vpc', version: 1 }),
-    idPattern: VPC_ID_PATTERN,
+    idPattern: AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_VPC_ID_PATTERN,
   }),
   Object.freeze({
     resourceKey: 'network-internet-gateway',
     providerType: 'ec2-internet-gateway',
     role: Object.freeze({ kind: 'internet-gateway', version: 1 }),
-    idPattern: INTERNET_GATEWAY_ID_PATTERN,
+    idPattern:
+      AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_INTERNET_GATEWAY_ID_PATTERN,
   }),
 ]);
 
@@ -96,10 +103,6 @@ export class AwsSingleNodeInternetGatewayAttachmentResourceUnknownError extends 
     this.code = 'AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_RESOURCE_UNKNOWN';
   }
 }
-
-class ProviderResponseUnknownError extends Error {}
-class InternetGatewayAttachmentEvidenceConflictError extends Error {}
-class InternetGatewayAttachmentEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -179,60 +182,6 @@ function errorNamed(error, name) {
 async function defaultWaitForRetry(attempt) {
   const delay = Math.min(2000 * 2 ** Math.max(0, attempt - 1), 30_000);
   await new Promise((resolve) => setTimeout(resolve, delay));
-}
-
-/**
- * Derive the one exact desired relationship state.
- * @param {unknown} value - Exact AWS single-node provider specification.
- * @returns {Readonly<{algorithm: 'sha256', value: string}>} - State digest.
- */
-export function getAwsSingleNodeInternetGatewayAttachmentStateDigest(value) {
-  validateAwsSingleNodeProviderSpec(
-    value,
-    'awsSingleNodeInternetGatewayAttachmentState providerSpec',
-  );
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeEc2InternetGatewayAttachmentState',
-    state: 'available',
-    onDestroy: 'purge',
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
-  });
-}
-
-/** @param {string} internetGatewayId @param {string} vpcId @returns {string} */
-export function getAwsSingleNodeInternetGatewayAttachmentProviderResourceId(
-  internetGatewayId,
-  vpcId,
-) {
-  if (
-    typeof internetGatewayId !== 'string' ||
-    !INTERNET_GATEWAY_ID_PATTERN.test(internetGatewayId)
-  ) {
-    throw new TypeError(
-      'awsSingleNodeInternetGatewayAttachment internetGatewayId must be a canonical EC2 internet gateway ID.',
-    );
-  }
-  if (typeof vpcId !== 'string' || !VPC_ID_PATTERN.test(vpcId)) {
-    throw new TypeError(
-      'awsSingleNodeInternetGatewayAttachment vpcId must be a canonical EC2 VPC ID.',
-    );
-  }
-  return createCanonicalJsonSha256Id({
-    domain:
-      AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_DOMAIN,
-    prefix:
-      AWS_SINGLE_NODE_INTERNET_GATEWAY_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
-    value: { internetGatewayId, vpcId },
-    valuePath: 'awsSingleNodeInternetGatewayAttachment provider identity',
-  });
 }
 
 /** @param {Readonly<Record<string, any>>} binding @param {Readonly<Record<string, any>>} definition @param {Readonly<Record<string, any>>} plan @param {Readonly<Record<string, any>>} providerScope @returns {boolean} */
@@ -562,144 +511,6 @@ function validateActionContext(value, providerScope) {
   });
 }
 
-/** @param {unknown} value @param {string} expectedOwnerId @returns {Readonly<Record<string, any>>} */
-function validateInternetGateway(value, expectedOwnerId) {
-  if (
-    !isPlainObject(value) ||
-    typeof value.InternetGatewayId !== 'string' ||
-    !INTERNET_GATEWAY_ID_PATTERN.test(value.InternetGatewayId) ||
-    typeof value.OwnerId !== 'string' ||
-    !Array.isArray(value.Attachments)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (value.OwnerId !== expectedOwnerId) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  if (value.Attachments.length > 1) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  for (const attachment of value.Attachments) {
-    if (
-      !isPlainObject(attachment) ||
-      typeof attachment.VpcId !== 'string' ||
-      !VPC_ID_PATTERN.test(attachment.VpcId) ||
-      typeof attachment.State !== 'string' ||
-      !INTERNET_GATEWAY_ATTACHMENT_STATES.has(attachment.State)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  return value;
-}
-
-/** @param {unknown} response @param {string} exactInternetGatewayId @param {string} expectedOwnerId @returns {Readonly<Record<string, any>>} */
-function oneInternetGatewayFromResponse(
-  response,
-  exactInternetGatewayId,
-  expectedOwnerId,
-) {
-  if (!isPlainObject(response) || !Array.isArray(response.InternetGateways)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  if (response.InternetGateways.length === 0) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.InternetGateways.length !== 1) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  const internetGateway = validateInternetGateway(
-    response.InternetGateways[0],
-    expectedOwnerId,
-  );
-  if (internetGateway.InternetGatewayId !== exactInternetGatewayId) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  return internetGateway;
-}
-
-/** @param {unknown} response @param {string} expectedOwnerId @returns {{internetGateways: Readonly<Record<string, any>>[], nextToken: string|null}} */
-function discoveryPage(response, expectedOwnerId) {
-  if (!isPlainObject(response) || !Array.isArray(response.InternetGateways)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  return {
-    internetGateways: response.InternetGateways.map((internetGateway) =>
-      validateInternetGateway(internetGateway, expectedOwnerId),
-    ),
-    nextToken,
-  };
-}
-
-/** @param {Readonly<Record<string, any>>} internetGateway @param {string} expectedVpcId @returns {'present'|'absent'|'transient'} */
-function exactAttachmentState(internetGateway, expectedVpcId) {
-  if (internetGateway.Attachments.length === 0) return 'absent';
-  const attachment = internetGateway.Attachments[0];
-  if (attachment.VpcId !== expectedVpcId) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  return attachment.State === 'available' ? 'present' : 'transient';
-}
-
-/** @param {Map<string, Readonly<Record<string, any>>>} matches @param {string} expectedInternetGatewayId @param {string} expectedVpcId @returns {'present'|'absent'|'transient'} */
-function broadAttachmentState(
-  matches,
-  expectedInternetGatewayId,
-  expectedVpcId,
-) {
-  if (matches.size === 0) return 'absent';
-  if (matches.size !== 1) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  const internetGateway = [...matches.values()][0];
-  if (internetGateway.InternetGatewayId !== expectedInternetGatewayId) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  if (internetGateway.Attachments.length === 0) return 'transient';
-  const attachment = internetGateway.Attachments[0];
-  if (attachment.VpcId !== expectedVpcId) {
-    throw new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  return attachment.State === 'available' ? 'present' : 'transient';
-}
-
-/** @param {unknown[]} errors @returns {Error|null} */
-function strongestEvidenceError(errors) {
-  if (
-    errors.some(
-      (error) =>
-        error instanceof InternetGatewayAttachmentEvidenceConflictError,
-    )
-  ) {
-    return new InternetGatewayAttachmentEvidenceConflictError();
-  }
-  if (errors.some((error) => error instanceof ProviderResponseUnknownError)) {
-    return new ProviderResponseUnknownError();
-  }
-  if (
-    errors.some(
-      (error) =>
-        error instanceof InternetGatewayAttachmentEvidenceTransientError,
-    )
-  ) {
-    return new InternetGatewayAttachmentEvidenceTransientError();
-  }
-  return null;
-}
-
 /**
  * Bind the exact dependency-derived VPC/internet-gateway relationship. The
  * factory never owns or closes the caller's narrow EC2 client.
@@ -780,10 +591,9 @@ export function createAwsSingleNodeInternetGatewayAttachmentResource(options) {
       if (errorNamed(error, 'InvalidInternetGatewayID.NotFound')) return null;
       throw new ProviderResponseUnknownError();
     }
-    return oneInternetGatewayFromResponse(
+    return decodeAwsSingleNodeExactInternetGatewayAttachmentResponse(
       response,
       authority.internetGatewayId,
-      authority.plan.providerScope.accountId,
     );
   }
 
@@ -815,15 +625,21 @@ export function createAwsSingleNodeInternetGatewayAttachmentResource(options) {
       } catch {
         throw new ProviderResponseUnknownError();
       }
-      const observed = discoveryPage(
-        response,
-        authority.plan.providerScope.accountId,
-      );
-      for (const internetGateway of observed.internetGateways) {
-        if (matches.has(internetGateway.InternetGatewayId)) {
+      const observed =
+        decodeAwsSingleNodeInternetGatewayAttachmentDiscoveryPage(response);
+      for (const internetGateway of observed.records) {
+        // Do not let a later page failure erase a conclusive foreign occupant
+        // already returned for this exact VPC slot.
+        decodeAwsSingleNodeBroadInternetGatewayAttachmentState(
+          [internetGateway],
+          authority.internetGatewayId,
+          authority.plan.providerScope.accountId,
+          authority.vpcId,
+        );
+        if (matches.has(internetGateway.internetGatewayId)) {
           throw new InternetGatewayAttachmentEvidenceConflictError();
         }
-        matches.set(internetGateway.InternetGatewayId, internetGateway);
+        matches.set(internetGateway.internetGatewayId, internetGateway);
       }
       if (observed.nextToken === null) return matches;
       if (
@@ -863,7 +679,11 @@ export function createAwsSingleNodeInternetGatewayAttachmentResource(options) {
     }
     if (exact !== null) {
       try {
-        exactState = exactAttachmentState(exact, authority.vpcId);
+        exactState = decodeAwsSingleNodeExactInternetGatewayAttachmentState(
+          exact,
+          authority.plan.providerScope.accountId,
+          authority.vpcId,
+        );
       } catch (error) {
         errors.push(error);
       }
@@ -872,9 +692,10 @@ export function createAwsSingleNodeInternetGatewayAttachmentResource(options) {
     // occupancy must not be hidden by an unavailable or malformed exact read.
     if (broad !== null) {
       try {
-        broadState = broadAttachmentState(
-          broad,
+        broadState = decodeAwsSingleNodeBroadInternetGatewayAttachmentState(
+          [...broad.values()],
           authority.internetGatewayId,
+          authority.plan.providerScope.accountId,
           authority.vpcId,
         );
       } catch (error) {
@@ -901,7 +722,8 @@ export function createAwsSingleNodeInternetGatewayAttachmentResource(options) {
         return exactState;
       }
     }
-    const strongest = strongestEvidenceError(errors);
+    const strongest =
+      getAwsSingleNodeInternetGatewayAttachmentStrongestEvidenceError(errors);
     if (strongest !== null) throw strongest;
     throw new ProviderResponseUnknownError();
   }

@@ -1809,6 +1809,35 @@ describe('AWS single-node internet gateway attachment retry bounds', () => {
     ).resolves.toEqual({ status: 'blocked' });
   });
 
+  it('preserves a first-page foreign VPC occupant over later pagination failure', async () => {
+    const fixture = makeFixture();
+    const exact = makeInternetGateway(fixture, { Attachments: [] });
+    const foreign = makeInternetGateway(fixture, {
+      InternetGatewayId: INTERNET_GATEWAY_IDS.other,
+    });
+    const describeInternetGateways = jest.fn(
+      async (/** @type {AnyRecord} */ input) => {
+        if (input.InternetGatewayIds) {
+          return { InternetGateways: [exact] };
+        }
+        if (input.NextToken === undefined) {
+          return {
+            InternetGateways: [foreign],
+            NextToken: 'page-2',
+          };
+        }
+        throw new Error('later-page-secret');
+      },
+    );
+    const client = makeClient(fixture, { describeInternetGateways });
+    const { resource } = makePorts(fixture, { client });
+
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    expect(describeInternetGateways).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects broad pagination token cycles and continuation at the hard page limit', async () => {
     const fixture = makeFixture();
     const present = makeInternetGateway(fixture);

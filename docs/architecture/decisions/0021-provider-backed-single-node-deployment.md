@@ -1732,6 +1732,44 @@ errors, or failed waits suppress that advice. This is an at-most-one identical
 request effect inside AWS's documented idempotency boundary, not API-call
 exactly-once execution or an indefinite token-retention claim.
 
+The thirty-fifth slice adds read-only observers for the three derived network
+relationships: internet-gateway attachment, default IPv4 route, and
+subnet/route-table association. Each mutation driver and observer shares pure
+provider-response and relationship-state evidence, while execution,
+settlement, response handling, and mutation ports remain private. Every
+observer recreates the exact desired and controller authority before I/O and
+recomputes its synthetic provider-resource ID from the complete endpoint
+binding lineage.
+
+Gateway attachment observation retains complete VPC-filtered gateway discovery
+plus an independent exact-gateway read. Default-route observation retains the
+exact owned route-table slot and its gateway/topology proof, while delete
+deliberately does not require the gateway to remain currently available.
+Subnet/route-table association observation retains exact reads of both parents
+plus complete paginated discovery of the subnet's unique explicit-association
+slot. Synthetic `wia1`, `wir1`, and `wsa1` IDs remain durable receipts, never
+provider evidence or replacements for these views. Provider-allocated
+association IDs remain fresh evidence rather than durable identity.
+Conclusive slot conflicts are retained as soon as a discovery page exposes
+them, even if a later page fails. Current subnet-association delete ignores
+well-formed unrelated associations and subnet lifecycle degradation so they
+cannot strand removal of the exact target, while wrong-table occupancy of that
+target subnet remains a conflict.
+
+A bound or current-create relationship is verified only when all required
+views agree on the dependency-bound endpoints and relationship state. An
+unbound no-action candidate is a collision and is never adopted; absence
+requires every bounded attempt and discovery page to complete cleanly and show
+the relationship absent. Current-create emptiness remains unknown because an
+earlier effect may not yet be visible.
+
+None of these observers emits `replay-safe-create`. Endpoint cardinality and
+natural slots let the mutation drivers recover through fresh reads, but
+`AttachInternetGateway`, `CreateRoute`, and `AssociateRouteTable` do not expose
+the stable EC2 client-token boundary used by route-table creation. Those
+properties do not turn an eventually consistent empty read into safe API replay
+or establish API-call or lifetime-effect exactly-once execution.
+
 Source and packaged deployment commands, shared authoritative resource
 driver adapters, aggregate inspection, owned provider and controller
 composition, guest storage/service projection, privileged publisher wiring,
