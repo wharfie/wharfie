@@ -1249,6 +1249,35 @@ describe('AWS single-node runtime role policy authority and errors', () => {
     }
   });
 
+  it('preserves an earlier paginated policy conflict before any later read can fail', async () => {
+    const fixture = makeFixture();
+    let callCount = 0;
+    const listRolePolicies = jest.fn(
+      async (/** @type {AnyRecord} */ _input) => {
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            PolicyNames: ['foreign-admin-policy'],
+            IsTruncated: true,
+            Marker: 'later-page',
+          };
+        }
+        throw providerError('NetworkingError');
+      },
+    );
+    const client = makeClient(fixture, { listRolePolicies });
+    const { resource } = makePorts(fixture, { client });
+
+    await expect(
+      resource.executeAction(fixture.context),
+    ).rejects.toBeInstanceOf(
+      AwsSingleNodeRuntimeRolePolicyResourceConflictError,
+    );
+    expect(listRolePolicies).toHaveBeenCalledTimes(1);
+    expect(client.getRolePolicy).not.toHaveBeenCalled();
+    expect(client.putRolePolicy).not.toHaveBeenCalled();
+  });
+
   it('requires exact prior derived lineage', async () => {
     const fixture = makeFixture({ operation: 'reconcile' });
     const wrongPrior = makePolicyBinding(

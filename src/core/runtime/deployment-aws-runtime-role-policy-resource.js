@@ -5,18 +5,33 @@ import {
   AWS_IAM_ROLE_ID_PATTERN,
   AWS_SINGLE_NODE_RUNTIME_POLICY_NAME,
   AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST,
-  AWS_SINGLE_NODE_RUNTIME_ROLE_DESCRIPTION,
-  AWS_SINGLE_NODE_RUNTIME_ROLE_MAX_SESSION_DURATION,
-  AWS_SINGLE_NODE_RUNTIME_ROLE_PATH,
   createAwsSingleNodeRuntimePolicy,
   getAwsSingleNodeManagedArtifactObjectLocation,
   getAwsSingleNodeRuntimePolicyProviderResourceId,
   getAwsSingleNodeRuntimePolicyStateDigest,
   getAwsSingleNodeRuntimeRoleName,
   getAwsSingleNodeRuntimeRoleStateDigest,
-  validateAwsSingleNodeRuntimePolicy,
-  validateAwsSingleNodeRuntimeRoleTrustPolicy,
 } from './deployment-aws-runtime-identity-contract.js';
+import {
+  AWS_IAM_EVIDENCE_MAX_READ_PAGES,
+  AWS_IAM_EVIDENCE_READ_MAX_ITEMS,
+  AwsIamEvidenceConflictError,
+  AwsIamEvidenceTransientError,
+  AwsIamEvidenceUnknownError,
+  isAwsIamErrorNamed,
+  readAwsIamListPages,
+} from './deployment-aws-iam-evidence.js';
+import {
+  corroborateAwsSingleNodeRuntimeRolePolicyEvidence,
+  decodeAwsSingleNodeRuntimeRoleAttachedPoliciesPage,
+  decodeAwsSingleNodeRuntimeRolePolicyInventory,
+  decodeAwsSingleNodeRuntimeRolePolicyNamesPage,
+  decodeAwsSingleNodeRuntimeRolePolicyResponse,
+} from './deployment-aws-runtime-role-policy-evidence.js';
+import {
+  decodeAwsSingleNodeRuntimeRoleEvidence,
+  decodeAwsSingleNodeRuntimeRoleResponse,
+} from './deployment-aws-runtime-role-evidence.js';
 import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
@@ -29,12 +44,10 @@ import {
 
 export const AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_DEFAULT_MAX_ATTEMPTS = 3;
 export const AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_MAX_READ_PAGES = 16;
-export const AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_READ_MAX_ITEMS = 1000;
-
-const IAM_PAGINATION_MARKER_MAX_LENGTH = 4096;
-const IAM_ATTACHED_POLICY_KEYS = new Set(['PolicyName', 'PolicyArn']);
-const IAM_POLICY_NAME_PATTERN = /^[\w+=,.@-]{1,128}$/u;
+export const AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_MAX_READ_PAGES =
+  AWS_IAM_EVIDENCE_MAX_READ_PAGES;
+export const AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_READ_MAX_ITEMS =
+  AWS_IAM_EVIDENCE_READ_MAX_ITEMS;
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -98,10 +111,6 @@ export class AwsSingleNodeRuntimeRolePolicyResourceUnknownError extends Error {
     this.code = 'AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_RESOURCE_UNKNOWN';
   }
 }
-
-class ProviderResponseUnknownError extends Error {}
-class RuntimeRolePolicyEvidenceConflictError extends Error {}
-class RuntimeRolePolicyEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -170,11 +179,7 @@ function sameDependencyBindings(left, right) {
 
 /** @param {unknown} error @param {string} name @returns {boolean} */
 function errorNamed(error, name) {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    /** @type {Record<string, any>} */ (error).name === name
-  );
+  return isAwsIamErrorNamed(error, name);
 }
 
 /** @param {unknown} error @returns {boolean} */
@@ -183,70 +188,6 @@ function policyMissing(error) {
     errorNamed(error, 'NoSuchEntity') ||
     errorNamed(error, 'NoSuchEntityException')
   );
-}
-
-/** @param {unknown} response @param {string} itemKey @returns {{items: unknown[], nextMarker: string|null}} */
-function parseIamListPage(response, itemKey) {
-  if (
-    !isPlainObject(response) ||
-    !Array.isArray(response[itemKey]) ||
-    response[itemKey].length >
-      AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_READ_MAX_ITEMS ||
-    typeof response.IsTruncated !== 'boolean'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.IsTruncated) {
-    if (
-      typeof response.Marker !== 'string' ||
-      response.Marker.length === 0 ||
-      response.Marker.length > IAM_PAGINATION_MARKER_MAX_LENGTH
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    return { items: response[itemKey], nextMarker: response.Marker };
-  }
-  if (response.Marker !== undefined && response.Marker !== null) {
-    throw new ProviderResponseUnknownError();
-  }
-  return { items: response[itemKey], nextMarker: null };
-}
-
-/** @param {unknown[]} observed @returns {string[]} */
-function validatePolicyNames(observed) {
-  const names = [];
-  const seen = new Set();
-  for (const candidate of observed) {
-    if (
-      typeof candidate !== 'string' ||
-      !IAM_POLICY_NAME_PATTERN.test(candidate)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    if (seen.has(candidate)) throw new ProviderResponseUnknownError();
-    seen.add(candidate);
-    names.push(candidate);
-  }
-  return names;
-}
-
-/** @param {unknown[]} observed @returns {void} */
-function validateAttachedPolicies(observed) {
-  for (const candidate of observed) {
-    if (!isPlainObject(candidate)) throw new ProviderResponseUnknownError();
-    if (
-      Object.keys(candidate).length !== IAM_ATTACHED_POLICY_KEYS.size ||
-      ![...IAM_ATTACHED_POLICY_KEYS].every((key) =>
-        Object.hasOwn(candidate, key),
-      ) ||
-      typeof candidate.PolicyName !== 'string' ||
-      !IAM_POLICY_NAME_PATTERN.test(candidate.PolicyName) ||
-      typeof candidate.PolicyArn !== 'string' ||
-      candidate.PolicyArn.length === 0
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
 }
 
 /** @param {number} attempt @returns {Promise<void>} */
@@ -641,73 +582,40 @@ function validateActionContext(value, providerScope) {
   });
 }
 
-/** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {void} */
+/** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
 function validatePolicyResponse(response, authority) {
-  if (
-    !isPlainObject(response) ||
-    typeof response.RoleName !== 'string' ||
-    typeof response.PolicyName !== 'string' ||
-    typeof response.PolicyDocument !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    response.RoleName !== authority.roleName ||
-    response.PolicyName !== AWS_SINGLE_NODE_RUNTIME_POLICY_NAME
-  ) {
-    throw new RuntimeRolePolicyEvidenceConflictError();
-  }
-  try {
-    validateAwsSingleNodeRuntimePolicy(
-      response.PolicyDocument,
-      policyAuthority(authority.plan),
-      'awsSingleNodeRuntimeRolePolicy provider response.PolicyDocument',
-    );
-  } catch (error) {
-    if (error instanceof TypeError) throw new ProviderResponseUnknownError();
-    throw new RuntimeRolePolicyEvidenceConflictError();
-  }
+  const evidence = decodeAwsSingleNodeRuntimeRolePolicyResponse(response, {
+    roleName: authority.roleName,
+    policyAuthority: policyAuthority(authority.plan),
+  });
+  if (!evidence.desired) throw new AwsIamEvidenceConflictError();
+  return evidence;
 }
 
 /** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {void} */
 function validateRoleResponse(response, authority) {
-  if (!isPlainObject(response) || !isPlainObject(response.Role)) {
-    throw new ProviderResponseUnknownError();
-  }
-  const role = response.Role;
+  const role = decodeAwsSingleNodeRuntimeRoleResponse(
+    response,
+    authority.roleName,
+  );
   if (
-    typeof role.Path !== 'string' ||
-    typeof role.RoleName !== 'string' ||
-    typeof role.RoleId !== 'string' ||
-    typeof role.Arn !== 'string' ||
-    typeof role.Description !== 'string' ||
-    !Number.isSafeInteger(role.MaxSessionDuration) ||
-    typeof role.AssumeRolePolicyDocument !== 'string'
+    role.PermissionsBoundary !== undefined &&
+    role.PermissionsBoundary !== null
   ) {
-    throw new ProviderResponseUnknownError();
+    throw new AwsIamEvidenceConflictError();
   }
-  const expectedArn = `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:role${AWS_SINGLE_NODE_RUNTIME_ROLE_PATH}${authority.roleName}`;
+  const evidence = decodeAwsSingleNodeRuntimeRoleEvidence(role, {
+    providerScope: authority.plan.providerScope,
+    roleName: authority.roleName,
+    providerResourceId: authority.runtimeRoleId,
+  });
   if (
-    role.Path !== AWS_SINGLE_NODE_RUNTIME_ROLE_PATH ||
-    role.RoleName !== authority.roleName ||
-    role.RoleId !== authority.runtimeRoleId ||
-    role.Arn !== expectedArn ||
-    role.Description !== AWS_SINGLE_NODE_RUNTIME_ROLE_DESCRIPTION ||
-    role.MaxSessionDuration !==
-      AWS_SINGLE_NODE_RUNTIME_ROLE_MAX_SESSION_DURATION ||
-    (role.PermissionsBoundary !== undefined &&
-      role.PermissionsBoundary !== null)
+    !sameJson(
+      evidence.observedDigest,
+      getAwsSingleNodeRuntimeRoleStateDigest(nameAuthority(authority.plan)),
+    )
   ) {
-    throw new RuntimeRolePolicyEvidenceConflictError();
-  }
-  try {
-    validateAwsSingleNodeRuntimeRoleTrustPolicy(
-      role.AssumeRolePolicyDocument,
-      'awsSingleNodeRuntimeRolePolicy provider response.Role.AssumeRolePolicyDocument',
-    );
-  } catch (error) {
-    if (error instanceof TypeError) throw new ProviderResponseUnknownError();
-    throw new RuntimeRolePolicyEvidenceConflictError();
+    throw new AwsIamEvidenceConflictError();
   }
 }
 
@@ -778,47 +686,30 @@ export function createAwsSingleNodeRuntimeRolePolicyResource(options) {
     }
   }
 
-  /** @param {string} method @param {string} itemKey @param {Readonly<Record<string, any>>} baseRequest @returns {Promise<unknown[]>} */
-  async function readIamList(method, itemKey, baseRequest) {
-    const items = [];
-    const seenMarkers = new Set();
-    let marker = null;
-    for (
-      let page = 1;
-      page <= AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_MAX_READ_PAGES;
-      page += 1
-    ) {
-      let response;
-      try {
-        response = await client[method](
-          deepFreeze({
-            ...baseRequest,
-            MaxItems: AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_READ_MAX_ITEMS,
-            ...(marker === null ? {} : { Marker: marker }),
-          }),
-        );
-      } catch (error) {
-        if (policyMissing(error)) {
-          throw new RuntimeRolePolicyEvidenceTransientError();
+  /** @param {string} method @param {string} itemKey @param {Readonly<Record<string, any>>} baseRequest @param {(items: unknown[]) => ReadonlyArray<unknown>} decodeItems @returns {Promise<unknown[]>} */
+  async function readIamList(method, itemKey, baseRequest, decodeItems) {
+    return readAwsIamListPages({
+      readPage: async (
+        /** @type {Readonly<Record<string, any>>} */ request,
+      ) => {
+        try {
+          return await client[method](request);
+        } catch (error) {
+          if (policyMissing(error)) {
+            throw new AwsIamEvidenceTransientError();
+          }
+          throw new AwsIamEvidenceUnknownError();
         }
-        throw new ProviderResponseUnknownError();
-      }
-      const observed = parseIamListPage(response, itemKey);
-      items.push(...observed.items);
-      if (observed.nextMarker === null) return items;
-      if (
-        page === AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_MAX_READ_PAGES ||
-        seenMarkers.has(observed.nextMarker)
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-      seenMarkers.add(observed.nextMarker);
-      marker = observed.nextMarker;
-    }
-    throw new ProviderResponseUnknownError();
+      },
+      itemKey,
+      baseRequest,
+      maxPages: AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_MAX_READ_PAGES,
+      maxItems: AWS_SINGLE_NODE_RUNTIME_ROLE_POLICY_READ_MAX_ITEMS,
+      decodeItems,
+    });
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @returns {Promise<boolean>} */
+  /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<{listed: 'present'|'absent'}>>} */
   async function readRoleOnce(authority) {
     let response;
     try {
@@ -827,33 +718,31 @@ export function createAwsSingleNodeRuntimeRolePolicyResource(options) {
       );
     } catch (error) {
       if (policyMissing(error)) {
-        throw new RuntimeRolePolicyEvidenceConflictError();
+        throw new AwsIamEvidenceConflictError();
       }
-      throw new ProviderResponseUnknownError();
+      throw new AwsIamEvidenceUnknownError();
     }
     validateRoleResponse(response, authority);
     const request = deepFreeze({ RoleName: authority.roleName });
-    const inlinePolicies = validatePolicyNames(
-      await readIamList('listRolePolicies', 'PolicyNames', request),
+    const inlinePolicies = await readIamList(
+      'listRolePolicies',
+      'PolicyNames',
+      request,
+      decodeAwsSingleNodeRuntimeRolePolicyNamesPage,
     );
     const attachedPolicies = await readIamList(
       'listAttachedRolePolicies',
       'AttachedPolicies',
       request,
+      decodeAwsSingleNodeRuntimeRoleAttachedPoliciesPage,
     );
-    validateAttachedPolicies(attachedPolicies);
-    if (
-      attachedPolicies.length !== 0 ||
-      inlinePolicies.length > 1 ||
-      (inlinePolicies.length === 1 &&
-        inlinePolicies[0] !== AWS_SINGLE_NODE_RUNTIME_POLICY_NAME)
-    ) {
-      throw new RuntimeRolePolicyEvidenceConflictError();
-    }
-    return inlinePolicies.length === 1;
+    return decodeAwsSingleNodeRuntimeRolePolicyInventory(
+      inlinePolicies,
+      attachedPolicies,
+    );
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @returns {Promise<'present'|'absent'>} */
+  /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>|null>} */
   async function readPolicyOnce(authority) {
     let response;
     try {
@@ -864,21 +753,18 @@ export function createAwsSingleNodeRuntimeRolePolicyResource(options) {
         }),
       );
     } catch (error) {
-      if (policyMissing(error)) return 'absent';
-      throw new ProviderResponseUnknownError();
+      if (policyMissing(error)) return null;
+      throw new AwsIamEvidenceUnknownError();
     }
-    validatePolicyResponse(response, authority);
-    return 'present';
+    return validatePolicyResponse(response, authority);
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<'present'|'absent'>} */
   async function readLogicalState(authority) {
-    const listed = await readRoleOnce(authority);
-    const state = await readPolicyOnce(authority);
-    if (listed !== (state === 'present')) {
-      throw new RuntimeRolePolicyEvidenceTransientError();
-    }
-    return state;
+    const inventory = await readRoleOnce(authority);
+    const policy = await readPolicyOnce(authority);
+    return corroborateAwsSingleNodeRuntimeRolePolicyEvidence(inventory, policy)
+      .presence;
   }
 
   /** @param {Readonly<Record<string, any>>} authority @param {'present'|'absent'} expectedState @returns {Promise<void>} */
@@ -887,7 +773,7 @@ export function createAwsSingleNodeRuntimeRolePolicyResource(options) {
     try {
       state = await readLogicalState(authority);
     } catch (error) {
-      if (error instanceof RuntimeRolePolicyEvidenceConflictError) {
+      if (error instanceof AwsIamEvidenceConflictError) {
         throw new AwsSingleNodeRuntimeRolePolicyResourceConflictError();
       }
       throw new AwsSingleNodeRuntimeRolePolicyResourceUnknownError();
@@ -905,7 +791,7 @@ export function createAwsSingleNodeRuntimeRolePolicyResource(options) {
     try {
       state = await readLogicalState(authority);
     } catch (error) {
-      if (error instanceof RuntimeRolePolicyEvidenceConflictError) {
+      if (error instanceof AwsIamEvidenceConflictError) {
         throw new AwsSingleNodeRuntimeRolePolicyResourceConflictError();
       }
       throw new AwsSingleNodeRuntimeRolePolicyResourceUnknownError();
@@ -946,7 +832,7 @@ export function createAwsSingleNodeRuntimeRolePolicyResource(options) {
       try {
         state = await readLogicalState(authority);
       } catch (error) {
-        if (error instanceof RuntimeRolePolicyEvidenceConflictError) {
+        if (error instanceof AwsIamEvidenceConflictError) {
           return Object.freeze({ status: 'blocked' });
         }
         if (attempt === maxAttempts) {

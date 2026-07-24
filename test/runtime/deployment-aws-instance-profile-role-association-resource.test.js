@@ -1137,6 +1137,31 @@ describe('AWS runtime role/profile association exact effect evidence', () => {
     expect(client.removeRoleFromInstanceProfile).not.toHaveBeenCalled();
   });
 
+  it('stops on a first-page inline-policy contradiction before a later read can fail', async () => {
+    const fixture = makeFixture();
+    let callCount = 0;
+    const listRolePolicies = jest.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          PolicyNames: ['foreign-inline-policy'],
+          IsTruncated: true,
+          Marker: 'later-page',
+        };
+      }
+      throw new Error('provider-secret-later-page');
+    });
+    const client = makeClient(fixture, { listRolePolicies });
+    const { resource } = makePorts(fixture, { client });
+
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    expect(listRolePolicies).toHaveBeenCalledTimes(1);
+    expect(client.addRoleToInstanceProfile).not.toHaveBeenCalled();
+    expect(client.removeRoleFromInstanceProfile).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       'an oversized result page',
@@ -1214,6 +1239,35 @@ describe('AWS runtime role/profile association exact effect evidence', () => {
       Marker: 'next-page',
     });
     expectDeepFrozen(listInstanceProfilesForRole.mock.calls[0][0]);
+  });
+
+  it('stops on a first-page profile contradiction before a later read can fail', async () => {
+    const fixture = makeFixture();
+    let callCount = 0;
+    const listInstanceProfilesForRole = jest.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          InstanceProfiles: [
+            makeProfileReference(fixture, {
+              InstanceProfileId: OTHER_PROFILE_ID,
+            }),
+          ],
+          IsTruncated: true,
+          Marker: 'later-page',
+        };
+      }
+      throw new Error('provider-secret-later-page');
+    });
+    const client = makeClient(fixture, { listInstanceProfilesForRole });
+    const { resource } = makePorts(fixture, { client });
+
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    expect(listInstanceProfilesForRole).toHaveBeenCalledTimes(1);
+    expect(client.addRoleToInstanceProfile).not.toHaveBeenCalled();
+    expect(client.removeRoleFromInstanceProfile).not.toHaveBeenCalled();
   });
 
   it.each([

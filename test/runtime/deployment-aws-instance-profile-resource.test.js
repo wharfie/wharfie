@@ -817,6 +817,30 @@ describe('AWS single-node runtime instance profile evidence', () => {
       AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAG_PAGES,
     );
   });
+
+  it('preserves a conclusive tag conflict over a later pagination failure', async () => {
+    const fixture = makeFixture();
+    const tags = expectedTags(fixture);
+    const listInstanceProfileTags = jest.fn(
+      async (/** @type {AnyRecord} */ input) => {
+        if (input.Marker !== undefined) {
+          throw new Error('later provider secret');
+        }
+        return {
+          Tags: [{ ...tags[0], Value: 'foreign' }],
+          IsTruncated: true,
+          Marker: 'page-two',
+        };
+      },
+    );
+    const client = makeClient(fixture, { listInstanceProfileTags });
+    const { resource } = makePorts(fixture, { client });
+
+    await expect(resource.verifySettlement(fixture.context)).resolves.toEqual({
+      status: 'blocked',
+    });
+    expect(listInstanceProfileTags).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('AWS single-node runtime instance profile safe deletion', () => {

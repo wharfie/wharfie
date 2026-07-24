@@ -1,15 +1,45 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
 import { compareCanonicalStrings } from './canonical-order.js';
+import {
+  AWS_IAM_EVIDENCE_MAX_READ_PAGES,
+  AWS_IAM_EVIDENCE_MAX_TAGS,
+  AWS_IAM_EVIDENCE_READ_MAX_ITEMS,
+  AwsIamEvidenceConflictError,
+  AwsIamEvidenceTransientError,
+  AwsIamEvidenceUnknownError,
+  decodeAwsIamTags,
+  isAwsIamErrorNamed,
+  readAwsIamListPages,
+  validateAwsIamTags,
+} from './deployment-aws-iam-evidence.js';
+import {
+  corroborateAwsSingleNodeInstanceProfileRoleAssociationViews,
+  decodeAwsSingleNodeInstanceProfileRoleAssociationProfileView,
+  decodeAwsSingleNodeInstanceProfileRoleAssociationRoleView,
+} from './deployment-aws-instance-profile-role-association-evidence.js';
+import {
+  createAwsSingleNodeInstanceProfileOwnershipTags,
+  decodeAwsSingleNodeInstanceProfileResponse,
+  validateAwsSingleNodeInstanceProfileId,
+} from './deployment-aws-instance-profile-evidence.js';
 import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import {
+  corroborateAwsSingleNodeRuntimeRolePolicyEvidence,
+  decodeAwsSingleNodeRuntimeRoleAttachedPoliciesPage,
+  decodeAwsSingleNodeRuntimeRolePolicyInventory,
+  decodeAwsSingleNodeRuntimeRolePolicyNamesPage,
+  decodeAwsSingleNodeRuntimeRolePolicyResponse,
+} from './deployment-aws-runtime-role-policy-evidence.js';
+import {
+  decodeAwsSingleNodeRuntimeRoleEvidence,
+  decodeAwsSingleNodeRuntimeRoleInstanceProfiles,
+  decodeAwsSingleNodeRuntimeRoleResponse,
+  getAwsSingleNodeRuntimeRoleOwnershipTags,
+  validateAwsSingleNodeRuntimeRoleId,
+} from './deployment-aws-runtime-role-evidence.js';
+import {
   AWS_SINGLE_NODE_RUNTIME_POLICY_NAME,
-  AWS_SINGLE_NODE_RUNTIME_ROLE_DESCRIPTION,
-  AWS_SINGLE_NODE_RUNTIME_ROLE_MAX_SESSION_DURATION,
-  AWS_SINGLE_NODE_RUNTIME_ROLE_PATH,
-  assertAwsIamInstanceProfileId,
-  assertAwsIamRoleId,
-  createAwsSingleNodeRuntimeIdentityTags,
   getAwsSingleNodeManagedArtifactObjectLocation,
   getAwsSingleNodeRuntimeAssociationProviderResourceId,
   getAwsSingleNodeRuntimeAssociationStateDigest,
@@ -19,8 +49,6 @@ import {
   getAwsSingleNodeRuntimePolicyStateDigest,
   getAwsSingleNodeRuntimeRoleName,
   getAwsSingleNodeRuntimeRoleStateDigest,
-  validateAwsSingleNodeRuntimePolicy,
-  validateAwsSingleNodeRuntimeRoleTrustPolicy,
 } from './deployment-aws-runtime-identity-contract.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
@@ -33,9 +61,12 @@ import {
 
 export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_DEFAULT_MAX_ATTEMPTS = 3;
 export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_MAX_READ_PAGES = 16;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_TAG_PAGE_SIZE = 50;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_PROFILE_PAGE_SIZE = 1000;
+export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_MAX_READ_PAGES =
+  AWS_IAM_EVIDENCE_MAX_READ_PAGES;
+export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_TAG_PAGE_SIZE =
+  AWS_IAM_EVIDENCE_MAX_TAGS;
+export const AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_PROFILE_PAGE_SIZE =
+  AWS_IAM_EVIDENCE_READ_MAX_ITEMS;
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -73,11 +104,6 @@ const DECLARED_DEPENDENCY_KEYS = Object.freeze([
   'runtime-role-policy',
   'runtime-identity',
 ]);
-const TAG_KEYS = new Set(['Key', 'Value']);
-const ATTACHED_POLICY_KEYS = new Set(['PolicyName', 'PolicyArn']);
-const IAM_POLICY_NAME_PATTERN = /^[\w+=,.@-]{1,128}$/u;
-const IAM_PAGINATION_MARKER_MAX_LENGTH = 4096;
-
 const ARTIFACT_DEFINITION = Object.freeze({
   resourceKey: 'artifact',
   providerType: 's3-object',
@@ -136,10 +162,6 @@ export class AwsSingleNodeInstanceProfileRoleAssociationResourceUnknownError ext
       'AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_RESOURCE_UNKNOWN';
   }
 }
-
-class ProviderResponseUnknownError extends Error {}
-class AssociationEvidenceConflictError extends Error {}
-class AssociationEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -208,11 +230,7 @@ function sameDependencyBindings(left, right) {
 
 /** @param {unknown} error @param {string} name @returns {boolean} */
 function errorNamed(error, name) {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    /** @type {Record<string, any>} */ (error).name === name
-  );
+  return isAwsIamErrorNamed(error, name);
 }
 
 /** @param {unknown} error @returns {boolean} */
@@ -377,8 +395,8 @@ function resolveDependencyAuthority(plan, head, actionIndex) {
     profileBinding,
   );
   try {
-    assertAwsIamRoleId(roleBinding.providerResourceId);
-    assertAwsIamInstanceProfileId(profileBinding.providerResourceId);
+    validateAwsSingleNodeRuntimeRoleId(roleBinding.providerResourceId);
+    validateAwsSingleNodeInstanceProfileId(profileBinding.providerResourceId);
   } catch {
     throw new AwsSingleNodeInstanceProfileRoleAssociationResourceConflictError();
   }
@@ -669,253 +687,109 @@ function expectedEndpointTags(authority, kind) {
   const binding = roleEndpoint
     ? authority.roleBinding
     : authority.profileBinding;
-  return createAwsSingleNodeRuntimeIdentityTags({
-    resourceKind: roleEndpoint
-      ? 'single-node-runtime-role'
-      : 'single-node-runtime-instance-profile',
-    capabilityKind: 'runtime-identity',
-    roleKind: roleEndpoint ? 'role' : 'instance-profile',
+  const tagAuthority = {
     providerScopeId: authority.plan.providerScope.providerScopeId,
     deploymentInstanceId: authority.plan.deploymentInstanceId,
     incarnationId: authority.plan.incarnationId,
-    resourceKey: roleEndpoint ? 'runtime-role' : 'runtime-identity',
     createdByActionId: binding.createdByActionId,
     ownershipNonce: binding.ownershipNonce,
     stateDigest: roleEndpoint
       ? authority.roleStateDigest
       : authority.profileStateDigest,
-  });
+  };
+  return roleEndpoint
+    ? getAwsSingleNodeRuntimeRoleOwnershipTags({
+        capabilityKind: 'runtime-identity',
+        roleKind: 'role',
+        resourceKey: 'runtime-role',
+        ...tagAuthority,
+      })
+    : createAwsSingleNodeInstanceProfileOwnershipTags(tagAuthority);
 }
 
 /** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
 function validateRoleEnvelope(value, authority) {
-  if (!isPlainObject(value) || !isPlainObject(value.Role)) {
-    throw new ProviderResponseUnknownError();
-  }
-  const role = value.Role;
-  for (const key of [
-    'Path',
-    'RoleName',
-    'RoleId',
-    'Arn',
-    'Description',
-    'AssumeRolePolicyDocument',
-  ]) {
-    if (typeof role[key] !== 'string' || role[key].length === 0) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  if (typeof role.MaxSessionDuration !== 'number') {
-    throw new ProviderResponseUnknownError();
-  }
-  try {
-    assertAwsIamRoleId(role.RoleId);
-  } catch {
-    throw new ProviderResponseUnknownError();
-  }
-  const expectedArn = `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:role${AWS_SINGLE_NODE_RUNTIME_ROLE_PATH}${authority.roleName}`;
+  const role = decodeAwsSingleNodeRuntimeRoleResponse(
+    value,
+    authority.roleName,
+  );
   if (
-    role.RoleId !== authority.runtimeRoleId ||
-    role.RoleName !== authority.roleName ||
-    role.Path !== AWS_SINGLE_NODE_RUNTIME_ROLE_PATH ||
-    role.Arn !== expectedArn ||
-    role.Description !== AWS_SINGLE_NODE_RUNTIME_ROLE_DESCRIPTION ||
-    role.MaxSessionDuration !==
-      AWS_SINGLE_NODE_RUNTIME_ROLE_MAX_SESSION_DURATION ||
-    (role.PermissionsBoundary !== undefined &&
-      role.PermissionsBoundary !== null)
+    role.PermissionsBoundary !== undefined &&
+    role.PermissionsBoundary !== null
   ) {
-    throw new AssociationEvidenceConflictError();
+    throw new AwsIamEvidenceConflictError();
   }
-  try {
-    validateAwsSingleNodeRuntimeRoleTrustPolicy(role.AssumeRolePolicyDocument);
-  } catch (error) {
-    if (error instanceof TypeError) throw new ProviderResponseUnknownError();
-    throw new AssociationEvidenceConflictError();
+  const evidence = decodeAwsSingleNodeRuntimeRoleEvidence(role, {
+    providerScope: authority.plan.providerScope,
+    roleName: authority.roleName,
+    providerResourceId: authority.runtimeRoleId,
+  });
+  if (!sameJson(evidence.observedDigest, authority.roleStateDigest)) {
+    throw new AwsIamEvidenceConflictError();
   }
-  return role;
+  return evidence;
 }
 
 /** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
 function validateInstanceProfileEnvelope(value, authority) {
-  if (!isPlainObject(value) || !isPlainObject(value.InstanceProfile)) {
-    throw new ProviderResponseUnknownError();
-  }
-  const profile = value.InstanceProfile;
-  for (const key of [
-    'Path',
-    'InstanceProfileName',
-    'InstanceProfileId',
-    'Arn',
-  ]) {
-    if (typeof profile[key] !== 'string' || profile[key].length === 0) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  try {
-    assertAwsIamInstanceProfileId(profile.InstanceProfileId);
-  } catch {
-    throw new ProviderResponseUnknownError();
-  }
-  const expectedArn = `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:instance-profile${AWS_SINGLE_NODE_RUNTIME_ROLE_PATH}${authority.instanceProfileName}`;
-  if (
-    profile.InstanceProfileId !== authority.instanceProfileId ||
-    profile.InstanceProfileName !== authority.instanceProfileName ||
-    profile.Path !== AWS_SINGLE_NODE_RUNTIME_ROLE_PATH ||
-    profile.Arn !== expectedArn
-  ) {
-    throw new AssociationEvidenceConflictError();
-  }
-  if (!Array.isArray(profile.Roles)) {
-    throw new ProviderResponseUnknownError();
-  }
-  return profile;
+  return decodeAwsSingleNodeInstanceProfileResponse(value, {
+    providerScope: authority.plan.providerScope,
+    instanceProfileName: authority.instanceProfileName,
+    expectedInstanceProfileId: authority.instanceProfileId,
+  });
 }
 
-/** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateExactRoleReference(value, authority) {
-  if (!isPlainObject(value)) throw new ProviderResponseUnknownError();
-  for (const key of ['Path', 'RoleName', 'RoleId', 'Arn']) {
-    if (typeof value[key] !== 'string' || value[key].length === 0) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  try {
-    assertAwsIamRoleId(value.RoleId);
-  } catch {
-    throw new ProviderResponseUnknownError();
-  }
-  const expectedArn = `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:role${AWS_SINGLE_NODE_RUNTIME_ROLE_PATH}${authority.roleName}`;
-  if (
-    value.Path !== AWS_SINGLE_NODE_RUNTIME_ROLE_PATH ||
-    value.RoleName !== authority.roleName ||
-    value.RoleId !== authority.runtimeRoleId ||
-    value.Arn !== expectedArn
-  ) {
-    throw new AssociationEvidenceConflictError();
-  }
+/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
+function membershipAuthority(authority) {
+  return deepFreeze({
+    providerScope: authority.plan.providerScope,
+    roleName: authority.roleName,
+    runtimeRoleId: authority.runtimeRoleId,
+    instanceProfileName: authority.instanceProfileName,
+    instanceProfileId: authority.instanceProfileId,
+  });
 }
 
-/** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateExactProfileReference(value, authority) {
-  if (!isPlainObject(value)) throw new ProviderResponseUnknownError();
-  for (const key of [
-    'Path',
-    'InstanceProfileName',
-    'InstanceProfileId',
-    'Arn',
-  ]) {
-    if (typeof value[key] !== 'string' || value[key].length === 0) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  try {
-    assertAwsIamInstanceProfileId(value.InstanceProfileId);
-  } catch {
-    throw new ProviderResponseUnknownError();
-  }
-  const expectedArn = `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:instance-profile${AWS_SINGLE_NODE_RUNTIME_ROLE_PATH}${authority.instanceProfileName}`;
-  if (
-    value.Path !== AWS_SINGLE_NODE_RUNTIME_ROLE_PATH ||
-    value.InstanceProfileName !== authority.instanceProfileName ||
-    value.InstanceProfileId !== authority.instanceProfileId ||
-    value.Arn !== expectedArn
-  ) {
-    throw new AssociationEvidenceConflictError();
-  }
+/** @param {Readonly<Record<string, any>>} client @param {string} method @param {string} itemKey @param {Readonly<Record<string, any>>} baseRequest @param {number} maxItems @param {(items: unknown[]) => ReadonlyArray<unknown>} decodeItems @returns {Promise<unknown[]>} */
+async function readAllPages(
+  client,
+  method,
+  itemKey,
+  baseRequest,
+  maxItems,
+  decodeItems,
+) {
+  return readAwsIamListPages({
+    readPage: async (/** @type {Readonly<Record<string, any>>} */ request) => {
+      try {
+        return await client[method](request);
+      } catch (error) {
+        if (noSuchEntity(error)) throw new AwsIamEvidenceTransientError();
+        throw new AwsIamEvidenceUnknownError();
+      }
+    },
+    decodeItems,
+    itemKey,
+    baseRequest,
+    maxPages: AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_MAX_READ_PAGES,
+    maxItems,
+  });
 }
 
-/** @param {unknown} response @param {string} itemKey @param {number} maxItems @returns {{items: unknown[], marker: string|null}} */
-function parseIamPage(response, itemKey, maxItems) {
-  if (
-    !isPlainObject(response) ||
-    !Array.isArray(response[itemKey]) ||
-    response[itemKey].length > maxItems ||
-    typeof response.IsTruncated !== 'boolean'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.IsTruncated === true) {
-    if (
-      typeof response.Marker !== 'string' ||
-      response.Marker.length === 0 ||
-      response.Marker.length > IAM_PAGINATION_MARKER_MAX_LENGTH
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    return { items: response[itemKey], marker: response.Marker };
-  }
-  if (response.Marker !== undefined && response.Marker !== null) {
-    throw new ProviderResponseUnknownError();
-  }
-  return { items: response[itemKey], marker: null };
-}
-
-/** @param {Readonly<Record<string, any>>} client @param {string} method @param {string} itemKey @param {Readonly<Record<string, any>>} baseRequest @param {number} maxItems @returns {Promise<unknown[]>} */
-async function readAllPages(client, method, itemKey, baseRequest, maxItems) {
-  const items = [];
-  const seenMarkers = new Set();
-  let marker = null;
-  for (
-    let page = 1;
-    page <= AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_MAX_READ_PAGES;
-    page += 1
-  ) {
-    let response;
-    try {
-      response = await client[method](
-        deepFreeze({
-          ...baseRequest,
-          MaxItems: maxItems,
-          ...(marker === null ? {} : { Marker: marker }),
-        }),
-      );
-    } catch (error) {
-      if (noSuchEntity(error)) throw new AssociationEvidenceTransientError();
-      throw new ProviderResponseUnknownError();
-    }
-    const observed = parseIamPage(response, itemKey, maxItems);
-    items.push(...observed.items);
-    if (observed.marker === null) return items;
-    if (
-      page ===
-        AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_MAX_READ_PAGES ||
-      seenMarkers.has(observed.marker)
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    seenMarkers.add(observed.marker);
-    marker = observed.marker;
-  }
-  throw new ProviderResponseUnknownError();
-}
-
-/** @param {unknown[]} observed @param {Readonly<Array<Readonly<{Key: string, Value: string}>>>} expected @returns {void} */
-function validateExactTags(observed, expected) {
+/** @param {Readonly<Array<Readonly<{Key: string, Value: string}>>>} expected @returns {(items: unknown[]) => ReadonlyArray<unknown>} */
+function exactTagPageDecoder(expected) {
   const expectedValues = new Map(expected.map((tag) => [tag.Key, tag.Value]));
   const seen = new Set();
-  for (const candidate of observed) {
-    if (!isPlainObject(candidate)) throw new ProviderResponseUnknownError();
-    if (
-      Object.keys(candidate).length !== TAG_KEYS.size ||
-      ![...TAG_KEYS].every((key) => Object.hasOwn(candidate, key)) ||
-      typeof candidate.Key !== 'string' ||
-      candidate.Key.length === 0 ||
-      typeof candidate.Value !== 'string'
-    ) {
-      throw new ProviderResponseUnknownError();
+  return (items) => {
+    const tags = decodeAwsIamTags(items);
+    for (const tag of tags) {
+      if (seen.has(tag.Key) || expectedValues.get(tag.Key) !== tag.Value) {
+        throw new AwsIamEvidenceConflictError();
+      }
+      seen.add(tag.Key);
     }
-    if (
-      seen.has(candidate.Key) ||
-      expectedValues.get(candidate.Key) !== candidate.Value
-    ) {
-      throw new AssociationEvidenceConflictError();
-    }
-    seen.add(candidate.Key);
-  }
-  if (observed.length !== expected.length) {
-    throw new AssociationEvidenceConflictError();
-  }
+    return tags;
+  };
 }
 
 /**
@@ -990,6 +864,7 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
   /** @param {Readonly<Record<string, any>>} authority @param {'role'|'profile'} kind @returns {Promise<void>} */
   async function readEndpointTags(authority, kind) {
     const roleEndpoint = kind === 'role';
+    const expected = expectedEndpointTags(authority, kind);
     const tags = await readAllPages(
       client,
       roleEndpoint ? 'listRoleTags' : 'listInstanceProfileTags',
@@ -998,8 +873,9 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
         ? deepFreeze({ RoleName: authority.roleName })
         : deepFreeze({ InstanceProfileName: authority.instanceProfileName }),
       AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_TAG_PAGE_SIZE,
+      exactTagPageDecoder(expected),
     );
-    validateExactTags(tags, expectedEndpointTags(authority, kind));
+    validateAwsIamTags(tags, expected, { allowIncomplete: false });
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<void>} */
@@ -1010,8 +886,8 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
         deepFreeze({ RoleName: authority.roleName }),
       );
     } catch (error) {
-      if (noSuchEntity(error)) throw new AssociationEvidenceTransientError();
-      throw new ProviderResponseUnknownError();
+      if (noSuchEntity(error)) throw new AwsIamEvidenceTransientError();
+      throw new AwsIamEvidenceUnknownError();
     }
     validateRoleEnvelope(response, authority);
     await readEndpointTags(authority, 'role');
@@ -1028,78 +904,50 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
         }),
       );
     } catch (error) {
-      if (noSuchEntity(error)) throw new AssociationEvidenceTransientError();
-      throw new ProviderResponseUnknownError();
+      if (noSuchEntity(error)) throw new AwsIamEvidenceTransientError();
+      throw new AwsIamEvidenceUnknownError();
     }
-    if (
-      !isPlainObject(response) ||
-      typeof response.RoleName !== 'string' ||
-      typeof response.PolicyName !== 'string' ||
-      typeof response.PolicyDocument !== 'string'
-    ) {
-      throw new ProviderResponseUnknownError();
+    const policy = decodeAwsSingleNodeRuntimeRolePolicyResponse(response, {
+      roleName: authority.roleName,
+      policyAuthority: policyAuthority(authority.plan),
+    });
+    if (!policy.desired) {
+      throw new AwsIamEvidenceConflictError();
     }
-    if (
-      response.RoleName !== authority.roleName ||
-      response.PolicyName !== AWS_SINGLE_NODE_RUNTIME_POLICY_NAME
-    ) {
-      throw new AssociationEvidenceConflictError();
-    }
-    try {
-      validateAwsSingleNodeRuntimePolicy(
-        response.PolicyDocument,
-        policyAuthority(authority.plan),
-      );
-    } catch (error) {
-      if (error instanceof TypeError) throw new ProviderResponseUnknownError();
-      throw new AssociationEvidenceConflictError();
-    }
+    let seenPolicy = false;
     const inlinePolicies = await readAllPages(
       client,
       'listRolePolicies',
       'PolicyNames',
       deepFreeze({ RoleName: authority.roleName }),
       AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_PROFILE_PAGE_SIZE,
+      (items) => {
+        const names = decodeAwsSingleNodeRuntimeRolePolicyNamesPage(items);
+        if (names.length === 1) {
+          if (seenPolicy) throw new AwsIamEvidenceConflictError();
+          seenPolicy = true;
+        }
+        return names;
+      },
     );
-    for (const policyName of inlinePolicies) {
-      if (
-        typeof policyName !== 'string' ||
-        !IAM_POLICY_NAME_PATTERN.test(policyName)
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-    }
-    if (inlinePolicies.length === 0) {
-      throw new AssociationEvidenceTransientError();
-    }
-    if (
-      inlinePolicies.length !== 1 ||
-      inlinePolicies[0] !== AWS_SINGLE_NODE_RUNTIME_POLICY_NAME
-    ) {
-      throw new AssociationEvidenceConflictError();
-    }
     const attachedPolicies = await readAllPages(
       client,
       'listAttachedRolePolicies',
       'AttachedPolicies',
       deepFreeze({ RoleName: authority.roleName }),
       AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_PROFILE_PAGE_SIZE,
+      decodeAwsSingleNodeRuntimeRoleAttachedPoliciesPage,
     );
-    for (const policy of attachedPolicies) {
-      if (
-        !isPlainObject(policy) ||
-        Object.keys(policy).length !== ATTACHED_POLICY_KEYS.size ||
-        ![...ATTACHED_POLICY_KEYS].every((key) => Object.hasOwn(policy, key)) ||
-        typeof policy.PolicyName !== 'string' ||
-        !IAM_POLICY_NAME_PATTERN.test(policy.PolicyName) ||
-        typeof policy.PolicyArn !== 'string' ||
-        policy.PolicyArn.length === 0
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-    }
-    if (attachedPolicies.length !== 0) {
-      throw new AssociationEvidenceConflictError();
+    const inventory = decodeAwsSingleNodeRuntimeRolePolicyInventory(
+      inlinePolicies,
+      attachedPolicies,
+    );
+    const corroborated = corroborateAwsSingleNodeRuntimeRolePolicyEvidence(
+      inventory,
+      policy,
+    );
+    if (corroborated.presence !== 'present') {
+      throw new AwsIamEvidenceTransientError();
     }
   }
 
@@ -1111,40 +959,43 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
         deepFreeze({ InstanceProfileName: authority.instanceProfileName }),
       );
     } catch (error) {
-      if (noSuchEntity(error)) throw new AssociationEvidenceTransientError();
-      throw new ProviderResponseUnknownError();
+      if (noSuchEntity(error)) throw new AwsIamEvidenceTransientError();
+      throw new AwsIamEvidenceUnknownError();
     }
     const profile = validateInstanceProfileEnvelope(response, authority);
     await readEndpointTags(authority, 'profile');
-    if (profile.Roles.length === 0) return 'absent';
-    if (profile.Roles.length !== 1) {
-      for (const role of profile.Roles) {
-        validateExactRoleReference(role, authority);
-      }
-      throw new AssociationEvidenceConflictError();
-    }
-    validateExactRoleReference(profile.Roles[0], authority);
-    return 'present';
+    return decodeAwsSingleNodeInstanceProfileRoleAssociationProfileView(
+      profile,
+      membershipAuthority(authority),
+    ).membership;
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<'present'|'absent'>} */
   async function readRoleMembership(authority) {
+    let seenProfile = false;
     const profiles = await readAllPages(
       client,
       'listInstanceProfilesForRole',
       'InstanceProfiles',
       deepFreeze({ RoleName: authority.roleName }),
       AWS_SINGLE_NODE_INSTANCE_PROFILE_ROLE_ASSOCIATION_PROFILE_PAGE_SIZE,
+      (items) => {
+        const decoded = decodeAwsSingleNodeRuntimeRoleInstanceProfiles(items);
+        const view = decodeAwsSingleNodeInstanceProfileRoleAssociationRoleView(
+          decoded,
+          membershipAuthority(authority),
+        );
+        if (view.membership === 'present') {
+          if (seenProfile) throw new AwsIamEvidenceConflictError();
+          seenProfile = true;
+        }
+        return decoded;
+      },
     );
-    if (profiles.length === 0) return 'absent';
-    if (profiles.length !== 1) {
-      for (const profile of profiles) {
-        validateExactProfileReference(profile, authority);
-      }
-      throw new AssociationEvidenceConflictError();
-    }
-    validateExactProfileReference(profiles[0], authority);
-    return 'present';
+    return decodeAwsSingleNodeInstanceProfileRoleAssociationRoleView(
+      profiles,
+      membershipAuthority(authority),
+    ).membership;
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<'present'|'absent'>} */
@@ -1153,10 +1004,10 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
     await readPolicyEffect(authority);
     const profileState = await readProfileMembership(authority);
     const roleState = await readRoleMembership(authority);
-    if (profileState !== roleState) {
-      throw new AssociationEvidenceTransientError();
-    }
-    return profileState;
+    return corroborateAwsSingleNodeInstanceProfileRoleAssociationViews({
+      profileView: { membership: profileState },
+      roleView: { membership: roleState },
+    }).presence;
   }
 
   /** @param {Readonly<Record<string, any>>} authority @param {'present'|'absent'} expectedState @param {boolean} mutationFailed @returns {Promise<void>} */
@@ -1172,12 +1023,12 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
           return;
         }
       } catch (error) {
-        if (error instanceof AssociationEvidenceConflictError) {
+        if (error instanceof AwsIamEvidenceConflictError) {
           throw new AwsSingleNodeInstanceProfileRoleAssociationResourceConflictError();
         }
-        if (error instanceof AssociationEvidenceTransientError) {
+        if (error instanceof AwsIamEvidenceTransientError) {
           if (attempt === maxAttempts) return;
-        } else if (error instanceof ProviderResponseUnknownError) {
+        } else if (error instanceof AwsIamEvidenceUnknownError) {
           if (attempt === maxAttempts) {
             throw new AwsSingleNodeInstanceProfileRoleAssociationResourceUnknownError();
           }
@@ -1197,10 +1048,10 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
     try {
       state = await readLogicalState(authority);
     } catch (error) {
-      if (error instanceof AssociationEvidenceConflictError) {
+      if (error instanceof AwsIamEvidenceConflictError) {
         throw new AwsSingleNodeInstanceProfileRoleAssociationResourceConflictError();
       }
-      if (error instanceof AssociationEvidenceTransientError) return;
+      if (error instanceof AwsIamEvidenceTransientError) return;
       throw new AwsSingleNodeInstanceProfileRoleAssociationResourceUnknownError();
     }
     const deleting = authority.action.action === 'delete';
@@ -1264,17 +1115,17 @@ export function createAwsSingleNodeInstanceProfileRoleAssociationResource(
           return deepFreeze({ status: 'converged', binding });
         }
       } catch (error) {
-        if (error instanceof AssociationEvidenceConflictError) {
+        if (error instanceof AwsIamEvidenceConflictError) {
           return Object.freeze({ status: 'blocked' });
         }
         if (
-          !(error instanceof ProviderResponseUnknownError) &&
-          !(error instanceof AssociationEvidenceTransientError)
+          !(error instanceof AwsIamEvidenceUnknownError) &&
+          !(error instanceof AwsIamEvidenceTransientError)
         ) {
           throw error;
         }
         if (attempt === maxAttempts) {
-          if (error instanceof ProviderResponseUnknownError) {
+          if (error instanceof AwsIamEvidenceUnknownError) {
             throw new AwsSingleNodeInstanceProfileRoleAssociationResourceUnknownError();
           }
           return Object.freeze({ status: 'not-converged' });

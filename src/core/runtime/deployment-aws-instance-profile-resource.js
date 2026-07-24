@@ -5,13 +5,33 @@ import {
   validateAwsSingleNodeProviderSpecContext,
 } from './deployment-aws-provider-spec.js';
 import {
-  AWS_IAM_INSTANCE_PROFILE_ID_PATTERN,
-  AWS_IAM_ROLE_ID_PATTERN,
   AWS_SINGLE_NODE_RUNTIME_ROLE_PATH,
-  createAwsSingleNodeRuntimeIdentityTags,
   getAwsSingleNodeRuntimeInstanceProfileName,
   getAwsSingleNodeRuntimeInstanceProfileStateDigest,
 } from './deployment-aws-runtime-identity-contract.js';
+import {
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_INSTANCE_PAGE_SIZE,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCE_PAGES,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCES,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAG_PAGES,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAGS,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_TAG_PAGE_SIZE,
+  createAwsSingleNodeInstanceProfileOwnershipTags,
+  decodeAwsSingleNodeInstanceProfileInstancePage,
+  decodeAwsSingleNodeInstanceProfileResponse,
+  decodeAwsSingleNodeInstanceProfileTagPage,
+  validateAwsSingleNodeInstanceProfileFencedInstance,
+  validateAwsSingleNodeInstanceProfileId,
+  validateAwsSingleNodeInstanceProfileTags,
+} from './deployment-aws-instance-profile-evidence.js';
+import {
+  AwsIamEvidenceConflictError,
+  AwsIamEvidenceTransientError,
+  AwsIamEvidenceUnknownError,
+  isAwsIamErrorNamed,
+} from './deployment-aws-iam-evidence.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
 import { validateDeploymentProfile } from './deployment-profile.js';
@@ -21,16 +41,16 @@ import {
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
 
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAG_PAGES = 16;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_TAG_PAGE_SIZE = 50;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAGS = 50;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCE_PAGES = 16;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_INSTANCE_PAGE_SIZE = 1000;
-export const AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCES =
-  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCE_PAGES *
-  AWS_SINGLE_NODE_INSTANCE_PROFILE_INSTANCE_PAGE_SIZE;
+export {
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_INSTANCE_PAGE_SIZE,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCE_PAGES,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCES,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAG_PAGES,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAGS,
+  AWS_SINGLE_NODE_INSTANCE_PROFILE_TAG_PAGE_SIZE,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -56,13 +76,6 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
   'listInstanceProfileTags',
   'describeInstances',
 ]);
-const IAM_ROLE_NAME_PATTERN = /^[A-Za-z0-9_+=,.@-]{1,64}$/;
-const IAM_INSTANCE_PROFILE_NAME_PATTERN = /^[A-Za-z0-9_+=,.@-]{1,128}$/;
-const IAM_PATH_PATTERN = /^\/(?:[\u0021-\u007e]+\/)*$/;
-const IAM_INSTANCE_PROFILE_ARN_PATTERN =
-  /^arn:[a-z0-9-]+:iam::[0-9]{12}:instance-profile\/[\u0021-\u007e]+$/;
-const EC2_INSTANCE_ID_PATTERN = /^i-[0-9a-f]{17}$/;
-const PAGINATION_TOKEN_MAX_LENGTH = 4096;
 const RESOURCE_KEY = 'runtime-identity';
 const PROVIDER_TYPE = 'instance-profile';
 
@@ -85,15 +98,6 @@ export class AwsSingleNodeInstanceProfileResourceUnknownError extends Error {
     this.code = 'AWS_SINGLE_NODE_INSTANCE_PROFILE_RESOURCE_UNKNOWN';
   }
 }
-
-/** Provider evidence is well formed and contradicts the exact resource. */
-class InstanceProfileEvidenceConflictError extends Error {}
-
-/** Provider evidence may still be converging or disappearing. */
-class InstanceProfileEvidenceTransientError extends Error {}
-
-/** A bounded provider response cannot establish exact evidence. */
-class ProviderResponseUnknownError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -146,38 +150,29 @@ function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** @param {unknown} error @param {string} name @returns {boolean} */
-function errorNamed(error, name) {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    /** @type {Record<string, any>} */ (error).name === name
-  );
-}
-
 /** @param {unknown} error @returns {boolean} */
 function instanceProfileNotFound(error) {
   return (
-    errorNamed(error, 'NoSuchEntity') ||
-    errorNamed(error, 'NoSuchEntityException')
+    isAwsIamErrorNamed(error, 'NoSuchEntity') ||
+    isAwsIamErrorNamed(error, 'NoSuchEntityException')
   );
 }
 
 /** @param {unknown} error @returns {boolean} */
 function instanceProfileAlreadyExists(error) {
   return (
-    errorNamed(error, 'EntityAlreadyExists') ||
-    errorNamed(error, 'EntityAlreadyExistsException')
+    isAwsIamErrorNamed(error, 'EntityAlreadyExists') ||
+    isAwsIamErrorNamed(error, 'EntityAlreadyExistsException')
   );
 }
 
 /** @param {unknown} error @returns {boolean} */
 function deletionMayStillConverge(error) {
   return (
-    errorNamed(error, 'DeleteConflict') ||
-    errorNamed(error, 'DeleteConflictException') ||
-    errorNamed(error, 'ConcurrentModification') ||
-    errorNamed(error, 'ConcurrentModificationException')
+    isAwsIamErrorNamed(error, 'DeleteConflict') ||
+    isAwsIamErrorNamed(error, 'DeleteConflictException') ||
+    isAwsIamErrorNamed(error, 'ConcurrentModification') ||
+    isAwsIamErrorNamed(error, 'ConcurrentModificationException')
   );
 }
 
@@ -204,10 +199,16 @@ function bindingMatchesAuthority(
   providerScope,
   ownershipNonce,
 ) {
+  let validProviderResourceId = true;
+  try {
+    validateAwsSingleNodeInstanceProfileId(binding.providerResourceId);
+  } catch {
+    validProviderResourceId = false;
+  }
   return (
+    validProviderResourceId &&
     binding.management === 'managed' &&
     binding.providerType === PROVIDER_TYPE &&
-    AWS_IAM_INSTANCE_PROFILE_ID_PATTERN.test(binding.providerResourceId) &&
     binding.deploymentInstanceId === plan.deploymentInstanceId &&
     binding.resourceKey === RESOURCE_KEY &&
     binding.providerScopeId === providerScope.providerScopeId &&
@@ -391,14 +392,10 @@ function validateActionContext(value, providerScope) {
 
 /** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Array<Readonly<{Key: string, Value: string}>>>} */
 function requiredTags(authority) {
-  return createAwsSingleNodeRuntimeIdentityTags({
-    resourceKind: 'single-node-runtime-instance-profile',
-    capabilityKind: authority.action.capability.kind,
-    roleKind: authority.action.role.kind,
+  return createAwsSingleNodeInstanceProfileOwnershipTags({
     providerScopeId: authority.plan.providerScope.providerScopeId,
     deploymentInstanceId: authority.plan.deploymentInstanceId,
     incarnationId: authority.plan.incarnationId,
-    resourceKey: authority.action.resourceKey,
     createdByActionId:
       authority.priorBinding?.createdByActionId ?? authority.action.actionId,
     ownershipNonce: authority.ownershipNonce,
@@ -415,248 +412,6 @@ function createInstanceProfileRequest(authority) {
     Path: AWS_SINGLE_NODE_RUNTIME_ROLE_PATH,
     Tags: requiredTags(authority),
   });
-}
-
-/** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
-function validateInstanceProfileEnvelope(value, authority) {
-  if (!isPlainObject(value) || !isPlainObject(value.InstanceProfile)) {
-    throw new ProviderResponseUnknownError();
-  }
-  const observed = value.InstanceProfile;
-  const expectedName = getAwsSingleNodeRuntimeInstanceProfileName(
-    nameAuthority(authority),
-  );
-  const expectedArn = `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:instance-profile${AWS_SINGLE_NODE_RUNTIME_ROLE_PATH}${expectedName}`;
-  for (const key of [
-    'InstanceProfileName',
-    'InstanceProfileId',
-    'Arn',
-    'Path',
-  ]) {
-    if (typeof observed[key] !== 'string' || observed[key].length === 0) {
-      throw new ProviderResponseUnknownError();
-    }
-  }
-  if (
-    !AWS_IAM_INSTANCE_PROFILE_ID_PATTERN.test(observed.InstanceProfileId) ||
-    !IAM_INSTANCE_PROFILE_NAME_PATTERN.test(observed.InstanceProfileName) ||
-    observed.Path.length > 512 ||
-    !IAM_PATH_PATTERN.test(observed.Path) ||
-    !IAM_INSTANCE_PROFILE_ARN_PATTERN.test(observed.Arn)
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    observed.InstanceProfileName !== expectedName ||
-    observed.Path !== AWS_SINGLE_NODE_RUNTIME_ROLE_PATH ||
-    observed.Arn !== expectedArn
-  ) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-  if (authority.priorBinding !== null) {
-    if (
-      observed.InstanceProfileId !== authority.priorBinding.providerResourceId
-    ) {
-      throw new InstanceProfileEvidenceConflictError();
-    }
-  }
-  if (!Array.isArray(observed.Roles)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (observed.Roles.length > 1) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-  for (const role of observed.Roles) {
-    validateRole(role, authority);
-  }
-  return observed;
-}
-
-/** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {void} */
-function validateRole(value, authority) {
-  if (!isPlainObject(value)) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-  for (const key of ['Path', 'RoleName', 'RoleId', 'Arn']) {
-    if (typeof value[key] !== 'string' || value[key].length === 0) {
-      throw new InstanceProfileEvidenceConflictError();
-    }
-  }
-  if (
-    value.Path.length > 512 ||
-    !IAM_PATH_PATTERN.test(value.Path) ||
-    !IAM_ROLE_NAME_PATTERN.test(value.RoleName) ||
-    !AWS_IAM_ROLE_ID_PATTERN.test(value.RoleId)
-  ) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-  const expectedArn = `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:role${value.Path}${value.RoleName}`;
-  if (value.Arn !== expectedArn) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-}
-
-/** @param {unknown} response @returns {{tags: Readonly<Array<Readonly<{Key: string, Value: string}>>>, marker: string|null}} */
-function validateTagPage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.Tags)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (response.Tags.length > AWS_SINGLE_NODE_INSTANCE_PROFILE_TAG_PAGE_SIZE) {
-    throw new ProviderResponseUnknownError();
-  }
-  const tags = [];
-  for (const tag of response.Tags) {
-    if (
-      !isPlainObject(tag) ||
-      typeof tag.Key !== 'string' ||
-      tag.Key.length === 0 ||
-      tag.Key.length > 128 ||
-      typeof tag.Value !== 'string' ||
-      tag.Value.length > 256
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    tags.push({ Key: tag.Key, Value: tag.Value });
-  }
-  if (
-    response.IsTruncated !== undefined &&
-    typeof response.IsTruncated !== 'boolean'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  const truncated = response.IsTruncated === true;
-  if (truncated) {
-    if (
-      typeof response.Marker !== 'string' ||
-      response.Marker.length === 0 ||
-      response.Marker.length > PAGINATION_TOKEN_MAX_LENGTH
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    return { tags, marker: response.Marker };
-  }
-  if (response.Marker !== undefined && response.Marker !== null) {
-    throw new ProviderResponseUnknownError();
-  }
-  return { tags, marker: null };
-}
-
-/** @param {Readonly<Array<Readonly<{Key: string, Value: string}>>>} observed @param {Readonly<Array<Readonly<{Key: string, Value: string}>>>} expected @param {boolean} allowIncomplete @returns {void} */
-function validateExactTags(observed, expected, allowIncomplete) {
-  if (
-    observed.length > AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAGS ||
-    observed.length > expected.length
-  ) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-  const expectedValues = new Map(expected.map((tag) => [tag.Key, tag.Value]));
-  const values = new Map();
-  for (const tag of observed) {
-    if (values.has(tag.Key)) {
-      throw new InstanceProfileEvidenceConflictError();
-    }
-    if (
-      !expectedValues.has(tag.Key) ||
-      expectedValues.get(tag.Key) !== tag.Value
-    ) {
-      throw new InstanceProfileEvidenceConflictError();
-    }
-    values.set(tag.Key, tag.Value);
-  }
-  if (observed.length === expected.length) return;
-  if (allowIncomplete) {
-    throw new InstanceProfileEvidenceTransientError();
-  }
-  if (expected.some((tag) => values.get(tag.Key) !== tag.Value)) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-}
-
-/** @param {unknown} response @returns {{instances: Readonly<Array<Readonly<Record<string, any>>>>, nextToken: string|null}} */
-function validateInstancePage(response) {
-  if (!isPlainObject(response) || !Array.isArray(response.Reservations)) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    response.Reservations.length >
-    AWS_SINGLE_NODE_INSTANCE_PROFILE_INSTANCE_PAGE_SIZE
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  const instances = [];
-  for (const reservation of response.Reservations) {
-    if (!isPlainObject(reservation) || !Array.isArray(reservation.Instances)) {
-      throw new ProviderResponseUnknownError();
-    }
-    for (const instance of reservation.Instances) {
-      if (!isPlainObject(instance)) {
-        throw new ProviderResponseUnknownError();
-      }
-      instances.push(instance);
-      if (
-        instances.length > AWS_SINGLE_NODE_INSTANCE_PROFILE_INSTANCE_PAGE_SIZE
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-    }
-  }
-  let nextToken = null;
-  if (response.NextToken !== undefined && response.NextToken !== null) {
-    if (
-      typeof response.NextToken !== 'string' ||
-      response.NextToken.length === 0 ||
-      response.NextToken.length > PAGINATION_TOKEN_MAX_LENGTH
-    ) {
-      throw new ProviderResponseUnknownError();
-    }
-    nextToken = response.NextToken;
-  }
-  return { instances, nextToken };
-}
-
-/**
- * Validate the only EC2 evidence this profile driver can safely observe.
- * This is a bounded current-region fence, not account-global proof: the
- * deletion guarantee depends on Wharfie's exclusive-profile contract, under
- * which this managed profile is never attached outside its configured region
- * or reused by non-Wharfie infrastructure.
- * @param {Readonly<Record<string, any>>} instance - One returned EC2 instance.
- * @param {Readonly<Record<string, any>>} instanceProfile - Exact owned profile.
- * @param {Readonly<Record<string, any>>} authority - Fixed controller authority.
- * @returns {void} - Returns only for confirmed terminated use.
- */
-function validateFencedInstance(instance, instanceProfile, authority) {
-  if (
-    typeof instance.InstanceId !== 'string' ||
-    !EC2_INSTANCE_ID_PATTERN.test(instance.InstanceId) ||
-    !isPlainObject(instance.IamInstanceProfile) ||
-    typeof instance.IamInstanceProfile.Id !== 'string' ||
-    typeof instance.IamInstanceProfile.Arn !== 'string' ||
-    !isPlainObject(instance.State) ||
-    !Number.isSafeInteger(instance.State.Code) ||
-    instance.State.Code < 0 ||
-    typeof instance.State.Name !== 'string'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  if (
-    instance.IamInstanceProfile.Id !== instanceProfile.InstanceProfileId ||
-    instance.IamInstanceProfile.Arn !== instanceProfile.Arn
-  ) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-  if (
-    instance.State.Name !== 'terminated' ||
-    (instance.State.Code & 0xff) !== 48
-  ) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
-  if (
-    instance.IamInstanceProfile.Arn !==
-    `arn:${authority.plan.providerScope.partition}:iam::${authority.plan.providerScope.accountId}:instance-profile${AWS_SINGLE_NODE_RUNTIME_ROLE_PATH}${instanceProfile.InstanceProfileName}`
-  ) {
-    throw new InstanceProfileEvidenceConflictError();
-  }
 }
 
 /**
@@ -734,8 +489,12 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
     return `${authority.action.actionId}\0${authority.ownershipNonce}`;
   }
 
-  /** @param {string} instanceProfileName @returns {Promise<Readonly<Array<Readonly<{Key: string, Value: string}>>>>} */
-  async function readAllTags(instanceProfileName) {
+  /** @param {string} instanceProfileName @param {Readonly<Array<Readonly<{Key: string, Value: string}>>>} expectedTags @param {boolean} allowIncomplete @returns {Promise<void>} */
+  async function readAllTags(
+    instanceProfileName,
+    expectedTags,
+    allowIncomplete,
+  ) {
     const tags = [];
     const seenMarkers = new Set();
     let marker = null;
@@ -755,26 +514,38 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
         );
       } catch (error) {
         if (instanceProfileNotFound(error)) {
-          throw new InstanceProfileEvidenceTransientError();
+          throw new AwsIamEvidenceTransientError();
         }
-        throw new ProviderResponseUnknownError();
+        throw new AwsIamEvidenceUnknownError();
       }
-      const observed = validateTagPage(response);
+      const observed = decodeAwsSingleNodeInstanceProfileTagPage(response);
       tags.push(...observed.tags);
       if (tags.length > AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAGS) {
-        throw new InstanceProfileEvidenceConflictError();
+        throw new AwsIamEvidenceConflictError();
       }
-      if (observed.marker === null) return tags;
+      if (observed.marker === null) {
+        validateAwsSingleNodeInstanceProfileTags(
+          tags,
+          expectedTags,
+          allowIncomplete,
+        );
+        return;
+      }
+      try {
+        validateAwsSingleNodeInstanceProfileTags(tags, expectedTags, true);
+      } catch (error) {
+        if (!(error instanceof AwsIamEvidenceTransientError)) throw error;
+      }
       if (
         page === AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_TAG_PAGES ||
         seenMarkers.has(observed.marker)
       ) {
-        throw new ProviderResponseUnknownError();
+        throw new AwsIamEvidenceUnknownError();
       }
       seenMarkers.add(observed.marker);
       marker = observed.marker;
     }
-    throw new ProviderResponseUnknownError();
+    throw new AwsIamEvidenceUnknownError();
   }
 
   /** @param {Readonly<Record<string, any>>} instanceProfile @param {Readonly<Record<string, any>>} authority @returns {Promise<void>} */
@@ -803,27 +574,31 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
           }),
         );
       } catch {
-        throw new ProviderResponseUnknownError();
+        throw new AwsIamEvidenceUnknownError();
       }
-      const observed = validateInstancePage(response);
+      const observed = decodeAwsSingleNodeInstanceProfileInstancePage(response);
       totalInstances += observed.instances.length;
       if (totalInstances > AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCES) {
-        throw new ProviderResponseUnknownError();
+        throw new AwsIamEvidenceUnknownError();
       }
       for (const instance of observed.instances) {
-        validateFencedInstance(instance, instanceProfile, authority);
+        validateAwsSingleNodeInstanceProfileFencedInstance(
+          instance,
+          instanceProfile,
+          authority.plan.providerScope,
+        );
       }
       if (observed.nextToken === null) return;
       if (
         page === AWS_SINGLE_NODE_INSTANCE_PROFILE_MAX_INSTANCE_PAGES ||
         seenTokens.has(observed.nextToken)
       ) {
-        throw new ProviderResponseUnknownError();
+        throw new AwsIamEvidenceUnknownError();
       }
       seenTokens.add(observed.nextToken);
       nextToken = observed.nextToken;
     }
-    throw new ProviderResponseUnknownError();
+    throw new AwsIamEvidenceUnknownError();
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>|null>} */
@@ -838,21 +613,25 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
       );
     } catch (error) {
       if (instanceProfileNotFound(error)) return null;
-      throw new ProviderResponseUnknownError();
+      throw new AwsIamEvidenceUnknownError();
     }
-    const instanceProfile = validateInstanceProfileEnvelope(
+    const instanceProfile = decodeAwsSingleNodeInstanceProfileResponse(
       response,
-      authority,
+      {
+        providerScope: authority.plan.providerScope,
+        instanceProfileName,
+        expectedInstanceProfileId:
+          authority.priorBinding?.providerResourceId ?? null,
+      },
     );
-    const tags = await readAllTags(instanceProfileName);
-    validateExactTags(
-      tags,
+    await readAllTags(
+      instanceProfileName,
       requiredTags(authority),
       authority.action.action !== 'noop',
     );
     if (authority.action.action === 'delete') {
       if (instanceProfile.Roles.length !== 0) {
-        throw new InstanceProfileEvidenceConflictError();
+        throw new AwsIamEvidenceConflictError();
       }
       await assertNoCurrentRegionInstanceUse(instanceProfile, authority);
     }
@@ -867,14 +646,14 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
     try {
       instanceProfile = await readExactProfile(authority);
     } catch (error) {
-      if (error instanceof InstanceProfileEvidenceConflictError) {
+      if (error instanceof AwsIamEvidenceConflictError) {
         if (authority.action.action === 'delete') return;
         throw new AwsSingleNodeInstanceProfileResourceConflictError();
       }
       if (
         (authority.action.action === 'create' ||
           authority.action.action === 'delete') &&
-        error instanceof InstanceProfileEvidenceTransientError
+        error instanceof AwsIamEvidenceTransientError
       ) {
         return;
       }
@@ -898,8 +677,8 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
           await readExactProfile(authority);
         } catch (readError) {
           if (
-            readError instanceof InstanceProfileEvidenceConflictError ||
-            readError instanceof InstanceProfileEvidenceTransientError
+            readError instanceof AwsIamEvidenceConflictError ||
+            readError instanceof AwsIamEvidenceTransientError
           ) {
             return;
           }
@@ -930,12 +709,12 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
     try {
       await readExactProfile(authority);
     } catch (error) {
-      if (error instanceof InstanceProfileEvidenceConflictError) {
+      if (error instanceof AwsIamEvidenceConflictError) {
         throw new AwsSingleNodeInstanceProfileResourceConflictError();
       }
       if (
-        error instanceof ProviderResponseUnknownError ||
-        error instanceof InstanceProfileEvidenceTransientError
+        error instanceof AwsIamEvidenceUnknownError ||
+        error instanceof AwsIamEvidenceTransientError
       ) {
         return;
       }
@@ -979,17 +758,17 @@ export function createAwsSingleNodeInstanceProfileResource(options) {
           return deepFreeze({ status: 'converged', binding: null });
         }
       } catch (error) {
-        if (error instanceof InstanceProfileEvidenceConflictError) {
+        if (error instanceof AwsIamEvidenceConflictError) {
           return Object.freeze({ status: 'blocked' });
         }
         if (
-          !(error instanceof ProviderResponseUnknownError) &&
-          !(error instanceof InstanceProfileEvidenceTransientError)
+          !(error instanceof AwsIamEvidenceUnknownError) &&
+          !(error instanceof AwsIamEvidenceTransientError)
         ) {
           throw error;
         }
         if (attempt === maxAttempts) {
-          if (error instanceof ProviderResponseUnknownError) {
+          if (error instanceof AwsIamEvidenceUnknownError) {
             throw new AwsSingleNodeInstanceProfileResourceUnknownError();
           }
           return Object.freeze({ status: 'not-converged' });
