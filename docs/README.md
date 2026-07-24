@@ -101,19 +101,21 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [InspectionV6 aggregate and controller
-checkpoint](../llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md).
-InspectionV6 now content-addresses raw execution advice and requires exact
-head, active-plan, provider-spec, and optional just-settled binding authority.
-The AWS aggregate preflights all 18 resource authorities before provider I/O,
-routes each read once, preserves raw uncertainty and conflict, and joins
-binding lineage plus separately narrowed resident health. The controller
-inspects before claiming a pending intent, performs a first call only after a
-definitely applied CAS, and replays recovery creates only through exact
-stable-token advice. One strict provider composer keeps inspection, planning,
-and mutation ports separate. Production client/command wiring remains next.
+The current restart handoff is the [production AWS provider assembly
+checkpoint](../llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md). One
+invocation-owned family now projects every exact AWS client from a single
+ordinary-chain credential snapshot, fences operations immediately at shutdown,
+and closes children before the credential authority. A pure production
+constructor wires all 16 observer families, service health, ProviderSpec,
+planning, and six mutation clients into the controller's seven-method provider.
+It performs no provider I/O, bootstrap, or close. An explicit invocation and
+operator boundary for control-resource bootstrap, read-only inspection,
+controller execution, and cleanup remains next; there are still no deployment
+commands or service-readiness claim.
 
-Its parent is the [complete AWS resource observers
+Its parent is the [InspectionV6 aggregate and controller
+checkpoint](../llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md),
+whose parent is the [complete AWS resource observers
 checkpoint](../llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md).
 The managed artifact, substrate node, and both retained-volume attachments now
 join the earlier observer families at the shared mutation-incapable raw

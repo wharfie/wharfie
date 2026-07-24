@@ -1063,13 +1063,11 @@ mutation boundary audits the complete bounded exact-key
 content-version/delete-marker history, blocks on foreign ownership, and purges
 only explicit VersionIds. Reconcile alone may repair authoritative
 current-object absence beneath the existing artifact binding by issuing a
-conditional update after that audit. The implemented resource drivers are not
-yet composed into a complete provider. One generic attachment effect now
-covers both fixed retained-volume
-roles with exact dual-view readback, response-loss recovery,
-`DeleteOnTermination=false`, fail-closed no-op after external loss, and only
-non-forced detach. V43 can detach from an exact running or stopped node only
-because it never mounts either device; future guest use must add a
+conditional update after that audit. One generic attachment effect now covers
+both fixed retained-volume roles with exact dual-view readback, response-loss
+recovery, `DeleteOnTermination=false`, fail-closed no-op after external loss,
+and only non-forced detach. V43 can detach from an exact running or stopped
+node only because it never mounts either device; future guest use must add a
 quiesce/unmount or stop dependency first. Guest format, mount, unmount,
 quiescence, and service activation remain unimplemented.
 
@@ -1118,13 +1116,23 @@ live inspection routes every role once only after full plan/head preflight.
 The controller separates definite first execution from crash recovery and
 never repeats a create without exact stable-token advice.
 
-1. Wire the aggregate's 16 observer families, service-health reader, planner,
-   mutation router, and invocation-owned AWS clients into the production
-   deployment command path. Then wire guest storage projection,
-   resident-service activation, and host observation.
+The production assembly now owns one ordinary-chain credential snapshot for an
+invocation and projects its durable store, control, ProviderSpec, observation,
+and mutation clients behind exact frozen surfaces. Shutdown immediately fences
+new operations, settles every child close, and closes the credential authority
+last. A pure constructor projects all 16 observer families plus service health
+and ProviderSpec reads, connects the six mutation clients and deterministic
+planner, and returns the exact seven-method controller provider. Construction
+does not perform provider I/O, bootstrap the retained table or bucket, or own
+the caller's client-family lifetime.
+
+1. Add one explicit deployment invocation facade that decides control-resource
+   bootstrap/recovery policy, separates read-only inspection from controller
+   mutation, and owns the client family through cleanup.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
-   currently running SEA.
+   currently running SEA. Then wire guest storage projection,
+   resident-service activation, and host observation.
 2. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
@@ -1133,9 +1141,11 @@ never repeats a create without exact stable-token advice.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [InspectionV6 aggregate and controller
-checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md).
-Its parent is the [complete AWS resource observers
+The current restart point is the [production AWS provider assembly
+checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md).
+Its parent is the [InspectionV6 aggregate and controller
+checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md),
+whose parent is the [complete AWS resource observers
 checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md),
 whose parent is the [runtime IAM observers
 checkpoint](llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md), whose

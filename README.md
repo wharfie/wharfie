@@ -464,11 +464,17 @@ These modules now implement both retained-volume attachment effects under
 deterministic mocks and expose their read-only evidence, but do not format,
 mount, unmount, quiesce, or fulfill a complete service capability. Future guest
 use must add a quiesce/unmount or stop dependency before attachment deletion.
-Production wiring of the aggregate's 16 concrete observer families and
-invocation-owned AWS clients, the privileged host observer and publisher,
-operator commands, and clean-account proof remain unfinished. External
-resource verification is represented by the generic V6 contract but remains
-unreachable through the fixed all-managed AWS profile and planner.
+One production composition boundary now opens an invocation-owned family from
+one ordinary-chain credential snapshot, fences every exact client projection
+at shutdown, and closes all children before its credential authority. A second
+pure boundary assembles all 16 observer families, service-health and
+ProviderSpec readers, planner, and six mutation clients into the controller's
+seven-method provider without provider I/O or lifecycle authority. It does not
+bootstrap the retained table or bucket. The privileged host observer and
+publisher, operator commands, guest service projection, and clean-account
+proof remain unfinished. External resource verification is represented by the
+generic V6 contract but remains unreachable through the fixed all-managed AWS
+profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -479,7 +485,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [InspectionV6 aggregate and controller checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md) — the current handoff for lossless 18-role aggregation, exact provider composition, pre-intent first-call fencing, and stable-token-only crash replay.
+- [Production AWS provider assembly checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md) — the current handoff for one ordinary-chain invocation lifetime, exact fenced AWS client projections, and complete pure assembly of the seven-method controller provider.
+- [InspectionV6 aggregate and controller checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md) — the parent handoff for lossless 18-role aggregation, exact provider composition, pre-intent first-call fencing, and stable-token-only crash replay.
 - [Complete AWS resource observers checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md) — the parent handoff for complete raw observation coverage, bounded artifact history, joined node/root evidence, stable node-create replay advice, and attachment endpoint-loss proof.
 - [Runtime IAM observers checkpoint](llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md) — the parent handoff for immutable IAM identity, exact policy and membership views, actual drift, and conservative no-token replay semantics.
 - [Derived network observers checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md) — the parent handoff for endpoint-lineage receipts, independent relationship views, natural-slot absence, and conservative no-token replay semantics.

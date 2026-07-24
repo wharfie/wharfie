@@ -1876,10 +1876,34 @@ owner cannot carry execute or settlement methods, the mutation router cannot
 be installed as an observer, and aggregate-only plan lineage or pending
 bindings are stripped before the built-in pure planner.
 
-Source and packaged deployment commands, production assembly of the 16
-observer families and invocation-owned AWS clients, guest storage/service
-projection, privileged publisher wiring, live STS session proof, and
-clean-account lifecycle proof remain unfinished. A document, bucket/table tag,
-SSM result, EC2 description, health receipt, or content ID still never proves
-that an application resource effect occurred or that a particular live AWS
-principal published it.
+Source and packaged deployment commands, guest storage/service projection,
+privileged publisher wiring, live STS session proof, and clean-account
+lifecycle proof remain unfinished. A document, bucket/table tag, SSM result,
+EC2 description, health receipt, or content ID still never proves that an
+application resource effect occurred or that a particular live AWS principal
+published it.
+
+The thirty-ninth slice adds the production AWS composition boundary without
+claiming an operator path. One invocation-owned client family transfers the
+credential-bound authority created from a single ordinary-chain snapshot and
+projects only the exact durable-store, control, ProviderSpec, observation, and
+mutation methods required downstream. Raw SDK clients and credential-bearing
+owners remain private. Starting shutdown immediately fences scope resolution
+and all client operations; every child close is attempted in reverse
+acquisition order and settled before the credential authority closes. Partial
+construction and shutdown failures use the same best-effort ordering and fixed
+redacted errors.
+
+A separate pure constructor narrows those clients into all 16 observer
+families for the 18-role graph, the five-read ProviderSpec resolver, the
+inspection-only service-health port, the six-client mutation router, and the
+deterministic planner. It returns only the controller's seven methods, performs
+no provider I/O, bootstrap, action, or close, and leaves family lifetime with
+the caller.
+
+This slice does not silently create the retained control table or bucket, add a
+read-only controller inspection entry point, or mount source or packaged
+deployment commands. Guest storage/service projection, privileged publisher
+wiring, live STS role/session proof, DESTROYED-tombstone reapply, and
+clean-account lifecycle proof remain unfinished. Production composition alone
+does not prove a deployable resident service or exactly-once provider effects.
