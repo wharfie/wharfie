@@ -1770,10 +1770,72 @@ the stable EC2 client-token boundary used by route-table creation. Those
 properties do not turn an eventually consistent empty read into safe API replay
 or establish API-call or lifetime-effect exactly-once execution.
 
+The thirty-sixth slice adds read-only observers for all four runtime-IAM graph
+roles. Their mutation drivers and observers share pure name, immutable
+identity, tag, pagination, role-shape, policy-document, and membership evidence
+without sharing execution, settlement, mutation ports, response candidates, or
+client lifecycle.
+
+The direct role and instance profile retain deterministic account-global names
+but trust a durable binding only after re-proving AWS's immutable RoleId or
+InstanceProfileId. Readable intrinsic differences produce actual state digests;
+foreign tags, permissions, membership, recreated identities, or unsupported
+children remain conflicts. Typed name absence beneath a durable direct binding
+stays unknown because an eventually consistent name lookup does not prove
+removal of the immutable resource. Only an unbound no-action target can become
+absent after a completely clean bounded history.
+
+The derived inline-policy observer re-proves the artifact and role receipts
+before joining the exact role, policy inventory, attached-policy inventory, and
+fixed document. The role/profile association similarly re-proves its three
+direct receipts and the policy's transitive lineage before joining both
+membership projections. Bidirectional emptiness proves association absence; so
+does full-window agreement that one endpoint was deleted plus an empty
+membership view from the surviving owned endpoint. One-sided propagation and
+dirty or asymmetric endpoint reads remain unknown. No IAM create exposes a
+stable token, so none of these observers emits replay advice.
+
+The thirty-seventh slice completes raw provider observation for the managed
+artifact, substrate node, and both retained-volume attachments. The artifact
+observer accepts only object-head and version-history reads. It audits every
+exact-key immutable version and delete marker under the bounded V40 namespace,
+recomputes each metadata-derived state, and requires the current alias to equal
+the audited latest immutable head. A bound missing alias can therefore prove
+current-object absence without weakening the controller's artifact-only rule
+that explicit-version purge must still run until history is empty.
+
+The substrate observer accepts only exact and locator instance reads, four
+instance-attribute reads, CPU-credit reads, and root-volume reads. It re-proves
+the eight direct receipts and complete thirteen-resource upstream closure,
+retains the exact client token and instance/root ownership identities, and
+joins full readable instance and root state into an actual digest. Provider
+lifecycle projects only raw `starting`, `degraded`, `stopped`, or `failed`
+health; service-level `healthy` remains an aggregate-only claim. Delete absence
+requires the same terminal instance/root proof as the mutation driver,
+including one stable joint negative signature through the full retry window.
+Only a completely clean exact current-create history may recommend replay of
+the original stable `RunInstances` token.
+
+One generic attachment observer accepts only exact instance and volume reads
+for both retained-volume relationships. Both views must agree on pair, device,
+card zero, and lifecycle. Exact desired state requires retention to be false in
+both views; a readable true, omitted, or disagreeing retention value is actual
+repairable drift rather than an ownership conflict or mutation authority. Dual
+readable absence settles current delete immediately; typed endpoint loss must
+preserve the identical instance/volume/both signature for every retry attempt.
+Current-create emptiness, one-sided evidence, successful empty exact responses,
+and changing negative signatures remain unknown. The observer can neither
+modify retention nor attach, force-detach, settle, or recommend replay.
+
+The existing InspectionV5 resource shape cannot losslessly carry the raw
+observers' bounded execution advice. Aggregate composition therefore requires a
+breaking InspectionV6 successor that content-addresses that advice without
+turning it into provider truth or settlement authority.
+
 Source and packaged deployment commands, shared authoritative resource
-driver adapters, aggregate inspection, owned provider and controller
-composition, guest storage/service projection, privileged publisher wiring,
-live STS session proof, and clean-account lifecycle proof remain unfinished. A
-document, bucket/table tag, SSM result, EC2 description, health receipt, or
-content ID still never proves that an application resource effect occurred or
-that a particular live AWS principal published it.
+aggregation, owned provider and controller composition, guest storage/service
+projection, privileged publisher wiring, live STS session proof, and
+clean-account lifecycle proof remain unfinished. A document, bucket/table tag,
+SSM result, EC2 description, health receipt, or content ID still never proves
+that an application resource effect occurred or that a particular live AWS
+principal published it.

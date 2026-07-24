@@ -1,64 +1,53 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact controller/provider port contracts are clearer than parser-specific expansions. */
 
 import {
-  assertApplicationRevisionId,
-  validateSha256Digest,
-} from './application-revision.js';
-import { assertArtifactId } from './artifact-record.js';
-import { sortCanonicalJsonValue } from './canonical-order.js';
-import {
-  assertDomainSeparatedSha256Id,
-  sha256Base64Url,
-} from './content-id.js';
-import {
-  DEPLOYMENT_ARTIFACT_STAGE_INTENT_ID_PREFIX,
-  DEPLOYMENT_ARTIFACT_STAGE_MAX_BYTES,
-  DEPLOYMENT_ARTIFACT_STAGE_RECEIPT_ID_PREFIX,
-  getDeploymentArtifactStageObjectLocation,
   validateDeploymentArtifactStageIntentContext,
   validateDeploymentArtifactStageReceiptContext,
 } from './deployment-artifact-stage.js';
 import {
-  DEPLOYMENT_ARTIFACT_STAGE_CONTENT_TYPE,
-  DEPLOYMENT_ARTIFACT_STAGE_METADATA_SCHEMA,
-} from './deployment-artifact-stager.js';
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_CACHE_CONTROL,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_CONTENT_TYPE,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_LIST_PAGE_SIZE,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_PAGES,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_VERSIONS,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_METADATA_SCHEMA,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_STATE_DIGEST_DOMAIN,
+  AwsSingleNodeManagedArtifactEvidenceConflictError as ArtifactEvidenceConflictError,
+  AwsSingleNodeManagedArtifactEvidenceTransientError as ArtifactEvidenceTransientError,
+  AwsSingleNodeManagedArtifactEvidenceUnknownError as ProviderResponseUnknownError,
+  createAwsSingleNodeManagedArtifactHistoryEvidence,
+  decodeAwsSingleNodeManagedArtifactHead,
+  decodeAwsSingleNodeManagedArtifactStageHead,
+  getAwsSingleNodeManagedArtifactStateDigest,
+  isAwsSingleNodeManagedArtifactCurrentMissingError as isCurrentObjectMissingError,
+  isAwsSingleNodeManagedArtifactDesiredState,
+  isAwsSingleNodeManagedArtifactErrorNamed as errorNamed,
+} from './deployment-aws-managed-artifact-evidence.js';
 import { getAwsSingleNodeManagedArtifactObjectLocation } from './deployment-aws-runtime-identity-contract.js';
 import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
-import {
-  DEPLOYMENT_REVISION_ID_PREFIX,
-  validateDeploymentRevision,
-} from './deployment-revision.js';
 import { validateDeploymentHead } from './deployment-head.js';
 import { validateDeploymentPlanContext } from './deployment-plan.js';
+import { validateDeploymentProfile } from './deployment-profile.js';
+import { validateProviderScope } from './deployment-provider-scope.js';
 import {
-  DEPLOYMENT_PROFILE_ID_PREFIX,
-  validateDeploymentProfile,
-} from './deployment-profile.js';
-import {
-  assertDeploymentInstanceId,
-  getDeploymentInstanceId,
-  validateProviderScope,
-} from './deployment-provider-scope.js';
-import {
-  DEPLOYMENT_ACTION_ID_PREFIX,
-  assertDeploymentIncarnationId,
   createDeploymentResourceBinding,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
-import { assertLogicalId } from './logical-id.js';
 
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_DEFAULT_MAX_ATTEMPTS = 3;
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_ATTEMPTS = 10;
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_PAGES = 16;
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_VERSIONS = 16_000;
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_LIST_PAGE_SIZE = 1000;
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_STATE_DIGEST_DOMAIN =
-  'wharfie:aws-single-node-managed-artifact-state:v1';
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_CONTENT_TYPE =
-  'application/octet-stream';
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_CACHE_CONTROL = 'no-store';
-export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_METADATA_SCHEMA =
-  'deployment-managed-artifact-v1';
+export {
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_CACHE_CONTROL,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_CONTENT_TYPE,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_DEFAULT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_LIST_PAGE_SIZE,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_ATTEMPTS,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_PAGES,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_VERSIONS,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_METADATA_SCHEMA,
+  AWS_SINGLE_NODE_MANAGED_ARTIFACT_STATE_DIGEST_DOMAIN,
+  getAwsSingleNodeManagedArtifactStateDigest,
+};
 
 const FACTORY_KEYS = new Set([
   'client',
@@ -83,45 +72,7 @@ const ACTION_CONTEXT_KEYS = new Set([
   'profile',
   'artifactStage',
 ]);
-const STATE_AUTHORITY_KEYS = new Set([
-  'deploymentRevision',
-  'profile',
-  'providerScope',
-  'providerSpec',
-  'deploymentInstanceId',
-  'incarnationId',
-]);
 const ARTIFACT_STAGE_KEYS = new Set(['intent', 'receipt']);
-const MANAGED_METADATA_KEYS = new Set([
-  'wharfie-schema',
-  'wharfie-managed-by',
-  'wharfie-resource-kind',
-  'wharfie-retention',
-  'wharfie-capability',
-  'wharfie-role',
-  'wharfie-provider-scope-id',
-  'wharfie-deployment-instance-id',
-  'wharfie-incarnation-id',
-  'wharfie-resource-key',
-  'wharfie-created-by-action-id',
-  'wharfie-ownership-nonce',
-  'wharfie-state-digest',
-  'wharfie-deployment-revision-id',
-  'wharfie-profile-revision-id',
-  'wharfie-app-id',
-  'wharfie-revision-id',
-  'wharfie-artifact-id',
-  'wharfie-content-length',
-  'wharfie-stage-intent-id',
-  'wharfie-stage-receipt-id',
-]);
-const STAGE_METADATA_KEYS = new Set([
-  'wharfie-schema',
-  'wharfie-intent',
-  'wharfie-nonce',
-  'wharfie-artifact',
-  'wharfie-digest',
-]);
 
 /** Exact controller authority or provider evidence is contradictory. */
 export class AwsSingleNodeManagedArtifactResourceConflictError extends Error {
@@ -142,10 +93,6 @@ export class AwsSingleNodeManagedArtifactResourceUnknownError extends Error {
     this.code = 'AWS_SINGLE_NODE_MANAGED_ARTIFACT_RESOURCE_UNKNOWN';
   }
 }
-
-class ProviderResponseUnknownError extends Error {}
-class ArtifactEvidenceConflictError extends Error {}
-class ArtifactEvidenceTransientError extends Error {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -198,250 +145,10 @@ function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** @param {unknown} left @param {unknown} right @returns {boolean} */
-function sameStringMap(left, right) {
-  if (!isPlainObject(left) || !isPlainObject(right)) return false;
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key) =>
-        Object.hasOwn(right, key) &&
-        typeof left[key] === 'string' &&
-        typeof right[key] === 'string' &&
-        left[key] === right[key],
-    )
-  );
-}
-
-/** @param {unknown} error @param {string} name @returns {boolean} */
-function errorNamed(error, name) {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    /** @type {Record<string, any>} */ (error).name === name
-  );
-}
-
-/** @param {unknown} error @returns {boolean} */
-function isCurrentObjectMissingError(error) {
-  return errorNamed(error, 'NoSuchKey') || errorNamed(error, 'NotFound');
-}
-
 /** @param {number} attempt @returns {Promise<void>} */
 async function defaultWaitForRetry(attempt) {
   const delay = Math.min(2000 * 2 ** Math.max(0, attempt - 1), 30_000);
   await new Promise((resolve) => setTimeout(resolve, delay));
-}
-
-/** @param {string} value @returns {boolean} */
-function isWellFormedUnicode(value) {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const low = value.charCodeAt(index + 1);
-      if (!(low >= 0xdc00 && low <= 0xdfff)) return false;
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/** @param {unknown} value @returns {value is string} */
-function isUsableVersionId(value) {
-  return (
-    typeof value === 'string' &&
-    value.length > 0 &&
-    value !== 'null' &&
-    isWellFormedUnicode(value) &&
-    Buffer.byteLength(value, 'utf8') <= 1024
-  );
-}
-
-/** @param {unknown} value @returns {value is string} */
-function isUsableOpaqueEtag(value) {
-  if (
-    typeof value !== 'string' ||
-    value.length < 3 ||
-    value[0] !== '"' ||
-    value[value.length - 1] !== '"' ||
-    !isWellFormedUnicode(value) ||
-    Buffer.byteLength(value, 'utf8') > 1024
-  ) {
-    return false;
-  }
-  const opaque = value.slice(1, -1);
-  if (opaque === '*') return false;
-  for (const character of opaque) {
-    const codePoint = character.codePointAt(0);
-    if (
-      codePoint === undefined ||
-      codePoint <= 0x20 ||
-      (codePoint >= 0x7f && codePoint <= 0x9f) ||
-      codePoint > 0xff ||
-      character === '"' ||
-      character === ','
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/** @param {unknown} value @returns {string} */
-function decodeListedKey(value) {
-  if (typeof value !== 'string' || !isWellFormedUnicode(value)) {
-    throw new ProviderResponseUnknownError();
-  }
-  let decoded;
-  try {
-    decoded = decodeURIComponent(value);
-  } catch {
-    throw new ProviderResponseUnknownError();
-  }
-  if (!isWellFormedUnicode(decoded)) throw new ProviderResponseUnknownError();
-  return decoded;
-}
-
-/** @param {string} artifactId @returns {string} */
-function artifactChecksumBase64(artifactId) {
-  assertArtifactId(artifactId, 'managedArtifact artifactId');
-  return Buffer.from(artifactId.slice('waf1_'.length), 'base64url').toString(
-    'base64',
-  );
-}
-
-/** @param {unknown} value @returns {number} */
-function parseCanonicalContentLength(value) {
-  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  const contentLength = Number(value);
-  if (
-    !Number.isSafeInteger(contentLength) ||
-    contentLength < 0 ||
-    contentLength > DEPLOYMENT_ARTIFACT_STAGE_MAX_BYTES ||
-    String(contentLength) !== value
-  ) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  return contentLength;
-}
-
-/** @param {Readonly<Record<string, any>>} providerScope @param {string} deploymentInstanceId @param {string} incarnationId @param {{deploymentRevisionId: string, profileRevisionId: string, appId: string, revisionId: string, artifactId: string}} artifact @param {Readonly<Record<string, any>>} artifactStorage @returns {Readonly<{algorithm: 'sha256', value: string}>} */
-function stateDigestFromReferences(
-  providerScope,
-  deploymentInstanceId,
-  incarnationId,
-  artifact,
-  artifactStorage,
-) {
-  const location = getAwsSingleNodeManagedArtifactObjectLocation({
-    providerScope,
-    deploymentInstanceId,
-    incarnationId,
-  });
-  const source = getDeploymentArtifactStageObjectLocation(
-    providerScope,
-    artifact.artifactId,
-  );
-  const descriptor = sortCanonicalJsonValue({
-    schemaVersion: 1,
-    kind: 'awsSingleNodeManagedArtifactState',
-    location,
-    source,
-    artifact: {
-      deploymentRevisionId: artifact.deploymentRevisionId,
-      profileRevisionId: artifact.profileRevisionId,
-      appId: artifact.appId,
-      revisionId: artifact.revisionId,
-      artifactId: artifact.artifactId,
-      checksumAlgorithm: 'SHA256',
-      checksum: artifact.artifactId.slice('waf1_'.length),
-    },
-    object: {
-      storage: artifactStorage.storage,
-      encryption: artifactStorage.encryption,
-      storageClass: 'STANDARD',
-      contentType: AWS_SINGLE_NODE_MANAGED_ARTIFACT_CONTENT_TYPE,
-      cacheControl: AWS_SINGLE_NODE_MANAGED_ARTIFACT_CACHE_CONTROL,
-      metadataSchema: AWS_SINGLE_NODE_MANAGED_ARTIFACT_METADATA_SCHEMA,
-      onDestroy: artifactStorage.onDestroy,
-    },
-  });
-  return deepFreeze({
-    algorithm: 'sha256',
-    value: sha256Base64Url(
-      `${AWS_SINGLE_NODE_MANAGED_ARTIFACT_STATE_DIGEST_DOMAIN}\0${JSON.stringify(
-        descriptor,
-      )}`,
-    ),
-  });
-}
-
-/**
- * Derive the exact plan-time state of the managed current object. Provider
- * version IDs, ETags, byte length, stage receipts, action IDs and ownership
- * nonces are intentionally excluded because none exists when a fresh plan is
- * created. The artifact ID already commits the complete byte digest.
- * @param {unknown} value - Complete deterministic deployment authority.
- * @returns {Readonly<{algorithm: 'sha256', value: string}>} - Exact desired state digest.
- */
-export function getAwsSingleNodeManagedArtifactStateDigest(value) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(
-      'awsSingleNodeManagedArtifact state must be an object.',
-    );
-  }
-  assertExactKeys(
-    value,
-    STATE_AUTHORITY_KEYS,
-    'awsSingleNodeManagedArtifact state',
-  );
-  const deploymentRevision = validateDeploymentRevision(
-    value.deploymentRevision,
-    'awsSingleNodeManagedArtifact state.deploymentRevision',
-  );
-  const profile = validateDeploymentProfile(
-    value.profile,
-    'awsSingleNodeManagedArtifact state.profile',
-  );
-  const providerScope = validateProviderScope(
-    value.providerScope,
-    'awsSingleNodeManagedArtifact state.providerScope',
-  );
-  const providerSpec = validateAwsSingleNodeProviderSpecContext(
-    value.providerSpec,
-    { profile, providerScope },
-  );
-  assertDeploymentInstanceId(
-    value.deploymentInstanceId,
-    'awsSingleNodeManagedArtifact state.deploymentInstanceId',
-  );
-  assertDeploymentIncarnationId(
-    value.incarnationId,
-    'awsSingleNodeManagedArtifact state.incarnationId',
-  );
-  if (
-    deploymentRevision.profileRevisionId !== profile.profileRevisionId ||
-    deploymentRevision.appId !== profile.appId ||
-    value.deploymentInstanceId !==
-      getDeploymentInstanceId({ deploymentRevision, providerScope })
-  ) {
-    throw new Error(
-      'awsSingleNodeManagedArtifact state deployment revision, profile, scope, and instance identity do not match.',
-    );
-  }
-  return stateDigestFromReferences(
-    providerScope,
-    value.deploymentInstanceId,
-    value.incarnationId,
-    deploymentRevision,
-    providerSpec.capabilities.artifactStorage,
-  );
 }
 
 /** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, string>>} */
@@ -472,6 +179,20 @@ function managedMetadata(authority) {
     'wharfie-content-length': String(stage.receipt.object.contentLength),
     'wharfie-stage-intent-id': stage.intent.stageIntentId,
     'wharfie-stage-receipt-id': stage.receipt.stageReceiptId,
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
+function evidenceAuthority(authority) {
+  return deepFreeze({
+    providerScope: authority.plan.providerScope,
+    artifactStorage: authority.providerSpec.capabilities.artifactStorage,
+    deploymentInstanceId: authority.plan.deploymentInstanceId,
+    incarnationId: authority.plan.incarnationId,
+    createdByActionId:
+      authority.priorBinding?.createdByActionId ?? authority.action.actionId,
+    ownershipNonce: authority.ownershipNonce,
+    appId: authority.plan.deploymentRevision.appId,
   });
 }
 
@@ -702,251 +423,6 @@ function validateActionContext(value, providerScope) {
   return deepFreeze({ ...shell, artifactStage });
 }
 
-/** Stable namespace ownership only; mutable per-version semantics are authenticated by their state digest below. @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, string>>} */
-function ownershipCore(authority) {
-  return deepFreeze({
-    'wharfie-schema': AWS_SINGLE_NODE_MANAGED_ARTIFACT_METADATA_SCHEMA,
-    'wharfie-managed-by': 'wharfie',
-    'wharfie-resource-kind': 'single-node-managed-artifact',
-    'wharfie-retention': 'purge',
-    'wharfie-capability': 'artifact-storage',
-    'wharfie-role': 'object',
-    'wharfie-provider-scope-id': authority.plan.providerScope.providerScopeId,
-    'wharfie-deployment-instance-id': authority.plan.deploymentInstanceId,
-    'wharfie-incarnation-id': authority.plan.incarnationId,
-    'wharfie-resource-key': 'artifact',
-    'wharfie-created-by-action-id':
-      authority.priorBinding?.createdByActionId ?? authority.action.actionId,
-    'wharfie-ownership-nonce': authority.ownershipNonce,
-    'wharfie-app-id': authority.plan.deploymentRevision.appId,
-  });
-}
-
-/** @param {unknown} value @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
-function validateManagedMetadata(value, authority) {
-  if (!isPlainObject(value)) throw new ArtifactEvidenceConflictError();
-  const keys = Object.keys(value);
-  if (
-    keys.length !== MANAGED_METADATA_KEYS.size ||
-    keys.some((key) => !MANAGED_METADATA_KEYS.has(key))
-  ) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  for (const [key, expected] of Object.entries(ownershipCore(authority))) {
-    if (value[key] !== expected) throw new ArtifactEvidenceConflictError();
-  }
-  try {
-    assertDomainSeparatedSha256Id(
-      value['wharfie-created-by-action-id'],
-      DEPLOYMENT_ACTION_ID_PREFIX,
-      'managedArtifact metadata createdByActionId',
-    );
-    validateOwnershipNonce(
-      value['wharfie-ownership-nonce'],
-      'managedArtifact metadata ownershipNonce',
-    );
-    assertDomainSeparatedSha256Id(
-      value['wharfie-deployment-revision-id'],
-      DEPLOYMENT_REVISION_ID_PREFIX,
-      'managedArtifact metadata deploymentRevisionId',
-    );
-    assertDomainSeparatedSha256Id(
-      value['wharfie-profile-revision-id'],
-      DEPLOYMENT_PROFILE_ID_PREFIX,
-      'managedArtifact metadata profileRevisionId',
-    );
-    assertLogicalId(value['wharfie-app-id'], 'managedArtifact metadata appId');
-    assertApplicationRevisionId(
-      value['wharfie-revision-id'],
-      'managedArtifact metadata revisionId',
-    );
-    assertArtifactId(
-      value['wharfie-artifact-id'],
-      'managedArtifact metadata artifactId',
-    );
-    assertDomainSeparatedSha256Id(
-      value['wharfie-stage-intent-id'],
-      DEPLOYMENT_ARTIFACT_STAGE_INTENT_ID_PREFIX,
-      'managedArtifact metadata stageIntentId',
-    );
-    assertDomainSeparatedSha256Id(
-      value['wharfie-stage-receipt-id'],
-      DEPLOYMENT_ARTIFACT_STAGE_RECEIPT_ID_PREFIX,
-      'managedArtifact metadata stageReceiptId',
-    );
-  } catch {
-    throw new ArtifactEvidenceConflictError();
-  }
-  const contentLength = parseCanonicalContentLength(
-    value['wharfie-content-length'],
-  );
-  let stateDigest;
-  try {
-    stateDigest = validateSha256Digest(
-      {
-        algorithm: 'sha256',
-        value: value['wharfie-state-digest'],
-      },
-      'managedArtifact metadata stateDigest',
-    );
-  } catch {
-    throw new ArtifactEvidenceConflictError();
-  }
-  const expectedDigest = stateDigestFromReferences(
-    authority.plan.providerScope,
-    authority.plan.deploymentInstanceId,
-    authority.plan.incarnationId,
-    {
-      deploymentRevisionId: value['wharfie-deployment-revision-id'],
-      profileRevisionId: value['wharfie-profile-revision-id'],
-      appId: value['wharfie-app-id'],
-      revisionId: value['wharfie-revision-id'],
-      artifactId: value['wharfie-artifact-id'],
-    },
-    authority.providerSpec.capabilities.artifactStorage,
-  );
-  if (!sameJson(stateDigest, expectedDigest)) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  return deepFreeze({
-    metadata: { ...value },
-    contentLength,
-    stateDigest,
-    artifactId: value['wharfie-artifact-id'],
-    deploymentRevisionId: value['wharfie-deployment-revision-id'],
-    revisionId: value['wharfie-revision-id'],
-    stageIntentId: value['wharfie-stage-intent-id'],
-    stageReceiptId: value['wharfie-stage-receipt-id'],
-  });
-}
-
-/** @param {unknown} response @param {Readonly<Record<string, any>>} authority @param {string|undefined} exactVersionId @returns {Readonly<Record<string, any>>} */
-function validateManagedHead(response, authority, exactVersionId) {
-  if (!isPlainObject(response)) throw new ProviderResponseUnknownError();
-  if (!isUsableVersionId(response.VersionId)) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  if (exactVersionId !== undefined && response.VersionId !== exactVersionId) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  if (!isUsableOpaqueEtag(response.ETag)) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  const parsed = validateManagedMetadata(response.Metadata, authority);
-  if (
-    response.ContentLength !== parsed.contentLength ||
-    response.ChecksumSHA256 !== artifactChecksumBase64(parsed.artifactId) ||
-    response.ServerSideEncryption !== 'AES256' ||
-    (response.StorageClass ?? 'STANDARD') !== 'STANDARD' ||
-    response.ContentType !== AWS_SINGLE_NODE_MANAGED_ARTIFACT_CONTENT_TYPE ||
-    response.CacheControl !== AWS_SINGLE_NODE_MANAGED_ARTIFACT_CACHE_CONTROL ||
-    response.DeleteMarker === true ||
-    (response.ChecksumType !== undefined &&
-      response.ChecksumType !== 'FULL_OBJECT') ||
-    (response.TagCount !== undefined && response.TagCount !== 0) ||
-    response.ContentDisposition !== undefined ||
-    response.ContentEncoding !== undefined ||
-    response.ContentLanguage !== undefined ||
-    response.WebsiteRedirectLocation !== undefined ||
-    response.SSECustomerAlgorithm !== undefined ||
-    response.SSEKMSKeyId !== undefined ||
-    response.ReplicationStatus !== undefined ||
-    response.ObjectLockMode !== undefined ||
-    response.ObjectLockRetainUntilDate !== undefined ||
-    response.ObjectLockLegalHoldStatus !== undefined ||
-    response.PartsCount !== undefined
-  ) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  return deepFreeze({
-    versionId: response.VersionId,
-    etag: response.ETag,
-    contentLength: response.ContentLength,
-    ...parsed,
-  });
-}
-
-/** @param {unknown} response @param {Readonly<Record<string, any>>} authority @returns {Readonly<{versionId: string, etag: string}>} */
-function validateStageHead(response, authority) {
-  if (!isPlainObject(response)) throw new ProviderResponseUnknownError();
-  const stage = authority.artifactStage;
-  const expectedMetadata = {
-    'wharfie-schema': DEPLOYMENT_ARTIFACT_STAGE_METADATA_SCHEMA,
-    'wharfie-intent': stage.intent.stageIntentId,
-    'wharfie-nonce': stage.intent.ownershipNonce,
-    'wharfie-artifact': stage.intent.artifact.artifactId,
-    'wharfie-digest': stage.intent.artifact.byteDigest.value,
-  };
-  if (
-    !isUsableVersionId(response.VersionId) ||
-    response.VersionId !== stage.receipt.object.versionId ||
-    !isUsableOpaqueEtag(response.ETag) ||
-    response.ContentLength !== stage.receipt.object.contentLength ||
-    response.ChecksumSHA256 !==
-      artifactChecksumBase64(stage.intent.artifact.artifactId) ||
-    response.ServerSideEncryption !== 'AES256' ||
-    (response.StorageClass ?? 'STANDARD') !== 'STANDARD' ||
-    response.ContentType !== DEPLOYMENT_ARTIFACT_STAGE_CONTENT_TYPE ||
-    response.DeleteMarker === true ||
-    !isPlainObject(response.Metadata) ||
-    Object.keys(response.Metadata).length !== STAGE_METADATA_KEYS.size ||
-    Object.keys(response.Metadata).some(
-      (key) => !STAGE_METADATA_KEYS.has(key),
-    ) ||
-    Object.entries(expectedMetadata).some(
-      ([key, expected]) => response.Metadata[key] !== expected,
-    )
-  ) {
-    throw new ArtifactEvidenceConflictError();
-  }
-  return deepFreeze({ versionId: response.VersionId, etag: response.ETag });
-}
-
-/** @param {unknown} value @returns {Readonly<{key: string, versionId: string, isLatest: boolean, etag: string, size: number}>} */
-function validateListedVersion(value) {
-  if (!isPlainObject(value)) throw new ProviderResponseUnknownError();
-  if (
-    !isUsableVersionId(value.VersionId) ||
-    typeof value.IsLatest !== 'boolean' ||
-    !isUsableOpaqueEtag(value.ETag) ||
-    !Number.isSafeInteger(value.Size) ||
-    value.Size < 0 ||
-    value.Size > DEPLOYMENT_ARTIFACT_STAGE_MAX_BYTES ||
-    (value.StorageClass ?? 'STANDARD') !== 'STANDARD' ||
-    (value.ChecksumType !== undefined &&
-      value.ChecksumType !== 'FULL_OBJECT') ||
-    (value.ChecksumAlgorithm !== undefined &&
-      (!Array.isArray(value.ChecksumAlgorithm) ||
-        value.ChecksumAlgorithm.length !== 1 ||
-        value.ChecksumAlgorithm[0] !== 'SHA256'))
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  return deepFreeze({
-    key: decodeListedKey(value.Key),
-    versionId: value.VersionId,
-    isLatest: value.IsLatest,
-    etag: value.ETag,
-    size: value.Size,
-  });
-}
-
-/** @param {unknown} value @returns {Readonly<{key: string, versionId: string, isLatest: boolean}>} */
-function validateListedMarker(value) {
-  if (!isPlainObject(value)) throw new ProviderResponseUnknownError();
-  if (
-    !isUsableVersionId(value.VersionId) ||
-    typeof value.IsLatest !== 'boolean'
-  ) {
-    throw new ProviderResponseUnknownError();
-  }
-  return deepFreeze({
-    key: decodeListedKey(value.Key),
-    versionId: value.VersionId,
-    isLatest: value.IsLatest,
-  });
-}
-
 /** @param {string} key @returns {string} */
 function encodeCopyKey(key) {
   return key.split('/').map(encodeURIComponent).join('/');
@@ -1071,7 +547,11 @@ export function createAwsSingleNodeManagedArtifactResource(options) {
       }
       throw new ProviderResponseUnknownError();
     }
-    return validateManagedHead(response, authority, versionId);
+    return decodeAwsSingleNodeManagedArtifactHead(
+      response,
+      evidenceAuthority(authority),
+      versionId,
+    );
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>>} */
@@ -1098,168 +578,39 @@ export function createAwsSingleNodeManagedArtifactResource(options) {
       }
       throw new ProviderResponseUnknownError();
     }
-    return validateStageHead(response, authority);
+    return decodeAwsSingleNodeManagedArtifactStageHead(
+      response,
+      authority.artifactStage,
+    );
   }
 
   /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<{versions: Readonly<Record<string, any>>[], markers: Readonly<Record<string, any>>[], current: Readonly<Record<string, any>>|null}>>} */
   async function readHistory(authority) {
-    const versions = [];
-    const markers = [];
-    const markerPairs = new Set();
-    let keyMarker;
-    let versionIdMarker;
-    let totalEntries = 0;
-    for (
-      let pageIndex = 0;
-      pageIndex < AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_PAGES;
-      pageIndex += 1
-    ) {
-      const request = deepFreeze({
-        Bucket: authority.location.bucketName,
-        Prefix: authority.location.key,
-        MaxKeys: AWS_SINGLE_NODE_MANAGED_ARTIFACT_LIST_PAGE_SIZE,
-        EncodingType: 'url',
-        ExpectedBucketOwner: providerScope.accountId,
-        ...(keyMarker === undefined ? {} : { KeyMarker: keyMarker }),
-        ...(versionIdMarker === undefined
-          ? {}
-          : { VersionIdMarker: versionIdMarker }),
-      });
-      let response;
-      try {
-        response = await client.listObjectVersions(request);
-      } catch {
-        throw new ProviderResponseUnknownError();
-      }
-      if (
-        !isPlainObject(response) ||
-        typeof response.IsTruncated !== 'boolean' ||
-        (response.Name !== undefined &&
-          response.Name !== authority.location.bucketName) ||
-        (response.Prefix !== undefined &&
-          decodeListedKey(response.Prefix) !== authority.location.key) ||
-        response.EncodingType !== 'url' ||
-        (response.MaxKeys !== undefined &&
-          (!Number.isSafeInteger(response.MaxKeys) ||
-            response.MaxKeys < 0 ||
-            response.MaxKeys >
-              AWS_SINGLE_NODE_MANAGED_ARTIFACT_LIST_PAGE_SIZE)) ||
-        (response.Versions !== undefined &&
-          !Array.isArray(response.Versions)) ||
-        (response.DeleteMarkers !== undefined &&
-          !Array.isArray(response.DeleteMarkers))
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-      const listedVersions = (response.Versions ?? []).map(
-        validateListedVersion,
-      );
-      const listedMarkers = (response.DeleteMarkers ?? []).map(
-        validateListedMarker,
-      );
-      if (
-        listedVersions.length + listedMarkers.length >
-        AWS_SINGLE_NODE_MANAGED_ARTIFACT_LIST_PAGE_SIZE
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-      const exactVersions = listedVersions.filter(
-        (/** @type {Readonly<Record<string, any>>} */ entry) =>
-          entry.key === authority.location.key,
-      );
-      const exactMarkers = listedMarkers.filter(
-        (/** @type {Readonly<Record<string, any>>} */ entry) =>
-          entry.key === authority.location.key,
-      );
-      totalEntries += exactVersions.length + exactMarkers.length;
-      if (
-        totalEntries > AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_VERSIONS
-      ) {
-        throw new ArtifactEvidenceConflictError();
-      }
-      versions.push(...exactVersions);
-      markers.push(...exactMarkers);
-      if (!response.IsTruncated) break;
-      if (
-        typeof response.NextKeyMarker !== 'string' ||
-        response.NextKeyMarker.length === 0 ||
-        !isUsableVersionId(response.NextVersionIdMarker)
-      ) {
-        throw new ProviderResponseUnknownError();
-      }
-      const nextKeyMarker = decodeListedKey(response.NextKeyMarker);
-      const pair = JSON.stringify([
-        nextKeyMarker,
-        response.NextVersionIdMarker ?? null,
-      ]);
-      if (markerPairs.has(pair)) throw new ArtifactEvidenceConflictError();
-      markerPairs.add(pair);
-      keyMarker = nextKeyMarker;
-      versionIdMarker = response.NextVersionIdMarker;
-      if (
-        pageIndex + 1 ===
-        AWS_SINGLE_NODE_MANAGED_ARTIFACT_MAX_HISTORY_PAGES
-      ) {
-        throw new ArtifactEvidenceConflictError();
-      }
-    }
-    const all = [...versions, ...markers];
-    const versionIds = new Set();
-    for (const entry of all) {
-      if (versionIds.has(entry.versionId)) {
-        throw new ArtifactEvidenceConflictError();
-      }
-      versionIds.add(entry.versionId);
-    }
-    const latest = all.filter((entry) => entry.isLatest);
-    if ((all.length === 0 && latest.length !== 0) || latest.length > 1) {
-      throw new ArtifactEvidenceConflictError();
-    }
-    if (all.length > 0 && latest.length !== 1) {
-      throw new ArtifactEvidenceConflictError();
-    }
-
-    const auditedVersions = [];
-    for (const version of versions) {
-      const head = await readHead(authority, version.versionId);
-      if (head === null) throw new ArtifactEvidenceTransientError();
-      if (head.etag !== version.etag || head.contentLength !== version.size) {
-        throw new ArtifactEvidenceConflictError();
-      }
-      auditedVersions.push(deepFreeze({ ...version, head }));
-    }
-
-    const latestEntry = latest[0] ?? null;
-    const current = await readHead(authority, undefined);
-    if (latestEntry === null) {
-      if (current !== null) throw new ArtifactEvidenceTransientError();
-    } else {
-      const latestIsMarker = markers.some(
-        (marker) => marker.versionId === latestEntry.versionId,
-      );
-      if (latestIsMarker) {
-        if (current !== null) throw new ArtifactEvidenceTransientError();
-      } else if (
-        current === null ||
-        current.versionId !== latestEntry.versionId ||
-        current.etag !== latestEntry.etag ||
-        current.contentLength !== latestEntry.size
-      ) {
-        throw new ArtifactEvidenceTransientError();
-      }
-    }
-    return deepFreeze({
-      versions: auditedVersions,
-      markers,
-      current,
+    const evidence = createAwsSingleNodeManagedArtifactHistoryEvidence({
+      readHistoryPage: async (
+        /** @type {Readonly<Record<string, any>>} */ request,
+      ) => {
+        try {
+          return await client.listObjectVersions(request);
+        } catch {
+          throw new ProviderResponseUnknownError();
+        }
+      },
+      readHead: (/** @type {string|undefined} */ versionId) =>
+        readHead(authority, versionId),
+    });
+    return evidence.readHistory({
+      location: authority.location,
+      accountId: providerScope.accountId,
     });
   }
 
   /** @param {Readonly<Record<string, any>>} current @param {Readonly<Record<string, any>>} authority @returns {boolean} */
   function isExactDesired(current, authority) {
-    if (!sameJson(current.stateDigest, authority.stateDigest)) return false;
-    const expected = managedMetadata(authority);
-    return sameStringMap(current.metadata, expected);
+    return isAwsSingleNodeManagedArtifactDesiredState(current, {
+      stateDigest: authority.stateDigest,
+      metadata: managedMetadata(authority),
+    });
   }
 
   /** @param {unknown} error @returns {never} */

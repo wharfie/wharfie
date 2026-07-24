@@ -59,14 +59,18 @@ and derives the exact durable binding plus only a controller-reachable,
 CAS-claimed current action, while pending frontiers remain read-only.
 Read-only provider adapters now cover both retained volumes and the directly
 owned VPC, internet gateway, subnet, route table, and application security
-group, plus all three derived network relationships. The direct natural-slot
-resources do not claim non-idempotent create replay; the route table alone adds
-clean-history client-token replay advice. Derived observers retain exact
-endpoint lineage and independent relationship views while treating synthetic
-IDs as receipts and emitting no replay advice. Remaining driver read-kernel
-adapters, aggregate inspection, owned provider composition, commands, guest
+group, all three derived network relationships, all four runtime-IAM roles, the
+managed artifact, substrate node, and both retained-volume attachments. Direct
+resources without provider tokens do not claim non-idempotent create replay;
+the retained volumes, route table, and substrate alone expose their exact
+stable-token advice after completely clean current-create histories. Derived
+observers retain exact endpoint lineage and independent relationship views
+while treating synthetic IDs as receipts. The artifact audits its complete
+version namespace, the node joins exact instance and root-volume proof, and
+typed attachment endpoint loss requires one stable full-window signature.
+Aggregate inspection, owned provider composition, commands, guest
 storage/service projection, and clean-account proof follow · **Last updated:**
-2026-07-23
+2026-07-24
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -820,9 +824,9 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       mutation-capable ports, and routes every one of the 18 graph keys exactly
       once by desired target. It validates the awaited result against that
       role, forwards the original context unchanged, never fans out, and owns
-      no credentials or lifecycle. Existing driver read kernels still require
-      separate observation-authority adapters before this boundary can produce
-      aggregate InspectionV5.
+      no credentials or lifecycle. Driver read kernels still require separate
+      observation-authority adapters before this boundary can produce a
+      lossless aggregate InspectionV6; V5 cannot carry execution advice.
 - [x] Derive one exact read-only authority for each resource observation. The
       pure eleven-field constructor validates the deployment revision, profile,
       provider scope, ProviderSpec, instance, incarnation, non-null head,
@@ -903,6 +907,27 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       only an all-clean-empty history is absent. Current-create emptiness stays
       unknown. Natural slots aid mutation recovery but do not produce
       `replay-safe-create` without a provider client token.
+- [x] Adapt all four runtime-IAM roles to the shared read-only boundary. The
+      direct role and instance profile retain exact deterministic names,
+      immutable provider IDs, ownership tags, and complete supported child
+      inventories. The derived inline policy and role/profile association
+      re-prove exact direct and transitive binding lineage before joining
+      independent list, document, and membership evidence. Readable drift uses
+      actual digests, unbound candidates remain collisions, endpoint deletion
+      can prove a physically absent association only after a completely clean
+      bounded window, and no IAM observer recommends replay without a provider
+      token.
+- [x] Complete raw observer coverage for the managed artifact, substrate node,
+      and both retained-volume attachments. The artifact audits every exact-key
+      immutable version and delete marker before interpreting its current
+      alias. The node joins exact instance, four-attribute, CPU-credit, ENI, and
+      root-volume evidence, projects raw lifecycle health, and alone among
+      these families can recommend replay through its original stable
+      `RunInstances` token after an entirely clean current-create history. One
+      generic attachment observer corroborates exact instance and volume views;
+      typed endpoint loss is authoritative only after one identical negative
+      signature survives the full retry window. All 18 graph roles now reach
+      V47's 16-family mutation-incapable router.
 
 - [x] Define only the minimum finite capability model needed by the golden path: nodes, application state, control state, artifact storage, a narrow runtime identity, networking, and no ingress or application-secret surface.
 - [ ] Require control-state implementations to provide linearizable conditional writes, transactions, authoritative lease expiry, and fencing validation.
@@ -1059,22 +1084,20 @@ while separately carrying either no execution advice or one exact
 `replay-safe-create` recommendation. That recommendation never turns an empty
 eventually consistent read into an absence claim and is accepted only for a
 canonical action ID and nonce on the routed managed/direct current create. The
-retained-volume, five directly owned network-resource, and three derived
-network-relationship drivers now share their exact evidence decoders with
-read-only observer ports. A stateless tagged-EC2 layer separates tags and
-bounded identity reads from mutation-only response recovery. The remaining
-seven implementation families stay private. One pure authority constructor
-revalidates the exact desired tuple, active plan, and last-settled provider
-lineage, recreates the V45 catalog, derives the target's durable binding, and
-exposes only a controller-reachable CAS-claimed intended action. It never turns
-a pending frontier into action authority.
+resource drivers now share their strict read evidence with all 16 observer
+families covering the 18 graph roles. A stateless tagged-EC2 layer separates
+tags and bounded identity reads from mutation-only response recovery; IAM,
+artifact, node/root, and attachment evidence preserve their own bounded
+multi-view contracts. One pure authority constructor revalidates the exact
+desired tuple, active plan, and last-settled provider lineage, recreates the V45
+catalog, derives the target's durable binding, and exposes only a
+controller-reachable CAS-claimed intended action. It never turns a pending
+frontier into action authority.
 
-1. Adapt the four runtime-IAM, managed-artifact, substrate-node, and generic
-   retained-volume-attachment read kernels to the shared observation boundary
-   without duplicating their provider decoders, then build aggregate inspection
+1. Define and build aggregate InspectionV6, preserving V47 execution advice,
    and complete controller composition across the implemented 18-role graph.
-   Then wire guest storage projection, resident-service activation, and host
-   observation.
+   Then wire guest storage projection,
+   resident-service activation, and host observation.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands, requiring apply and reconcile to re-observe the
    currently running SEA.
@@ -1086,8 +1109,12 @@ a pending frontier into action authority.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [derived network observers
-checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md). Its
+The current restart point is the [complete AWS resource observers
+checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md).
+Its parent is the [runtime IAM observers
+checkpoint](llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md), whose
+parent is the [derived network observers
+checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md), whose
 parent is the [route-table observer
 checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md), whose
 parent is the [subnet and security-group observer

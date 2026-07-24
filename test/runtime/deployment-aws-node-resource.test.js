@@ -19,6 +19,10 @@ import {
 import { getAwsSingleNodeInternetGatewayStateDigest } from '../../src/core/runtime/deployment-aws-internet-gateway-resource.js';
 import { getAwsSingleNodeManagedArtifactStateDigest } from '../../src/core/runtime/deployment-aws-managed-artifact-resource.js';
 import {
+  AwsSingleNodeNodeResourceObserverAuthorityError,
+  createAwsSingleNodeNodeResourceObserver,
+} from '../../src/core/runtime/deployment-aws-node-resource-observer.js';
+import {
   AWS_SINGLE_NODE_NODE_CREATE_CLIENT_TOKEN_DOMAIN,
   AWS_SINGLE_NODE_NODE_DEFAULT_MAX_ATTEMPTS,
   AWS_SINGLE_NODE_NODE_DISCOVERY_MAX_RESULTS,
@@ -36,6 +40,8 @@ import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import { createAwsSingleNodeDesiredResourceTargetCatalog } from '../../src/core/runtime/deployment-aws-desired-resource-targets.js';
+import { createAwsSingleNodeResourceObservationAuthority } from '../../src/core/runtime/deployment-aws-resource-observation-authority.js';
 import { getAwsSingleNodeRouteTableStateDigest } from '../../src/core/runtime/deployment-aws-route-table-resource.js';
 import {
   AWS_SINGLE_NODE_RUNTIME_ROLE_PATH,
@@ -387,8 +393,8 @@ function desiredState(base, definition) {
   };
 }
 
-/** @param {Readonly<Record<string, any>>} base @param {'apply'|'reconcile'|'destroy'} operation */
-function makePlan(base, operation) {
+/** @param {Readonly<Record<string, any>>} base @param {'apply'|'reconcile'|'destroy'} operation @param {{substrateBeforeStateDigest?: Readonly<Record<string, string>>}} [options] */
+function makePlan(base, operation, options = {}) {
   const definitions =
     operation === 'destroy'
       ? [...AWS_SINGLE_NODE_RESOURCE_GRAPH.resources].reverse()
@@ -399,6 +405,10 @@ function makePlan(base, operation) {
       const existing = {
         ...desired,
         providerResourceId: providerResourceId(base, definition),
+        ...(definition.resourceKey === 'substrate' &&
+        options.substrateBeforeStateDigest !== undefined
+          ? { stateDigest: options.substrateBeforeStateDigest }
+          : {}),
       };
       const contract = {
         resourceKey: definition.resourceKey,
@@ -686,8 +696,12 @@ function replaceHeadIntents(head, intents) {
   });
 }
 
-/** @param {ReturnType<typeof makeFixture>} fixture @returns {Record<string, string>} */
+/** @param {any} fixture @returns {Record<string, string>} */
 function expectedTags(fixture) {
+  const settledNodeAction = fixture.settledPlan?.actions.find(
+    (/** @type {Readonly<AnyRecord>} */ candidate) =>
+      candidate.resourceKey === 'substrate',
+  );
   return {
     'wharfie:managed-by': 'wharfie',
     'wharfie:resource-kind': 'single-node-substrate',
@@ -703,6 +717,7 @@ function expectedTags(fixture) {
       fixture.priorBinding?.createdByActionId ?? fixture.action.actionId,
     'wharfie:ownership-nonce': fixture.ownershipNonce,
     'wharfie:state-digest':
+      settledNodeAction?.after?.stateDigest.value ??
       fixture.action.after?.stateDigest.value ??
       fixture.action.before.stateDigest.value,
   };
@@ -793,7 +808,7 @@ function makeInstance(fixture, overrides = {}) {
         PrivateIpAddress: '10.42.0.10',
         PrivateIpAddresses: [
           {
-            Association: publicAssociation,
+            Association: { ...publicAssociation },
             Primary: true,
             PrivateDnsName: 'ip-10-42-0-10.ec2.internal',
             PrivateIpAddress: '10.42.0.10',
@@ -976,7 +991,7 @@ function makeAttributeResponse(fixture, attribute, valueOverride) {
 
 /**
  * @param {ReturnType<typeof makeFixture>} fixture
- * @param {{instance?: AnyRecord|null, discovery?: AnyRecord[], exact?: AnyRecord|null, rootVolume?: AnyRecord, rootDiscovery?: AnyRecord[], rootExact?: AnyRecord|null, rootExactError?: Error, attributeOverrides?: Record<string, unknown>, credits?: string, runResponse?: unknown}} [options]
+ * @param {{instance?: AnyRecord|null, discovery?: AnyRecord[], exact?: AnyRecord|null, exactError?: Error, rootVolume?: AnyRecord, rootDiscovery?: AnyRecord[], rootExact?: AnyRecord|null, rootExactError?: Error, attributeOverrides?: Record<string, unknown>, credits?: string, runResponse?: unknown}} [options]
  */
 function makeClient(fixture, options = {}) {
   const instance =
@@ -990,6 +1005,12 @@ function makeClient(fixture, options = {}) {
     options.rootDiscovery ?? (rootExact === null ? [] : [rootExact]);
   const describeInstances = jest.fn(
     async (/** @type {AnyRecord} */ request) => {
+      if (
+        Object.hasOwn(request, 'InstanceIds') &&
+        options.exactError !== undefined
+      ) {
+        throw options.exactError;
+      }
       const records = Object.hasOwn(request, 'InstanceIds')
         ? exact === null
           ? []
@@ -1061,6 +1082,372 @@ function makePorts(fixture, options = {}) {
     waitForRetry,
   });
   return { client, waitForRetry, resource };
+}
+
+/** @param {ReturnType<typeof makeFixture>} fixture @param {Readonly<Record<string, any>>} head */
+function makeNodeObservationAuthority(fixture, head) {
+  const targets = createAwsSingleNodeDesiredResourceTargetCatalog({
+    deploymentRevision: fixture.base.deploymentRevision,
+    profile: fixture.base.profile,
+    providerScope: fixture.base.providerScope,
+    providerSpec: fixture.base.providerSpec,
+    deploymentInstanceId: fixture.base.deploymentInstanceId,
+    incarnationId: fixture.base.incarnationId,
+    head,
+  });
+  const target = targets.find(
+    (candidate) => candidate.resourceKey === 'substrate',
+  );
+  if (target === undefined) throw new Error('Missing substrate target.');
+  return createAwsSingleNodeResourceObservationAuthority({
+    operation: fixture.plan.operation,
+    deploymentRevision: fixture.base.deploymentRevision,
+    profile: fixture.base.profile,
+    providerScope: fixture.base.providerScope,
+    providerSpec: fixture.base.providerSpec,
+    deploymentInstanceId: fixture.base.deploymentInstanceId,
+    incarnationId: fixture.base.incarnationId,
+    head,
+    plan: fixture.plan,
+    settledPlan: null,
+    target,
+  });
+}
+
+/** @returns {any} */
+function makeCurrentCreateObservationFixture() {
+  const fixture = makeFixture();
+  return Object.freeze({
+    ...fixture,
+    authority: makeNodeObservationAuthority(fixture, fixture.head),
+  });
+}
+
+/** @returns {any} */
+function makeBoundObservationFixture() {
+  const fixture = makeFixture();
+  const dependencies = fixture.action.dependsOn.map(
+    (/** @type {string} */ resourceKey) => {
+      const binding = fixture.bindingByKey.get(resourceKey);
+      if (binding === undefined) {
+        throw new Error(`Missing node dependency '${resourceKey}'.`);
+      }
+      return binding;
+    },
+  );
+  const substrateBinding = makeBinding(
+    fixture.base,
+    fixture.action,
+    fixture.ownershipNonce,
+    dependencies,
+    fixture.action.actionId,
+  );
+  const frontier = fixture.plan.actions.length;
+  const intents = fixture.plan.actions.map(
+    (
+      /** @type {Readonly<AnyRecord>} */ action,
+      /** @type {number} */ index,
+    ) => ({
+      actionId: action.actionId,
+      status: 'settled',
+      ownershipNonce:
+        fixture.head.activeOperation.intents[index].ownershipNonce,
+    }),
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: fixture.base.deploymentInstanceId,
+    providerScope: fixture.base.providerScope,
+    incarnationId: fixture.base.incarnationId,
+    generation: fixture.head.generation + 2,
+    phase: 'CONVERGING',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId:
+      fixture.base.deploymentRevision.deploymentRevisionId,
+    resourceBindings: [...fixture.head.resourceBindings, substrateBinding],
+    activeOperation: {
+      kind: 'create',
+      planId: fixture.plan.planId,
+      status: 'running',
+      nextActionIndex: frontier,
+      intents,
+    },
+    lastOperation: null,
+  });
+  const boundFixture = Object.freeze({
+    ...fixture,
+    priorBinding: substrateBinding,
+    head,
+  });
+  return Object.freeze({
+    ...boundFixture,
+    authority: makeNodeObservationAuthority(boundFixture, head),
+  });
+}
+
+/** @param {{substrateBeforeStateDigest?: Readonly<Record<string, string>>}} [options] @returns {any} */
+function makeDeleteObservationFixture(options = {}) {
+  const base = makeBase();
+  const settledPlan = makePlan(base, 'apply');
+  const settledIntentByKey = new Map(
+    settledPlan.actions.map(
+      (
+        /** @type {Readonly<AnyRecord>} */ action,
+        /** @type {number} */ index,
+      ) => [
+        action.resourceKey,
+        {
+          actionId: action.actionId,
+          status: 'settled',
+          ownershipNonce: nonce(100 + index),
+        },
+      ],
+    ),
+  );
+  const settledIntents = settledPlan.actions.map(
+    (/** @type {Readonly<AnyRecord>} */ action) =>
+      settledIntentByKey.get(action.resourceKey),
+  );
+  const settledActionByKey = new Map(
+    settledPlan.actions.map((/** @type {Readonly<AnyRecord>} */ action) => [
+      action.resourceKey,
+      action,
+    ]),
+  );
+  const bindingByKey = new Map();
+  for (const definition of AWS_SINGLE_NODE_RESOURCE_GRAPH.resources) {
+    const action = settledActionByKey.get(definition.resourceKey);
+    if (action === undefined) throw new Error('Missing settled action.');
+    const dependencies = definition.dependsOn.map(
+      (/** @type {string} */ resourceKey) => {
+        const binding = bindingByKey.get(resourceKey);
+        if (binding === undefined) {
+          throw new Error(`Missing settled dependency '${resourceKey}'.`);
+        }
+        return binding;
+      },
+    );
+    const intent = settledIntentByKey.get(definition.resourceKey);
+    bindingByKey.set(
+      definition.resourceKey,
+      makeBinding(
+        base,
+        action,
+        intent.ownershipNonce,
+        dependencies,
+        action.actionId,
+      ),
+    );
+    if (definition.resourceKey === 'substrate') break;
+  }
+  const priorBinding = bindingByKey.get('substrate');
+  if (priorBinding === undefined) throw new Error('Missing substrate binding.');
+  const readyGeneration = 40;
+  const readyHead = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: readyGeneration,
+    phase: 'READY',
+    settledDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    targetDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    resourceBindings: [...bindingByKey.values()],
+    activeOperation: null,
+    lastOperation: {
+      kind: 'create',
+      planId: settledPlan.planId,
+      intents: settledIntents,
+    },
+  });
+  const plan = makePlan(base, 'destroy', options);
+  const action = plan.actions.find(
+    (/** @type {Readonly<AnyRecord>} */ candidate) =>
+      candidate.resourceKey === 'substrate',
+  );
+  if (action === undefined) throw new Error('Missing substrate delete.');
+  const actionIndex = plan.actions.indexOf(action);
+  const intents = plan.actions.map(
+    (
+      /** @type {Readonly<AnyRecord>} */ candidate,
+      /** @type {number} */ index,
+    ) => ({
+      actionId: candidate.actionId,
+      status:
+        index < actionIndex
+          ? 'settled'
+          : index === actionIndex
+            ? 'intended'
+            : 'pending',
+      ownershipNonce:
+        bindingByKey.get(candidate.resourceKey)?.ownershipNonce ??
+        nonce(200 + index),
+    }),
+  );
+  const deletedKeys = new Set(
+    plan.actions
+      .slice(0, actionIndex)
+      .filter(
+        (/** @type {Readonly<AnyRecord>} */ candidate) =>
+          candidate.action === 'delete',
+      )
+      .map(
+        (/** @type {Readonly<AnyRecord>} */ candidate) => candidate.resourceKey,
+      ),
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: readyGeneration + 2,
+    phase: 'DESTROYING',
+    settledDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    targetDeploymentRevisionId: null,
+    resourceBindings: [...bindingByKey.values()].filter(
+      (binding) => !deletedKeys.has(binding.resourceKey),
+    ),
+    activeOperation: {
+      kind: 'destroy',
+      planId: plan.planId,
+      status: 'running',
+      nextActionIndex: actionIndex,
+      intents,
+    },
+    lastOperation: readyHead.lastOperation,
+  });
+  const targets = createAwsSingleNodeDesiredResourceTargetCatalog({
+    deploymentRevision: base.deploymentRevision,
+    profile: base.profile,
+    providerScope: base.providerScope,
+    providerSpec: base.providerSpec,
+    deploymentInstanceId: base.deploymentInstanceId,
+    incarnationId: base.incarnationId,
+    head,
+  });
+  const target = targets.find(
+    (candidate) => candidate.resourceKey === 'substrate',
+  );
+  if (target === undefined) throw new Error('Missing substrate target.');
+  const authority = createAwsSingleNodeResourceObservationAuthority({
+    operation: 'destroy',
+    deploymentRevision: base.deploymentRevision,
+    profile: base.profile,
+    providerScope: base.providerScope,
+    providerSpec: base.providerSpec,
+    deploymentInstanceId: base.deploymentInstanceId,
+    incarnationId: base.incarnationId,
+    head,
+    plan,
+    settledPlan,
+    target,
+  });
+  return Object.freeze({
+    base,
+    plan,
+    settledPlan,
+    action,
+    actionIndex,
+    ownershipNonce: priorBinding.ownershipNonce,
+    bindingByKey,
+    dependencyBindings: priorBinding.dependencyBindings,
+    priorBinding,
+    head,
+    authority,
+  });
+}
+
+/** @returns {any} */
+function makeSettledNoopObservationFixture() {
+  const created = makeDeleteObservationFixture();
+  const settledPlan = makePlan(created.base, 'reconcile');
+  const action = settledPlan.actions.find(
+    (/** @type {Readonly<AnyRecord>} */ candidate) =>
+      candidate.resourceKey === 'substrate',
+  );
+  if (action === undefined) throw new Error('Missing settled substrate noop.');
+  const intents = settledPlan.actions.map(
+    (
+      /** @type {Readonly<AnyRecord>} */ candidate,
+      /** @type {number} */ index,
+    ) => ({
+      actionId: candidate.actionId,
+      status: 'settled',
+      ownershipNonce:
+        created.bindingByKey.get(candidate.resourceKey)?.ownershipNonce ??
+        nonce(300 + index),
+    }),
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: created.base.deploymentInstanceId,
+    providerScope: created.base.providerScope,
+    incarnationId: created.base.incarnationId,
+    generation: created.head.generation + 4,
+    phase: 'READY',
+    settledDeploymentRevisionId:
+      created.base.deploymentRevision.deploymentRevisionId,
+    targetDeploymentRevisionId:
+      created.base.deploymentRevision.deploymentRevisionId,
+    resourceBindings: [...created.bindingByKey.values()],
+    activeOperation: null,
+    lastOperation: {
+      kind: 'reconcile',
+      planId: settledPlan.planId,
+      intents,
+    },
+  });
+  const targets = createAwsSingleNodeDesiredResourceTargetCatalog({
+    deploymentRevision: created.base.deploymentRevision,
+    profile: created.base.profile,
+    providerScope: created.base.providerScope,
+    providerSpec: created.base.providerSpec,
+    deploymentInstanceId: created.base.deploymentInstanceId,
+    incarnationId: created.base.incarnationId,
+    head,
+  });
+  const target = targets.find(
+    (/** @type {Readonly<AnyRecord>} */ candidate) =>
+      candidate.resourceKey === 'substrate',
+  );
+  if (target === undefined) throw new Error('Missing substrate target.');
+  const authority = createAwsSingleNodeResourceObservationAuthority({
+    operation: 'reconcile',
+    deploymentRevision: created.base.deploymentRevision,
+    profile: created.base.profile,
+    providerScope: created.base.providerScope,
+    providerSpec: created.base.providerSpec,
+    deploymentInstanceId: created.base.deploymentInstanceId,
+    incarnationId: created.base.incarnationId,
+    head,
+    plan: null,
+    settledPlan,
+    target,
+  });
+  return Object.freeze({
+    ...created,
+    plan: null,
+    settledPlan,
+    action,
+    head,
+    authority,
+  });
+}
+
+/** @param {any} fixture @param {Record<string, any>} [options] */
+function makeObserverPorts(fixture, options = {}) {
+  const fullClient = options.client ?? makeClient(fixture, options);
+  const client = Object.freeze({
+    describeInstances: fullClient.describeInstances,
+    describeInstanceAttribute: fullClient.describeInstanceAttribute,
+    describeInstanceCreditSpecifications:
+      fullClient.describeInstanceCreditSpecifications,
+    describeVolumes: fullClient.describeVolumes,
+  });
+  const waitForRetry = options.waitForRetry ?? jest.fn();
+  const observer = createAwsSingleNodeNodeResourceObserver({
+    client,
+    providerScope: fixture.base.providerScope,
+    maxAttempts: options.maxAttempts ?? 2,
+    waitForRetry,
+  });
+  return { client, waitForRetry, observer };
 }
 
 /** @param {ReturnType<typeof makeFixture>} fixture */
@@ -2198,6 +2585,665 @@ describe('AWS single-node substrate evidence and factory fences', () => {
         client,
         providerScope: fixture.base.providerScope,
         unsupported: true,
+      }),
+    ).toThrow(TypeError);
+  });
+});
+
+describe('AWS single-node substrate read-only observation', () => {
+  it.each([
+    ['pending', 0, 'starting'],
+    ['running', 16, 'degraded'],
+    ['shutting-down', 32, 'failed'],
+    ['terminated', 48, 'failed'],
+    ['stopping', 64, 'stopped'],
+    ['stopped', 80, 'stopped'],
+  ])(
+    'maps exact owned %s lifecycle without mutation',
+    async (name, code, health) => {
+      const fixture = makeBoundObservationFixture();
+      const instance =
+        name === 'stopped'
+          ? makeStoppedInstance(fixture)
+          : makeInstance(fixture, { State: { Name: name, Code: code } });
+      const ports = makeObserverPorts(fixture, {
+        client: makeClient(fixture, { instance }),
+      });
+
+      await expect(ports.observer.observe(fixture.authority)).resolves.toEqual({
+        resourceKey: 'substrate',
+        presence: 'present',
+        ownership: 'verified',
+        providerIdentity: {
+          providerType: 'ec2-instance',
+          providerResourceId: IDS.instance,
+        },
+        observedDigest: fixture.action.after.stateDigest,
+        health,
+        execution: 'none',
+      });
+      expect(
+        ports.client.describeInstances.mock.calls.every(
+          (/** @type {AnyRecord[]} */ [request]) =>
+            Object.hasOwn(request, 'InstanceIds'),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('returns verified actual drift for an exact current create', async () => {
+    const fixture = makeCurrentCreateObservationFixture();
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        attributeOverrides: { userData: 'd3Jvbmc=' },
+      }),
+    });
+
+    const observation = await ports.observer.observe(fixture.authority);
+
+    expect(observation).toMatchObject({
+      presence: 'present',
+      ownership: 'verified',
+      providerIdentity: {
+        providerResourceId: IDS.instance,
+      },
+      health: 'degraded',
+      execution: 'none',
+    });
+    expect(observation.observedDigest).not.toEqual(
+      fixture.action.after.stateDigest,
+    );
+    expectDeepFrozen(observation);
+  });
+
+  it('recommends stable-token replay only after the full clean empty current-create window', async () => {
+    const fixture = makeCurrentCreateObservationFixture();
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, { instance: null }),
+    });
+
+    await expect(ports.observer.observe(fixture.authority)).resolves.toEqual({
+      resourceKey: 'substrate',
+      presence: 'unknown',
+      ownership: 'unknown',
+      providerIdentity: null,
+      observedDigest: null,
+      health: 'unknown',
+      execution: 'replay-safe-create',
+    });
+    expect(ports.client.describeInstances).toHaveBeenCalledTimes(2);
+    expect(ports.client.describeVolumes).not.toHaveBeenCalled();
+  });
+
+  it('returns zero-I/O unknown for a legitimate partial upstream head', async () => {
+    const fixture = makeFixture();
+    const frontier = 2;
+    const intents = fixture.plan.actions.map(
+      (
+        /** @type {Readonly<AnyRecord>} */ action,
+        /** @type {number} */ index,
+      ) => ({
+        actionId: action.actionId,
+        status:
+          index < frontier
+            ? 'settled'
+            : index === frontier
+              ? 'intended'
+              : 'pending',
+        ownershipNonce:
+          fixture.head.activeOperation.intents[index].ownershipNonce,
+      }),
+    );
+    const head = createDeploymentHead({
+      deploymentInstanceId: fixture.base.deploymentInstanceId,
+      providerScope: fixture.base.providerScope,
+      incarnationId: fixture.base.incarnationId,
+      generation: fixture.head.generation,
+      phase: 'CONVERGING',
+      settledDeploymentRevisionId: null,
+      targetDeploymentRevisionId:
+        fixture.base.deploymentRevision.deploymentRevisionId,
+      resourceBindings: fixture.head.resourceBindings.slice(0, frontier),
+      activeOperation: {
+        kind: 'create',
+        planId: fixture.plan.planId,
+        status: 'running',
+        nextActionIndex: frontier,
+        intents,
+      },
+      lastOperation: null,
+    });
+    const partial = Object.freeze({
+      ...fixture,
+      head,
+      authority: makeNodeObservationAuthority(fixture, head),
+    });
+    const ports = makeObserverPorts(partial);
+
+    await expect(ports.observer.observe(partial.authority)).resolves.toEqual({
+      resourceKey: 'substrate',
+      presence: 'unknown',
+      ownership: 'unknown',
+      providerIdentity: null,
+      observedDigest: null,
+      health: 'unknown',
+      execution: 'none',
+    });
+    expect(ports.client.describeInstances).not.toHaveBeenCalled();
+    expect(ports.client.describeVolumes).not.toHaveBeenCalled();
+  });
+
+  it('rejects a forged partial binding receipt before any provider I/O', async () => {
+    const fixture = makeFixture();
+    const frontier = 1;
+    const artifactAction = fixture.plan.actions[0];
+    const forgedArtifact = makeBinding(
+      fixture.base,
+      artifactAction,
+      fixture.head.activeOperation.intents[0].ownershipNonce,
+      [],
+      semanticId('wda3', 'wharfie:test:forged-action:v1', {
+        resourceKey: 'artifact',
+      }),
+    );
+    const intents = fixture.plan.actions.map(
+      (
+        /** @type {Readonly<AnyRecord>} */ action,
+        /** @type {number} */ index,
+      ) => ({
+        actionId: action.actionId,
+        status:
+          index < frontier
+            ? 'settled'
+            : index === frontier
+              ? 'intended'
+              : 'pending',
+        ownershipNonce:
+          fixture.head.activeOperation.intents[index].ownershipNonce,
+      }),
+    );
+    const head = createDeploymentHead({
+      deploymentInstanceId: fixture.base.deploymentInstanceId,
+      providerScope: fixture.base.providerScope,
+      incarnationId: fixture.base.incarnationId,
+      generation: fixture.head.generation,
+      phase: 'CONVERGING',
+      settledDeploymentRevisionId: null,
+      targetDeploymentRevisionId:
+        fixture.base.deploymentRevision.deploymentRevisionId,
+      resourceBindings: [forgedArtifact],
+      activeOperation: {
+        kind: 'create',
+        planId: fixture.plan.planId,
+        status: 'running',
+        nextActionIndex: frontier,
+        intents,
+      },
+      lastOperation: null,
+    });
+    const partial = Object.freeze({
+      ...fixture,
+      head,
+      authority: makeNodeObservationAuthority(fixture, head),
+    });
+    const ports = makeObserverPorts(partial);
+
+    await expect(
+      ports.observer.observe(partial.authority),
+    ).rejects.toBeInstanceOf(AwsSingleNodeNodeResourceObserverAuthorityError);
+    expect(ports.client.describeInstances).not.toHaveBeenCalled();
+    expect(ports.client.describeVolumes).not.toHaveBeenCalled();
+  });
+
+  it('returns candidate-known conflict for exact ownership drift and page-local collision evidence', async () => {
+    const bound = makeBoundObservationFixture();
+    const wrongTags = makeInstance(bound, {
+      Tags: tagArray({
+        ...expectedTags(bound),
+        'wharfie:ownership-nonce': nonce(1),
+      }),
+    });
+    const boundPorts = makeObserverPorts(bound, {
+      client: makeClient(bound, { instance: wrongTags }),
+    });
+    await expect(
+      boundPorts.observer.observe(bound.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+
+    const creating = makeCurrentCreateObservationFixture();
+    const collision = makeInstance(creating, {
+      ClientToken: 'wrong-token',
+    });
+    const baseClient = makeClient(creating);
+    const describeInstances = jest.fn(async () => ({
+      Reservations: [
+        {
+          OwnerId: creating.base.providerScope.accountId,
+          Instances: [collision],
+        },
+      ],
+      NextToken: 'later-page',
+    }));
+    const collisionPorts = makeObserverPorts(creating, {
+      client: {
+        ...baseClient,
+        describeInstances,
+      },
+    });
+    await expect(
+      collisionPorts.observer.observe(creating.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+    expect(describeInstances).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes same-page instance cardinality conflict outrank malformed candidate evidence', async () => {
+    const fixture = makeCurrentCreateObservationFixture();
+    const malformed = makeInstance(fixture, {
+      InstanceId: 'i-00000000000000002',
+      Tags: 'malformed',
+    });
+    const contradictory = makeInstance(fixture, {
+      InstanceId: 'i-00000000000000003',
+      ClientToken: 'wrong-token',
+    });
+    const baseClient = makeClient(fixture);
+    const describeInstances = jest.fn(async () => ({
+      Reservations: [
+        {
+          OwnerId: fixture.base.providerScope.accountId,
+          Instances: [malformed, contradictory],
+        },
+      ],
+    }));
+    const ports = makeObserverPorts(fixture, {
+      client: { ...baseClient, describeInstances },
+    });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: {
+        providerResourceId: 'i-00000000000000002',
+      },
+    });
+    expect(describeInstances).toHaveBeenCalledTimes(1);
+  });
+
+  it('ranks fulfilled conclusive conflicts over concurrent unknown reads', async () => {
+    const fixture = makeBoundObservationFixture();
+    const baseClient = makeClient(fixture);
+    const client = {
+      ...baseClient,
+      describeInstanceAttribute: jest.fn(
+        async (/** @type {AnyRecord} */ request) => {
+          if (request.Attribute === 'userData') {
+            throw providerError('ServiceUnavailable');
+          }
+          return makeAttributeResponse(fixture, request.Attribute);
+        },
+      ),
+      describeInstanceCreditSpecifications: jest.fn(async () => ({
+        InstanceCreditSpecifications: [
+          { InstanceId: IDS.instance, CpuCredits: 'standard' },
+        ],
+        NextToken: 'contradictory-page',
+      })),
+    };
+    const ports = makeObserverPorts(fixture, { client });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+  });
+
+  it('ranks a fulfilled credit conflict over malformed static instance evidence', async () => {
+    const fixture = makeBoundObservationFixture();
+    const malformed = makeInstance(fixture, {
+      CapacityReservationSpecification: {
+        CapacityReservationPreference: 'none',
+        CapacityReservationTarget: { CapacityReservationId: '' },
+      },
+    });
+    const baseClient = makeClient(fixture, { instance: malformed });
+    const client = {
+      ...baseClient,
+      describeInstanceCreditSpecifications: jest.fn(async () => ({
+        InstanceCreditSpecifications: [
+          { InstanceId: IDS.instance, CpuCredits: 'standard' },
+        ],
+        NextToken: 'contradictory-page',
+      })),
+    };
+    const ports = makeObserverPorts(fixture, { client });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+    expect(client.describeVolumes).toHaveBeenCalled();
+  });
+
+  it('uses the settled ownership receipt when destroy before-state has readable drift', async () => {
+    const fixture = makeDeleteObservationFixture({
+      substrateBeforeStateDigest: digest('destroy-observed-drift'),
+    });
+    const settledNode = fixture.settledPlan.actions.find(
+      (/** @type {Readonly<AnyRecord>} */ candidate) =>
+        candidate.resourceKey === 'substrate',
+    );
+    expect(fixture.action.before.stateDigest).not.toEqual(
+      settledNode.after.stateDigest,
+    );
+    const ports = makeObserverPorts(fixture);
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'verified',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+  });
+
+  it('accepts the creation ownership provenance carried by a later settled noop receipt', async () => {
+    const fixture = makeSettledNoopObservationFixture();
+    expect(fixture.action.action).toBe('noop');
+    expect(fixture.priorBinding.createdByActionId).not.toBe(
+      fixture.action.actionId,
+    );
+    const ports = makeObserverPorts(fixture);
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'verified',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+  });
+
+  it('requires the identical full-window joint negative before deleting an aged-out binding', async () => {
+    const fixture = makeDeleteObservationFixture();
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        exactError: providerError('InvalidInstanceID.NotFound'),
+        discovery: [],
+        rootExact: null,
+        rootDiscovery: [],
+      }),
+    });
+
+    await expect(ports.observer.observe(fixture.authority)).resolves.toEqual({
+      resourceKey: 'substrate',
+      presence: 'absent',
+      ownership: 'missing',
+      providerIdentity: null,
+      observedDigest: null,
+      health: 'absent',
+      execution: 'none',
+    });
+    expect(ports.waitForRetry).toHaveBeenCalledTimes(1);
+    expect(ports.client.describeInstances).toHaveBeenCalledTimes(4);
+    expect(ports.client.describeVolumes).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['typed root absence', null, null],
+    ['rootless terminal tombstone', undefined, null],
+    ['exact deleted root tombstone', 'deleted', []],
+  ])(
+    'accepts exact terminated instance proof with %s',
+    async (_name, rootState, attachments) => {
+      const fixture = makeDeleteObservationFixture();
+      const instance = makeInstance(fixture, {
+        State: { Name: 'terminated', Code: 48 },
+        ...(rootState === undefined ? { BlockDeviceMappings: undefined } : {}),
+      });
+      const rootVolume =
+        rootState === 'deleted'
+          ? makeRootVolume(fixture, {
+              State: 'deleted',
+              Attachments: attachments,
+            })
+          : null;
+      const ports = makeObserverPorts(fixture, {
+        client: makeClient(fixture, {
+          instance,
+          rootExact: rootVolume,
+          rootDiscovery: [],
+          ...(rootState === null
+            ? {
+                rootExactError: providerError('InvalidVolume.NotFound'),
+              }
+            : {}),
+        }),
+      });
+
+      await expect(
+        ports.observer.observe(fixture.authority),
+      ).resolves.toMatchObject({
+        presence: 'absent',
+        ownership: 'missing',
+        health: 'absent',
+      });
+    },
+  );
+
+  it('accepts an owned unattached deleted root tombstone with readable intrinsic drift', async () => {
+    const fixture = makeDeleteObservationFixture();
+    const instance = makeInstance(fixture, {
+      State: { Name: 'terminated', Code: 48 },
+    });
+    const rootVolume = makeRootVolume(fixture, {
+      State: 'deleted',
+      Attachments: [],
+      Size: fixture.base.providerSpec.node.rootVolume.sizeGiB + 8,
+    });
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        instance,
+        rootExact: rootVolume,
+        rootDiscovery: [],
+      }),
+    });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'absent',
+      ownership: 'missing',
+      health: 'absent',
+    });
+  });
+
+  it('never treats shutting-down or a deleting root as terminal absence', async () => {
+    const fixture = makeDeleteObservationFixture();
+    const shuttingDownPorts = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        instance: makeInstance(fixture, {
+          State: { Name: 'shutting-down', Code: 32 },
+        }),
+      }),
+    });
+    await expect(
+      shuttingDownPorts.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'unknown',
+      ownership: 'unknown',
+      health: 'unknown',
+    });
+    expect(
+      shuttingDownPorts.client.describeInstanceAttribute,
+    ).not.toHaveBeenCalled();
+
+    const deletingRoot = makeRootVolume(fixture, { State: 'deleting' });
+    const deleting = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        instance: makeInstance(fixture, {
+          State: { Name: 'terminated', Code: 48 },
+        }),
+        rootExact: deletingRoot,
+        rootDiscovery: [],
+      }),
+    }).observer;
+    await expect(deleting.observe(fixture.authority)).resolves.toMatchObject({
+      presence: 'unknown',
+      ownership: 'unknown',
+      health: 'unknown',
+    });
+  });
+
+  it('reports a different owned root locator as conflict after exact root absence', async () => {
+    const fixture = makeDeleteObservationFixture();
+    const differentRoot = makeRootVolume(fixture, {
+      VolumeId: 'vol-00000000000000009',
+      Attachments: [
+        {
+          ...makeRootVolume(fixture).Attachments[0],
+          VolumeId: 'vol-00000000000000009',
+        },
+      ],
+    });
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        instance: makeInstance(fixture, {
+          State: { Name: 'terminated', Code: 48 },
+        }),
+        rootExact: null,
+        rootDiscovery: [differentRoot],
+        rootExactError: providerError('InvalidVolume.NotFound'),
+      }),
+    });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+  });
+
+  it('makes same-page root cardinality conflict outrank malformed root tags', async () => {
+    const fixture = makeDeleteObservationFixture();
+    const malformedRoot = makeRootVolume(fixture, {
+      VolumeId: 'vol-00000000000000009',
+      Tags: 'malformed',
+      Attachments: [],
+    });
+    const contradictoryRoot = makeRootVolume(fixture, {
+      VolumeId: 'vol-0000000000000000a',
+      Attachments: [],
+    });
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        instance: makeInstance(fixture, {
+          State: { Name: 'terminated', Code: 48 },
+        }),
+        rootExactError: providerError('InvalidVolume.NotFound'),
+        rootDiscovery: [malformedRoot, contradictoryRoot],
+      }),
+    });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+  });
+
+  it('keeps a current-create instance candidate when exact root identity conflicts', async () => {
+    const fixture = makeCurrentCreateObservationFixture();
+    const wrongRoot = makeRootVolume(fixture, {
+      VolumeId: 'vol-00000000000000009',
+      Attachments: [
+        {
+          ...makeRootVolume(fixture).Attachments[0],
+          VolumeId: 'vol-00000000000000009',
+        },
+      ],
+    });
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, { rootExact: wrongRoot }),
+    });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'present',
+      ownership: 'conflict',
+      providerIdentity: { providerResourceId: IDS.instance },
+    });
+  });
+
+  it('does not conclude delete absence when the negative-window wait fails', async () => {
+    const fixture = makeDeleteObservationFixture();
+    const waitForRetry = jest.fn(async () => {
+      throw new Error('cancelled');
+    });
+    const ports = makeObserverPorts(fixture, {
+      client: makeClient(fixture, {
+        exactError: providerError('InvalidInstanceID.NotFound'),
+        discovery: [],
+        rootExact: null,
+        rootDiscovery: [],
+      }),
+      waitForRetry,
+    });
+
+    await expect(
+      ports.observer.observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'unknown',
+      ownership: 'unknown',
+      execution: 'none',
+    });
+    expect(waitForRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes only a frozen observe port and preserves the two-attempt floor', () => {
+    const fixture = makeCurrentCreateObservationFixture();
+    const client = makeClient(fixture);
+    const observer = makeObserverPorts(fixture, { client }).observer;
+
+    expect(Object.keys(observer)).toEqual(['observe']);
+    expect(Object.isFrozen(observer)).toBe(true);
+    expect(() =>
+      createAwsSingleNodeNodeResourceObserver({
+        client: {
+          describeInstances: client.describeInstances,
+          describeInstanceAttribute: client.describeInstanceAttribute,
+          describeInstanceCreditSpecifications:
+            client.describeInstanceCreditSpecifications,
+          describeVolumes: client.describeVolumes,
+        },
+        providerScope: fixture.base.providerScope,
+        maxAttempts: 1,
+      }),
+    ).toThrow(TypeError);
+    expect(() =>
+      createAwsSingleNodeNodeResourceObserver({
+        client,
+        providerScope: fixture.base.providerScope,
       }),
     ).toThrow(TypeError);
   });

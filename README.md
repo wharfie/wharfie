@@ -415,21 +415,41 @@ remain endpoint-lineage receipts rather than provider evidence. Current-create
 emptiness is unknown, unbound candidates are collisions rather than adoptions,
 and none recommends API replay without a stable provider client token.
 
+All four runtime-IAM roles now also have read-only observers over shared pure
+IAM evidence. The direct role and profile retain exact deterministic names,
+immutable IDs, ownership tags, and complete supported child inventories. The
+derived policy and role/profile association re-prove their direct and
+transitive binding lineage before joining independent list, document, and
+membership views. Readable state drift carries actual digests, current-create
+collisions remain distinct, and no IAM observer recommends replay because the
+mutation APIs expose no stable client token.
+
+The final private read kernels are now adapted as well. The managed artifact
+audits its complete exact-key version namespace and requires the current alias
+to equal the audited latest immutable head. The substrate joins exact instance,
+attribute, credit, ENI, and root-volume evidence and is the only remaining
+observer allowed to recommend a stable-token create replay after a completely
+clean current-create history. One generic attachment observer joins exact
+instance and volume views for both retained volumes; typed endpoint loss must
+retain the identical signature through the full retry window. All 18 graph
+roles can therefore reach V47's mutation-incapable raw observation boundary.
+
 The restriction is structurally pinned for AL2023's systemd/cgroup-v2 host,
 but this slice does not claim a pinned-AMI execution proof. A clean-host smoke
 test must still prove bootstrap completion and denied IMDS access before this
 becomes a production security claim.
 
 These modules now implement both retained-volume attachment effects under
-deterministic mocks, but do not format, mount, unmount, quiesce, or fulfill a
-complete service capability. Future guest use must add a quiesce/unmount or
-stop dependency before attachment deletion. The privileged host observer,
-the remaining adapters over the drivers' authoritative read kernels, aggregate
-AWS inspection, owned provider/authority composition, operator commands, and
-clean-account proof remain unfinished. Fresh apply from a DESTROYED tombstone
-is also currently unsupported: InspectionV5 requires retained resources to
-remain exactly bound, while the controller permits a fresh incarnation only
-after those bindings are gone.
+deterministic mocks and expose their read-only evidence, but do not format,
+mount, unmount, quiesce, or fulfill a complete service capability. Future guest
+use must add a quiesce/unmount or stop dependency before attachment deletion.
+Lossless aggregate AWS InspectionV6, owned provider/controller composition,
+the privileged host observer and publisher, operator commands, and
+clean-account proof remain unfinished. V6 must retain V47's bounded execution
+advice because the current InspectionV5 resource shape cannot represent it.
+Fresh apply from a DESTROYED tombstone is also currently unsupported:
+InspectionV5 requires retained resources to remain exactly bound, while the
+controller permits a fresh incarnation only after those bindings are gone.
 
 ## Start here
 
@@ -437,7 +457,9 @@ after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Derived network observers checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md) — the current handoff for endpoint-lineage receipts, independent relationship views, natural-slot absence, and conservative no-token replay semantics.
+- [Complete AWS resource observers checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md) — the current handoff for complete raw observation coverage, bounded artifact history, joined node/root evidence, stable node-create replay advice, and attachment endpoint-loss proof.
+- [Runtime IAM observers checkpoint](llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md) — the parent handoff for immutable IAM identity, exact policy and membership views, actual drift, and conservative no-token replay semantics.
+- [Derived network observers checkpoint](llm/checkpoints/2026-07-23-v53-derived-network-observers.md) — the parent handoff for endpoint-lineage receipts, independent relationship views, natural-slot absence, and conservative no-token replay semantics.
 - [Route-table observer checkpoint](llm/checkpoints/2026-07-23-v52-route-table-observer.md) — the parent handoff for exact bound reads, child-state separation, and client-token-backed response-loss replay advice.
 - [Subnet and security-group observer checkpoint](llm/checkpoints/2026-07-23-v51-subnet-security-group-observers.md) — the parent handoff for dependency-bound natural-slot corroboration, exact bound reads, actual network drift, and conservative no-token response-loss semantics.
 - [Tagged-EC2 VPC and internet-gateway observer checkpoint](llm/checkpoints/2026-07-23-v50-tagged-ec2-vpc-gateway-observers.md) — the parent handoff for stateless tagged identity evidence, exact bound reads, actual VPC drift, and conservative no-token response-loss semantics.

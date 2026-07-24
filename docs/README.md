@@ -101,16 +101,38 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [derived network observers
+The current restart handoff is the [complete AWS resource observers
+checkpoint](../llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md).
+The managed artifact, substrate node, and both retained-volume attachments now
+join the earlier observer families at the shared mutation-incapable raw
+boundary. Artifact evidence audits the complete exact-key version namespace;
+node evidence joins exact instance, attribute, credit, ENI, and root-volume
+proof; and attachment evidence joins exact instance and volume views. Among
+these final V55 families, only the node may recommend a current-create replay,
+and only through its exact stable EC2 client token after a completely clean
+bounded history. All 18 graph roles now have read-only adapters, while
+a lossless aggregate InspectionV6 remains the next slice because V5 cannot
+carry V47's bounded execution advice.
+
+Its parent is the [runtime IAM observers
+checkpoint](../llm/checkpoints/2026-07-24-v54-runtime-iam-observers.md). The
+direct role and instance-profile observers preserve deterministic names,
+immutable provider IDs, complete ownership tags, and supported child
+inventories. The derived policy and role/profile association retain exact
+dependency lineage and independent list, document, and membership evidence.
+Readable physical differences carry actual digests, and no IAM create emits
+replay advice without a provider token.
+
+That checkpoint's parent is the [derived network observers
 checkpoint](../llm/checkpoints/2026-07-23-v53-derived-network-observers.md).
 The gateway attachment, default IPv4 route, and subnet/route-table association
-now share pure provider evidence with their mutation drivers while retaining
+share pure provider evidence with their mutation drivers while retaining
 read-only ports. Their observers re-prove exact endpoint-binding lineage,
 independent provider views, natural-slot collision and absence semantics, and
 synthetic receipt identities. Current-create emptiness remains unknown, and
 none emits replay advice without a provider client-token guarantee.
 
-Its parent is the [route-table observer
+The derived-network checkpoint's parent is the [route-table observer
 checkpoint](../llm/checkpoints/2026-07-23-v52-route-table-observer.md). The
 directly owned route table shares strict provider evidence with its mutation
 driver while keeping mutation authority and response candidates private. Bound
