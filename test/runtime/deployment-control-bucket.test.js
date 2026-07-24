@@ -8,6 +8,7 @@ import {
   DEPLOYMENT_CONTROL_BUCKET_VERSIONING_READY_CHECKSUM_SHA256,
   DEPLOYMENT_CONTROL_BUCKET_VERSIONING_READY_KEY,
   DeploymentControlBucketConflictError,
+  DeploymentControlBucketMissingError,
   DeploymentControlBucketUnknownError,
   createDeploymentControlBucket,
   getDeploymentControlBucketName,
@@ -200,6 +201,24 @@ function createBucket(
 }
 
 describe('AWS deployment control bucket', () => {
+  it('exposes the exact frozen lifecycle and fixed missing error', () => {
+    const bucket = createBucket(createClient());
+    const missing = new DeploymentControlBucketMissingError();
+
+    expect(Reflect.ownKeys(bucket)).toEqual([
+      'bucketName',
+      'inspect',
+      'reconcile',
+      'bootstrap',
+    ]);
+    expect(Object.isFrozen(bucket)).toBe(true);
+    expect(missing).toMatchObject({
+      name: 'DeploymentControlBucketMissingError',
+      message: 'AWS deployment control bucket is absent.',
+      code: 'DEPLOYMENT_CONTROL_BUCKET_MISSING',
+    });
+  });
+
   it('shares the deterministic, bounded stage-bucket name contract', () => {
     expect(getDeploymentControlBucketName(PROVIDER_SCOPE)).toBe(BUCKET_NAME);
     expect(BUCKET_NAME).toMatch(/^wharfie-dc-v1-[0-9]{12}-[a-f0-9]{20}$/);
@@ -249,6 +268,24 @@ describe('AWS deployment control bucket', () => {
     expect(client.getBucketLocation).not.toHaveBeenCalled();
     expect(client.getBucketPolicy).not.toHaveBeenCalled();
     expect(client.headObject).not.toHaveBeenCalled();
+    expect(client.createBucket).not.toHaveBeenCalled();
+  });
+
+  it('reports truthful authoritative absence when the bucket disappears during inspection', async () => {
+    const client = createClient({
+      getBucketLocation: async () => {
+        throw awsError('NoSuchBucket');
+      },
+    });
+
+    await expect(createBucket(client).inspect()).resolves.toMatchObject({
+      status: 'absent',
+      evidence: 'bucket-read-no-such-bucket',
+      bucketName: BUCKET_NAME,
+    });
+    expect(client.headBucket).toHaveBeenCalledTimes(1);
+    expect(client.getBucketLocation).toHaveBeenCalledTimes(1);
+    expect(client.getBucketTagging).not.toHaveBeenCalled();
     expect(client.createBucket).not.toHaveBeenCalled();
   });
 
@@ -369,6 +406,199 @@ describe('AWS deployment control bucket', () => {
     expect(client.putBucketEncryption).not.toHaveBeenCalled();
     expect(client.putBucketLifecycleConfiguration).not.toHaveBeenCalled();
     expect(client.putObject).not.toHaveBeenCalled();
+  });
+
+  it('reconciles an already-active bucket without mutation or creation', async () => {
+    const waitForVersioningPropagation = jest.fn(
+      async (/** @type {number} */ _attempt) => {},
+    );
+    const client = createClient();
+
+    await expect(
+      createBucket(
+        client,
+        PROVIDER_SCOPE,
+        undefined,
+        waitForVersioningPropagation,
+      ).reconcile(),
+    ).resolves.toMatchObject({
+      status: 'active',
+      bucketName: BUCKET_NAME,
+    });
+    expect(client.createBucket).not.toHaveBeenCalled();
+    expect(client.putBucketVersioning).not.toHaveBeenCalled();
+    expect(client.putPublicAccessBlock).not.toHaveBeenCalled();
+    expect(client.putBucketOwnershipControls).not.toHaveBeenCalled();
+    expect(client.putBucketEncryption).not.toHaveBeenCalled();
+    expect(client.putBucketLifecycleConfiguration).not.toHaveBeenCalled();
+    expect(client.putObject).not.toHaveBeenCalled();
+    expect(waitForVersioningPropagation).not.toHaveBeenCalled();
+  });
+
+  it('reconciles all safe settings and the sentinel through exact lost-response readback', async () => {
+    const state = {
+      versioning: false,
+      publicAccess: false,
+      ownership: false,
+      encryption: false,
+      lifecycle: false,
+      sentinel: false,
+    };
+    const waitForVersioningPropagation = jest.fn(
+      async (/** @type {number} */ _attempt) => {},
+    );
+    const client = createClient({
+      getBucketVersioning: async () =>
+        state.versioning ? { Status: 'Enabled' } : {},
+      getPublicAccessBlock: async () => {
+        if (!state.publicAccess) {
+          throw awsError('NoSuchPublicAccessBlockConfiguration');
+        }
+        return publicAccessResponse();
+      },
+      getBucketOwnershipControls: async () => {
+        if (!state.ownership) {
+          throw awsError('OwnershipControlsNotFoundError');
+        }
+        return ownershipResponse();
+      },
+      getBucketEncryption: async () => {
+        if (!state.encryption) {
+          throw awsError('ServerSideEncryptionConfigurationNotFoundError');
+        }
+        return encryptionResponse();
+      },
+      getBucketLifecycleConfiguration: async () => {
+        if (!state.lifecycle) {
+          throw awsError('NoSuchLifecycleConfiguration');
+        }
+        return lifecycleResponse();
+      },
+      headObject: async () => {
+        if (!state.sentinel) throw awsError('NotFound');
+        return sentinelResponse();
+      },
+      putBucketVersioning: async () => {
+        state.versioning = true;
+        throw new Error('lost versioning response');
+      },
+      putPublicAccessBlock: async () => {
+        state.publicAccess = true;
+        throw new Error('lost public-access response');
+      },
+      putBucketOwnershipControls: async () => {
+        state.ownership = true;
+        throw new Error('lost ownership response');
+      },
+      putBucketEncryption: async () => {
+        state.encryption = true;
+        throw new Error('lost encryption response');
+      },
+      putBucketLifecycleConfiguration: async () => {
+        state.lifecycle = true;
+        throw new Error('lost lifecycle response');
+      },
+      putObject: async () => {
+        state.sentinel = true;
+        throw new Error('lost sentinel response');
+      },
+    });
+
+    await expect(
+      createBucket(
+        client,
+        PROVIDER_SCOPE,
+        undefined,
+        waitForVersioningPropagation,
+      ).reconcile(),
+    ).resolves.toMatchObject({
+      status: 'active',
+      versioningEnabled: true,
+      versioningWriteReady: true,
+    });
+    expect(client.createBucket).not.toHaveBeenCalled();
+    expect(client.putBucketVersioning).toHaveBeenCalledTimes(1);
+    expect(client.putPublicAccessBlock).toHaveBeenCalledTimes(1);
+    expect(client.putBucketOwnershipControls).toHaveBeenCalledTimes(1);
+    expect(client.putBucketEncryption).toHaveBeenCalledTimes(1);
+    expect(client.putBucketLifecycleConfiguration).toHaveBeenCalledTimes(1);
+    expect(client.putObject).toHaveBeenCalledTimes(1);
+    expect(client.getBucketVersioning).toHaveBeenCalledTimes(4);
+    expect(client.headObject).toHaveBeenCalledTimes(4);
+    expect(waitForVersioningPropagation).toHaveBeenCalledTimes(1);
+    expect(waitForVersioningPropagation).toHaveBeenCalledWith(1);
+  });
+
+  it('fails reconciliation with fixed missing evidence on initial absence', async () => {
+    const client = createClient({
+      headBucket: async () => {
+        throw awsError('NotFound');
+      },
+    });
+
+    await expect(createBucket(client).reconcile()).rejects.toEqual(
+      new DeploymentControlBucketMissingError(),
+    );
+    expect(client.headBucket).toHaveBeenCalledTimes(1);
+    expect(client.createBucket).not.toHaveBeenCalled();
+    expect(client.putBucketVersioning).not.toHaveBeenCalled();
+    expect(client.putObject).not.toHaveBeenCalled();
+  });
+
+  it('fails reconciliation when the bucket disappears during settings readback', async () => {
+    let exists = true;
+    const client = createClient({
+      headBucket: async () => {
+        if (!exists) throw awsError('NoSuchBucket');
+        return {};
+      },
+      getBucketVersioning: async () => ({}),
+      headObject: async () => {
+        throw awsError('NotFound');
+      },
+      putBucketVersioning: async () => {
+        exists = false;
+        return {};
+      },
+    });
+
+    await expect(createBucket(client).reconcile()).rejects.toEqual(
+      new DeploymentControlBucketMissingError(),
+    );
+    expect(client.putBucketVersioning).toHaveBeenCalledTimes(1);
+    expect(client.headBucket).toHaveBeenCalledTimes(2);
+    expect(client.createBucket).not.toHaveBeenCalled();
+    expect(client.putObject).not.toHaveBeenCalled();
+  });
+
+  it('fails reconciliation when the bucket disappears during sentinel readback', async () => {
+    let exists = true;
+    const waitForVersioningPropagation = jest.fn(async () => {});
+    const client = createClient({
+      headBucket: async () => {
+        if (!exists) throw awsError('NoSuchBucket');
+        return {};
+      },
+      headObject: async () => {
+        throw awsError('NotFound');
+      },
+      putObject: async () => {
+        exists = false;
+        return {};
+      },
+    });
+
+    await expect(
+      createBucket(
+        client,
+        PROVIDER_SCOPE,
+        undefined,
+        waitForVersioningPropagation,
+      ).reconcile(),
+    ).rejects.toEqual(new DeploymentControlBucketMissingError());
+    expect(waitForVersioningPropagation).toHaveBeenCalledTimes(1);
+    expect(client.putObject).toHaveBeenCalledTimes(1);
+    expect(client.createBucket).not.toHaveBeenCalled();
   });
 
   it('refuses to adopt an already-existing bucket without exact ownership tags', async () => {

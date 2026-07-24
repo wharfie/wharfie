@@ -1126,13 +1126,25 @@ planner, and returns the exact seven-method controller provider. Construction
 does not perform provider I/O, bootstrap the retained table or bucket, or own
 the caller's client-family lifetime.
 
-1. Add one explicit deployment invocation facade that decides control-resource
-   bootstrap/recovery policy, separates read-only inspection from controller
-   mutation, and owns the client family through cleanup.
+The CLI-free deployment invocation now owns that family and composes the fixed
+retained controls, branded store, artifact stager, provider, and controller.
+It separates read-only control inspection and require-active from
+existing-only reconciliation and explicit bootstrap. Lifecycle-native
+reconciliation never calls either create API, including across disappearance
+and readback races. Controller plan, converge, and resume require fresh active
+control evidence. Invocation close fences new calls, drains every entered call
+and both sides of paired control work, then closes the family once.
+
+1. Add the controller's read-only deployment inspection envelope, including
+   exact active and predecessor plan hydration without ProviderSpec selection,
+   planning, staging, CAS, or effects. Then add one operation runner that owns
+   invocation cleanup, explicit control policy, and exact selected-SEA
+   authority for source mode.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
-   `destroy` commands, requiring apply and reconcile to re-observe the
-   currently running SEA. Then wire guest storage projection,
-   resident-service activation, and host observation.
+   `destroy` commands only after that boundary is proven. Apply and reconcile
+   must re-observe the selected or currently running SEA.
+   Then wire guest storage projection, resident-service activation, and host
+   observation.
 2. Install and wire the privileged host observer outside the application UID,
    then prove the complete lifecycle in a clean account through the user's
    ordinary credential chain, including interruption and response-loss
@@ -1141,9 +1153,11 @@ the caller's client-family lifetime.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [production AWS provider assembly
-checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md).
-Its parent is the [InspectionV6 aggregate and controller
+The current restart point is the [owned AWS deployment invocation
+checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md).
+Its parent is the [production AWS provider assembly
+checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md), whose
+parent is the [InspectionV6 aggregate and controller
 checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md),
 whose parent is the [complete AWS resource observers
 checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md),

@@ -119,6 +119,15 @@ export class DeploymentControlBucketUnknownError extends Error {
   }
 }
 
+/** Existing-only reconciliation observed authoritative bucket absence. */
+export class DeploymentControlBucketMissingError extends Error {
+  constructor() {
+    super('AWS deployment control bucket is absent.');
+    this.name = 'DeploymentControlBucketMissingError';
+    this.code = 'DEPLOYMENT_CONTROL_BUCKET_MISSING';
+  }
+}
+
 class DeploymentControlBucketTagsNotVisibleError extends DeploymentControlBucketConflictError {}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
@@ -164,6 +173,11 @@ function isBucketAbsentError(error) {
     /** @type {{ $metadata?: {httpStatusCode?: unknown} }} */ (error).$metadata
       ?.httpStatusCode === 404
   );
+}
+
+/** @param {unknown} error @returns {boolean} */
+function isDefiniteBucketDisappearanceError(error) {
+  return errorNamed(error, 'NoSuchBucket');
 }
 
 /** @param {unknown} error @returns {boolean} */
@@ -218,13 +232,17 @@ function isWellFormedUnicode(value) {
   return true;
 }
 
-/** @param {Readonly<Record<string, any>>} providerScope @param {string} bucketName @returns {Readonly<Record<string, any>>} */
-function absentEvidence(providerScope, bucketName) {
+/** @param {Readonly<Record<string, any>>} providerScope @param {string} bucketName @param {'head-bucket-resource-not-found'|'bucket-read-no-such-bucket'} [evidence] @returns {Readonly<Record<string, any>>} */
+function absentEvidence(
+  providerScope,
+  bucketName,
+  evidence = 'head-bucket-resource-not-found',
+) {
   return deepFreeze({
     schemaVersion: 1,
     kind: 'deploymentControlBucketInspection',
     status: 'absent',
-    evidence: 'head-bucket-resource-not-found',
+    evidence,
     bucketName,
     providerScopeId: providerScope.providerScopeId,
     bucketRegion: null,
@@ -265,7 +283,8 @@ async function validateLocation(client, bucketName, providerScope) {
       Bucket: bucketName,
       ExpectedBucketOwner: providerScope.accountId,
     });
-  } catch {
+  } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     throw new DeploymentControlBucketUnknownError();
   }
   if (!isPlainObject(response)) {
@@ -297,6 +316,7 @@ async function inspectTags(client, bucketName, accountId, expected) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (errorNamed(error, 'NoSuchTagSet')) {
       throw new DeploymentControlBucketTagsNotVisibleError();
     }
@@ -348,7 +368,8 @@ async function inspectVersioning(client, bucketName, accountId) {
       Bucket: bucketName,
       ExpectedBucketOwner: accountId,
     });
-  } catch {
+  } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     throw new DeploymentControlBucketUnknownError();
   }
   if (!isPlainObject(response)) {
@@ -377,6 +398,7 @@ async function inspectPublicAccess(client, bucketName, accountId) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (errorNamed(error, 'NoSuchPublicAccessBlockConfiguration')) return false;
     throw new DeploymentControlBucketUnknownError();
   }
@@ -406,6 +428,7 @@ async function inspectOwnership(client, bucketName, accountId) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (
       errorNamed(
         error,
@@ -448,6 +471,7 @@ async function inspectEncryption(client, bucketName, accountId) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (errorNamed(error, 'ServerSideEncryptionConfigurationNotFoundError')) {
       return { ready: false, value: null };
     }
@@ -486,6 +510,7 @@ async function inspectVersioningReady(client, bucketName, providerScope) {
       ChecksumMode: 'ENABLED',
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (isObjectAbsentError(error)) {
       return { status: 'absent', versionId: null };
     }
@@ -539,6 +564,7 @@ async function inspectServiceHealthLifecycle(client, bucketName, accountId) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (errorNamed(error, 'NoSuchLifecycleConfiguration')) return false;
     throw new DeploymentControlBucketUnknownError();
   }
@@ -617,6 +643,7 @@ async function validateNoBucketPolicy(client, bucketName, accountId) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (errorNamed(error, 'NoSuchBucketPolicy')) return;
     throw new DeploymentControlBucketUnknownError();
   }
@@ -632,6 +659,7 @@ async function validateNoReplication(client, bucketName, accountId) {
       ExpectedBucketOwner: accountId,
     });
   } catch (error) {
+    if (isDefiniteBucketDisappearanceError(error)) throw error;
     if (errorNamed(error, 'ReplicationConfigurationNotFoundError')) return;
     throw new DeploymentControlBucketUnknownError();
   }
@@ -704,11 +732,12 @@ function putServiceHealthLifecycleRequest(providerScope, bucketName) {
 
 /**
  * Bind the fixed, retained deployment-control bucket lifecycle to one exact
- * AWS provider scope. `inspect` is strictly read-only; `bootstrap` is the only
- * mutating entry point and never deletes the bucket or weakens its settings.
+ * AWS provider scope. `inspect` is strictly read-only. `reconcile` may
+ * strengthen only an existing bucket, while `bootstrap` may additionally
+ * create an absent bucket. Neither mutator deletes or weakens bucket state.
  * The supplied client remains owned by the caller.
  * @param {{client: DeploymentControlBucketClient, providerScope: unknown, waitForReady?: (attempt: number) => Promise<void>, waitForVersioningPropagation?: (attempt: number) => Promise<void>}} options - Explicit client, scope, and optional wait hooks.
- * @returns {Readonly<{bucketName: string, inspect: () => Promise<Readonly<Record<string, any>>>, bootstrap: () => Promise<Readonly<Record<string, any>>>}>} - Bucket lifecycle API.
+ * @returns {Readonly<{bucketName: string, inspect: () => Promise<Readonly<Record<string, any>>>, reconcile: () => Promise<Readonly<Record<string, any>>>, bootstrap: () => Promise<Readonly<Record<string, any>>>}>} - Bucket lifecycle API.
  */
 export function createDeploymentControlBucket(options) {
   if (!isPlainObject(options)) {
@@ -768,87 +797,103 @@ export function createDeploymentControlBucket(options) {
       }
       throw error;
     }
-    const region = await validateLocation(client, bucketName, providerScope);
-    const tags = await inspectTags(
-      client,
-      bucketName,
-      providerScope.accountId,
-      expectedTags,
-    );
-    const versioningEnabled = await inspectVersioning(
-      client,
-      bucketName,
-      providerScope.accountId,
-    );
-    const publicAccessBlocked = await inspectPublicAccess(
-      client,
-      bucketName,
-      providerScope.accountId,
-    );
-    const ownership = await inspectOwnership(
-      client,
-      bucketName,
-      providerScope.accountId,
-    );
-    const encryption = await inspectEncryption(
-      client,
-      bucketName,
-      providerScope.accountId,
-    );
-    const serviceHealthLifecycleConforms = await inspectServiceHealthLifecycle(
-      client,
-      bucketName,
-      providerScope.accountId,
-    );
-    await validateNoBucketPolicy(client, bucketName, providerScope.accountId);
-    await validateNoReplication(client, bucketName, providerScope.accountId);
-    const sentinel = await inspectVersioningReady(
-      client,
-      bucketName,
-      providerScope,
-    );
-    if (!versioningEnabled && sentinel.status === 'ready') {
-      throw new DeploymentControlBucketConflictError();
-    }
-
-    const active =
-      tags.ready &&
-      versioningEnabled &&
-      sentinel.status === 'ready' &&
-      publicAccessBlocked &&
-      ownership.ready &&
-      encryption.ready &&
-      serviceHealthLifecycleConforms;
-    return {
-      state: deepFreeze({
-        schemaVersion: 1,
-        kind: 'deploymentControlBucketInspection',
-        status: active ? 'active' : 'bootstrap-required',
-        evidence:
-          'head-location-tags-versioning-public-access-ownership-encryption-service-health-lifecycle-no-policy-no-replication-and-versioned-sentinel',
+    try {
+      const region = await validateLocation(client, bucketName, providerScope);
+      const tags = await inspectTags(
+        client,
         bucketName,
-        providerScopeId: providerScope.providerScopeId,
-        bucketRegion: region,
-        tagsConform: tags.ready,
-        versioningEnabled,
-        versioningWriteReady: sentinel.status === 'ready',
-        publicAccessBlocked,
-        objectOwnership: ownership.value,
-        defaultEncryption: encryption.value,
-        serviceHealthLifecycleConforms,
-        bucketPolicyPresent: false,
-        replicationConfigurationPresent: false,
-      }),
-      needs: {
-        versioning: !versioningEnabled,
-        publicAccess: !publicAccessBlocked,
-        ownership: !ownership.ready,
-        encryption: !encryption.ready,
-        lifecycle: !serviceHealthLifecycleConforms,
-        sentinel: sentinel.status !== 'ready',
-      },
-      sentinel,
-    };
+        providerScope.accountId,
+        expectedTags,
+      );
+      const versioningEnabled = await inspectVersioning(
+        client,
+        bucketName,
+        providerScope.accountId,
+      );
+      const publicAccessBlocked = await inspectPublicAccess(
+        client,
+        bucketName,
+        providerScope.accountId,
+      );
+      const ownership = await inspectOwnership(
+        client,
+        bucketName,
+        providerScope.accountId,
+      );
+      const encryption = await inspectEncryption(
+        client,
+        bucketName,
+        providerScope.accountId,
+      );
+      const serviceHealthLifecycleConforms =
+        await inspectServiceHealthLifecycle(
+          client,
+          bucketName,
+          providerScope.accountId,
+        );
+      await validateNoBucketPolicy(client, bucketName, providerScope.accountId);
+      await validateNoReplication(client, bucketName, providerScope.accountId);
+      const sentinel = await inspectVersioningReady(
+        client,
+        bucketName,
+        providerScope,
+      );
+      if (!versioningEnabled && sentinel.status === 'ready') {
+        throw new DeploymentControlBucketConflictError();
+      }
+
+      const active =
+        tags.ready &&
+        versioningEnabled &&
+        sentinel.status === 'ready' &&
+        publicAccessBlocked &&
+        ownership.ready &&
+        encryption.ready &&
+        serviceHealthLifecycleConforms;
+      return {
+        state: deepFreeze({
+          schemaVersion: 1,
+          kind: 'deploymentControlBucketInspection',
+          status: active ? 'active' : 'bootstrap-required',
+          evidence:
+            'head-location-tags-versioning-public-access-ownership-encryption-service-health-lifecycle-no-policy-no-replication-and-versioned-sentinel',
+          bucketName,
+          providerScopeId: providerScope.providerScopeId,
+          bucketRegion: region,
+          tagsConform: tags.ready,
+          versioningEnabled,
+          versioningWriteReady: sentinel.status === 'ready',
+          publicAccessBlocked,
+          objectOwnership: ownership.value,
+          defaultEncryption: encryption.value,
+          serviceHealthLifecycleConforms,
+          bucketPolicyPresent: false,
+          replicationConfigurationPresent: false,
+        }),
+        needs: {
+          versioning: !versioningEnabled,
+          publicAccess: !publicAccessBlocked,
+          ownership: !ownership.ready,
+          encryption: !encryption.ready,
+          lifecycle: !serviceHealthLifecycleConforms,
+          sentinel: sentinel.status !== 'ready',
+        },
+        sentinel,
+      };
+    } catch (error) {
+      if (isDefiniteBucketDisappearanceError(error)) {
+        return {
+          state: absentEvidence(
+            providerScope,
+            bucketName,
+            'bucket-read-no-such-bucket',
+          ),
+          needs: {},
+          sentinel: { status: 'absent', versionId: null },
+        };
+      }
+      throw error;
+    }
   }
 
   /** @returns {Promise<Readonly<Record<string, any>>>} */
@@ -856,8 +901,12 @@ export function createDeploymentControlBucket(options) {
     return (await inspectObserved()).state;
   }
 
-  /** @param {(observed: {state: Readonly<Record<string, any>>, needs: Record<string, boolean>, sentinel: {status: 'absent'|'unversioned'|'ready', versionId: string|null}}) => boolean} accepted @param {boolean} [retryMissingTags] @returns {Promise<{state: Readonly<Record<string, any>>, needs: Record<string, boolean>, sentinel: {status: 'absent'|'unversioned'|'ready', versionId: string|null}}>} */
-  async function awaitInspection(accepted, retryMissingTags = false) {
+  /** @param {(observed: {state: Readonly<Record<string, any>>, needs: Record<string, boolean>, sentinel: {status: 'absent'|'unversioned'|'ready', versionId: string|null}}) => boolean} accepted @param {boolean} [retryMissingTags] @param {boolean} [existingOnly] @returns {Promise<{state: Readonly<Record<string, any>>, needs: Record<string, boolean>, sentinel: {status: 'absent'|'unversioned'|'ready', versionId:string|null}}>} */
+  async function awaitInspection(
+    accepted,
+    retryMissingTags = false,
+    existingOnly = false,
+  ) {
     for (
       let attempt = 0;
       attempt < DEPLOYMENT_CONTROL_BUCKET_MAX_INSPECTION_ATTEMPTS;
@@ -884,6 +933,9 @@ export function createDeploymentControlBucket(options) {
         }
         continue;
       }
+      if (existingOnly && observed.state.status === 'absent') {
+        throw new DeploymentControlBucketMissingError();
+      }
       if (accepted(observed)) return observed;
       if (attempt + 1 < DEPLOYMENT_CONTROL_BUCKET_MAX_INSPECTION_ATTEMPTS) {
         try {
@@ -896,11 +948,14 @@ export function createDeploymentControlBucket(options) {
     throw new DeploymentControlBucketUnknownError();
   }
 
-  /** @param {() => Promise<any>} write @returns {Promise<void>} */
-  async function attemptWrite(write) {
+  /** @param {() => Promise<any>} write @param {boolean} [existingOnly] @returns {Promise<void>} */
+  async function attemptWrite(write, existingOnly = false) {
     try {
       await write();
-    } catch {
+    } catch (error) {
+      if (existingOnly && isBucketAbsentError(error)) {
+        throw new DeploymentControlBucketMissingError();
+      }
       // Every mutator is resolved through the same exact bounded readback, so
       // success, a concurrent equivalent write, and response loss converge.
     }
@@ -935,21 +990,22 @@ export function createDeploymentControlBucket(options) {
     }
   }
 
-  /** @param {{state: Readonly<Record<string, any>>, needs: Record<string, boolean>, sentinel: {status: 'absent'|'unversioned'|'ready', versionId: string|null}}} initial @returns {Promise<Readonly<Record<string, any>>>} */
-  async function convergeVersioningReady(initial) {
+  /** @param {{state: Readonly<Record<string, any>>, needs: Record<string, boolean>, sentinel: {status: 'absent'|'unversioned'|'ready', versionId: string|null}}} initial @param {boolean} [existingOnly] @returns {Promise<Readonly<Record<string, any>>>} */
+  async function convergeVersioningReady(initial, existingOnly = false) {
     let observed = initial;
     if (observed.state.status === 'active') return observed.state;
     if (!settingsReady(observed)) {
       throw new DeploymentControlBucketUnknownError();
     }
     // S3 documents a propagation window after versioning is first enabled.
-    // Each bootstrap invocation that might write the sentinel waits the full
+    // Each convergence invocation that might write the sentinel waits the full
     // interval once, including after a process restart, then proves current
     // settings and sentinel state again before its first object write.
     await waitForPropagation(1);
     observed = await awaitInspection(
       (candidate) => settingsReady(candidate),
       true,
+      existingOnly,
     );
     if (observed.state.status === 'active') return observed.state;
 
@@ -968,17 +1024,27 @@ export function createDeploymentControlBucket(options) {
         if (!onlyIfAbsent && observed.sentinel.status !== 'unversioned') {
           throw new DeploymentControlBucketUnknownError();
         }
-        await attemptWrite(() =>
-          client.putObject(
-            putVersioningReadyRequest(providerScope, bucketName, onlyIfAbsent),
-          ),
+        await attemptWrite(
+          () =>
+            client.putObject(
+              putVersioningReadyRequest(
+                providerScope,
+                bucketName,
+                onlyIfAbsent,
+              ),
+            ),
+          existingOnly,
         );
         writeNeeded = false;
       }
 
       try {
         observed = await inspectObserved();
+        if (existingOnly && observed.state.status === 'absent') {
+          throw new DeploymentControlBucketMissingError();
+        }
       } catch (error) {
+        if (error instanceof DeploymentControlBucketMissingError) throw error;
         if (!(error instanceof DeploymentControlBucketUnknownError)) {
           throw error;
         }
@@ -1000,6 +1066,105 @@ export function createDeploymentControlBucket(options) {
     throw new DeploymentControlBucketUnknownError();
   }
 
+  /** @param {{state: Readonly<Record<string, any>>, needs: Record<string, boolean>, sentinel: {status: 'absent'|'unversioned'|'ready', versionId: string|null}}} initial @param {boolean} existingOnly @returns {Promise<Readonly<Record<string, any>>>} */
+  async function convergeExisting(initial, existingOnly) {
+    let observed = initial;
+    if (observed.state.status === 'active') return observed.state;
+    if (observed.state.status !== 'bootstrap-required') {
+      if (existingOnly && observed.state.status === 'absent') {
+        throw new DeploymentControlBucketMissingError();
+      }
+      throw new DeploymentControlBucketUnknownError();
+    }
+
+    if (observed.needs.publicAccess) {
+      await attemptWrite(
+        () =>
+          client.putPublicAccessBlock({
+            Bucket: bucketName,
+            ExpectedBucketOwner: providerScope.accountId,
+            PublicAccessBlockConfiguration: {
+              BlockPublicAcls: true,
+              BlockPublicPolicy: true,
+              IgnorePublicAcls: true,
+              RestrictPublicBuckets: true,
+            },
+          }),
+        existingOnly,
+      );
+    }
+    if (observed.needs.ownership) {
+      await attemptWrite(
+        () =>
+          client.putBucketOwnershipControls({
+            Bucket: bucketName,
+            ExpectedBucketOwner: providerScope.accountId,
+            OwnershipControls: {
+              Rules: [{ ObjectOwnership: 'BucketOwnerEnforced' }],
+            },
+          }),
+        existingOnly,
+      );
+    }
+    if (observed.needs.encryption) {
+      await attemptWrite(
+        () =>
+          client.putBucketEncryption({
+            Bucket: bucketName,
+            ExpectedBucketOwner: providerScope.accountId,
+            ServerSideEncryptionConfiguration: {
+              Rules: [
+                {
+                  ApplyServerSideEncryptionByDefault: {
+                    SSEAlgorithm: 'AES256',
+                  },
+                },
+              ],
+            },
+          }),
+        existingOnly,
+      );
+    }
+    if (observed.needs.versioning) {
+      await attemptWrite(
+        () =>
+          client.putBucketVersioning({
+            Bucket: bucketName,
+            ExpectedBucketOwner: providerScope.accountId,
+            VersioningConfiguration: { Status: 'Enabled' },
+          }),
+        existingOnly,
+      );
+    }
+    if (observed.needs.lifecycle) {
+      await attemptWrite(
+        () =>
+          client.putBucketLifecycleConfiguration(
+            putServiceHealthLifecycleRequest(providerScope, bucketName),
+          ),
+        existingOnly,
+      );
+    }
+    observed = await awaitInspection(
+      (candidate) => settingsReady(candidate),
+      true,
+      existingOnly,
+    );
+    if (observed.state.status === 'active') return observed.state;
+    return await convergeVersioningReady(observed, existingOnly);
+  }
+
+  /**
+   * Strengthen only a bucket that already exists. Authoritative absence at any
+   * readback or write boundary is a fixed typed failure; this operation never
+   * creates a replacement.
+   * @returns {Promise<Readonly<Record<string, any>>>}
+   */
+  async function reconcile() {
+    const observed = await awaitInspection(() => true, true, true);
+    return await convergeExisting(observed, true);
+  }
+
   /** @returns {Promise<Readonly<Record<string, any>>>} */
   async function bootstrap() {
     let observed = await awaitInspection(() => true, true);
@@ -1012,78 +1177,10 @@ export function createDeploymentControlBucket(options) {
         true,
       );
     }
-    if (observed.state.status === 'active') return observed.state;
-    if (observed.state.status !== 'bootstrap-required') {
-      throw new DeploymentControlBucketUnknownError();
-    }
-
-    if (observed.needs.publicAccess) {
-      await attemptWrite(() =>
-        client.putPublicAccessBlock({
-          Bucket: bucketName,
-          ExpectedBucketOwner: providerScope.accountId,
-          PublicAccessBlockConfiguration: {
-            BlockPublicAcls: true,
-            BlockPublicPolicy: true,
-            IgnorePublicAcls: true,
-            RestrictPublicBuckets: true,
-          },
-        }),
-      );
-    }
-    if (observed.needs.ownership) {
-      await attemptWrite(() =>
-        client.putBucketOwnershipControls({
-          Bucket: bucketName,
-          ExpectedBucketOwner: providerScope.accountId,
-          OwnershipControls: {
-            Rules: [{ ObjectOwnership: 'BucketOwnerEnforced' }],
-          },
-        }),
-      );
-    }
-    if (observed.needs.encryption) {
-      await attemptWrite(() =>
-        client.putBucketEncryption({
-          Bucket: bucketName,
-          ExpectedBucketOwner: providerScope.accountId,
-          ServerSideEncryptionConfiguration: {
-            Rules: [
-              {
-                ApplyServerSideEncryptionByDefault: {
-                  SSEAlgorithm: 'AES256',
-                },
-              },
-            ],
-          },
-        }),
-      );
-    }
-    if (observed.needs.versioning) {
-      await attemptWrite(() =>
-        client.putBucketVersioning({
-          Bucket: bucketName,
-          ExpectedBucketOwner: providerScope.accountId,
-          VersioningConfiguration: { Status: 'Enabled' },
-        }),
-      );
-    }
-    if (observed.needs.lifecycle) {
-      await attemptWrite(() =>
-        client.putBucketLifecycleConfiguration(
-          putServiceHealthLifecycleRequest(providerScope, bucketName),
-        ),
-      );
-    }
-    observed = await awaitInspection(
-      (candidate) => settingsReady(candidate),
-      true,
-    );
-    if (observed.state.status === 'active') return observed.state;
-    return await convergeVersioningReady(observed);
+    return await convergeExisting(observed, false);
   }
 
-  return Object.freeze({ bucketName, inspect, bootstrap });
+  return Object.freeze({ bucketName, inspect, reconcile, bootstrap });
 }
 
 export default { createDeploymentControlBucket };

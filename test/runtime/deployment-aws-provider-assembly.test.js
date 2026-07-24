@@ -4,6 +4,7 @@ import {
   createCanonicalJsonSha256Id,
   createSha256Id,
 } from '../../src/core/runtime/content-id.js';
+import { createAwsSingleNodeDeploymentInvocationFromClientFamily } from '../../src/core/runtime/deployment-aws-invocation.js';
 import { createAwsSingleNodeDeploymentProviderFromClientFamily } from '../../src/core/runtime/deployment-aws-provider-assembly.js';
 import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
@@ -19,6 +20,7 @@ import {
 } from '../../src/core/runtime/deployment-provider-scope.js';
 import { createDeploymentIncarnationId } from '../../src/core/runtime/deployment-resource-binding.js';
 import { validateDeploymentRevision } from '../../src/core/runtime/deployment-revision.js';
+import { brandDBClient, DB_ADAPTER_NAMES } from '../../src/core/lib/db/base.js';
 
 const PROVIDER_METHODS = Object.freeze([
   'resolveScope',
@@ -175,16 +177,18 @@ function semanticId(prefix, domain, value) {
 
 /** @param {string} clientKey @param {readonly string[]} methods @param {jest.Mock[]} io */
 function makeClient(clientKey, methods, io) {
-  return Object.freeze(
-    Object.fromEntries(
-      methods.map((method) => {
-        const mock = jest.fn();
-        mock.mockName(`${clientKey}.${method}`);
-        io.push(mock);
-        return [method, mock];
-      }),
-    ),
+  const client = Object.fromEntries(
+    methods.map((method) => {
+      const mock = jest.fn();
+      mock.mockName(`${clientKey}.${method}`);
+      io.push(mock);
+      return [method, mock];
+    }),
   );
+  if (clientKey === 'deploymentStore') {
+    brandDBClient(client, DB_ADAPTER_NAMES.DYNAMODB);
+  }
+  return Object.freeze(client);
 }
 
 /** @returns {{family: Readonly<AnyRecord>, providerScope: Readonly<AnyRecord>, io: jest.Mock[], receivers: unknown[]}} */
@@ -322,6 +326,36 @@ function makeAbsentInspectionContext(providerScope) {
 }
 
 describe('AWS single-node deployment provider client-family assembly', () => {
+  it('composes through the real owned invocation boundary without construction I/O', async () => {
+    const fixture = makeClientFamily();
+
+    const invocation = createAwsSingleNodeDeploymentInvocationFromClientFamily({
+      clientFamily: fixture.family,
+      now: () => 1_900_000_000_000,
+      maxAttempts: 2,
+      waitForRetry: async () => {},
+    });
+
+    expect(Object.keys(invocation)).toEqual([
+      'providerScope',
+      'inspectControl',
+      'requireControl',
+      'reconcileControl',
+      'bootstrapControl',
+      'plan',
+      'converge',
+      'resume',
+      'close',
+    ]);
+    expect(fixture.io.every((method) => method.mock.calls.length === 0)).toBe(
+      true,
+    );
+    expect(fixture.family.close).not.toHaveBeenCalled();
+
+    await invocation.close();
+    expect(fixture.family.close).toHaveBeenCalledTimes(1);
+  });
+
   it('constructs the exact frozen provider without I/O, close, or leaked capabilities', () => {
     const fixture = makeClientFamily();
     const provider = createAwsSingleNodeDeploymentProviderFromClientFamily({

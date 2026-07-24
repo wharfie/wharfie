@@ -1907,3 +1907,32 @@ deployment commands. Guest storage/service projection, privileged publisher
 wiring, live STS role/session proof, DESTROYED-tombstone reapply, and
 clean-account lifecycle proof remain unfinished. Production composition alone
 does not prove a deployable resident service or exactly-once provider effects.
+
+The fortieth slice makes retained control policy and invocation lifetime
+explicit. Both fixed control-resource lifecycles now distinguish one-shot
+read-only inspection, existing-only reconciliation, and bootstrap.
+Reconciliation may wait and strengthen safe settings but never calls the table
+or bucket create API. Authoritative absence at the initial read, a write, or a
+readback is a fixed typed failure. The table retains the initial TableArn and
+TableId across creating-state and PITR convergence so deletion/recreation is
+not adopted. The bucket retains its full versioning-propagation and sentinel
+proof and reports secondary-read disappearance without mislabeling it as
+initial-head evidence.
+
+One CLI-free invocation transfers the V57 client family only after pure
+composition succeeds. It binds those lifecycles, the branded control store,
+artifact stager, provider, and controller behind exact control inspection,
+require-active, reconcile, bootstrap, plan, converge, resume, and close
+capabilities. Both sides of every paired control operation settle before a
+deterministically selected error is returned. Controller operations always
+reinspect and require both controls active; none bootstraps or chooses recovery
+implicitly. Starting close fences new work, drains already-entered calls, and
+then closes the family once.
+
+This slice does not add read-only deployment inspection, a one-shot
+operation/cleanup runner, commands, or source-mode selected-artifact ownership.
+The current stager still requires the running executable and its embedded
+revision to be the target artifact, so a Node-hosted source command cannot
+honestly apply itself. Guest service projection, privileged publisher wiring,
+live STS role/session proof, DESTROYED-tombstone reapply, clean-account proof,
+and exactly-once provider effects remain unfinished.

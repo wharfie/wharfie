@@ -101,19 +101,19 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [production AWS provider assembly
-checkpoint](../llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md). One
-invocation-owned family now projects every exact AWS client from a single
-ordinary-chain credential snapshot, fences operations immediately at shutdown,
-and closes children before the credential authority. A pure production
-constructor wires all 16 observer families, service health, ProviderSpec,
-planning, and six mutation clients into the controller's seven-method provider.
-It performs no provider I/O, bootstrap, or close. An explicit invocation and
-operator boundary for control-resource bootstrap, read-only inspection,
-controller execution, and cleanup remains next; there are still no deployment
-commands or service-readiness claim.
+The current restart handoff is the [owned AWS deployment invocation
+checkpoint](../llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md).
+One CLI-free lifetime now composes the fixed retained controls, durable store,
+artifact stager, complete V57 provider, and controller. It exposes read-only
+control inspection and require-active, existing-only reconciliation that can
+never create, and separately explicit bootstrap. Controller plan, converge,
+and resume require both controls to be freshly active. Close fences new calls,
+waits for entered work, and closes the AWS family once. Construction remains
+zero-I/O; there are still no deployment commands or service-readiness claim.
 
-Its parent is the [InspectionV6 aggregate and controller
+Its parent is the [production AWS provider assembly
+checkpoint](../llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md), whose
+parent is the [InspectionV6 aggregate and controller
 checkpoint](../llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md),
 whose parent is the [complete AWS resource observers
 checkpoint](../llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md).

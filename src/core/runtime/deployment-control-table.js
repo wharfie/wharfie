@@ -48,6 +48,14 @@ export class DeploymentControlTableConflictError extends Error {
   }
 }
 
+export class DeploymentControlTableMissingError extends Error {
+  constructor() {
+    super('AWS deployment control table is absent.');
+    this.name = 'DeploymentControlTableMissingError';
+    this.code = 'DEPLOYMENT_CONTROL_TABLE_MISSING';
+  }
+}
+
 export class DeploymentControlTableUnknownError extends Error {
   constructor(message = 'AWS deployment control table state is unknown.') {
     super(message);
@@ -334,10 +342,11 @@ function createTableRequest(providerScope) {
 
 /**
  * Bind the fixed, retained deployment-control table lifecycle to one exact AWS
- * provider scope. `inspect` is strictly read-only; `bootstrap` is the only
- * mutating entry point and never deletes or weakens the table.
+ * provider scope. `inspect` is strictly read-only; `reconcile` may only
+ * strengthen an existing table; and `bootstrap` may also create the fixed
+ * retained table. Neither mutator deletes or weakens it.
  * @param {{client: DeploymentControlTableClient, providerScope: unknown, waitForActive?: (attempt: number) => Promise<void>}} options - Explicit client, scope, and optional wait hook.
- * @returns {Readonly<{inspect: () => Promise<Readonly<Record<string, any>>>, bootstrap: () => Promise<Readonly<Record<string, any>>>}>} - Lifecycle API.
+ * @returns {Readonly<{inspect: () => Promise<Readonly<Record<string, any>>>, reconcile: () => Promise<Readonly<Record<string, any>>>, bootstrap: () => Promise<Readonly<Record<string, any>>>}>} - Lifecycle API.
  */
 export function createDeploymentControlTableLifecycle(options) {
   if (!isPlainObject(options)) {
@@ -427,8 +436,12 @@ export function createDeploymentControlTableLifecycle(options) {
     });
   }
 
-  /** @param {(state: Readonly<Record<string, any>>) => boolean} accepted @param {boolean} [retryMissingTags] @returns {Promise<Readonly<Record<string, any>>>} */
-  async function awaitInspection(accepted, retryMissingTags = false) {
+  /** @param {(state: Readonly<Record<string, any>>) => boolean} accepted @param {boolean} [retryMissingTags] @param {boolean} [failOnAbsent] @returns {Promise<Readonly<Record<string, any>>>} */
+  async function awaitInspection(
+    accepted,
+    retryMissingTags = false,
+    failOnAbsent = false,
+  ) {
     for (
       let attempt = 0;
       attempt < DEPLOYMENT_CONTROL_TABLE_MAX_INSPECTION_ATTEMPTS;
@@ -456,6 +469,9 @@ export function createDeploymentControlTableLifecycle(options) {
         }
         continue;
       }
+      if (failOnAbsent && state.status === 'absent') {
+        throw new DeploymentControlTableMissingError();
+      }
       if (accepted(state)) return state;
       if (attempt + 1 < DEPLOYMENT_CONTROL_TABLE_MAX_INSPECTION_ATTEMPTS) {
         try {
@@ -466,6 +482,75 @@ export function createDeploymentControlTableLifecycle(options) {
       }
     }
     throw new DeploymentControlTableUnknownError();
+  }
+
+  /**
+   * Finish convergence after an exact table has been observed. Existing-only
+   * reconciliation turns every later authoritative absence into a fixed
+   * missing result; bootstrap keeps its bounded unknown-state behavior after
+   * a create attempt.
+   * @param {Readonly<Record<string, any>>} initial - Exact observed state.
+   * @param {boolean} failOnAbsent - Whether absence is an existing-only failure.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Exact active state.
+   */
+  async function convergeExisting(initial, failOnAbsent) {
+    let state = initial;
+    if (state.status === 'absent') {
+      if (failOnAbsent) throw new DeploymentControlTableMissingError();
+      throw new DeploymentControlTableUnknownError();
+    }
+    const expectedTableArn = state.tableArn;
+    const expectedTableId = state.tableId;
+    if (state.status === 'creating') {
+      state = await awaitInspection(
+        (candidate) =>
+          candidate.status === 'active' ||
+          candidate.status === 'bootstrap-required',
+        true,
+        failOnAbsent,
+      );
+      if (
+        state.tableArn !== expectedTableArn ||
+        state.tableId !== expectedTableId
+      ) {
+        throw new DeploymentControlTableConflictError();
+      }
+    }
+    if (state.status === 'active') return state;
+    if (state.status !== 'bootstrap-required') {
+      throw new DeploymentControlTableUnknownError();
+    }
+    try {
+      await client.updateContinuousBackups({
+        TableName: DEPLOYMENT_CONTROL_TABLE_NAME,
+        PointInTimeRecoverySpecification: {
+          PointInTimeRecoveryEnabled: true,
+          RecoveryPeriodInDays: DEPLOYMENT_CONTROL_TABLE_PITR_DAYS,
+        },
+      });
+    } catch {
+      // The update may have committed despite a lost response. Only exact
+      // final inspection is authoritative.
+    }
+    return await awaitInspection(
+      (candidate) => {
+        if (
+          candidate.tableArn !== expectedTableArn ||
+          candidate.tableId !== expectedTableId
+        ) {
+          throw new DeploymentControlTableConflictError();
+        }
+        return candidate.status === 'active';
+      },
+      false,
+      failOnAbsent,
+    );
+  }
+
+  /** @returns {Promise<Readonly<Record<string, any>>>} */
+  async function reconcile() {
+    const state = await awaitInspection(() => true, false, true);
+    return convergeExisting(state, true);
   }
 
   /** @returns {Promise<Readonly<Record<string, any>>>} */
@@ -484,44 +569,11 @@ export function createDeploymentControlTableLifecycle(options) {
           candidate.status === 'bootstrap-required',
         true,
       );
-    } else if (state.status === 'creating') {
-      state = await awaitInspection(
-        (candidate) =>
-          candidate.status === 'active' ||
-          candidate.status === 'bootstrap-required',
-        true,
-      );
     }
-    if (state.status === 'active') return state;
-    if (state.status !== 'bootstrap-required') {
-      throw new DeploymentControlTableUnknownError();
-    }
-    const expectedTableArn = state.tableArn;
-    const expectedTableId = state.tableId;
-    try {
-      await client.updateContinuousBackups({
-        TableName: DEPLOYMENT_CONTROL_TABLE_NAME,
-        PointInTimeRecoverySpecification: {
-          PointInTimeRecoveryEnabled: true,
-          RecoveryPeriodInDays: DEPLOYMENT_CONTROL_TABLE_PITR_DAYS,
-        },
-      });
-    } catch {
-      // The update may have committed despite a lost response. Only exact
-      // final inspection is authoritative.
-    }
-    return await awaitInspection((candidate) => {
-      if (
-        candidate.tableArn !== expectedTableArn ||
-        candidate.tableId !== expectedTableId
-      ) {
-        throw new DeploymentControlTableConflictError();
-      }
-      return candidate.status === 'active';
-    });
+    return convergeExisting(state, false);
   }
 
-  return Object.freeze({ inspect, bootstrap });
+  return Object.freeze({ inspect, reconcile, bootstrap });
 }
 
 export default { createDeploymentControlTableLifecycle };

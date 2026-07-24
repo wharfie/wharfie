@@ -5,6 +5,7 @@ import {
   DEPLOYMENT_CONTROL_TABLE_PITR_DAYS,
   DEPLOYMENT_CONTROL_TABLE_RECORD_KEY,
   DeploymentControlTableConflictError,
+  DeploymentControlTableMissingError,
   DeploymentControlTableUnknownError,
   createDeploymentControlTableLifecycle,
 } from '../../src/core/runtime/deployment-control-table.js';
@@ -123,6 +124,23 @@ function createLifecycle(client, waitForActive = async () => {}) {
 }
 
 describe('AWS deployment control table lifecycle', () => {
+  it('exposes the exact frozen lifecycle and fixed missing error', () => {
+    const lifecycle = createLifecycle(createClient());
+    const missing = new DeploymentControlTableMissingError();
+
+    expect(Object.keys(lifecycle)).toEqual([
+      'inspect',
+      'reconcile',
+      'bootstrap',
+    ]);
+    expect(Object.isFrozen(lifecycle)).toBe(true);
+    expect(missing).toMatchObject({
+      name: 'DeploymentControlTableMissingError',
+      message: 'AWS deployment control table is absent.',
+      code: 'DEPLOYMENT_CONTROL_TABLE_MISSING',
+    });
+  });
+
   it('reports authoritative absence without performing any other operation', async () => {
     const client = createClient({
       describeTable: async () => {
@@ -230,6 +248,112 @@ describe('AWS deployment control table lifecycle', () => {
     expect(client.listTagsOfResource).not.toHaveBeenCalled();
     expect(client.describeContinuousBackups).not.toHaveBeenCalled();
     expect(client.describeTimeToLive).not.toHaveBeenCalled();
+  });
+
+  it('reconciles an already-active table without mutation or creation', async () => {
+    const client = createClient();
+
+    await expect(createLifecycle(client).reconcile()).resolves.toMatchObject({
+      status: 'active',
+      tableArn: TABLE_ARN,
+      tableId: TABLE_ID,
+    });
+    expect(client.createTable).not.toHaveBeenCalled();
+    expect(client.updateContinuousBackups).not.toHaveBeenCalled();
+  });
+
+  it('reconciles PITR through lost-response readback without creating', async () => {
+    let pitrEnabled = false;
+    const client = createClient({
+      describeContinuousBackups: async () => backupResponse(pitrEnabled),
+      updateContinuousBackups: async () => {
+        pitrEnabled = true;
+        throw new Error('lost backup response');
+      },
+    });
+
+    await expect(createLifecycle(client).reconcile()).resolves.toMatchObject({
+      status: 'active',
+      pitrEnabled: true,
+      pitrRecoveryPeriodDays: DEPLOYMENT_CONTROL_TABLE_PITR_DAYS,
+    });
+    expect(client.updateContinuousBackups).toHaveBeenCalledTimes(1);
+    expect(client.createTable).not.toHaveBeenCalled();
+  });
+
+  it('waits for an already-creating table during reconciliation without creating', async () => {
+    const descriptions = [
+      tableResponse({ TableStatus: 'CREATING' }),
+      tableResponse({ TableStatus: 'CREATING' }),
+      tableResponse(),
+    ];
+    const waitForActive = jest.fn(async () => {});
+    const client = createClient({
+      describeTable: async () => descriptions.shift(),
+    });
+
+    await expect(
+      createLifecycle(client, waitForActive).reconcile(),
+    ).resolves.toMatchObject({
+      status: 'active',
+      tableArn: TABLE_ARN,
+      tableId: TABLE_ID,
+    });
+    expect(waitForActive).toHaveBeenCalledTimes(1);
+    expect(client.createTable).not.toHaveBeenCalled();
+    expect(client.updateContinuousBackups).not.toHaveBeenCalled();
+  });
+
+  it('rejects physical replacement while reconciling an already-creating table', async () => {
+    const descriptions = [
+      tableResponse({ TableStatus: 'CREATING' }),
+      tableResponse({ TableId: 'fedcba98-7654-3210-fedc-ba9876543210' }),
+    ];
+    const client = createClient({
+      describeTable: async () => descriptions.shift(),
+    });
+
+    await expect(createLifecycle(client).reconcile()).rejects.toBeInstanceOf(
+      DeploymentControlTableConflictError,
+    );
+    expect(client.createTable).not.toHaveBeenCalled();
+    expect(client.updateContinuousBackups).not.toHaveBeenCalled();
+  });
+
+  it('fails reconciliation with fixed missing evidence on initial absence', async () => {
+    const client = createClient({
+      describeTable: async () => {
+        throw resourceNotFound();
+      },
+    });
+
+    await expect(createLifecycle(client).reconcile()).rejects.toEqual(
+      new DeploymentControlTableMissingError(),
+    );
+    expect(client.describeTable).toHaveBeenCalledTimes(1);
+    expect(client.createTable).not.toHaveBeenCalled();
+    expect(client.updateContinuousBackups).not.toHaveBeenCalled();
+  });
+
+  it('fails reconciliation with fixed missing evidence when the table disappears during PITR readback', async () => {
+    let exists = true;
+    const client = createClient({
+      describeTable: async () => {
+        if (!exists) throw resourceNotFound();
+        return tableResponse();
+      },
+      describeContinuousBackups: async () => backupResponse(false),
+      updateContinuousBackups: async () => {
+        exists = false;
+        throw new Error('lost response while the table disappeared');
+      },
+    });
+
+    await expect(createLifecycle(client).reconcile()).rejects.toEqual(
+      new DeploymentControlTableMissingError(),
+    );
+    expect(client.updateContinuousBackups).toHaveBeenCalledTimes(1);
+    expect(client.createTable).not.toHaveBeenCalled();
   });
 
   it.each([
