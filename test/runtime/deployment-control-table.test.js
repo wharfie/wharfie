@@ -39,6 +39,18 @@ function resourceNotFound() {
   return error;
 }
 
+/** @returns {{promise: Promise<any>, resolve: (value: any) => void}} */
+function deferred() {
+  /** @type {(value: any) => void} */
+  let settle = () => {
+    throw new Error('Deferred promise was not initialized.');
+  };
+  const promise = new Promise((resolve) => {
+    settle = resolve;
+  });
+  return { promise, resolve: settle };
+}
+
 /** @param {Record<string, any>} [overrides] @returns {Record<string, any>} */
 function tableResponse(overrides = {}) {
   return {
@@ -212,6 +224,41 @@ describe('AWS deployment control table lifecycle', () => {
     });
     expect(client.createTable).not.toHaveBeenCalled();
     expect(client.updateContinuousBackups).not.toHaveBeenCalled();
+  });
+
+  it('waits for every active-table read and reports the first canonical failure', async () => {
+    const pendingPitr = deferred();
+    const allStarted = deferred();
+    const client = createClient({
+      listTagsOfResource: async () => ({
+        Tags: [
+          ...REQUIRED_TAGS,
+          { Key: 'wharfie:unexpected', Value: 'unsupported' },
+        ],
+      }),
+      describeContinuousBackups: () => pendingPitr.promise,
+      describeTimeToLive: async () => {
+        allStarted.resolve(undefined);
+        throw new Error('later provider failure');
+      },
+    });
+
+    const inspection = createLifecycle(client).inspect();
+    await allStarted.promise;
+    const observed = jest.fn();
+    const reported = inspection.then(observed, observed);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(client.listTagsOfResource).toHaveBeenCalledTimes(1);
+    expect(client.describeContinuousBackups).toHaveBeenCalledTimes(1);
+    expect(client.describeTimeToLive).toHaveBeenCalledTimes(1);
+    expect(observed).not.toHaveBeenCalled();
+
+    pendingPitr.resolve(backupResponse(true));
+    await expect(inspection).rejects.toBeInstanceOf(
+      DeploymentControlTableConflictError,
+    );
+    await reported;
   });
 
   it.each([

@@ -29,6 +29,23 @@ function digest(value) {
   return { algorithm: 'sha256', value: sha256Base64Url(value) };
 }
 
+/** @returns {{promise: Promise<any>, resolve: (value: any) => void, reject: (reason: unknown) => void}} */
+function deferred() {
+  /** @type {(value: any) => void} */
+  let settle = () => {
+    throw new Error('Deferred promise was not initialized.');
+  };
+  /** @type {(reason: unknown) => void} */
+  let fail = () => {
+    throw new Error('Deferred promise was not initialized.');
+  };
+  const promise = new Promise((resolve, reject) => {
+    settle = resolve;
+    fail = reject;
+  });
+  return { promise, resolve: settle, reject: fail };
+}
+
 /** @param {string} [appId] @returns {ReturnType<typeof createApplicationRevision>} */
 function makeRevision(appId = 'deployment-demo') {
   return createApplicationRevision({
@@ -156,6 +173,42 @@ describe('deployment revisions', () => {
       1,
     );
     expect(Object.isFrozen(deployment)).toBe(true);
+  });
+
+  it('waits for both running-artifact reads and reports the first canonical failure', async () => {
+    const fixture = makeFixture();
+    const pendingArtifact = deferred();
+    const artifactStarted = deferred();
+    const pairFailure = new Error('embedded pair failure');
+    const artifactFailure = new Error('artifact inspection failure');
+    const dependencies = {
+      readEmbeddedRevisionRuntimePair: jest.fn(() =>
+        Promise.reject(pairFailure),
+      ),
+      inspectRunningArtifact: jest.fn(() => {
+        artifactStarted.resolve(undefined);
+        return pendingArtifact.promise;
+      }),
+    };
+
+    const observation = createRunningDeploymentRevision(
+      fixture.input,
+      dependencies,
+    );
+    await artifactStarted.promise;
+    const observed = jest.fn();
+    const reported = observation.then(observed, observed);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(dependencies.readEmbeddedRevisionRuntimePair).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(dependencies.inspectRunningArtifact).toHaveBeenCalledTimes(1);
+    expect(observed).not.toHaveBeenCalled();
+
+    pendingArtifact.reject(artifactFailure);
+    await expect(observation).rejects.toBe(pairFailure);
+    await reported;
   });
 
   it('changes identity with deployment name, running bytes, or profile', async () => {

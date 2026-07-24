@@ -200,10 +200,20 @@ async function observeRunningDeploymentArtifact(dependencies) {
     inspectArtifact = async () =>
       await module.inspectArtifactBytes(module.getRunningExecutablePath());
   }
-  const [pairValue, artifactValue] = await Promise.all([
-    readPair(),
-    inspectArtifact(),
+  const observations = await Promise.allSettled([
+    Promise.resolve().then(() => readPair()),
+    Promise.resolve().then(() => inspectArtifact()),
   ]);
+  for (const observation of observations) {
+    if (observation.status === 'rejected') throw observation.reason;
+  }
+  const [pairObservation, artifactObservation] = observations;
+  if (pairObservation.status === 'rejected') throw pairObservation.reason;
+  if (artifactObservation.status === 'rejected') {
+    throw artifactObservation.reason;
+  }
+  const pairValue = pairObservation.value;
+  const artifactValue = artifactObservation.value;
   const pair = cloneJsonObject(pairValue, 'runningArtifact.embedded');
   assertAllKeys(
     pair,

@@ -1,9 +1,11 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
+import { compareCanonicalStrings } from '../../src/core/runtime/canonical-order.js';
 import {
   createCanonicalJsonSha256Id,
   createSha256Id,
 } from '../../src/core/runtime/content-id.js';
+import { createAwsSingleNodeDesiredResourceTargetCatalog } from '../../src/core/runtime/deployment-aws-desired-resource-targets.js';
 import { createAwsSingleNodeDeploymentInvocationFromClientFamily } from '../../src/core/runtime/deployment-aws-invocation.js';
 import { createAwsSingleNodeDeploymentProviderFromClientFamily } from '../../src/core/runtime/deployment-aws-provider-assembly.js';
 import {
@@ -14,11 +16,27 @@ import {
   createAwsSingleNodeProvider,
   createDeploymentProfile,
 } from '../../src/core/runtime/deployment-profile.js';
+import { getAwsSingleNodeDefaultIpv4RouteProviderResourceId } from '../../src/core/runtime/deployment-aws-default-ipv4-route-resource.js';
+import { getAwsSingleNodeInternetGatewayAttachmentProviderResourceId } from '../../src/core/runtime/deployment-aws-internet-gateway-attachment-resource.js';
+import {
+  getAwsSingleNodeManagedArtifactObjectLocation,
+  getAwsSingleNodeRuntimeAssociationProviderResourceId,
+  getAwsSingleNodeRuntimePolicyProviderResourceId,
+} from '../../src/core/runtime/deployment-aws-runtime-identity-contract.js';
+import { getAwsSingleNodeSubnetRouteTableAssociationProviderResourceId } from '../../src/core/runtime/deployment-aws-subnet-route-table-association-resource.js';
+import { getAwsSingleNodeVolumeAttachmentProviderResourceId } from '../../src/core/runtime/deployment-aws-volume-attachment-resource.js';
+import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
+import { createDeploymentPlan } from '../../src/core/runtime/deployment-plan.js';
 import {
   createAwsProviderScope,
   getDeploymentInstanceId,
 } from '../../src/core/runtime/deployment-provider-scope.js';
-import { createDeploymentIncarnationId } from '../../src/core/runtime/deployment-resource-binding.js';
+import {
+  createDeploymentIncarnationId,
+  createDeploymentResourceBinding,
+  createOwnershipNonce,
+} from '../../src/core/runtime/deployment-resource-binding.js';
+import { getAwsSingleNodeResourceDestroyOrder } from '../../src/core/runtime/deployment-resource-graph.js';
 import { validateDeploymentRevision } from '../../src/core/runtime/deployment-revision.js';
 import { brandDBClient, DB_ADAPTER_NAMES } from '../../src/core/lib/db/base.js';
 
@@ -170,9 +188,25 @@ const CLIENT_METHODS = Object.freeze({
 
 /** @typedef {Record<string, any>} AnyRecord */
 
+const APPLICATION_VOLUME_ID = 'vol-00000000000000001';
+const CONTROL_VOLUME_ID = 'vol-00000000000000002';
+const VPC_ID = 'vpc-00000000000000001';
+const INTERNET_GATEWAY_ID = 'igw-00000000000000001';
+const SUBNET_ID = 'subnet-00000000000000001';
+const ROUTE_TABLE_ID = 'rtb-00000000000000001';
+const SECURITY_GROUP_ID = 'sg-00000000000000001';
+const RUNTIME_ROLE_ID = 'AROA1234567890EXAMPLE';
+const RUNTIME_IDENTITY_ID = 'AIPA1234567890EXAMPLE';
+const SUBSTRATE_ID = 'i-00000000000000001';
+
 /** @param {string} prefix @param {string} domain @param {unknown} value @returns {string} */
 function semanticId(prefix, domain, value) {
   return createCanonicalJsonSha256Id({ prefix, domain, value });
+}
+
+/** @param {number} byte @returns {string} */
+function nonce(byte) {
+  return createOwnershipNonce(Buffer.alloc(32, byte));
 }
 
 /** @param {string} clientKey @param {readonly string[]} methods @param {jest.Mock[]} io */
@@ -325,6 +359,487 @@ function makeAbsentInspectionContext(providerScope) {
   });
 }
 
+/**
+ * @param {Readonly<AnyRecord>} base
+ * @param {Readonly<AnyRecord>|null} [head]
+ * @returns {ReadonlyArray<Readonly<AnyRecord>>}
+ */
+function makeTargets(base, head = null) {
+  return createAwsSingleNodeDesiredResourceTargetCatalog({
+    deploymentRevision: base.deploymentRevision,
+    profile: base.profile,
+    providerScope: base.providerScope,
+    providerSpec: base.providerSpec,
+    deploymentInstanceId: base.deploymentInstanceId,
+    incarnationId: base.incarnationId,
+    head,
+  });
+}
+
+/** @param {Readonly<AnyRecord>} base @returns {Readonly<AnyRecord>} */
+function makeCreatePlan(base) {
+  return createDeploymentPlan(
+    {
+      operation: 'apply',
+      deploymentRevision: base.deploymentRevision,
+      providerScope: base.providerScope,
+      providerSpec: base.providerSpec,
+      deploymentInstanceId: base.deploymentInstanceId,
+      incarnationId: base.incarnationId,
+      basis: {
+        headGeneration: 0,
+        settledDeploymentRevisionId: null,
+        inspectionId: semanticId(
+          'win6',
+          'wharfie:test:aws-provider-assembly-create-basis:v1',
+          base.deploymentInstanceId,
+        ),
+      },
+      actions: makeTargets(base).map((target) => ({
+        resourceKey: target.resourceKey,
+        capability: target.capability,
+        role: target.role,
+        management: target.management,
+        ownershipMode: target.ownershipMode,
+        dependsOn: target.dependsOn,
+        onDestroy: target.onDestroy,
+        action: 'create',
+        destructive: false,
+        reason: 'missing',
+        before: null,
+        after: target.target,
+      })),
+    },
+    { profile: base.profile },
+  );
+}
+
+/** @param {Readonly<AnyRecord>} base @param {string} resourceKey @returns {string} */
+function providerResourceId(base, resourceKey) {
+  if (resourceKey === 'artifact') {
+    return getAwsSingleNodeManagedArtifactObjectLocation({
+      providerScope: base.providerScope,
+      deploymentInstanceId: base.deploymentInstanceId,
+      incarnationId: base.incarnationId,
+    }).arn;
+  }
+  if (resourceKey === 'application-state') return APPLICATION_VOLUME_ID;
+  if (resourceKey === 'control-state') return CONTROL_VOLUME_ID;
+  if (resourceKey === 'network-vpc') return VPC_ID;
+  if (resourceKey === 'network-internet-gateway') {
+    return INTERNET_GATEWAY_ID;
+  }
+  if (resourceKey === 'network-internet-gateway-attachment') {
+    return getAwsSingleNodeInternetGatewayAttachmentProviderResourceId(
+      INTERNET_GATEWAY_ID,
+      VPC_ID,
+    );
+  }
+  if (resourceKey === 'network-subnet') return SUBNET_ID;
+  if (resourceKey === 'network-route-table') return ROUTE_TABLE_ID;
+  if (resourceKey === 'network-default-ipv4-route') {
+    return getAwsSingleNodeDefaultIpv4RouteProviderResourceId(
+      base.providerSpec.capabilities.networking.egressCidr,
+      INTERNET_GATEWAY_ID,
+      ROUTE_TABLE_ID,
+    );
+  }
+  if (resourceKey === 'network-subnet-route-table-association') {
+    return getAwsSingleNodeSubnetRouteTableAssociationProviderResourceId(
+      ROUTE_TABLE_ID,
+      SUBNET_ID,
+    );
+  }
+  if (resourceKey === 'network-security-group') return SECURITY_GROUP_ID;
+  if (resourceKey === 'runtime-role') return RUNTIME_ROLE_ID;
+  if (resourceKey === 'runtime-role-policy') {
+    return getAwsSingleNodeRuntimePolicyProviderResourceId({
+      runtimeRoleId: RUNTIME_ROLE_ID,
+    });
+  }
+  if (resourceKey === 'runtime-identity') return RUNTIME_IDENTITY_ID;
+  if (resourceKey === 'runtime-identity-role-association') {
+    return getAwsSingleNodeRuntimeAssociationProviderResourceId({
+      runtimeRoleId: RUNTIME_ROLE_ID,
+      instanceProfileId: RUNTIME_IDENTITY_ID,
+    });
+  }
+  if (resourceKey === 'substrate') return SUBSTRATE_ID;
+  if (resourceKey === 'application-state-attachment') {
+    return getAwsSingleNodeVolumeAttachmentProviderResourceId(
+      base.providerSpec,
+      'application-state',
+      SUBSTRATE_ID,
+      APPLICATION_VOLUME_ID,
+    );
+  }
+  if (resourceKey === 'control-state-attachment') {
+    return getAwsSingleNodeVolumeAttachmentProviderResourceId(
+      base.providerSpec,
+      'control-state',
+      SUBSTRATE_ID,
+      CONTROL_VOLUME_ID,
+    );
+  }
+  throw new Error(`Unsupported provider-assembly resource '${resourceKey}'.`);
+}
+
+/**
+ * @param {Readonly<AnyRecord>} base
+ * @param {Readonly<AnyRecord>} plan
+ * @param {ReadonlyArray<Readonly<AnyRecord>>} intents
+ * @returns {ReadonlyArray<Readonly<AnyRecord>>}
+ */
+function makeBindings(base, plan, intents) {
+  const bindingByKey = new Map();
+  return makeTargets(base).map((target, index) => {
+    const dependencyBindings = target.dependsOn
+      .map((/** @type {string} */ resourceKey) => {
+        const dependency = bindingByKey.get(resourceKey);
+        if (dependency === undefined) {
+          throw new Error(
+            `Missing provider-assembly dependency '${resourceKey}'.`,
+          );
+        }
+        return { resourceKey, bindingId: dependency.bindingId };
+      })
+      .sort(
+        (
+          /** @type {{resourceKey: string}} */ left,
+          /** @type {{resourceKey: string}} */ right,
+        ) => compareCanonicalStrings(left.resourceKey, right.resourceKey),
+      );
+    const binding = createDeploymentResourceBinding({
+      schemaVersion: 2,
+      kind: 'deploymentResourceBinding',
+      deploymentInstanceId: base.deploymentInstanceId,
+      incarnationId: base.incarnationId,
+      resourceKey: target.resourceKey,
+      capability: target.capability,
+      role: target.role,
+      management: target.management,
+      ownershipMode: target.ownershipMode,
+      onDestroy: target.onDestroy,
+      dependencyBindings,
+      providerType: target.target.providerType,
+      providerResourceId: providerResourceId(base, target.resourceKey),
+      providerScopeId: base.providerScope.providerScopeId,
+      ownershipNonce: intents[index].ownershipNonce,
+      createdByActionId: plan.actions[index].actionId,
+    });
+    bindingByKey.set(target.resourceKey, binding);
+    return binding;
+  });
+}
+
+/**
+ * Create a real DESTROYED head whose purge bindings have been removed, paired
+ * with the exact completed destroy PlanV3 receipt that remains read authority.
+ * @param {Readonly<AnyRecord>} providerScope
+ * @returns {Readonly<AnyRecord>}
+ */
+function makeDestroyedInspectionContext(providerScope) {
+  const base = makeAbsentInspectionContext(providerScope);
+  const createPlan = makeCreatePlan(base);
+  const createIntents = createPlan.actions.map(
+    (
+      /** @type {Readonly<AnyRecord>} */ action,
+      /** @type {number} */ index,
+    ) => ({
+      actionId: action.actionId,
+      status: 'settled',
+      ownershipNonce: nonce(100 + index),
+    }),
+  );
+  const bindings = makeBindings(base, createPlan, createIntents);
+  const readyHead = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: 38,
+    phase: 'READY',
+    settledDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    targetDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    resourceBindings: bindings,
+    activeOperation: null,
+    lastOperation: {
+      kind: 'create',
+      planId: createPlan.planId,
+      intents: createIntents,
+    },
+  });
+  const targetByKey = new Map(
+    makeTargets(base, readyHead).map((target) => [target.resourceKey, target]),
+  );
+  const bindingByKey = new Map(
+    bindings.map((binding) => [binding.resourceKey, binding]),
+  );
+  const destroyPlan = createDeploymentPlan(
+    {
+      operation: 'destroy',
+      deploymentRevision: base.deploymentRevision,
+      providerScope: base.providerScope,
+      providerSpec: base.providerSpec,
+      deploymentInstanceId: base.deploymentInstanceId,
+      incarnationId: base.incarnationId,
+      basis: {
+        headGeneration: readyHead.generation,
+        settledDeploymentRevisionId:
+          base.deploymentRevision.deploymentRevisionId,
+        inspectionId: semanticId(
+          'win6',
+          'wharfie:test:aws-provider-assembly-destroy-basis:v1',
+          readyHead.headId,
+        ),
+      },
+      actions: getAwsSingleNodeResourceDestroyOrder().map((resourceKey) => {
+        const target = targetByKey.get(resourceKey);
+        const binding = bindingByKey.get(resourceKey);
+        if (target === undefined || binding === undefined) {
+          throw new Error(
+            `Missing provider-assembly destroy resource '${resourceKey}'.`,
+          );
+        }
+        const before = {
+          providerType: target.target.providerType,
+          providerResourceId: binding.providerResourceId,
+          stateDigest: target.target.stateDigest,
+        };
+        const retained = target.onDestroy === 'retain';
+        return {
+          resourceKey,
+          capability: target.capability,
+          role: target.role,
+          management: target.management,
+          ownershipMode: target.ownershipMode,
+          dependsOn: target.dependsOn,
+          onDestroy: target.onDestroy,
+          action: retained ? 'noop' : 'delete',
+          destructive: !retained,
+          reason: retained ? 'retained-data' : 'destroy-requested',
+          before,
+          after: retained ? before : null,
+        };
+      }),
+    },
+    { profile: base.profile },
+  );
+  const destroyIntents = destroyPlan.actions.map(
+    (/** @type {Readonly<AnyRecord>} */ action) => {
+      const binding = bindingByKey.get(action.resourceKey);
+      if (binding === undefined) {
+        throw new Error(
+          `Missing provider-assembly destroy intent '${action.resourceKey}'.`,
+        );
+      }
+      return {
+        actionId: action.actionId,
+        status: 'settled',
+        ownershipNonce: binding.ownershipNonce,
+      };
+    },
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: readyHead.generation + 38,
+    phase: 'DESTROYED',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId: null,
+    resourceBindings: bindings.filter(
+      (binding) => binding.onDestroy === 'retain',
+    ),
+    activeOperation: null,
+    lastOperation: {
+      kind: 'destroy',
+      planId: destroyPlan.planId,
+      intents: destroyIntents,
+    },
+  });
+  return Object.freeze({
+    ...base,
+    operation: 'destroy',
+    head,
+    plan: null,
+    settledPlan: destroyPlan,
+    pendingBinding: null,
+    readyBindings: bindings,
+    targets: makeTargets(base, head),
+  });
+}
+
+/** @param {Record<string, string>} tags @returns {{Key: string, Value: string}[]} */
+function tagArray(tags) {
+  return Object.entries(tags)
+    .sort(([left], [right]) => compareCanonicalStrings(left, right))
+    .map(([Key, Value]) => ({ Key, Value }));
+}
+
+/**
+ * @param {Readonly<AnyRecord>} context
+ * @param {'application-state'|'control-state'} resourceKey
+ * @param {Readonly<AnyRecord>} [overrides]
+ * @returns {Readonly<AnyRecord>}
+ */
+function retainedVolume(context, resourceKey, overrides = {}) {
+  const target = context.targets.find(
+    (/** @type {Readonly<AnyRecord>} */ candidate) =>
+      candidate.resourceKey === resourceKey,
+  );
+  const binding = context.readyBindings.find(
+    (/** @type {Readonly<AnyRecord>} */ candidate) =>
+      candidate.resourceKey === resourceKey,
+  );
+  if (target === undefined || binding === undefined) {
+    throw new Error(`Missing retained volume '${resourceKey}'.`);
+  }
+  const configuration =
+    resourceKey === 'application-state'
+      ? context.providerSpec.capabilities.applicationState
+      : context.providerSpec.capabilities.controlState;
+  return Object.freeze({
+    VolumeId: binding.providerResourceId,
+    AvailabilityZoneId: context.providerSpec.placement.availabilityZoneId,
+    AvailabilityZone: 'us-east-1a',
+    VolumeType: configuration.volumeType,
+    Size: configuration.sizeGiB,
+    Iops: configuration.iops,
+    Throughput: configuration.throughputMiBps,
+    MultiAttachEnabled: configuration.multiAttach,
+    Encrypted: configuration.encrypted,
+    KmsKeyId: context.providerSpec.storage.ebsKmsKeyArn,
+    SnapshotId: '',
+    State: 'available',
+    CreateTime: new Date('2026-07-23T12:00:00.000Z'),
+    Attachments: [],
+    Tags: tagArray({
+      'wharfie:managed-by': 'wharfie',
+      'wharfie:resource-kind': 'single-node-state-volume',
+      'wharfie:retention': 'retain',
+      'wharfie:schema-version': '2',
+      'wharfie:capability': target.capability.kind,
+      'wharfie:role': target.role.kind,
+      'wharfie:provider-scope-id': context.providerScope.providerScopeId,
+      'wharfie:deployment-instance-id': context.deploymentInstanceId,
+      'wharfie:incarnation-id': context.incarnationId,
+      'wharfie:resource-key': resourceKey,
+      'wharfie:created-by-action-id': binding.createdByActionId,
+      'wharfie:ownership-nonce': binding.ownershipNonce,
+      'wharfie:state-digest': target.target.stateDigest.value,
+    }),
+    FastRestored: false,
+    SseType: 'sse-kms',
+    ...overrides,
+  });
+}
+
+/** @param {string} name @returns {Error & {name: string}} */
+function awsError(name) {
+  const error = /** @type {Error & {name: string}} */ (
+    new Error(`simulated ${name}`)
+  );
+  error.name = name;
+  return error;
+}
+
+/**
+ * @param {Readonly<AnyRecord>} clientFamily
+ * @param {Readonly<AnyRecord>} context
+ * @param {'application-state'|'control-state'|null} [remainingAttachment]
+ * @returns {ReadonlyArray<Readonly<AnyRecord>>}
+ */
+function configureDestroyedReadClients(
+  clientFamily,
+  context,
+  remainingAttachment = null,
+) {
+  const clients = clientFamily.clients;
+  const location = getAwsSingleNodeManagedArtifactObjectLocation({
+    providerScope: context.providerScope,
+    deploymentInstanceId: context.deploymentInstanceId,
+    incarnationId: context.incarnationId,
+  });
+  clients.managedArtifact.listObjectVersions.mockResolvedValue({
+    Name: location.bucketName,
+    Prefix: location.key,
+    MaxKeys: 1000,
+    EncodingType: 'url',
+    IsTruncated: false,
+    Versions: [],
+    DeleteMarkers: [],
+  });
+  clients.managedArtifact.headObject.mockRejectedValue(awsError('NotFound'));
+  const retainedResourceKeys =
+    /** @type {ReadonlyArray<'application-state'|'control-state'>} */ ([
+      'application-state',
+      'control-state',
+    ]);
+  const volumes = retainedResourceKeys.map(
+    (/** @type {'application-state'|'control-state'} */ resourceKey) => {
+      if (resourceKey !== remainingAttachment) {
+        return retainedVolume(context, resourceKey);
+      }
+      const configuration =
+        resourceKey === 'application-state'
+          ? context.providerSpec.capabilities.applicationState
+          : context.providerSpec.capabilities.controlState;
+      const volumeId =
+        resourceKey === 'application-state'
+          ? APPLICATION_VOLUME_ID
+          : CONTROL_VOLUME_ID;
+      return retainedVolume(context, resourceKey, {
+        State: 'in-use',
+        Attachments: [
+          {
+            VolumeId: volumeId,
+            InstanceId: SUBSTRATE_ID,
+            Device: configuration.deviceName,
+            State: 'attached',
+            DeleteOnTermination: false,
+            EbsCardIndex: 0,
+          },
+        ],
+      });
+    },
+  );
+  const describeVolumes = (/** @type {Readonly<AnyRecord>} */ request) => ({
+    Volumes: volumes.filter((volume) =>
+      request.VolumeIds.includes(volume.VolumeId),
+    ),
+  });
+  clients.volume.describeVolumes.mockImplementation(describeVolumes);
+  clients.network.describeVpcs.mockResolvedValue({ Vpcs: [] });
+  clients.network.describeInternetGateways.mockResolvedValue({
+    InternetGateways: [],
+  });
+  clients.network.describeSubnets.mockResolvedValue({ Subnets: [] });
+  clients.network.describeRouteTables.mockResolvedValue({
+    RouteTables: [],
+  });
+  clients.network.describeSecurityGroups.mockResolvedValue({
+    SecurityGroups: [],
+  });
+  clients.runtimeIdentity.getRole.mockRejectedValue(awsError('NoSuchEntity'));
+  clients.runtimeIdentity.getInstanceProfile.mockRejectedValue(
+    awsError('NoSuchEntity'),
+  );
+  clients.node.describeInstances.mockImplementation(
+    async (/** @type {Readonly<AnyRecord>} */ request) => {
+      if (Object.hasOwn(request, 'InstanceIds')) {
+        throw awsError('InvalidInstanceID.NotFound');
+      }
+      return { Reservations: [] };
+    },
+  );
+  clients.node.describeVolumes.mockResolvedValue({ Volumes: [] });
+  clients.volumeAttachment.describeInstances.mockRejectedValue(
+    awsError('InvalidInstanceID.NotFound'),
+  );
+  clients.volumeAttachment.describeVolumes.mockImplementation(describeVolumes);
+  return Object.freeze(volumes);
+}
+
 describe('AWS single-node deployment provider client-family assembly', () => {
   it('composes through the real owned invocation boundary without construction I/O', async () => {
     const fixture = makeClientFamily();
@@ -342,6 +857,7 @@ describe('AWS single-node deployment provider client-family assembly', () => {
       'requireControl',
       'reconcileControl',
       'bootstrapControl',
+      'inspect',
       'plan',
       'converge',
       'resume',
@@ -411,6 +927,120 @@ describe('AWS single-node deployment provider client-family assembly', () => {
     expect(now).toHaveBeenCalledTimes(1);
     expect(fixture.io.every((mock) => mock.mock.calls.length === 0)).toBe(true);
     expect(fixture.family.close).not.toHaveBeenCalled();
+  });
+
+  it('derives DESTROYED through the fully assembled real observers after purge bindings are gone', async () => {
+    const fixture = makeClientFamily();
+    const destroyed = makeDestroyedInspectionContext(fixture.providerScope);
+    const { readyBindings: _readyBindings, targets, ...context } = destroyed;
+    const clients = fixture.family.clients;
+    configureDestroyedReadClients(fixture.family, destroyed);
+    const waitForRetry = jest.fn(async () => {});
+    const provider = createAwsSingleNodeDeploymentProviderFromClientFamily({
+      clientFamily: fixture.family,
+      now: () => 1_900_000_000_000,
+      maxAttempts: 2,
+      waitForRetry,
+    });
+
+    const inspection = /** @type {AnyRecord} */ (
+      await provider.inspect(context)
+    );
+
+    expect(inspection.status).toBe('destroyed');
+    expect(inspection.resources).toHaveLength(targets.length);
+    expect(
+      inspection.resources
+        .filter(
+          (/** @type {Readonly<AnyRecord>} */ resource) =>
+            resource.onDestroy === 'retain',
+        )
+        .every(
+          (/** @type {Readonly<AnyRecord>} */ resource) =>
+            resource.presence === 'present' &&
+            resource.ownership === 'verified' &&
+            resource.bindingId !== null,
+        ),
+    ).toBe(true);
+    expect(
+      inspection.resources
+        .filter(
+          (/** @type {Readonly<AnyRecord>} */ resource) =>
+            resource.onDestroy === 'purge',
+        )
+        .every(
+          (/** @type {Readonly<AnyRecord>} */ resource) =>
+            resource.presence === 'absent' &&
+            resource.ownership === 'missing' &&
+            resource.bindingId === null,
+        ),
+    ).toBe(true);
+    expect(clients.node.describeInstances).toHaveBeenCalledTimes(4);
+    expect(clients.node.describeInstances).toHaveBeenCalledWith({
+      InstanceIds: [SUBSTRATE_ID],
+    });
+    expect(
+      clients.node.describeInstances.mock.calls.filter(
+        (/** @type {AnyRecord[]} */ call) => Object.hasOwn(call[0], 'Filters'),
+      ),
+    ).toHaveLength(2);
+    expect(clients.node.describeVolumes).toHaveBeenCalledTimes(2);
+    expect(clients.node.runInstances).not.toHaveBeenCalled();
+    expect(clients.node.terminateInstances).not.toHaveBeenCalled();
+    expect(clients.volume.createVolume).not.toHaveBeenCalled();
+    expect(clients.network.deleteVpc).not.toHaveBeenCalled();
+    expect(clients.runtimeIdentity.deleteRole).not.toHaveBeenCalled();
+    expect(clients.managedArtifact.deleteObjectVersion).not.toHaveBeenCalled();
+    expect(fixture.family.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps a destroyed retained-volume attachment unknown while fresh volume evidence still carries it', async () => {
+    const fixture = makeClientFamily();
+    const destroyed = makeDestroyedInspectionContext(fixture.providerScope);
+    const {
+      readyBindings: _readyBindings,
+      targets: _targets,
+      ...context
+    } = destroyed;
+    configureDestroyedReadClients(
+      fixture.family,
+      destroyed,
+      'application-state',
+    );
+    const provider = createAwsSingleNodeDeploymentProviderFromClientFamily({
+      clientFamily: fixture.family,
+      now: () => 1_900_000_000_000,
+      maxAttempts: 2,
+      waitForRetry: async () => {},
+    });
+
+    const inspection = /** @type {AnyRecord} */ (
+      await provider.inspect(context)
+    );
+    const resource = (/** @type {string} */ resourceKey) =>
+      inspection.resources.find(
+        (/** @type {Readonly<AnyRecord>} */ candidate) =>
+          candidate.resourceKey === resourceKey,
+      );
+
+    expect(inspection.status).toBe('unknown');
+    expect(resource('application-state')).toMatchObject({
+      presence: 'present',
+      ownership: 'verified',
+    });
+    expect(resource('application-state-attachment')).toMatchObject({
+      presence: 'unknown',
+      ownership: 'unknown',
+    });
+    expect(resource('control-state-attachment')).toMatchObject({
+      presence: 'absent',
+      ownership: 'missing',
+    });
+    expect(
+      fixture.family.clients.volumeAttachment.describeVolumes,
+    ).toHaveBeenCalledWith({
+      VolumeIds: [APPLICATION_VOLUME_ID],
+    });
   });
 
   it('preserves a projected read receiver and the common retry policy', async () => {

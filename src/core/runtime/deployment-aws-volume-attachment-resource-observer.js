@@ -2,6 +2,7 @@
 
 import { sortCanonicalJsonValue } from './canonical-order.js';
 import { createAwsSingleNodeDesiredResourceTargetCatalog } from './deployment-aws-desired-resource-targets.js';
+import { createAwsSingleNodeDestroyedResourceLocator } from './deployment-aws-destroyed-resource-locator.js';
 import { createAwsSingleNodeResourceObservationAuthority } from './deployment-aws-resource-observation-authority.js';
 import { validateAwsSingleNodeResourceObservation } from './deployment-aws-resource-observation.js';
 import {
@@ -36,7 +37,7 @@ const FACTORY_KEYS = new Set([
 ]);
 const FACTORY_REQUIRED_KEYS = new Set(['client', 'providerScope']);
 const CLIENT_KEYS = new Set(['describeInstances', 'describeVolumes']);
-const AUTHORITY_KEYS = new Set([
+const AUTHORITY_REQUIRED_KEYS = new Set([
   'operation',
   'deploymentRevision',
   'profile',
@@ -50,6 +51,10 @@ const AUTHORITY_KEYS = new Set([
   'target',
   'binding',
   'currentAction',
+]);
+const AUTHORITY_KEYS = new Set([
+  ...AUTHORITY_REQUIRED_KEYS,
+  'destroyedResourceLocator',
 ]);
 const PROVIDER_TYPE = 'ebs-volume-attachment';
 const SUBSTRATE_RESOURCE_KEY = 'substrate';
@@ -162,9 +167,14 @@ function revalidateAuthority(authority) {
       'awsSingleNodeVolumeAttachmentResourceObserver context must be an object.',
     );
   }
-  assertExactKeys(
+  assertSupportedKeys(
     authority,
     AUTHORITY_KEYS,
+    'awsSingleNodeVolumeAttachmentResourceObserver context',
+  );
+  assertRequiredKeys(
+    authority,
+    AUTHORITY_REQUIRED_KEYS,
     'awsSingleNodeVolumeAttachmentResourceObserver context',
   );
   let canonical;
@@ -185,13 +195,27 @@ function revalidateAuthority(authority) {
   } catch {
     throw new AwsSingleNodeVolumeAttachmentResourceObserverAuthorityError();
   }
+  const expectedDestroyedResourceLocator =
+    createAwsSingleNodeDestroyedResourceLocator(canonical);
+  const destroyedResourceLocator = Object.hasOwn(
+    authority,
+    'destroyedResourceLocator',
+  )
+    ? authority.destroyedResourceLocator
+    : null;
   if (
     !sameJson(authority.binding, canonical.binding) ||
-    !sameJson(authority.currentAction, canonical.currentAction)
+    !sameJson(authority.currentAction, canonical.currentAction) ||
+    !sameJson(destroyedResourceLocator, expectedDestroyedResourceLocator)
   ) {
     throw new AwsSingleNodeVolumeAttachmentResourceObserverAuthorityError();
   }
-  return canonical;
+  return expectedDestroyedResourceLocator === null
+    ? canonical
+    : deepFreeze({
+        ...canonical,
+        destroyedResourceLocator: expectedDestroyedResourceLocator,
+      });
 }
 
 /** @param {Readonly<Record<string, any>>} binding @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} definition @param {Map<string, Readonly<Record<string, any>>>} bindingByKey @returns {void} */
@@ -422,11 +446,79 @@ function assertRelationshipAuthority(authority) {
   );
   const volumeBinding = bindingByKey.get(contract.volumeResourceKey) ?? null;
   const instanceBinding = bindingByKey.get(SUBSTRATE_RESOURCE_KEY) ?? null;
+  const configuration =
+    contract.capabilityKind === 'application-state'
+      ? authority.providerSpec.capabilities.applicationState
+      : authority.providerSpec.capabilities.controlState;
   if (volumeBinding === null || instanceBinding === null) {
     if (authority.binding !== null || authority.currentAction !== null) {
       throw new AwsSingleNodeVolumeAttachmentResourceObserverAuthorityError();
     }
-    return null;
+    const destroyedResourceLocator = authority.destroyedResourceLocator;
+    if (
+      destroyedResourceLocator === undefined ||
+      destroyedResourceLocator.resourceKey !== contract.resourceKey ||
+      destroyedResourceLocator.providerState?.providerType !== PROVIDER_TYPE
+    ) {
+      return null;
+    }
+    const dependencyByKey = new Map(
+      destroyedResourceLocator.dependencies.map(
+        (/** @type {Readonly<Record<string, any>>} */ dependency) => [
+          dependency.resourceKey,
+          dependency.providerIdentity,
+        ],
+      ),
+    );
+    const volumeIdentity = dependencyByKey.get(contract.volumeResourceKey);
+    const instanceIdentity = dependencyByKey.get(SUBSTRATE_RESOURCE_KEY);
+    let volumeId;
+    let instanceId;
+    try {
+      if (
+        dependencyByKey.size !== 2 ||
+        volumeIdentity?.providerType !== 'ebs-volume' ||
+        instanceIdentity?.providerType !== 'ec2-instance'
+      ) {
+        throw new Error();
+      }
+      volumeId = validateAwsSingleNodeVolumeAttachmentVolumeId(
+        volumeIdentity.providerResourceId,
+      );
+      instanceId = validateAwsSingleNodeVolumeAttachmentInstanceId(
+        instanceIdentity.providerResourceId,
+      );
+    } catch {
+      throw new AwsSingleNodeVolumeAttachmentResourceObserverAuthorityError();
+    }
+    const providerResourceId =
+      getAwsSingleNodeVolumeAttachmentProviderResourceId(
+        authority.providerSpec,
+        contract.capabilityKind,
+        instanceId,
+        volumeId,
+      );
+    if (
+      destroyedResourceLocator.providerState.providerResourceId !==
+        providerResourceId ||
+      (volumeBinding !== null &&
+        volumeBinding.providerResourceId !== volumeId) ||
+      (instanceBinding !== null &&
+        instanceBinding.providerResourceId !== instanceId)
+    ) {
+      throw new AwsSingleNodeVolumeAttachmentResourceObserverAuthorityError();
+    }
+    return deepFreeze({
+      availabilityZoneId: authority.providerSpec.placement.availabilityZoneId,
+      capabilityKind: contract.capabilityKind,
+      configuration,
+      destroyed: true,
+      expectedDigest,
+      instanceId,
+      providerResourceId,
+      resourceKey: contract.resourceKey,
+      volumeId,
+    });
   }
   const volumeDefinition = getAwsSingleNodeResourceDefinition(
     contract.volumeResourceKey,
@@ -500,14 +592,11 @@ function assertRelationshipAuthority(authority) {
   ) {
     throw new AwsSingleNodeVolumeAttachmentResourceObserverAuthorityError();
   }
-  const configuration =
-    contract.capabilityKind === 'application-state'
-      ? authority.providerSpec.capabilities.applicationState
-      : authority.providerSpec.capabilities.controlState;
   return deepFreeze({
     availabilityZoneId: authority.providerSpec.placement.availabilityZoneId,
     capabilityKind: contract.capabilityKind,
     configuration,
+    destroyed: false,
     expectedDigest,
     instanceId,
     providerResourceId,
@@ -743,12 +832,16 @@ export function createAwsSingleNodeVolumeAttachmentResourceObserver(options) {
     const isCurrentDelete =
       authority.binding !== null &&
       authority.currentAction?.action.action === 'delete';
+    const isCompletedDestroy = relationship?.destroyed === true;
     let allAttemptsCleanAbsent = true;
     let endpointAbsenceSignature = null;
     let endpointAbsenceObservations = 0;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        const logical = await readLogicalState(relationship, isCurrentDelete);
+        const logical = await readLogicalState(
+          relationship,
+          isCurrentDelete || isCompletedDestroy,
+        );
         if (logical.state === 'endpoint-absent') {
           allAttemptsCleanAbsent = false;
           if (logical.signature === endpointAbsenceSignature) {

@@ -1936,3 +1936,52 @@ revision to be the target artifact, so a Node-hosted source command cannot
 honestly apply itself. Guest service projection, privileged publisher wiring,
 live STS role/session proof, DESTROYED-tombstone reapply, clean-account proof,
 and exactly-once provider effects remain unfinished.
+
+The forty-first slice adds exact read-only deployment inspection without
+expanding mutation authority. The controller accepts only
+`{deploymentInstanceId}` and returns one frozen schema-v1
+`deploymentControllerInspection` envelope. An absent durable head returns
+`status: absent` with null head, active plan, last-operation plan, profile,
+ProviderSpec, and InspectionV6 fields and performs no provider operation.
+
+A live or destroyed head instead hydrates and cross-validates the exact active
+plan when present, the exact plan named by `lastOperation`, their stored
+profile, and their common pinned ProviderSpec before obtaining one fresh
+InspectionV6. It never resolves a newer ProviderSpec, creates a plan, stages an
+artifact, writes durable state, performs CAS, or executes or settles an effect.
+Unknown and conflict are returned as truthful inspection statuses rather than
+being rejected as mutation authority.
+
+Completed destroy is now inspectable after final head publication. A DESTROYED
+head may authorize observation only through its exact last destroy plan.
+Inspection becomes `destroyed` only when every retained resource remains
+present with exact ownership, bindings, dependencies, and desired/observed
+state while every purged resource is authoritatively absent without residual
+identity or binding evidence. Settled destroy receipts can reconstruct
+historical provider locators, but those locators authorize reads rather than
+proving absence. The substrate and volume attachments require fresh exact and
+collision evidence; a bounded relationship can inherit absence only from a
+freshly absent provider endpoint whose lifecycle necessarily contains it.
+Uncertainty and contradictory evidence are never overwritten. This read
+authority does not permit fresh apply from the retained-binding tombstone.
+
+Concurrent deployment read fanouts are drain barriers: every admitted sibling
+settles before return and deterministic contract order selects the canonical
+error. Exact controller inputs are also descriptor-snapshotted plain objects;
+symbols, accessors, non-enumerable fields, class instances, and extra keys are
+rejected before deferred store or provider work begins. The invocation takes
+an independent deep JSON snapshot before its asynchronous control preflight,
+so caller mutation cannot redirect an admitted controller operation.
+
+The owned AWS invocation exposes this controller operation as top-level
+`inspect`, distinct from `inspectControl`. It first obtains fresh evidence that
+both retained control resources are active, admits the control preflight and
+controller inspection as one lifetime operation, and preserves the exact
+controller result. Starting close fences later calls but drains an already
+entered inspection before closing the family.
+
+This slice still does not add the one-shot operation runner, define
+primary-operation versus cleanup-error precedence, own a selected source-mode
+SEA, or mount deployment commands. Guest service projection, privileged
+publisher wiring, live STS role/session proof, DESTROYED-tombstone reapply,
+clean-account proof, and exactly-once provider effects remain unfinished.

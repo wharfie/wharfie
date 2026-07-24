@@ -27,9 +27,6 @@ import {
 import { validateDeploymentRevision } from './deployment-revision.js';
 import { cloneJsonObject } from './json-value.js';
 
-export const AWS_SINGLE_NODE_RESOURCE_OBSERVATION_AUTHORITY_UNSUPPORTED =
-  'AWS_SINGLE_NODE_RESOURCE_OBSERVATION_AUTHORITY_UNSUPPORTED';
-
 const INPUT_KEYS = new Set([
   'operation',
   'deploymentRevision',
@@ -52,15 +49,6 @@ const AUTHORITY_TARGET_ERROR =
   'AWS single-node resource observation authority target does not match exactly one desired resource target.';
 const AUTHORITY_FRONTIER_ERROR =
   'AWS single-node resource observation authority has an invalid action frontier.';
-
-/** A destroyed head cannot yet authorize resource observation for reincarnation. */
-export class AwsSingleNodeResourceObservationAuthorityUnsupportedError extends Error {
-  constructor() {
-    super('AWS single-node resource observation authority is unsupported.');
-    this.name = 'AwsSingleNodeResourceObservationAuthorityUnsupportedError';
-    this.code = AWS_SINGLE_NODE_RESOURCE_OBSERVATION_AUTHORITY_UNSUPPORTED;
-  }
-}
 
 /** @param {Record<string, any>} value @param {Set<string>} keys @param {string} path @returns {void} */
 function assertExactKeys(value, keys, path) {
@@ -124,16 +112,23 @@ function settledOperationMatchesBasis(plan, operationKind) {
 function assertSettledPlanAuthority(plan, head, providerSpec) {
   const lastOperation = head.lastOperation;
   const operationKind = getSettledOperationKind(plan);
+  const isCompletedDestroy = head.phase === 'DESTROYED';
+  const revisionMatches = isCompletedDestroy
+    ? plan.operation === 'destroy' &&
+      plan.basis.settledDeploymentRevisionId ===
+        plan.deploymentRevision.deploymentRevisionId
+    : plan.deploymentRevision.deploymentRevisionId ===
+      head.settledDeploymentRevisionId;
   if (
     lastOperation === null ||
     !sameJson(plan.providerSpec, providerSpec) ||
     plan.planId !== lastOperation.planId ||
     !settledOperationMatchesBasis(plan, operationKind) ||
     lastOperation.kind !== operationKind ||
+    (isCompletedDestroy && operationKind !== 'destroy') ||
     plan.deploymentInstanceId !== head.deploymentInstanceId ||
     plan.incarnationId !== head.incarnationId ||
-    plan.deploymentRevision.deploymentRevisionId !==
-      head.settledDeploymentRevisionId ||
+    !revisionMatches ||
     !sameJson(plan.providerScope, head.providerScope) ||
     plan.basis.headGeneration >= head.generation ||
     lastOperation.intents.length !== plan.actions.length ||
@@ -731,9 +726,7 @@ export function createAwsSingleNodeResourceObservationAuthority(value) {
     input.head,
     'awsSingleNodeResourceObservationAuthority.head',
   );
-  if (head.phase === 'DESTROYED') {
-    throw new AwsSingleNodeResourceObservationAuthorityUnsupportedError();
-  }
+  const isCompletedDestroy = head.phase === 'DESTROYED';
 
   if (
     deploymentRevision.profileRevisionId !== profile.profileRevisionId ||
@@ -743,7 +736,9 @@ export function createAwsSingleNodeResourceObservationAuthority(value) {
     head.deploymentInstanceId !== input.deploymentInstanceId ||
     head.incarnationId !== input.incarnationId ||
     !sameJson(head.providerScope, providerScope) ||
-    (input.operation !== 'apply' &&
+    (isCompletedDestroy && input.operation !== 'destroy') ||
+    (!isCompletedDestroy &&
+      input.operation !== 'apply' &&
       head.settledDeploymentRevisionId !==
         deploymentRevision.deploymentRevisionId)
   ) {
@@ -766,6 +761,12 @@ export function createAwsSingleNodeResourceObservationAuthority(value) {
         );
   if (settledPlan !== null) {
     assertSettledPlanAuthority(settledPlan, head, providerSpec);
+    if (
+      isCompletedDestroy &&
+      !sameJson(settledPlan.deploymentRevision, deploymentRevision)
+    ) {
+      planConflict();
+    }
     try {
       validateAwsSingleNodeProviderSpecContext(settledPlan.providerSpec, {
         profile,
@@ -802,6 +803,12 @@ export function createAwsSingleNodeResourceObservationAuthority(value) {
 
   if (plan !== null && head.activeOperation !== null) {
     const activeOperation = head.activeOperation;
+    const operationMatchesPlan =
+      activeOperation.kind === 'destroy'
+        ? plan.operation === 'destroy'
+        : activeOperation.kind === 'reconcile'
+          ? plan.operation === 'apply' || plan.operation === 'reconcile'
+          : plan.operation === 'apply';
     const expectedOperationKind =
       plan.operation === 'destroy'
         ? 'destroy'
@@ -813,6 +820,7 @@ export function createAwsSingleNodeResourceObservationAuthority(value) {
             : 'update';
     if (
       plan.operation !== input.operation ||
+      !operationMatchesPlan ||
       !sameJson(plan.deploymentRevision, deploymentRevision) ||
       !sameJson(plan.providerScope, providerScope) ||
       !sameJson(plan.providerSpec, providerSpec) ||
@@ -973,7 +981,5 @@ export function createAwsSingleNodeResourceObservationAuthority(value) {
 }
 
 export default {
-  AWS_SINGLE_NODE_RESOURCE_OBSERVATION_AUTHORITY_UNSUPPORTED,
-  AwsSingleNodeResourceObservationAuthorityUnsupportedError,
   createAwsSingleNodeResourceObservationAuthority,
 };

@@ -1131,15 +1131,22 @@ retained controls, branded store, artifact stager, provider, and controller.
 It separates read-only control inspection and require-active from
 existing-only reconciliation and explicit bootstrap. Lifecycle-native
 reconciliation never calls either create API, including across disappearance
-and readback races. Controller plan, converge, and resume require fresh active
-control evidence. Invocation close fences new calls, drains every entered call
-and both sides of paired control work, then closes the family once.
+and readback races. The controller and invocation now expose exact read-only
+deployment inspection. Absent heads return a frozen null-document envelope
+without deployment-provider I/O after the invocation's control preflight. Live
+and destroyed heads hydrate their exact active and last-operation plans,
+stored profile, pinned ProviderSpec, and InspectionV6 without selection,
+planning, staging, writes, CAS, or effects. Unknown and conflict remain
+operator-visible data. A completed DESTROYED head can use its exact last
+destroy plan to observe retained and purged resources; `destroyed` still
+requires complete exact provider evidence. Inspection, plan, converge, and
+resume require fresh active control evidence. Invocation close fences new
+calls, drains every entered call and both sides of paired control work, then
+closes the family once.
 
-1. Add the controller's read-only deployment inspection envelope, including
-   exact active and predecessor plan hydration without ProviderSpec selection,
-   planning, staging, CAS, or effects. Then add one operation runner that owns
-   invocation cleanup, explicit control policy, and exact selected-SEA
-   authority for source mode.
+1. Add one operation runner that owns invocation cleanup, makes control policy
+   explicit, defines primary-operation versus cleanup-error precedence, and
+   owns exact selected-SEA authority for source mode.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands only after that boundary is proven. Apply and reconcile
    must re-observe the selected or currently running SEA.
@@ -1153,9 +1160,11 @@ and both sides of paired control work, then closes the family once.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [owned AWS deployment invocation
-checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md).
-Its parent is the [production AWS provider assembly
+The current restart point is the [read-only deployment inspection
+checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md).
+Its parent is the [owned AWS deployment invocation
+checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md),
+whose parent is the [production AWS provider assembly
 checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md), whose
 parent is the [InspectionV6 aggregate and controller
 checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md),

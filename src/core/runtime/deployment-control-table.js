@@ -413,11 +413,17 @@ export function createDeploymentControlTableLifecycle(options) {
         ttlEnabled: null,
       });
     }
-    const [, pitr] = await Promise.all([
+    const observations = await Promise.allSettled([
       validateTags(client, table.tableArn, expectedTags),
       inspectPitr(client),
       validateTimeToLiveDisabled(client),
     ]);
+    for (const observation of observations) {
+      if (observation.status === 'rejected') throw observation.reason;
+    }
+    const pitrObservation = observations[1];
+    if (pitrObservation.status === 'rejected') throw pitrObservation.reason;
+    const pitr = pitrObservation.value;
     const pitrReady =
       pitr.enabled === true &&
       pitr.recoveryPeriodDays === DEPLOYMENT_CONTROL_TABLE_PITR_DAYS;

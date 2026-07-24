@@ -475,13 +475,21 @@ One CLI-free invocation now composes the fixed retained table and bucket,
 branded store, artifact stager, provider, and controller behind an exact owned
 lifetime. Control inspection and require-active are read-only; existing-only
 reconcile can strengthen but never create; bootstrap is the sole explicit
-create policy. Controller plan, converge, and resume all require fresh active
-control evidence. Shutdown fences new calls, drains entered work, and closes
-the family once. This does not yet provide read-only deployment inspection,
-operator commands, selected-SEA source staging, the privileged host observer
-and publisher, guest service projection, or clean-account proof. External
-resource verification is represented by the generic V6 contract but remains
-unreachable through the fixed all-managed AWS profile and planner.
+create policy. The controller and invocation now expose a top-level read-only
+deployment `inspect({deploymentInstanceId})`. The controller's absent-head path
+returns one exact null-document envelope without deployment-provider I/O. A
+live or destroyed head hydrates its exact active and last-operation plans,
+profile, pinned ProviderSpec, and InspectionV6 without selecting prerequisites,
+planning, staging, writing, CAS, or effects. Unknown and conflict remain
+truthful inspection data. The invocation first requires fresh active control
+evidence for inspection, plan, converge, and resume. Shutdown fences new calls,
+drains entered work, and closes the family once.
+
+This does not yet provide the one-shot operation runner, operator commands,
+selected-SEA source staging, the privileged host observer and publisher, guest
+service projection, or clean-account proof. External resource verification is
+represented by the generic V6 contract but remains unreachable through the
+fixed all-managed AWS profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -492,7 +500,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Owned AWS deployment invocation checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md) — the current handoff for explicit inspect/require/reconcile/bootstrap control policy, guarded controller operations, active-call draining, and one owned AWS lifetime.
+- [Read-only deployment inspection checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md) — the current handoff for exact durable inspection hydration, completed-destroy observation, guarded controller operations, active-call draining, and one owned AWS lifetime.
+- [Owned AWS deployment invocation checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md) — the parent handoff for explicit inspect/require/reconcile/bootstrap control policy, guarded controller operations, active-call draining, and one owned AWS lifetime.
 - [Production AWS provider assembly checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md) — the parent handoff for one ordinary-chain invocation lifetime, exact fenced AWS client projections, and complete pure assembly of the seven-method controller provider.
 - [InspectionV6 aggregate and controller checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md) — the earlier handoff for lossless 18-role aggregation, exact provider composition, pre-intent first-call fencing, and stable-token-only crash replay.
 - [Complete AWS resource observers checkpoint](llm/checkpoints/2026-07-24-v55-complete-aws-resource-observers.md) — the parent handoff for complete raw observation coverage, bounded artifact history, joined node/root evidence, stable node-create replay advice, and attachment endpoint-loss proof.

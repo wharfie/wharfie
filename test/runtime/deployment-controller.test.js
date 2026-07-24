@@ -73,6 +73,8 @@ function semanticId(prefix, domain, value) {
 
 const HEALTH_NOW = 1_700_000_000_000;
 const RUNTIME_ROLE_ID = 'AROA1234567890EXAMPLE';
+/** @type {ReadonlyArray<'unknown'|'conflict'>} */
+const READ_ONLY_INSPECTION_EVIDENCE = Object.freeze(['unknown', 'conflict']);
 
 const RESOURCE_BY_KEY = new Map(
   AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.map(
@@ -137,8 +139,8 @@ function makeProviderSpec(
   });
 }
 
-/** @returns {Readonly<Record<string, any>>} */
-function makeContext() {
+/** @param {number} [revision] @returns {Readonly<Record<string, any>>} */
+function makeContext(revision = 1) {
   const profile = validateDeploymentProfile(
     createDeploymentProfile({
       profile: { id: 'production' },
@@ -158,7 +160,7 @@ function makeContext() {
     kind: 'deploymentRevision',
     deployment: { id: 'production' },
     appId: profile.appId,
-    revisionId: semanticId('wrv1', 'wharfie:test:revision:v1', { revision: 1 }),
+    revisionId: semanticId('wrv1', 'wharfie:test:revision:v1', { revision }),
     artifactId: createSha256Id({
       prefix: 'waf1',
       payload: 'controller artifact',
@@ -722,8 +724,13 @@ function makeLiveInspection(
   );
 }
 
-/** @param {Readonly<Record<string, any>>|null} [initialHead] @param {Readonly<Record<string, any>>[]} [initialPlans] @param {string[]} [events] */
-function makeStore(initialHead = null, initialPlans = [], events = []) {
+/** @param {Readonly<Record<string, any>>|null} [initialHead] @param {Readonly<Record<string, any>>[]} [initialPlans] @param {string[]} [events] @param {Readonly<Record<string, any>>[]} [initialProfiles] */
+function makeStore(
+  initialHead = null,
+  initialPlans = [],
+  events = [],
+  initialProfiles = [],
+) {
   let head =
     initialHead === null ? null : validateDeploymentHead(clone(initialHead));
   /** @type {Map<string, Readonly<Record<string, any>>>} */
@@ -734,12 +741,26 @@ function makeStore(initialHead = null, initialPlans = [], events = []) {
     }),
   );
   /** @type {Map<string, Readonly<Record<string, any>>>} */
-  const profiles = new Map();
+  const profiles = new Map(
+    initialProfiles.map((profile) => {
+      const canonical = validateDeploymentProfile(clone(profile));
+      return [canonical.profileRevisionId, canonical];
+    }),
+  );
   /** @type {null|((previous: Readonly<Record<string, any>>|null, next: Readonly<Record<string, any>>) => void|Promise<void>)} */
   let afterCas = null;
+  /** @type {null|(() => void|Promise<void>)} */
+  let beforeReadHead = null;
   const stats = { puts: 0, casAttempts: 0, casSuccesses: 0 };
+  const readStats = { heads: 0, plans: 0, profiles: 0 };
+  /** @type {string[]} */
+  const readHeadDeploymentInstanceIds = [];
   const api = {
-    async readHead() {
+    /** @param {string} deploymentInstanceId */
+    async readHead(deploymentInstanceId) {
+      readStats.heads += 1;
+      readHeadDeploymentInstanceIds.push(deploymentInstanceId);
+      if (beforeReadHead !== null) await beforeReadHead();
       return head === null ? null : clone(head);
     },
     /** @param {{expectedHeadId: string|null, nextHead: unknown}} input */
@@ -762,6 +783,7 @@ function makeStore(initialHead = null, initialPlans = [], events = []) {
     },
     /** @param {string} planId */
     async readPlan(planId) {
+      readStats.plans += 1;
       const plan = plans.get(planId);
       return plan === undefined ? null : clone(plan);
     },
@@ -776,6 +798,7 @@ function makeStore(initialHead = null, initialPlans = [], events = []) {
     },
     /** @param {string} profileRevisionId */
     async readProfile(profileRevisionId) {
+      readStats.profiles += 1;
       const profile = profiles.get(profileRevisionId);
       return profile === undefined ? null : clone(profile);
     },
@@ -783,8 +806,14 @@ function makeStore(initialHead = null, initialPlans = [], events = []) {
   return {
     api,
     stats,
+    readStats,
+    readHeadDeploymentInstanceIds,
     get head() {
       return head;
+    },
+    /** @param {null|(() => void|Promise<void>)} hook */
+    setBeforeReadHead(hook) {
+      beforeReadHead = hook;
     },
     /** @param {null|((previous: Readonly<Record<string, any>>|null, next: Readonly<Record<string, any>>) => void|Promise<void>)} hook */
     setAfterCas(hook) {
@@ -793,6 +822,18 @@ function makeStore(initialHead = null, initialPlans = [], events = []) {
     /** @param {Readonly<Record<string, any>>} value */
     replaceHeadForTest(value) {
       head = validateDeploymentHead(clone(value));
+    },
+    /** @param {string} planId @param {Readonly<Record<string, any>>} value */
+    replacePlanForTest(planId, value) {
+      plans.set(planId, validateDeploymentPlan(clone(value)));
+    },
+    /** @param {string} planId */
+    removePlanForTest(planId) {
+      plans.delete(planId);
+    },
+    /** @param {string} profileRevisionId */
+    removeProfileForTest(profileRevisionId) {
+      profiles.delete(profileRevisionId);
     },
   };
 }
@@ -896,12 +937,14 @@ function makeProvider(base, store, physical, events = []) {
   const inspectContexts = [];
   /** @type {Record<string, any>[]} */
   const planContexts = [];
+  let scopeResolutionCount = 0;
   let providerSpecResolutionCount = 0;
   let providerSpecValidationCount = 0;
   /** @type {Readonly<Record<string, any>>|null} */
   let validatedProviderSpecOverride = null;
   const api = {
     async resolveScope() {
+      scopeResolutionCount += 1;
       return clone(resolvedScope);
     },
     /** @param {Record<string, any>} _context */
@@ -1057,6 +1100,9 @@ function makeProvider(base, store, physical, events = []) {
     verifyContexts,
     inspectContexts,
     planContexts,
+    get scopeResolutionCount() {
+      return scopeResolutionCount;
+    },
     get providerSpecResolutionCount() {
       return providerSpecResolutionCount;
     },
@@ -1310,26 +1356,201 @@ function replaceReadySettledPlan(
   });
 }
 
-/** @param {{head?: Readonly<Record<string, any>>|null, plans?: Readonly<Record<string, any>>[], physical?: Map<string, Readonly<Record<string, any>>>}} [options] */
+/** @returns {{base: Readonly<Record<string, any>>, physical: Map<string, Readonly<Record<string, any>>>, head: Readonly<Record<string, any>>, activePlan: Readonly<Record<string, any>>}} */
+function makeActiveCreateState() {
+  const base = makeContext();
+  const activePlan = makePlan(base, makeAbsentInspection(base), 'apply');
+  const head = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: 1,
+    phase: 'CONVERGING',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId: base.deploymentRevision.deploymentRevisionId,
+    resourceBindings: [],
+    activeOperation: {
+      kind: 'create',
+      planId: activePlan.planId,
+      status: 'running',
+      nextActionIndex: 0,
+      intents: activePlan.actions.map(
+        (
+          /** @type {Readonly<Record<string, any>>} */ action,
+          /** @type {number} */ index,
+        ) => ({
+          actionId: action.actionId,
+          status: 'pending',
+          ownershipNonce: createOwnershipNonce(Buffer.alloc(32, index + 50)),
+        }),
+      ),
+    },
+    lastOperation: null,
+  });
+  return { base, physical: new Map(), head, activePlan };
+}
+
+/** @param {'apply'|'reconcile'} [operation] @returns {ReturnType<typeof makeReadyState> & {head: Readonly<Record<string, any>>, activePlan: Readonly<Record<string, any>>}} */
+function makeActiveResidentState(operation = 'reconcile') {
+  const ready = makeReadyState();
+  const reconcilePlan = makePlan(
+    ready.base,
+    makeLiveInspection(ready.base, ready.head, ready.physical),
+    'reconcile',
+    'original',
+    ready.head.resourceBindings,
+  );
+  const activePlan =
+    operation === 'reconcile'
+      ? reconcilePlan
+      : createDeploymentPlan(
+          {
+            operation: 'apply',
+            deploymentRevision: reconcilePlan.deploymentRevision,
+            providerScope: reconcilePlan.providerScope,
+            providerSpec: reconcilePlan.providerSpec,
+            deploymentInstanceId: reconcilePlan.deploymentInstanceId,
+            incarnationId: reconcilePlan.incarnationId,
+            basis: reconcilePlan.basis,
+            actions: reconcilePlan.actions.map(
+              (/** @type {Readonly<Record<string, any>>} */ action) => {
+                const { actionId: _actionId, ...input } = action;
+                return input;
+              },
+            ),
+          },
+          { profile: ready.base.profile },
+        );
+  const bindingByResourceKey = new Map(
+    ready.head.resourceBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ binding) => [
+        binding.resourceKey,
+        binding,
+      ],
+    ),
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: ready.head.deploymentInstanceId,
+    providerScope: ready.head.providerScope,
+    incarnationId: ready.head.incarnationId,
+    generation: ready.head.generation + 1,
+    phase: 'CONVERGING',
+    settledDeploymentRevisionId: ready.head.settledDeploymentRevisionId,
+    targetDeploymentRevisionId: ready.head.targetDeploymentRevisionId,
+    resourceBindings: ready.head.resourceBindings,
+    activeOperation: {
+      kind: 'reconcile',
+      planId: activePlan.planId,
+      status: 'running',
+      nextActionIndex: 0,
+      intents: activePlan.actions.map(
+        (/** @type {Readonly<Record<string, any>>} */ action) => ({
+          actionId: action.actionId,
+          status: 'pending',
+          ownershipNonce:
+            bindingByResourceKey.get(action.resourceKey)?.ownershipNonce ??
+            null,
+        }),
+      ),
+    },
+    lastOperation: ready.head.lastOperation,
+  });
+  return { ...ready, head, activePlan };
+}
+
+/** @returns {ReturnType<typeof makeReadyState> & {head: Readonly<Record<string, any>>, destroyPlan: Readonly<Record<string, any>>}} */
+function makeDestroyedState() {
+  const ready = makeReadyState();
+  const destroyPlan = makePlan(
+    ready.base,
+    makeLiveInspection(ready.base, ready.head, ready.physical),
+    'destroy',
+    'original',
+    ready.head.resourceBindings,
+  );
+  const bindingByResourceKey = new Map(
+    ready.head.resourceBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ binding) => [
+        binding.resourceKey,
+        binding,
+      ],
+    ),
+  );
+  const retainedBindings = ready.head.resourceBindings.filter(
+    (/** @type {Readonly<Record<string, any>>} */ binding) =>
+      binding.onDestroy === 'retain',
+  );
+  const physical = new Map(
+    retainedBindings.map(
+      (/** @type {Readonly<Record<string, any>>} */ binding) => [
+        binding.resourceKey,
+        binding,
+      ],
+    ),
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: ready.head.deploymentInstanceId,
+    providerScope: ready.head.providerScope,
+    incarnationId: ready.head.incarnationId,
+    generation: ready.head.generation + 1,
+    phase: 'DESTROYED',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId: null,
+    resourceBindings: retainedBindings,
+    activeOperation: null,
+    lastOperation: {
+      kind: 'destroy',
+      planId: destroyPlan.planId,
+      intents: destroyPlan.actions.map(
+        (/** @type {Readonly<Record<string, any>>} */ action) => ({
+          actionId: action.actionId,
+          status: 'settled',
+          ownershipNonce:
+            bindingByResourceKey.get(action.resourceKey)?.ownershipNonce ??
+            null,
+        }),
+      ),
+    },
+  });
+  return { ...ready, physical, head, destroyPlan };
+}
+
+/** @param {{head?: Readonly<Record<string, any>>|null, plans?: Readonly<Record<string, any>>[], profiles?: Readonly<Record<string, any>>[], physical?: Map<string, Readonly<Record<string, any>>>}} [options] */
 function makeHarness(options = {}) {
   const base = makeContext();
   /** @type {string[]} */
   const events = [];
   const physical = options.physical || new Map();
-  const store = makeStore(options.head || null, options.plans || [], events);
+  const store = makeStore(
+    options.head || null,
+    options.plans || [],
+    events,
+    options.profiles || [],
+  );
   const provider = makeProvider(base, store, physical, events);
   const artifactStager = makeArtifactStager(base, events);
   let currentNow = HEALTH_NOW;
+  let clockReadCount = 0;
+  const factoryStats = { ownershipNonces: 0, incarnations: 0 };
   const controller = createDeploymentController({
     store: store.api,
     provider: provider.api,
     artifactStager: artifactStager.api,
-    now: () => currentNow,
+    now: () => {
+      clockReadCount += 1;
+      return currentNow;
+    },
     createOwnershipNonce: (() => {
       let index = 20;
-      return () => createOwnershipNonce(Buffer.alloc(32, index++));
+      return () => {
+        factoryStats.ownershipNonces += 1;
+        return createOwnershipNonce(Buffer.alloc(32, index++));
+      };
     })(),
-    createDeploymentIncarnationId: () => base.incarnationId,
+    createDeploymentIncarnationId: () => {
+      factoryStats.incarnations += 1;
+      return base.incarnationId;
+    },
   });
   return {
     base,
@@ -1339,6 +1560,10 @@ function makeHarness(options = {}) {
     artifactStager,
     events,
     controller,
+    factoryStats,
+    get clockReadCount() {
+      return clockReadCount;
+    },
     /** @param {number} value */
     setNow(value) {
       currentNow = value;
@@ -1354,6 +1579,654 @@ async function planWith(harness, operation) {
     profile: harness.base.profile,
   });
 }
+
+/** @param {ReturnType<typeof makeHarness>} harness */
+function expectInspectionDidNotMutate(harness) {
+  expect(harness.store.stats).toEqual({
+    puts: 0,
+    casAttempts: 0,
+    casSuccesses: 0,
+  });
+  expect(harness.events).toEqual([]);
+  expect(harness.artifactStager.stageCount).toBe(0);
+  expect(harness.artifactStager.validationCount).toBe(0);
+  expect(harness.provider.planContexts).toEqual([]);
+  expect(harness.provider.executeContexts).toEqual([]);
+  expect(harness.provider.verifyContexts).toEqual([]);
+  expect(harness.provider.executeCount.size).toBe(0);
+  expect(harness.provider.providerSpecResolutionCount).toBe(0);
+  expect(harness.provider.providerSpecValidationCount).toBe(0);
+  expect(harness.factoryStats).toEqual({
+    ownershipNonces: 0,
+    incarnations: 0,
+  });
+}
+
+describe('deployment controller read-only inspection', () => {
+  it('accepts only an exact plain or null-prototype data-property request without invoking accessors', async () => {
+    const harness = makeHarness();
+    let accessorReads = 0;
+    const accessorRequest = {};
+    Object.defineProperty(accessorRequest, 'deploymentInstanceId', {
+      enumerable: true,
+      get() {
+        accessorReads += 1;
+        return harness.base.deploymentInstanceId;
+      },
+    });
+    const symbolRequest = {
+      deploymentInstanceId: harness.base.deploymentInstanceId,
+      [Symbol('extra')]: true,
+    };
+    const nonEnumerableRequest = {};
+    Object.defineProperty(nonEnumerableRequest, 'deploymentInstanceId', {
+      enumerable: false,
+      value: harness.base.deploymentInstanceId,
+    });
+    class InspectRequest {
+      constructor() {
+        this.deploymentInstanceId = harness.base.deploymentInstanceId;
+      }
+    }
+
+    await expect(harness.controller.inspect(accessorRequest)).rejects.toThrow(
+      /enumerable data property/i,
+    );
+    expect(accessorReads).toBe(0);
+    await expect(harness.controller.inspect(symbolRequest)).rejects.toThrow(
+      /symbol keys/i,
+    );
+    await expect(
+      harness.controller.inspect(nonEnumerableRequest),
+    ).rejects.toThrow(/enumerable data property/i);
+    await expect(
+      harness.controller.inspect(new InspectRequest()),
+    ).rejects.toThrow(/plain object/i);
+    expect(harness.store.readStats).toEqual({
+      heads: 0,
+      plans: 0,
+      profiles: 0,
+    });
+    expect(harness.provider.scopeResolutionCount).toBe(0);
+    expect(harness.provider.inspectContexts).toEqual([]);
+
+    const nullPrototypeRequest = Object.assign(Object.create(null), {
+      deploymentInstanceId: harness.base.deploymentInstanceId,
+    });
+    await expect(
+      harness.controller.inspect(nullPrototypeRequest),
+    ).resolves.toMatchObject({ status: 'absent' });
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 0,
+      profiles: 0,
+    });
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('snapshots request identity before a deferred head read can observe caller mutation', async () => {
+    const harness = makeHarness();
+    /** @type {() => void} */
+    let releaseRead = () => {};
+    const readBarrier = new Promise((resolve) => {
+      releaseRead = () => resolve(undefined);
+    });
+    harness.store.setBeforeReadHead(() => readBarrier);
+    const request = {
+      deploymentInstanceId: harness.base.deploymentInstanceId,
+    };
+
+    const pending = harness.controller.inspect(request);
+    request.deploymentInstanceId = 'mutated-after-inspection-admission';
+    releaseRead();
+    const result = await pending;
+
+    expect(harness.store.readHeadDeploymentInstanceIds).toEqual([
+      harness.base.deploymentInstanceId,
+    ]);
+    expect(result.deploymentInstanceId).toBe(harness.base.deploymentInstanceId);
+    expect(result.status).toBe('absent');
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('reads Proxy data descriptors without invoking a value get trap', async () => {
+    const harness = makeHarness();
+    let valueGets = 0;
+    const request = new Proxy(
+      { deploymentInstanceId: harness.base.deploymentInstanceId },
+      {
+        get(target, property, receiver) {
+          valueGets += 1;
+          if (property === 'deploymentInstanceId') {
+            return 'proxy-get-substituted-identity';
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+
+    const result = await harness.controller.inspect(request);
+
+    expect(valueGets).toBe(0);
+    expect(harness.store.readHeadDeploymentInstanceIds).toEqual([
+      harness.base.deploymentInstanceId,
+    ]);
+    expect(result.deploymentInstanceId).toBe(harness.base.deploymentInstanceId);
+    expect(result.status).toBe('absent');
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('returns one exact frozen absent envelope after only the strong head read', async () => {
+    const harness = makeHarness();
+
+    const result = await harness.controller.inspect({
+      deploymentInstanceId: harness.base.deploymentInstanceId,
+    });
+
+    expect(Object.keys(result)).toEqual([
+      'schemaVersion',
+      'kind',
+      'deploymentInstanceId',
+      'status',
+      'head',
+      'activePlan',
+      'lastOperationPlan',
+      'profile',
+      'providerSpec',
+      'inspection',
+    ]);
+    expect(result).toEqual({
+      schemaVersion: 1,
+      kind: 'deploymentControllerInspection',
+      deploymentInstanceId: harness.base.deploymentInstanceId,
+      status: 'absent',
+      head: null,
+      activePlan: null,
+      lastOperationPlan: null,
+      profile: null,
+      providerSpec: null,
+      inspection: null,
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 0,
+      profiles: 0,
+    });
+    expect(harness.provider.scopeResolutionCount).toBe(0);
+    expect(harness.provider.inspectContexts).toEqual([]);
+    expect(harness.clockReadCount).toBe(0);
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('hydrates READY authority and delegates one exact read-only provider context', async () => {
+    const ready = makeReadyState();
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      profiles: [ready.base.profile],
+      physical: ready.physical,
+    });
+
+    const result = await harness.controller.inspect({
+      deploymentInstanceId: ready.base.deploymentInstanceId,
+    });
+
+    expect(Object.keys(result)).toEqual([
+      'schemaVersion',
+      'kind',
+      'deploymentInstanceId',
+      'status',
+      'head',
+      'activePlan',
+      'lastOperationPlan',
+      'profile',
+      'providerSpec',
+      'inspection',
+    ]);
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      kind: 'deploymentControllerInspection',
+      deploymentInstanceId: ready.base.deploymentInstanceId,
+      status: 'converged',
+      activePlan: null,
+    });
+    expect(result.head).toEqual(ready.head);
+    expect(result.lastOperationPlan).toEqual(ready.applyPlan);
+    expect(result.profile).toEqual(ready.base.profile);
+    expect(result.providerSpec).toEqual(ready.base.providerSpec);
+    expect(result.inspection).toMatchObject({
+      schemaVersion: 6,
+      kind: 'deploymentInspection',
+      deploymentInstanceId: ready.base.deploymentInstanceId,
+      status: 'converged',
+      headGeneration: ready.head.generation,
+    });
+    for (const value of [
+      result,
+      result.head,
+      result.lastOperationPlan,
+      result.profile,
+      result.providerSpec,
+      result.inspection,
+    ]) {
+      expect(Object.isFrozen(value)).toBe(true);
+    }
+
+    expect(harness.provider.inspectContexts).toHaveLength(1);
+    const [context] = harness.provider.inspectContexts;
+    expect(Object.keys(context)).toEqual([
+      'operation',
+      'deploymentRevision',
+      'providerScope',
+      'deploymentInstanceId',
+      'incarnationId',
+      'profile',
+      'providerSpec',
+      'head',
+      'plan',
+      'settledPlan',
+      'pendingBinding',
+    ]);
+    expect(context).toEqual({
+      operation: ready.applyPlan.operation,
+      deploymentRevision: ready.applyPlan.deploymentRevision,
+      providerScope: ready.applyPlan.providerScope,
+      deploymentInstanceId: ready.applyPlan.deploymentInstanceId,
+      incarnationId: ready.applyPlan.incarnationId,
+      profile: ready.base.profile,
+      providerSpec: ready.applyPlan.providerSpec,
+      head: result.head,
+      plan: null,
+      settledPlan: result.lastOperationPlan,
+      pendingBinding: null,
+    });
+    expect(context.head).toBe(result.head);
+    expect(context.settledPlan).toBe(result.lastOperationPlan);
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 1,
+      profiles: 1,
+    });
+    expect(harness.provider.scopeResolutionCount).toBe(1);
+    expect(harness.clockReadCount).toBe(1);
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('hydrates an active create without inventing a predecessor plan', async () => {
+    const active = makeActiveCreateState();
+    const harness = makeHarness({
+      head: active.head,
+      plans: [active.activePlan],
+      profiles: [active.base.profile],
+      physical: active.physical,
+    });
+
+    const result = await harness.controller.inspect({
+      deploymentInstanceId: active.base.deploymentInstanceId,
+    });
+
+    expect(result).toMatchObject({
+      status: 'in-flight',
+      head: { phase: 'CONVERGING' },
+    });
+    expect(result.activePlan).toEqual(active.activePlan);
+    expect(result.lastOperationPlan).toBeNull();
+    expect(result.profile).toEqual(active.base.profile);
+    expect(result.providerSpec).toEqual(active.base.providerSpec);
+    expect(result.inspection.status).toBe('in-flight');
+    expect(harness.provider.inspectContexts).toHaveLength(1);
+    expect(harness.provider.inspectContexts[0]).toEqual({
+      operation: active.activePlan.operation,
+      deploymentRevision: active.activePlan.deploymentRevision,
+      providerScope: active.activePlan.providerScope,
+      deploymentInstanceId: active.activePlan.deploymentInstanceId,
+      incarnationId: active.activePlan.incarnationId,
+      profile: active.base.profile,
+      providerSpec: active.activePlan.providerSpec,
+      head: result.head,
+      plan: result.activePlan,
+      settledPlan: null,
+      pendingBinding: null,
+    });
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 1,
+      profiles: 1,
+    });
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('hydrates both active and predecessor plans for a resident operation', async () => {
+    const active = makeActiveResidentState();
+    const harness = makeHarness({
+      head: active.head,
+      plans: [active.activePlan, active.applyPlan],
+      profiles: [active.base.profile],
+      physical: active.physical,
+    });
+
+    const result = await harness.controller.inspect({
+      deploymentInstanceId: active.base.deploymentInstanceId,
+    });
+
+    expect(result.status).toBe('in-flight');
+    expect(result.activePlan).toEqual(active.activePlan);
+    expect(result.lastOperationPlan).toEqual(active.applyPlan);
+    expect(result.providerSpec).toEqual(active.activePlan.providerSpec);
+    expect(harness.provider.inspectContexts).toHaveLength(1);
+    expect(harness.provider.inspectContexts[0]).toMatchObject({
+      operation: 'reconcile',
+      head: result.head,
+      plan: result.activePlan,
+      settledPlan: result.lastOperationPlan,
+      pendingBinding: null,
+    });
+    expect(harness.provider.inspectContexts[0].plan).toBe(result.activePlan);
+    expect(harness.provider.inspectContexts[0].settledPlan).toBe(
+      result.lastOperationPlan,
+    );
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 2,
+      profiles: 1,
+    });
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('inspects and resumes a same-revision apply as an active reconcile operation', async () => {
+    const active = makeActiveResidentState('apply');
+    const harness = makeHarness({
+      head: active.head,
+      plans: [active.activePlan, active.applyPlan],
+      profiles: [active.base.profile],
+      physical: active.physical,
+    });
+
+    const inspected = await harness.controller.inspect({
+      deploymentInstanceId: active.base.deploymentInstanceId,
+    });
+
+    expect(inspected).toMatchObject({
+      status: 'in-flight',
+      head: {
+        phase: 'CONVERGING',
+        activeOperation: { kind: 'reconcile' },
+      },
+      activePlan: { operation: 'apply' },
+    });
+    expect(harness.provider.inspectContexts).toHaveLength(1);
+    expect(harness.provider.inspectContexts[0]).toMatchObject({
+      operation: 'apply',
+      plan: { planId: active.activePlan.planId },
+      settledPlan: { planId: active.applyPlan.planId },
+    });
+    expectInspectionDidNotMutate(harness);
+
+    const resumed = await harness.controller.resume({
+      deploymentInstanceId: active.base.deploymentInstanceId,
+    });
+
+    expect(resumed).toMatchObject({
+      phase: 'READY',
+      settledDeploymentRevisionId:
+        active.base.deploymentRevision.deploymentRevisionId,
+      activeOperation: null,
+      lastOperation: {
+        kind: 'reconcile',
+        planId: active.activePlan.planId,
+      },
+    });
+  });
+
+  it.each(READ_ONLY_INSPECTION_EVIDENCE)(
+    'returns provider %s as inspection data without mutation or recovery',
+    async (status) => {
+      const ready = makeReadyState();
+      const harness = makeHarness({
+        head: ready.head,
+        plans: [ready.applyPlan],
+        profiles: [ready.base.profile],
+        physical: ready.physical,
+      });
+      harness.provider.setInspectionEvidence(status);
+
+      const result = await harness.controller.inspect({
+        deploymentInstanceId: ready.base.deploymentInstanceId,
+      });
+
+      expect(result.status).toBe(status);
+      expect(result.inspection.status).toBe(status);
+      expect(result.head.headId).toBe(ready.head.headId);
+      expect(harness.provider.inspectContexts).toHaveLength(1);
+      expectInspectionDidNotMutate(harness);
+    },
+  );
+
+  it('fails closed for missing active, missing predecessor, corrupt predecessor, and missing profile lineage before provider I/O', async () => {
+    const active = makeActiveCreateState();
+    const missingActive = makeHarness({
+      head: active.head,
+      profiles: [active.base.profile],
+      physical: active.physical,
+    });
+    await expect(
+      missingActive.controller.inspect({
+        deploymentInstanceId: active.base.deploymentInstanceId,
+      }),
+    ).rejects.toThrow(/active deployment plan is missing/i);
+
+    const ready = makeReadyState();
+    const missingPredecessor = makeHarness({
+      head: ready.head,
+      profiles: [ready.base.profile],
+      physical: ready.physical,
+    });
+    await expect(
+      missingPredecessor.controller.inspect({
+        deploymentInstanceId: ready.base.deploymentInstanceId,
+      }),
+    ).rejects.toThrow(/last-operation deployment plan is missing/i);
+
+    const corruptHead = replaceReadySettledPlan(
+      ready,
+      ready.applyPlan,
+      'update',
+    );
+    const corruptPredecessor = makeHarness({
+      head: corruptHead,
+      plans: [ready.applyPlan],
+      profiles: [ready.base.profile],
+      physical: ready.physical,
+    });
+    await expect(
+      corruptPredecessor.controller.inspect({
+        deploymentInstanceId: ready.base.deploymentInstanceId,
+      }),
+    ).rejects.toThrow(/last settled plan does not match/i);
+
+    const missingProfile = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    await expect(
+      missingProfile.controller.inspect({
+        deploymentInstanceId: ready.base.deploymentInstanceId,
+      }),
+    ).rejects.toThrow(/inspection profile is missing/i);
+
+    for (const harness of [
+      missingActive,
+      missingPredecessor,
+      corruptPredecessor,
+      missingProfile,
+    ]) {
+      expect(harness.provider.scopeResolutionCount).toBe(0);
+      expect(harness.provider.inspectContexts).toEqual([]);
+      expect(harness.clockReadCount).toBe(0);
+      expectInspectionDidNotMutate(harness);
+    }
+  });
+
+  it('rejects create/reconcile and update/reconcile active-plan lineage before profile or provider I/O', async () => {
+    const activeCreate = makeActiveCreateState();
+    const createReconcilePlan = makePlan(
+      activeCreate.base,
+      makeAbsentInspection(activeCreate.base),
+      'reconcile',
+    );
+    const createReconcileHead = createDeploymentHead({
+      deploymentInstanceId: activeCreate.head.deploymentInstanceId,
+      providerScope: activeCreate.head.providerScope,
+      incarnationId: activeCreate.head.incarnationId,
+      generation: activeCreate.head.generation,
+      phase: 'CONVERGING',
+      settledDeploymentRevisionId: null,
+      targetDeploymentRevisionId:
+        activeCreate.base.deploymentRevision.deploymentRevisionId,
+      resourceBindings: [],
+      activeOperation: {
+        kind: 'create',
+        planId: createReconcilePlan.planId,
+        status: 'running',
+        nextActionIndex: 0,
+        intents: createReconcilePlan.actions.map(
+          (
+            /** @type {Readonly<Record<string, any>>} */ action,
+            /** @type {number} */ index,
+          ) => ({
+            actionId: action.actionId,
+            status: 'pending',
+            ownershipNonce: createOwnershipNonce(Buffer.alloc(32, index + 100)),
+          }),
+        ),
+      },
+      lastOperation: null,
+    });
+
+    const ready = makeReadyState();
+    const desired = makeContext(2);
+    const residentReconcilePlan = makePlan(
+      ready.base,
+      makeLiveInspection(ready.base, ready.head, ready.physical),
+      'reconcile',
+      'original',
+      ready.head.resourceBindings,
+    );
+    const updateReconcilePlan = createDeploymentPlan(
+      {
+        operation: 'reconcile',
+        deploymentRevision: desired.deploymentRevision,
+        providerScope: desired.providerScope,
+        providerSpec: desired.providerSpec,
+        deploymentInstanceId: desired.deploymentInstanceId,
+        incarnationId: desired.incarnationId,
+        basis: residentReconcilePlan.basis,
+        actions: residentReconcilePlan.actions.map(
+          (/** @type {Readonly<Record<string, any>>} */ action) => {
+            const { actionId: _actionId, ...input } = action;
+            return input;
+          },
+        ),
+      },
+      { profile: desired.profile },
+    );
+    const bindingByResourceKey = new Map(
+      ready.head.resourceBindings.map(
+        (/** @type {Readonly<Record<string, any>>} */ binding) => [
+          binding.resourceKey,
+          binding,
+        ],
+      ),
+    );
+    const updateReconcileHead = createDeploymentHead({
+      deploymentInstanceId: desired.deploymentInstanceId,
+      providerScope: desired.providerScope,
+      incarnationId: desired.incarnationId,
+      generation: ready.head.generation + 1,
+      phase: 'CONVERGING',
+      settledDeploymentRevisionId:
+        ready.base.deploymentRevision.deploymentRevisionId,
+      targetDeploymentRevisionId:
+        desired.deploymentRevision.deploymentRevisionId,
+      resourceBindings: ready.head.resourceBindings,
+      activeOperation: {
+        kind: 'update',
+        planId: updateReconcilePlan.planId,
+        status: 'running',
+        nextActionIndex: 0,
+        intents: updateReconcilePlan.actions.map(
+          (/** @type {Readonly<Record<string, any>>} */ action) => ({
+            actionId: action.actionId,
+            status: 'pending',
+            ownershipNonce:
+              bindingByResourceKey.get(action.resourceKey)?.ownershipNonce ??
+              null,
+          }),
+        ),
+      },
+      lastOperation: ready.head.lastOperation,
+    });
+
+    for (const [head, plan] of [
+      [createReconcileHead, createReconcilePlan],
+      [updateReconcileHead, updateReconcilePlan],
+    ]) {
+      const harness = makeHarness({ head, plans: [plan] });
+      await expect(
+        harness.controller.inspect({
+          deploymentInstanceId: head.deploymentInstanceId,
+        }),
+      ).rejects.toThrow(/exact active operation/i);
+      expect(harness.store.readStats).toEqual({
+        heads: 1,
+        plans: 1,
+        profiles: 0,
+      });
+      expect(harness.provider.scopeResolutionCount).toBe(0);
+      expect(harness.provider.inspectContexts).toEqual([]);
+      expect(harness.clockReadCount).toBe(0);
+      expectInspectionDidNotMutate(harness);
+    }
+  });
+
+  it('inspects a completed DESTROYED tombstone through its exact destroy plan', async () => {
+    const destroyed = makeDestroyedState();
+    const harness = makeHarness({
+      head: destroyed.head,
+      plans: [destroyed.destroyPlan],
+      profiles: [destroyed.base.profile],
+      physical: destroyed.physical,
+    });
+
+    const result = await harness.controller.inspect({
+      deploymentInstanceId: destroyed.base.deploymentInstanceId,
+    });
+
+    expect(result.status).toBe('destroyed');
+    expect(result.head).toEqual(destroyed.head);
+    expect(result.activePlan).toBeNull();
+    expect(result.lastOperationPlan).toEqual(destroyed.destroyPlan);
+    expect(result.inspection).toMatchObject({
+      status: 'destroyed',
+      headGeneration: destroyed.head.generation,
+    });
+    expect(harness.provider.inspectContexts).toHaveLength(1);
+    expect(harness.provider.inspectContexts[0]).toMatchObject({
+      operation: 'destroy',
+      plan: null,
+      settledPlan: result.lastOperationPlan,
+      pendingBinding: null,
+    });
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 1,
+      profiles: 1,
+    });
+    expectInspectionDidNotMutate(harness);
+  });
+});
 
 describe('deployment controller artifact staging', () => {
   it('stages before controller persistence and passes one exact bundle to every action call', async () => {

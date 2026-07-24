@@ -1092,16 +1092,27 @@ export function createAwsSingleNodeNodeResource(options) {
     const instanceId = instance.InstanceId;
     let responses;
     try {
-      responses = await Promise.all([
+      const observations = await Promise.allSettled([
         readAttribute(instanceId, 'userData'),
         readAttribute(instanceId, 'disableApiTermination'),
         readAttribute(instanceId, 'disableApiStop'),
         readAttribute(instanceId, 'instanceInitiatedShutdownBehavior'),
-        client.describeInstanceCreditSpecifications(
-          deepFreeze({ InstanceIds: [instanceId] }),
+        Promise.resolve().then(() =>
+          client.describeInstanceCreditSpecifications(
+            deepFreeze({ InstanceIds: [instanceId] }),
+          ),
         ),
-        client.describeVolumes(deepFreeze({ VolumeIds: [rootVolumeId] })),
+        Promise.resolve().then(() =>
+          client.describeVolumes(deepFreeze({ VolumeIds: [rootVolumeId] })),
+        ),
       ]);
+      for (const observation of observations) {
+        if (observation.status === 'rejected') throw observation.reason;
+      }
+      responses = observations.map((observation) => {
+        if (observation.status === 'rejected') throw observation.reason;
+        return observation.value;
+      });
     } catch (error) {
       if (
         error instanceof ProviderResponseUnknownError ||

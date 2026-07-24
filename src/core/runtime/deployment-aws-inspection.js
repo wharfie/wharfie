@@ -5,6 +5,7 @@ import {
   sortCanonicalJsonValue,
 } from './canonical-order.js';
 import { createAwsSingleNodeDesiredResourceTargetCatalog } from './deployment-aws-desired-resource-targets.js';
+import { createAwsSingleNodeDestroyedResourceLocator } from './deployment-aws-destroyed-resource-locator.js';
 import { validateAwsSingleNodeProviderSpecContext } from './deployment-aws-provider-spec.js';
 import { createAwsSingleNodeResourceObservationAuthority } from './deployment-aws-resource-observation-authority.js';
 import { validateAwsSingleNodeResourceObservation } from './deployment-aws-resource-observation.js';
@@ -56,6 +57,30 @@ const INSPECTION_CONTEXT_KEYS = new Set([
   'pendingBinding',
 ]);
 const OPERATIONS = new Set(['apply', 'reconcile', 'destroy']);
+const DESTROYED_LOCATOR_OBSERVER_RESOURCE_KEYS = new Set([
+  'substrate',
+  'application-state-attachment',
+  'control-state-attachment',
+]);
+const DESTROY_ABSENCE_CONTAINERS = Object.freeze({
+  'network-internet-gateway-attachment': Object.freeze([
+    'network-vpc',
+    'network-internet-gateway',
+  ]),
+  'network-subnet': Object.freeze(['network-vpc']),
+  'network-route-table': Object.freeze(['network-vpc']),
+  'network-default-ipv4-route': Object.freeze(['network-route-table']),
+  'network-subnet-route-table-association': Object.freeze([
+    'network-subnet',
+    'network-route-table',
+  ]),
+  'network-security-group': Object.freeze(['network-vpc']),
+  'runtime-role-policy': Object.freeze(['runtime-role']),
+  'runtime-identity-role-association': Object.freeze([
+    'runtime-role',
+    'runtime-identity',
+  ]),
+});
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
@@ -274,7 +299,7 @@ function assertPendingBindingAuthority(pendingBinding, input, authorities) {
  * Fence every resource authority, including active and predecessor plan
  * lineage, before any observer is allowed to perform provider I/O.
  * @param {Readonly<Record<string, any>>} input - Exact live provider context.
- * @returns {{head: Readonly<Record<string, any>>, targets: readonly Readonly<Record<string, any>>[], authorities: readonly Readonly<Record<string, any>>[], pendingBinding: Readonly<Record<string, any>>|null}} - Complete read authority.
+ * @returns {{head: Readonly<Record<string, any>>, targets: readonly Readonly<Record<string, any>>[], authorities: readonly Readonly<Record<string, any>>[], observationAuthorities: readonly Readonly<Record<string, any>>[], destroyedLocatorByKey: ReadonlyMap<string, Readonly<Record<string, any>>>, pendingBinding: Readonly<Record<string, any>>|null}} - Complete read authority.
  */
 function validateLiveAuthority(input) {
   const head = validateDeploymentHead(
@@ -318,6 +343,21 @@ function validateLiveAuthority(input) {
       'AWS single-node deployment inspection authority does not cover the exact resource graph.',
     );
   }
+  const destroyedLocatorByKey = new Map();
+  const observationAuthorities = authorities.map((authority) => {
+    const destroyedResourceLocator =
+      createAwsSingleNodeDestroyedResourceLocator(authority);
+    if (destroyedResourceLocator === null) return authority;
+    destroyedLocatorByKey.set(
+      authority.target.resourceKey,
+      destroyedResourceLocator,
+    );
+    return DESTROYED_LOCATOR_OBSERVER_RESOURCE_KEYS.has(
+      authority.target.resourceKey,
+    )
+      ? Object.freeze({ ...authority, destroyedResourceLocator })
+      : authority;
+  });
   const pendingBinding =
     input.pendingBinding === null
       ? null
@@ -328,7 +368,56 @@ function validateLiveAuthority(input) {
   if (pendingBinding !== null) {
     assertPendingBindingAuthority(pendingBinding, input, authorities);
   }
-  return { head, targets, authorities, pendingBinding };
+  return {
+    head,
+    targets,
+    authorities,
+    observationAuthorities,
+    destroyedLocatorByKey,
+    pendingBinding,
+  };
+}
+
+/** @param {readonly Readonly<Record<string, any>>[]} observations @param {ReadonlyMap<string, Readonly<Record<string, any>>>} destroyedLocatorByKey @returns {readonly Readonly<Record<string, any>>[]} */
+function inferCompletedDestroyAbsence(observations, destroyedLocatorByKey) {
+  if (destroyedLocatorByKey.size === 0) return observations;
+  const observationByKey = new Map(
+    observations.map((observation) => [observation.resourceKey, observation]),
+  );
+  for (const [resourceKey, containers] of Object.entries(
+    DESTROY_ABSENCE_CONTAINERS,
+  )) {
+    const observation = observationByKey.get(resourceKey);
+    if (
+      observation?.presence !== 'unknown' ||
+      !destroyedLocatorByKey.has(resourceKey) ||
+      !containers.some(
+        (containerKey) =>
+          observationByKey.get(containerKey)?.presence === 'absent',
+      )
+    ) {
+      continue;
+    }
+    observationByKey.set(
+      resourceKey,
+      validateAwsSingleNodeResourceObservation(
+        {
+          resourceKey,
+          presence: 'absent',
+          ownership: 'missing',
+          providerIdentity: null,
+          observedDigest: null,
+          health: 'absent',
+          execution: 'none',
+        },
+        resourceKey,
+      ),
+    );
+  }
+  return observations.map(
+    (observation) =>
+      observationByKey.get(observation.resourceKey) ?? observation,
+  );
 }
 
 /** @param {Readonly<Record<string, any>>} target @param {Readonly<Record<string, any>>} observation @param {Readonly<Record<string, any>>|undefined} binding @returns {Record<string, any>} */
@@ -412,9 +501,18 @@ function deriveStatus(resources, head) {
   ) {
     return 'unknown';
   }
+  const hasCompletedDestroyAuthority =
+    head.phase === 'DESTROYED' ||
+    (head.phase === 'DESTROYING' &&
+      head.activeOperation?.kind === 'destroy' &&
+      head.activeOperation.nextActionIndex ===
+        head.activeOperation.intents.length &&
+      head.activeOperation.intents.every(
+        (/** @type {Readonly<Record<string, any>>} */ intent) =>
+          intent.status === 'settled',
+      ));
   if (
-    head.phase === 'DESTROYING' &&
-    head.activeOperation?.kind === 'destroy' &&
+    hasCompletedDestroyAuthority &&
     resources.every((resource) =>
       resource.onDestroy === 'retain'
         ? resource.presence === 'present' &&
@@ -566,15 +664,35 @@ export function createAwsSingleNodeDeploymentInspectionProvider(options) {
       );
     }
 
-    const { head, authorities, pendingBinding } = validateLiveAuthority(input);
+    const {
+      head,
+      authorities,
+      observationAuthorities,
+      destroyedLocatorByKey,
+      pendingBinding,
+    } = validateLiveAuthority(input);
     const sampledNow = validateNow(now());
-    const observations = await Promise.all(
-      authorities.map(async (authority) =>
+    const observationResults = await Promise.allSettled(
+      observationAuthorities.map(async (authority) =>
         validateAwsSingleNodeResourceObservation(
           await resourceObservationRouter.observeResource(authority),
           authority.target.resourceKey,
         ),
       ),
+    );
+    for (const result of observationResults) {
+      if (result.status === 'rejected') throw result.reason;
+    }
+    const observations = inferCompletedDestroyAbsence(
+      observationResults.map((result) => {
+        if (result.status !== 'fulfilled') {
+          throw new Error(
+            'AWS single-node deployment inspection observation barrier is incomplete.',
+          );
+        }
+        return result.value;
+      }),
+      destroyedLocatorByKey,
     );
     const durableBindingByKey = new Map(
       head.resourceBindings.map(

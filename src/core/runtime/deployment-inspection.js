@@ -839,14 +839,15 @@ function assertInspectionContext(
               canonicalPlan.deploymentRevision.deploymentRevisionId
             ? 'reconcile'
             : 'update';
-    const expectedPlanOperation =
+    const operationMatchesPlan =
       expectedOperationKind === 'destroy'
-        ? 'destroy'
+        ? canonicalPlan.operation === 'destroy'
         : expectedOperationKind === 'reconcile'
-          ? 'reconcile'
-          : 'apply';
+          ? canonicalPlan.operation === 'apply' ||
+            canonicalPlan.operation === 'reconcile'
+          : canonicalPlan.operation === 'apply';
     if (
-      canonicalPlan.operation !== expectedPlanOperation ||
+      !operationMatchesPlan ||
       !sameCanonicalJson(
         canonicalPlan.deploymentRevision,
         payload.deploymentRevision,

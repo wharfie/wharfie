@@ -45,6 +45,7 @@ import {
   getAwsSingleNodeNodeStateDigest,
   validateAwsSingleNodeNodeManagedTags,
 } from './deployment-aws-node-evidence.js';
+import { createAwsSingleNodeDestroyedResourceLocator } from './deployment-aws-destroyed-resource-locator.js';
 import { createAwsSingleNodeResourceObservationAuthority } from './deployment-aws-resource-observation-authority.js';
 import { validateAwsSingleNodeResourceObservation } from './deployment-aws-resource-observation.js';
 import {
@@ -68,6 +69,7 @@ import {
   createAwsTaggedEc2EvidenceKernel,
 } from './deployment-aws-tagged-ec2-evidence.js';
 import { validateProviderScope } from './deployment-provider-scope.js';
+import { assertDeploymentActionId } from './deployment-resource-binding.js';
 import { getAwsSingleNodeResourceDefinition } from './deployment-resource-graph.js';
 import { createCanonicalJsonSha256Id } from './content-id.js';
 
@@ -91,7 +93,7 @@ const CLIENT_KEYS = new Set([
   'describeInstanceCreditSpecifications',
   'describeVolumes',
 ]);
-const AUTHORITY_KEYS = new Set([
+const AUTHORITY_REQUIRED_KEYS = new Set([
   'operation',
   'deploymentRevision',
   'profile',
@@ -105,6 +107,10 @@ const AUTHORITY_KEYS = new Set([
   'target',
   'binding',
   'currentAction',
+]);
+const AUTHORITY_KEYS = new Set([
+  ...AUTHORITY_REQUIRED_KEYS,
+  'destroyedResourceLocator',
 ]);
 const RESOURCE_KEY = 'substrate';
 const PROVIDER_TYPE = 'ec2-instance';
@@ -236,9 +242,14 @@ function revalidateAuthority(authority) {
       'awsSingleNodeNodeResourceObserver context must be an object.',
     );
   }
-  assertExactKeys(
+  assertSupportedKeys(
     authority,
     AUTHORITY_KEYS,
+    'awsSingleNodeNodeResourceObserver context',
+  );
+  assertRequiredKeys(
+    authority,
+    AUTHORITY_REQUIRED_KEYS,
     'awsSingleNodeNodeResourceObserver context',
   );
   const canonical = createAwsSingleNodeResourceObservationAuthority({
@@ -254,13 +265,27 @@ function revalidateAuthority(authority) {
     settledPlan: authority.settledPlan,
     target: authority.target,
   });
+  const expectedDestroyedResourceLocator =
+    createAwsSingleNodeDestroyedResourceLocator(canonical);
+  const destroyedResourceLocator = Object.hasOwn(
+    authority,
+    'destroyedResourceLocator',
+  )
+    ? authority.destroyedResourceLocator
+    : null;
   if (
     !sameJson(authority.binding, canonical.binding) ||
-    !sameJson(authority.currentAction, canonical.currentAction)
+    !sameJson(authority.currentAction, canonical.currentAction) ||
+    !sameJson(destroyedResourceLocator, expectedDestroyedResourceLocator)
   ) {
     throw new AwsSingleNodeNodeResourceObserverAuthorityError();
   }
-  return canonical;
+  return expectedDestroyedResourceLocator === null
+    ? canonical
+    : deepFreeze({
+        ...canonical,
+        destroyedResourceLocator: expectedDestroyedResourceLocator,
+      });
 }
 
 /** @param {Readonly<Record<string, any>>} authority @returns {Readonly<Record<string, any>>} */
@@ -282,6 +307,28 @@ function locator(authority) {
     incarnationId: authority.incarnationId,
     resourceKey: RESOURCE_KEY,
   });
+}
+
+/** @param {unknown} tags @param {string} key @returns {string} */
+function exactTagValue(tags, key) {
+  if (!Array.isArray(tags)) {
+    throw new AwsSingleNodeNodeEvidenceUnknownError();
+  }
+  const values = [];
+  for (const tag of tags) {
+    if (
+      !isPlainObject(tag) ||
+      typeof tag.Key !== 'string' ||
+      typeof tag.Value !== 'string'
+    ) {
+      throw new AwsSingleNodeNodeEvidenceUnknownError();
+    }
+    if (tag.Key === key) values.push(tag.Value);
+  }
+  if (values.length !== 1) {
+    throw new AwsSingleNodeNodeEvidenceConflictError();
+  }
+  return values[0];
 }
 
 /** @param {string} domain @param {string} prefix @param {unknown} value @returns {string} */
@@ -1027,8 +1074,61 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
     });
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>|null} receipt @param {Readonly<Record<string, any>>} dependencies @returns {Promise<Readonly<Record<string, any>>[]>} */
-  async function discoverInstances(authority, receipt, dependencies) {
+  /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} instance @returns {{receipt: Readonly<Record<string, any>>, lifecycle: string}} */
+  function destroyedResourceReceipt(authority, instance) {
+    const destroyedResourceLocator = authority.destroyedResourceLocator;
+    const providerState = destroyedResourceLocator?.providerState;
+    const desiredStateDigest = authority.target.target.stateDigest;
+    if (
+      destroyedResourceLocator === null ||
+      destroyedResourceLocator === undefined ||
+      providerState?.providerType !== PROVIDER_TYPE ||
+      providerState.providerResourceId !== instance.InstanceId ||
+      providerState.stateDigest?.algorithm !== 'sha256' ||
+      typeof providerState.stateDigest.value !== 'string' ||
+      desiredStateDigest?.algorithm !== 'sha256' ||
+      typeof desiredStateDigest.value !== 'string' ||
+      typeof destroyedResourceLocator.ownershipNonce !== 'string'
+    ) {
+      throw new AwsSingleNodeNodeResourceObserverAuthorityError();
+    }
+    const createdByActionId = exactTagValue(
+      instance.Tags,
+      'wharfie:created-by-action-id',
+    );
+    try {
+      assertDeploymentActionId(
+        createdByActionId,
+        'awsSingleNodeNode destroyed createdByActionId',
+      );
+    } catch {
+      throw new AwsSingleNodeNodeEvidenceConflictError();
+    }
+    const receipt = deepFreeze({
+      createdByActionId,
+      ownershipNonce: destroyedResourceLocator.ownershipNonce,
+      stateDigest: desiredStateDigest,
+    });
+    const identity = decodeAwsSingleNodeNodeIdentityEvidence(instance, {
+      providerScopeAccountId: providerScope.accountId,
+      expectedClientToken: getAwsSingleNodeNodeCreateClientToken(
+        receipt.createdByActionId,
+        receipt.ownershipNonce,
+      ),
+      expectedInstanceId: providerState.providerResourceId,
+      expectedTags: expectedTags(authority, receipt),
+      allowTagPropagation: false,
+    });
+    return { receipt, lifecycle: identity.lifecycle };
+  }
+
+  /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>|null} receipt @param {Readonly<Record<string, any>>} dependencies @param {string|null} [allowedCollisionProviderResourceId] @returns {Promise<Readonly<Record<string, any>>[]>} */
+  async function discoverInstances(
+    authority,
+    receipt,
+    dependencies,
+    allowedCollisionProviderResourceId = null,
+  ) {
     const records = new Map();
     const seenTokens = new Set();
     const filters = instanceEvidence.discoveryFilters(locator(authority));
@@ -1052,9 +1152,14 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
         records.set(record.InstanceId, record);
       }
       if (records.size > 1) {
-        throw new NodeCandidateConflictError(
-          [...records.keys()].sort(compareCanonicalStrings)[0],
-        );
+        const conflictingProviderResourceId =
+          [...records.keys()]
+            .sort(compareCanonicalStrings)
+            .find(
+              (providerResourceId) =>
+                providerResourceId !== allowedCollisionProviderResourceId,
+            ) ?? [...records.keys()].sort(compareCanonicalStrings)[0];
+        throw new NodeCandidateConflictError(conflictingProviderResourceId);
       }
       for (const record of observed.records) {
         try {
@@ -1087,7 +1192,7 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
           }
           throw error;
         }
-        if (receipt === null) {
+        if (receipt === null && allowedCollisionProviderResourceId === null) {
           return [...records.values()];
         }
       }
@@ -1300,8 +1405,12 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
     throw new AwsSingleNodeNodeEvidenceTransientError();
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>|null} receipt @returns {Promise<Readonly<Record<string, any>>[]>} */
-  async function discoverRoots(authority, receipt) {
+  /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>|null} receipt @param {string|null} [allowedCollisionProviderResourceId] @returns {Promise<Readonly<Record<string, any>>[]>} */
+  async function discoverRoots(
+    authority,
+    receipt,
+    allowedCollisionProviderResourceId = null,
+  ) {
     const records = new Map();
     const seenTokens = new Set();
     const filters = rootEvidence.discoveryFilters(locator(authority));
@@ -1340,7 +1449,7 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
         } else {
           validateAwsSingleNodeNodeManagedTags(record.Tags, tags, false);
         }
-        if (receipt === null) {
+        if (receipt === null && allowedCollisionProviderResourceId === null) {
           return [...records.values()];
         }
       }
@@ -1355,6 +1464,97 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
       nextToken = observed.nextToken;
     }
     return [...records.values()];
+  }
+
+  /**
+   * An exact historical ID miss is not enough: a replacement node or root can
+   * still exist under the stable deployment locator. Drain both collision-only
+   * reads before ranking any candidate above an incomplete provider read.
+   * @param {Readonly<Record<string, any>>} authority - Completed destroy read authority.
+   * @param {string} historicalInstanceId - Exact instance ID from destroy lineage.
+   * @returns {Promise<string|null>} Contradictory provider identity, if any.
+   */
+  async function destroyedCollisionProviderResourceId(
+    authority,
+    historicalInstanceId,
+  ) {
+    const [instanceResult, rootResult] = await Promise.allSettled([
+      discoverInstances(authority, null, {
+        binding: null,
+        currentAction: null,
+      }),
+      discoverRoots(authority, null),
+    ]);
+    if (instanceResult.status === 'fulfilled') {
+      const candidate = instanceResult.value[0];
+      if (candidate !== undefined) return candidate.InstanceId;
+    } else if (instanceResult.reason instanceof NodeCandidateConflictError) {
+      return instanceResult.reason.providerResourceId;
+    }
+    if (rootResult.status === 'fulfilled' && rootResult.value.length !== 0) {
+      return historicalInstanceId;
+    }
+    const errors = [instanceResult, rootResult]
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (
+      errors.some(
+        (error) =>
+          error instanceof AwsSingleNodeNodeEvidenceConflictError ||
+          error instanceof AwsTaggedEc2EvidenceConflictError,
+      )
+    ) {
+      return historicalInstanceId;
+    }
+    if (errors.length !== 0) throwStrongestEvidence(errors);
+    return null;
+  }
+
+  /** @param {Readonly<Record<string, any>>} authority @param {string} historicalInstanceId @param {string|null} historicalRootVolumeId @returns {Promise<string|null>} */
+  async function destroyedTerminalCollisionProviderResourceId(
+    authority,
+    historicalInstanceId,
+    historicalRootVolumeId,
+  ) {
+    const [instanceResult, rootResult] = await Promise.allSettled([
+      discoverInstances(
+        authority,
+        null,
+        { binding: null, currentAction: null },
+        historicalInstanceId,
+      ),
+      discoverRoots(authority, null, historicalRootVolumeId),
+    ]);
+    if (instanceResult.status === 'fulfilled') {
+      const collision = instanceResult.value.find(
+        (record) => record.InstanceId !== historicalInstanceId,
+      );
+      if (collision !== undefined) return collision.InstanceId;
+    } else if (instanceResult.reason instanceof NodeCandidateConflictError) {
+      return instanceResult.reason.providerResourceId;
+    }
+    if (
+      rootResult.status === 'fulfilled' &&
+      rootResult.value.some(
+        (record) => record.VolumeId !== historicalRootVolumeId,
+      )
+    ) {
+      return historicalInstanceId;
+    }
+    const errors = [instanceResult, rootResult]
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (
+      errors.some(
+        (error) =>
+          error instanceof AwsSingleNodeNodeEvidenceConflictError ||
+          error instanceof AwsTaggedEc2EvidenceConflictError,
+      )
+    ) {
+      return historicalInstanceId;
+    }
+    if (errors.length !== 0) throwStrongestEvidence(errors);
+    return null;
   }
 
   /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} receipt @param {string} rootVolumeId @returns {Promise<Readonly<Record<string, any>>|null>} */
@@ -1496,8 +1696,13 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
     );
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} receipt @param {Readonly<Record<string, any>>|null} terminalInstance @returns {Promise<{status: 'absent'|'negative'|'not-converged', signature: string|null}>} */
-  async function readDeleteAbsence(authority, receipt, terminalInstance) {
+  /** @param {Readonly<Record<string, any>>} authority @param {Readonly<Record<string, any>>} receipt @param {Readonly<Record<string, any>>|null} terminalInstance @param {string} instanceId @returns {Promise<{status: 'absent'|'negative'|'not-converged', signature: string|null}>} */
+  async function readDeleteAbsence(
+    authority,
+    receipt,
+    terminalInstance,
+    instanceId,
+  ) {
     const rootVolumeId =
       terminalInstance === null
         ? null
@@ -1524,7 +1729,7 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
       const state = decodeAwsSingleNodeNodeRootVolumePurgeEvidence(exact, {
         providerSpec: authority.providerSpec,
         expectedTags: tags,
-        instanceId: dependenciesBindingId(authority),
+        instanceId,
       });
       return {
         status: state === 'deleted' ? 'absent' : 'not-converged',
@@ -1559,7 +1764,7 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
     const state = decodeAwsSingleNodeNodeRootVolumePurgeEvidence(exact, {
       providerSpec: authority.providerSpec,
       expectedTags: tags,
-      instanceId: dependenciesBindingId(authority),
+      instanceId,
     });
     return {
       status: state === 'deleted' ? 'absent' : 'not-converged',
@@ -1567,12 +1772,87 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
     };
   }
 
-  /** @param {Readonly<Record<string, any>>} authority @returns {string} */
-  function dependenciesBindingId(authority) {
-    if (authority.binding === null) {
-      throw new AwsSingleNodeNodeEvidenceUnknownError();
+  /** @param {Readonly<Record<string, any>>} authority @returns {Promise<Readonly<Record<string, any>>>} */
+  async function observeDestroyedResource(authority) {
+    const destroyedResourceLocator = authority.destroyedResourceLocator;
+    const instanceId =
+      destroyedResourceLocator?.providerState?.providerResourceId;
+    if (
+      destroyedResourceLocator?.resourceKey !== RESOURCE_KEY ||
+      destroyedResourceLocator.providerState?.providerType !== PROVIDER_TYPE ||
+      typeof instanceId !== 'string' ||
+      !AWS_EC2_INSTANCE_ID_PATTERN.test(instanceId)
+    ) {
+      throw new AwsSingleNodeNodeResourceObserverAuthorityError();
     }
-    return authority.binding.providerResourceId;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const exact = await instanceEvidence.readExactSafely(instanceId);
+        if (exact === null) {
+          const collisionProviderResourceId =
+            await destroyedCollisionProviderResourceId(authority, instanceId);
+          if (collisionProviderResourceId !== null) {
+            return conflictObservation(collisionProviderResourceId);
+          }
+          if (attempt === maxAttempts) return absentObservation();
+        } else {
+          const { receipt, lifecycle } = destroyedResourceReceipt(
+            authority,
+            exact,
+          );
+          if (lifecycle === 'terminated') {
+            const historicalRootVolumeId =
+              decodeAwsSingleNodeNodeTerminalRootVolumeId(
+                exact.BlockDeviceMappings,
+                authority.providerSpec.node.rootVolume.deviceName,
+              );
+            const absence = await readDeleteAbsence(
+              authority,
+              receipt,
+              exact,
+              instanceId,
+            );
+            if (absence.status === 'absent') {
+              const collisionProviderResourceId =
+                await destroyedTerminalCollisionProviderResourceId(
+                  authority,
+                  instanceId,
+                  historicalRootVolumeId,
+                );
+              return collisionProviderResourceId === null
+                ? absentObservation()
+                : conflictObservation(collisionProviderResourceId);
+            }
+            throw new AwsSingleNodeNodeEvidenceTransientError();
+          }
+          if (lifecycle === 'shutting-down') {
+            throw new AwsSingleNodeNodeEvidenceTransientError();
+          }
+          return conflictObservation(instanceId);
+        }
+      } catch (error) {
+        if (
+          error instanceof AwsSingleNodeNodeEvidenceConflictError ||
+          error instanceof AwsTaggedEc2EvidenceConflictError
+        ) {
+          return conflictObservation(instanceId);
+        }
+        if (
+          !(error instanceof AwsSingleNodeNodeEvidenceUnknownError) &&
+          !(error instanceof AwsSingleNodeNodeEvidenceTransientError) &&
+          !(error instanceof AwsTaggedEc2EvidenceUnknownError) &&
+          !(error instanceof AwsTaggedEc2EvidenceTransientError)
+        ) {
+          throw error;
+        }
+        if (attempt === maxAttempts) return unknownObservation();
+      }
+      if (attempt < maxAttempts && !(await wait(attempt))) {
+        return unknownObservation();
+      }
+    }
+    return unknownObservation();
   }
 
   /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
@@ -1580,6 +1860,9 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
     const authority = revalidateAuthority(value);
     if (!sameJson(authority.providerScope, providerScope)) {
       throw new AwsSingleNodeNodeResourceObserverAuthorityError();
+    }
+    if (authority.destroyedResourceLocator !== undefined) {
+      return observeDestroyedResource(authority);
     }
     const dependencies = assertNodeAuthority(authority);
     if (dependencies.ready === false) return unknownObservation();
@@ -1607,7 +1890,12 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
             if (receipt === null) {
               throw new AwsSingleNodeNodeResourceObserverAuthorityError();
             }
-            const absence = await readDeleteAbsence(authority, receipt, null);
+            const absence = await readDeleteAbsence(
+              authority,
+              receipt,
+              null,
+              dependencies.binding.providerResourceId,
+            );
             if (absence.status === 'absent') return absentObservation();
             if (absence.status === 'negative' && absence.signature !== null) {
               negativeSignatures.push(absence.signature);
@@ -1644,6 +1932,7 @@ export function createAwsSingleNodeNodeResourceObserver(options) {
               authority,
               receipt,
               views.instance,
+              dependencies.binding.providerResourceId,
             );
             if (absence.status === 'absent') return absentObservation();
             if (absence.status === 'negative' && absence.signature !== null) {

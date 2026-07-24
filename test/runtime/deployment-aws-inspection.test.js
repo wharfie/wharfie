@@ -64,6 +64,18 @@ function clone(value) {
   return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
 }
 
+/** @returns {{promise: Promise<any>, resolve: (value: any) => void}} */
+function deferred() {
+  /** @type {(value: any) => void} */
+  let settle = () => {
+    throw new Error('Deferred promise was not initialized.');
+  };
+  const promise = new Promise((resolve) => {
+    settle = resolve;
+  });
+  return { promise, resolve: settle };
+}
+
 /** @param {string} prefix @param {string} domain @param {unknown} value @returns {string} */
 function semanticId(prefix, domain, value) {
   return createCanonicalJsonSha256Id({ prefix, domain, value });
@@ -529,6 +541,32 @@ function makeSettledDestroy(base, ready) {
   return { plan, head };
 }
 
+/** @param {Readonly<AnyRecord>} base @param {ReturnType<typeof makeReadyCreate>} ready @returns {{plan: Readonly<AnyRecord>, head: Readonly<AnyRecord>}} */
+function makeDestroyedTombstone(base, ready) {
+  const settled = makeSettledDestroy(base, ready);
+  const operation = settled.head.activeOperation;
+  if (operation === null) {
+    throw new Error('Missing settled destroy operation.');
+  }
+  const head = createDeploymentHead({
+    deploymentInstanceId: base.deploymentInstanceId,
+    providerScope: base.providerScope,
+    incarnationId: base.incarnationId,
+    generation: settled.head.generation + 1,
+    phase: 'DESTROYED',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId: null,
+    resourceBindings: settled.head.resourceBindings,
+    activeOperation: null,
+    lastOperation: {
+      kind: 'destroy',
+      planId: settled.plan.planId,
+      intents: operation.intents,
+    },
+  });
+  return { plan: settled.plan, head };
+}
+
 /** @param {Readonly<AnyRecord>} base @param {Readonly<AnyRecord>|null} head @param {Readonly<AnyRecord>|null} plan @param {Readonly<AnyRecord>|null} [pendingBinding] @returns {AnyRecord} */
 function inspectionContext(base, head, plan, pendingBinding = null) {
   return {
@@ -555,6 +593,19 @@ function absentObservation(resourceKey) {
     providerIdentity: null,
     observedDigest: null,
     health: 'absent',
+    execution: 'none',
+  };
+}
+
+/** @param {string} resourceKey @returns {AnyRecord} */
+function unknownObservation(resourceKey) {
+  return {
+    resourceKey,
+    presence: 'unknown',
+    ownership: 'unknown',
+    providerIdentity: null,
+    observedDigest: null,
+    health: 'unknown',
     execution: 'none',
   };
 }
@@ -776,6 +827,43 @@ describe('AWS single-node aggregate InspectionV6 provider', () => {
     expect(harness.inspectHealth).not.toHaveBeenCalled();
   });
 
+  it('waits for every started resource observation and selects failure by canonical role order', async () => {
+    const base = makeBase();
+    const state = makeActiveCreate(base);
+    const order = getAwsSingleNodeResourceApplyOrder();
+    const firstFailure = new Error('first observation failed');
+    const laterFailure = new Error('later observation failed');
+    const pending = deferred();
+    const harness = makeProvider(base, (authority) => {
+      if (authority.target.resourceKey === order[0]) throw firstFailure;
+      if (authority.target.resourceKey === order[1]) return pending.promise;
+      if (authority.target.resourceKey === order[2]) throw laterFailure;
+      return absentObservation(authority.target.resourceKey);
+    });
+
+    const result = harness.provider.inspect(
+      inspectionContext(base, state.head, state.plan),
+    );
+    let settled = false;
+    result.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.observeResource).toHaveBeenCalledTimes(order.length);
+    expect(settled).toBe(false);
+
+    pending.resolve(absentObservation(order[1]));
+    await expect(result).rejects.toBe(firstFailure);
+    expect(settled).toBe(true);
+  });
+
   it('keeps a non-final active frontier in-flight when a future role is unknown', async () => {
     const base = makeBase();
     const state = makeActiveCreate(base);
@@ -932,6 +1020,228 @@ describe('AWS single-node aggregate InspectionV6 provider', () => {
     ).toBe(true);
     expect(harness.inspectHealth).not.toHaveBeenCalled();
   });
+
+  it('re-observes every role behind a DESTROYED tombstone and derives destroyed only from exact retained-present and purged-absent evidence', async () => {
+    const base = makeBase();
+    const ready = makeReadyCreate(base);
+    const destroyed = makeDestroyedTombstone(base, ready);
+    const harness = makeProvider(base, (authority) =>
+      authority.target.onDestroy === 'retain'
+        ? exactPresentObservation(authority)
+        : absentObservation(authority.target.resourceKey),
+    );
+    const context = {
+      ...inspectionContext(base, destroyed.head, null),
+      operation: 'destroy',
+      settledPlan: destroyed.plan,
+    };
+
+    const inspection = await harness.provider.inspect(context);
+
+    expect(inspection.status).toBe('destroyed');
+    expect(harness.observeResource).toHaveBeenCalledTimes(
+      getAwsSingleNodeResourceApplyOrder().length,
+    );
+    for (const [authority] of harness.observeResource.mock.calls) {
+      expect(authority.operation).toBe('destroy');
+      expect(authority.head).toEqual(destroyed.head);
+      expect(authority.plan).toBeNull();
+      expect(authority.settledPlan).toEqual(destroyed.plan);
+    }
+    expect(
+      inspection.resources.every(
+        (/** @type {Readonly<AnyRecord>} */ resource) =>
+          resource.onDestroy === 'retain'
+            ? resource.presence === 'present' &&
+              resource.ownership === 'verified' &&
+              resource.bindingId !== null
+            : resource.presence === 'absent' &&
+              resource.ownership === 'missing' &&
+              resource.bindingId === null,
+      ),
+    ).toBe(true);
+  });
+
+  it('derives finite post-destroy relationship absence only from freshly absent containing endpoints', async () => {
+    const base = makeBase();
+    const ready = makeReadyCreate(base);
+    const destroyed = makeDestroyedTombstone(base, ready);
+    const freshlyAbsent = new Set([
+      'artifact',
+      'network-vpc',
+      'network-internet-gateway',
+      'runtime-role',
+      'runtime-identity',
+      'substrate',
+      'application-state-attachment',
+      'control-state-attachment',
+    ]);
+    const harness = makeProvider(base, (authority) => {
+      if (authority.target.onDestroy === 'retain') {
+        return exactPresentObservation(authority);
+      }
+      return freshlyAbsent.has(authority.target.resourceKey)
+        ? absentObservation(authority.target.resourceKey)
+        : unknownObservation(authority.target.resourceKey);
+    });
+
+    const inspection = await harness.provider.inspect({
+      ...inspectionContext(base, destroyed.head, null),
+      operation: 'destroy',
+      settledPlan: destroyed.plan,
+    });
+
+    expect(inspection.status).toBe('destroyed');
+    expect(
+      inspection.resources
+        .filter(
+          (/** @type {Readonly<AnyRecord>} */ resource) =>
+            resource.onDestroy === 'purge',
+        )
+        .every(
+          (/** @type {Readonly<AnyRecord>} */ resource) =>
+            resource.presence === 'absent' && resource.ownership === 'missing',
+        ),
+    ).toBe(true);
+    const nodeAuthority = harness.observeResource.mock.calls
+      .map(([authority]) => authority)
+      .find((authority) => authority.target.resourceKey === 'substrate');
+    const nodeAction = destroyed.plan.actions.find(
+      (/** @type {Readonly<AnyRecord>} */ action) =>
+        action.resourceKey === 'substrate',
+    );
+    if (nodeAuthority === undefined) {
+      throw new Error('Missing destroyed node observation authority.');
+    }
+    if (nodeAction === undefined) {
+      throw new Error('Missing destroyed node action.');
+    }
+    expect(nodeAuthority.destroyedResourceLocator).toMatchObject({
+      planId: destroyed.plan.planId,
+      actionId: nodeAction.actionId,
+      providerState: nodeAction.before,
+    });
+    expect(Object.isFrozen(nodeAuthority.destroyedResourceLocator)).toBe(true);
+  });
+
+  it('does not infer default-route absence from internet-gateway absence while its route table remains unknown', async () => {
+    const base = makeBase();
+    const ready = makeReadyCreate(base);
+    const destroyed = makeDestroyedTombstone(base, ready);
+    const harness = makeProvider(base, (authority) => {
+      if (authority.target.onDestroy === 'retain') {
+        return exactPresentObservation(authority);
+      }
+      return authority.target.resourceKey === 'network-internet-gateway'
+        ? absentObservation(authority.target.resourceKey)
+        : unknownObservation(authority.target.resourceKey);
+    });
+
+    const inspection = await harness.provider.inspect({
+      ...inspectionContext(base, destroyed.head, null),
+      operation: 'destroy',
+      settledPlan: destroyed.plan,
+    });
+
+    expect(inspection.status).toBe('unknown');
+    expect(inspectionResource(inspection, 'network-route-table')).toMatchObject(
+      {
+        presence: 'unknown',
+        ownership: 'unknown',
+      },
+    );
+    expect(
+      inspectionResource(inspection, 'network-default-ipv4-route'),
+    ).toMatchObject({
+      presence: 'unknown',
+      ownership: 'unknown',
+    });
+  });
+
+  it('never launders fresh post-destroy relationship conflict through containing-endpoint absence', async () => {
+    const base = makeBase();
+    const ready = makeReadyCreate(base);
+    const destroyed = makeDestroyedTombstone(base, ready);
+    const harness = makeProvider(base, (authority) => {
+      if (authority.target.onDestroy === 'retain') {
+        return exactPresentObservation(authority);
+      }
+      if (authority.target.resourceKey === 'runtime-role-policy') {
+        return conflictObservation(authority);
+      }
+      return [
+        'artifact',
+        'network-vpc',
+        'network-internet-gateway',
+        'runtime-role',
+        'runtime-identity',
+        'substrate',
+      ].includes(authority.target.resourceKey)
+        ? absentObservation(authority.target.resourceKey)
+        : unknownObservation(authority.target.resourceKey);
+    });
+
+    const inspection = await harness.provider.inspect({
+      ...inspectionContext(base, destroyed.head, null),
+      operation: 'destroy',
+      settledPlan: destroyed.plan,
+    });
+
+    expect(inspection.status).toBe('conflict');
+    expect(inspectionResource(inspection, 'runtime-role-policy')).toMatchObject(
+      {
+        presence: 'present',
+        ownership: 'conflict',
+      },
+    );
+  });
+
+  it.each(['drifted', 'conflict', 'unknown'])(
+    'preserves post-destroy %s evidence instead of trusting the tombstone phase',
+    async (expectedStatus) => {
+      const base = makeBase();
+      const ready = makeReadyCreate(base);
+      const destroyed = makeDestroyedTombstone(base, ready);
+      const retainedResourceKey =
+        destroyed.head.resourceBindings[0]?.resourceKey;
+      if (retainedResourceKey === undefined) {
+        throw new Error('Missing retained post-destroy test binding.');
+      }
+      const harness = makeProvider(base, (authority) => {
+        if (authority.target.resourceKey === retainedResourceKey) {
+          if (expectedStatus === 'drifted') {
+            return absentObservation(authority.target.resourceKey);
+          }
+          if (expectedStatus === 'conflict') {
+            return conflictObservation(authority);
+          }
+          return {
+            resourceKey: authority.target.resourceKey,
+            presence: 'unknown',
+            ownership: 'unknown',
+            providerIdentity: null,
+            observedDigest: null,
+            health: 'unknown',
+            execution: 'none',
+          };
+        }
+        return authority.target.onDestroy === 'retain'
+          ? exactPresentObservation(authority)
+          : absentObservation(authority.target.resourceKey);
+      });
+
+      const inspection = await harness.provider.inspect({
+        ...inspectionContext(base, destroyed.head, null),
+        operation: 'destroy',
+        settledPlan: destroyed.plan,
+      });
+
+      expect(inspection.status).toBe(expectedStatus);
+      expect(harness.observeResource).toHaveBeenCalledTimes(
+        getAwsSingleNodeResourceApplyOrder().length,
+      );
+    },
+  );
 
   it('preserves exact current stable-token create replay advice', async () => {
     const base = makeBase();

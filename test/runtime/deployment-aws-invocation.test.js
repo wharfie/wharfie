@@ -26,6 +26,7 @@ const INVOCATION_KEYS = Object.freeze([
   'requireControl',
   'reconcileControl',
   'bootstrapControl',
+  'inspect',
   'plan',
   'converge',
   'resume',
@@ -198,6 +199,9 @@ beforeEach(() => {
   artifactStager = Object.freeze({ artifactStager: true });
   provider = Object.freeze({ provider: true });
   controller = {
+    inspect: jest.fn(async (input) =>
+      Object.freeze({ kind: 'deployment-inspection', input }),
+    ),
     plan: jest.fn(async (input) => Object.freeze({ kind: 'plan', input })),
     converge: jest.fn(async (input) =>
       Object.freeze({ kind: 'converged-head', input }),
@@ -272,6 +276,7 @@ describe('AWS single-node deployment invocation construction', () => {
       expect(lifecycle.reconcile).not.toHaveBeenCalled();
       expect(lifecycle.bootstrap).not.toHaveBeenCalled();
     }
+    expect(controller.inspect).not.toHaveBeenCalled();
     expect(controller.plan).not.toHaveBeenCalled();
     expect(controller.converge).not.toHaveBeenCalled();
     expect(controller.resume).not.toHaveBeenCalled();
@@ -378,33 +383,93 @@ describe('AWS deployment control orchestration', () => {
       code: 'AWS_DEPLOYMENT_CONTROL_NOT_READY',
       message: 'AWS deployment control resources are not active.',
     });
+    await expect(invocation.inspect(input)).rejects.toBeInstanceOf(
+      AwsDeploymentControlNotReadyError,
+    );
     await expect(invocation.plan(input)).rejects.toBeInstanceOf(
       AwsDeploymentControlNotReadyError,
     );
+    expect(controller.inspect).not.toHaveBeenCalled();
     expect(controller.plan).not.toHaveBeenCalled();
-    expect(tableLifecycle.inspect).toHaveBeenCalledTimes(2);
-    expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(2);
+    expect(tableLifecycle.inspect).toHaveBeenCalledTimes(3);
+    expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(3);
   });
 
   it.each([
+    ['inspect', 'inspect'],
     ['plan', 'plan'],
     ['converge', 'converge'],
     ['resume', 'resume'],
   ])(
-    'gates and delegates %s with the exact input and controller receiver',
+    'gates and delegates %s with an independent frozen input and controller receiver',
     async (publicMethod, controllerMethod) => {
       const invocation = createInvocation();
       const input = Object.freeze({ method: publicMethod });
 
       const result = await invocation[publicMethod](input);
 
-      expect(result.input).toBe(input);
-      expect(controller[controllerMethod]).toHaveBeenCalledWith(input);
+      expect(result.input).toEqual(input);
+      expect(result.input).not.toBe(input);
+      expect(Object.isFrozen(result.input)).toBe(true);
+      expect(controller[controllerMethod]).toHaveBeenCalledWith(result.input);
       expect(controller[controllerMethod].mock.contexts[0]).toBe(controller);
       expect(tableLifecycle.inspect).toHaveBeenCalledTimes(1);
       expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each(['inspect', 'plan', 'converge', 'resume'])(
+    'snapshots the complete %s request before deferred control preflight',
+    async (publicMethod) => {
+      const tableInspection = deferred();
+      const bucketInspection = deferred();
+      tableLifecycle.inspect.mockReturnValueOnce(tableInspection.promise);
+      bucketLifecycle.inspect.mockReturnValueOnce(bucketInspection.promise);
+      const invocation = createInvocation();
+      /** @type {Record<string, any>} */
+      const input = {
+        method: publicMethod,
+        nested: { deploymentInstanceId: 'before-preflight' },
+      };
+
+      const operation = invocation[publicMethod](input);
+      input.method = 'mutated';
+      input.nested.deploymentInstanceId = 'after-preflight';
+      input.extra = true;
+      tableInspection.resolve(tableState());
+      bucketInspection.resolve(bucketState());
+
+      const result = await operation;
+      expect(result.input).toEqual({
+        method: publicMethod,
+        nested: { deploymentInstanceId: 'before-preflight' },
+      });
+      expect(Object.isFrozen(result.input)).toBe(true);
+      expect(Object.isFrozen(result.input.nested)).toBe(true);
+      expect(controller[publicMethod]).toHaveBeenCalledWith(result.input);
+    },
+  );
+
+  it('rejects an accessor request before control or controller I/O', async () => {
+    const invocation = createInvocation();
+    let getterCalls = 0;
+    const input = {};
+    Object.defineProperty(input, 'deploymentInstanceId', {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return 'should-not-be-read';
+      },
+    });
+
+    await expect(invocation.inspect(input)).rejects.toThrow(
+      'must be a plain JSON property',
+    );
+    expect(getterCalls).toBe(0);
+    expect(tableLifecycle.inspect).not.toHaveBeenCalled();
+    expect(bucketLifecycle.inspect).not.toHaveBeenCalled();
+    expect(controller.inspect).not.toHaveBeenCalled();
+  });
 
   it('preflights both controls before explicit reconcile and never bootstraps', async () => {
     const tableInspection = deferred();
@@ -533,13 +598,13 @@ describe('AWS deployment invocation ownership lifecycle', () => {
   it('fences immediately, waits for entered work, and memoizes one family close', async () => {
     const entered = deferred();
     const operation = deferred();
-    controller.plan.mockImplementationOnce(function planController() {
+    controller.inspect.mockImplementationOnce(function inspectController() {
       entered.resolve(undefined);
       return operation.promise;
     });
     const invocation = createInvocation();
-    const input = Object.freeze({ request: 'active-plan' });
-    const active = invocation.plan(input);
+    const input = Object.freeze({ request: 'active-inspection' });
+    const active = invocation.inspect(input);
     await entered.promise;
 
     const firstClose = invocation.close();
@@ -552,6 +617,7 @@ describe('AWS deployment invocation ownership lifecycle', () => {
       'requireControl',
       'reconcileControl',
       'bootstrapControl',
+      'inspect',
       'plan',
       'converge',
       'resume',
@@ -561,7 +627,7 @@ describe('AWS deployment invocation ownership lifecycle', () => {
       );
     }
 
-    const result = Object.freeze({ kind: 'plan' });
+    const result = Object.freeze({ kind: 'deployment-inspection' });
     operation.resolve(result);
     await expect(active).resolves.toBe(result);
     await expect(firstClose).resolves.toBeUndefined();

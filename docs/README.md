@@ -101,17 +101,22 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [owned AWS deployment invocation
-checkpoint](../llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md).
+The current restart handoff is the [read-only deployment inspection
+checkpoint](../llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md).
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only
 control inspection and require-active, existing-only reconciliation that can
-never create, and separately explicit bootstrap. Controller plan, converge,
-and resume require both controls to be freshly active. Close fences new calls,
-waits for entered work, and closes the AWS family once. Construction remains
-zero-I/O; there are still no deployment commands or service-readiness claim.
+never create, and separately explicit bootstrap. Top-level deployment
+inspection returns an exact frozen absent or hydrated envelope without
+ProviderSpec selection, planning, staging, writes, CAS, or effects. Inspection,
+plan, converge, and resume require both controls to be freshly active. Close
+fences new calls, waits for entered work, and closes the AWS family once.
+Construction remains zero-I/O; there are still no deployment commands or
+service-readiness claim.
 
-Its parent is the [production AWS provider assembly
+Its parent is the [owned AWS deployment invocation
+checkpoint](../llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md),
+whose parent is the [production AWS provider assembly
 checkpoint](../llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md), whose
 parent is the [InspectionV6 aggregate and controller
 checkpoint](../llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md),

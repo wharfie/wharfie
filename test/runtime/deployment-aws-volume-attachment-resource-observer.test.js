@@ -7,6 +7,7 @@ import {
 } from '../../src/core/runtime/content-id.js';
 import { getAwsSingleNodeDefaultIpv4RouteProviderResourceId } from '../../src/core/runtime/deployment-aws-default-ipv4-route-resource.js';
 import { createAwsSingleNodeDesiredResourceTargetCatalog } from '../../src/core/runtime/deployment-aws-desired-resource-targets.js';
+import { createAwsSingleNodeDestroyedResourceLocator } from '../../src/core/runtime/deployment-aws-destroyed-resource-locator.js';
 import { getAwsSingleNodeInternetGatewayAttachmentProviderResourceId } from '../../src/core/runtime/deployment-aws-internet-gateway-attachment-evidence.js';
 import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
@@ -626,6 +627,81 @@ function makeDeleteFixture(resourceKey) {
   });
 }
 
+/** @param {string} resourceKey @returns {Readonly<AnyRecord>} */
+function makeDestroyedFixture(resourceKey) {
+  const active = makeDeleteFixture(resourceKey);
+  const createActionIndexByKey = new Map(
+    active.settledPlan.actions.map(
+      (
+        /** @type {Readonly<AnyRecord>} */ action,
+        /** @type {number} */ index,
+      ) => [action.resourceKey, index],
+    ),
+  );
+  const intents = active.plan.actions.map(
+    (/** @type {Readonly<AnyRecord>} */ action) => {
+      const createActionIndex = createActionIndexByKey.get(action.resourceKey);
+      if (createActionIndex === undefined) {
+        throw new Error(`Missing create receipt '${action.resourceKey}'.`);
+      }
+      return {
+        actionId: action.actionId,
+        status: 'settled',
+        ownershipNonce: nonce(100 + createActionIndex),
+      };
+    },
+  );
+  const head = createDeploymentHead({
+    deploymentInstanceId: active.base.deploymentInstanceId,
+    providerScope: active.base.providerScope,
+    incarnationId: active.base.incarnationId,
+    generation: active.head.generation + active.plan.actions.length * 2 + 1,
+    phase: 'DESTROYED',
+    settledDeploymentRevisionId: null,
+    targetDeploymentRevisionId: null,
+    resourceBindings: active.head.resourceBindings.filter(
+      (/** @type {Readonly<AnyRecord>} */ binding) =>
+        binding.onDestroy === 'retain',
+    ),
+    activeOperation: null,
+    lastOperation: {
+      kind: 'destroy',
+      planId: active.plan.planId,
+      intents,
+    },
+  });
+  const target = targetFor(makeTargets(active.base, head), resourceKey);
+  const canonicalAuthority = createAwsSingleNodeResourceObservationAuthority({
+    operation: 'destroy',
+    deploymentRevision: active.base.deploymentRevision,
+    profile: active.base.profile,
+    providerScope: active.base.providerScope,
+    providerSpec: active.base.providerSpec,
+    deploymentInstanceId: active.base.deploymentInstanceId,
+    incarnationId: active.base.incarnationId,
+    head,
+    plan: null,
+    settledPlan: active.plan,
+    target,
+  });
+  const destroyedResourceLocator =
+    createAwsSingleNodeDestroyedResourceLocator(canonicalAuthority);
+  if (destroyedResourceLocator === null) {
+    throw new Error(`Missing destroyed locator '${resourceKey}'.`);
+  }
+  return Object.freeze({
+    ...active,
+    mode: 'destroyed',
+    head,
+    target,
+    authority: Object.freeze({
+      ...canonicalAuthority,
+      destroyedResourceLocator,
+    }),
+    destroyedResourceLocator,
+  });
+}
+
 /** @param {Readonly<AnyRecord>} fixture */
 function fixtureCase(fixture) {
   const result = CASES.find(
@@ -916,6 +992,66 @@ describe('AWS single-node retained volume attachment observer', () => {
     expect(observation.presence).toBe('absent');
     expect(client.describeInstances).toHaveBeenCalledTimes(1);
     expect(client.describeVolumes).toHaveBeenCalledTimes(1);
+  });
+
+  it('proves completed-destroy attachment absence from a stable missing instance and fresh available volume', async () => {
+    const fixture = makeDestroyedFixture('application-state-attachment');
+    const waitForRetry = jest.fn(async () => {});
+    const client = makeClient(fixture, {
+      describeInstances: jest.fn(async () => {
+        throw providerError('InvalidInstanceID.NotFound');
+      }),
+      describeVolumes: jest.fn(async () => absentVolumeResponse(fixture)),
+    });
+
+    await expect(
+      makeObserver(fixture, client, { waitForRetry }).observe(
+        fixture.authority,
+      ),
+    ).resolves.toMatchObject({
+      presence: 'absent',
+      ownership: 'missing',
+      providerIdentity: null,
+    });
+    expect(client.describeInstances).toHaveBeenCalledTimes(2);
+    expect(client.describeVolumes).toHaveBeenCalledTimes(2);
+    expect(waitForRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps completed-destroy attachment evidence unknown while an in-use retained volume still carries it', async () => {
+    const fixture = makeDestroyedFixture('application-state-attachment');
+    const client = makeClient(fixture, {
+      describeInstances: jest.fn(async () => {
+        throw providerError('InvalidInstanceID.NotFound');
+      }),
+      describeVolumes: jest.fn(async () => volumeResponse(fixture)),
+    });
+
+    await expect(
+      makeObserver(fixture, client).observe(fixture.authority),
+    ).resolves.toMatchObject({
+      presence: 'unknown',
+      ownership: 'unknown',
+      providerIdentity: null,
+    });
+    expect(client.describeInstances).toHaveBeenCalledTimes(2);
+    expect(client.describeVolumes).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a tampered completed-destroy attachment locator before provider I/O', async () => {
+    const fixture = makeDestroyedFixture('application-state-attachment');
+    const client = makeClient(fixture);
+    const forged = clone(fixture.authority);
+    forged.destroyedResourceLocator.dependencies[0].providerIdentity.providerResourceId =
+      'vol-00000000000000009';
+
+    await expect(
+      makeObserver(fixture, client).observe(forged),
+    ).rejects.toBeInstanceOf(
+      AwsSingleNodeVolumeAttachmentResourceObserverAuthorityError,
+    );
+    expect(client.describeInstances).not.toHaveBeenCalled();
+    expect(client.describeVolumes).not.toHaveBeenCalled();
   });
 
   it('requires the same typed endpoint-absence signature for every delete attempt', async () => {

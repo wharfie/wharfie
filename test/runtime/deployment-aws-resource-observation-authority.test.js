@@ -9,11 +9,7 @@ import {
 import { getAwsSingleNodeDefaultIpv4RouteProviderResourceId } from '../../src/core/runtime/deployment-aws-default-ipv4-route-resource.js';
 import { createAwsSingleNodeDesiredResourceTargetCatalog } from '../../src/core/runtime/deployment-aws-desired-resource-targets.js';
 import { getAwsSingleNodeInternetGatewayAttachmentProviderResourceId } from '../../src/core/runtime/deployment-aws-internet-gateway-attachment-resource.js';
-import {
-  AWS_SINGLE_NODE_RESOURCE_OBSERVATION_AUTHORITY_UNSUPPORTED,
-  AwsSingleNodeResourceObservationAuthorityUnsupportedError,
-  createAwsSingleNodeResourceObservationAuthority,
-} from '../../src/core/runtime/deployment-aws-resource-observation-authority.js';
+import { createAwsSingleNodeResourceObservationAuthority } from '../../src/core/runtime/deployment-aws-resource-observation-authority.js';
 import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
@@ -86,25 +82,6 @@ function expectDeepFrozen(value) {
   if (value === null || typeof value !== 'object') return;
   expect(Object.isFrozen(value)).toBe(true);
   for (const child of Object.values(value)) expectDeepFrozen(child);
-}
-
-/** @param {() => unknown} callback @returns {void} */
-function expectUnsupported(callback) {
-  /** @type {any} */
-  let failure;
-  try {
-    callback();
-  } catch (error) {
-    failure = error;
-  }
-  expect(failure).toBeInstanceOf(
-    AwsSingleNodeResourceObservationAuthorityUnsupportedError,
-  );
-  expect(failure).toMatchObject({
-    name: 'AwsSingleNodeResourceObservationAuthorityUnsupportedError',
-    code: AWS_SINGLE_NODE_RESOURCE_OBSERVATION_AUTHORITY_UNSUPPORTED,
-    message: 'AWS single-node resource observation authority is unsupported.',
-  });
 }
 
 /** @param {string} appId @returns {Readonly<AnyRecord>} */
@@ -476,38 +453,31 @@ function makeReadyState(base, options = {}) {
   };
 }
 
-/** @param {Readonly<AnyRecord>} base @returns {Readonly<AnyRecord>} */
-function makeDestroyedHead(base) {
-  return createDeploymentHead({
+/** @param {Readonly<AnyRecord>} base @returns {{plan: Readonly<AnyRecord>, intents: ReadonlyArray<Readonly<AnyRecord>>, head: Readonly<AnyRecord>}} */
+function makeDestroyedState(base) {
+  const ready = makeReadyState(base);
+  const plan = makeDestroyPlan(base, ready.head);
+  const intents = makePlanIntents(plan, ready.head).map((intent) => ({
+    ...intent,
+    status: 'settled',
+  }));
+  const retainedBindings = ready.bindings.filter(
+    (/** @type {Readonly<AnyRecord>} */ binding) =>
+      binding.onDestroy === 'retain',
+  );
+  const head = createDeploymentHead({
     deploymentInstanceId: base.deploymentInstanceId,
     providerScope: base.providerScope,
     incarnationId: base.incarnationId,
-    generation: 9,
+    generation: ready.head.generation + plan.actions.length * 2 + 2,
     phase: 'DESTROYED',
     settledDeploymentRevisionId: null,
     targetDeploymentRevisionId: null,
-    resourceBindings: [],
+    resourceBindings: retainedBindings,
     activeOperation: null,
-    lastOperation: {
-      kind: 'destroy',
-      planId: semanticId(
-        'wpl3',
-        'wharfie:test:resource-observation-authority-destroy-plan:v1',
-        { incarnationId: base.incarnationId },
-      ),
-      intents: [
-        {
-          actionId: semanticId(
-            'wda3',
-            'wharfie:test:resource-observation-authority-destroy-action:v1',
-            { incarnationId: base.incarnationId },
-          ),
-          status: 'settled',
-          ownershipNonce: nonce(250),
-        },
-      ],
-    },
+    lastOperation: settledOperation(plan, intents),
   });
+  return { plan, intents, head };
 }
 
 /** @param {Readonly<AnyRecord>} base @param {Readonly<AnyRecord>|null} head @returns {ReadonlyArray<Readonly<AnyRecord>>} */
@@ -1085,6 +1055,59 @@ describe('AWS single-node resource observation authority', () => {
     },
   );
 
+  it('rejects reconcile plans masquerading as active create or update operations', () => {
+    const createBase = makeBase();
+    const createReconcilePlan = makeCreatePlan(createBase, {
+      operation: 'reconcile',
+    });
+    const createHead = makeActiveCreateHead(createBase, createReconcilePlan);
+    const createTarget = targetFor(
+      makeTargets(createBase, createHead),
+      'artifact',
+    );
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(
+          createBase,
+          'reconcile',
+          createHead,
+          createReconcilePlan,
+          createTarget,
+        ),
+      ),
+    ).toThrow(/does not match its exact deployment context/i);
+
+    const settled = makeBase({ revision: 1 });
+    const desired = makeBase({ revision: 2 });
+    const ready = makeReadyState(settled);
+    const updatePlan = makeUpdatePlan(settled, desired, ready.head);
+    const updateReconcilePlan = recreatePlan(updatePlan, desired.profile, {
+      operation: 'reconcile',
+    });
+    const updateHead = makeActiveResidentHead(
+      desired,
+      updateReconcilePlan,
+      ready.head,
+      'update',
+    );
+    const updateTarget = targetFor(
+      makeTargets(desired, updateHead),
+      'artifact',
+    );
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(
+          desired,
+          'apply',
+          updateHead,
+          updateReconcilePlan,
+          updateTarget,
+          { settledPlan: ready.plan },
+        ),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
+  });
+
   it('permits a prospective READY revision only for apply', () => {
     const settled = makeBase({ revision: 1 });
     const desired = makeBase({ revision: 2 });
@@ -1640,7 +1663,7 @@ describe('AWS single-node resource observation authority', () => {
     ).toThrow(/plan does not match the exact active operation/i);
   });
 
-  it('derives exact target-local intended actions for active reconcile, update, and destroy operation kinds', () => {
+  it('derives exact target-local intended actions for active apply/reconcile, update, and destroy operation kinds', () => {
     const resident = makeBase({ revision: 1 });
     const ready = makeReadyState(resident);
     const readyHead = ready.head;
@@ -1649,6 +1672,15 @@ describe('AWS single-node resource observation authority', () => {
     const reconcileHead = makeActiveResidentHead(
       resident,
       reconcilePlan,
+      readyHead,
+      'reconcile',
+    );
+    const applyReconcilePlan = recreatePlan(reconcilePlan, resident.profile, {
+      operation: 'apply',
+    });
+    const applyReconcileHead = makeActiveResidentHead(
+      resident,
+      applyReconcilePlan,
       readyHead,
       'reconcile',
     );
@@ -1671,6 +1703,14 @@ describe('AWS single-node resource observation authority', () => {
     );
 
     const fixtures = [
+      {
+        base: resident,
+        operation: 'apply',
+        expectedKind: 'reconcile',
+        plan: applyReconcilePlan,
+        settledPlan: ready.plan,
+        head: applyReconcileHead,
+      },
       {
         base: resident,
         operation: 'reconcile',
@@ -2211,7 +2251,7 @@ describe('AWS single-node resource observation authority', () => {
     }
   });
 
-  it('rejects a null head structurally and a DESTROYED head with one fixed non-echoing unsupported error', () => {
+  it('rejects a null head structurally and authorizes every DESTROYED role only from its exact completed destroy plan', () => {
     const base = makeBase();
     const nullTarget = targetFor(makeTargets(base, null), 'artifact');
     expect(() =>
@@ -2220,13 +2260,100 @@ describe('AWS single-node resource observation authority', () => {
       ),
     ).toThrow(/head must be non-null/i);
 
-    const destroyed = makeDestroyedHead(base);
-    const destroyedTarget = targetFor(makeTargets(base, destroyed), 'artifact');
-    expectUnsupported(() =>
-      createAwsSingleNodeResourceObservationAuthority(
-        authorityInput(base, 'apply', destroyed, null, destroyedTarget),
-      ),
+    const destroyed = makeDestroyedState(base);
+    const targets = makeTargets(base, destroyed.head);
+    expect(targets).toHaveLength(
+      AWS_SINGLE_NODE_RESOURCE_GRAPH.resources.length,
     );
+
+    for (const target of targets) {
+      const authority = createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'destroy', destroyed.head, null, target, {
+          settledPlan: destroyed.plan,
+        }),
+      );
+      expect(authority.operation).toBe('destroy');
+      expect(authority.head).toEqual(destroyed.head);
+      expect(authority.plan).toBeNull();
+      expect(authority.settledPlan).toEqual(destroyed.plan);
+      expect(authority.currentAction).toBeNull();
+      expect(authority.binding).toEqual(
+        destroyed.head.resourceBindings.find(
+          (/** @type {Readonly<AnyRecord>} */ binding) =>
+            binding.resourceKey === target.resourceKey,
+        ) ?? null,
+      );
+      expectDeepFrozen(authority);
+    }
+
+    const target = targetFor(targets, 'artifact');
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'apply', destroyed.head, null, target, {
+          settledPlan: destroyed.plan,
+        }),
+      ),
+    ).toThrow(/does not match its exact deployment context/i);
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'destroy', destroyed.head, null, target, {
+          settledPlan: makeCreatePlan(base),
+        }),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
+
+    const alternate = Object.freeze({
+      ...base,
+      deploymentRevision: makeDeploymentRevision(base.profile, 2),
+    });
+    const alternateTarget = targetFor(
+      makeTargets(alternate, destroyed.head),
+      'artifact',
+    );
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(
+          alternate,
+          'destroy',
+          destroyed.head,
+          null,
+          alternateTarget,
+          { settledPlan: destroyed.plan },
+        ),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
+  });
+
+  it('rejects a DESTROYED plan whose basis does not name its exact destroyed revision', () => {
+    const base = makeBase();
+    const destroyed = makeDestroyedState(base);
+    const invalidPlan = recreatePlan(destroyed.plan, base.profile, {
+      basis: {
+        ...destroyed.plan.basis,
+        settledDeploymentRevisionId: null,
+      },
+    });
+    const invalidHead = createDeploymentHead({
+      deploymentInstanceId: destroyed.head.deploymentInstanceId,
+      providerScope: destroyed.head.providerScope,
+      incarnationId: destroyed.head.incarnationId,
+      generation: destroyed.head.generation,
+      phase: 'DESTROYED',
+      settledDeploymentRevisionId: null,
+      targetDeploymentRevisionId: null,
+      resourceBindings: destroyed.head.resourceBindings,
+      activeOperation: null,
+      lastOperation: settledOperation(invalidPlan, destroyed.intents),
+    });
+    const target = targetFor(makeTargets(base, invalidHead), 'artifact');
+
+    expect(() =>
+      createAwsSingleNodeResourceObservationAuthority(
+        authorityInput(base, 'destroy', invalidHead, null, target, {
+          settledPlan: invalidPlan,
+        }),
+      ),
+    ).toThrow(/plan does not match the exact active operation/i);
   });
 
   it('rejects malformed top-level structure and exact-key violations', () => {

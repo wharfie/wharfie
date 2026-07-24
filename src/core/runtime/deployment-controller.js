@@ -36,6 +36,7 @@ const PLAN_REQUEST_KEYS = new Set([
   'deploymentRevision',
   'profile',
 ]);
+const INSPECT_REQUEST_KEYS = new Set(['deploymentInstanceId']);
 const CONVERGE_REQUEST_KEYS = new Set(['plan', 'profile']);
 const RESUME_REQUEST_KEYS = new Set(['deploymentInstanceId']);
 const SETTLEMENT_KEYS = new Set(['status', 'binding']);
@@ -87,16 +88,38 @@ function exactObject(value, keys, path) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`${path} must be an object.`);
   }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${path} must be a plain object.`);
+  }
   const object = /** @type {Record<string, any>} */ (value);
-  for (const key of Object.keys(object)) {
+  /** @type {Map<string, any>} */
+  const values = new Map();
+  for (const key of Reflect.ownKeys(object)) {
+    if (typeof key !== 'string') {
+      throw new TypeError(`${path} must not contain symbol keys.`);
+    }
     if (!keys.has(key)) throw new TypeError(`${path}.${key} is not supported.`);
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+    ) {
+      throw new TypeError(
+        `${path}.${key} must be an enumerable data property.`,
+      );
+    }
+    values.set(key, descriptor.value);
   }
   for (const key of keys) {
-    if (!Object.prototype.hasOwnProperty.call(object, key)) {
+    if (!values.has(key)) {
       throw new TypeError(`${path}.${key} is required.`);
     }
   }
-  return object;
+  return Object.freeze(
+    Object.fromEntries([...keys].map((key) => [key, values.get(key)])),
+  );
 }
 
 /** @param {unknown} left @param {unknown} right @returns {boolean} */
@@ -178,7 +201,7 @@ function nextHead(head, changes) {
  * credentials remain private to the provider implementation.
  *
  * @param {{store: Record<string, Function>, provider: Record<string, Function>, artifactStager: Record<string, Function>, now: () => number, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports and explicit inspection clock.
- * @returns {Readonly<{plan: (input: unknown) => Promise<Readonly<Record<string, any>>>, converge: (input: unknown) => Promise<Readonly<Record<string, any>>>, resume: (input: unknown) => Promise<Readonly<Record<string, any>>>}>} - Controller API.
+ * @returns {Readonly<{inspect: (input: unknown) => Promise<Readonly<Record<string, any>>>, plan: (input: unknown) => Promise<Readonly<Record<string, any>>>, converge: (input: unknown) => Promise<Readonly<Record<string, any>>>, resume: (input: unknown) => Promise<Readonly<Record<string, any>>>}>} - Controller API.
  */
 export function createDeploymentController(dependencies) {
   if (
@@ -447,20 +470,23 @@ export function createDeploymentController(dependencies) {
 
   /**
    * Resolve and independently bind the exact plan named by the durable last
-   * operation. Active create operations have no settled predecessor and
-   * therefore return null.
+   * operation. Active create operations have no predecessor and therefore
+   * return null.
    * @param {Readonly<Record<string, any>>} head - Exact durable head.
-   * @returns {Promise<Readonly<Record<string, any>>|null>} - Exact last-settled plan.
+   * @returns {Promise<Readonly<Record<string, any>>|null>} - Exact last-operation plan.
    */
-  async function readLastSettledPlan(head) {
+  async function readLastOperationPlan(head) {
     if (head.lastOperation === null) return null;
     const value = await store.readPlan(head.lastOperation.planId);
     if (value === null) {
       throw new Error(
-        'The last settled deployment plan is missing from durable storage.',
+        'The last-operation deployment plan is missing from durable storage.',
       );
     }
-    const plan = validateDeploymentPlan(value, 'last settled deployment plan');
+    const plan = validateDeploymentPlan(
+      value,
+      'last-operation deployment plan',
+    );
     const expectedOperationKind =
       plan.operation === 'destroy'
         ? 'destroy'
@@ -476,14 +502,21 @@ export function createDeploymentController(dependencies) {
         : plan.operation === 'reconcile'
           ? expectedOperationKind === 'reconcile'
           : expectedOperationKind !== 'destroy';
+    const deploymentRevisionMatchesHead =
+      head.phase === 'DESTROYED'
+        ? expectedOperationKind === 'destroy' &&
+          plan.operation === 'destroy' &&
+          plan.basis.settledDeploymentRevisionId ===
+            plan.deploymentRevision.deploymentRevisionId
+        : plan.deploymentRevision.deploymentRevisionId ===
+          head.settledDeploymentRevisionId;
     if (
       plan.planId !== head.lastOperation.planId ||
       !operationMatchesBasis ||
       head.lastOperation.kind !== expectedOperationKind ||
       plan.deploymentInstanceId !== head.deploymentInstanceId ||
       plan.incarnationId !== head.incarnationId ||
-      plan.deploymentRevision.deploymentRevisionId !==
-        head.settledDeploymentRevisionId ||
+      !deploymentRevisionMatchesHead ||
       !sameJson(plan.providerScope, head.providerScope) ||
       plan.basis.headGeneration >= head.generation ||
       head.lastOperation.intents.length !== plan.actions.length ||
@@ -511,7 +544,7 @@ export function createDeploymentController(dependencies) {
    */
   async function selectProviderSpec(request, head) {
     if (head !== null && head.phase === 'READY') {
-      const priorPlan = await readLastSettledPlan(head);
+      const priorPlan = await readLastOperationPlan(head);
       if (priorPlan === null) {
         throw new DeploymentControllerConflictError(
           'A ready deployment is missing its exact last-settled plan.',
@@ -633,7 +666,7 @@ export function createDeploymentController(dependencies) {
   }
 
   /** @param {Readonly<Record<string, any>>} inspection @param {Record<string, any>} request @param {Readonly<Record<string, any>>|null} head @returns {void} */
-  function assertInspectionAuthority(inspection, request, head) {
+  function assertInspectionContextAuthority(inspection, request, head) {
     const expectedIncarnation = head?.incarnationId || null;
     if (
       !sameJson(inspection.deploymentRevision, request.deploymentRevision) ||
@@ -647,6 +680,19 @@ export function createDeploymentController(dependencies) {
         'Provider inspection does not match the exact desired tuple and durable head.',
       );
     }
+  }
+
+  /**
+   * Require correlated provider evidence that can authorize mutation. Public
+   * read-only inspection deliberately uses only the context check above so
+   * unknown and conflict remain truthful operator-visible results.
+   * @param {Readonly<Record<string, any>>} inspection
+   * @param {Record<string, any>} request
+   * @param {Readonly<Record<string, any>>|null} head
+   * @returns {void}
+   */
+  function assertInspectionAuthority(inspection, request, head) {
+    assertInspectionContextAuthority(inspection, request, head);
     if (head === null && inspection.status !== 'absent') {
       throw new StaleDeploymentPlanError(
         'An absent durable head requires absent provider evidence.',
@@ -797,7 +843,7 @@ export function createDeploymentController(dependencies) {
     pendingBinding = null,
   ) {
     await assertPlanProviderScope(plan, profile);
-    const settledPlan = await readLastSettledPlan(head);
+    const settledPlan = await readLastOperationPlan(head);
     const request = {
       operation: plan.operation,
       deploymentRevision: plan.deploymentRevision,
@@ -1041,7 +1087,8 @@ export function createDeploymentController(dependencies) {
       profile: request.profile,
       providerScope: request.providerScope,
     });
-    const settledPlan = head === null ? null : await readLastSettledPlan(head);
+    const settledPlan =
+      head === null ? null : await readLastOperationPlan(head);
     const context = providerContext(request, head);
     const inspectionContext = Object.freeze({
       ...context,
@@ -1699,7 +1746,7 @@ export function createDeploymentController(dependencies) {
   async function finalize(plan, profile, head) {
     await assertPlanProviderScope(plan, profile);
     try {
-      const settledPlan = await readLastSettledPlan(head);
+      const settledPlan = await readLastOperationPlan(head);
       const observed = await provider.inspect(
         Object.freeze({
           ...providerContext(
@@ -1920,6 +1967,12 @@ export function createDeploymentController(dependencies) {
   /** @param {Readonly<Record<string, any>>} head @param {Readonly<Record<string, any>>} plan @returns {void} */
   function assertActivePlan(head, plan) {
     const operation = head.activeOperation;
+    const operationMatchesPlan =
+      operation?.kind === 'destroy'
+        ? plan.operation === 'destroy'
+        : operation?.kind === 'reconcile'
+          ? plan.operation === 'apply' || plan.operation === 'reconcile'
+          : plan.operation === 'apply';
     const expectedKind =
       plan.operation === 'destroy'
         ? 'destroy'
@@ -1931,6 +1984,7 @@ export function createDeploymentController(dependencies) {
             : 'update';
     if (
       operation === null ||
+      !operationMatchesPlan ||
       operation.planId !== plan.planId ||
       operation.kind !== expectedKind ||
       plan.deploymentInstanceId !== head.deploymentInstanceId ||
@@ -1955,6 +2009,146 @@ export function createDeploymentController(dependencies) {
         'Persisted plan does not match the exact active operation.',
       );
     }
+  }
+
+  /**
+   * Resolve and independently bind the exact plan named by the durable active
+   * operation.
+   * @param {Readonly<Record<string, any>>} head - Exact durable head.
+   * @returns {Promise<Readonly<Record<string, any>>|null>} - Exact active plan.
+   */
+  async function readActivePlan(head) {
+    if (head.activeOperation === null) return null;
+    const value = await store.readPlan(head.activeOperation.planId);
+    if (value === null) {
+      throw new Error(
+        'Active deployment plan is missing from durable storage.',
+      );
+    }
+    const activePlan = validateDeploymentPlan(
+      value,
+      'persisted active deployment plan',
+    );
+    assertActivePlan(head, activePlan);
+    return activePlan;
+  }
+
+  /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
+  async function inspect(value) {
+    const input = exactObject(
+      value,
+      INSPECT_REQUEST_KEYS,
+      'deploymentController.inspect',
+    );
+    assertDeploymentInstanceId(
+      input.deploymentInstanceId,
+      'deploymentController.inspect.deploymentInstanceId',
+    );
+    const head = await readHead(input.deploymentInstanceId);
+    if (head === null) {
+      return Object.freeze({
+        schemaVersion: 1,
+        kind: 'deploymentControllerInspection',
+        deploymentInstanceId: input.deploymentInstanceId,
+        status: 'absent',
+        head: null,
+        activePlan: null,
+        lastOperationPlan: null,
+        profile: null,
+        providerSpec: null,
+        inspection: null,
+      });
+    }
+
+    const activePlan = await readActivePlan(head);
+    const settledPlan = await readLastOperationPlan(head);
+    const authorityPlan = activePlan || settledPlan;
+    if (authorityPlan === null) {
+      throw new DeploymentControllerConflictError(
+        'The durable deployment head has no inspection-authorizing plan.',
+      );
+    }
+
+    const profileValue = await store.readProfile(
+      authorityPlan.deploymentRevision.profileRevisionId,
+    );
+    if (profileValue === null) {
+      throw new Error(
+        'Deployment inspection profile is missing from durable storage.',
+      );
+    }
+    const profile = validateDeploymentProfile(
+      profileValue,
+      'persisted deployment inspection profile',
+    );
+    const contextualActivePlan =
+      activePlan === null
+        ? null
+        : validateDeploymentPlanContext(activePlan, { profile });
+    const contextualSettledPlan =
+      settledPlan === null
+        ? null
+        : validateDeploymentPlanContext(settledPlan, { profile });
+    const contextualAuthorityPlan =
+      contextualActivePlan || contextualSettledPlan;
+    if (contextualAuthorityPlan === null) {
+      throw new DeploymentControllerConflictError(
+        'The durable deployment head has no inspection-authorizing plan.',
+      );
+    }
+    if (
+      contextualActivePlan !== null &&
+      contextualSettledPlan !== null &&
+      !sameJson(
+        contextualActivePlan.providerSpec,
+        contextualSettledPlan.providerSpec,
+      )
+    ) {
+      throw new DeploymentControllerConflictError(
+        'Active and last-settled deployment plans do not use the same provider specification.',
+      );
+    }
+
+    await assertPlanProviderScope(contextualAuthorityPlan, profile);
+    const request = {
+      operation: contextualAuthorityPlan.operation,
+      deploymentRevision: contextualAuthorityPlan.deploymentRevision,
+      providerScope: contextualAuthorityPlan.providerScope,
+      deploymentInstanceId: contextualAuthorityPlan.deploymentInstanceId,
+      incarnationId: contextualAuthorityPlan.incarnationId,
+      profile,
+      providerSpec: contextualAuthorityPlan.providerSpec,
+    };
+    const observed = await provider.inspect(
+      Object.freeze({
+        ...providerContext(request, head),
+        plan: contextualActivePlan,
+        settledPlan: contextualSettledPlan,
+        pendingBinding: null,
+      }),
+    );
+    const inspection = validateDeploymentInspectionContext(observed, {
+      profile,
+      providerSpec: contextualAuthorityPlan.providerSpec,
+      head,
+      plan: contextualActivePlan,
+      pendingBinding: null,
+      now: sampleInspectionNow(),
+    });
+    assertInspectionContextAuthority(inspection, request, head);
+
+    return Object.freeze({
+      schemaVersion: 1,
+      kind: 'deploymentControllerInspection',
+      deploymentInstanceId: input.deploymentInstanceId,
+      status: inspection.status,
+      head,
+      activePlan: contextualActivePlan,
+      lastOperationPlan: contextualSettledPlan,
+      profile,
+      providerSpec: contextualAuthorityPlan.providerSpec,
+      inspection,
+    });
   }
 
   /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
@@ -2114,16 +2308,12 @@ export function createDeploymentController(dependencies) {
       throw new Error('Cannot resume a deployment without a durable head.');
     }
     if (head.activeOperation === null) return head;
-    const storedValue = await store.readPlan(head.activeOperation.planId);
-    if (storedValue === null) {
-      throw new Error(
-        'Active deployment plan is missing from durable storage.',
+    const structuralPlan = await readActivePlan(head);
+    if (structuralPlan === null) {
+      throw new DeploymentControllerConflictError(
+        'The active deployment operation has no plan.',
       );
     }
-    const structuralPlan = validateDeploymentPlan(
-      storedValue,
-      'persisted active deployment plan',
-    );
     const profileValue = await store.readProfile(
       structuralPlan.deploymentRevision.profileRevisionId,
     );
@@ -2139,7 +2329,6 @@ export function createDeploymentController(dependencies) {
     const storedPlan = validateDeploymentPlanContext(structuralPlan, {
       profile,
     });
-    assertActivePlan(head, storedPlan);
     await assertFreshProviderScope(
       {
         operation: storedPlan.operation,
@@ -2166,7 +2355,7 @@ export function createDeploymentController(dependencies) {
     return await runOperation(storedPlan, profile, head, artifactStage);
   }
 
-  return Object.freeze({ plan, converge, resume });
+  return Object.freeze({ inspect, plan, converge, resume });
 }
 
 export default { createDeploymentController };

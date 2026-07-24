@@ -11,6 +11,7 @@ import {
 } from './deployment-control-table.js';
 import { createDeploymentController } from './deployment-controller.js';
 import { validateProviderScope } from './deployment-provider-scope.js';
+import { cloneJsonObject } from './json-value.js';
 
 const FACTORY_KEYS = new Set([
   'clientFamily',
@@ -370,7 +371,7 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
   const controllerOwner = /** @type {Record<string, Function>} */ (
     /** @type {unknown} */ (controller)
   );
-  for (const method of ['plan', 'converge', 'resume']) {
+  for (const method of ['inspect', 'plan', 'converge', 'resume']) {
     if (typeof controllerOwner[method] !== 'function') {
       throw new TypeError(
         `awsDeploymentInvocation controller.${method} must be a function.`,
@@ -378,6 +379,7 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     }
   }
   const controllerMethods = Object.freeze({
+    inspect: controllerOwner.inspect,
     plan: controllerOwner.plan,
     converge: controllerOwner.converge,
     resume: controllerOwner.resume,
@@ -472,19 +474,38 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
   }
 
   /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
+  function inspect(input) {
+    return enter(async () => {
+      const request = deepFreeze(
+        cloneJsonObject(input, 'awsDeploymentInvocation inspect input'),
+      );
+      await requireControlInternal();
+      return await Reflect.apply(controllerMethods.inspect, controller, [
+        request,
+      ]);
+    });
+  }
+
+  /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
   function plan(input) {
     return enter(async () => {
+      const request = deepFreeze(
+        cloneJsonObject(input, 'awsDeploymentInvocation plan input'),
+      );
       await requireControlInternal();
-      return await Reflect.apply(controllerMethods.plan, controller, [input]);
+      return await Reflect.apply(controllerMethods.plan, controller, [request]);
     });
   }
 
   /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
   function converge(input) {
     return enter(async () => {
+      const request = deepFreeze(
+        cloneJsonObject(input, 'awsDeploymentInvocation converge input'),
+      );
       await requireControlInternal();
       return await Reflect.apply(controllerMethods.converge, controller, [
-        input,
+        request,
       ]);
     });
   }
@@ -492,8 +513,13 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
   /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
   function resume(input) {
     return enter(async () => {
+      const request = deepFreeze(
+        cloneJsonObject(input, 'awsDeploymentInvocation resume input'),
+      );
       await requireControlInternal();
-      return await Reflect.apply(controllerMethods.resume, controller, [input]);
+      return await Reflect.apply(controllerMethods.resume, controller, [
+        request,
+      ]);
     });
   }
 
@@ -520,6 +546,7 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     requireControl,
     reconcileControl,
     bootstrapControl,
+    inspect,
     plan,
     converge,
     resume,
