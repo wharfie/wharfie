@@ -1985,3 +1985,36 @@ primary-operation versus cleanup-error precedence, own a selected source-mode
 SEA, or mount deployment commands. Guest service projection, privileged
 publisher wiring, live STS role/session proof, DESTROYED-tombstone reapply,
 clean-account proof, and exactly-once provider effects remain unfinished.
+
+The forty-second slice adds a finite one-shot AWS deployment operation runner.
+Its exact request names one region, one `require-active`,
+`reconcile-existing`, or `bootstrap` control policy, one `inspect`, `plan`,
+`converge`, or `resume` operation, and that operation's JSON input. The
+non-callback surface never exposes its invocation or permits a second
+operation in the same lifetime.
+
+The runner descriptor-snapshots its exact top-level request and independently
+deep-clones and freezes the operation input before opening credentials.
+Symbols, accessors, hidden fields, non-JSON values, and later caller mutation
+cannot redirect the admitted operation. The selected policy runs first, then
+the invocation operation performs its ordinary fresh require-active check;
+that second inspection deliberately closes disappearance after reconcile or
+bootstrap preparation.
+
+Every opened result that passes the exact frozen invocation validation is
+accepted into runner ownership and closed after the policy or operation
+settles. A lone operation failure is preserved unchanged, as is a lone cleanup
+failure. If both fail, one AggregateError retains the primary failure first and
+the close failure second. An open failure or malformed opener result transfers
+no invocation to the runner and therefore causes no runner-owned close.
+
+This slice does not claim source-mode artifact authority. The current stager
+still proves the running executable, so a Node-hosted source process cannot
+use this runner to apply itself. The next boundary must mint a
+non-serializable, one-shot selected-SEA capability directly from a fresh
+in-process package result and held file descriptor. An arbitrary path plus an
+unsigned artifact sidecar cannot prove the SEA's embedded revision/runtime
+assets, especially for an off-target build. Commands, guest service
+projection, privileged publisher wiring, live STS role/session proof,
+DESTROYED-tombstone reapply, clean-account proof, and exactly-once provider
+effects remain unfinished.

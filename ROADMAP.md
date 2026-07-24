@@ -1144,9 +1144,19 @@ resume require fresh active control evidence. Invocation close fences new
 calls, drains every entered call and both sides of paired control work, then
 closes the family once.
 
-1. Add one operation runner that owns invocation cleanup, makes control policy
-   explicit, defines primary-operation versus cleanup-error precedence, and
-   owns exact selected-SEA authority for source mode.
+One finite non-callback runner now snapshots its exact request before opening
+credentials, chooses explicit require-active, existing-only reconcile, or
+bootstrap control policy, dispatches one controller operation, and always
+closes the invocation. The operation's own fresh control check remains a
+deliberate second fence after policy preparation. An operation failure remains
+primary; a simultaneous close failure is retained second in one ordered
+AggregateError.
+
+1. Add one non-serializable, one-shot selected-SEA authority minted directly
+   from a fresh in-process package result and held artifact descriptor. Use
+   that same authority to create the deployment revision and stage the exact
+   bytes; arbitrary paths and unsigned sidecars are not sufficient embedded
+   metadata proof.
    Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
    `destroy` commands only after that boundary is proven. Apply and reconcile
    must re-observe the selected or currently running SEA.
@@ -1160,9 +1170,11 @@ closes the family once.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [read-only deployment inspection
-checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md).
-Its parent is the [owned AWS deployment invocation
+The current restart point is the [one-shot deployment operation runner
+checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md).
+Its parent is the [read-only deployment inspection
+checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md),
+whose parent is the [owned AWS deployment invocation
 checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md),
 whose parent is the [production AWS provider assembly
 checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md), whose

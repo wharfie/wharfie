@@ -485,11 +485,18 @@ truthful inspection data. The invocation first requires fresh active control
 evidence for inspection, plan, converge, and resume. Shutdown fences new calls,
 drains entered work, and closes the family once.
 
-This does not yet provide the one-shot operation runner, operator commands,
-selected-SEA source staging, the privileged host observer and publisher, guest
-service projection, or clean-account proof. External resource verification is
-represented by the generic V6 contract but remains unreachable through the
-fixed all-managed AWS profile and planner.
+One finite operation runner now opens exactly one invocation, applies an
+explicit `require-active`, `reconcile-existing`, or `bootstrap` control policy,
+dispatches exactly one inspection, plan, converge, or resume operation, and
+unconditionally closes the invocation. It snapshots the complete request
+before opening credentials and preserves deterministic primary-operation and
+cleanup failures.
+
+This does not yet provide operator commands, selected-SEA source staging, the
+privileged host observer and publisher, guest service projection, or
+clean-account proof. External resource verification is represented by the
+generic V6 contract but remains unreachable through the fixed all-managed AWS
+profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -500,7 +507,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Read-only deployment inspection checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md) — the current handoff for exact durable inspection hydration, completed-destroy observation, guarded controller operations, active-call draining, and one owned AWS lifetime.
+- [One-shot deployment operation runner checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md) — the current handoff for explicit control policy, one finite operation, unconditional cleanup, and deterministic failure precedence.
+- [Read-only deployment inspection checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md) — the parent handoff for exact durable inspection hydration, completed-destroy observation, guarded controller operations, active-call draining, and one owned AWS lifetime.
 - [Owned AWS deployment invocation checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md) — the parent handoff for explicit inspect/require/reconcile/bootstrap control policy, guarded controller operations, active-call draining, and one owned AWS lifetime.
 - [Production AWS provider assembly checkpoint](llm/checkpoints/2026-07-24-v57-aws-provider-assembly.md) — the parent handoff for one ordinary-chain invocation lifetime, exact fenced AWS client projections, and complete pure assembly of the seven-method controller provider.
 - [InspectionV6 aggregate and controller checkpoint](llm/checkpoints/2026-07-24-v56-inspection-aggregate-controller.md) — the earlier handoff for lossless 18-role aggregation, exact provider composition, pre-intent first-call fencing, and stable-token-only crash replay.
