@@ -6,6 +6,10 @@ const SERVICE_ACTIONS = Object.freeze([
     description: 'Install and enable this artifact as a systemd user service',
   }),
   Object.freeze({
+    name: 'converge',
+    description: 'Converge this artifact as the resident release',
+  }),
+  Object.freeze({
     name: 'update',
     description: 'Quiesce and activate this artifact as the next release',
   }),
@@ -41,17 +45,19 @@ const SERVICE_ACTIONS = Object.freeze([
 
 const ACTIVATION_ACTIONS = new Set([
   'install',
+  'converge',
   'update',
   'rollback',
   'recover',
 ]);
-/** @type {Readonly<Record<string, string>>} */
-const SERVICE_ERROR_REMEDIATIONS = Object.freeze({
-  'systemd-user-service-activation-recovery-required':
-    'Run service recover before retrying activation.',
-  'systemd-user-service-active-reinstall-recovery-required':
-    'Run service install again from the exact selected SEA to resume repair.',
-});
+const ACTIVATION_RECOVERY_REMEDIATION =
+  'Run service recover before retrying activation.';
+const CONVERGE_RECOVERY_REMEDIATION =
+  'Retry service converge from this exact desired SEA.';
+const CONVERGE_ROLLBACK_RECOVERY_REMEDIATION =
+  'Run service recover before retrying desired-target convergence.';
+const ACTIVE_REINSTALL_RECOVERY_REMEDIATION =
+  'Run service install again from the exact selected SEA to resume repair.';
 const SERVICE_REQUEST_STATUSES = new Set([
   'fulfilled',
   'refused',
@@ -187,6 +193,16 @@ function hasValidResultSettlement(result, action) {
     if (result.requestStatus === 'failed') {
       return result.outcome === 'source-restored';
     }
+    if (action === 'converge') {
+      return (
+        result.outcome === 'target-active' &&
+        result.health === 'healthy' &&
+        typeof result.activeArtifactId === 'string' &&
+        result.activeArtifactId.length > 0 &&
+        typeof result.activeRevisionId === 'string' &&
+        result.activeRevisionId.length > 0
+      );
+    }
     return FULFILLED_ACTIVATION_OUTCOMES.has(result.outcome);
   }
   return (
@@ -279,6 +295,38 @@ function normalizeResult(value, action) {
 }
 
 /**
+ * Select only static remediation text appropriate to the requested action.
+ * @param {string} code - Safe error code.
+ * @param {string} action - Requested service action.
+ * @returns {string | null} - Trusted guidance, or null.
+ */
+function getExpectedErrorRemediation(code, action) {
+  if (code === 'systemd-user-service-activation-recovery-required') {
+    return action === 'converge'
+      ? CONVERGE_RECOVERY_REMEDIATION
+      : ACTIVATION_RECOVERY_REMEDIATION;
+  }
+  if (code === 'systemd-user-service-active-reinstall-recovery-required') {
+    return action === 'converge'
+      ? CONVERGE_RECOVERY_REMEDIATION
+      : ACTIVE_REINSTALL_RECOVERY_REMEDIATION;
+  }
+  if (
+    action === 'converge' &&
+    code === 'systemd-user-service-converge-rollback-recovery-required'
+  ) {
+    return CONVERGE_ROLLBACK_RECOVERY_REMEDIATION;
+  }
+  if (
+    action === 'converge' &&
+    code === 'systemd-user-service-converge-proof-required'
+  ) {
+    return CONVERGE_RECOVERY_REMEDIATION;
+  }
+  return null;
+}
+
+/**
  * @param {unknown} error - Operation failure.
  * @param {string} action - Requested operation.
  * @returns {Readonly<Record<string, any>>} - One safe JSON failure receipt.
@@ -299,9 +347,7 @@ function createJsonError(error, action) {
   const code = /^[a-z0-9][a-z0-9-]{0,127}$/.test(rawCode)
     ? rawCode
     : 'systemd-user-service-operation-failed';
-  const expectedRemediation = Object.hasOwn(SERVICE_ERROR_REMEDIATIONS, code)
-    ? SERVICE_ERROR_REMEDIATIONS[code]
-    : null;
+  const expectedRemediation = getExpectedErrorRemediation(code, action);
   const remediation =
     expectedRemediation !== null &&
     error &&
@@ -367,6 +413,12 @@ function formatHumanResult(action, result) {
     return `${action.name}: ${outcome}; wiring: ${wiring}${wiringRemediation}${activationRemediation}${app}`;
   }
   if (result.requestStatus === 'pending') {
+    if (action.name === 'converge') {
+      if (result.reason === 'incompatible-durable-work') {
+        return `${action.name}: ${outcome}; request pending; settle incompatible durable work, then retry service converge${app}`;
+      }
+      return `${action.name}: ${outcome}; request pending; retry service converge${app}`;
+    }
     if (result.reason === 'incompatible-durable-work') {
       return `${action.name}: ${outcome}; request pending; settle incompatible durable work, then run service recover; or install its matching revision${app}`;
     }

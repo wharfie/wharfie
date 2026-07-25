@@ -136,7 +136,8 @@ evidence-reconciliation commands understand the activation-aware cursor and
 schema-v7 redacted timer/signal lifecycle state. Managed-effect workflow
 successors and schedules remain unfinished. Packaged Linux artifacts now have
 a recoverable systemd user-service
-install/update/rollback/recover/start/stop/restart/status/uninstall lifecycle.
+install/converge/update/rollback/recover/start/stop/restart/status/uninstall
+lifecycle.
 A single local coordinator serializes release changes, closes durable work
 admission, requires every existing source run to be terminal during update or
 rollback, and retains one exact rollback candidate before it changes the
@@ -790,6 +791,7 @@ service:
 ```bash
 <app> wharfie service install
 <app> wharfie service status --json
+<desired-app> wharfie service converge
 <next-app> wharfie service update
 <next-app> wharfie service rollback
 <next-app> wharfie service recover
@@ -800,14 +802,23 @@ service:
 ```
 
 These commands reject root, never invoke `sudo`, and preserve durable state and
-immutable releases on uninstall. `service update` is invoked through the new
-artifact and activates it only after closing run admission and proving every
-durable run terminal. A fresh `service rollback` must be invoked through the
-currently selected artifact—`<next-app>` immediately after an update—and
-selects the one retained prior release. If its response is ambiguous, run
-`service recover`; do not issue a new rollback and risk requesting the reverse
-transition. A rollback request from the prior/candidate SEA is rejected because
-it cannot be distinguished from a false fresh request.
+immutable releases on uninstall. `service converge` is the retry-safe
+desired-artifact operation for automation: it recovers interrupted
+non-rollback activation, then makes at most one install, repair, or ordinary
+update attempt toward the invoking SEA, while preserving non-fulfilled
+settlements. An in-flight first install of another artifact can be replaced,
+and an exact receipt-backed ACTIVE projection can be restarted from stopped,
+failed, or degraded liveness before settlement or update; systemd failure and
+start-limit state are cleared when present. Missing, corrupt, or contradictory
+source authority still fails closed. It never expresses or recovers rollback.
+`service update` is invoked through the new artifact and activates it only
+after closing run admission and proving every durable run terminal. A fresh
+`service rollback` must be invoked through the currently selected
+artifact—`<next-app>` immediately after an update—and selects the one retained
+prior release. If its response is ambiguous, run `service recover`; do not
+issue a new rollback and risk requesting the reverse transition. A rollback
+request from the prior/candidate SEA is rejected because it cannot be
+distinguished from a false fresh request.
 
 The coordinator persists every activation phase. It enables the exact unit
 without starting it, then permits `systemctl start` only after the durable
@@ -822,9 +833,9 @@ draining or be retained safely. Results separate request status
 
 Durable activation state is the authority for repairing a missing receipt,
 selector, or fixed unit. Physical wiring without that authority is reported
-as degraded and is never adopted by install, start, update, rollback, or
-recovery; the existing exact orphan checks remain available only for cleanup
-through `service uninstall`.
+as degraded and is never adopted by install, converge, start, update, rollback,
+or recovery; the existing exact orphan checks remain available only for
+cleanup through `service uninstall`.
 Uninstall preserves immutable releases and durable state, retains the `ACTIVE`
 selection and same-revision run admission, and writes an installation
 tombstone while removing physical wiring. Running `service install` from that

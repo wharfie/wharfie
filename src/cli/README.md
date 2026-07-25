@@ -63,7 +63,7 @@ be supplied only once, and a returned active head is an incomplete nonzero
 result rather than success.
 
 Packaged Linux artifacts additionally expose
-`<app> wharfie service install|update|rollback|recover|start|stop|restart|status|uninstall`.
+`<app> wharfie service install|converge|update|rollback|recover|start|stop|restart|status|uninstall`.
 This is a
 packaged-only systemd user-service boundary: it requires pre-enabled lingering,
 rejects root and custom `XDG_CONFIG_HOME` topology, never accepts unit or
@@ -79,6 +79,14 @@ durable activation record. Physical wiring with no activation authority is
 degraded and never adopted by an execution-capable command.
 
 Update and rollback use a single serialized local activation coordinator.
+`service converge` is the retry-safe desired-artifact entrypoint for host
+automation: it recovers a non-rollback transition before installing, repairing,
+or making one ordinary update attempt toward the exact invoking SEA, and it
+preserves non-fulfilled settlements for later retry. It can replace an
+in-flight first install of another artifact and restart an exact receipt-backed
+ACTIVE projection with stopped, failed, or degraded liveness after clearing
+systemd failure/start-limit state when present. It refuses missing, corrupt, or
+contradictory authority and never expresses or recovers rollback.
 Update is invoked from the new target SEA; a fresh rollback is invoked from the
 currently selected SEA and uses only its retained candidate. After an
 ambiguous rollback response, use `service recover` instead of sending another

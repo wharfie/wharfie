@@ -17,6 +17,7 @@ import {
   createLedgerServiceOwnership,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
 import {
+  LocalApplicationActivationAction,
   LocalApplicationActivationPhase,
   createLocalApplicationActivation,
   getLocalApplicationServiceStartFence,
@@ -59,6 +60,10 @@ const MAX_SERVICE_RECORD_BYTES = 64 * 1024;
 const ATOMIC_PUBLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const ACTIVATION_RECOVERY_REMEDIATION =
   'Run service recover before retrying activation.';
+const CONVERGE_RECOVERY_REMEDIATION =
+  'Retry service converge from this exact desired SEA.';
+const CONVERGE_ROLLBACK_RECOVERY_REMEDIATION =
+  'Run service recover before retrying desired-target convergence.';
 const ACTIVE_REINSTALL_RECOVERY_REMEDIATION =
   'Run service install again from the exact selected SEA to resume repair.';
 const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
@@ -160,11 +165,20 @@ function hasCode(error, code) {
  * Preserve the original failure while marking only errors that left a durable
  * activation transition in flight as recoverable operator work.
  * @param {unknown} error - Transition failure.
+ * @param {string} [remediation] - Exact safe replay guidance.
  * @returns {Error} - Recovery-tagged failure.
  */
-function createActivationRecoveryRequiredError(error) {
-  if (hasCode(error, 'systemd-user-service-activation-recovery-required')) {
-    return /** @type {Error} */ (error);
+function createActivationRecoveryRequiredError(
+  error,
+  remediation = ACTIVATION_RECOVERY_REMEDIATION,
+) {
+  if (
+    error instanceof Error &&
+    hasCode(error, 'systemd-user-service-activation-recovery-required') &&
+    'remediation' in error &&
+    error.remediation === remediation
+  ) {
+    return error;
   }
   const failure = new Error(
     error instanceof Error
@@ -174,7 +188,7 @@ function createActivationRecoveryRequiredError(error) {
   failure.name = 'SystemdUserServiceActivationRecoveryRequiredError';
   Object.assign(failure, {
     code: 'systemd-user-service-activation-recovery-required',
-    remediation: ACTIVATION_RECOVERY_REMEDIATION,
+    remediation,
     cause: error,
   });
   return failure;
@@ -182,16 +196,24 @@ function createActivationRecoveryRequiredError(error) {
 
 /**
  * Mark only failures after an authorized ACTIVE repair begins. Durable
- * activation remains ACTIVE, so replay is `service install` from the selected
- * SEA rather than activation `recover`.
+ * activation remains ACTIVE, so replay is either selected-release
+ * `service install` or exact-desired `service converge`, never activation
+ * `recover`.
  * @param {unknown} error - Interrupted physical repair.
+ * @param {string} [remediation] - Exact safe replay guidance.
  * @returns {Error} - Actionable replay error.
  */
-function createActiveReinstallRecoveryRequiredError(error) {
+function createActiveReinstallRecoveryRequiredError(
+  error,
+  remediation = ACTIVE_REINSTALL_RECOVERY_REMEDIATION,
+) {
   if (
-    hasCode(error, 'systemd-user-service-active-reinstall-recovery-required')
+    error instanceof Error &&
+    hasCode(error, 'systemd-user-service-active-reinstall-recovery-required') &&
+    'remediation' in error &&
+    error.remediation === remediation
   ) {
-    return /** @type {Error} */ (error);
+    return error;
   }
   const causeMessage =
     error instanceof Error
@@ -201,7 +223,54 @@ function createActiveReinstallRecoveryRequiredError(error) {
   failure.name = 'SystemdUserServiceActiveReinstallRecoveryRequiredError';
   Object.assign(failure, {
     code: 'systemd-user-service-active-reinstall-recovery-required',
-    remediation: ACTIVE_REINSTALL_RECOVERY_REMEDIATION,
+    remediation,
+    cause: error,
+  });
+  return failure;
+}
+
+/**
+ * Refuse desired-target convergence across an in-flight rollback. Only the
+ * direction-neutral recovery command may settle that ambiguity.
+ * @returns {Error} - Stable rollback-recovery boundary.
+ */
+function createConvergeRollbackRecoveryRequiredError() {
+  const failure = new Error(
+    'Desired-target convergence cannot resolve an in-flight rollback.',
+  );
+  failure.name = 'SystemdUserServiceConvergeRollbackRecoveryRequiredError';
+  Object.assign(failure, {
+    code: 'systemd-user-service-converge-rollback-recovery-required',
+    remediation: CONVERGE_ROLLBACK_RECOVERY_REMEDIATION,
+  });
+  return failure;
+}
+
+/**
+ * Mark a lost post-settlement proof of the exact desired resident. The
+ * durable transition is already ACTIVE, so replay is the same convergence
+ * request rather than transition-only recovery.
+ * @param {unknown} error - Exact proof failure.
+ * @returns {Error} - Stable desired-proof error.
+ */
+function createConvergeProofRequiredError(error) {
+  if (
+    error instanceof Error &&
+    hasCode(error, 'systemd-user-service-converge-proof-required') &&
+    'remediation' in error &&
+    error.remediation === CONVERGE_RECOVERY_REMEDIATION
+  ) {
+    return error;
+  }
+  const failure = new Error(
+    error instanceof Error
+      ? error.message
+      : 'Desired-target convergence lost its exact resident proof.',
+  );
+  failure.name = 'SystemdUserServiceConvergeProofRequiredError';
+  Object.assign(failure, {
+    code: 'systemd-user-service-converge-proof-required',
+    remediation: CONVERGE_RECOVERY_REMEDIATION,
     cause: error,
   });
   return failure;
@@ -1514,7 +1583,7 @@ function assertSharedPackagedStorage(layout, packagedStorage, environment) {
  * Create the packaged Linux systemd user-service operator. Construction is
  * side-effect free; every method resolves embedded identity lazily.
  * @param {Record<string, any>} [options] - Testable host adapters and roots.
- * @returns {Readonly<{install: () => Promise<Record<string, any>>, update: () => Promise<Record<string, any>>, rollback: () => Promise<Record<string, any>>, recover: () => Promise<Record<string, any>>, start: () => Promise<Record<string, any>>, stop: () => Promise<Record<string, any>>, restart: () => Promise<Record<string, any>>, status: () => Promise<Record<string, any>>, uninstall: () => Promise<Record<string, any>>}>} - Service operations.
+ * @returns {Readonly<{install: () => Promise<Record<string, any>>, converge: () => Promise<Record<string, any>>, update: () => Promise<Record<string, any>>, rollback: () => Promise<Record<string, any>>, recover: () => Promise<Record<string, any>>, start: () => Promise<Record<string, any>>, stop: () => Promise<Record<string, any>>, restart: () => Promise<Record<string, any>>, status: () => Promise<Record<string, any>>, uninstall: () => Promise<Record<string, any>>}>} - Service operations.
  */
 export function createSystemdUserServiceOperator(options = {}) {
   const platform = options.platform || process.platform;
@@ -2949,9 +3018,21 @@ export function createSystemdUserServiceOperator(options = {}) {
             'Systemd loaded different or stale wiring while activation tried to stop the service.',
           );
         }
-        if (systemd.activeState === 'inactive') return;
-        await systemctl(['stop', context.layout.unitName]);
-        await waitForSystemdInactive({ layout: context.layout }, stopTimeoutMs);
+        const failed =
+          systemd.activeState === 'failed' || systemd.result === 'failed';
+        if (systemd.activeState !== 'inactive') {
+          await systemctl(['stop', context.layout.unitName]);
+          await waitForSystemdInactive(
+            { layout: context.layout },
+            stopTimeoutMs,
+          );
+        }
+        if (failed) {
+          // reset-failed also clears systemd's start-rate counter. Without it,
+          // a retry-safe desired-state operation can remain stuck after the
+          // selected unit reaches start-limit-hit.
+          await systemctl(['reset-failed', context.layout.unitName]);
+        }
       },
 
       /** @param {Readonly<Record<string, any>>} input - Inactivity proof request. @returns {Promise<void>} - Resolves for inactive service. */
@@ -3122,7 +3203,7 @@ export function createSystemdUserServiceOperator(options = {}) {
    * @template T
    * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
    * @param {(runtime: {activation: ReturnType<typeof createLocalApplicationActivation>, coordinator: Readonly<Record<string, Function>>, driver: Readonly<Record<string, Function>>}) => Promise<T>} handler - Locked operation.
-   * @param {{preflightFirstInstall?: boolean}} [runtimeOptions] - First-install host preflight.
+   * @param {{preflightFirstInstall?: boolean, activationRecoveryRemediation?: string}} [runtimeOptions] - First-install host preflight and safe replay guidance.
    * @returns {Promise<T>} - Converged result.
    */
   async function withLockedActivation(context, handler, runtimeOptions = {}) {
@@ -3211,7 +3292,18 @@ export function createSystemdUserServiceOperator(options = {}) {
             current &&
             current.phase !== LocalApplicationActivationPhase.ACTIVE
           ) {
-            throw createActivationRecoveryRequiredError(error);
+            if (
+              hasCode(
+                error,
+                'systemd-user-service-converge-rollback-recovery-required',
+              )
+            ) {
+              throw error;
+            }
+            throw createActivationRecoveryRequiredError(
+              error,
+              runtimeOptions.activationRecoveryRemediation,
+            );
           }
           throw error;
         }
@@ -3281,6 +3373,37 @@ export function createSystemdUserServiceOperator(options = {}) {
       reason: result.reason,
       blockingWork,
     };
+  }
+
+  /**
+   * Create the target-enforcing convergence receipt. A fulfilled result is
+   * accepted only while the invoking artifact remains independently healthy.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
+   * @param {Readonly<Record<string, any>>} result - Activation result.
+   * @param {Readonly<{artifactId: string, revisionId: string}>} target - Exact invoking release.
+   * @returns {Promise<Record<string, any>>} - Proven convergence receipt.
+   */
+  async function createDesiredConvergenceReceipt(context, result, target) {
+    let receipt;
+    try {
+      receipt = await createActivationReceipt(context, result, 'converge');
+    } catch (error) {
+      throw createConvergeProofRequiredError(error);
+    }
+    if (
+      receipt.requestStatus === 'fulfilled' &&
+      (receipt.outcome !== 'target-active' ||
+        receipt.health !== 'healthy' ||
+        receipt.activeArtifactId !== target.artifactId ||
+        receipt.activeRevisionId !== target.revisionId)
+    ) {
+      throw createConvergeProofRequiredError(
+        new Error(
+          'Desired-target convergence could not re-prove the exact healthy invoking release.',
+        ),
+      );
+    }
+    return receipt;
   }
 
   /**
@@ -3375,7 +3498,7 @@ export function createSystemdUserServiceOperator(options = {}) {
    * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
    * @param {{activation: ReturnType<typeof createLocalApplicationActivation>, driver: Readonly<Record<string, Function>>}} runtime - Locked activation runtime.
    * @param {Readonly<Record<string, any>>} current - Exact ACTIVE state.
-   * @param {{requireInvokingRelease?: boolean}} [options] - Reprojection authority.
+   * @param {{requireInvokingRelease?: boolean, recoveryRemediation?: string}} [options] - Reprojection authority and safe replay guidance.
    * @returns {Promise<Readonly<Record<string, any>>>} - Synthetic activation result.
    */
   async function reinstallActiveSelection(
@@ -3419,7 +3542,11 @@ export function createSystemdUserServiceOperator(options = {}) {
       const observed = await observeInstallation(verified.installation, {
         integrity: verified.integrity,
       });
-      if (observed.health === 'stopped') {
+      if (
+        observed.health === 'stopped' ||
+        observed.health === 'failed' ||
+        observed.health === 'degraded'
+      ) {
         needsRepair = true;
       } else if (observed.health !== 'healthy') {
         const error = new Error(
@@ -3455,7 +3582,10 @@ export function createSystemdUserServiceOperator(options = {}) {
           release: current.selected,
         });
       } catch (error) {
-        throw createActiveReinstallRecoveryRequiredError(error);
+        throw createActiveReinstallRecoveryRequiredError(
+          error,
+          options.recoveryRemediation,
+        );
       }
     }
     return Object.freeze({
@@ -3567,6 +3697,58 @@ export function createSystemdUserServiceOperator(options = {}) {
     return activation;
   }
 
+  /**
+   * Re-prove and, when necessary, repair an ACTIVE source projection before
+   * beginning an update to a different invoking release.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
+   * @param {{activation: ReturnType<typeof createLocalApplicationActivation>, driver: Readonly<Record<string, Function>>}} runtime - Locked activation runtime.
+   * @param {Readonly<Record<string, any>>} current - Exact ACTIVE activation.
+   * @param {{repairAuthorizedSource?: boolean, repairRecoveryRemediation?: string}} [options] - Whether target convergence may resume a receipt-backed source repair and its safe replay guidance.
+   * @returns {Promise<void>} - Resolves after the source projection is safe.
+   */
+  async function prepareActiveSourceForUpdate(
+    context,
+    runtime,
+    current,
+    options = {},
+  ) {
+    const installation = await readInstallation(
+      context.layout,
+      context.uid,
+      context.filesystemUid,
+      context.pair.runtime.target,
+      { allowUninstalledTargetMismatch: true },
+    );
+    if (installation?.state === 'uninstalled') {
+      await reinstallActiveSelection(context, runtime, current, {
+        requireInvokingRelease: false,
+        recoveryRemediation: options.repairRecoveryRemediation,
+      });
+      return;
+    }
+    if (
+      options.repairAuthorizedSource === true &&
+      installation?.state === 'installed'
+    ) {
+      await reinstallActiveSelection(context, runtime, current, {
+        requireInvokingRelease: false,
+        recoveryRemediation: options.repairRecoveryRemediation,
+      });
+      return;
+    }
+    const projection = Object.freeze({
+      appId: context.pair.runtime.appId,
+      current: current.selected,
+      previous: current.rollbackCandidate,
+    });
+    const physical = await inspectPhysicalSelectionRepair(context, projection);
+    if (physical.needsRepair) {
+      throw new Error(
+        'The durable activation lacks its exact installed source projection; invoke its exact selected SEA and run service install before service update.',
+      );
+    }
+  }
+
   /** @returns {Promise<Record<string, any>>} - Installation receipt. */
   async function install() {
     const context = await resolveContext();
@@ -3621,6 +3803,121 @@ export function createSystemdUserServiceOperator(options = {}) {
     );
   }
 
+  /**
+   * Treat the invoking artifact as the desired resident release. Resume one
+   * non-rollback durable transition before making at most one exact-target
+   * install, repair, or update attempt.
+   * @returns {Promise<Record<string, any>>} - Activation receipt.
+   */
+  async function converge() {
+    const context = await resolveContext();
+    await assertLinger(context.uid);
+    return await withLockedActivation(
+      context,
+      async (runtime) => {
+        const artifact = await inspectBytes(artifactPath);
+        const target = Object.freeze({
+          artifactId: artifact.artifactId,
+          revisionId: context.pair.runtime.revisionId,
+        });
+        let current = await runtime.activation.get({
+          appId: context.pair.runtime.appId,
+        });
+        let result;
+
+        if (
+          current &&
+          current.phase !== LocalApplicationActivationPhase.ACTIVE
+        ) {
+          if (
+            current.transition?.action ===
+            LocalApplicationActivationAction.ROLLBACK
+          ) {
+            throw createConvergeRollbackRecoveryRequiredError();
+          }
+          const recoveringTarget = current.transition?.target;
+          const replaceableFirstInstall =
+            current.transition?.action ===
+              LocalApplicationActivationAction.INSTALL &&
+            current.transition.source === null &&
+            recoveringTarget &&
+            !hasSameReleaseReference(recoveringTarget, target);
+          if (replaceableFirstInstall) {
+            result = await runtime.coordinator.install({
+              appId: context.pair.runtime.appId,
+              target,
+            });
+            return await createDesiredConvergenceReceipt(
+              context,
+              result,
+              target,
+            );
+          }
+          result = await runtime.coordinator.recover({
+            appId: context.pair.runtime.appId,
+          });
+          if (result.requestStatus !== 'fulfilled') {
+            return await createDesiredConvergenceReceipt(
+              context,
+              result,
+              target,
+            );
+          }
+          current = await runtime.activation.get({
+            appId: context.pair.runtime.appId,
+          });
+          if (
+            recoveringTarget &&
+            hasSameReleaseReference(recoveringTarget, target) &&
+            current?.phase === LocalApplicationActivationPhase.ACTIVE &&
+            hasSameReleaseReference(current.selected, target)
+          ) {
+            return await createDesiredConvergenceReceipt(
+              context,
+              result,
+              target,
+            );
+          }
+        }
+
+        if (!current) {
+          result = await runtime.coordinator.install({
+            appId: context.pair.runtime.appId,
+            target,
+          });
+        } else if (
+          current.phase === LocalApplicationActivationPhase.ACTIVE &&
+          hasSameReleaseReference(current.selected, target)
+        ) {
+          result = await reinstallActiveSelection(context, runtime, current, {
+            recoveryRemediation: CONVERGE_RECOVERY_REMEDIATION,
+          });
+        } else if (
+          current.phase === LocalApplicationActivationPhase.ACTIVE &&
+          current.selected
+        ) {
+          await prepareActiveSourceForUpdate(context, runtime, current, {
+            repairAuthorizedSource: true,
+            repairRecoveryRemediation: CONVERGE_RECOVERY_REMEDIATION,
+          });
+          result = await runtime.coordinator.update({
+            appId: context.pair.runtime.appId,
+            target,
+          });
+        } else {
+          throw new Error(
+            'Systemd service convergence could not recover one exact ACTIVE source release.',
+          );
+        }
+        return await createDesiredConvergenceReceipt(context, result, target);
+      },
+      {
+        preflightFirstInstall: true,
+        activationRecoveryRemediation: CONVERGE_RECOVERY_REMEDIATION,
+      },
+    );
+  }
+
   /** @returns {Promise<Record<string, any>>} - Update receipt. */
   async function update() {
     const context = await resolveContext();
@@ -3636,33 +3933,7 @@ export function createSystemdUserServiceOperator(options = {}) {
             'Systemd update requires one exact ACTIVE source release.',
           );
         }
-        const installation = await readInstallation(
-          context.layout,
-          context.uid,
-          context.filesystemUid,
-          context.pair.runtime.target,
-          { allowUninstalledTargetMismatch: true },
-        );
-        if (installation?.state === 'uninstalled') {
-          await reinstallActiveSelection(context, runtime, current, {
-            requireInvokingRelease: false,
-          });
-        } else {
-          const projection = Object.freeze({
-            appId: context.pair.runtime.appId,
-            current: current.selected,
-            previous: current.rollbackCandidate,
-          });
-          const physical = await inspectPhysicalSelectionRepair(
-            context,
-            projection,
-          );
-          if (physical.needsRepair) {
-            throw new Error(
-              'The durable activation lacks its exact installed source projection; invoke its exact selected SEA and run service install before service update.',
-            );
-          }
-        }
+        await prepareActiveSourceForUpdate(context, runtime, current);
       }
       const result = await runtime.coordinator.update({
         appId: context.pair.runtime.appId,
@@ -4199,6 +4470,7 @@ export function createSystemdUserServiceOperator(options = {}) {
 
   return Object.freeze({
     install,
+    converge,
     update,
     rollback,
     recover,

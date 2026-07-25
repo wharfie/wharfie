@@ -288,6 +288,7 @@ lingering:
 ```bash
 <app> wharfie service install
 <app> wharfie service status --json
+<desired-app> wharfie service converge
 <next-app> wharfie service update
 <next-app> wharfie service rollback
 <next-app> wharfie service recover
@@ -296,6 +297,19 @@ lingering:
 <app> wharfie service restart
 <app> wharfie service uninstall
 ```
+
+Use `service converge` when automation owns one exact desired artifact and may
+have lost an earlier response. It recovers a non-rollback durable transition
+first, except that an in-flight first install of a different artifact is
+replaced through the coordinator's explicit replacement path. It then makes at
+most one install, repair, or ordinary update attempt toward the invoking
+artifact. Convergence can repair an exact receipt-backed ACTIVE source before
+updating, including restarting an exact projection whose liveness is stopped,
+failed, or degraded and clearing systemd failure/start-limit state. Missing,
+corrupt, or contradictory source authority still fails closed. A pending,
+refused, or failed settlement exits unsuccessfully and can be retried after its
+blocker changes. Convergence never expresses or recovers rollback; after an
+ambiguous rollback, use `service recover`.
 
 The commands never invoke `sudo` or accept arbitrary unit/environment input.
 The unit location is fixed to the account's `~/.config/systemd/user`; custom
@@ -322,9 +336,9 @@ that existing command is the explicit cleanup path and returns
 `outcome: orphan-reconciled`. There is no separate `service reconcile`
 command. A missing receipt, selector, or unit is repairable only when the
 durable activation record names the exact projection. Physical wiring with no
-activation record is degraded and is not adopted by install, start, update,
-rollback, or recovery; uninstall's exact orphan checks are cleanup authority,
-not activation authority.
+activation record is degraded and is not adopted by install, converge, start,
+update, rollback, or recovery; uninstall's exact orphan checks are cleanup
+authority, not activation authority.
 
 First install requires physical absence and records a transition with no
 source. Existing queued work is compatible when every nonterminal run has the

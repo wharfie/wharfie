@@ -194,6 +194,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('<app> wharfie service install');
     expect(quickstart).toContain('<app> wharfie service status --json');
+    expect(quickstart).toContain('<desired-app> wharfie service converge');
     expect(quickstart).toContain('<next-app> wharfie service update');
     expect(quickstart).toContain('<next-app> wharfie service rollback');
     expect(quickstart).toContain('<next-app> wharfie service recover');

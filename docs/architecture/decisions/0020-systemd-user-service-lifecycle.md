@@ -58,6 +58,7 @@ The initial packaged operator surface is:
 
 ```text
 <app> wharfie service install
+<desired-app> wharfie service converge
 <next-app> wharfie service update
 <next-app> wharfie service rollback
 <next-app> wharfie service recover
@@ -74,6 +75,26 @@ stop, and uninstall converge when their requested state is already satisfied;
 restart deliberately starts a new process generation. An installation is bound
 to the embedded application identity; commands never accept a unit name,
 executable path, shell fragment, or another application ID from the caller.
+
+`service converge` is the target-enforcing desired-state operation for a host
+agent or other automation that owns an exact desired SEA. It first resumes a
+non-rollback durable activation, except that an in-flight first install of a
+different artifact uses the coordinator's explicit replacement transition
+instead. An in-flight rollback is refused and must be settled with
+`service recover`. If other recovery remains non-fulfilled, convergence returns
+that finite result without beginning another transition. Otherwise it makes at
+most one exact-target attempt: repair an already selected invoking release,
+install it when no activation exists, or enter the ordinary update path when
+another release is active. Before that update, convergence may repair an exact
+receipt-backed ACTIVE source projection. An exact projection whose only defect
+is stopped, failed, or degraded liveness is stopped, has systemd failure and
+start-limit state cleared when present, and is restarted before settlement or
+update. Missing, corrupt, or contradictory source authority still fails
+closed. Repeating the same desired artifact after a lost install or update
+response cannot request a reverse transition.
+Interactive `update` and `rollback` remain explicit directional operations,
+and `recover` remains the direction-neutral command when no desired artifact
+is being asserted.
 
 `install` publishes the release and fixed unit, reloads the user manager, and
 enables the unit without starting it. Once the exact selection is durable and
@@ -184,7 +205,8 @@ and cannot begin the opposite rollback. It must not issue a new rollback based
 on a guessed current selection. A rollback invocation from the retained
 candidate/prior SEA is rejected: it is indistinguishable from a stale retry
 after response loss and cannot safely express a fresh direction change.
-Explicit recovery is the only public ambiguity contract.
+Direction-neutral recovery is the only public ambiguity contract after a
+rollback request.
 
 Beginning a change closes new-run admission in the same control-store
 transaction that records `QUIESCING`. Service-start admission is also fenced
@@ -222,6 +244,15 @@ finite recovery result when no durable activation and no physical projection
 exist. Refused, failed, and pending requests use a nonzero command exit,
 including in JSON mode. This is deliberately one recoverable local coordinator,
 not multi-node rollout or coordinator failover.
+
+`service converge` composes those same effects rather than introducing another
+activation state machine. One invocation may recover a prior transition and
+then make one attempt to request the invoking release, but it never reports
+success unless that exact release is independently healthy. A non-fulfilled
+receipt remains a nonzero command result and is safe for a durable host
+reconciler to retry after the reported blocker changes. Convergence never
+expresses or recovers rollback; an ambiguous rollback still requires
+`service recover`.
 
 Lifecycle mutations are serialized with a per-UID, per-installation abstract
 Linux Unix socket. Kernel bind is the cross-process exclusion primitive and

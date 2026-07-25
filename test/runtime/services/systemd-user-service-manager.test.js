@@ -54,7 +54,23 @@ afterEach(async () => {
 });
 
 /**
- * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
+ * The service-manager suite exercises host and activation semantics. Native
+ * LMDB behavior has dedicated adapter and workflow integration suites, so use
+ * the persisted JSON adapter here to avoid opening one native environment per
+ * host fixture.
+ * @param {string} adapterName - Manager-selected adapter.
+ * @param {{path?: string, readOnly?: boolean}} options - Store options.
+ * @returns {Promise<import('../../../src/core/lib/db/base.js').DBClient>} - Test DB.
+ */
+async function createTestControlDBClient(adapterName, options) {
+  if (adapterName !== 'lmdb') {
+    throw new Error('service-manager tests expected the fixed lmdb selector');
+  }
+  return createVanillaDB(options);
+}
+
+/**
+ * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, useProductionControlDB?: boolean, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -90,7 +106,9 @@ async function createHarness(options = {}) {
     systemdMode: options.systemdMode || 'normal',
     failedArtifactId: /** @type {string | null} */ (null),
     cleanExitArtifactId: /** @type {string | null} */ (null),
+    failStartBeforeEffectOnce: false,
     failStartResponseOnce: false,
+    repairRuntimeOnStartOnce: false,
     failDaemonReloadOnce: false,
     failUnitPath: false,
     loadState: seededForeignFragmentPath ? 'loaded' : 'not-found',
@@ -200,7 +218,15 @@ async function createHarness(options = {}) {
         state.enabled = true;
         if (args.includes('--now')) state.active = true;
       } else if (operation === 'start' || operation === 'restart') {
+        if (state.failStartBeforeEffectOnce) {
+          state.failStartBeforeEffectOnce = false;
+          throw new Error('systemctl start failed before taking effect');
+        }
         state.active = true;
+        if (state.repairRuntimeOnStartOnce) {
+          state.repairRuntimeOnStartOnce = false;
+          state.runtimeMode = 'matching';
+        }
         if (state.failStartResponseOnce) {
           state.failStartResponseOnce = false;
           throw new Error('systemctl start response was lost');
@@ -211,6 +237,8 @@ async function createHarness(options = {}) {
         }
       } else if (operation === 'stop') {
         state.active = false;
+      } else if (operation === 'reset-failed') {
+        state.systemdMode = 'normal';
       } else if (operation === 'disable') {
         state.enabled = false;
         state.active = false;
@@ -331,6 +359,9 @@ async function createHarness(options = {}) {
   let token = 0;
   const releaseOperationLock = jest.fn(async () => undefined);
   const acquireOperationLock = jest.fn(async () => releaseOperationLock);
+  const controlDBClient = options.useProductionControlDB
+    ? createControlDBClient
+    : createTestControlDBClient;
   /** @param {Readonly<Record<string, string>>} target - Exact packaged target. */
   const createOperatorForTarget = (target) =>
     createSystemdUserServiceOperator({
@@ -367,6 +398,9 @@ async function createHarness(options = {}) {
       getFilesystemUid: () =>
         options.filesystemUid ?? process.getuid?.() ?? options.uid ?? 1000,
       acquireOperationLock,
+      ...(options.useProductionControlDB
+        ? {}
+        : { createControlDBClient: controlDBClient }),
       ...(options.listRuns
         ? {
             createExecutionLedger: () => ({ listRuns: options.listRuns }),
@@ -397,6 +431,7 @@ async function createHarness(options = {}) {
     execute,
     acquireOperationLock,
     releaseOperationLock,
+    controlDBClient,
     createOperatorForTarget,
     readRuntimeState,
     operator,
@@ -405,7 +440,7 @@ async function createHarness(options = {}) {
 
 /** @param {Record<string, any>} harness - Installed harness. @returns {Promise<void>} - Removes only its activation row. */
 async function eraseActivationRecord(harness) {
-  const db = await createControlDBClient('lmdb', {
+  const db = await harness.controlDBClient('lmdb', {
     path: harness.layout.controlPath,
   });
   try {
@@ -427,7 +462,7 @@ async function eraseActivationRecord(harness) {
 
 /** @param {Record<string, any>} harness - Harness. @returns {Promise<Readonly<Record<string, any>> | null>} - Activation snapshot. */
 async function readActivationRecord(harness) {
-  const db = await createControlDBClient('lmdb', {
+  const db = await harness.controlDBClient('lmdb', {
     path: harness.layout.controlPath,
     readOnly: true,
   });
@@ -706,6 +741,374 @@ describe('systemd user service manager', () => {
     });
   });
 
+  it('converges an absent service without requiring an install/update guess', async () => {
+    const harness = await createHarness();
+    const target = await inspectArtifactBytes(harness.artifactPath);
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      schemaVersion: 1,
+      kind: 'wharfie.service.result',
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      activeRevisionId: REVISION_ID,
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'healthy',
+      activation: {
+        phase: 'ACTIVE',
+        selected: {
+          artifactId: target.artifactId,
+          revisionId: REVISION_ID,
+        },
+      },
+    });
+  });
+
+  (process.platform === 'linux' ? it : it.skip)(
+    'persists desired-target convergence through the production LMDB manager path',
+    async () => {
+      const harness = await createHarness({ useProductionControlDB: true });
+      await harness.operator.converge();
+      await expect(
+        fsp.stat(path.join(harness.layout.controlPath, 'lmdb', 'data.mdb')),
+      ).resolves.toBeDefined();
+      await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+      const target = await inspectArtifactBytes(harness.artifactPath);
+
+      await expect(harness.operator.converge()).resolves.toMatchObject({
+        action: 'converge',
+        requestStatus: 'fulfilled',
+        outcome: 'target-active',
+        activeArtifactId: target.artifactId,
+      });
+      await expect(harness.operator.status()).resolves.toMatchObject({
+        health: 'healthy',
+        activation: {
+          phase: 'ACTIVE',
+          selected: { artifactId: target.artifactId },
+        },
+      });
+    },
+  );
+
+  it('converges an already healthy exact target without changing its activation generation', async () => {
+    const harness = await createHarness();
+    await harness.operator.converge();
+    const activationBefore = await readActivationRecord(harness);
+    harness.calls.length = 0;
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+    });
+    await expect(readActivationRecord(harness)).resolves.toEqual(
+      activationBefore,
+    );
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' &&
+          ['stop', 'daemon-reload', 'enable', 'start'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('clears systemd failure state and restarts an exact desired target', async () => {
+    const harness = await createHarness();
+    await harness.operator.converge();
+    const activationBefore = await readActivationRecord(harness);
+    harness.state.systemdMode = 'failed';
+    harness.calls.length = 0;
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+    });
+    await expect(readActivationRecord(harness)).resolves.toEqual(
+      activationBefore,
+    );
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        {
+          command: 'systemctl',
+          args: ['--user', 'stop', 'wharfie-service-demo.service'],
+        },
+        {
+          command: 'systemctl',
+          args: ['--user', 'reset-failed', 'wharfie-service-demo.service'],
+        },
+        {
+          command: 'systemctl',
+          args: ['--user', 'start', 'wharfie-service-demo.service'],
+        },
+      ]),
+    );
+  });
+
+  it('restarts an exact desired target whose live runtime proof is degraded', async () => {
+    const harness = await createHarness();
+    await harness.operator.converge();
+    const activationBefore = await readActivationRecord(harness);
+    harness.state.runtimeMode = 'wrong-process';
+    harness.state.repairRuntimeOnStartOnce = true;
+    harness.calls.length = 0;
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+    });
+    await expect(readActivationRecord(harness)).resolves.toEqual(
+      activationBefore,
+    );
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        {
+          command: 'systemctl',
+          args: ['--user', 'stop', 'wharfie-service-demo.service'],
+        },
+        {
+          command: 'systemctl',
+          args: ['--user', 'start', 'wharfie-service-demo.service'],
+        },
+      ]),
+    );
+  });
+
+  it('replaces a permanently failed first-install target with a different desired artifact', async () => {
+    const harness = await createHarness();
+    const failing = await inspectArtifactBytes(harness.artifactPath);
+    harness.state.failedArtifactId = failing.artifactId;
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'pending',
+      outcome: 'in-flight',
+      activeArtifactId: null,
+    });
+
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const desired = await inspectArtifactBytes(harness.artifactPath);
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: desired.artifactId,
+      rollbackArtifactId: null,
+    });
+  });
+
+  it('converges a new invoking artifact through the ordinary update path', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.converge();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
+  });
+
+  it('repairs a failed authorized source before converging a new target', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.converge();
+    harness.state.systemdMode = 'failed';
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.calls.length = 0;
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        {
+          command: 'systemctl',
+          args: ['--user', 'reset-failed', 'wharfie-service-demo.service'],
+        },
+      ]),
+    );
+  });
+
+  it('recovers an ambiguous convergence before retrying its exact target', async () => {
+    const harness = await createHarness();
+    await harness.operator.converge();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.state.failStartResponseOnce = true;
+
+    await expect(harness.operator.converge()).rejects.toMatchObject({
+      code: 'systemd-user-service-activation-recovery-required',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      activeArtifactId: target.artifactId,
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'healthy',
+      activation: {
+        phase: 'ACTIVE',
+        selected: { artifactId: target.artifactId },
+      },
+    });
+  });
+
+  it('recovers an ambiguous prior target before converging a newer target', async () => {
+    const harness = await createHarness();
+    await harness.operator.converge();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const intermediate = await inspectArtifactBytes(harness.artifactPath);
+    harness.state.failStartResponseOnce = true;
+    await expect(harness.operator.converge()).rejects.toMatchObject({
+      code: 'systemd-user-service-activation-recovery-required',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v3');
+    const desired = await inspectArtifactBytes(harness.artifactPath);
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: desired.artifactId,
+      rollbackArtifactId: intermediate.artifactId,
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'healthy',
+      activation: {
+        phase: 'ACTIVE',
+        selected: { artifactId: desired.artifactId },
+        rollback: { artifactId: intermediate.artifactId },
+      },
+    });
+  });
+
+  it('returns an unfinished recovered install instead of beginning another transition', async () => {
+    let blocked = true;
+    const harness = await createHarness({
+      listRuns: async () => ({
+        items: blocked
+          ? [
+              {
+                runId: 'foreign-running-work',
+                appId: APP_ID,
+                revisionId: `wrv1_${Buffer.alloc(32, 8).toString('base64url')}`,
+                kind: 'workflow',
+                status: 'RUNNING',
+                version: 1,
+                lastSequence: 1,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ]
+          : [],
+      }),
+    });
+
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      requestStatus: 'pending',
+      outcome: 'in-flight',
+    });
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'pending',
+      outcome: 'in-flight',
+      activeArtifactId: null,
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'degraded',
+      activation: { phase: 'QUIESCING', action: 'install' },
+    });
+    blocked = false;
+  });
+
+  it('preserves a refused source when desired-target convergence is blocked by durable work', async () => {
+    let blocked = false;
+    const harness = await createHarness({
+      listRuns: async () => ({
+        items: blocked
+          ? [
+              {
+                runId: 'running-work',
+                appId: APP_ID,
+                revisionId: REVISION_ID,
+                kind: 'workflow',
+                status: 'RUNNING',
+                version: 1,
+                lastSequence: 1,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ]
+          : [],
+      }),
+    });
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.converge();
+    blocked = true;
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'refused',
+      outcome: 'source-retained',
+      health: 'healthy',
+      activeArtifactId: source.artifactId,
+      reason: 'durable-work',
+      blockingWork: {
+        blockerCount: 1,
+        blockers: [{ runId: 'running-work', status: 'RUNNING' }],
+      },
+    });
+  });
+
+  it('reports a restored source when desired-target convergence fails definitively', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.converge();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.state.failedArtifactId = target.artifactId;
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'failed',
+      outcome: 'source-restored',
+      health: 'healthy',
+      activeArtifactId: source.artifactId,
+    });
+    await expect(fsp.readlink(harness.layout.currentLink)).resolves.toBe(
+      path.join('releases', source.artifactId),
+    );
+  });
+
   it('updates to the exact invoking artifact and retains one rollback release', async () => {
     const harness = await createHarness();
     const source = await inspectArtifactBytes(harness.artifactPath);
@@ -856,6 +1259,41 @@ describe('systemd user service manager', () => {
     await expect(fsp.readlink(harness.layout.currentLink)).resolves.toBe(
       selectionAfterRollback,
     );
+  });
+
+  it('refuses to resolve an in-flight rollback through desired-target convergence', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    await harness.operator.update();
+    harness.state.failStartResponseOnce = true;
+
+    await expect(harness.operator.rollback()).rejects.toMatchObject({
+      code: 'systemd-user-service-activation-recovery-required',
+    });
+    harness.calls.length = 0;
+
+    await expect(harness.operator.converge()).rejects.toMatchObject({
+      code: 'systemd-user-service-converge-rollback-recovery-required',
+      remediation:
+        'Run service recover before retrying desired-target convergence.',
+    });
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' &&
+          ['stop', 'daemon-reload', 'enable', 'start'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      activation: { phase: 'ACTIVATING', action: 'rollback' },
+    });
+    await expect(harness.operator.recover()).resolves.toMatchObject({
+      action: 'recover',
+      requestStatus: 'fulfilled',
+      activeArtifactId: source.artifactId,
+    });
   });
 
   it('refuses an update while durable source work remains nonterminal', async () => {
@@ -2335,6 +2773,54 @@ describe('systemd user service manager', () => {
     await expect(readActivationRecord(harness)).resolves.toEqual(
       activationBefore,
     );
+  });
+
+  it('retries interrupted source reprojection through the same desired-target convergence command', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.converge();
+    await harness.operator.uninstall();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.state.failDaemonReloadOnce = true;
+
+    await expect(harness.operator.converge()).rejects.toMatchObject({
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
+  });
+
+  it('restarts a receipt-backed source whose repair start failed before taking effect', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.converge();
+    await harness.operator.uninstall();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.state.failStartBeforeEffectOnce = true;
+
+    await expect(harness.operator.converge()).rejects.toMatchObject({
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    expect(harness.state.active).toBe(false);
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
   });
 
   it('installs over an activation-less uninstalled tombstone', async () => {

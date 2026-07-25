@@ -7,11 +7,12 @@ import { createProgram } from '../../src/core/resources/builds/actor-system-cli/
 import sourceOpsCommand from '../../src/cli/cmds/ops.js';
 import { createSystemdUserServiceCommand } from '../../src/core/runtime/operator/systemd-user-service-command.js';
 
-/** @typedef {'install'|'update'|'rollback'|'recover'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
+/** @typedef {'install'|'converge'|'update'|'rollback'|'recover'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
 
 /** @type {ReadonlyArray<ServiceResultAction|'status'>} */
 const ACTIONS = Object.freeze([
   'install',
+  'converge',
   'update',
   'rollback',
   'recover',
@@ -24,6 +25,7 @@ const ACTIONS = Object.freeze([
 
 const OUTCOMES = Object.freeze({
   install: 'target-active',
+  converge: 'target-active',
   update: 'target-active',
   rollback: 'target-active',
   recover: 'target-active',
@@ -53,12 +55,19 @@ const HUMAN_ACTIVATION_CASES = [
     'in-flight',
     'recover: in-flight; request pending; run service recover (service-demo)',
   ],
+  [
+    'converge',
+    'pending',
+    'in-flight',
+    'converge: in-flight; request pending; retry service converge (service-demo)',
+  ],
 ];
 
 /** @type {Array<[ServiceResultAction, string, string, Record<string, any>]>} */
 const JSON_NONFULFILLED_CASES = [
   ['update', 'refused', 'source-retained', {}],
   ['rollback', 'failed', 'source-restored', {}],
+  ['converge', 'pending', 'in-flight', {}],
   [
     'install',
     'pending',
@@ -163,6 +172,7 @@ describe('packaged systemd user service command', () => {
     ).not.toContain('service');
     expect(packaged.helpInformation()).toContain('service');
     expect(service?.helpInformation()).toContain('install');
+    expect(service?.helpInformation()).toContain('converge');
     expect(service?.helpInformation()).toContain('update');
     expect(service?.helpInformation()).toContain('rollback');
     expect(service?.helpInformation()).toContain('recover');
@@ -450,6 +460,40 @@ describe('packaged systemd user service command', () => {
   );
 
   it.each([
+    [
+      'absent settlement',
+      {
+        outcome: 'absent',
+        health: 'absent',
+        activeArtifactId: null,
+        activeRevisionId: null,
+      },
+    ],
+    ['degraded target', { health: 'degraded' }],
+    ['unproven target', { activeArtifactId: null, activeRevisionId: null }],
+  ])('rejects fulfilled converge with %s', async (_label, overrides) => {
+    const operator = makeOperator();
+    operator.converge.mockResolvedValue(makeResult('converge', overrides));
+    const line = jest.fn();
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line, failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge']);
+
+    expect(line).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      message: expect.stringMatching(/invalid receipt/),
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it.each([
     ['status', { schemaVersion: 1, kind: 'wharfie.service.result' }],
     [
       'status',
@@ -610,6 +654,128 @@ describe('packaged systemd user service command', () => {
     expect(processRef.exitCode).toBe(1);
   });
 
+  it('directs an ambiguous desired-target operation back through service converge', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('desired activation interrupted'), {
+            code: 'systemd-user-service-activation-recovery-required',
+            remediation: 'Retry service converge from this exact desired SEA.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-activation-recovery-required',
+      message: 'desired activation interrupted',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('directs interrupted desired-target repair back through service converge', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('desired repair interrupted'), {
+            code: 'systemd-user-service-active-reinstall-recovery-required',
+            remediation: 'Retry service converge from this exact desired SEA.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      message: 'desired repair interrupted',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('requires direction-neutral recovery before convergence can cross a rollback', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('rollback remains in flight'), {
+            code: 'systemd-user-service-converge-rollback-recovery-required',
+            remediation:
+              'Run service recover before retrying desired-target convergence.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-converge-rollback-recovery-required',
+      message: 'rollback remains in flight',
+      remediation:
+        'Run service recover before retrying desired-target convergence.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves retry guidance when exact convergence proof is lost', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('exact health proof was lost'), {
+            code: 'systemd-user-service-converge-proof-required',
+            remediation: 'Retry service converge from this exact desired SEA.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-converge-proof-required',
+      message: 'exact health proof was lost',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
   it('prints exact active-reinstall repair guidance as JSON', async () => {
     const failure = jest.fn();
     const json = jest.fn();
@@ -746,7 +912,7 @@ describe('packaged systemd user service command', () => {
     [
       'wrong activation',
       'systemd-user-service-activation-recovery-required',
-      'Run service install again from the exact selected SEA to resume repair.',
+      'Retry service install or service converge from the exact selected SEA.',
     ],
     [
       'missing active-reinstall',
@@ -757,6 +923,16 @@ describe('packaged systemd user service command', () => {
       'wrong active-reinstall',
       'systemd-user-service-active-reinstall-recovery-required',
       'Run service recover before retrying activation.',
+    ],
+    [
+      'rollback-only convergence',
+      'systemd-user-service-converge-rollback-recovery-required',
+      'Run service recover before retrying desired-target convergence.',
+    ],
+    [
+      'proof-only convergence',
+      'systemd-user-service-converge-proof-required',
+      'Retry service converge from this exact desired SEA.',
     ],
   ])(
     'does not trust %s remediation on a recovery-coded error',

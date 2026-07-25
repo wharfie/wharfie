@@ -26,9 +26,12 @@ abrupt machine reboot in a disposable Ubuntu environment. That packaged
 service also supports serialized, crash-recoverable update and rollback:
 Wharfie closes admission, refuses while any durable run remains nonterminal,
 retains one exact prior release, and resumes interrupted activation through
-`service recover`. Update runs from the new target SEA and a fresh rollback
-runs from the currently selected SEA. After an ambiguous rollback response,
-recovery verifies or finishes the durable transition without toggling releases.
+`service recover`. Its target-enforcing `service converge` operation lets host
+automation make one non-rollback recovery plus install, repair, or update
+attempt toward an exact desired SEA. Update runs from the new target SEA and a
+fresh rollback runs from the currently selected SEA. After an ambiguous
+rollback response, only explicit recovery verifies or finishes the durable
+transition without toggling releases.
 These activation semantics have focused unit and packaged-manager evidence;
 the earlier disposable-host proof did not exercise update or rollback. A
 source or packaged command can durably submit one

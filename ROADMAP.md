@@ -458,7 +458,7 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       source effect as `COMPENSATED`.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
 - [ ] Support manual, cron, and workflow-triggered runs through one execution path.
-- [x] Implement packaged Linux systemd user-service install/update/rollback/recover/start/stop/restart/status/uninstall with fixed-unit rendering, immutable releases, PID-bound durable health, graceful drain, retry-safe uninstall, and preserved state.
+- [x] Implement packaged Linux systemd user-service install/converge/update/rollback/recover/start/stop/restart/status/uninstall with fixed-unit rendering, immutable releases, PID-bound durable health, graceful drain, retry-safe desired-artifact activation and uninstall, and preserved state.
 - [x] Give every packaged application one immutable app-scoped local-storage
       layout under `<wharfie-data>/applications/<appId>` before any developer,
       operator, or hidden-runtime entrypoint runs. Foreground commands and the
@@ -493,6 +493,17 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       `service recover`, not a new reverse transition. Results separate
       fulfilled/refused/failed/pending request status from target-active,
       source-retained, source-restored, in-flight, and absent outcomes.
+- [x] Add a provider-safe `service converge` command. It first recovers any
+      non-rollback durable transition, except that a different desired artifact
+      replaces an in-flight first install, and then installs, repairs, or
+      attempts the ordinary update needed to make the exact invoking SEA
+      healthy. Exact receipt-backed projections are restarted from stopped,
+      failed, or degraded liveness, including clearing systemd failure and
+      start-limit state. An in-flight rollback still requires explicit
+      `service recover`.
+      Replaying the same desired artifact across response loss cannot toggle
+      releases, and non-fulfilled settlements remain visible to a durable host
+      reconciler.
 - [x] Preserve the durable `ACTIVE` selection, rollback reference, and
       same-revision run admission across state-preserving uninstall. The
       installation tombstone and immutable releases remain; installing the
