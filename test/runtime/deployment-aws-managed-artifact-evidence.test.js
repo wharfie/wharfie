@@ -12,6 +12,7 @@ import {
   decodeAwsSingleNodeManagedArtifactHead,
   decodeAwsSingleNodeManagedArtifactMetadata,
   getAwsSingleNodeManagedArtifactStateDigest,
+  validateAwsSingleNodeManagedArtifactHeadEvidence,
 } from '../../src/core/runtime/deployment-aws-managed-artifact-evidence.js';
 import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
@@ -285,6 +286,138 @@ describe('AWS single-node managed artifact provider evidence', () => {
     });
     expectDeepFrozen(decodedMetadata);
     expectDeepFrozen(decodedHead);
+  });
+
+  it('revalidates one decoded head into an independent canonical frozen value', () => {
+    const base = makeBase();
+    const authority = evidenceAuthority(base);
+    const versionId = 'Bearer opaque-provider-version';
+    const decoded = decodeAwsSingleNodeManagedArtifactHead(
+      head(base, base.deploymentRevision, {
+        VersionId: versionId,
+        ETag: '"secret-token"',
+      }),
+      authority,
+      versionId,
+    );
+    const candidate = structuredClone(decoded);
+
+    const validated = validateAwsSingleNodeManagedArtifactHeadEvidence(
+      candidate,
+      authority,
+    );
+
+    expect(validated).toEqual(decoded);
+    expect(validated).not.toBe(candidate);
+    expect(validated.metadata).not.toBe(candidate.metadata);
+    expect(validated.stateDigest).not.toBe(candidate.stateDigest);
+    expect(Object.keys(validated)).toEqual(
+      [
+        'versionId',
+        'etag',
+        'contentLength',
+        'metadata',
+        'stateDigest',
+        'artifactId',
+        'deploymentRevisionId',
+        'revisionId',
+        'stageIntentId',
+        'stageReceiptId',
+      ].sort(),
+    );
+    candidate.metadata['wharfie-app-id'] = 'changed-after-validation';
+    candidate.stateDigest.value = 'changed-after-validation';
+    expect(validated.metadata['wharfie-app-id']).toBe(base.profile.appId);
+    expect(validated.stateDigest).toEqual(
+      stateDigest(base, base.deploymentRevision),
+    );
+    expectDeepFrozen(validated);
+  });
+
+  it('rejects malformed decoded heads and exact-shape contradictions with the evidence taxonomy', () => {
+    const base = makeBase();
+    const authority = evidenceAuthority(base);
+    const valid = structuredClone(
+      decodeAwsSingleNodeManagedArtifactHead(
+        head(base, base.deploymentRevision),
+        authority,
+        'opaque-version-1',
+      ),
+    );
+    const missing = /** @type {AnyRecord} */ (structuredClone(valid));
+    delete missing.stageReceiptId;
+
+    expect(() =>
+      validateAwsSingleNodeManagedArtifactHeadEvidence(null, authority),
+    ).toThrow(AwsSingleNodeManagedArtifactEvidenceUnknownError);
+    for (const candidate of [
+      { ...valid, unsupported: true },
+      missing,
+      { ...valid, versionId: 'null' },
+      { ...valid, etag: 'unquoted-etag' },
+      { ...valid, contentLength: '137' },
+      { ...valid, contentLength: 138 },
+    ]) {
+      expect(() =>
+        validateAwsSingleNodeManagedArtifactHeadEvidence(candidate, authority),
+      ).toThrow(AwsSingleNodeManagedArtifactEvidenceConflictError);
+    }
+  });
+
+  it('re-decodes metadata and cross-checks every derived head field', () => {
+    const base = makeBase();
+    const authority = evidenceAuthority(base);
+    const previous = structuredClone(
+      decodeAwsSingleNodeManagedArtifactHead(
+        head(base, base.previousDeploymentRevision),
+        authority,
+        'opaque-version-1',
+      ),
+    );
+    const current = decodeAwsSingleNodeManagedArtifactHead(
+      head(base, base.deploymentRevision),
+      authority,
+      'opaque-version-1',
+    );
+    const mismatches = {
+      contentLength: previous.contentLength + 1,
+      stateDigest: current.stateDigest,
+      artifactId: current.artifactId,
+      deploymentRevisionId: current.deploymentRevisionId,
+      revisionId: current.revisionId,
+      stageIntentId: current.stageIntentId,
+      stageReceiptId: current.stageReceiptId,
+    };
+
+    for (const [field, replacement] of Object.entries(mismatches)) {
+      expect(() =>
+        validateAwsSingleNodeManagedArtifactHeadEvidence(
+          { ...previous, [field]: replacement },
+          authority,
+        ),
+      ).toThrow(AwsSingleNodeManagedArtifactEvidenceConflictError);
+    }
+
+    expect(() =>
+      validateAwsSingleNodeManagedArtifactHeadEvidence(
+        { ...previous, metadata: current.metadata },
+        authority,
+      ),
+    ).toThrow(AwsSingleNodeManagedArtifactEvidenceConflictError);
+    expect(() =>
+      validateAwsSingleNodeManagedArtifactHeadEvidence(
+        {
+          ...previous,
+          metadata: {
+            ...previous.metadata,
+            'wharfie-ownership-nonce': createOwnershipNonce(
+              Buffer.alloc(32, 99),
+            ),
+          },
+        },
+        authority,
+      ),
+    ).toThrow(AwsSingleNodeManagedArtifactEvidenceConflictError);
   });
 
   it('rejects a claimed digest inconsistent with the metadata references', () => {

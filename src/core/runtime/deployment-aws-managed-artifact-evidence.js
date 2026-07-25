@@ -40,6 +40,7 @@ import {
   assertDeploymentIncarnationId,
   validateOwnershipNonce,
 } from './deployment-resource-binding.js';
+import { cloneBoundedJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 
 export const AWS_SINGLE_NODE_MANAGED_ARTIFACT_DEFAULT_MAX_ATTEMPTS = 3;
@@ -72,6 +73,19 @@ const EVIDENCE_AUTHORITY_KEYS = new Set([
   'ownershipNonce',
   'appId',
 ]);
+const MANAGED_HEAD_EVIDENCE_KEYS = new Set([
+  'versionId',
+  'etag',
+  'contentLength',
+  'metadata',
+  'stateDigest',
+  'artifactId',
+  'deploymentRevisionId',
+  'revisionId',
+  'stageIntentId',
+  'stageReceiptId',
+]);
+const MANAGED_HEAD_EVIDENCE_MAX_BYTES = 32 * 1024;
 const HISTORY_KERNEL_KEYS = new Set(['readHistoryPage', 'readHead']);
 const HISTORY_KERNEL_REQUIRED_KEYS = new Set(['readHistoryPage', 'readHead']);
 const HISTORY_AUTHORITY_KEYS = new Set(['location', 'accountId']);
@@ -705,6 +719,79 @@ export function decodeAwsSingleNodeManagedArtifactHead(
 }
 
 /**
+ * Revalidate one serialized decoded destination head before it crosses another
+ * durable boundary. Opaque VersionId and ETag values are syntax-checked but are
+ * deliberately not interpreted or scanned as user-authored credential
+ * material.
+ * @param {unknown} value - Candidate decoded managed-artifact head.
+ * @param {unknown} authority - Stable namespace ownership authority.
+ * @returns {Readonly<Record<string, any>>} - Fresh canonical head evidence.
+ */
+export function validateAwsSingleNodeManagedArtifactHeadEvidence(
+  value,
+  authority,
+) {
+  /** @type {Record<string, any>} */
+  let evidence;
+  try {
+    evidence = cloneBoundedJsonObject(
+      value,
+      MANAGED_HEAD_EVIDENCE_MAX_BYTES,
+      'awsSingleNodeManagedArtifact head evidence',
+    );
+  } catch {
+    throw new AwsSingleNodeManagedArtifactEvidenceUnknownError();
+  }
+  try {
+    assertExactKeys(
+      evidence,
+      MANAGED_HEAD_EVIDENCE_KEYS,
+      'awsSingleNodeManagedArtifact head evidence',
+    );
+  } catch {
+    throw new AwsSingleNodeManagedArtifactEvidenceConflictError();
+  }
+  if (
+    !isUsableVersionId(evidence.versionId) ||
+    !isUsableOpaqueEtag(evidence.etag)
+  ) {
+    throw new AwsSingleNodeManagedArtifactEvidenceConflictError();
+  }
+  const parsed = decodeAwsSingleNodeManagedArtifactMetadata(
+    evidence.metadata,
+    authority,
+  );
+  if (
+    !Number.isSafeInteger(evidence.contentLength) ||
+    evidence.contentLength < 0 ||
+    evidence.contentLength > DEPLOYMENT_ARTIFACT_STAGE_MAX_BYTES ||
+    evidence.contentLength !== parsed.contentLength ||
+    !sameCanonicalJson(evidence.stateDigest, parsed.stateDigest) ||
+    evidence.artifactId !== parsed.artifactId ||
+    evidence.deploymentRevisionId !== parsed.deploymentRevisionId ||
+    evidence.revisionId !== parsed.revisionId ||
+    evidence.stageIntentId !== parsed.stageIntentId ||
+    evidence.stageReceiptId !== parsed.stageReceiptId
+  ) {
+    throw new AwsSingleNodeManagedArtifactEvidenceConflictError();
+  }
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      versionId: evidence.versionId,
+      etag: evidence.etag,
+      contentLength: parsed.contentLength,
+      metadata: parsed.metadata,
+      stateDigest: parsed.stateDigest,
+      artifactId: parsed.artifactId,
+      deploymentRevisionId: parsed.deploymentRevisionId,
+      revisionId: parsed.revisionId,
+      stageIntentId: parsed.stageIntentId,
+      stageReceiptId: parsed.stageReceiptId,
+    }),
+  );
+}
+
+/**
  * Decode one exact immutable staged source HeadObject response.
  * @param {unknown} response - Raw S3 response.
  * @param {Readonly<Record<string, any>>} artifactStage - Validated stage pair.
@@ -1106,4 +1193,5 @@ export default {
   isAwsSingleNodeManagedArtifactCurrentMissingError,
   isAwsSingleNodeManagedArtifactDesiredState,
   isAwsSingleNodeManagedArtifactErrorNamed,
+  validateAwsSingleNodeManagedArtifactHeadEvidence,
 };
