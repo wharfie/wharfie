@@ -24,15 +24,19 @@ bindings plus immutable IAM RoleId and EC2 instance ID at
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
 Inspection V6/`win6` correlates both identities before readiness. Live STS
 caller proof and the privileged production publisher remain unwired. The V65
-host boundary now distills one all-infrastructure-settled, still-active
-deployment operation into a bounded content-addressed request with exact node,
-role, managed-object version, desired release, and both retained-volume
-attachment identities. It refuses READY, blocked, destroy, and incomplete
-frontiers, borrows no unrelated graph action, and binds one success-only
-receipt to the existing durable service-health receipt across the later READY
-successor. Provider freshness, live STS proof, guest device/mount proof, and
-the trusted durable host kernel remain intentionally outside that pure
-contract.
+host boundary distills one all-infrastructure-settled, still-active deployment
+operation into a bounded content-addressed request with exact node, role,
+managed-object version, desired release, and both retained-volume attachment
+identities. It refuses READY, blocked, destroy, and incomplete frontiers,
+borrows no unrelated graph action, and binds one success-only receipt to the
+existing durable service-health receipt across the later READY successor. V66
+adds the pure trusted-host activation kernel: one deployment fence, one bounded
+request state, six fixed evidence-backed stages, persisted intent before
+mutation, definite CAS-winner dispatch authority, mandatory independent
+claim/dispatch/settle/replay authorization, conservative ambiguity recovery,
+and authorized higher-generation supersession. Concrete root-owned
+store/lock/authority, live STS, guest storage, artifact, service, and health
+adapters remain outside that pure protocol.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -86,10 +90,10 @@ replays only exact stable-token creates after recovery. The AWS composition
 wiring now reaches exact experimental source and packaged `plan`, `apply`,
 `inspect`, `reconcile`, and `destroy` commands while preserving
 selected/pre-staged source authority and running-SEA packaged authority. The
-pure privileged-host request/receipt boundary is defined; its durable kernel,
-guest storage/artifact/service projection, privileged publisher, clean-account
-proof, and a deployed-service readiness claim still follow · **Last updated:**
-2026-07-25
+pure privileged-host request/receipt boundary and durable activation kernel are
+defined; concrete host adapters, privileged packaging and delivery,
+clean-account proof, and a deployed-service readiness claim still follow ·
+**Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -1231,28 +1235,38 @@ The narrow `@wharfie/wharfie/deployment-profile` authoring subpath creates the
 canonical operator document. Source and packaged reusable plan envelopes
 deliberately do not cross artifact-authority surfaces.
 
-The first privileged-host boundary is now explicit without pretending the
-host is already implemented. One `whaq1` request can be minted only from a
-running, all-actions-settled `CONVERGING` operation and its exact predecessor
-plan. It content-addresses complete node/role/release/versioned-object and
-retained-volume attachment authority. One `whar1` success receipt binds that
-request to DeploymentServiceHealthReceiptV3 and remains valid across the
-controller's READY successor. Serialized S3 head evidence is only a canonical
-projection, and the receipt is only a trusted-host attestation: the next pure
-kernel must independently prove live STS identity, exact downloaded bytes,
-devices, filesystems, mounts, and local service health before settlement.
+The first privileged-host boundary and its pure durable kernel are now
+explicit without pretending the host is already deployed. One `whaq1` request
+can be minted only from a running, all-actions-settled `CONVERGING` operation
+and its exact predecessor plan. One `whar1` success receipt binds that request
+to exact S3-backed DeploymentServiceHealthReceiptV3 evidence and remains valid
+across the controller's READY successor. The kernel persists the complete
+request before claiming the deployment fence, then drives six fixed stages
+through intent, live observation, exact-convergent mutation, and exact
+settlement. Only one definite exact-CAS winner may dispatch, all authority
+purposes are independently rechecked, later mutations invalidate invocation
+freshness, and an authorized higher head generation may supersede old work.
+It deliberately promises at-least-once-safe convergence rather than physical
+exactly-once execution.
 
-1. Wire guest storage projection, resident-service activation, and the
-   privileged host observer outside the application UID, then prove the
-   complete lifecycle in a clean account through the user's ordinary
-   credential chain, including interruption and response-loss recovery and the
-   publishing caller's exact STS role/session identity.
-2. Begin provider-backed coordinator recovery only after the single-node
+1. Add a root-owned authenticated durable state store, a deployment-scoped
+   crash-releasing lock, and a live authority adapter. Make operator inspection
+   fence-aware and define bounded retention for superseded historical states.
+2. Add exact live STS identity proof, then concrete storage, versioned-artifact,
+   fixed-user service-convergence, and S3 health-publication adapters. Prove
+   format/mount and response-loss recovery on disposable Linux hosts without
+   ever executing application bytes as root.
+3. Only after that lifecycle is proven, expose the root framework host command
+   and SEA, add SSM as wakeup/delivery rather than durable authority, and run a
+   complete clean-account proof through the user's ordinary credential chain.
+4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [host activation contract
-checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md). Its
+The latest recorded restart point is the [durable host activation kernel
+checkpoint](llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md).
+Its parent is the [host activation contract
+checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md), whose
 parent is the [target service convergence
 checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md),
 whose parent is the [deployment command surface
