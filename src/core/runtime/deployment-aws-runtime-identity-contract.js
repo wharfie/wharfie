@@ -275,7 +275,7 @@ function createRuntimePolicyDocument(value) {
         {
           Sid: 'ReadExactManagedArtifact',
           Effect: 'Allow',
-          Action: 's3:GetObject',
+          Action: 's3:GetObjectVersion',
           Resource: artifactArn,
           Condition: {
             Bool: { 'aws:SecureTransport': 'true' },

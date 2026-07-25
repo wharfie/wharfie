@@ -1008,6 +1008,11 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
     );
     await ensurePrivateDirectory(fsOps, stateDirectory, expectedUid);
     await ensurePrivateDirectory(fsOps, statesDirectory, expectedUid);
+    // The preceding ensure authenticates this exact private directory but
+    // syncs only its parent. Sync the record-bearing directory itself before
+    // reading so a predecessor's rename ambiguity becomes durable truth after
+    // a process restart rather than escaping the predecessor's memory poison.
+    await syncDirectory(fsOps, statesDirectory);
     const releaseHost = await acquireHostLock();
     try {
       await withTransaction(async () => {

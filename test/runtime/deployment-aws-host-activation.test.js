@@ -1,7 +1,14 @@
+import { promises as fsp } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { beforeAll, describe, expect, it } from '@jest/globals';
 
 import { sortCanonicalJsonValue } from '../../src/core/runtime/canonical-order.js';
-import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
+import {
+  createCanonicalJsonSha256Id,
+  sha256Base64Url,
+} from '../../src/core/runtime/content-id.js';
 import {
   AWS_SINGLE_NODE_HOST_ACTIVATION_OBSERVATION_ID_DOMAIN,
   AWS_SINGLE_NODE_HOST_ACTIVATION_OBSERVATION_ID_PREFIX,
@@ -15,7 +22,17 @@ import {
 import {
   createAwsSingleNodeHostActivationRequest,
   validateAwsSingleNodeHostActivationReceiptContext,
+  validateAwsSingleNodeHostActivationRequest,
 } from '../../src/core/runtime/deployment-aws-host-agent-contract.js';
+import {
+  createAwsSingleNodeHostArtifactProjectionAdapter,
+  getAwsSingleNodeHostArtifactProjectionLayout,
+} from '../../src/core/runtime/deployment-aws-host-artifact-projection.js';
+import { getAwsSingleNodeManagedArtifactStateDigest } from '../../src/core/runtime/deployment-aws-managed-artifact-evidence.js';
+import {
+  DEPLOYMENT_REVISION_ID_DOMAIN,
+  DEPLOYMENT_REVISION_ID_PREFIX,
+} from '../../src/core/runtime/deployment-revision.js';
 import { getDeploymentServiceHealthObjectLocation } from '../../src/core/runtime/deployment-service-health.js';
 import {
   clone,
@@ -23,6 +40,7 @@ import {
   makeFixture,
   makeHealthReceipt,
   makeReconcileFixture,
+  reidentifyRequest,
 } from './fixtures/deployment-aws-host-activation.js';
 
 /** @typedef {Record<string, any>} AnyRecord */
@@ -72,6 +90,92 @@ function frozenClone(value) {
     return Object.freeze(candidate);
   }
   return freeze(copy);
+}
+
+/**
+ * Keep the fixture's deliberately opaque provider version while binding an
+ * exact byte sequence into a newly content-addressed activation request.
+ * @param {Buffer} bytes
+ * @returns {{fixture: Readonly<AnyRecord>, request: Readonly<AnyRecord>}}
+ */
+function makeArtifactProjectionIntegrationRequest(bytes) {
+  const artifactFixture = makeFixture();
+  const original = createAwsSingleNodeHostActivationRequest(
+    artifactFixture.requestContext,
+  );
+  const digest = sha256Base64Url(bytes);
+  const artifactId = `waf1_${digest}`;
+  const revisionPayload = clone(artifactFixture.deploymentRevision);
+  delete revisionPayload.deploymentRevisionId;
+  revisionPayload.artifactId = artifactId;
+  const deploymentRevisionId = createCanonicalJsonSha256Id({
+    domain: DEPLOYMENT_REVISION_ID_DOMAIN,
+    prefix: DEPLOYMENT_REVISION_ID_PREFIX,
+    value: revisionPayload,
+  });
+  const deploymentRevision = {
+    ...revisionPayload,
+    deploymentRevisionId,
+  };
+  const stateDigest = getAwsSingleNodeManagedArtifactStateDigest({
+    deploymentRevision,
+    profile: artifactFixture.profile,
+    providerScope: artifactFixture.providerScope,
+    providerSpec: artifactFixture.providerSpec,
+    deploymentInstanceId: artifactFixture.deploymentInstanceId,
+    incarnationId: artifactFixture.incarnationId,
+  });
+  const activationRequest = validateAwsSingleNodeHostActivationRequest(
+    reidentifyRequest({
+      ...clone(original),
+      deploymentRevisionId,
+      artifactId,
+      artifact: {
+        ...clone(original.artifact),
+        contentLength: bytes.byteLength,
+        byteDigest: { algorithm: 'sha256', value: digest },
+        stateDigest,
+      },
+    }),
+  );
+  return { fixture: artifactFixture, request: activationRequest };
+}
+
+/**
+ * @param {Readonly<AnyRecord>} artifactFixture
+ * @param {Readonly<AnyRecord>} activationRequest
+ * @param {Buffer} bytes
+ * @returns {AnyRecord}
+ */
+function makeArtifactProjectionGetResponse(
+  artifactFixture,
+  activationRequest,
+  bytes,
+) {
+  return {
+    VersionId: activationRequest.artifact.versionId,
+    ETag: activationRequest.artifact.etag,
+    ContentLength: activationRequest.artifact.contentLength,
+    ChecksumSHA256: Buffer.from(
+      activationRequest.artifact.byteDigest.value,
+      'base64url',
+    ).toString('base64'),
+    ChecksumType: 'FULL_OBJECT',
+    ServerSideEncryption: 'AES256',
+    StorageClass: 'STANDARD',
+    ContentType: 'application/octet-stream',
+    CacheControl: 'no-store',
+    Metadata: {
+      ...clone(artifactFixture.managedArtifact.metadata),
+      'wharfie-state-digest': activationRequest.artifact.stateDigest.value,
+      'wharfie-deployment-revision-id': activationRequest.deploymentRevisionId,
+      'wharfie-artifact-id': activationRequest.artifactId,
+      'wharfie-content-length': String(
+        activationRequest.artifact.contentLength,
+      ),
+    },
+    Body: bytes,
+  };
 }
 
 /** @param {unknown} value @param {Readonly<string[]>} keys @param {string} path @returns {AnyRecord} */
@@ -589,6 +693,111 @@ describe('AWS single-node durable host activation', () => {
     expect(effectIndex).toBeGreaterThan(intendedIndex);
     expect(postObserveIndex).toBeGreaterThan(effectIndex);
     expect(settlementIndex).toBeGreaterThan(postObserveIndex);
+  });
+
+  it('composes exact artifact projection through rename response loss without leaking provider selectors', async () => {
+    const bytes = Buffer.from(
+      'exact portable SEA bytes composed through durable host activation',
+      'utf8',
+    );
+    const integration = makeArtifactProjectionIntegrationRequest(bytes);
+    const base = await fsp.mkdtemp(
+      path.join(tmpdir(), 'wharfie-host-activation-artifact-'),
+    );
+    try {
+      await fsp.chmod(base, 0o700);
+      const root = path.join(base, 'projection');
+      const responseLosingFs = Object.create(fsp);
+      let lostRenameResponse = false;
+      responseLosingFs.rename = async (
+        /** @type {string} */ oldPath,
+        /** @type {string} */ newPath,
+      ) => {
+        await fsp.rename(oldPath, newPath);
+        lostRenameResponse = true;
+        throw new Error('simulated filesystem rename response loss');
+      };
+      /** @type {AnyRecord[]} */
+      const downloads = [];
+      const client = {
+        async getObject(
+          /** @type {AnyRecord} */ input,
+          /** @type {AnyRecord} */ options,
+        ) {
+          downloads.push({ input, options });
+          return makeArtifactProjectionGetResponse(
+            integration.fixture,
+            integration.request,
+            bytes,
+          );
+        },
+      };
+      const artifactProjection =
+        createAwsSingleNodeHostArtifactProjectionAdapter({
+          client,
+          root,
+          testOnlyRoot: true,
+          expectedUid: process.getuid?.() ?? 0,
+          runtimeGid: (process.getgid?.() ?? 0) || 1,
+          fsOps: responseLosingFs,
+        });
+      const memory = createMemoryStore();
+      const harness = createStepHarness({
+        request: integration.request,
+        healthFixture: integration.fixture,
+      });
+      const steps = Object.freeze({
+        ...harness.steps,
+        artifactProjection,
+      });
+      const { kernel } = createKernel(memory.store, steps, integration.request);
+
+      const result = await kernel.converge(integration.request);
+      const state = await kernel.inspect({
+        requestId: integration.request.requestId,
+      });
+      const artifactStep = state.steps.find(
+        (/** @type {AnyRecord} */ step) => step.kind === 'artifact-projection',
+      );
+      const artifactEvidence = artifactStep.evidence.value;
+      const layout = getAwsSingleNodeHostArtifactProjectionLayout(
+        integration.request,
+        root,
+      );
+
+      expect(result.status).toBe('succeeded');
+      expect(state.status).toBe('succeeded');
+      expect(lostRenameResponse).toBe(true);
+      expect(downloads).toHaveLength(1);
+      expect(downloads[0].input).toEqual({
+        Bucket: integration.request.artifact.bucketName,
+        Key: integration.request.artifact.key,
+        VersionId: integration.request.artifact.versionId,
+        ExpectedBucketOwner: integration.request.providerScope.accountId,
+        ChecksumMode: 'ENABLED',
+        IfMatch: integration.request.artifact.etag,
+      });
+      expect(integration.request.artifact.versionId).toContain(
+        'Bearer provider-opaque-value',
+      );
+      expect(artifactEvidence).not.toHaveProperty('versionId');
+      expect(artifactEvidence).not.toHaveProperty('etag');
+      expect(JSON.stringify(artifactEvidence)).not.toContain(
+        'Bearer provider-opaque-value',
+      );
+      expect(JSON.stringify(artifactEvidence)).not.toContain('managed-etag');
+      expect(await fsp.readFile(layout.artifactPath)).toEqual(bytes);
+      await expect(
+        fsp.lstat(
+          path.join(
+            layout.deploymentDirectory,
+            `.${integration.request.requestId}.tmp`,
+          ),
+        ),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await fsp.rm(base, { recursive: true, force: true });
+    }
   });
 
   it('settles across mutation and settlement-CAS response loss', async () => {

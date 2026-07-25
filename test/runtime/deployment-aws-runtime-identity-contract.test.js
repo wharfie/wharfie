@@ -232,7 +232,7 @@ describe('AWS single-node runtime identity contract', () => {
       Sid: 'ManageWithSsm',
     });
     expect(policy.Statement[1]).toEqual({
-      Action: 's3:GetObject',
+      Action: 's3:GetObjectVersion',
       Condition: {
         Bool: { 'aws:SecureTransport': 'true' },
         StringEquals: { 's3:ResourceAccount': '123456789012' },
@@ -291,7 +291,7 @@ describe('AWS single-node runtime identity contract', () => {
       Sid: 'DenyDeletingOwnHealthHistory',
     });
     expect(JSON.stringify(policy)).not.toMatch(
-      /s3:ListBucket|ec2messages|ssm:GetParameter|s3:GetObjectVersion|dynamodb:(?:BatchGetItem|Query|Scan)|dynamodb:PartiQL/,
+      /s3:ListBucket|ec2messages|ssm:GetParameter|dynamodb:(?:BatchGetItem|Query|Scan)|dynamodb:PartiQL/,
     );
     expect(Object.isFrozen(policy)).toBe(true);
     expect(Object.isFrozen(policy.Statement)).toBe(true);
@@ -300,7 +300,7 @@ describe('AWS single-node runtime identity contract', () => {
   it('derives the provider-spec digest from the same exact policy shape', () => {
     expect(AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST).toEqual({
       algorithm: 'sha256',
-      value: 'cH34BV7sMmvhePjPdM3ra7IJwq5v2rVvI08sPwh2puA',
+      value: 'QkpOaiHXhz7bvfZc3ZruH35LVafg0sJrz7YL31ckrfQ',
     });
     expect(getAwsSingleNodeRuntimePolicyTemplateDigest()).toBe(
       AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST,

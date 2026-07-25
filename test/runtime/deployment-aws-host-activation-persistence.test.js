@@ -37,6 +37,7 @@ import {
   AwsSingleNodeHostActivationPersistenceCloseError,
   AwsSingleNodeHostActivationPersistenceClosedError,
   AwsSingleNodeHostActivationPersistenceCorruptError,
+  AwsSingleNodeHostActivationPersistenceInitializationError,
   AwsSingleNodeHostActivationPersistenceLockBusyError,
   AwsSingleNodeHostActivationPersistenceOperationError,
   createAwsSingleNodeHostActivationPersistence,
@@ -708,7 +709,7 @@ describe('AWS single-node host activation persistence', () => {
     await persistence.close();
   });
 
-  it('poisons the handle when rename ambiguity cannot be made directory-durable', async () => {
+  it('poisons rename ambiguity until a recreated handle durably recovers its state directory', async () => {
     /** @type {string|null} */
     let failDirectorySyncFor = null;
     const durabilityFailingFs = Object.create(fsp);
@@ -736,9 +737,11 @@ describe('AWS single-node host activation persistence', () => {
       failDirectorySyncFor = path.dirname(String(destination));
       throw new Error('simulated response loss after rename');
     };
-    const { persistence } = await openTestPersistence({
-      fsOps: durabilityFailingFs,
-    });
+    const { persistence, registry, stateDirectory } = await openTestPersistence(
+      {
+        fsOps: durabilityFailingFs,
+      },
+    );
     const request = makeRequest(baseRequest, 21);
     const state = makeState(request);
 
@@ -769,6 +772,74 @@ describe('AWS single-node host activation persistence', () => {
     ).toThrow(AwsSingleNodeHostActivationPersistenceCorruptError);
 
     await persistence.close();
+
+    await expect(
+      createTestPersistence({
+        stateDirectory,
+        registry,
+        fsOps: durabilityFailingFs,
+      }),
+    ).rejects.toBeInstanceOf(
+      AwsSingleNodeHostActivationPersistenceInitializationError,
+    );
+
+    const statesDirectory = path.join(stateDirectory, 'states');
+    let authenticatedStatesDirectory = false;
+    let syncedStatesDirectory = false;
+    const recoveryFs = Object.create(fsp);
+    recoveryFs.lstat = async (
+      /** @type {import('node:fs').PathLike} */ target,
+    ) => {
+      const stats = await fsp.lstat(target);
+      if (String(target) === statesDirectory) {
+        authenticatedStatesDirectory = true;
+      }
+      return stats;
+    };
+    recoveryFs.open = async (
+      /** @type {import('node:fs').PathLike} */ target,
+      /** @type {string|number} */ flags,
+      /** @type {string|number|undefined} */ mode,
+    ) => {
+      const handle = await fsp.open(target, flags, mode);
+      if (String(target) !== statesDirectory) return handle;
+      if (!authenticatedStatesDirectory) {
+        await handle.close();
+        throw new Error('state directory sync preceded authentication');
+      }
+      return {
+        async sync() {
+          await handle.sync();
+          syncedStatesDirectory = true;
+        },
+        async close() {
+          await handle.close();
+        },
+      };
+    };
+    recoveryFs.opendir = async (
+      /** @type {import('node:fs').PathLike} */ target,
+      /** @type {import('node:fs').OpenDirOptions|undefined} */ options,
+    ) => {
+      if (String(target) === statesDirectory && !syncedStatesDirectory) {
+        throw new Error('state directory was read before restart durability');
+      }
+      return fsp.opendir(target, options);
+    };
+
+    const reopened = (
+      await createTestPersistence({
+        stateDirectory,
+        registry,
+        fsOps: recoveryFs,
+      })
+    ).persistence;
+    expect(authenticatedStatesDirectory).toBe(true);
+    expect(syncedStatesDirectory).toBe(true);
+    await expect(
+      reopened.store.readActivationState(request.requestId),
+    ).resolves.toEqual(state);
+    await reopened.close();
   });
 
   itPosix.each(['fence', 'state'])(
