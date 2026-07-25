@@ -63,7 +63,7 @@ import { cloneBoundedJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
-export const AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_SCHEMA_VERSION = 1;
+export const AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_SCHEMA_VERSION = 2;
 export const AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_KIND =
   'awsSingleNodeHostActivationRequest';
 export const AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_ID_DOMAIN =
@@ -129,6 +129,8 @@ const VOLUME_KEYS = new Set([
   'capabilityKind',
   'volumeBindingId',
   'volumeProviderResourceId',
+  'sizeBytes',
+  'createdWithoutSnapshot',
   'attachmentBindingId',
   'attachmentProviderResourceId',
   'requestedDeviceName',
@@ -159,6 +161,13 @@ const VOLUME_CONTRACTS = Object.freeze([
     requestedDeviceName: '/dev/sdg',
   }),
 ]);
+const DISTINCT_VOLUME_IDENTITY_KEYS = Object.freeze([
+  'volumeBindingId',
+  'volumeProviderResourceId',
+  'attachmentBindingId',
+  'attachmentProviderResourceId',
+]);
+const GIBIBYTE_BYTES = 1024 ** 3;
 const VOLUME_ID_PATTERN = /^vol-[0-9a-f]{8,32}$/;
 
 /** @param {Record<string, any>} value @param {Set<string>} keys @param {string} path @returns {void} */
@@ -371,6 +380,10 @@ function validateRequestVolume(value, index, path) {
     volume.volumeProviderResourceId,
     `${path}.volumeProviderResourceId`,
   );
+  const sizeBytes = positiveSafeInteger(volume.sizeBytes, `${path}.sizeBytes`);
+  if (volume.createdWithoutSnapshot !== true) {
+    throw new TypeError(`${path}.createdWithoutSnapshot must be literal true.`);
+  }
   assertDomainSeparatedSha256Id(
     volume.attachmentBindingId,
     DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
@@ -391,6 +404,8 @@ function validateRequestVolume(value, index, path) {
       capabilityKind: contract.capabilityKind,
       volumeBindingId: volume.volumeBindingId,
       volumeProviderResourceId,
+      sizeBytes,
+      createdWithoutSnapshot: true,
       attachmentBindingId: volume.attachmentBindingId,
       attachmentProviderResourceId: volume.attachmentProviderResourceId,
       requestedDeviceName: contract.requestedDeviceName,
@@ -406,7 +421,9 @@ function validateRequestPayload(value, path) {
     request.schemaVersion !==
     AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_SCHEMA_VERSION
   ) {
-    throw new TypeError(`${path}.schemaVersion must be the integer 1.`);
+    throw new TypeError(
+      `${path}.schemaVersion must be the integer ${AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_SCHEMA_VERSION}.`,
+    );
   }
   if (request.kind !== AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_KIND) {
     throw new TypeError(
@@ -521,6 +538,13 @@ function validateRequestPayload(value, path) {
   const volumes = request.volumes.map((volume, index) =>
     validateRequestVolume(volume, index, `${path}.volumes[${index}]`),
   );
+  for (const key of DISTINCT_VOLUME_IDENTITY_KEYS) {
+    if (volumes[0][key] === volumes[1][key]) {
+      throw new Error(
+        `${path}.volumes must use distinct ${key} values across application-state and control-state.`,
+      );
+    }
+  }
   const normalized = {
     schemaVersion: AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_SCHEMA_VERSION,
     kind: AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_KIND,
@@ -690,12 +714,17 @@ function deriveRequestAuthority(value, path) {
   const volumes = volumeAuthorities.map(({ contract, volume, attachment }) => {
     const volumeBinding = volume.binding;
     const attachmentBinding = attachment.binding;
-    const requestedDeviceName =
+    const providerCapability =
       providerSpec.capabilities[
         contract.capabilityKind === 'application-state'
           ? 'applicationState'
           : 'controlState'
-      ].deviceName;
+      ];
+    const requestedDeviceName = providerCapability.deviceName;
+    const sizeBytes = positiveSafeInteger(
+      providerCapability.sizeGiB * GIBIBYTE_BYTES,
+      `${path} ${contract.capabilityKind} sizeBytes`,
+    );
     const expectedAttachmentId =
       getAwsSingleNodeVolumeAttachmentProviderResourceId(
         providerSpec,
@@ -725,6 +754,8 @@ function deriveRequestAuthority(value, path) {
       capabilityKind: contract.capabilityKind,
       volumeBindingId: volumeBinding.bindingId,
       volumeProviderResourceId: volumeBinding.providerResourceId,
+      sizeBytes,
+      createdWithoutSnapshot: true,
       attachmentBindingId: attachmentBinding.bindingId,
       attachmentProviderResourceId: attachmentBinding.providerResourceId,
       requestedDeviceName,

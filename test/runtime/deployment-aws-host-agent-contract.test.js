@@ -42,8 +42,9 @@ describe('AWS single-node host activation request', () => {
     );
     const { requestId: _requestId, ...payload } = request;
 
+    expect(AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_SCHEMA_VERSION).toBe(2);
     expect(request).toMatchObject({
-      schemaVersion: AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_SCHEMA_VERSION,
+      schemaVersion: 2,
       kind: AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_KIND,
       planId: fixture.plan.planId,
       deploymentOperationId: fixture.head.activeOperation.operationId,
@@ -63,11 +64,15 @@ describe('AWS single-node host activation request', () => {
         {
           capabilityKind: 'application-state',
           volumeProviderResourceId: IDS.applicationVolume,
+          sizeBytes: 8 * 1024 ** 3,
+          createdWithoutSnapshot: true,
           requestedDeviceName: '/dev/sdf',
         },
         {
           capabilityKind: 'control-state',
           volumeProviderResourceId: IDS.controlVolume,
+          sizeBytes: 8 * 1024 ** 3,
+          createdWithoutSnapshot: true,
           requestedDeviceName: '/dev/sdg',
         },
       ],
@@ -138,6 +143,63 @@ describe('AWS single-node host activation request', () => {
         }),
       secret,
     );
+  });
+
+  it.each([
+    'volumeBindingId',
+    'volumeProviderResourceId',
+    'attachmentBindingId',
+    'attachmentProviderResourceId',
+  ])('rejects cross-role %s aliases', (identityKey) => {
+    const fixture = makeFixture();
+    const request = createAwsSingleNodeHostActivationRequest(
+      fixture.requestContext,
+    );
+    const candidate = /** @type {AnyRecord} */ (clone(request));
+    candidate.volumes[1][identityKey] = candidate.volumes[0][identityKey];
+
+    expect(() =>
+      validateAwsSingleNodeHostActivationRequest(reidentifyRequest(candidate)),
+    ).toThrow(
+      new RegExp(
+        `distinct ${identityKey} values across application-state and control-state`,
+      ),
+    );
+  });
+
+  it.each([
+    ['sizeBytes', 0, /positive safe integer/],
+    ['sizeBytes', Number.MAX_SAFE_INTEGER + 1, /positive safe integer/],
+    ['createdWithoutSnapshot', false, /must be literal true/],
+  ])(
+    'rejects invalid standalone volume %s values',
+    (field, value, expectedError) => {
+      const fixture = makeFixture();
+      const request = createAwsSingleNodeHostActivationRequest(
+        fixture.requestContext,
+      );
+      const candidate = /** @type {AnyRecord} */ (clone(request));
+      candidate.volumes[0][field] = value;
+
+      expect(() =>
+        validateAwsSingleNodeHostActivationRequest(
+          reidentifyRequest(candidate),
+        ),
+      ).toThrow(expectedError);
+    },
+  );
+
+  it('rejects the reidentified v1 request schema', () => {
+    const fixture = makeFixture();
+    const request = createAwsSingleNodeHostActivationRequest(
+      fixture.requestContext,
+    );
+
+    expect(() =>
+      validateAwsSingleNodeHostActivationRequest(
+        reidentifyRequest({ ...request, schemaVersion: 1 }),
+      ),
+    ).toThrow(/schemaVersion must be the integer 2/);
   });
 
   it('does not mint new privileged authority from a blocked frontier', () => {
@@ -270,6 +332,9 @@ describe('AWS single-node host activation request', () => {
       },
       (/** @type {AnyRecord} */ candidate) => {
         candidate.volumes[0].volumeProviderResourceId = 'vol-00000000000000003';
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.volumes[0].sizeBytes += 1;
       },
     ];
 
