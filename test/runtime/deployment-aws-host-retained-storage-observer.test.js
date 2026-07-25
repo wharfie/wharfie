@@ -9,6 +9,7 @@ import {
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL,
   createAwsSingleNodeHostApplicationStorageAdapter,
   createAwsSingleNodeHostControlStorageAdapter,
+  getAwsSingleNodeHostRetainedStorageBootProjection,
 } from '../../src/core/runtime/deployment-aws-host-retained-storage.js';
 import {
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BLKID_PATH,
@@ -20,7 +21,6 @@ import {
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_WIPEFS_PATH,
   createAwsSingleNodeHostRetainedStorageObserver,
   createAwsSingleNodeHostRetainedStorageObserverForTest,
-  getAwsSingleNodeHostRetainedStorageBootProjection,
 } from '../../src/core/runtime/deployment-aws-host-retained-storage-observer.js';
 import {
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_KIND,
@@ -343,10 +343,10 @@ function makePorts(desired, options = {}) {
           ? `${projection.unitText}forged\n`
           : projection.unitText;
       }
-      if (input.path === projection.dropInPath) {
-        return boot === 'wrong-dropin'
-          ? `${projection.dropInText}forged\n`
-          : projection.dropInText;
+      if (input.path === projection.userManagerGate.dropInPath) {
+        return boot === 'wrong-gate'
+          ? `${projection.userManagerGate.dropInText}forged\n`
+          : projection.userManagerGate.dropInText;
       }
       throw new Error('unexpected retained-storage text read');
     }),
@@ -441,18 +441,23 @@ function makePorts(desired, options = {}) {
         });
       }
       if (input.path === projection.unitPath) {
-        if (boot === 'absent') return null;
+        if (boot === 'absent' || boot === 'gate-only') return null;
         return stats({
           nlink: boot === 'hardlinked-unit' ? 2 : 1,
         });
       }
       if (input.path === projection.enableLinkPath) {
-        if (boot === 'absent' || boot === 'partial' || boot === 'gated') {
+        if (
+          boot === 'absent' ||
+          boot === 'partial' ||
+          boot === 'gate-only' ||
+          boot === 'gated'
+        ) {
           return null;
         }
         return stats({ type: 'symlink', mode: 0o777 });
       }
-      if (input.path === projection.dropInPath) {
+      if (input.path === projection.userManagerGate.dropInPath) {
         if (
           boot === 'absent' ||
           boot === 'partial' ||
@@ -461,6 +466,12 @@ function makePorts(desired, options = {}) {
           return null;
         }
         return stats();
+      }
+      if (input.path === projection.userManagerGate.legacyDropInPaths[0]) {
+        return boot === 'legacy-v1-application' ? stats() : null;
+      }
+      if (input.path === projection.userManagerGate.legacyDropInPaths[1]) {
+        return boot === 'legacy-v1-control' ? stats() : null;
       }
       return null;
     }),
@@ -506,7 +517,7 @@ describe('AWS single-node host retained-storage observer', () => {
     ).toThrow(/own data property/u);
   });
 
-  it('projects exact role-owned persistent unit, enable link, and user-manager drop-in bytes', () => {
+  it('projects exact role mounts behind one shared two-mount user-manager gate', () => {
     const application =
       getAwsSingleNodeHostRetainedStorageBootProjection(applicationDesired);
     const control =
@@ -516,11 +527,9 @@ describe('AWS single-node host retained-storage observer', () => {
     expect(application.enableLinkPath).toBe(
       `/etc/systemd/system/local-fs.target.wants/${application.unitName}`,
     );
-    expect(application.dropInPath).toBe(
-      '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-application-state.conf',
-    );
-    expect(control.dropInPath).toBe(
-      '/etc/systemd/system/user@1001.service.d/61-wharfie-retained-control-state.conf',
+    expect(application.userManagerGate).toEqual(control.userManagerGate);
+    expect(application.userManagerGate.dropInPath).toBe(
+      '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-storage.conf',
     );
     expect(application.unitText).toContain(
       'Options=rw,nodev,noexec,nosuid,relatime,errors=remount-ro,private\nDirectoryMode=0700\nReadWriteOnly=yes\nTimeoutSec=90s\n',
@@ -532,8 +541,19 @@ describe('AWS single-node host retained-storage observer', () => {
       )}\n`,
     );
     expect(application.unitText).not.toContain('What=UUID=');
-    expect(application.dropInText).toBe(
-      `[Unit]\nBindsTo=${application.unitName}\nAfter=${application.unitName}\n`,
+    expect(application.userManagerGate.dropInText).toBe(
+      `[Unit]\nBindsTo=${application.unitName} ${control.unitName}\nAfter=${application.unitName} ${control.unitName}\n`,
+    );
+    expect(application.userManagerGate.retainedMountUnitNames).toEqual([
+      application.unitName,
+      control.unitName,
+    ]);
+    expect(application.userManagerGate.legacyDropInPaths).toEqual([
+      '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-application-state.conf',
+      '/etc/systemd/system/user@1001.service.d/61-wharfie-retained-control-state.conf',
+    ]);
+    expect(application.unitText).toContain(
+      'X-Wharfie-Retained-Storage-Projection=wharfie-systemd-retained-storage-v2',
     );
     expectDeepFrozen(application);
     expectDeepFrozen(control);
@@ -585,6 +605,10 @@ describe('AWS single-node host retained-storage observer', () => {
     [
       'blank media with incomplete exact wiring',
       { filesystem: 'blank', mount: 'absent', boot: 'partial' },
+    ],
+    [
+      'blank media behind a gate staged before either role unit',
+      { filesystem: 'blank', mount: 'absent', boot: 'gate-only' },
     ],
     [
       'blank media gated before enablement',
@@ -640,7 +664,9 @@ describe('AWS single-node host retained-storage observer', () => {
     ],
     ['wrong target ownership', { target: 'wrong-owner' }],
     ['nonexact mount-unit bytes', { boot: 'wrong-unit' }],
-    ['nonexact user-manager drop-in bytes', { boot: 'wrong-dropin' }],
+    ['nonexact shared user-manager gate bytes', { boot: 'wrong-gate' }],
+    ['a stale V1 application role drop-in', { boot: 'legacy-v1-application' }],
+    ['a stale V1 control role drop-in', { boot: 'legacy-v1-control' }],
     ['a noncanonical enable link', { boot: 'wrong-link' }],
     ['a hard-linked persistent unit', { boot: 'hardlinked-unit' }],
     ['an unsafe enable link without the role gate', { boot: 'unsafe-enabled' }],

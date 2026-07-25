@@ -255,7 +255,7 @@ describe('AWS single-node host retained storage', () => {
         mode: 0o700,
       },
       bootWiring: {
-        projectionId: 'wharfie-systemd-retained-storage-v1',
+        projectionId: 'wharfie-systemd-retained-storage-v2',
         persistent: true,
         enabled: true,
         sourceByVolumeIdentity: true,
@@ -314,7 +314,8 @@ describe('AWS single-node host retained storage', () => {
         candidate.bootWiring.id = `${candidate.bootWiring.id}-forged`;
       },
       (/** @type {AnyRecord} */ candidate) => {
-        candidate.bootWiring.projectionId = 'forged-projection';
+        candidate.bootWiring.projectionId =
+          'wharfie-systemd-retained-storage-v1';
       },
       (/** @type {AnyRecord} */ candidate) => {
         candidate.directory.uid = 65_534;

@@ -10,7 +10,10 @@ import {
   validateAwsSingleNodeHostActivationRequest,
 } from './deployment-aws-host-agent-contract.js';
 import { getAwsSingleNodeHostActivationIntentId } from './deployment-aws-host-activation.js';
-import { getAwsSingleNodeHostRetainedStorageMountUnitName } from './deployment-aws-host-retained-storage-projection.js';
+import {
+  getAwsSingleNodeHostRetainedStorageMountUnitName,
+  projectAwsSingleNodeHostRetainedStorageBoot,
+} from './deployment-aws-host-retained-storage-projection.js';
 import { validateAwsSingleNodeHostRuntimeIdentityEvidence } from './deployment-aws-host-runtime-identity.js';
 import { AWS_SINGLE_NODE_VOLUME_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX } from './deployment-aws-volume-attachment-evidence.js';
 import { assertAwsEc2InstanceId } from './deployment-aws-runtime-identity-contract.js';
@@ -56,7 +59,7 @@ export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE = 'ext4';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_PROFILE_ID =
   'wharfie-ext4-v1';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID =
-  'wharfie-systemd-retained-storage-v1';
+  'wharfie-systemd-retained-storage-v2';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL =
   'Amazon Elastic Block Store';
 
@@ -784,6 +787,20 @@ export function validateAwsSingleNodeHostRetainedStorageDesired(value) {
   );
   assertManifestIsSecretFree(canonical, valuePath);
   return canonical;
+}
+
+/**
+ * Validate and project the exact persistent mount plus the one shared
+ * fail-closed user-manager gate requiring both retained mounts.
+ * @param {unknown} desiredValue - Strict role-specific desired state.
+ * @returns {Readonly<Record<string, any>>} Exact immutable boot projection.
+ */
+export function getAwsSingleNodeHostRetainedStorageBootProjection(
+  desiredValue,
+) {
+  return projectAwsSingleNodeHostRetainedStorageBoot(
+    validateAwsSingleNodeHostRetainedStorageDesired(desiredValue),
+  );
 }
 
 /** @param {unknown} value @param {string} valuePath @returns {Readonly<Record<string, any>>} */

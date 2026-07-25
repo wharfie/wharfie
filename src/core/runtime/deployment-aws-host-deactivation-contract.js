@@ -29,16 +29,16 @@ import {
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP,
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_USER,
   getAwsSingleNodeHostRetainedFilesystemUuid,
+  getAwsSingleNodeHostRetainedStorageBootProjection,
   getAwsSingleNodeHostRetainedStorageLayout,
   validateAwsSingleNodeHostApplicationStorageEvidence,
   validateAwsSingleNodeHostControlStorageEvidence,
   validateAwsSingleNodeHostRetainedStorageDesired,
 } from './deployment-aws-host-retained-storage.js';
 import {
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_LEGACY_DROP_IN_NAMES,
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
-  getAwsSingleNodeHostRetainedStorageBootProjection,
-} from './deployment-aws-host-retained-storage-observer.js';
-import {
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_USER_MANAGER_GATE_DROP_IN_NAME,
   getAwsSingleNodeHostRetainedStorageByIdPath,
   getAwsSingleNodeHostRetainedStorageMountUnitName,
 } from './deployment-aws-host-retained-storage-projection.js';
@@ -75,24 +75,27 @@ import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 import { createSystemdUserServiceLayout } from './services/systemd-user-service.js';
 
-export const AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_SCHEMA_VERSION = 1;
+export const AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_SCHEMA_VERSION = 2;
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_KIND =
   'awsSingleNodeHostDeactivationRequest';
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_ID_DOMAIN =
-  'wharfie:aws-single-node-host-deactivation-request:v1';
-export const AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_ID_PREFIX = 'whdq1';
-export const AWS_SINGLE_NODE_HOST_DEACTIVATION_RECEIPT_SCHEMA_VERSION = 1;
+  'wharfie:aws-single-node-host-deactivation-request:v2';
+export const AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_ID_PREFIX = 'whdq2';
+export const AWS_SINGLE_NODE_HOST_DEACTIVATION_RECEIPT_SCHEMA_VERSION = 2;
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_RECEIPT_KIND =
   'awsSingleNodeHostDeactivationReceipt';
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_RECEIPT_ID_DOMAIN =
-  'wharfie:aws-single-node-host-deactivation-receipt:v1';
-export const AWS_SINGLE_NODE_HOST_DEACTIVATION_RECEIPT_ID_PREFIX = 'whdr1';
+  'wharfie:aws-single-node-host-deactivation-receipt:v2';
+export const AWS_SINGLE_NODE_HOST_DEACTIVATION_RECEIPT_ID_PREFIX = 'whdr2';
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_SERVICE_ASSERTION_SCHEMA_VERSION = 1;
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_SERVICE_ASSERTION_KIND =
   'awsSingleNodeHostDeactivationServiceTerminalAssertion';
-export const AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_SCHEMA_VERSION = 1;
+export const AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_SCHEMA_VERSION = 2;
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_KIND =
   'awsSingleNodeHostDeactivationStorageTerminalAssertion';
+export const AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_SCHEMA_VERSION = 1;
+export const AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_KIND =
+  'awsSingleNodeHostDeactivationUserManagerGateTerminalAssertion';
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_DOCUMENT_MAX_BYTES = 64 * 1024;
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_CONTEXT_MAX_BYTES = 512 * 1024;
 export const AWS_SINGLE_NODE_HOST_DEACTIVATION_SERVICE_CONFIG_ROOT =
@@ -132,6 +135,7 @@ const REQUEST_PAYLOAD_KEYS = new Set([
   'runtimeAccount',
   'service',
   'storage',
+  'userManagerGate',
 ]);
 const REQUEST_DOCUMENT_KEYS = new Set(['requestId', ...REQUEST_PAYLOAD_KEYS]);
 const REQUEST_SERVICE_KEYS = new Set([
@@ -155,10 +159,15 @@ const STORAGE_IDENTITY_KEYS = new Set([
   'mountUnitName',
   'mountUnitPath',
   'localFsEnableLinkPath',
-  'roleDropInPath',
-  'userManagerUnitName',
   'volumeIdentityPath',
   'bootWiringId',
+  'bootProjectionId',
+]);
+const USER_MANAGER_GATE_IDENTITY_KEYS = new Set([
+  'userManagerUnitName',
+  'dropInPath',
+  'legacyDropInPaths',
+  'retainedMountUnitNames',
   'bootProjectionId',
 ]);
 const DISTINCT_STORAGE_IDENTITY_KEYS = Object.freeze([
@@ -178,20 +187,23 @@ const STORAGE_ROLES = Object.freeze([
     attachmentResourceKey: 'application-state-attachment',
     mountTargetKey: 'applicationMountTarget',
     desiredKind: AWS_SINGLE_NODE_HOST_APPLICATION_STORAGE_DESIRED_KIND,
-    dropInName: '60-wharfie-retained-application-state.conf',
   }),
   Object.freeze({
     capabilityKind: 'control-state',
     attachmentResourceKey: 'control-state-attachment',
     mountTargetKey: 'controlMountTarget',
     desiredKind: AWS_SINGLE_NODE_HOST_CONTROL_STORAGE_DESIRED_KIND,
-    dropInName: '61-wharfie-retained-control-state.conf',
   }),
 ]);
 const FILESYSTEM_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
-const RECEIPT_CREATE_KEYS = new Set(['request', 'service', 'storage']);
+const RECEIPT_CREATE_KEYS = new Set([
+  'request',
+  'service',
+  'storage',
+  'userManagerGate',
+]);
 const RECEIPT_CONTEXT_KEYS = new Set([
   'request',
   'requestContext',
@@ -204,6 +216,7 @@ const RECEIPT_PAYLOAD_KEYS = new Set([
   'destroyOperationId',
   'service',
   'storage',
+  'userManagerGate',
 ]);
 const RECEIPT_DOCUMENT_KEYS = new Set(['receiptId', ...RECEIPT_PAYLOAD_KEYS]);
 const RECEIPT_SERVICE_KEYS = new Set([
@@ -228,8 +241,6 @@ const RECEIPT_STORAGE_KEYS = new Set([
   'schemaVersion',
   'kind',
   ...STORAGE_IDENTITY_KEYS,
-  'runtimeUid',
-  'runtimeGid',
   'syncStatus',
   'mountStatus',
   'mountUnitLoadState',
@@ -240,9 +251,13 @@ const RECEIPT_STORAGE_KEYS = new Set([
   'mountUnitNeedDaemonReload',
   'mountUnitFileStatus',
   'localFsEnableLinkStatus',
-  'roleDropInPath',
-  'roleDropInStatus',
-  'userManagerUnitName',
+]);
+const RECEIPT_USER_MANAGER_GATE_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  ...USER_MANAGER_GATE_IDENTITY_KEYS,
+  'dropInStatus',
+  'legacyDropInStatuses',
   'userManagerBindsTo',
   'userManagerAfter',
   'userManagerNeedDaemonReload',
@@ -400,8 +415,8 @@ function validateRuntimeAccount(value, path) {
   });
 }
 
-/** @param {unknown} value @param {number} index @param {string} appId @param {Readonly<Record<string, any>>} runtimeAccount @param {string} path @returns {Readonly<Record<string, any>>} */
-function validateStorageIdentity(value, index, appId, runtimeAccount, path) {
+/** @param {unknown} value @param {number} index @param {string} appId @param {string} path @returns {Readonly<Record<string, any>>} */
+function validateStorageIdentity(value, index, appId, path) {
   const storage = cloneDocument(value, path);
   assertExactKeys(storage, STORAGE_IDENTITY_KEYS, path);
   const role = STORAGE_ROLES[index];
@@ -465,12 +480,6 @@ function validateStorageIdentity(value, index, appId, runtimeAccount, path) {
     'local-fs.target.wants',
     mountUnitName,
   );
-  const userManagerUnitName = `user@${runtimeAccount.uid}.service`;
-  const roleDropInPath = nodePath.posix.join(
-    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
-    `${userManagerUnitName}.d`,
-    role.dropInName,
-  );
   const bootWiringId = `wharfie-retained-${role.capabilityKind}-${storage.filesystemUuid}`;
   const expected =
     /** @type {Record<string, any>} */
@@ -490,8 +499,6 @@ function validateStorageIdentity(value, index, appId, runtimeAccount, path) {
       mountUnitName,
       mountUnitPath,
       localFsEnableLinkPath,
-      roleDropInPath,
-      userManagerUnitName,
       volumeIdentityPath,
       bootWiringId,
       bootProjectionId:
@@ -546,13 +553,13 @@ function assertGlobalRequestBindingIds(request, storage, path) {
   }
 }
 
-/** @param {Readonly<Record<string, any>>} request @param {Readonly<Record<string, any>>} storage @param {number} index @param {string} path @returns {Readonly<Record<string, string>>} */
-function validateRequestStorageProjection(request, storage, index, path) {
+/** @param {Readonly<Record<string, any>>} request @param {Readonly<Record<string, any>>} storage @param {number} index @param {string} path @returns {Readonly<Record<string, any>>} */
+function createRequestStorageDesired(request, storage, index, path) {
   const role = STORAGE_ROLES[index];
   if (role === undefined) {
     throw new TypeError(`${path} retained-storage role is not supported.`);
   }
-  const desired = validateAwsSingleNodeHostRetainedStorageDesired({
+  return validateAwsSingleNodeHostRetainedStorageDesired({
     schemaVersion: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DESIRED_SCHEMA_VERSION,
     kind: role.desiredKind,
     requestId: request.activationRequestId,
@@ -597,14 +604,17 @@ function validateRequestStorageProjection(request, storage, index, path) {
       orderedBeforeRuntimeUserManager: true,
     },
   });
+}
+
+/** @param {Readonly<Record<string, any>>} request @param {Readonly<Record<string, any>>} storage @param {number} index @param {string} path @returns {Readonly<Record<string, any>>} */
+function validateRequestStorageProjection(request, storage, index, path) {
+  const desired = createRequestStorageDesired(request, storage, index, path);
   const projection = getAwsSingleNodeHostRetainedStorageBootProjection(desired);
   const matches = [
     ['mountUnitName', projection.unitName],
     ['mountUnitPath', projection.unitPath],
     ['localFsEnableLinkPath', projection.enableLinkPath],
-    ['roleDropInPath', projection.dropInPath],
     ['volumeIdentityPath', projection.sourcePath],
-    ['userManagerUnitName', `user@${request.runtimeAccount.uid}.service`],
   ];
   for (const [key, expected] of matches) {
     if (storage[key] !== expected) {
@@ -612,6 +622,56 @@ function validateRequestStorageProjection(request, storage, index, path) {
     }
   }
   return projection;
+}
+
+/** @param {unknown} value @param {Readonly<Record<string, any>>} request @param {ReadonlyArray<Readonly<Record<string, any>>>} projections @param {string} path @returns {Readonly<Record<string, any>>} */
+function validateRequestUserManagerGate(value, request, projections, path) {
+  if (projections.length !== STORAGE_ROLES.length) {
+    throw new TypeError(
+      `${path} requires both retained-storage boot projections.`,
+    );
+  }
+  const applicationGate = projections[0].userManagerGate;
+  const controlGate = projections[1].userManagerGate;
+  if (!sameJson(applicationGate, controlGate)) {
+    throw new Error(
+      `${path} retained-storage projections do not share one exact user-manager gate.`,
+    );
+  }
+  const gate = cloneDocument(value, path);
+  assertExactKeys(gate, USER_MANAGER_GATE_IDENTITY_KEYS, path);
+  const retainedMountUnitNames = validateSystemdUnitList(
+    gate.retainedMountUnitNames,
+    `${path}.retainedMountUnitNames`,
+  );
+  if (
+    !Array.isArray(gate.legacyDropInPaths) ||
+    gate.legacyDropInPaths.some(
+      (candidate) => typeof candidate !== 'string' || candidate.length === 0,
+    )
+  ) {
+    throw new TypeError(
+      `${path}.legacyDropInPaths must contain exact absolute paths.`,
+    );
+  }
+  const expected = {
+    userManagerUnitName: applicationGate.userManagerUnitName,
+    dropInPath: applicationGate.dropInPath,
+    legacyDropInPaths: applicationGate.legacyDropInPaths,
+    retainedMountUnitNames: applicationGate.retainedMountUnitNames,
+    bootProjectionId: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID,
+  };
+  if (
+    gate.userManagerUnitName !== expected.userManagerUnitName ||
+    gate.dropInPath !== expected.dropInPath ||
+    gate.bootProjectionId !== expected.bootProjectionId ||
+    !sameJson(gate.legacyDropInPaths, expected.legacyDropInPaths) ||
+    !sameJson(retainedMountUnitNames, expected.retainedMountUnitNames) ||
+    gate.userManagerUnitName !== `user@${request.runtimeAccount.uid}.service`
+  ) {
+    throw new Error(`${path} does not match its exact shared projection.`);
+  }
+  return deepFreeze(sortCanonicalJsonValue(expected));
 }
 
 /** @param {unknown} value @param {string} path @returns {Readonly<Record<string, any>>} */
@@ -729,47 +789,54 @@ function validateRequestPayload(value, path) {
       candidate,
       index,
       request.appId,
-      runtimeAccount,
       `${path}.storage[${index}]`,
     ),
   );
   assertDistinctStorageIdentities(storage, `${path}.storage`);
   assertDistinctStorageBindingIds(storage, `${path}.storage`);
   assertGlobalRequestBindingIds(request, storage, path);
-  const normalized = {
-    schemaVersion: AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_SCHEMA_VERSION,
-    kind: AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_KIND,
-    activationRequestId: request.activationRequestId,
-    providerScopeId: request.providerScopeId,
-    providerSpecId: request.providerSpecId,
-    deploymentInstanceId: request.deploymentInstanceId,
-    incarnationId: request.incarnationId,
-    destroyPlanId: request.destroyPlanId,
-    destroyOperationId: request.destroyOperationId,
-    authorizedHeadId: request.authorizedHeadId,
-    authorizedHeadGeneration,
-    lastSettledOperationId: request.lastSettledOperationId,
-    deploymentRevisionId: request.deploymentRevisionId,
-    profileRevisionId: request.profileRevisionId,
-    appId: request.appId,
-    artifactId: request.artifactId,
-    revisionId: request.revisionId,
-    nodeBindingId: request.nodeBindingId,
-    nodeProviderResourceId: request.nodeProviderResourceId,
-    runtimeRoleBindingId: request.runtimeRoleBindingId,
-    runtimeRoleId: request.runtimeRoleId,
-    runtimeRoleName,
-    runtimeAccount,
-    service,
-    storage,
-  };
-  storage.forEach((identity, index) =>
+  const normalized =
+    /** @type {Record<string, any>} */
+    ({
+      schemaVersion: AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_SCHEMA_VERSION,
+      kind: AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_KIND,
+      activationRequestId: request.activationRequestId,
+      providerScopeId: request.providerScopeId,
+      providerSpecId: request.providerSpecId,
+      deploymentInstanceId: request.deploymentInstanceId,
+      incarnationId: request.incarnationId,
+      destroyPlanId: request.destroyPlanId,
+      destroyOperationId: request.destroyOperationId,
+      authorizedHeadId: request.authorizedHeadId,
+      authorizedHeadGeneration,
+      lastSettledOperationId: request.lastSettledOperationId,
+      deploymentRevisionId: request.deploymentRevisionId,
+      profileRevisionId: request.profileRevisionId,
+      appId: request.appId,
+      artifactId: request.artifactId,
+      revisionId: request.revisionId,
+      nodeBindingId: request.nodeBindingId,
+      nodeProviderResourceId: request.nodeProviderResourceId,
+      runtimeRoleBindingId: request.runtimeRoleBindingId,
+      runtimeRoleId: request.runtimeRoleId,
+      runtimeRoleName,
+      runtimeAccount,
+      service,
+      storage,
+    });
+  const projections = storage.map((identity, index) =>
     validateRequestStorageProjection(
       normalized,
       identity,
       index,
       `${path}.storage[${index}]`,
     ),
+  );
+  normalized.userManagerGate = validateRequestUserManagerGate(
+    request.userManagerGate,
+    normalized,
+    projections,
+    `${path}.userManagerGate`,
   );
   assertManifestIsSecretFree(normalized, path);
   return deepFreeze(sortCanonicalJsonValue(normalized));
@@ -1014,7 +1081,6 @@ function createRequestFromAuthority(authority) {
       const mountTarget = retainedLayout[role.mountTargetKey];
       const mountUnitName =
         getAwsSingleNodeHostRetainedStorageMountUnitName(mountTarget);
-      const userManagerUnitName = `user@${authority.runtimeAccount.uid}.service`;
       return {
         capabilityKind: role.capabilityKind,
         volumeBindingId: activationVolume.volumeBindingId,
@@ -1039,12 +1105,6 @@ function createRequestFromAuthority(authority) {
           'local-fs.target.wants',
           mountUnitName,
         ),
-        roleDropInPath: nodePath.posix.join(
-          AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
-          `${userManagerUnitName}.d`,
-          role.dropInName,
-        ),
-        userManagerUnitName,
         volumeIdentityPath: getAwsSingleNodeHostRetainedStorageByIdPath(
           activationVolume.volumeProviderResourceId,
         ),
@@ -1053,6 +1113,43 @@ function createRequestFromAuthority(authority) {
           AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID,
       };
     },
+  );
+  const projectionAuthority = {
+    activationRequestId: activationRequest.requestId,
+    providerScopeId: activationRequest.providerScope.providerScopeId,
+    deploymentInstanceId: activationRequest.deploymentInstanceId,
+    incarnationId: activationRequest.incarnationId,
+    nodeProviderResourceId: activationRequest.nodeProviderResourceId,
+    appId: activationRequest.appId,
+    runtimeAccount: authority.runtimeAccount,
+  };
+  const projections = storage.map(
+    (
+      /** @type {Readonly<Record<string, any>>} */ identity,
+      /** @type {number} */ index,
+    ) =>
+      getAwsSingleNodeHostRetainedStorageBootProjection(
+        createRequestStorageDesired(
+          projectionAuthority,
+          identity,
+          index,
+          `awsSingleNodeHostDeactivationRequest.storage[${index}]`,
+        ),
+      ),
+  );
+  const projectedGate = projections[0].userManagerGate;
+  const userManagerGate = validateRequestUserManagerGate(
+    {
+      userManagerUnitName: projectedGate.userManagerUnitName,
+      dropInPath: projectedGate.dropInPath,
+      legacyDropInPaths: projectedGate.legacyDropInPaths,
+      retainedMountUnitNames: projectedGate.retainedMountUnitNames,
+      bootProjectionId:
+        AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID,
+    },
+    projectionAuthority,
+    projections,
+    'awsSingleNodeHostDeactivationRequest.userManagerGate',
   );
   const payload = validateRequestPayload(
     {
@@ -1081,6 +1178,7 @@ function createRequestFromAuthority(authority) {
       runtimeAccount: authority.runtimeAccount,
       service: expectedServiceIdentity(activationRequest.appId),
       storage,
+      userManagerGate,
     },
     'awsSingleNodeHostDeactivationRequest',
   );
@@ -1246,7 +1344,7 @@ function validateReceiptStorage(value, index, path) {
     storage.kind !== AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_KIND
   ) {
     throw new TypeError(
-      `${path} must use the V1 storage terminal-assertion schema.`,
+      `${path} must use the V2 storage terminal-assertion schema.`,
     );
   }
   assertDomainSeparatedSha256Id(
@@ -1306,14 +1404,6 @@ function validateReceiptStorage(value, index, path) {
     'local-fs.target.wants',
     mountUnitName,
   );
-  const runtimeUid = linuxRuntimeId(storage.runtimeUid, `${path}.runtimeUid`);
-  const runtimeGid = linuxRuntimeId(storage.runtimeGid, `${path}.runtimeGid`);
-  const userManagerUnitName = `user@${runtimeUid}.service`;
-  const roleDropInPath = nodePath.posix.join(
-    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
-    `${userManagerUnitName}.d`,
-    role.dropInName,
-  );
   const bootWiringId = `wharfie-retained-${role.capabilityKind}-${storage.filesystemUuid}`;
   const identities =
     /** @type {Record<string, any>} */
@@ -1333,8 +1423,6 @@ function validateReceiptStorage(value, index, path) {
       mountUnitName,
       mountUnitPath,
       localFsEnableLinkPath,
-      roleDropInPath,
-      userManagerUnitName,
       volumeIdentityPath,
       bootWiringId,
       bootProjectionId:
@@ -1357,8 +1445,6 @@ function validateReceiptStorage(value, index, path) {
     ['mountUnitNeedDaemonReload', false],
     ['mountUnitFileStatus', 'absent'],
     ['localFsEnableLinkStatus', 'absent'],
-    ['roleDropInStatus', 'absent'],
-    ['userManagerNeedDaemonReload', false],
   ];
   for (const [key, expected] of fixed) {
     if (storage[key] !== expected) {
@@ -1367,33 +1453,136 @@ function validateReceiptStorage(value, index, path) {
       );
     }
   }
-  const userManagerBindsTo = validateSystemdUnitList(
-    storage.userManagerBindsTo,
-    `${path}.userManagerBindsTo`,
-  );
-  const userManagerAfter = validateSystemdUnitList(
-    storage.userManagerAfter,
-    `${path}.userManagerAfter`,
-  );
-  if (
-    userManagerBindsTo.includes(mountUnitName) ||
-    userManagerAfter.includes(mountUnitName)
-  ) {
-    throw new Error(
-      `${path} effective user-manager dependencies must not name its removed mount unit.`,
-    );
-  }
   return deepFreeze(
     sortCanonicalJsonValue({
       schemaVersion:
         AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_SCHEMA_VERSION,
       kind: AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_KIND,
       ...identities,
-      runtimeUid,
-      runtimeGid,
       ...Object.fromEntries(fixed),
+    }),
+  );
+}
+
+/** @param {unknown} value @param {string} path @returns {Readonly<Record<string, any>>} */
+function validateReceiptUserManagerGate(value, path) {
+  const gate = cloneDocument(value, path);
+  assertExactKeys(gate, RECEIPT_USER_MANAGER_GATE_KEYS, path);
+  if (
+    gate.schemaVersion !==
+      AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_SCHEMA_VERSION ||
+    gate.kind !==
+      AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_KIND
+  ) {
+    throw new TypeError(
+      `${path} must use the V1 user-manager-gate terminal-assertion schema.`,
+    );
+  }
+  if (
+    typeof gate.userManagerUnitName !== 'string' ||
+    !/^user@[1-9][0-9]*\.service$/u.test(gate.userManagerUnitName)
+  ) {
+    throw new TypeError(
+      `${path}.userManagerUnitName must name one canonical numeric user manager.`,
+    );
+  }
+  const runtimeUid = linuxRuntimeId(
+    Number(gate.userManagerUnitName.slice(5, -8)),
+    `${path}.userManagerUnitName UID`,
+  );
+  const userManagerUnitName = `user@${runtimeUid}.service`;
+  if (gate.userManagerUnitName !== userManagerUnitName) {
+    throw new TypeError(
+      `${path}.userManagerUnitName must use a canonical runtime UID.`,
+    );
+  }
+  const dropInDirectoryPath = nodePath.posix.join(
+    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
+    `${userManagerUnitName}.d`,
+  );
+  const dropInPath = nodePath.posix.join(
+    dropInDirectoryPath,
+    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_USER_MANAGER_GATE_DROP_IN_NAME,
+  );
+  if (gate.dropInPath !== dropInPath) {
+    throw new Error(
+      `${path}.dropInPath does not match its canonical user manager.`,
+    );
+  }
+  const expectedLegacyDropInPaths =
+    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_LEGACY_DROP_IN_NAMES.map((name) =>
+      nodePath.posix.join(dropInDirectoryPath, name),
+    );
+  if (
+    !Array.isArray(gate.legacyDropInPaths) ||
+    !sameJson(gate.legacyDropInPaths, expectedLegacyDropInPaths)
+  ) {
+    throw new Error(
+      `${path}.legacyDropInPaths do not match the canonical V1 paths.`,
+    );
+  }
+  const legacyDropInPaths = Object.freeze(expectedLegacyDropInPaths);
+  const retainedMountUnitNames = validateSystemdUnitList(
+    gate.retainedMountUnitNames,
+    `${path}.retainedMountUnitNames`,
+  );
+  if (
+    gate.bootProjectionId !==
+    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID
+  ) {
+    throw new TypeError(
+      `${path}.bootProjectionId must use the fixed retained-storage projection.`,
+    );
+  }
+  if (
+    gate.dropInStatus !== 'absent' ||
+    gate.userManagerNeedDaemonReload !== false
+  ) {
+    throw new TypeError(
+      `${path} must assert an absent gate and a current user-manager cache.`,
+    );
+  }
+  if (
+    !Array.isArray(gate.legacyDropInStatuses) ||
+    !sameJson(gate.legacyDropInStatuses, ['absent', 'absent'])
+  ) {
+    throw new TypeError(
+      `${path}.legacyDropInStatuses must prove both legacy files absent.`,
+    );
+  }
+  const userManagerBindsTo = validateSystemdUnitList(
+    gate.userManagerBindsTo,
+    `${path}.userManagerBindsTo`,
+  );
+  const userManagerAfter = validateSystemdUnitList(
+    gate.userManagerAfter,
+    `${path}.userManagerAfter`,
+  );
+  if (
+    [...userManagerBindsTo, ...userManagerAfter].some((unitName) =>
+      retainedMountUnitNames.includes(unitName),
+    )
+  ) {
+    throw new Error(
+      `${path} effective dependencies must not name either removed retained mount unit.`,
+    );
+  }
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      schemaVersion:
+        AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_SCHEMA_VERSION,
+      kind: AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_KIND,
+      userManagerUnitName,
+      dropInPath,
+      legacyDropInPaths,
+      retainedMountUnitNames,
+      bootProjectionId:
+        AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID,
+      dropInStatus: 'absent',
+      legacyDropInStatuses: ['absent', 'absent'],
       userManagerBindsTo,
       userManagerAfter,
+      userManagerNeedDaemonReload: false,
     }),
   );
 }
@@ -1438,27 +1627,14 @@ function validateReceiptPayload(value, path) {
   );
   assertDistinctStorageIdentities(storage, `${path}.storage`);
   assertDistinctStorageBindingIds(storage, `${path}.storage`);
-  if (
-    storage[0].runtimeUid !== storage[1].runtimeUid ||
-    storage[0].runtimeGid !== storage[1].runtimeGid ||
-    storage[0].userManagerUnitName !== storage[1].userManagerUnitName ||
-    !sameJson(storage[0].userManagerBindsTo, storage[1].userManagerBindsTo) ||
-    !sameJson(storage[0].userManagerAfter, storage[1].userManagerAfter)
-  ) {
-    throw new Error(
-      `${path}.storage must assert one request-bound runtime account and identical effective user-manager dependencies.`,
-    );
-  }
+  const userManagerGate = validateReceiptUserManagerGate(
+    receipt.userManagerGate,
+    `${path}.userManagerGate`,
+  );
   const retainedMountUnits = storage.map((identity) => identity.mountUnitName);
-  if (
-    storage.some((identity) =>
-      [...identity.userManagerBindsTo, ...identity.userManagerAfter].some(
-        (unitName) => retainedMountUnits.includes(unitName),
-      ),
-    )
-  ) {
+  if (!sameJson(userManagerGate.retainedMountUnitNames, retainedMountUnits)) {
     throw new Error(
-      `${path}.storage effective user-manager dependencies must not name either removed retained mount unit.`,
+      `${path}.userManagerGate must name both retained mount units in canonical role order.`,
     );
   }
   const normalized = {
@@ -1468,6 +1644,7 @@ function validateReceiptPayload(value, path) {
     destroyOperationId: receipt.destroyOperationId,
     service,
     storage,
+    userManagerGate,
   };
   assertManifestIsSecretFree(normalized, path);
   return deepFreeze(sortCanonicalJsonValue(normalized));
@@ -1493,20 +1670,19 @@ function assertReceiptMatchesRequest(receipt, request, path) {
       index,
       `${path}.request.storage[${index}]`,
     );
-    if (
-      receipt.storage[index].runtimeUid !== request.runtimeAccount.uid ||
-      receipt.storage[index].runtimeGid !== request.runtimeAccount.gid
-    ) {
-      throw new Error(
-        `${path}.storage[${index}] runtime account does not match its request.`,
-      );
-    }
     for (const key of STORAGE_IDENTITY_KEYS) {
       if (receipt.storage[index][key] !== request.storage[index][key]) {
         throw new Error(
           `${path}.storage[${index}].${key} does not match its request.`,
         );
       }
+    }
+  }
+  for (const key of USER_MANAGER_GATE_IDENTITY_KEYS) {
+    if (!sameJson(receipt.userManagerGate[key], request.userManagerGate[key])) {
+      throw new Error(
+        `${path}.userManagerGate.${key} does not match its request.`,
+      );
     }
   }
 }
@@ -1531,6 +1707,7 @@ function deriveReceipt(value, path) {
       destroyOperationId: request.destroyOperationId,
       service: input.service,
       storage: input.storage,
+      userManagerGate: input.userManagerGate,
     },
     'awsSingleNodeHostDeactivationReceipt',
   );
@@ -1552,10 +1729,11 @@ function createReceiptFromPayload(payload) {
 /**
  * Normalize one trusted-host success assertion into a content-addressed pure
  * document. Its exact schema proves only what the caller asserted: service
- * absence plus synced, unmounted, projection-absent retained storage. It is
- * not host observation or provenance and is not controller authority without
- * the strengthened context validator and a future authenticated closed host
- * execution/readback boundary.
+ * absence plus synced, unmounted retained storage; the shared gate and both
+ * legacy role drop-ins absent; and effective user-manager dependencies free
+ * of both removed mounts. It is not host observation or provenance and is not
+ * controller authority without the strengthened context validator and a
+ * future authenticated closed host execution/readback boundary.
  * @param {unknown} value - Request-bound service and storage assertions.
  * @returns {Readonly<Record<string, any>>} - Canonical receipt.
  */
@@ -1687,6 +1865,8 @@ export default {
   AWS_SINGLE_NODE_HOST_DEACTIVATION_SERVICE_CONFIG_ROOT,
   AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_KIND,
   AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_SCHEMA_VERSION,
+  AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_KIND,
+  AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_SCHEMA_VERSION,
   createAwsSingleNodeHostDeactivationReceipt,
   createAwsSingleNodeHostDeactivationRequest,
   validateAwsSingleNodeHostDeactivationReceipt,

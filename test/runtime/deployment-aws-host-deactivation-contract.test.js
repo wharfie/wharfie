@@ -8,6 +8,8 @@ import {
   AWS_SINGLE_NODE_HOST_DEACTIVATION_SERVICE_ASSERTION_SCHEMA_VERSION,
   AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_KIND,
   AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_SCHEMA_VERSION,
+  AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_KIND,
+  AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_SCHEMA_VERSION,
   AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_ID_DOMAIN,
   AWS_SINGLE_NODE_HOST_DEACTIVATION_REQUEST_ID_PREFIX,
   createAwsSingleNodeHostDeactivationReceipt,
@@ -266,8 +268,6 @@ function settledEvidence(request) {
             AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_SCHEMA_VERSION,
           kind: AWS_SINGLE_NODE_HOST_DEACTIVATION_STORAGE_ASSERTION_KIND,
           ...identity,
-          runtimeUid: request.runtimeAccount.uid,
-          runtimeGid: request.runtimeAccount.gid,
           syncStatus: 'complete',
           mountStatus: 'unmounted',
           mountUnitLoadState: 'not-found',
@@ -278,13 +278,20 @@ function settledEvidence(request) {
           mountUnitNeedDaemonReload: false,
           mountUnitFileStatus: 'absent',
           localFsEnableLinkStatus: 'absent',
-          roleDropInStatus: 'absent',
-          userManagerBindsTo: [],
-          userManagerAfter: [],
-          userManagerNeedDaemonReload: false,
         }),
       ),
     ),
+    userManagerGate: Object.freeze({
+      schemaVersion:
+        AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_SCHEMA_VERSION,
+      kind: AWS_SINGLE_NODE_HOST_DEACTIVATION_USER_MANAGER_GATE_ASSERTION_KIND,
+      ...request.userManagerGate,
+      dropInStatus: 'absent',
+      legacyDropInStatuses: ['absent', 'absent'],
+      userManagerBindsTo: [],
+      userManagerAfter: [],
+      userManagerNeedDaemonReload: false,
+    }),
   });
 }
 
@@ -296,6 +303,8 @@ describe('AWS single-node host deactivation contract', () => {
     });
     const request = createAwsSingleNodeHostDeactivationRequest(destroy.context);
 
+    expect(request.schemaVersion).toBe(2);
+    expect(request.requestId).toMatch(/^whdq2_/u);
     expect(
       createAwsSingleNodeHostDeactivationRequest(
         reverseObjectKeys(destroy.context),
@@ -351,9 +360,8 @@ describe('AWS single-node host deactivation contract', () => {
       expect(storage).toMatchObject({
         filesystemType: 'ext4',
         filesystemProfileId: 'wharfie-ext4-v1',
-        bootProjectionId: 'wharfie-systemd-retained-storage-v1',
+        bootProjectionId: 'wharfie-systemd-retained-storage-v2',
         createdWithoutSnapshot: true,
-        userManagerUnitName: 'user@1001.service',
       });
       expect(storage.mountUnitPath).toBe(
         `/etc/systemd/system/${storage.mountUnitName}`,
@@ -365,14 +373,19 @@ describe('AWS single-node host deactivation contract', () => {
         storage.volumeProviderResourceId.replace('-', ''),
       );
     }
-    expect(
-      request.storage.map(
-        (/** @type {Readonly<AnyRecord>} */ storage) => storage.roleDropInPath,
+    expect(request.userManagerGate).toEqual({
+      userManagerUnitName: 'user@1001.service',
+      dropInPath:
+        '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-storage.conf',
+      legacyDropInPaths: [
+        '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-application-state.conf',
+        '/etc/systemd/system/user@1001.service.d/61-wharfie-retained-control-state.conf',
+      ],
+      retainedMountUnitNames: request.storage.map(
+        (/** @type {Readonly<AnyRecord>} */ storage) => storage.mountUnitName,
       ),
-    ).toEqual([
-      '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-application-state.conf',
-      '/etc/systemd/system/user@1001.service.d/61-wharfie-retained-control-state.conf',
-    ]);
+      bootProjectionId: 'wharfie-systemd-retained-storage-v2',
+    });
     expectDeepFrozen(request);
   });
 
@@ -442,9 +455,55 @@ describe('AWS single-node host deactivation contract', () => {
         reidentifyRequest(nodeStorageAlias),
       ),
     ).toThrow(/globally distinct/i);
+
+    const oneMountGate = clone(request);
+    oneMountGate.userManagerGate.retainedMountUnitNames.pop();
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationRequest(
+        reidentifyRequest(oneMountGate),
+      ),
+    ).toThrow(/shared projection/i);
+
+    const reversedGate = clone(request);
+    reversedGate.userManagerGate.retainedMountUnitNames.reverse();
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationRequest(
+        reidentifyRequest(reversedGate),
+      ),
+    ).toThrow(/sorted unique/i);
+
+    const substitutedGatePath = clone(request);
+    substitutedGatePath.userManagerGate.dropInPath =
+      substitutedGatePath.userManagerGate.dropInPath.replace(
+        'user@1001.service',
+        'user@1003.service',
+      );
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationRequest(
+        reidentifyRequest(substitutedGatePath),
+      ),
+    ).toThrow(/shared projection/i);
+
+    const substitutedLegacyPath = clone(request);
+    substitutedLegacyPath.userManagerGate.legacyDropInPaths[0] =
+      '/etc/systemd/system/user@1001.service.d/60-forged.conf';
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationRequest(
+        reidentifyRequest(substitutedLegacyPath),
+      ),
+    ).toThrow(/shared projection/i);
+
+    const legacyProjection = clone(request);
+    legacyProjection.storage[0].bootProjectionId =
+      'wharfie-systemd-retained-storage-v1';
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationRequest(
+        reidentifyRequest(legacyProjection),
+      ),
+    ).toThrow(/boot projection profiles/i);
   });
 
-  test('creates only an exact service/storage terminal assertion', async () => {
+  test('creates only an exact service/storage/gate terminal assertion', async () => {
     const destroy = await makeDestroyFixture();
     const request = createAwsSingleNodeHostDeactivationRequest(destroy.context);
     const evidence = settledEvidence(request);
@@ -453,11 +512,14 @@ describe('AWS single-node host deactivation contract', () => {
       ...evidence,
     });
 
+    expect(receipt.schemaVersion).toBe(2);
+    expect(receipt.receiptId).toMatch(/^whdr2_/u);
     expect(
       createAwsSingleNodeHostDeactivationReceipt({
         request: reverseObjectKeys(request),
         service: reverseObjectKeys(evidence.service),
         storage: reverseObjectKeys(evidence.storage),
+        userManagerGate: reverseObjectKeys(evidence.userManagerGate),
       }),
     ).toEqual(receipt);
     expect(
@@ -501,12 +563,15 @@ describe('AWS single-node host deactivation contract', () => {
         mountUnitNeedDaemonReload: false,
         mountUnitFileStatus: 'absent',
         localFsEnableLinkStatus: 'absent',
-        roleDropInStatus: 'absent',
-        userManagerBindsTo: [],
-        userManagerAfter: [],
-        userManagerNeedDaemonReload: false,
       });
     }
+    expect(receipt.userManagerGate).toMatchObject({
+      dropInStatus: 'absent',
+      legacyDropInStatuses: ['absent', 'absent'],
+      userManagerBindsTo: [],
+      userManagerAfter: [],
+      userManagerNeedDaemonReload: false,
+    });
     expectDeepFrozen(receipt);
   });
 
@@ -529,13 +594,18 @@ describe('AWS single-node host deactivation contract', () => {
       ['storage', 'mountUnitNeedDaemonReload', true],
       ['storage', 'mountUnitFileStatus', 'present'],
       ['storage', 'localFsEnableLinkStatus', 'present'],
-      ['storage', 'roleDropInStatus', 'present'],
-      ['storage', 'userManagerNeedDaemonReload', true],
+      ['gate', 'dropInStatus', 'present'],
+      ['gate', 'legacyDropInStatuses', ['present', 'absent']],
+      ['gate', 'userManagerNeedDaemonReload', true],
     ];
     for (const [section, key, value] of failures) {
       const evidence = clone(settledEvidence(request));
       const target =
-        section === 'service' ? evidence.service : evidence.storage[0];
+        section === 'service'
+          ? evidence.service
+          : section === 'storage'
+            ? evidence.storage[0]
+            : evidence.userManagerGate;
       target[key] = value;
       expect(() =>
         createAwsSingleNodeHostDeactivationReceipt({
@@ -546,7 +616,7 @@ describe('AWS single-node host deactivation contract', () => {
     }
 
     const boundDependency = clone(settledEvidence(request));
-    boundDependency.storage[0].userManagerBindsTo = [
+    boundDependency.userManagerGate.userManagerBindsTo = [
       request.storage[0].mountUnitName,
     ];
     expect(() =>
@@ -556,19 +626,27 @@ describe('AWS single-node host deactivation contract', () => {
       }),
     ).toThrow(/must not name/i);
 
-    const crossBoundDependencies = clone(settledEvidence(request));
-    crossBoundDependencies.storage[0].userManagerAfter = [
+    const orderedDependency = clone(settledEvidence(request));
+    orderedDependency.userManagerGate.userManagerAfter = [
       request.storage[1].mountUnitName,
     ];
-    crossBoundDependencies.storage[1].userManagerAfter = [
+    expect(() =>
+      createAwsSingleNodeHostDeactivationReceipt({
+        request,
+        ...orderedDependency,
+      }),
+    ).toThrow(/must not name/i);
+
+    const missingMount = clone(settledEvidence(request));
+    missingMount.userManagerGate.retainedMountUnitNames = [
       request.storage[0].mountUnitName,
     ];
     expect(() =>
       createAwsSingleNodeHostDeactivationReceipt({
         request,
-        ...crossBoundDependencies,
+        ...missingMount,
       }),
-    ).toThrow(/identical effective/i);
+    ).toThrow(/both retained mount units|does not match/i);
   });
 
   test('independently rejects storage binding aliases and a substituted runtime account', async () => {
@@ -586,20 +664,27 @@ describe('AWS single-node host deactivation contract', () => {
 
     const substituted = clone(settledEvidence(request));
     const substituteUid = request.runtimeAccount.uid + 1;
-    for (const storage of substituted.storage) {
-      storage.runtimeUid = substituteUid;
-      storage.userManagerUnitName = `user@${substituteUid}.service`;
-      storage.roleDropInPath = storage.roleDropInPath.replace(
-        `user@${request.runtimeAccount.uid}.service`,
-        storage.userManagerUnitName,
+    const originalUnit = request.userManagerGate.userManagerUnitName;
+    substituted.userManagerGate.userManagerUnitName = `user@${substituteUid}.service`;
+    substituted.userManagerGate.dropInPath =
+      substituted.userManagerGate.dropInPath.replace(
+        originalUnit,
+        substituted.userManagerGate.userManagerUnitName,
       );
-    }
+    substituted.userManagerGate.legacyDropInPaths =
+      substituted.userManagerGate.legacyDropInPaths.map(
+        (/** @type {string} */ legacyPath) =>
+          legacyPath.replace(
+            originalUnit,
+            substituted.userManagerGate.userManagerUnitName,
+          ),
+      );
     expect(() =>
       createAwsSingleNodeHostDeactivationReceipt({
         request,
         ...substituted,
       }),
-    ).toThrow(/runtime account/i);
+    ).toThrow(/userManagerGate/i);
   });
 
   test('binds a receipt to an equal-or-later live successor only', async () => {
@@ -625,6 +710,32 @@ describe('AWS single-node host deactivation contract', () => {
     expect(() =>
       validateAwsSingleNodeHostDeactivationReceipt(reidentifyReceipt(tampered)),
     ).toThrow(/mountUnitFileStatus/i);
+
+    const forgedGatePath = clone(receipt);
+    forgedGatePath.userManagerGate.dropInPath =
+      '/etc/systemd/system/user@1001.service.d/60-forged.conf';
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationReceipt(
+        reidentifyReceipt(forgedGatePath),
+      ),
+    ).toThrow(/canonical user manager/i);
+
+    const reorderedLegacyPaths = clone(receipt);
+    reorderedLegacyPaths.userManagerGate.legacyDropInPaths.reverse();
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationReceipt(
+        reidentifyReceipt(reorderedLegacyPaths),
+      ),
+    ).toThrow(/canonical V1 paths/i);
+
+    const noncanonicalUserManager = clone(receipt);
+    noncanonicalUserManager.userManagerGate.userManagerUnitName =
+      'user@01001.service';
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationReceipt(
+        reidentifyReceipt(noncanonicalUserManager),
+      ),
+    ).toThrow(/canonical numeric user manager/i);
 
     const recoveredHead = createCurrentHead(first, {
       generation: request.authorizedHeadGeneration + 5,

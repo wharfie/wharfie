@@ -12,12 +12,10 @@ import {
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DIRECTORY_MODE,
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE,
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL,
+  getAwsSingleNodeHostRetainedStorageBootProjection,
   validateAwsSingleNodeHostRetainedStorageDesired,
 } from './deployment-aws-host-retained-storage.js';
-import {
-  getAwsSingleNodeHostRetainedStorageByIdPath,
-  getAwsSingleNodeHostRetainedStorageMountUnitName,
-} from './deployment-aws-host-retained-storage-projection.js';
+import { getAwsSingleNodeHostRetainedStorageByIdPath } from './deployment-aws-host-retained-storage-projection.js';
 import { cloneBoundedJsonObject } from './json-value.js';
 
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_UDEVADM_PATH =
@@ -34,8 +32,6 @@ export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SELF_MOUNT_NAMESPACE_PATH =
   '/proc/self/ns/mnt';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_PID1_MOUNT_NAMESPACE_PATH =
   '/proc/1/ns/mnt';
-export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT =
-  '/etc/systemd/system';
 
 const TOOL_TIMEOUT_MILLISECONDS = 10_000;
 const SMALL_OUTPUT_MAX_BYTES = 16 * 1024;
@@ -90,11 +86,6 @@ const FIXED_LIVE_MOUNT_OPTIONS = Object.freeze([
   'noexec',
   'nosuid',
   'relatime',
-]);
-const FIXED_UNIT_MOUNT_OPTIONS = Object.freeze([
-  ...FIXED_LIVE_MOUNT_OPTIONS,
-  'errors=remount-ro',
-  'private',
 ]);
 
 class RetainedStorageUnknownError extends Error {
@@ -382,84 +373,6 @@ function parseLsblk(output) {
   const budget = { count: 0 };
   return document.blockdevices.map((record) =>
     normalizeLsblkRecord(record, 0, budget),
-  );
-}
-
-/** @param {Readonly<Record<string, any>>} desired @returns {Readonly<Record<string, string>>} */
-function bootProjection(desired) {
-  const unitName = getAwsSingleNodeHostRetainedStorageMountUnitName(
-    desired.mount.target,
-  );
-  const unitPath = path.posix.join(
-    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
-    unitName,
-  );
-  const enableLinkPath = path.posix.join(
-    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
-    'local-fs.target.wants',
-    unitName,
-  );
-  const sourcePath = getAwsSingleNodeHostRetainedStorageByIdPath(
-    desired.volumeProviderResourceId,
-  );
-  const dropInName =
-    desired.capabilityKind === 'application-state'
-      ? '60-wharfie-retained-application-state.conf'
-      : '61-wharfie-retained-control-state.conf';
-  const dropInPath = path.posix.join(
-    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SYSTEMD_ROOT,
-    `user@${desired.directory.uid}.service.d`,
-    dropInName,
-  );
-  const unitText = [
-    '[Unit]',
-    `Description=Wharfie retained ${desired.capabilityKind} storage`,
-    `Before=user@${desired.directory.uid}.service`,
-    `X-Wharfie-Retained-Storage=${desired.bootWiring.id}`,
-    `X-Wharfie-Retained-Storage-Projection=${desired.bootWiring.projectionId}`,
-    '',
-    '[Mount]',
-    `What=${sourcePath}`,
-    `Where=${desired.mount.target}`,
-    `Type=${AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE}`,
-    `Options=${FIXED_UNIT_MOUNT_OPTIONS.join(',')}`,
-    'DirectoryMode=0700',
-    'ReadWriteOnly=yes',
-    'TimeoutSec=90s',
-    '',
-    '[Install]',
-    'WantedBy=local-fs.target',
-    '',
-  ].join('\n');
-  const dropInText = [
-    '[Unit]',
-    `BindsTo=${unitName}`,
-    `After=${unitName}`,
-    '',
-  ].join('\n');
-  return Object.freeze({
-    unitName,
-    unitPath,
-    enableLinkPath,
-    dropInPath,
-    sourcePath,
-    unitText,
-    dropInText,
-  });
-}
-
-/**
- * Project the one canonical persistent systemd mount and role-owned user-manager
- * ordering drop-in. The read-only observer and the future mutator share these
- * exact paths and bytes.
- * @param {unknown} desiredValue - Strict role-specific desired state.
- * @returns {Readonly<Record<string, string>>}
- */
-export function getAwsSingleNodeHostRetainedStorageBootProjection(
-  desiredValue,
-) {
-  return bootProjection(
-    validateAwsSingleNodeHostRetainedStorageDesired(desiredValue),
   );
 }
 
@@ -1021,19 +934,44 @@ async function inspectTargetDirectory(stats, desired, mounted, ports) {
   return 'mounted';
 }
 
-/** @param {Readonly<Record<string, any>>} desired @param {Readonly<Record<string, Function>>} ports @returns {Promise<'absent'|'unit'|'gated'|'enabled'>} */
+/** @param {Readonly<Record<string, any>>} desired @param {Readonly<Record<string, Function>>} ports @returns {Promise<'absent'|'gate-only'|'unit'|'gated'|'enabled'>} */
 async function inspectBootWiring(desired, ports) {
-  const projection = bootProjection(desired);
-  const [unitStats, linkStats, dropInStats] = await Promise.all([
+  const projection = getAwsSingleNodeHostRetainedStorageBootProjection(desired);
+  const gate = projection.userManagerGate;
+  const [unitStats, linkStats, gateStats, ...legacyStats] = await Promise.all([
     stat(ports, projection.unitPath),
     stat(ports, projection.enableLinkPath),
-    stat(ports, projection.dropInPath),
+    stat(ports, gate.dropInPath),
+    ...gate.legacyDropInPaths.map((/** @type {string} */ legacyPath) =>
+      stat(ports, legacyPath),
+    ),
   ]);
-  if (unitStats === null) {
-    if (linkStats !== null || dropInStats !== null) {
+  if (legacyStats.some((stats) => stats !== null)) {
+    throw new RetainedStorageConflictError();
+  }
+
+  if (gateStats !== null) {
+    if (
+      gateStats.type !== 'regular' ||
+      gateStats.uid !== 0 ||
+      gateStats.gid !== 0 ||
+      gateStats.mode !== 0o644 ||
+      gateStats.nlink !== 1
+    ) {
       throw new RetainedStorageConflictError();
     }
-    return 'absent';
+    const gateText = await readText(ports, gate.dropInPath, UNIT_MAX_BYTES);
+    if (gateText === null) throw new RetainedStorageUnknownError();
+    if (gateText !== gate.dropInText) {
+      throw new RetainedStorageConflictError();
+    }
+  }
+
+  if (unitStats === null) {
+    if (linkStats !== null) {
+      throw new RetainedStorageConflictError();
+    }
+    return gateStats === null ? 'absent' : 'gate-only';
   }
   if (
     unitStats.type !== 'regular' ||
@@ -1068,32 +1006,11 @@ async function inspectBootWiring(desired, ports) {
       throw new RetainedStorageConflictError();
     }
   }
-
-  if (dropInStats !== null) {
-    if (
-      dropInStats.type !== 'regular' ||
-      dropInStats.uid !== 0 ||
-      dropInStats.gid !== 0 ||
-      dropInStats.mode !== 0o644 ||
-      dropInStats.nlink !== 1
-    ) {
-      throw new RetainedStorageConflictError();
-    }
-    const dropInText = await readText(
-      ports,
-      projection.dropInPath,
-      UNIT_MAX_BYTES,
-    );
-    if (dropInText === null) throw new RetainedStorageUnknownError();
-    if (dropInText !== projection.dropInText) {
-      throw new RetainedStorageConflictError();
-    }
-  }
-  if (linkStats !== null && dropInStats === null) {
+  if (linkStats !== null && gateStats === null) {
     throw new RetainedStorageConflictError();
   }
   if (linkStats !== null) return 'enabled';
-  return dropInStats === null ? 'unit' : 'gated';
+  return gateStats === null ? 'unit' : 'gated';
 }
 
 /** @param {Readonly<Record<string, any>>} desired @param {Readonly<Record<string, Function>>} ports @returns {Promise<Readonly<Record<string, any>>>} */
