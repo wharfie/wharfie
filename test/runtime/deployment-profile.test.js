@@ -37,6 +37,22 @@ function clone(value) {
 }
 
 describe('deployment profiles', () => {
+  it.each([
+    undefined,
+    null,
+    '',
+    ' US-EAST-1 ',
+    'us_east_1',
+    `us-${'a'.repeat(64)}-1`,
+  ])(
+    'rejects invalid AWS region input at the provider-helper boundary: %#',
+    (region) => {
+      expect(() =>
+        createAwsSingleNodeProvider(/** @type {any} */ (region)),
+      ).toThrow(/canonical AWS region/i);
+    },
+  );
+
   it('creates one explicit finite AWS single-node capability mapping', () => {
     const input = makeProfileInput();
     const profile = createDeploymentProfile(input);

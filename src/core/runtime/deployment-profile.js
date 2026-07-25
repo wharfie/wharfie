@@ -236,6 +236,24 @@ function validateConfiguration(value, valuePath) {
 }
 
 /**
+ * @param {unknown} value - Candidate AWS region.
+ * @param {string} valuePath - Human-readable value path.
+ * @returns {string} - Explicit canonical region.
+ */
+function validateAwsRegion(value, valuePath) {
+  if (
+    typeof value !== 'string' ||
+    value.length > 63 ||
+    !AWS_REGION_PATTERN.test(value)
+  ) {
+    throw new TypeError(
+      `${valuePath} must be an explicit canonical AWS region.`,
+    );
+  }
+  return value;
+}
+
+/**
  * @param {unknown} value - Candidate AWS provider selection.
  * @param {string} valuePath - Human-readable value path.
  * @returns {DeploymentProfile['provider']} - Exact provider selection.
@@ -251,19 +269,11 @@ function validateProvider(value, valuePath) {
   }
   const scope = cloneJsonObject(provider.scope, `${valuePath}.scope`);
   assertAllKeys(scope, SCOPE_KEYS, `${valuePath}.scope`);
-  if (
-    typeof scope.region !== 'string' ||
-    scope.region.length > 63 ||
-    !AWS_REGION_PATTERN.test(scope.region)
-  ) {
-    throw new TypeError(
-      `${valuePath}.scope.region must be an explicit canonical AWS region.`,
-    );
-  }
+  const region = validateAwsRegion(scope.region, `${valuePath}.scope.region`);
   const normalized = {
     kind: DEPLOYMENT_PROVIDER_KIND,
     contractVersion: DEPLOYMENT_PROVIDER_CONTRACT_VERSION,
-    scope: { region: scope.region },
+    scope: { region },
     configuration: validateConfiguration(
       provider.configuration,
       `${valuePath}.configuration`,
@@ -316,15 +326,18 @@ function createDeploymentProfilePayload(value, valuePath) {
  * @returns {DeploymentProfile['provider']} - Fresh provider input.
  */
 export function createAwsSingleNodeProvider(region) {
-  return /** @type {DeploymentProfile['provider']} */ (
-    JSON.parse(
-      JSON.stringify({
-        kind: DEPLOYMENT_PROVIDER_KIND,
-        contractVersion: DEPLOYMENT_PROVIDER_CONTRACT_VERSION,
-        scope: { region },
-        configuration: AWS_SINGLE_NODE_CONFIGURATION,
-      }),
-    )
+  const canonicalRegion = validateAwsRegion(
+    region,
+    'awsSingleNodeProvider.scope.region',
+  );
+  return validateProvider(
+    {
+      kind: DEPLOYMENT_PROVIDER_KIND,
+      contractVersion: DEPLOYMENT_PROVIDER_CONTRACT_VERSION,
+      scope: { region: canonicalRegion },
+      configuration: AWS_SINGLE_NODE_CONFIGURATION,
+    },
+    'awsSingleNodeProvider',
   );
 }
 
