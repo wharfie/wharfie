@@ -16,6 +16,16 @@ const CONFIG_PATH = '/etc/wharfie-systemd-proof.json';
 const STATUS_TIMEOUT_MS = 120_000;
 const STATUS_POLL_INTERVAL_MS = 250;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+const DESIRED_CONVERGENCE_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'appId',
+  'unit',
+  'desired',
+  'disposition',
+  'basis',
+]);
+const DESIRED_RELEASE_KEYS = new Set(['artifactId', 'revisionId']);
 
 /**
  * @param {number} duration - Milliseconds to block.
@@ -198,6 +208,50 @@ function readPackagedStatus(config) {
 }
 
 /**
+ * @param {unknown} value - Candidate object.
+ * @param {Set<string>} keys - Required exact keys.
+ * @returns {value is Record<string, any>} - Whether every and only required key is present.
+ */
+function hasExactKeys(value, keys) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const actual = Object.keys(value);
+  return actual.length === keys.size && actual.every((key) => keys.has(key));
+}
+
+/**
+ * Require the booted installed release's exact status-V3 authorization.
+ * @param {unknown} value - Candidate packaged status.
+ * @param {Readonly<Record<string, any>>} config - Boot proof configuration.
+ * @returns {value is Record<string, any>} - Whether the desired-convergence proof is exact.
+ */
+function hasBootDesiredConvergence(value, config) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const status = /** @type {Record<string, any>} */ (value);
+  const proof = status.desiredConvergence;
+  if (!hasExactKeys(proof, DESIRED_CONVERGENCE_KEYS)) return false;
+  if (!hasExactKeys(proof.desired, DESIRED_RELEASE_KEYS)) return false;
+  const unit = path.basename(config.unitPath);
+  return (
+    status.schemaVersion === 3 &&
+    status.kind === 'wharfie.service.status' &&
+    status.appId === config.appId &&
+    status.unit === unit &&
+    proof.schemaVersion === 1 &&
+    proof.kind === 'wharfie.service.desired-convergence' &&
+    proof.appId === config.appId &&
+    proof.unit === unit &&
+    proof.desired.artifactId === config.artifactId &&
+    proof.desired.revisionId === config.revisionId &&
+    proof.disposition === 'authorized' &&
+    proof.basis === 'durable-active'
+  );
+}
+
+/**
  * @param {Readonly<Record<string, any>>} config - Boot configuration.
  * @returns {{result: ReturnType<typeof run>, parsed?: Record<string, any>}} - Workflow observation.
  */
@@ -257,9 +311,7 @@ while (Date.now() < deadline) {
   const status = observation.parsed;
   if (
     observation.result.status === 0 &&
-    status?.schemaVersion === 2 &&
-    status.kind === 'wharfie.service.status' &&
-    status.appId === config.appId &&
+    hasBootDesiredConvergence(status, config) &&
     status.health === 'healthy' &&
     status.installation?.activeArtifactId === config.artifactId &&
     status.installation?.activeRevisionId === config.revisionId &&

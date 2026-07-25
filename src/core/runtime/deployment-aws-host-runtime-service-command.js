@@ -58,6 +58,27 @@ const INPUT_KEYS = new Set([
 const DIGEST_KEYS = new Set(['algorithm', 'value']);
 const METADATA_KEYS = new Set(['artifact', 'revision', 'runtime']);
 const METADATA_ARTIFACT_KEYS = new Set(['artifactId', 'byteDigest', 'size']);
+const DESIRED_CONVERGENCE_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'appId',
+  'unit',
+  'desired',
+  'disposition',
+  'basis',
+]);
+const DESIRED_RELEASE_KEYS = new Set(['artifactId', 'revisionId']);
+const DESIRED_CONVERGENCE_DISPOSITIONS = new Set([
+  'authorized',
+  'conflict',
+  'unknown',
+]);
+const DESIRED_CONVERGENCE_AUTHORIZED_BASES = new Set([
+  'physical-absence',
+  'durable-install',
+  'durable-change',
+  'durable-active',
+]);
 const TEST_ONLY_PORT_KEYS = new Set([
   'projectionRoot',
   'platform',
@@ -82,6 +103,10 @@ const PROCESS_OUTCOME_KEYS = new Set([
   'stdout',
   'stderr',
 ]);
+const SERVICE_STATUS_SCHEMA_VERSION = 3;
+const SERVICE_STATUS_KIND = 'wharfie.service.status';
+const DESIRED_CONVERGENCE_SCHEMA_VERSION = 1;
+const DESIRED_CONVERGENCE_KIND = 'wharfie.service.desired-convergence';
 
 const ACCOUNT_COMMAND_TIMEOUT_MILLISECONDS = 5_000;
 const ACCOUNT_RECORD_MAX_OUTPUT_BYTES = 16 * 1024;
@@ -1204,6 +1229,64 @@ function validateExactArtifactMetadata(value, input) {
 }
 
 /**
+ * Require status V3 to carry one exact read-only convergence decision bound to
+ * the independently verified SEA. The manager owns the decision; this root
+ * boundary prevents a stale or different desired artifact from borrowing it.
+ * @param {unknown} value - Canonically decoded service-status response.
+ * @param {Readonly<Record<string, any>>} input - Exact verified service input.
+ * @returns {void}
+ */
+function validateExactDesiredConvergenceStatus(value, input) {
+  try {
+    if (!isPlainObject(value)) throw new Error();
+    const status = /** @type {Record<string, any>} */ (value);
+    const expectedUnit = `wharfie-${input.appId}.service`;
+    if (
+      status.schemaVersion !== SERVICE_STATUS_SCHEMA_VERSION ||
+      status.kind !== SERVICE_STATUS_KIND ||
+      status.appId !== input.appId ||
+      status.unit !== expectedUnit
+    ) {
+      throw new Error();
+    }
+    const proof = snapshotExactDataObject(
+      status.desiredConvergence,
+      DESIRED_CONVERGENCE_KEYS,
+      'awsSingleNodeHostRuntimeService desired convergence',
+    );
+    const desired = snapshotExactDataObject(
+      proof.desired,
+      DESIRED_RELEASE_KEYS,
+      'awsSingleNodeHostRuntimeService desired convergence.desired',
+    );
+    assertArtifactId(
+      desired.artifactId,
+      'awsSingleNodeHostRuntimeService desired convergence.desired.artifactId',
+    );
+    assertApplicationRevisionId(
+      desired.revisionId,
+      'awsSingleNodeHostRuntimeService desired convergence.desired.revisionId',
+    );
+    if (
+      proof.schemaVersion !== DESIRED_CONVERGENCE_SCHEMA_VERSION ||
+      proof.kind !== DESIRED_CONVERGENCE_KIND ||
+      proof.appId !== input.appId ||
+      proof.unit !== expectedUnit ||
+      desired.artifactId !== input.artifactId ||
+      desired.revisionId !== input.revisionId ||
+      !DESIRED_CONVERGENCE_DISPOSITIONS.has(proof.disposition) ||
+      (proof.disposition === 'authorized'
+        ? !DESIRED_CONVERGENCE_AUTHORIZED_BASES.has(proof.basis)
+        : proof.basis !== null)
+    ) {
+      throw new Error();
+    }
+  } catch {
+    throw new AwsSingleNodeHostRuntimeServiceResponseError();
+  }
+}
+
+/**
  * Parse the exact two-property systemctl show readback.
  * @param {Readonly<Record<string, any>>} outcome - Process response.
  * @returns {boolean} - Whether the transient unit has no live process.
@@ -1394,7 +1477,11 @@ function createCommandFromPorts(ports) {
     if (action === 'inspect' && outcome.exitCode !== 0) {
       throw new AwsSingleNodeHostRuntimeServiceResponseError();
     }
-    return decodeExactJsonObject(outcome.stdout, outcome.stderr);
+    const response = decodeExactJsonObject(outcome.stdout, outcome.stderr);
+    if (action === 'inspect') {
+      validateExactDesiredConvergenceStatus(response, input);
+    }
+    return response;
   }
 
   return Object.freeze({

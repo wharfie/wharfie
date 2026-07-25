@@ -147,6 +147,37 @@ function makeMetadata(bytes, overrides = {}) {
   };
 }
 
+/** @param {Buffer} bytes @param {Record<string, any>} [overrides] @returns {Record<string, any>} */
+function makeDesiredConvergence(bytes, overrides = {}) {
+  const input = makeInput(bytes);
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.desired-convergence',
+    appId: input.appId,
+    unit: `wharfie-${input.appId}.service`,
+    desired: {
+      artifactId: input.artifactId,
+      revisionId: input.revisionId,
+    },
+    disposition: 'authorized',
+    basis: 'durable-active',
+    ...overrides,
+  };
+}
+
+/** @param {Buffer} bytes @param {Record<string, any>} [overrides] @returns {Record<string, any>} */
+function makeServiceStatus(bytes, overrides = {}) {
+  const input = makeInput(bytes);
+  return {
+    schemaVersion: 3,
+    kind: 'wharfie.service.status',
+    appId: input.appId,
+    unit: `wharfie-${input.appId}.service`,
+    desiredConvergence: makeDesiredConvergence(bytes),
+    ...overrides,
+  };
+}
+
 /** @param {number} [exitCode] @param {string|Buffer} [stdout] @param {string|Buffer} [stderr] @returns {Readonly<Record<string, any>>} */
 function exited(exitCode = 0, stdout = '', stderr = '') {
   return Object.freeze({
@@ -204,13 +235,7 @@ function makePorts(bytes, options = {}) {
   };
   const serviceOutcomes = [
     ...(options.serviceOutcomes ?? [
-      exited(
-        0,
-        `${JSON.stringify({
-          schemaVersion: 2,
-          kind: 'wharfie.service.status',
-        })}\n`,
-      ),
+      exited(0, `${JSON.stringify(makeServiceStatus(bytes))}\n`),
     ]),
   ];
   const defaultMetadataOutcome = exited(
@@ -363,10 +388,7 @@ describe('AWS single-node host runtime service command', () => {
 
     await expect(
       command.inspectExactService(makeInput(bytes)),
-    ).resolves.toEqual({
-      schemaVersion: 2,
-      kind: 'wharfie.service.status',
-    });
+    ).resolves.toEqual(makeServiceStatus(bytes));
     expect(originalRunProcess).toHaveBeenCalled();
     expect(originalOpenArtifact).toHaveBeenCalledTimes(2);
     expect(originalPlatform).toHaveBeenCalledTimes(1);
@@ -385,10 +407,7 @@ describe('AWS single-node host runtime service command', () => {
 
     const status = await command.inspectExactService(input);
 
-    expect(status).toEqual({
-      schemaVersion: 2,
-      kind: 'wharfie.service.status',
-    });
+    expect(status).toEqual(makeServiceStatus(bytes));
     expectDeepFrozen(status);
     const expectedOpen = [
       input.artifactPath,
@@ -430,8 +449,8 @@ describe('AWS single-node host runtime service command', () => {
     );
     expect(launcher).toBeDefined();
     const [, args, processOptions] = launcher;
-    const unitArgument = args.find(
-      (/** @type {string} */ argument) => argument.startsWith('--unit='),
+    const unitArgument = args.find((/** @type {string} */ argument) =>
+      argument.startsWith('--unit='),
     );
     expect(unitArgument).toMatch(
       new RegExp(
@@ -525,6 +544,187 @@ describe('AWS single-node host runtime service command', () => {
     ]);
   });
 
+  it.each([
+    ['authorized physical absence', 'authorized', 'physical-absence'],
+    ['authorized install', 'authorized', 'durable-install'],
+    ['authorized change', 'authorized', 'durable-change'],
+    ['authorized active state', 'authorized', 'durable-active'],
+    ['explicit conflict', 'conflict', null],
+    ['explicit uncertainty', 'unknown', null],
+  ])(
+    'accepts an exact status-V3 desired-convergence decision for %s',
+    async (_label, disposition, basis) => {
+      const bytes = Buffer.from(`status decision ${String(_label)}`);
+      const status = makeServiceStatus(bytes, {
+        desiredConvergence: makeDesiredConvergence(bytes, {
+          disposition,
+          basis,
+        }),
+      });
+      const fixture = makePorts(bytes, {
+        serviceOutcomes: [exited(0, `${JSON.stringify(status)}\n`)],
+      });
+
+      await expect(
+        createAwsSingleNodeHostRuntimeServiceCommandForTest(
+          fixture.ports,
+        ).inspectExactService(makeInput(bytes)),
+      ).resolves.toEqual(status);
+    },
+  );
+
+  it.each([
+    [
+      'status schema',
+      (/** @type {Record<string, any>} */ status) => {
+        status.schemaVersion = 2;
+      },
+    ],
+    [
+      'status kind',
+      (/** @type {Record<string, any>} */ status) => {
+        status.kind = 'wharfie.service.result';
+      },
+    ],
+    [
+      'status app',
+      (/** @type {Record<string, any>} */ status) => {
+        status.appId = 'different-app';
+      },
+    ],
+    [
+      'status unit',
+      (/** @type {Record<string, any>} */ status) => {
+        status.unit = 'wharfie-different-app.service';
+      },
+    ],
+    [
+      'missing proof',
+      (/** @type {Record<string, any>} */ status) => {
+        delete status.desiredConvergence;
+      },
+    ],
+    [
+      'proof schema',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.schemaVersion = 2;
+      },
+    ],
+    [
+      'proof kind',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.kind = 'wharfie.service.status';
+      },
+    ],
+    [
+      'proof app',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.appId = 'different-app';
+      },
+    ],
+    [
+      'proof unit',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.unit = 'wharfie-different-app.service';
+      },
+    ],
+    [
+      'proof extra field',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.argv = [];
+      },
+    ],
+    [
+      'proof missing field',
+      (/** @type {Record<string, any>} */ status) => {
+        delete status.desiredConvergence.disposition;
+      },
+    ],
+    [
+      'desired extra field',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.desired.path = '/forged';
+      },
+    ],
+    [
+      'desired missing field',
+      (/** @type {Record<string, any>} */ status) => {
+        delete status.desiredConvergence.desired.revisionId;
+      },
+    ],
+    [
+      'desired artifact identity',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.desired.artifactId = identity(
+          'waf1',
+          'different artifact',
+        );
+      },
+    ],
+    [
+      'desired revision identity',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.desired.revisionId = identity(
+          'wrv1',
+          'different revision',
+        );
+      },
+    ],
+    [
+      'malformed desired artifact identity',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.desired.artifactId = 'not-an-artifact';
+      },
+    ],
+    [
+      'unsupported disposition',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.disposition = 'ready';
+      },
+    ],
+    [
+      'authorized null basis',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.basis = null;
+      },
+    ],
+    [
+      'authorized unsupported basis',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.basis = 'manager-said-so';
+      },
+    ],
+    [
+      'conflict authorized basis',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.disposition = 'conflict';
+      },
+    ],
+    [
+      'unknown authorized basis',
+      (/** @type {Record<string, any>} */ status) => {
+        status.desiredConvergence.disposition = 'unknown';
+      },
+    ],
+  ])(
+    'rejects a status response with a mismatched %s decision',
+    async (_label, mutate) => {
+      const bytes = Buffer.from(`invalid status decision ${String(_label)}`);
+      const status = makeServiceStatus(bytes);
+      mutate(status);
+      const fixture = makePorts(bytes, {
+        serviceOutcomes: [exited(0, `${JSON.stringify(status)}\n`)],
+      });
+
+      await expect(
+        createAwsSingleNodeHostRuntimeServiceCommandForTest(
+          fixture.ports,
+        ).inspectExactService(makeInput(bytes)),
+      ).rejects.toBeInstanceOf(AwsSingleNodeHostRuntimeServiceResponseError);
+      expect(fixture.events).toContain('service-launcher');
+    },
+  );
+
   it('requires an exact embedded metadata pair and byte observation before either service action', async () => {
     const bytes = Buffer.from('metadata-bound artifact');
     const otherRevision = createEmbeddedRevision('other-app');
@@ -576,10 +776,7 @@ describe('AWS single-node host runtime service command', () => {
 
   it('uses non-reused invocation units while retaining fixed metadata and service namespaces', async () => {
     const bytes = Buffer.from('stable unit');
-    const status = {
-      schemaVersion: 2,
-      kind: 'wharfie.service.status',
-    };
+    const status = makeServiceStatus(bytes);
     const result = {
       schemaVersion: 1,
       kind: 'wharfie.service.result',

@@ -70,13 +70,18 @@ rejects root and custom `XDG_CONFIG_HOME` topology, never accepts unit or
 environment overrides, anchors packaged durable state to the operating-system
 account instead of ambient `XDG_DATA_HOME` or `HOME`, verifies the live
 manager's effective unit, and preserves state and immutable releases on
-uninstall. Status schema V2 exposes verified disk/manager wiring as `managed`,
-`absent`, `orphaned`, `conflicting`, or `unknown`; human orphan status directs
-the operator to `service uninstall`. There is no `service reconcile` verb:
-`uninstall` returns `orphan-reconciled` after removing exact residual wiring.
-A missing receipt, selector, or fixed unit is repaired only from the exact
-durable activation record. Physical wiring with no activation authority is
-degraded and never adopted by an execution-capable command.
+uninstall. Status schema V3 preserves the verified `managed`, `absent`,
+`orphaned`, `conflicting`, or `unknown` disk/manager wiring view and adds one
+required `desiredConvergence` V1 decision bound to the exact invoking SEA,
+application, and unit. Its disposition is `authorized`, `conflict`, or
+`unknown`; authorized decisions name exactly `physical-absence`,
+`durable-install`, `durable-change`, or `durable-active`, while conflict and
+unknown decisions carry a null basis. Human orphan status directs the operator
+to `service uninstall`. There is no `service reconcile` verb: `uninstall`
+returns `orphan-reconciled` after removing exact residual wiring. A missing
+receipt, selector, or fixed unit is repaired only from the exact durable
+activation record. Physical wiring with no activation authority is degraded
+and never adopted by an execution-capable command.
 
 Update and rollback use a single serialized local activation coordinator.
 `service converge` is the retry-safe desired-artifact entrypoint for host

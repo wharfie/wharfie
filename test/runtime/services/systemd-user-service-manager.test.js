@@ -70,7 +70,7 @@ async function createTestControlDBClient(adapterName, options) {
 }
 
 /**
- * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, useProductionControlDB?: boolean, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'null'|'stopped'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, useProductionControlDB?: boolean, fsOps?: typeof fsp, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -103,6 +103,7 @@ async function createHarness(options = {}) {
     enabled: false,
     linger: options.linger !== false,
     runtimeMode: options.runtimeMode || 'matching',
+    runtimeArtifactId: /** @type {string | null} */ (null),
     systemdMode: options.systemdMode || 'normal',
     failedArtifactId: /** @type {string | null} */ (null),
     cleanExitArtifactId: /** @type {string | null} */ (null),
@@ -312,8 +313,19 @@ async function createHarness(options = {}) {
   );
   const readRuntimeState = jest.fn(async () => {
     const selectedIdentity = await readSelectedIdentity();
+    if (state.runtimeMode === 'null') return null;
     if (state.runtimeMode === 'unavailable') {
       return { status: 'UNAVAILABLE', session: 'unknown' };
+    }
+    if (state.runtimeMode === 'stopped') {
+      return {
+        status: 'STOPPED',
+        artifactId: selectedIdentity.artifactId,
+        revisionId: selectedIdentity.revisionId,
+        generation: 1,
+        session: 'absent',
+        currentOwner: false,
+      };
     }
     if (state.runtimeMode === 'starting') {
       return {
@@ -341,9 +353,10 @@ async function createHarness(options = {}) {
     return {
       status: 'READY',
       artifactId:
-        state.runtimeMode === 'wrong-artifact'
+        state.runtimeArtifactId ||
+        (state.runtimeMode === 'wrong-artifact'
           ? `${selectedIdentity.artifactId.slice(0, -1)}${selectedIdentity.artifactId.endsWith('A') ? 'B' : 'A'}`
-          : selectedIdentity.artifactId,
+          : selectedIdentity.artifactId),
       revisionId:
         state.runtimeMode === 'wrong-revision'
           ? `wrv1_${Buffer.alloc(32, 5).toString('base64url')}`
@@ -397,6 +410,7 @@ async function createHarness(options = {}) {
       getEffectiveUid: () => options.uid ?? 1000,
       getFilesystemUid: () =>
         options.filesystemUid ?? process.getuid?.() ?? options.uid ?? 1000,
+      fsOps: options.fsOps || fsp,
       acquireOperationLock,
       ...(options.useProductionControlDB
         ? {}
@@ -471,6 +485,26 @@ async function readActivationRecord(harness) {
       db,
       tableName: harness.layout.executionLedgerTable,
     }).get({ appId: APP_ID });
+  } finally {
+    await db.close?.();
+  }
+}
+
+/** @param {Record<string, any>} harness - Harness. @returns {Promise<void>} - Moves an exact ACTIVATING target into source restoration. */
+async function beginActivationSourceRestore(harness) {
+  const db = await harness.controlDBClient('lmdb', {
+    path: harness.layout.controlPath,
+  });
+  try {
+    const activation = createLocalApplicationActivation({
+      db,
+      tableName: harness.layout.executionLedgerTable,
+    });
+    const current = await activation.get({ appId: APP_ID });
+    await activation.beginSourceRestore({
+      appId: APP_ID,
+      transitionId: current.transition.transitionId,
+    });
   } finally {
     await db.close?.();
   }
@@ -612,12 +646,46 @@ describe('systemd user service manager', () => {
 
   it('serializes status without materializing absent service state', async () => {
     const harness = await createHarness();
+    const desired = await inspectArtifactBytes(harness.artifactPath);
+    harness.calls.length = 0;
 
-    await expect(harness.operator.status()).resolves.toMatchObject({
+    const status = await harness.operator.status();
+    expect(status).toMatchObject({
+      schemaVersion: 3,
       health: 'absent',
       installation: { state: 'absent' },
       activation: null,
+      desiredConvergence: {
+        schemaVersion: 1,
+        kind: 'wharfie.service.desired-convergence',
+        appId: APP_ID,
+        unit: harness.layout.unitName,
+        desired: {
+          artifactId: desired.artifactId,
+          revisionId: REVISION_ID,
+        },
+        disposition: 'authorized',
+        basis: 'physical-absence',
+      },
     });
+    expect(Object.keys(status.desiredConvergence).sort()).toEqual(
+      [
+        'appId',
+        'basis',
+        'desired',
+        'disposition',
+        'kind',
+        'schemaVersion',
+        'unit',
+      ].sort(),
+    );
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' &&
+          ['daemon-reload', 'enable', 'start', 'stop'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
     expect(harness.acquireOperationLock).toHaveBeenCalledTimes(1);
     expect(harness.acquireOperationLock).toHaveBeenCalledWith({
       serviceRoot: harness.layout.serviceRoot,
@@ -629,6 +697,74 @@ describe('systemd user service manager', () => {
     });
     await expect(fsp.stat(harness.layout.controlPath)).rejects.toMatchObject({
       code: 'ENOENT',
+    });
+  });
+
+  it('does not hide a later symlinked state root behind an absent control root', async () => {
+    const harness = await createHarness();
+    for (const directory of [
+      harness.dataRoot,
+      path.dirname(harness.layout.serviceRoot),
+      harness.layout.serviceRoot,
+      harness.layout.stateRoot,
+    ]) {
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+      await fsp.chmod(directory, 0o700);
+    }
+    const redirect = path.join(harness.root, 'foreign-application-state');
+    await fsp.mkdir(redirect, { mode: 0o700 });
+    await fsp.symlink(redirect, harness.layout.applicationStatePath, 'dir');
+
+    await expect(fsp.stat(harness.layout.controlPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      installation: { state: 'absent' },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
+    });
+  });
+
+  it('retains a later transient state-root observation over an absent control root', async () => {
+    const transientFsOps = new Proxy(fsp, {
+      get(target, property, receiver) {
+        if (property !== 'lstat') {
+          return Reflect.get(target, property, receiver);
+        }
+        return async (/** @type {string} */ targetPath) => {
+          if (path.basename(String(targetPath)) === 'application-state') {
+            const error = new Error(
+              'application-state observation interrupted',
+            );
+            Object.assign(error, { code: 'EAGAIN' });
+            throw error;
+          }
+          return await target.lstat(targetPath);
+        };
+      },
+    });
+    const harness = await createHarness({ fsOps: transientFsOps });
+    for (const directory of [
+      harness.dataRoot,
+      path.dirname(harness.layout.serviceRoot),
+      harness.layout.serviceRoot,
+      harness.layout.stateRoot,
+    ]) {
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+      await fsp.chmod(directory, 0o700);
+    }
+
+    await expect(fsp.stat(harness.layout.controlPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      installation: { state: 'absent' },
+      desiredConvergence: {
+        disposition: 'unknown',
+        basis: null,
+      },
     });
   });
 
@@ -723,7 +859,7 @@ describe('systemd user service manager', () => {
     );
 
     await expect(harness.operator.status()).resolves.toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: 'wharfie.service.status',
       health: 'healthy',
       systemd: { activeState: 'active', unitFileState: 'enabled' },
@@ -737,6 +873,14 @@ describe('systemd user service manager', () => {
         status: 'READY',
         revisionId: REVISION_ID,
         session: 'active',
+      },
+      desiredConvergence: {
+        desired: {
+          artifactId: source.artifactId,
+          revisionId: REVISION_ID,
+        },
+        disposition: 'authorized',
+        basis: 'durable-active',
       },
     });
   });
@@ -992,6 +1136,17 @@ describe('systemd user service manager', () => {
     await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v3');
     const desired = await inspectArtifactBytes(harness.artifactPath);
 
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      activation: { phase: 'ACTIVATING', action: 'update' },
+      desiredConvergence: {
+        desired: {
+          artifactId: desired.artifactId,
+          revisionId: REVISION_ID,
+        },
+        disposition: 'unknown',
+        basis: null,
+      },
+    });
     await expect(harness.operator.converge()).resolves.toMatchObject({
       action: 'converge',
       requestStatus: 'fulfilled',
@@ -1045,6 +1200,10 @@ describe('systemd user service manager', () => {
     await expect(harness.operator.status()).resolves.toMatchObject({
       health: 'degraded',
       activation: { phase: 'QUIESCING', action: 'install' },
+      desiredConvergence: {
+        disposition: 'authorized',
+        basis: 'durable-install',
+      },
     });
     blocked = false;
   });
@@ -1288,6 +1447,10 @@ describe('systemd user service manager', () => {
     ).toEqual([]);
     await expect(harness.operator.status()).resolves.toMatchObject({
       activation: { phase: 'ACTIVATING', action: 'rollback' },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
     });
     await expect(harness.operator.recover()).resolves.toMatchObject({
       action: 'recover',
@@ -1395,11 +1558,93 @@ describe('systemd user service manager', () => {
     await expect(harness.operator.status()).resolves.toMatchObject({
       health: 'degraded',
       activation: { phase: 'ACTIVATING', action: 'update' },
+      desiredConvergence: {
+        desired: {
+          artifactId: target.artifactId,
+          revisionId: REVISION_ID,
+        },
+        disposition: 'authorized',
+        basis: 'durable-change',
+      },
     });
     await expect(harness.operator.recover()).resolves.toMatchObject({
       action: 'recover',
       requestStatus: 'fulfilled',
       activeArtifactId: target.artifactId,
+    });
+  });
+
+  it('authorizes exact-target convergence through durable source restoration', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.state.failStartResponseOnce = true;
+    await expect(harness.operator.update()).rejects.toMatchObject({
+      code: 'systemd-user-service-activation-recovery-required',
+    });
+    await beginActivationSourceRestore(harness);
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      activation: {
+        phase: 'QUIESCING',
+        action: 'update',
+        desired: {
+          artifactId: source.artifactId,
+          revisionId: REVISION_ID,
+        },
+        selected: {
+          artifactId: target.artifactId,
+          revisionId: REVISION_ID,
+        },
+      },
+      desiredConvergence: {
+        desired: {
+          artifactId: target.artifactId,
+          revisionId: REVISION_ID,
+        },
+        disposition: 'authorized',
+        basis: 'durable-change',
+      },
+    });
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
+  });
+
+  it('rejects a foreign uninstalled tombstone during source restoration', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    harness.state.failStartResponseOnce = true;
+    await expect(harness.operator.update()).rejects.toMatchObject({
+      code: 'systemd-user-service-activation-recovery-required',
+    });
+    await beginActivationSourceRestore(harness);
+    const tombstone = JSON.parse(
+      await fsp.readFile(harness.layout.installationPath, 'utf8'),
+    );
+    tombstone.state = 'uninstalled';
+    tombstone.current.revisionId = `wrv1_${Buffer.alloc(32, 6).toString('base64url')}`;
+    await fsp.writeFile(
+      harness.layout.installationPath,
+      `${JSON.stringify(tombstone, null, 2)}\n`,
+    );
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      activation: {
+        phase: 'QUIESCING',
+        action: 'update',
+      },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
     });
   });
 
@@ -1419,6 +1664,14 @@ describe('systemd user service manager', () => {
         phase: 'QUIESCENT',
         action: 'update',
       },
+      desiredConvergence: {
+        desired: {
+          artifactId: target.artifactId,
+          revisionId: REVISION_ID,
+        },
+        disposition: 'authorized',
+        basis: 'durable-change',
+      },
     });
     await expect(harness.operator.recover()).resolves.toMatchObject({
       action: 'recover',
@@ -1426,6 +1679,66 @@ describe('systemd user service manager', () => {
       outcome: 'target-active',
       health: 'healthy',
       activeArtifactId: target.artifactId,
+    });
+  });
+
+  it('rejects a foreign uninstalled tombstone during durable update', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    harness.state.failDaemonReloadOnce = true;
+    await expect(harness.operator.update()).rejects.toThrow(
+      /daemon reload interrupted/,
+    );
+    const tombstone = JSON.parse(
+      await fsp.readFile(harness.layout.installationPath, 'utf8'),
+    );
+    tombstone.state = 'uninstalled';
+    tombstone.current.revisionId = `wrv1_${Buffer.alloc(32, 7).toString('base64url')}`;
+    await fsp.writeFile(
+      harness.layout.installationPath,
+      `${JSON.stringify(tombstone, null, 2)}\n`,
+    );
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      activation: {
+        phase: 'QUIESCENT',
+        action: 'update',
+      },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
+    });
+  });
+
+  it('verifies authorized uninstalled tombstone metadata during durable update', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    harness.state.failDaemonReloadOnce = true;
+    await expect(harness.operator.update()).rejects.toThrow(
+      /daemon reload interrupted/,
+    );
+    const tombstone = JSON.parse(
+      await fsp.readFile(harness.layout.installationPath, 'utf8'),
+    );
+    tombstone.state = 'uninstalled';
+    tombstone.current.size += 1;
+    await fsp.writeFile(
+      harness.layout.installationPath,
+      `${JSON.stringify(tombstone, null, 2)}\n`,
+    );
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      activation: {
+        phase: 'QUIESCENT',
+        action: 'update',
+      },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
     });
   });
 
@@ -1450,6 +1763,10 @@ describe('systemd user service manager', () => {
       health: 'degraded',
       integrity: { status: 'verified' },
       activation: { phase: 'QUIESCING', action: 'update' },
+      desiredConvergence: {
+        disposition: 'authorized',
+        basis: 'durable-change',
+      },
     });
     harness.calls.length = 0;
     await expect(harness.operator.stop()).rejects.toMatchObject({
@@ -1499,6 +1816,10 @@ describe('systemd user service manager', () => {
       integrity: { status: 'invalid' },
       health: 'degraded',
       wiring: { state: 'managed' },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
     });
     await expect(harness.operator.install()).rejects.toThrow(
       /activation is missing while an installation receipt exists/,
@@ -1658,7 +1979,12 @@ describe('systemd user service manager', () => {
       health: 'degraded',
       installation: { state: 'absent' },
       systemd: { activeState: 'active', fragmentPath: harness.layout.unitPath },
-      runtime: null,
+      runtime: {
+        status: 'READY',
+        artifactId: installed.activeArtifactId,
+        session: 'active',
+        processId: 4321,
+      },
       wiring: {
         state: 'orphaned',
         unitFile: 'managed',
@@ -1698,7 +2024,7 @@ describe('systemd user service manager', () => {
     });
   });
 
-  it('does not reload a cached active orphan before directing uninstall', async () => {
+  it('repairs exact stale cached wiring for an ACTIVE selection', async () => {
     const harness = await createHarness({
       retainActiveWhenUnitMissingOnReload: true,
     });
@@ -1708,8 +2034,27 @@ describe('systemd user service manager', () => {
     harness.state.needDaemonReload = true;
     harness.calls.length = 0;
 
-    await expect(harness.operator.install()).rejects.toThrow(/stale wiring/);
-    expect(harness.calls).not.toEqual(
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      systemd: { needDaemonReload: true },
+      desiredConvergence: {
+        disposition: 'authorized',
+        basis: 'durable-active',
+      },
+    });
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' &&
+          ['daemon-reload', 'enable', 'start', 'stop'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
+    harness.calls.length = 0;
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      outcome: 'target-active',
+      health: 'healthy',
+    });
+    expect(harness.calls).toEqual(
       expect.arrayContaining([
         { command: 'systemctl', args: ['--user', 'daemon-reload'] },
       ]),
@@ -1829,6 +2174,12 @@ describe('systemd user service manager', () => {
     await fsp.chmod(installedPath, 0o700);
     await fsp.writeFile(installedPath, 'tampered');
 
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
+    });
     await expect(harness.operator.install()).rejects.toThrow(
       /bytes failed verification/,
     );
@@ -1848,6 +2199,12 @@ describe('systemd user service manager', () => {
     await fsp.writeFile(releasePath, `${JSON.stringify(release, null, 2)}\n`);
     await fsp.unlink(harness.layout.installationPath);
 
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
+    });
     await expect(harness.operator.install()).rejects.toThrow(
       /immutable release disagrees with its reference/,
     );
@@ -2201,6 +2558,23 @@ describe('systemd user service manager', () => {
     });
   });
 
+  it.each(['null', 'stopped'])(
+    'does not authorize a live MainPID with %s runtime ownership',
+    async (runtimeMode) => {
+      const harness = await createHarness();
+      await harness.operator.install();
+      harness.state.runtimeMode = runtimeMode;
+
+      await expect(harness.operator.status()).resolves.toMatchObject({
+        systemd: { activeState: 'active', mainPid: 4321 },
+        desiredConvergence: {
+          disposition: 'conflict',
+          basis: null,
+        },
+      });
+    },
+  );
+
   it('requires the durable resident to run the exact installed artifact', async () => {
     const harness = await createHarness();
     const installed = await harness.operator.install();
@@ -2219,6 +2593,32 @@ describe('systemd user service manager', () => {
     expect(status.runtime.artifactId).not.toBe(installed.activeArtifactId);
   });
 
+  it('rejects a live rollback release even though activation retains its authority', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.update();
+    harness.state.runtimeArtifactId = source.artifactId;
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      activation: {
+        selected: { artifactId: target.artifactId },
+        rollback: { artifactId: source.artifactId },
+      },
+      runtime: {
+        artifactId: source.artifactId,
+        session: 'active',
+        processId: 4321,
+      },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
+    });
+  });
+
   it('requires the live durable resident to be systemd MainPID', async () => {
     const harness = await createHarness();
     await harness.operator.install();
@@ -2228,6 +2628,24 @@ describe('systemd user service manager', () => {
       health: 'degraded',
       systemd: { activeState: 'active', mainPid: 4321 },
       runtime: { status: 'READY', session: 'active', processId: 9876 },
+      desiredConvergence: {
+        disposition: 'conflict',
+        basis: null,
+      },
+    });
+  });
+
+  it('reports unknown desired convergence when the manager cannot be observed', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    harness.state.failUnitShow = true;
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      systemd: { loadState: 'unavailable' },
+      desiredConvergence: {
+        disposition: 'unknown',
+        basis: null,
+      },
     });
   });
 
@@ -2704,6 +3122,52 @@ describe('systemd user service manager', () => {
     await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
     await expect(harness.operator.update()).resolves.toMatchObject({
       action: 'update',
+      requestStatus: 'fulfilled',
+      outcome: 'target-active',
+      health: 'healthy',
+      activeArtifactId: target.artifactId,
+      rollbackArtifactId: source.artifactId,
+    });
+  });
+
+  it('converges a new desired SEA through an authorized missing ACTIVE source projection', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    await fsp.unlink(harness.layout.installationPath);
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    harness.calls.length = 0;
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      installation: { state: 'absent' },
+      activation: {
+        phase: 'ACTIVE',
+        selected: {
+          artifactId: source.artifactId,
+          revisionId: REVISION_ID,
+        },
+      },
+      desiredConvergence: {
+        desired: {
+          artifactId: target.artifactId,
+          revisionId: REVISION_ID,
+        },
+        disposition: 'authorized',
+        basis: 'durable-active',
+      },
+    });
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' &&
+          ['daemon-reload', 'enable', 'start', 'stop'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
+
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      action: 'converge',
       requestStatus: 'fulfilled',
       outcome: 'target-active',
       health: 'healthy',

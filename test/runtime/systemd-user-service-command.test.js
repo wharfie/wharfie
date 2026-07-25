@@ -34,6 +34,9 @@ const OUTCOMES = Object.freeze({
   restart: 'restarted',
   uninstall: 'uninstalled',
 });
+const STATUS_ARTIFACT_ID = `waf1_${Buffer.alloc(32, 4).toString('base64url')}`;
+const STATUS_REVISION_ID = `wrv1_${Buffer.alloc(32, 5).toString('base64url')}`;
+const STATUS_UNIT = 'wharfie-service-demo.service';
 
 /** @type {Array<[ServiceResultAction, string, string, string]>} */
 const HUMAN_ACTIVATION_CASES = [
@@ -124,27 +127,58 @@ function withoutField(value, field) {
   return copy;
 }
 
+/**
+ * @param {Record<string, any>} [overrides] - Desired-convergence overrides.
+ * @returns {Record<string, any>} - Complete status-V3 convergence decision.
+ */
+function makeDesiredConvergence(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.desired-convergence',
+    appId: 'service-demo',
+    unit: STATUS_UNIT,
+    desired: {
+      artifactId: STATUS_ARTIFACT_ID,
+      revisionId: STATUS_REVISION_ID,
+    },
+    disposition: 'authorized',
+    basis: 'durable-active',
+    ...overrides,
+  };
+}
+
+/**
+ * @param {Record<string, any>} [overrides] - Status overrides.
+ * @returns {Record<string, any>} - Complete status-V3 receipt.
+ */
+function makeStatus(overrides = {}) {
+  return {
+    schemaVersion: 3,
+    kind: 'wharfie.service.status',
+    appId: 'service-demo',
+    unit: STATUS_UNIT,
+    health: 'healthy',
+    installation: { state: 'installed' },
+    systemd: { activeState: 'active' },
+    wiring: {
+      state: 'managed',
+      unitFile: 'managed',
+      selection: 'managed',
+      effectiveUnit: 'managed',
+      cleanupPending: false,
+    },
+    desiredConvergence: makeDesiredConvergence(),
+    ...overrides,
+  };
+}
+
 function makeOperator() {
   return Object.fromEntries(
     ACTIONS.map((action) => [
       action,
       jest.fn(async () => {
         if (action !== 'status') return makeResult(action);
-        return {
-          schemaVersion: 2,
-          kind: 'wharfie.service.status',
-          appId: 'service-demo',
-          health: 'healthy',
-          installation: { state: 'installed' },
-          systemd: { activeState: 'active' },
-          wiring: {
-            state: 'managed',
-            unitFile: 'managed',
-            selection: 'managed',
-            effectiveUnit: 'managed',
-            cleanupPending: false,
-          },
-        };
+        return makeStatus();
       }),
     ]),
   );
@@ -207,9 +241,11 @@ describe('packaged systemd user service command', () => {
         expect.objectContaining(
           action === 'status'
             ? {
+                schemaVersion: 3,
                 kind: 'wharfie.service.status',
                 appId: 'service-demo',
                 health: 'healthy',
+                desiredConvergence: makeDesiredConvergence(),
               }
             : { action, appId: 'service-demo' },
         ),
@@ -239,21 +275,24 @@ describe('packaged systemd user service command', () => {
 
   it('makes orphan cleanup actionable in human status output', async () => {
     const operator = makeOperator();
-    operator.status.mockResolvedValue({
-      schemaVersion: 2,
-      kind: 'wharfie.service.status',
-      appId: 'service-demo',
-      health: 'degraded',
-      installation: { state: 'absent' },
-      systemd: { activeState: 'active' },
-      wiring: {
-        state: 'orphaned',
-        unitFile: 'managed',
-        selection: 'absent',
-        effectiveUnit: 'managed',
-        cleanupPending: false,
-      },
-    });
+    operator.status.mockResolvedValue(
+      makeStatus({
+        health: 'degraded',
+        installation: { state: 'absent' },
+        systemd: { activeState: 'active' },
+        wiring: {
+          state: 'orphaned',
+          unitFile: 'managed',
+          selection: 'absent',
+          effectiveUnit: 'managed',
+          cleanupPending: false,
+        },
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'unknown',
+          basis: null,
+        }),
+      }),
+    );
     const line = jest.fn();
     const command = createSystemdUserServiceCommand({
       loadOperator: async () => operator,
@@ -270,20 +309,22 @@ describe('packaged systemd user service command', () => {
 
   it('makes an in-flight activation actionable in human status output', async () => {
     const operator = makeOperator();
-    operator.status.mockResolvedValue({
-      schemaVersion: 2,
-      kind: 'wharfie.service.status',
-      appId: 'service-demo',
-      health: 'degraded',
-      activation: { phase: 'QUIESCING', action: 'update' },
-      wiring: {
-        state: 'managed',
-        unitFile: 'managed',
-        selection: 'managed',
-        effectiveUnit: 'managed',
-        cleanupPending: false,
-      },
-    });
+    operator.status.mockResolvedValue(
+      makeStatus({
+        health: 'degraded',
+        activation: { phase: 'QUIESCING', action: 'update' },
+        wiring: {
+          state: 'managed',
+          unitFile: 'managed',
+          selection: 'managed',
+          effectiveUnit: 'managed',
+          cleanupPending: false,
+        },
+        desiredConvergence: makeDesiredConvergence({
+          basis: 'durable-change',
+        }),
+      }),
+    );
     const line = jest.fn();
     const command = createSystemdUserServiceCommand({
       loadOperator: async () => operator,
@@ -300,20 +341,23 @@ describe('packaged systemd user service command', () => {
 
   it('prioritizes activation recovery over orphan cleanup guidance', async () => {
     const operator = makeOperator();
-    operator.status.mockResolvedValue({
-      schemaVersion: 2,
-      kind: 'wharfie.service.status',
-      appId: 'service-demo',
-      health: 'degraded',
-      activation: { phase: 'SELECTED', action: 'update' },
-      wiring: {
-        state: 'orphaned',
-        unitFile: 'managed',
-        selection: 'absent',
-        effectiveUnit: 'managed',
-        cleanupPending: false,
-      },
-    });
+    operator.status.mockResolvedValue(
+      makeStatus({
+        health: 'degraded',
+        activation: { phase: 'SELECTED', action: 'update' },
+        wiring: {
+          state: 'orphaned',
+          unitFile: 'managed',
+          selection: 'absent',
+          effectiveUnit: 'managed',
+          cleanupPending: false,
+        },
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'unknown',
+          basis: null,
+        }),
+      }),
+    );
     const line = jest.fn();
     const command = createSystemdUserServiceCommand({
       loadOperator: async () => operator,
@@ -326,6 +370,196 @@ describe('packaged systemd user service command', () => {
     expect(line).toHaveBeenCalledWith(
       'status: degraded; wiring: orphaned; activation: SELECTED; run service recover (service-demo)',
     );
+  });
+
+  it.each([
+    ['authorized', 'physical-absence'],
+    ['authorized', 'durable-install'],
+    ['authorized', 'durable-change'],
+    ['authorized', 'durable-active'],
+    ['conflict', null],
+    ['unknown', null],
+  ])(
+    'accepts status V3 desired convergence %s with %s basis',
+    async (disposition, basis) => {
+      const status = makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition,
+          basis,
+        }),
+      });
+      const json = jest.fn();
+      const failure = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => ({
+          ...makeOperator(),
+          status: async () => status,
+        }),
+        output: { json, failure },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', 'status', '--json']);
+
+      expect(json).toHaveBeenCalledWith(status);
+      expect(failure).not.toHaveBeenCalled();
+      expect(processRef.exitCode).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ['legacy status version', makeStatus({ schemaVersion: 2 })],
+    ['missing proof', withoutField(makeStatus(), 'desiredConvergence')],
+    ['null proof', makeStatus({ desiredConvergence: null })],
+    [
+      'proof with an extra key',
+      makeStatus({
+        desiredConvergence: {
+          ...makeDesiredConvergence(),
+          command: 'forged',
+        },
+      }),
+    ],
+    [
+      'proof without a basis',
+      makeStatus({
+        desiredConvergence: withoutField(makeDesiredConvergence(), 'basis'),
+      }),
+    ],
+    [
+      'unsupported proof version',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ schemaVersion: 2 }),
+      }),
+    ],
+    [
+      'unsupported proof kind',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          kind: 'wharfie.service.other',
+        }),
+      }),
+    ],
+    [
+      'proof app mismatch',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ appId: 'other-app' }),
+      }),
+    ],
+    [
+      'proof unit mismatch',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          unit: 'wharfie-other-app.service',
+        }),
+      }),
+    ],
+    ['missing outer unit', withoutField(makeStatus(), 'unit')],
+    [
+      'desired release with an extra key',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: {
+            artifactId: STATUS_ARTIFACT_ID,
+            revisionId: STATUS_REVISION_ID,
+            extra: true,
+          },
+        }),
+      }),
+    ],
+    [
+      'desired release without a revision',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: { artifactId: STATUS_ARTIFACT_ID },
+        }),
+      }),
+    ],
+    [
+      'noncanonical desired artifact',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: {
+            artifactId: 'waf1_not-canonical',
+            revisionId: STATUS_REVISION_ID,
+          },
+        }),
+      }),
+    ],
+    [
+      'noncanonical desired revision',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: {
+            artifactId: STATUS_ARTIFACT_ID,
+            revisionId: 'wrv1_not-canonical',
+          },
+        }),
+      }),
+    ],
+    [
+      'unsupported disposition',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'ready',
+        }),
+      }),
+    ],
+    [
+      'authorized null basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ basis: null }),
+      }),
+    ],
+    [
+      'authorized unsupported basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ basis: 'durable-other' }),
+      }),
+    ],
+    [
+      'conflict with an authorized basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'conflict',
+          basis: 'durable-active',
+        }),
+      }),
+    ],
+    [
+      'unknown with an authorized basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'unknown',
+          basis: 'physical-absence',
+        }),
+      }),
+    ],
+  ])('rejects status V3 with %s', async (_label, status) => {
+    const json = jest.fn();
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        status: async () => status,
+      }),
+      output: { json, failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'status', '--json']);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schemaVersion: 1,
+        kind: 'wharfie.service.error',
+        action: 'status',
+      }),
+    );
+    expect(failure).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
   });
 
   it.each(HUMAN_ACTIVATION_CASES)(
@@ -495,22 +729,6 @@ describe('packaged systemd user service command', () => {
 
   it.each([
     ['status', { schemaVersion: 1, kind: 'wharfie.service.result' }],
-    [
-      'status',
-      {
-        schemaVersion: 1,
-        kind: 'wharfie.service.status',
-        appId: 'service-demo',
-        health: 'healthy',
-        wiring: {
-          state: 'managed',
-          unitFile: 'managed',
-          selection: 'managed',
-          effectiveUnit: 'managed',
-          cleanupPending: false,
-        },
-      },
-    ],
     ['start', makeResult('stop')],
     ['update', withoutField(makeResult('update'), 'requestStatus')],
     ['update', makeResult('update', { requestStatus: 'waiting' })],

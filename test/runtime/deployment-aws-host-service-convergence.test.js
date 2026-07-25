@@ -181,12 +181,35 @@ function wiring() {
 
 /**
  * @param {Readonly<AnyRecord>} exactRequest
+ * @param {'physical-absence'|'durable-install'|'durable-change'|'durable-active'} basis
+ * @param {AnyRecord} [overrides]
+ * @returns {AnyRecord}
+ */
+function desiredConvergence(
+  exactRequest,
+  basis = 'durable-active',
+  overrides = {},
+) {
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.desired-convergence',
+    appId: exactRequest.appId,
+    unit: `wharfie-${exactRequest.appId}.service`,
+    desired: release(exactRequest),
+    disposition: 'authorized',
+    basis,
+    ...overrides,
+  };
+}
+
+/**
+ * @param {Readonly<AnyRecord>} exactRequest
  * @param {{artifactId: string, revisionId: string}} [current]
  * @returns {AnyRecord}
  */
 function healthyStatus(exactRequest, current = release(exactRequest)) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'wharfie.service.status',
     appId: exactRequest.appId,
     unit: `wharfie-${exactRequest.appId}.service`,
@@ -229,13 +252,14 @@ function healthyStatus(exactRequest, current = release(exactRequest)) {
       rollback: null,
       lastOutcome: 'target-active',
     },
+    desiredConvergence: desiredConvergence(exactRequest),
   };
 }
 
 /** @param {Readonly<AnyRecord>} exactRequest @returns {AnyRecord} */
 function absentStatus(exactRequest) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'wharfie.service.status',
     appId: exactRequest.appId,
     unit: `wharfie-${exactRequest.appId}.service`,
@@ -262,6 +286,7 @@ function absentStatus(exactRequest) {
     },
     health: 'absent',
     activation: null,
+    desiredConvergence: desiredConvergence(exactRequest, 'physical-absence'),
   };
 }
 
@@ -385,9 +410,41 @@ describe('AWS single-node host service convergence', () => {
       rollback: null,
       lastOutcome: null,
     };
+    interruptedFirstInstallStatus.desiredConvergence = desiredConvergence(
+      request,
+      'durable-install',
+    );
     const interruptedFirstInstall = makeAdapter(interruptedFirstInstallStatus);
     await expect(
       interruptedFirstInstall.adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'ready' });
+
+    const legacyFirstInstallTombstoneStatus = absentStatus(request);
+    const legacyRelease = otherRelease();
+    legacyFirstInstallTombstoneStatus.installation = {
+      state: 'uninstalled',
+      lastArtifactId: legacyRelease.artifactId,
+      lastRevisionId: legacyRelease.revisionId,
+    };
+    legacyFirstInstallTombstoneStatus.health = 'degraded';
+    legacyFirstInstallTombstoneStatus.integrity = { status: 'invalid' };
+    legacyFirstInstallTombstoneStatus.activation = {
+      phase: 'QUIESCENT',
+      action: 'install',
+      desired: release(request),
+      selected: null,
+      rollback: null,
+      lastOutcome: null,
+    };
+    legacyFirstInstallTombstoneStatus.desiredConvergence = desiredConvergence(
+      request,
+      'durable-install',
+    );
+    const legacyFirstInstallTombstone = makeAdapter(
+      legacyFirstInstallTombstoneStatus,
+    );
+    await expect(
+      legacyFirstInstallTombstone.adapter.observe(makeContext(request, 0)),
     ).resolves.toEqual({ status: 'ready' });
 
     const other = otherRelease();
@@ -406,9 +463,82 @@ describe('AWS single-node host service convergence', () => {
       rollback: other,
       lastOutcome: null,
     };
+    progressingStatus.desiredConvergence = desiredConvergence(
+      request,
+      'durable-change',
+    );
     const progressing = makeAdapter(progressingStatus);
     await expect(
       progressing.adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'ready' });
+
+    const selectedTargetStatus = healthyStatus(request);
+    const retainedSource = otherRelease();
+    selectedTargetStatus.health = 'degraded';
+    selectedTargetStatus.installation.previousArtifactId =
+      retainedSource.artifactId;
+    selectedTargetStatus.installation.previousRevisionId =
+      retainedSource.revisionId;
+    selectedTargetStatus.systemd = systemd(request, {
+      activeState: 'inactive',
+      subState: 'dead',
+      mainPid: 0,
+    });
+    selectedTargetStatus.runtime = {
+      status: 'STOPPED',
+      artifactId: retainedSource.artifactId,
+      revisionId: retainedSource.revisionId,
+      generation: 4,
+      session: 'absent',
+      currentOwner: false,
+    };
+    selectedTargetStatus.activation = {
+      phase: 'SELECTED',
+      action: 'update',
+      desired: release(request),
+      selected: release(request),
+      rollback: null,
+      lastOutcome: null,
+    };
+    selectedTargetStatus.desiredConvergence = desiredConvergence(
+      request,
+      'durable-change',
+    );
+    const selectedTarget = makeAdapter(selectedTargetStatus);
+    await expect(
+      selectedTarget.adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'ready' });
+
+    const restoredSourceStatus = healthyStatus(request, retainedSource);
+    restoredSourceStatus.health = 'degraded';
+    restoredSourceStatus.systemd = systemd(request, {
+      activeState: 'inactive',
+      subState: 'dead',
+      mainPid: 0,
+    });
+    restoredSourceStatus.runtime = {
+      status: 'STOPPED',
+      artifactId: retainedSource.artifactId,
+      revisionId: retainedSource.revisionId,
+      generation: 5,
+      session: 'absent',
+      currentOwner: false,
+    };
+    restoredSourceStatus.activation = {
+      phase: 'SELECTED',
+      action: 'update',
+      desired: retainedSource,
+      selected: retainedSource,
+      rollback: null,
+      lastOutcome: null,
+    };
+    restoredSourceStatus.desiredConvergence = desiredConvergence(
+      request,
+      'durable-change',
+    );
+    const restoredSource = makeAdapter(restoredSourceStatus);
+    await expect(
+      restoredSource.adapter.observe(makeContext(request, 0)),
     ).resolves.toEqual({ status: 'ready' });
 
     const failedStatus = healthyStatus(request);
@@ -447,6 +577,36 @@ describe('AWS single-node host service convergence', () => {
     await expect(
       staleCache.adapter.observe(makeContext(request, 0)),
     ).resolves.toEqual({ status: 'ready' });
+
+    const missingUnitStatus = healthyStatus(request);
+    missingUnitStatus.health = 'degraded';
+    missingUnitStatus.integrity = { status: 'invalid' };
+    missingUnitStatus.wiring = {
+      ...wiring(),
+      state: 'orphaned',
+      unitFile: 'absent',
+      effectiveUnit: 'absent',
+    };
+    missingUnitStatus.systemd = systemd(request, {
+      loadState: 'not-found',
+      unitFileState: '',
+      activeState: 'inactive',
+      subState: 'dead',
+      mainPid: 0,
+      fragmentPath: '',
+    });
+    missingUnitStatus.runtime = {
+      status: 'STOPPED',
+      artifactId: request.artifactId,
+      revisionId: request.revisionId,
+      generation: 4,
+      session: 'absent',
+      currentOwner: false,
+    };
+    const missingUnit = makeAdapter(missingUnitStatus);
+    await expect(
+      missingUnit.adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'ready' });
   });
 
   it.each([
@@ -462,6 +622,19 @@ describe('AWS single-node host service convergence', () => {
           ...wiring(),
           state: 'conflicting',
           unitFile: 'conflicting',
+        },
+      }),
+    ],
+    [
+      'ambiguous managed selector',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        integrity: { status: 'invalid' },
+        wiring: {
+          ...wiring(),
+          state: 'conflicting',
+          selection: 'conflicting',
         },
       }),
     ],
@@ -508,6 +681,49 @@ describe('AWS single-node host service convergence', () => {
       }),
     ],
     [
+      'live manager process without runtime state',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        runtime: null,
+      }),
+    ],
+    [
+      'active manager state without a PID or runtime',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        systemd: systemd(request, { mainPid: 0 }),
+        runtime: null,
+      }),
+    ],
+    [
+      'live manager process with a stopped runtime',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        runtime: {
+          status: 'STOPPED',
+          artifactId: request.artifactId,
+          revisionId: request.revisionId,
+          generation: 4,
+          session: 'absent',
+          currentOwner: false,
+        },
+      }),
+    ],
+    [
+      'live manager process with a stopping lifecycle',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        runtime: {
+          ...healthyStatus(request).runtime,
+          status: 'STOPPING',
+        },
+      }),
+    ],
+    [
       'active runtime without a process identity',
       () => {
         const status = healthyStatus(request);
@@ -547,6 +763,22 @@ describe('AWS single-node host service convergence', () => {
           mainPid: 0,
         },
       }),
+    ],
+    [
+      'live rollback-candidate runtime',
+      () => {
+        const rollback = otherRelease();
+        const status = healthyStatus(request);
+        status.installation.previousArtifactId = rollback.artifactId;
+        status.installation.previousRevisionId = rollback.revisionId;
+        status.activation.rollback = rollback;
+        status.runtime = {
+          ...status.runtime,
+          artifactId: rollback.artifactId,
+          revisionId: rollback.revisionId,
+        };
+        return status;
+      },
     ],
     [
       'manual runtime owner',
@@ -601,6 +833,87 @@ describe('AWS single-node host service convergence', () => {
       }),
     ],
     [
+      'inverted active receipt projection',
+      () => {
+        const current = release(request);
+        const previous = otherRelease();
+        const status = healthyStatus(request);
+        status.installation = {
+          state: 'installed',
+          activeArtifactId: previous.artifactId,
+          activeRevisionId: previous.revisionId,
+          previousArtifactId: current.artifactId,
+          previousRevisionId: current.revisionId,
+        };
+        status.activation = {
+          ...status.activation,
+          rollback: previous,
+        };
+        status.integrity = {
+          status: 'verified',
+          artifactId: previous.artifactId,
+          revisionId: previous.revisionId,
+        };
+        return status;
+      },
+    ],
+    [
+      'foreign ACTIVE uninstall tombstone',
+      () => ({
+        ...absentStatus(request),
+        installation: {
+          state: 'uninstalled',
+          lastArtifactId: otherRelease().artifactId,
+          lastRevisionId: otherRelease().revisionId,
+        },
+        activation: healthyStatus(request).activation,
+        desiredConvergence: desiredConvergence(request, 'durable-active'),
+      }),
+    ],
+    [
+      'foreign durable-change uninstall tombstone',
+      () => {
+        const source = otherRelease();
+        const status = absentStatus(request);
+        status.installation = {
+          state: 'uninstalled',
+          lastArtifactId: createSha256Id({
+            prefix: 'waf1',
+            payload: 'foreign uninstall tombstone artifact bytes',
+          }),
+          lastRevisionId: semanticId(
+            'wrv1',
+            'wharfie:test:foreign-uninstall-tombstone-revision:v1',
+            { revision: 3 },
+          ),
+        };
+        status.activation = {
+          phase: 'SELECTED',
+          action: 'update',
+          desired: release(request),
+          selected: release(request),
+          rollback: source,
+          lastOutcome: null,
+        };
+        status.desiredConvergence = desiredConvergence(
+          request,
+          'durable-change',
+        );
+        return status;
+      },
+    ],
+    [
+      'verified integrity for another release',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        integrity: {
+          status: 'verified',
+          ...otherRelease(),
+        },
+      }),
+    ],
+    [
       'foreign effective unit',
       () => ({
         ...healthyStatus(request),
@@ -608,6 +921,25 @@ describe('AWS single-node host service convergence', () => {
           ...systemd(request),
           fragmentPath: '/etc/systemd/user/foreign.service',
         },
+      }),
+    ],
+    [
+      'loaded unit without an effective fragment',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        systemd: systemd(request, { fragmentPath: '' }),
+      }),
+    ],
+    [
+      'live process behind a not-found unit',
+      () => ({
+        ...healthyStatus(request),
+        health: 'degraded',
+        systemd: systemd(request, {
+          loadState: 'not-found',
+          fragmentPath: '',
+        }),
       }),
     ],
     [
@@ -648,13 +980,134 @@ describe('AWS single-node host service convergence', () => {
     },
   );
 
+  it('maps the V3 decision directly and rejects internally inconsistent authorization', async () => {
+    const conflictStatus = healthyStatus(request);
+    conflictStatus.desiredConvergence = desiredConvergence(request, undefined, {
+      disposition: 'conflict',
+      basis: null,
+    });
+    await expect(
+      makeAdapter(conflictStatus).adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'conflict' });
+
+    const unknownStatus = healthyStatus(request);
+    unknownStatus.desiredConvergence = desiredConvergence(request, undefined, {
+      disposition: 'unknown',
+      basis: null,
+    });
+    await expect(
+      makeAdapter(unknownStatus).adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'unknown' });
+
+    const wrongBasis = healthyStatus(request);
+    wrongBasis.desiredConvergence = desiredConvergence(
+      request,
+      'durable-change',
+    );
+    await expect(
+      makeAdapter(wrongBasis).adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'unknown' });
+
+    const falseAbsence = healthyStatus(request);
+    falseAbsence.desiredConvergence = desiredConvergence(
+      request,
+      'physical-absence',
+    );
+    await expect(
+      makeAdapter(falseAbsence).adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'conflict' });
+
+    const falseAbsenceHealth = absentStatus(request);
+    falseAbsenceHealth.health = 'healthy';
+    await expect(
+      makeAdapter(falseAbsenceHealth).adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'unknown' });
+
+    const wrongDesired = healthyStatus(request);
+    wrongDesired.desiredConvergence = {
+      ...desiredConvergence(request),
+      desired: otherRelease(),
+    };
+    await expect(
+      makeAdapter(wrongDesired).adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'unknown' });
+
+    const extraProofField = healthyStatus(request);
+    extraProofField.desiredConvergence = {
+      ...desiredConvergence(request),
+      command: 'forged',
+    };
+    await expect(
+      makeAdapter(extraProofField).adapter.observe(makeContext(request, 0)),
+    ).resolves.toEqual({ status: 'unknown' });
+
+    const unavailableVerifiedRuntime = healthyStatus(request);
+    unavailableVerifiedRuntime.health = 'degraded';
+    unavailableVerifiedRuntime.runtime = {
+      status: 'UNAVAILABLE',
+      session: 'unknown',
+    };
+    await expect(
+      makeAdapter(unavailableVerifiedRuntime).adapter.observe(
+        makeContext(request, 0),
+      ),
+    ).resolves.toEqual({ status: 'unknown' });
+
+    const unavailableInvalidRuntime = healthyStatus(request);
+    unavailableInvalidRuntime.health = 'degraded';
+    unavailableInvalidRuntime.integrity = { status: 'invalid' };
+    unavailableInvalidRuntime.runtime = {
+      status: 'UNAVAILABLE',
+      session: 'unknown',
+    };
+    await expect(
+      makeAdapter(unavailableInvalidRuntime).adapter.observe(
+        makeContext(request, 0),
+      ),
+    ).resolves.toEqual({ status: 'unknown' });
+  });
+
   it.each([
     ['null', () => null],
     [
-      'unsupported schema',
-      () => ({ ...healthyStatus(request), schemaVersion: 1 }),
+      'legacy V2 schema',
+      () => ({ ...healthyStatus(request), schemaVersion: 2 }),
     ],
     ['extra field', () => ({ ...healthyStatus(request), argv: [] })],
+    [
+      'unsupported health',
+      () => ({ ...healthyStatus(request), health: 'forged' }),
+    ],
+    [
+      'unsupported systemd load state',
+      () => ({
+        ...healthyStatus(request),
+        systemd: systemd(request, { loadState: 'masked' }),
+      }),
+    ],
+    [
+      'malformed optional integrity',
+      () => ({
+        ...healthyStatus(request),
+        integrity: { status: 'invalid', artifactId: request.artifactId },
+      }),
+    ],
+    [
+      'installed status without integrity',
+      () => {
+        const status = healthyStatus(request);
+        delete status.integrity;
+        return status;
+      },
+    ],
+    [
+      'installed status without persistence',
+      () => {
+        const status = healthyStatus(request);
+        delete status.persistence;
+        return status;
+      },
+    ],
     [
       'unavailable manager',
       () => ({
@@ -671,19 +1124,6 @@ describe('AWS single-node host service convergence', () => {
           mainPid: 0,
           fragmentPath: '',
           needDaemonReload: null,
-        },
-      }),
-    ],
-    [
-      'ambiguous selector crash residue',
-      () => ({
-        ...healthyStatus(request),
-        health: 'degraded',
-        integrity: { status: 'invalid' },
-        wiring: {
-          ...wiring(),
-          state: 'conflicting',
-          selection: 'conflicting',
         },
       }),
     ],
@@ -709,26 +1149,55 @@ describe('AWS single-node host service convergence', () => {
       }),
     ],
     [
-      'stale manager cache during an ambiguous transition',
-      () => ({
-        ...healthyStatus(request),
-        health: 'degraded',
-        integrity: { status: 'invalid' },
-        wiring: {
-          ...wiring(),
-          state: 'conflicting',
-          effectiveUnit: 'conflicting',
-        },
-        systemd: systemd(request, { needDaemonReload: true }),
-        activation: {
-          phase: 'QUIESCING',
-          action: 'update',
+      'install transition with a foreign selected reference',
+      () => {
+        const status = absentStatus(request);
+        status.health = 'degraded';
+        status.integrity = { status: 'invalid' };
+        status.activation = {
+          phase: 'QUIESCENT',
+          action: 'install',
           desired: release(request),
           selected: otherRelease(),
           rollback: null,
           lastOutcome: null,
-        },
-      }),
+        };
+        status.desiredConvergence = desiredConvergence(
+          request,
+          'durable-install',
+        );
+        return status;
+      },
+    ],
+    [
+      'stale manager cache during an ambiguous transition',
+      () => {
+        /** @type {AnyRecord} */
+        const status = {
+          ...healthyStatus(request),
+          health: 'degraded',
+          integrity: { status: 'invalid' },
+          wiring: {
+            ...wiring(),
+            state: 'conflicting',
+            effectiveUnit: 'conflicting',
+          },
+          systemd: systemd(request, { needDaemonReload: true }),
+          activation: {
+            phase: 'QUIESCING',
+            action: 'update',
+            desired: release(request),
+            selected: otherRelease(),
+            rollback: null,
+            lastOutcome: null,
+          },
+        };
+        status.desiredConvergence = desiredConvergence(request, undefined, {
+          disposition: 'unknown',
+          basis: null,
+        });
+        return status;
+      },
     ],
     [
       'absent runtime session with a live process',

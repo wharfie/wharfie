@@ -1,5 +1,8 @@
 import { Command } from 'commander';
 
+import { assertApplicationRevisionId } from '../application-revision.js';
+import { assertArtifactId } from '../artifact-record.js';
+
 const SERVICE_ACTIONS = Object.freeze([
   Object.freeze({
     name: 'install',
@@ -99,6 +102,27 @@ const SERVICE_HEALTH_STATES = new Set([
 const SERVICE_RELEASE_REFERENCE_PAIRS = Object.freeze([
   Object.freeze(['activeArtifactId', 'activeRevisionId']),
   Object.freeze(['rollbackArtifactId', 'rollbackRevisionId']),
+]);
+const DESIRED_CONVERGENCE_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'appId',
+  'unit',
+  'desired',
+  'disposition',
+  'basis',
+]);
+const DESIRED_RELEASE_KEYS = new Set(['artifactId', 'revisionId']);
+const DESIRED_CONVERGENCE_DISPOSITIONS = new Set([
+  'authorized',
+  'conflict',
+  'unknown',
+]);
+const AUTHORIZED_DESIRED_CONVERGENCE_BASES = new Set([
+  'physical-absence',
+  'durable-install',
+  'durable-change',
+  'durable-active',
 ]);
 
 /**
@@ -212,6 +236,59 @@ function hasValidResultSettlement(result, action) {
 }
 
 /**
+ * @param {unknown} value - Candidate JSON object.
+ * @param {Set<string>} keys - Required exact keys.
+ * @returns {value is Record<string, any>} - Whether the object has exactly the required keys.
+ */
+function hasExactObjectKeys(value, keys) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const actual = Object.keys(value);
+  return actual.length === keys.size && actual.every((key) => keys.has(key));
+}
+
+/**
+ * Validate the status-V3 read-only convergence decision without interpreting
+ * the manager's underlying host evidence. This boundary requires one exact
+ * proof shape and keeps its application/unit identity joined to the enclosing
+ * status before either JSON or human output is emitted.
+ * @param {Record<string, any>} status - Candidate service status.
+ * @returns {boolean} - Whether the desired-convergence proof is exact.
+ */
+function hasValidDesiredConvergence(status) {
+  const proof = status.desiredConvergence;
+  if (!hasExactObjectKeys(proof, DESIRED_CONVERGENCE_KEYS)) return false;
+  if (!hasExactObjectKeys(proof.desired, DESIRED_RELEASE_KEYS)) return false;
+  if (
+    proof.schemaVersion !== 1 ||
+    proof.kind !== 'wharfie.service.desired-convergence' ||
+    typeof status.unit !== 'string' ||
+    status.unit.length === 0 ||
+    proof.appId !== status.appId ||
+    proof.unit !== status.unit ||
+    !DESIRED_CONVERGENCE_DISPOSITIONS.has(proof.disposition)
+  ) {
+    return false;
+  }
+  try {
+    assertArtifactId(
+      proof.desired.artifactId,
+      'systemd user service desiredConvergence.desired.artifactId',
+    );
+    assertApplicationRevisionId(
+      proof.desired.revisionId,
+      'systemd user service desiredConvergence.desired.revisionId',
+    );
+  } catch {
+    return false;
+  }
+  return proof.disposition === 'authorized'
+    ? AUTHORIZED_DESIRED_CONVERGENCE_BASES.has(proof.basis)
+    : proof.basis === null;
+}
+
+/**
  * Refuse malformed or non-serializable implementation results at the command
  * boundary. The manager owns the receipt schema; this adapter guarantees only
  * that both output modes emit one JSON object rather than host objects such as
@@ -251,7 +328,7 @@ function normalizeResult(value, action) {
   }
   const expectedKind =
     action === 'status' ? 'wharfie.service.status' : 'wharfie.service.result';
-  const expectedSchemaVersion = action === 'status' ? 2 : 1;
+  const expectedSchemaVersion = action === 'status' ? 3 : 1;
   const validWiring =
     action !== 'status' ||
     (normalized.wiring &&
@@ -284,7 +361,9 @@ function normalizeResult(value, action) {
     normalized.appId.length === 0 ||
     !validWiring ||
     (action === 'status'
-      ? typeof normalized.health !== 'string' || normalized.health.length === 0
+      ? typeof normalized.health !== 'string' ||
+        normalized.health.length === 0 ||
+        !hasValidDesiredConvergence(normalized)
       : !validResult)
   ) {
     throw new TypeError(

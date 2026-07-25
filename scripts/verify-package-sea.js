@@ -9215,7 +9215,41 @@ export default defineApp({
   const serviceStatusReceipt = JSON.parse(serviceStatus.stdout);
   if (serviceStatusReceipt.kind === 'wharfie.service.status') {
     assert.equal(serviceStatus.status, 0);
+    assert.equal(serviceStatusReceipt.schemaVersion, 3);
+    assert.equal(serviceStatusReceipt.appId, 'portable-app');
+    assert.equal(serviceStatusReceipt.unit, 'wharfie-portable-app.service');
     assert.equal(serviceStatusReceipt.installation?.state, 'absent');
+    const desiredConvergence = serviceStatusReceipt.desiredConvergence;
+    assert.deepEqual(Object.keys(desiredConvergence).sort(), [
+      'appId',
+      'basis',
+      'desired',
+      'disposition',
+      'kind',
+      'schemaVersion',
+      'unit',
+    ]);
+    assert.equal(desiredConvergence.schemaVersion, 1);
+    assert.equal(
+      desiredConvergence.kind,
+      'wharfie.service.desired-convergence',
+    );
+    assert.equal(desiredConvergence.appId, 'portable-app');
+    assert.equal(desiredConvergence.unit, 'wharfie-portable-app.service');
+    assert.deepEqual(Object.keys(desiredConvergence.desired).sort(), [
+      'artifactId',
+      'revisionId',
+    ]);
+    assert.equal(
+      desiredConvergence.desired.artifactId,
+      packagedArtifact.artifactId,
+    );
+    assert.equal(
+      desiredConvergence.desired.revisionId,
+      packagedArtifact.revisionId,
+    );
+    assert.equal(desiredConvergence.disposition, 'authorized');
+    assert.equal(desiredConvergence.basis, 'physical-absence');
   } else {
     assert.equal(serviceStatus.status, 1);
     assert.equal(serviceStatusReceipt.kind, 'wharfie.service.error');

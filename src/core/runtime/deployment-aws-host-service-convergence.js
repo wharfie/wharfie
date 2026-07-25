@@ -27,8 +27,10 @@ export const AWS_SINGLE_NODE_HOST_SERVICE_RUNTIME_GROUP = 'wharfie-runtime';
 
 const SERVICE_CONVERGENCE_STEP = 'service-convergence';
 const ARTIFACT_PROJECTION_STEP = 'artifact-projection';
-const SERVICE_STATUS_SCHEMA_VERSION = 2;
+const SERVICE_STATUS_SCHEMA_VERSION = 3;
 const SERVICE_STATUS_KIND = 'wharfie.service.status';
+const DESIRED_CONVERGENCE_SCHEMA_VERSION = 1;
+const DESIRED_CONVERGENCE_KIND = 'wharfie.service.desired-convergence';
 const RUNTIME_HOME = '/var/lib/wharfie-runtime';
 
 const FACTORY_KEYS = new Set(['command', 'root', 'testOnlyRoot']);
@@ -75,8 +77,29 @@ const STATUS_COMMON_KEYS = new Set([
   'wiring',
   'health',
   'activation',
+  'desiredConvergence',
 ]);
 const STATUS_OPTIONAL_KEYS = new Set(['integrity', 'persistence']);
+const DESIRED_CONVERGENCE_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'appId',
+  'unit',
+  'desired',
+  'disposition',
+  'basis',
+]);
+const DESIRED_CONVERGENCE_DISPOSITIONS = new Set([
+  'authorized',
+  'conflict',
+  'unknown',
+]);
+const DESIRED_CONVERGENCE_AUTHORIZED_BASES = new Set([
+  'physical-absence',
+  'durable-install',
+  'durable-change',
+  'durable-active',
+]);
 const SYSTEMD_KEYS = new Set([
   'loadState',
   'unitFileState',
@@ -153,14 +176,14 @@ const ACTIVATION_OUTCOMES = new Set([
   'source-retained',
   'source-restored',
 ]);
-const NONHEALTHY_STATES = new Set([
+const SERVICE_HEALTH_STATES = new Set([
+  'absent',
+  'healthy',
   'starting',
   'stopped',
   'failed',
   'degraded',
 ]);
-const CONFLICTING_WIRING_STATES = new Set(['conflicting', 'orphaned']);
-
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -500,6 +523,40 @@ function parseNullableRelease(value, valuePath) {
   return value === null ? null : parseRelease(value, valuePath);
 }
 
+/** @param {unknown} value @param {string} valuePath @returns {Readonly<Record<string, any>>} */
+function parseDesiredConvergence(value, valuePath) {
+  const proof = exactPlainObject(value, valuePath);
+  assertExactKeys(proof, DESIRED_CONVERGENCE_KEYS, valuePath);
+  if (
+    proof.schemaVersion !== DESIRED_CONVERGENCE_SCHEMA_VERSION ||
+    proof.kind !== DESIRED_CONVERGENCE_KIND
+  ) {
+    throw new TypeError(`${valuePath} has an unsupported contract.`);
+  }
+  if (typeof proof.appId !== 'string' || typeof proof.unit !== 'string') {
+    throw new TypeError(`${valuePath} service identity must be strings.`);
+  }
+  if (!DESIRED_CONVERGENCE_DISPOSITIONS.has(proof.disposition)) {
+    throw new TypeError(`${valuePath}.disposition is not supported.`);
+  }
+  if (
+    proof.disposition === 'authorized'
+      ? !DESIRED_CONVERGENCE_AUTHORIZED_BASES.has(proof.basis)
+      : proof.basis !== null
+  ) {
+    throw new TypeError(`${valuePath}.basis does not match its disposition.`);
+  }
+  return Object.freeze({
+    schemaVersion: proof.schemaVersion,
+    kind: proof.kind,
+    appId: proof.appId,
+    unit: proof.unit,
+    desired: parseRelease(proof.desired, `${valuePath}.desired`),
+    disposition: proof.disposition,
+    basis: proof.basis,
+  });
+}
+
 /** @param {unknown} value @param {string} valuePath @returns {Readonly<Record<string, any>> | null} */
 function parseActivation(value, valuePath) {
   if (value === null) return null;
@@ -757,10 +814,20 @@ function installedRelease(installation) {
  * @param {Readonly<Record<string, any>> | null} runtime - Observed runtime.
  * @param {Readonly<Record<string, any>>[]} allowedReleases - Authorized releases.
  * @param {Readonly<Record<string, any>>} systemd - Observed manager state.
+ * @param {boolean} [allowInactiveUnlistedRelease] - Whether a stopped,
+ *   unowned lifecycle may retain the transition's redacted source identity.
  * @returns {boolean} - Whether runtime state proves foreign ownership.
  */
-function hasForeignRuntimeProof(runtime, allowedReleases, systemd) {
-  if (runtime === null) return false;
+function hasForeignRuntimeProof(
+  runtime,
+  allowedReleases,
+  systemd,
+  allowInactiveUnlistedRelease = false,
+) {
+  if (runtime === null) return systemd.mainPid > 0;
+  if (systemd.mainPid > 0 && runtime.session !== 'active') {
+    return true;
+  }
   if (
     runtime.session === 'active' &&
     (runtime.ownerKind !== 'resident' ||
@@ -787,7 +854,13 @@ function hasForeignRuntimeProof(runtime, allowedReleases, systemd) {
   }
   if (
     Object.hasOwn(runtime, 'artifactId') &&
-    !allowedReleases.some((candidate) => sameRelease(runtime, candidate))
+    !allowedReleases.some((candidate) => sameRelease(runtime, candidate)) &&
+    !(
+      allowInactiveUnlistedRelease &&
+      runtime.session === 'absent' &&
+      runtime.currentOwner !== true &&
+      !Object.hasOwn(runtime, 'processId')
+    )
   ) {
     return true;
   }
@@ -802,21 +875,6 @@ function isExactManagedWiring(wiring) {
     wiring.selection === 'managed' &&
     wiring.effectiveUnit === 'managed' &&
     wiring.cleanupPending === false
-  );
-}
-
-/** @param {Readonly<Record<string, any>>} wiring @param {Readonly<Record<string, any>>} systemd @param {Readonly<Record<string, any>>} request @returns {boolean} */
-function isExactStaleManagedWiring(wiring, systemd, request) {
-  return (
-    wiring.state === 'conflicting' &&
-    wiring.unitFile === 'managed' &&
-    wiring.selection === 'managed' &&
-    wiring.effectiveUnit === 'conflicting' &&
-    wiring.cleanupPending === false &&
-    systemd.loadState === 'loaded' &&
-    systemd.fragmentPath === getUnitPath(request) &&
-    systemd.dropInPaths === '' &&
-    systemd.needDaemonReload === true
   );
 }
 
@@ -847,6 +905,298 @@ function isExactAbsentSystemd(systemd) {
   );
 }
 
+/**
+ * Classify only the positive contradictions and observation failures that an
+ * adapter must not let an authorized manager decision override. The manager's
+ * activation record is the sole authority for existing physical releases;
+ * neither the invoking request nor observed receipt/runtime may authorize
+ * itself.
+ * @param {Readonly<Record<string, any>>} request - Exact desired request.
+ * @param {Readonly<Record<string, any>>} proof - Parsed manager decision.
+ * @param {Readonly<Record<string, any>>} wiring - Parsed wiring.
+ * @param {Readonly<Record<string, any>>} systemd - Parsed systemd state.
+ * @param {Readonly<Record<string, any>>} installation - Parsed installation.
+ * @param {Readonly<Record<string, any>> | null} activation - Parsed activation.
+ * @param {Readonly<Record<string, any>> | null} runtime - Parsed runtime.
+ * @param {Readonly<Record<string, any>> | null} integrity - Parsed integrity.
+ * @param {Readonly<Record<string, any>> | null} persistence - Parsed persistence.
+ * @returns {'conflict'|'unknown'|null} - Blocking result, or null when the
+ *   manager-authorized state remains eligible for repair.
+ */
+function classifyAuthorizedConvergenceGuard(
+  request,
+  proof,
+  wiring,
+  systemd,
+  installation,
+  activation,
+  runtime,
+  integrity,
+  persistence,
+) {
+  if (activation?.action === 'rollback') return 'conflict';
+  const basisIncoherent =
+    (proof.basis === 'durable-install' &&
+      (activation === null ||
+        activation.action !== 'install' ||
+        !sameRelease(activation.desired, proof.desired) ||
+        activation.rollback !== null ||
+        (activation.selected !== null &&
+          !sameRelease(activation.selected, activation.desired)))) ||
+    (proof.basis === 'durable-change' &&
+      (activation === null || activation.action !== 'update')) ||
+    (proof.basis === 'durable-active' &&
+      (activation === null || activation.phase !== 'ACTIVE'));
+  if (
+    proof.basis === 'durable-active' &&
+    activation !== null &&
+    (!sameRelease(activation.desired, activation.selected) ||
+      (activation.rollback !== null &&
+        sameRelease(activation.rollback, activation.selected)))
+  ) {
+    return 'conflict';
+  }
+  if (
+    runtime?.session === 'active' &&
+    (activation?.selected === null ||
+      activation?.selected === undefined ||
+      !sameRelease(runtime, activation.selected))
+  ) {
+    return 'conflict';
+  }
+  if (
+    installation.state === 'installed' &&
+    (integrity === null || persistence === null)
+  ) {
+    return 'unknown';
+  }
+  if (!['loaded', 'not-found'].includes(systemd.loadState)) return 'unknown';
+  if (
+    wiring.unitFile === 'conflicting' ||
+    wiring.selection === 'conflicting' ||
+    wiring.cleanupPending === true ||
+    systemd.dropInPaths !== '' ||
+    (systemd.loadState === 'loaded'
+      ? systemd.fragmentPath !== getUnitPath(request)
+      : systemd.fragmentPath !== '') ||
+    (systemd.loadState !== 'loaded' &&
+      (systemd.mainPid > 0 || systemd.activeState === 'active')) ||
+    persistence?.linger === false
+  ) {
+    return 'conflict';
+  }
+  if (integrity?.status === 'verified') {
+    if (installation.state !== 'installed') return 'unknown';
+    if (!sameRelease(integrity, installedRelease(installation))) {
+      return 'conflict';
+    }
+  }
+  if (
+    !['absent', 'managed', 'conflicting', 'orphaned'].includes(wiring.state) ||
+    !['absent', 'managed'].includes(wiring.unitFile) ||
+    !['absent', 'managed', 'conflicting'].includes(wiring.selection) ||
+    !['absent', 'managed', 'conflicting'].includes(wiring.effectiveUnit) ||
+    (runtime !== null &&
+      (runtime.status === 'UNKNOWN' ||
+        runtime.status === 'UNAVAILABLE' ||
+        runtime.session === 'unknown'))
+  ) {
+    return 'unknown';
+  }
+  const managerHasLiveProcess =
+    systemd.mainPid > 0 || systemd.activeState === 'active';
+  if (
+    managerHasLiveProcess &&
+    (runtime === null ||
+      !['READY', 'STARTING'].includes(runtime.status) ||
+      runtime.session !== 'active' ||
+      runtime.ownerKind !== 'resident' ||
+      runtime.currentOwner !== true ||
+      activation?.selected === null ||
+      activation?.selected === undefined ||
+      !sameRelease(runtime, activation.selected) ||
+      !Number.isSafeInteger(runtime.processId) ||
+      runtime.processId < 1 ||
+      systemd.mainPid < 1 ||
+      runtime.processId !== systemd.mainPid)
+  ) {
+    return 'conflict';
+  }
+
+  /** @type {{artifactId: string, revisionId: string}[]} */
+  const allowedReleases = [];
+  if (activation !== null) {
+    const candidates =
+      proof.basis === 'durable-install'
+        ? [activation.desired]
+        : [activation.desired, activation.selected, activation.rollback];
+    for (const candidate of candidates) {
+      if (candidate !== null) allowedReleases.push(candidate);
+    }
+  }
+  if (installation.state === 'installed') {
+    if (
+      proof.basis === 'durable-active' &&
+      activation !== null &&
+      (!sameRelease(installedRelease(installation), activation.selected) ||
+        !sameNullableRelease(
+          installation.previousArtifactId === null
+            ? null
+            : {
+                artifactId: installation.previousArtifactId,
+                revisionId: installation.previousRevisionId,
+              },
+          activation.rollback,
+        ))
+    ) {
+      return 'conflict';
+    }
+    const installedReleases = [installedRelease(installation)];
+    // During a forward change after target selection, the public activation
+    // view intentionally omits transition.source even though the exact receipt
+    // retains it as `previous`. The manager proof has already joined that
+    // source; only ACTIVE exposes a complete previous/rollback pair here.
+    if (
+      proof.basis === 'durable-active' &&
+      installation.previousArtifactId !== null
+    ) {
+      installedReleases.push({
+        artifactId: installation.previousArtifactId,
+        revisionId: installation.previousRevisionId,
+      });
+    }
+    if (
+      installedReleases.some(
+        (installed) =>
+          !allowedReleases.some((allowed) => sameRelease(installed, allowed)),
+      )
+    ) {
+      return 'conflict';
+    }
+  }
+  if (installation.state === 'uninstalled') {
+    const lastRelease = {
+      artifactId: installation.lastArtifactId,
+      revisionId: installation.lastRevisionId,
+    };
+    if (
+      (proof.basis === 'durable-change' &&
+        !allowedReleases.some((allowed) =>
+          sameRelease(lastRelease, allowed),
+        )) ||
+      (proof.basis === 'durable-active' &&
+        activation !== null &&
+        !sameRelease(lastRelease, activation.selected))
+    ) {
+      return 'conflict';
+    }
+  }
+  if (
+    hasForeignRuntimeProof(
+      runtime,
+      allowedReleases,
+      systemd,
+      proof.basis === 'durable-change',
+    )
+  ) {
+    return 'conflict';
+  }
+  if (proof.basis === 'physical-absence') {
+    if (
+      installation.state === 'installed' ||
+      !isExactAbsentWiring(wiring) ||
+      !isExactAbsentSystemd(systemd)
+    ) {
+      return 'conflict';
+    }
+    return activation === null &&
+      runtime === null &&
+      integrity === null &&
+      persistence === null
+      ? null
+      : 'unknown';
+  }
+  if (basisIncoherent) return 'unknown';
+  return null;
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} status - Decoded service status.
+ * @param {Readonly<Record<string, any>>} request - Exact desired request.
+ * @param {Readonly<Record<string, any>>} wiring - Parsed wiring state.
+ * @param {Readonly<Record<string, any>>} systemd - Parsed manager state.
+ * @param {Readonly<Record<string, any>>} installation - Parsed receipt.
+ * @param {Readonly<Record<string, any>> | null} activation - Durable activation.
+ * @param {Readonly<Record<string, any>> | null} runtime - Runtime observation.
+ * @param {Readonly<Record<string, any>> | null} integrity - Integrity proof.
+ * @param {Readonly<Record<string, any>> | null} persistence - Boot persistence.
+ * @returns {boolean} - Whether the complete desired settlement is exact.
+ */
+function isExactDesiredSettlement(
+  status,
+  request,
+  wiring,
+  systemd,
+  installation,
+  activation,
+  runtime,
+  integrity,
+  persistence,
+) {
+  if (
+    installation.state !== 'installed' ||
+    activation === null ||
+    runtime === null ||
+    persistence === null ||
+    integrity === null ||
+    status.health !== 'healthy' ||
+    !isExactManagedWiring(wiring)
+  ) {
+    return false;
+  }
+  const current = installedRelease(installation);
+  const previous =
+    installation.previousArtifactId === null
+      ? null
+      : {
+          artifactId: installation.previousArtifactId,
+          revisionId: installation.previousRevisionId,
+        };
+  return (
+    integrity.status === 'verified' &&
+    sameRelease(integrity, current) &&
+    sameRelease(current, request) &&
+    activation.phase === 'ACTIVE' &&
+    sameRelease(activation.desired, current) &&
+    sameRelease(activation.selected, current) &&
+    sameNullableRelease(activation.rollback, previous) &&
+    (activation.rollback === null ||
+      !sameRelease(activation.rollback, current)) &&
+    hasExactKeys(runtime, ACTIVE_RUNTIME_KEYS) &&
+    runtime.status === 'READY' &&
+    sameRelease(runtime, current) &&
+    runtime.generation >= 1 &&
+    runtime.ownerKind === 'resident' &&
+    runtime.ownerGeneration >= 1 &&
+    runtime.session === 'active' &&
+    runtime.processId >= 1 &&
+    runtime.currentOwner === true &&
+    systemd.loadState === 'loaded' &&
+    systemd.unitFileState === 'enabled' &&
+    systemd.activeState === 'active' &&
+    systemd.subState === 'running' &&
+    systemd.result === 'success' &&
+    systemd.mainPid === runtime.processId &&
+    systemd.execMainStatus === 0 &&
+    systemd.fragmentPath === getUnitPath(request) &&
+    systemd.dropInPaths === '' &&
+    systemd.needDaemonReload === false &&
+    persistence.linger === true &&
+    persistence.unitEnabled === true &&
+    persistence.bootEnabled === true
+  );
+}
+
 /** @param {Readonly<Record<string, any>>} status @param {Readonly<Record<string, any>>} request @returns {'settled'|'ready'|'unknown'|'conflict'} */
 function classifyDecodedStatus(status, request) {
   if (
@@ -861,6 +1211,20 @@ function classifyDecodedStatus(status, request) {
   if (status.appId !== request.appId || status.unit !== getUnitName(request)) {
     return 'conflict';
   }
+  const desiredConvergence = parseDesiredConvergence(
+    status.desiredConvergence,
+    'serviceStatus.desiredConvergence',
+  );
+  if (
+    desiredConvergence.appId !== status.appId ||
+    desiredConvergence.unit !== status.unit ||
+    !sameRelease(desiredConvergence.desired, request)
+  ) {
+    return 'unknown';
+  }
+  if (desiredConvergence.disposition !== 'authorized') {
+    return desiredConvergence.disposition;
+  }
   const wiring = parseWiring(status.wiring, 'serviceStatus.wiring');
   const systemd = parseSystemd(status.systemd, 'serviceStatus.systemd');
   const installation = parseInstallation(
@@ -871,201 +1235,46 @@ function classifyDecodedStatus(status, request) {
     status.activation,
     'serviceStatus.activation',
   );
-  if (activation?.action === 'rollback') {
-    return 'conflict';
-  }
-  if (typeof status.health !== 'string') return 'unknown';
+  const runtime = parseRuntime(status.runtime, 'serviceStatus.runtime');
+  const integrity = Object.hasOwn(status, 'integrity')
+    ? parseIntegrity(status.integrity, 'serviceStatus.integrity')
+    : null;
+  const persistence = Object.hasOwn(status, 'persistence')
+    ? parsePersistence(status.persistence, 'serviceStatus.persistence')
+    : null;
+  if (!SERVICE_HEALTH_STATES.has(status.health)) return 'unknown';
+  const guard = classifyAuthorizedConvergenceGuard(
+    request,
+    desiredConvergence,
+    wiring,
+    systemd,
+    installation,
+    activation,
+    runtime,
+    integrity,
+    persistence,
+  );
+  if (guard !== null) return guard;
   if (
-    installation.state === 'installed' &&
-    isExactStaleManagedWiring(wiring, systemd, request) &&
-    Object.hasOwn(status, 'integrity') &&
-    Object.hasOwn(status, 'persistence') &&
-    activation !== null
-  ) {
-    const staleIntegrity = parseIntegrity(
-      status.integrity,
-      'serviceStatus.integrity',
-    );
-    const stalePersistence = parsePersistence(
-      status.persistence,
-      'serviceStatus.persistence',
-    );
-    const staleRuntime = parseRuntime(status.runtime, 'serviceStatus.runtime');
-    const staleCurrent = installedRelease(installation);
-    const stalePrevious =
-      installation.previousArtifactId === null
-        ? null
-        : {
-            artifactId: installation.previousArtifactId,
-            revisionId: installation.previousRevisionId,
-          };
-    const activeProjection =
-      activation.phase === 'ACTIVE' &&
-      sameRelease(activation.desired, staleCurrent) &&
-      sameRelease(activation.selected, staleCurrent) &&
-      sameNullableRelease(activation.rollback, stalePrevious) &&
-      (activation.rollback === null ||
-        !sameRelease(activation.rollback, staleCurrent));
-    if (
-      staleIntegrity.status === 'invalid' &&
-      sameRelease(staleCurrent, request) &&
-      activeProjection &&
-      !hasForeignRuntimeProof(staleRuntime, [staleCurrent], systemd) &&
-      stalePersistence.linger === true &&
-      NONHEALTHY_STATES.has(status.health)
-    ) {
-      return 'ready';
-    }
-  }
-  if (CONFLICTING_WIRING_STATES.has(wiring.state)) {
-    const positivelyForeignUnit =
-      wiring.unitFile === 'conflicting' ||
-      (systemd.fragmentPath !== '' &&
-        systemd.fragmentPath !== getUnitPath(request)) ||
-      systemd.dropInPaths !== '';
-    return positivelyForeignUnit ? 'conflict' : 'unknown';
-  }
-
-  if (installation.state === 'absent' || installation.state === 'uninstalled') {
-    if (
-      !isExactAbsentWiring(wiring) ||
-      status.runtime !== null ||
-      !isExactAbsentSystemd(systemd) ||
-      Object.hasOwn(status, 'persistence')
-    ) {
-      return 'conflict';
-    }
-
-    if (installation.state === 'absent') {
-      if (
-        activation === null &&
-        !Object.hasOwn(status, 'integrity') &&
-        status.health === 'absent'
-      ) {
-        return 'ready';
-      }
-      const repairableInitialInstall =
-        activation !== null &&
-        activation.action === 'install' &&
-        ['QUIESCING', 'QUIESCENT'].includes(activation.phase) &&
-        activation.selected === null &&
-        activation.rollback === null &&
-        activation.lastOutcome === null &&
-        sameRelease(activation.desired, request) &&
-        Object.hasOwn(status, 'integrity') &&
-        parseIntegrity(status.integrity, 'serviceStatus.integrity').status ===
-          'invalid' &&
-        status.health === 'degraded';
-      return repairableInitialInstall ? 'ready' : 'conflict';
-    }
-
-    const last = {
-      artifactId: installation.lastArtifactId,
-      revisionId: installation.lastRevisionId,
-    };
-    if (
-      Object.hasOwn(status, 'integrity') ||
-      status.health !== 'absent' ||
-      (activation !== null &&
-        (activation.phase !== 'ACTIVE' ||
-          !sameRelease(activation.desired, last) ||
-          !sameRelease(activation.selected, last) ||
-          (activation.rollback !== null &&
-            sameRelease(activation.rollback, last))))
-    ) {
-      return 'conflict';
-    }
-    return 'ready';
-  }
-
-  if (
-    !Object.hasOwn(status, 'integrity') ||
-    !Object.hasOwn(status, 'persistence')
+    desiredConvergence.basis === 'physical-absence' &&
+    status.health !== 'absent'
   ) {
     return 'unknown';
   }
-  if (!isExactManagedWiring(wiring)) return 'unknown';
-  const integrity = parseIntegrity(status.integrity, 'serviceStatus.integrity');
-  const persistence = parsePersistence(
-    status.persistence,
-    'serviceStatus.persistence',
-  );
-  const runtime = parseRuntime(status.runtime, 'serviceStatus.runtime');
-  const current = installedRelease(installation);
-  const previous =
-    installation.previousArtifactId === null
-      ? null
-      : {
-          artifactId: installation.previousArtifactId,
-          revisionId: installation.previousRevisionId,
-        };
-
-  if (systemd.fragmentPath !== getUnitPath(request)) {
-    return 'conflict';
-  }
-  if (systemd.dropInPaths !== '') return 'conflict';
-  if (hasForeignRuntimeProof(runtime, [current], systemd)) return 'conflict';
-  if (persistence.linger === false) return 'conflict';
-
-  // Invalid is intentionally not a positive foreign-content proof. V64
-  // collapses authorized selector/receipt crash residue and foreign selector
-  // bytes into this same redacted shape, so V72 must fail closed as unknown
-  // until a richer recovery proof is available.
-  if (integrity.status === 'invalid') return 'unknown';
-  if (!sameRelease(integrity, current)) return 'conflict';
-  if (activation === null) return 'conflict';
-  if (activation.phase === 'ACTIVE') {
-    if (
-      !sameRelease(activation.desired, current) ||
-      !sameRelease(activation.selected, current) ||
-      !sameNullableRelease(activation.rollback, previous) ||
-      (activation.rollback !== null &&
-        sameRelease(activation.rollback, current))
-    ) {
-      return 'conflict';
-    }
-  } else if (
-    activation.selected === null ||
-    !sameRelease(activation.selected, current)
-  ) {
-    return 'conflict';
-  }
-
-  if (status.health !== 'healthy') {
-    return NONHEALTHY_STATES.has(status.health) ? 'ready' : 'unknown';
-  }
-
-  if (
-    activation.phase !== 'ACTIVE' ||
-    runtime === null ||
-    !hasExactKeys(runtime, ACTIVE_RUNTIME_KEYS) ||
-    runtime.status !== 'READY' ||
-    !sameRelease(runtime, current) ||
-    !Number.isSafeInteger(runtime.generation) ||
-    runtime.generation < 1 ||
-    runtime.ownerKind !== 'resident' ||
-    !Number.isSafeInteger(runtime.ownerGeneration) ||
-    runtime.ownerGeneration < 1 ||
-    runtime.session !== 'active' ||
-    !Number.isSafeInteger(runtime.processId) ||
-    runtime.processId < 1 ||
-    runtime.currentOwner !== true ||
-    systemd.loadState !== 'loaded' ||
-    systemd.unitFileState !== 'enabled' ||
-    systemd.activeState !== 'active' ||
-    systemd.subState !== 'running' ||
-    systemd.result !== 'success' ||
-    systemd.mainPid !== runtime.processId ||
-    systemd.execMainStatus !== 0 ||
-    systemd.fragmentPath !== getUnitPath(request) ||
-    systemd.needDaemonReload !== false ||
-    persistence.linger !== true ||
-    persistence.unitEnabled !== true ||
-    persistence.bootEnabled !== true
-  ) {
-    return 'conflict';
-  }
-  return sameRelease(current, request) ? 'settled' : 'ready';
+  return desiredConvergence.basis === 'durable-active' &&
+    isExactDesiredSettlement(
+      status,
+      request,
+      wiring,
+      systemd,
+      installation,
+      activation,
+      runtime,
+      integrity,
+      persistence,
+    )
+    ? 'settled'
+    : 'ready';
 }
 
 /** @param {unknown} value @param {Readonly<Record<string, any>>} request @returns {'settled'|'ready'|'unknown'|'conflict'} */

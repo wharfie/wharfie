@@ -353,14 +353,27 @@ Mismatch, missing state, startup, stopped state, and failed state remain
 distinguishable. JSON output is versioned, contains no application inputs,
 payloads, credentials, raw environment, private socket paths, or systemd
 journal text, and does not parse the human `systemctl status` rendering.
-Status schema V2 also joins durable installation intent with the immutable
-executable selection, fixed unit's verified bytes, and live manager's effective
+Status schema V3 retains the V2 join of durable installation intent, immutable
+executable selection, fixed unit bytes, and the live manager's effective
 selection in a `wiring` view. Its state is `managed`, `absent`, `orphaned`,
 `conflicting`, or `unknown`, and its redacted `selection` field distinguishes
-an exact selected release from absence or conflicting metadata;
-`orphaned` means Wharfie can see exact residual wiring without a live installed
-receipt, while `unknown` means the manager could not establish absence. Human
-status includes this state and directs an orphan to `service uninstall`.
+an exact selected release from absence or conflicting metadata. `orphaned`
+means Wharfie can see exact residual wiring without a live installed receipt,
+while `unknown` means the manager could not establish absence. Human status
+includes this state and directs an orphan to `service uninstall`.
+
+V3 additionally requires one `desiredConvergence` V1 object. It repeats the
+status application and unit, names the exact artifact and revision of the SEA
+that requested status, and reports a disposition of `authorized`, `conflict`,
+or `unknown`. Authorized decisions carry exactly one basis:
+`physical-absence`, `durable-install`, `durable-change`, or `durable-active`;
+conflict and unknown decisions carry a null basis. The manager computes this
+decision under the same app-scoped kernel operation lock as the rest of status,
+by joining durable activation authority with the receipt, selector, immutable
+release records, fixed unit, live manager view, and resident ownership. It
+does not mutate or repair any of them. This makes partial selector, receipt,
+and activation residue explicit to a desired-SEA caller without converting
+mere ambiguity into mutation authority.
 
 ### Uninstall preserves durable data
 

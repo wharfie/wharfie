@@ -1409,15 +1409,50 @@ function removeBootObserver() {
 }
 
 /**
- * Assert the finite service status agreement used throughout the proof.
+ * Assert the exact status-V3 decision for the SEA that requested inspection.
  * @param {Record<string, any>} status - Packaged status.
- * @returns {void} - Returns for healthy PID-bound boot persistence.
+ * @param {Record<string, any>} desired - Invoking artifact identity.
+ * @param {'physical-absence'|'durable-active'} basis - Exact authorization basis.
+ * @returns {void} - Returns for one request-bound authorized decision.
  */
-function assertHealthy(status) {
-  const storage = proofStorageLayout();
-  assert.equal(status.schemaVersion, 2);
+function assertDesiredConvergence(status, desired, basis) {
+  const proof = status.desiredConvergence;
+  assert.equal(status.schemaVersion, 3);
   assert.equal(status.kind, 'wharfie.service.status');
   assert.equal(status.appId, APP_ID);
+  assert.equal(status.unit, UNIT_NAME);
+  assert.deepEqual(Object.keys(proof).sort(), [
+    'appId',
+    'basis',
+    'desired',
+    'disposition',
+    'kind',
+    'schemaVersion',
+    'unit',
+  ]);
+  assert.equal(proof.schemaVersion, 1);
+  assert.equal(proof.kind, 'wharfie.service.desired-convergence');
+  assert.equal(proof.appId, APP_ID);
+  assert.equal(proof.unit, UNIT_NAME);
+  assert.deepEqual(Object.keys(proof.desired).sort(), [
+    'artifactId',
+    'revisionId',
+  ]);
+  assert.equal(proof.desired.artifactId, desired.artifactId);
+  assert.equal(proof.desired.revisionId, desired.revisionId);
+  assert.equal(proof.disposition, 'authorized');
+  assert.equal(proof.basis, basis);
+}
+
+/**
+ * Assert the finite service status agreement used throughout the proof.
+ * @param {Record<string, any>} status - Packaged status.
+ * @param {Record<string, any>} desired - Invoking artifact identity.
+ * @returns {void} - Returns for healthy PID-bound boot persistence.
+ */
+function assertHealthy(status, desired) {
+  const storage = proofStorageLayout();
+  assertDesiredConvergence(status, desired, 'durable-active');
   assert.equal(status.health, 'healthy');
   assert.equal(status.persistence?.linger, true);
   assert.equal(status.persistence?.unitEnabled, true);
@@ -1448,10 +1483,11 @@ function assertSameTimer(timer, expected, status) {
 /**
  * @param {Record<string, any>} status - Healthy service status.
  * @param {string} releasePath - Exact immutable release path.
+ * @param {Record<string, any>} desired - Invoking artifact identity.
  * @returns {void} - Returns when the supervised PID executes that release.
  */
-function assertRunningRelease(status, releasePath) {
-  assertHealthy(status);
+function assertRunningRelease(status, releasePath, desired) {
+  assertHealthy(status, desired);
   assert.equal(
     readlinkSync(`/proc/${status.systemd.mainPid}/exe`),
     releasePath,
@@ -1482,15 +1518,22 @@ function createActivationEvidence(activation) {
  * @param {Record<string, any>} current - Expected current artifact evidence.
  * @param {Record<string, any> | null} rollback - Expected retained candidate.
  * @param {Readonly<Record<string, string>>} storage - Proof layout.
+ * @param {Record<string, any>} [desired] - Invoking artifact identity.
  * @returns {Readonly<Record<string, any>>} - Healthy selection evidence.
  */
-function assertActiveArtifact(status, current, rollback, storage) {
+function assertActiveArtifact(
+  status,
+  current,
+  rollback,
+  storage,
+  desired = current,
+) {
   const releasePath = path.join(
     storage.releasesRoot,
     current.artifactId,
     'app',
   );
-  assertRunningRelease(status, releasePath);
+  assertRunningRelease(status, releasePath, desired);
   assert.equal(status.installation?.activeArtifactId, current.artifactId);
   assert.equal(status.installation?.activeRevisionId, current.revisionId);
   assert.equal(
@@ -1578,11 +1621,22 @@ function runSuccessfulActivationCommand(options) {
     options.outcome,
   );
   const status = readServiceStatus(options.artifactPath);
+  const desired =
+    options.current.artifactPath === options.artifactPath
+      ? options.current
+      : options.rollback?.artifactPath === options.artifactPath
+        ? options.rollback
+        : null;
+  assert.ok(
+    desired,
+    'activation verification must bind the exact invoking artifact',
+  );
   const active = assertActiveArtifact(
     status,
     options.current,
     options.rollback,
     options.storage,
+    desired,
   );
   return Object.freeze({ receipt, active });
 }
@@ -2054,6 +2108,7 @@ async function prepare(repoRoot) {
     'absent',
     `fresh service status: ${JSON.stringify(absent)}`,
   );
+  assertDesiredConvergence(absent, sourceArtifact, 'physical-absence');
   const idempotencyKey = 'systemd-real-reboot-proof';
   const started = runArtifactJson(
     packaged.artifactPath,
@@ -2111,7 +2166,7 @@ async function prepare(repoRoot) {
   assert.equal(install.outcome, 'target-active');
   assert.equal(install.health, 'healthy');
   const installed = readServiceStatus(packaged.artifactPath);
-  assertHealthy(installed);
+  assertHealthy(installed, sourceArtifact);
   announce('healthy-systemd-service');
   assert.equal(
     installed.installation.activeArtifactId,
@@ -2141,7 +2196,7 @@ async function prepare(repoRoot) {
   const releasePath = path.join(releaseDirectory, 'app');
   const releaseRecordPath = path.join(releaseDirectory, 'release.json');
   assert.equal(sha256File(releasePath), sha256File(packaged.artifactPath));
-  assertRunningRelease(installed, releasePath);
+  assertRunningRelease(installed, releasePath, sourceArtifact);
 
   const timerWaiting = await waitFor(
     () => inspectRun(packaged.artifactPath, runId),
@@ -2162,7 +2217,7 @@ async function prepare(repoRoot) {
   announce('durable-timer-waiting');
 
   const beforeCrash = readServiceStatus(packaged.artifactPath);
-  assertHealthy(beforeCrash);
+  assertHealthy(beforeCrash, sourceArtifact);
   process.kill(beforeCrash.systemd.mainPid, 'SIGKILL');
   const afterCrash = await waitFor(
     () => readServiceStatus(packaged.artifactPath),
@@ -2173,11 +2228,11 @@ async function prepare(repoRoot) {
       status.runtime?.generation > beforeCrash.runtime.generation,
     'systemd crash replacement',
   );
-  assertHealthy(afterCrash);
+  assertHealthy(afterCrash, sourceArtifact);
   const afterCrashRun = inspectRun(packaged.artifactPath, runId);
   assert.equal(afterCrashRun.workflowCursor?.disposition, 'TIMER_WAITING');
   assertSameTimer(afterCrashRun.timers?.[0], timerWaiting.timers[0], 'WAITING');
-  assertRunningRelease(afterCrash, releasePath);
+  assertRunningRelease(afterCrash, releasePath, sourceArtifact);
   announce('systemd-crash-replacement');
   assert.deepEqual(
     readMarkers().map((entry) => entry.stepIndex),
@@ -2287,7 +2342,7 @@ async function verify() {
   assert.equal(bootReceipt.previousBootId, prepared.bootId);
   assert.deepEqual(bootReceipt.sessionsBeforeCheck, []);
   assert.equal(bootReceipt.automaticStart, true);
-  assertHealthy(bootReceipt.status);
+  assertHealthy(bootReceipt.status, prepared);
   assert.equal(bootReceipt.executablePath, prepared.release.artifactPath);
   assert.equal(bootReceipt.workflow.run?.runId, prepared.runId);
   assert.equal(
@@ -2303,7 +2358,7 @@ async function verify() {
 
   const artifactPath = prepared.artifactPath;
   const bootStatus = readServiceStatus(artifactPath);
-  assertRunningRelease(bootStatus, prepared.release.artifactPath);
+  assertRunningRelease(bootStatus, prepared.release.artifactPath, prepared);
   assert.equal(bootStatus.systemd.mainPid, bootReceipt.status.systemd.mainPid);
   const waitBeforePolling = prepared.timer.dueAt - Date.now() - 1_000;
   if (waitBeforePolling > 0) await wait(waitBeforePolling);
@@ -2387,7 +2442,7 @@ async function verify() {
   assert.deepEqual(readMarkers(), completedMarkers);
 
   const beforeRestart = readServiceStatus(artifactPath);
-  assertHealthy(beforeRestart);
+  assertHealthy(beforeRestart, prepared);
   const restart = runArtifactJson(
     artifactPath,
     ['wharfie', 'service', 'restart', '--json'],
@@ -2396,7 +2451,7 @@ async function verify() {
   assert.equal(restart.action, 'restart');
   assert.equal(restart.outcome, 'restarted');
   const afterRestart = readServiceStatus(artifactPath);
-  assertHealthy(afterRestart);
+  assertHealthy(afterRestart, prepared);
   assert.notEqual(afterRestart.systemd.mainPid, beforeRestart.systemd.mainPid);
   assert.ok(afterRestart.runtime.generation > beforeRestart.runtime.generation);
 
@@ -2408,6 +2463,7 @@ async function verify() {
   assert.equal(stop.action, 'stop');
   assert.equal(stop.outcome, 'stopped');
   const stopped = readServiceStatus(artifactPath);
+  assertDesiredConvergence(stopped, prepared, 'durable-active');
   assert.equal(stopped.health, 'stopped');
   assert.equal(stopped.systemd?.activeState, 'inactive');
 
@@ -2419,7 +2475,7 @@ async function verify() {
   assert.equal(start.action, 'start');
   assert.equal(start.outcome, 'started');
   const afterStart = readServiceStatus(artifactPath);
-  assertHealthy(afterStart);
+  assertHealthy(afterStart, prepared);
   assert.ok(afterStart.runtime.generation > afterRestart.runtime.generation);
 
   const beforeUninstall = inspectRun(artifactPath, prepared.runId);
@@ -2446,6 +2502,7 @@ async function verify() {
     false,
   );
   const absent = readServiceStatus(artifactPath);
+  assertDesiredConvergence(absent, prepared, 'durable-active');
   assert.equal(absent.health, 'absent');
   assert.equal(absent.installation?.state, 'uninstalled');
   const independentSystemd = readIndependentUninstallState();

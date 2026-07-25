@@ -851,8 +851,12 @@ describe('AWS single-node durable host activation', () => {
 
       /** @returns {AnyRecord} */
       function absentStatus() {
+        const desired = {
+          artifactId: integration.request.artifactId,
+          revisionId: integration.request.revisionId,
+        };
         return {
-          schemaVersion: 2,
+          schemaVersion: 3,
           kind: 'wharfie.service.status',
           appId: integration.request.appId,
           unit: unitName,
@@ -879,6 +883,15 @@ describe('AWS single-node durable host activation', () => {
           },
           health: 'absent',
           activation: null,
+          desiredConvergence: {
+            schemaVersion: 1,
+            kind: 'wharfie.service.desired-convergence',
+            appId: integration.request.appId,
+            unit: unitName,
+            desired,
+            disposition: 'authorized',
+            basis: 'physical-absence',
+          },
         };
       }
 
@@ -889,7 +902,7 @@ describe('AWS single-node durable host activation', () => {
           revisionId: integration.request.revisionId,
         };
         return {
-          schemaVersion: 2,
+          schemaVersion: 3,
           kind: 'wharfie.service.status',
           appId: integration.request.appId,
           unit: unitName,
@@ -948,6 +961,15 @@ describe('AWS single-node durable host activation', () => {
             selected,
             rollback: null,
             lastOutcome: 'target-active',
+          },
+          desiredConvergence: {
+            schemaVersion: 1,
+            kind: 'wharfie.service.desired-convergence',
+            appId: integration.request.appId,
+            unit: unitName,
+            desired: selected,
+            disposition: 'authorized',
+            basis: 'durable-active',
           },
         };
       }

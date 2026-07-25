@@ -49,9 +49,11 @@ import {
 import { createLocalApplicationSystemdActivation } from './local-application-systemd-activation.js';
 
 const SERVICE_RESULT_SCHEMA_VERSION = 1;
-const SERVICE_STATUS_SCHEMA_VERSION = 2;
+const SERVICE_STATUS_SCHEMA_VERSION = 3;
 const SERVICE_RESULT_KIND = 'wharfie.service.result';
 const SERVICE_STATUS_KIND = 'wharfie.service.status';
+const DESIRED_CONVERGENCE_SCHEMA_VERSION = 1;
+const DESIRED_CONVERGENCE_KIND = 'wharfie.service.desired-convergence';
 const UNINSTALL_MARKER_KIND = 'wharfie.systemd-user-service.uninstall-marker';
 const UNINSTALL_MARKER_SCHEMA_VERSION = 2;
 const DEFAULT_START_TIMEOUT_MS = 60_000;
@@ -90,6 +92,16 @@ const SYSTEMD_SHOW_PROPERTIES = Object.freeze([
   'FragmentPath',
   'DropInPaths',
   'NeedDaemonReload',
+]);
+const TRANSIENT_OBSERVATION_ERROR_CODES = new Set([
+  'EAGAIN',
+  'EBUSY',
+  'EINTR',
+  'EIO',
+  'EMFILE',
+  'ENFILE',
+  'ENOMEM',
+  'ETIMEDOUT',
 ]);
 
 /**
@@ -161,6 +173,24 @@ function hasCode(error, code) {
     typeof error === 'object' &&
     'code' in error &&
     String(error.code) === code
+  );
+}
+
+/**
+ * Separate retryable observation loss from stable local-state contradictions.
+ * Process-adapter failures are always observations, while a small errno set
+ * covers resource pressure and interrupted filesystem reads.
+ * @param {unknown} error - Observation failure.
+ * @returns {boolean} - Whether status must report unknown rather than conflict.
+ */
+function isTransientObservationError(error) {
+  return (
+    (error instanceof Error &&
+      error.name === 'SystemdUserServiceProcessError') ||
+    (error !== null &&
+      typeof error === 'object' &&
+      'code' in error &&
+      TRANSIENT_OBSERVATION_ERROR_CODES.has(String(error.code)))
   );
 }
 
@@ -1821,6 +1851,24 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
+   * @returns {Readonly<Record<string, any>>} - JSON-safe unavailable manager view.
+   */
+  function createUnavailableSystemdObservation() {
+    return Object.freeze({
+      loadState: 'unavailable',
+      unitFileState: 'unknown',
+      activeState: 'unknown',
+      subState: 'unknown',
+      result: 'unknown',
+      mainPid: 0,
+      execMainStatus: 0,
+      fragmentPath: '',
+      dropInPaths: '',
+      needDaemonReload: null,
+    });
+  }
+
+  /**
    * Require systemd to resolve the unit name from Wharfie's fixed fragment
    * without administrator or generator drop-ins. Cache freshness is checked
    * separately so missing local bytes can be restored before daemon-reload.
@@ -2177,85 +2225,780 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
-   * Observe actual unit wiring when durable metadata says no installation is
-   * present. Absence is established only by both disk and a reachable fresh
-   * manager; any divergence remains visible and non-healthy.
-   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
-   * @param {Readonly<Record<string, any>> | null} installation - Missing receipt or tombstone.
-   * @param {Readonly<Record<string, any>> | null} marker - Optional cleanup marker.
-   * @returns {Promise<Record<string, any>>} - Redacted detached status.
+   * @param {Readonly<Record<string, any>>} reference - Release identity.
+   * @returns {string} - Collision-free in-memory lookup key.
    */
-  async function observeDetachedInstallation(context, installation, marker) {
-    const unitFile = await inspectFixedUnitFile({
-      fsOps,
-      layout: context.layout,
-      uid: context.filesystemUid,
-    });
-    /** @type {'absent'|'managed'|'conflicting'} */
-    let selection;
+  function releaseObservationKey(reference) {
+    return JSON.stringify([reference.artifactId, reference.revisionId]);
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>>} left - Release record.
+   * @param {Readonly<Record<string, any>>} right - Release record.
+   * @returns {boolean} - Whether records are byte-for-byte equivalent JSON.
+   */
+  function hasSameReleaseRecord(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  /**
+   * Observe the three mutable runtime roots required by an installed
+   * projection without creating any of them.
+   * @param {{layout: Readonly<Record<string, string>>, filesystemUid: number}} context - App context.
+   * @returns {Promise<Readonly<{state: 'managed'|'absent'|'conflicting'|'unknown', controlExists: boolean}>>} - Root observation.
+   */
+  async function inspectStatusStateRoots(context) {
+    let controlExists = true;
+    /** @type {'managed'|'absent'|'conflicting'|'unknown'} */
+    let state = 'managed';
+    for (const [directory, label] of [
+      [context.layout.controlPath, 'Systemd user-service control root'],
+      [context.layout.stateRoot, 'Systemd user-service state root'],
+      [
+        context.layout.applicationStatePath,
+        'Systemd user-service application-state root',
+      ],
+    ]) {
+      try {
+        await assertRealPath(
+          fsOps,
+          directory,
+          'directory',
+          label,
+          context.filesystemUid,
+        );
+      } catch (error) {
+        if (
+          directory === context.layout.controlPath &&
+          hasCode(error, 'ENOENT')
+        ) {
+          controlExists = false;
+        }
+        if (hasCode(error, 'ENOENT')) {
+          if (state === 'managed') state = 'absent';
+          continue;
+        }
+        if (isTransientObservationError(error)) {
+          if (state !== 'conflicting') state = 'unknown';
+          continue;
+        }
+        state = 'conflicting';
+      }
+    }
+    return Object.freeze({ state, controlExists });
+  }
+
+  /**
+   * Read the selector as an explicit four-way observation. A malformed or
+   * unauthorized selector is stable conflict; transient resource failures are
+   * retained as unknown.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, filesystemUid: number}} context - App context.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Selector observation.
+   */
+  async function inspectStatusSelection(context) {
     try {
-      selection = (await readSelectedRelease({
+      const release = await readSelectedRelease({
         fsOps,
         layout: context.layout,
         inspectBytes,
         uid: context.filesystemUid,
         target: context.pair.runtime.target,
-      }))
-        ? 'managed'
-        : 'absent';
-    } catch {
-      selection = 'conflicting';
+      });
+      return release
+        ? Object.freeze({ state: 'verified', release })
+        : Object.freeze({ state: 'absent' });
+    } catch (error) {
+      return Object.freeze({
+        state: isTransientObservationError(error) ? 'unknown' : 'conflicting',
+      });
     }
+  }
+
+  /**
+   * Inspect the live manager search path and any lower-priority unit-name
+   * claimant without creating the fixed unit directory.
+   * @param {{layout: Readonly<Record<string, string>>}} context - App context.
+   * @returns {Promise<Readonly<{state: 'available'|'conflicting'|'unknown', includesFixedPath: boolean}>>} - Manager-path observation.
+   */
+  async function inspectStatusManagerPaths(context) {
+    let unitPaths;
+    try {
+      unitPaths = await readManagerUnitPaths();
+    } catch {
+      return Object.freeze({
+        state: 'unknown',
+        includesFixedPath: false,
+      });
+    }
+    for (const unitDirectory of unitPaths) {
+      const candidate = path.join(unitDirectory, context.layout.unitName);
+      if (candidate === context.layout.unitPath) continue;
+      try {
+        await fsOps.lstat(candidate);
+      } catch (error) {
+        if (hasCode(error, 'ENOENT')) continue;
+        return Object.freeze({
+          state: isTransientObservationError(error) ? 'unknown' : 'conflicting',
+          includesFixedPath: unitPaths.includes(
+            path.dirname(context.layout.unitPath),
+          ),
+        });
+      }
+      return Object.freeze({
+        state: 'conflicting',
+        includesFixedPath: unitPaths.includes(
+          path.dirname(context.layout.unitPath),
+        ),
+      });
+    }
+    return Object.freeze({
+      state: 'available',
+      includesFixedPath: unitPaths.includes(
+        path.dirname(context.layout.unitPath),
+      ),
+    });
+  }
+
+  /**
+   * Capture every raw input used by status and desired-convergence
+   * classification while the existing operation lock is held. The snapshot
+   * performs no staging, publication, reload, enablement, or activation write.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
+   * @param {Readonly<Record<string, any>> | null} activation - Durable activation.
+   * @param {Readonly<Record<string, any>> | null} installation - Physical receipt.
+   * @param {Readonly<Record<string, any>> | null} marker - Uninstall marker.
+   * @param {Readonly<{artifactId: string, revisionId: string}>} desired - Invoking SEA identity.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Coherent read-only snapshot.
+   */
+  async function readStatusObservationSnapshot(
+    context,
+    activation,
+    installation,
+    marker,
+    desired,
+  ) {
+    const unitFile = await inspectFixedUnitFile({
+      fsOps,
+      layout: context.layout,
+      uid: context.filesystemUid,
+    });
+    const stateRoots = await inspectStatusStateRoots(context);
+    const selected = await inspectStatusSelection(context);
+
     let systemd;
+    let systemdAvailable = true;
     try {
       systemd = await readSystemd(context.layout);
     } catch {
-      systemd = Object.freeze({
-        loadState: 'unavailable',
-        unitFileState: 'unknown',
-        activeState: 'unknown',
-        subState: 'unknown',
-        result: 'unknown',
-        mainPid: 0,
-        execMainStatus: 0,
-        fragmentPath: '',
-        dropInPaths: '',
-        needDaemonReload: null,
-      });
+      systemdAvailable = false;
+      systemd = createUnavailableSystemdObservation();
     }
-    const wiring = createWiringView(
+
+    const manager = await inspectStatusManagerPaths(context);
+    let linger;
+    let lingerAvailable = true;
+    try {
+      linger = await readLinger(context.uid);
+    } catch {
+      lingerAvailable = false;
+      linger = null;
+    }
+
+    let runtime = null;
+    let runtimeAvailable = true;
+    if (stateRoots.controlExists) {
+      try {
+        runtime = await (options.readRuntimeState || readRuntimeState)({
+          layout: context.layout,
+          appId: context.pair.runtime.appId,
+          fsOps,
+          ...(options.createControlDBClient
+            ? { createDB: options.createControlDBClient }
+            : {}),
+          ...(options.probeLocalServiceSession
+            ? { probeSession: options.probeLocalServiceSession }
+            : {}),
+        });
+      } catch {
+        runtimeAvailable = false;
+        runtime = Object.freeze({
+          status: 'UNAVAILABLE',
+          session: 'unknown',
+        });
+      }
+    }
+
+    /** @type {Map<string, Readonly<Record<string, any>>>} */
+    const releases = new Map();
+    const references = [
+      activation?.selected,
+      activation?.desired,
+      activation?.rollbackCandidate,
+      activation?.transition?.source,
+      activation?.transition?.target,
+      installation?.current,
+      installation?.previous,
+    ].filter(Boolean);
+    for (const reference of references) {
+      const key = releaseObservationKey(reference);
+      if (releases.has(key)) continue;
+      try {
+        releases.set(
+          key,
+          Object.freeze({
+            state: 'verified',
+            release: await readActivationRelease(context, reference),
+          }),
+        );
+      } catch (error) {
+        releases.set(
+          key,
+          Object.freeze({
+            state: isTransientObservationError(error)
+              ? 'unknown'
+              : 'conflicting',
+          }),
+        );
+      }
+    }
+
+    return Object.freeze({
+      layout: context.layout,
+      desired,
+      activation,
+      installation,
+      marker,
       unitFile,
-      selection,
+      stateRoots,
+      selected,
       systemd,
-      context.layout,
-      false,
-      marker !== null,
+      systemdAvailable,
+      manager,
+      linger,
+      lingerAvailable,
+      runtime,
+      runtimeAvailable,
+      releases,
+    });
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>>} snapshot - Status snapshot.
+   * @param {Readonly<Record<string, any>>} reference - Release identity.
+   * @returns {Readonly<Record<string, any>> | undefined} - Release observation.
+   */
+  function getReleaseObservation(snapshot, reference) {
+    return snapshot.releases.get(releaseObservationKey(reference));
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>>} snapshot - Status snapshot.
+   * @param {Readonly<Record<string, any>>} record - Physical release record.
+   * @returns {boolean} - Whether immutable bytes and exact metadata verified.
+   */
+  function hasVerifiedReleaseRecord(snapshot, record) {
+    const observation = getReleaseObservation(snapshot, record);
+    return (
+      observation?.state === 'verified' &&
+      hasSameReleaseRecord(observation.release, record)
     );
+  }
+
+  /**
+   * Derive the legacy public status fields solely from the captured raw
+   * snapshot so the attached convergence proof cannot disagree with a second
+   * host observation.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>}} context - App context.
+   * @param {Readonly<Record<string, any>>} snapshot - Coherent status snapshot.
+   * @returns {Record<string, any>} - Public status without activation/proof.
+   */
+  function createObservedStatusFromSnapshot(context, snapshot) {
+    const installation = snapshot.installation;
+    const installed =
+      installation?.state === 'installed' && snapshot.marker === null;
+    const exactSelection =
+      installed &&
+      snapshot.selected.state === 'verified' &&
+      hasSameReleaseReference(snapshot.selected.release, installation.current);
+    let integrity = Object.freeze({
+      status:
+        exactSelection &&
+        snapshot.stateRoots.state === 'managed' &&
+        snapshot.unitFile.state === 'managed' &&
+        hasVerifiedReleaseRecord(snapshot, installation.current)
+          ? 'verified'
+          : 'invalid',
+      ...(exactSelection &&
+      snapshot.stateRoots.state === 'managed' &&
+      snapshot.unitFile.state === 'managed' &&
+      hasVerifiedReleaseRecord(snapshot, installation.current)
+        ? {
+            artifactId: installation.current.artifactId,
+            revisionId: installation.current.revisionId,
+          }
+        : {}),
+    });
+    const selection =
+      snapshot.selected.state === 'verified'
+        ? exactSelection || !installed
+          ? 'managed'
+          : 'conflicting'
+        : snapshot.selected.state === 'absent'
+          ? 'absent'
+          : 'conflicting';
+    const wiring = createWiringView(
+      snapshot.unitFile,
+      selection,
+      snapshot.systemd,
+      context.layout,
+      installed,
+      snapshot.marker !== null,
+    );
+    if (
+      installed &&
+      integrity.status === 'verified' &&
+      wiring.state !== 'managed'
+    ) {
+      integrity = Object.freeze({ status: 'invalid' });
+    }
+
+    if (installed) {
+      const persistence = Object.freeze({
+        linger: snapshot.lingerAvailable ? snapshot.linger : null,
+        unitEnabled: snapshot.systemd.unitFileState === 'enabled',
+        bootEnabled:
+          snapshot.linger === true &&
+          snapshot.systemd.unitFileState === 'enabled',
+      });
+      return {
+        schemaVersion: SERVICE_STATUS_SCHEMA_VERSION,
+        kind: SERVICE_STATUS_KIND,
+        appId: installation.appId,
+        unit: installation.unitName,
+        installation: {
+          state: 'installed',
+          activeArtifactId: installation.current.artifactId,
+          activeRevisionId: installation.current.revisionId,
+          previousArtifactId: installation.previous?.artifactId || null,
+          previousRevisionId: installation.previous?.revisionId || null,
+        },
+        systemd: snapshot.systemd,
+        runtime: snapshot.runtime,
+        integrity,
+        wiring,
+        persistence,
+        health: classifyHealth(
+          installation,
+          snapshot.systemd,
+          snapshot.runtime,
+          integrity,
+          persistence,
+        ),
+      };
+    }
+
     return {
       schemaVersion: SERVICE_STATUS_SCHEMA_VERSION,
       kind: SERVICE_STATUS_KIND,
       appId: context.pair.runtime.appId,
       unit: context.layout.unitName,
       installation: installation
-        ? installation.state === 'installed'
-          ? {
-              state: 'installed',
-              activeArtifactId: installation.current.artifactId,
-              activeRevisionId: installation.current.revisionId,
-              previousArtifactId: installation.previous?.artifactId || null,
-              previousRevisionId: installation.previous?.revisionId || null,
-            }
-          : {
-              state: 'uninstalled',
-              lastArtifactId: installation.current.artifactId,
-              lastRevisionId: installation.current.revisionId,
-            }
+        ? {
+            state: 'uninstalled',
+            lastArtifactId: installation.current.artifactId,
+            lastRevisionId: installation.current.revisionId,
+          }
         : { state: 'absent' },
-      systemd,
-      runtime: null,
+      systemd: snapshot.systemd,
+      runtime: snapshot.runtime,
       wiring,
       health: wiring.state === 'absent' ? 'absent' : 'degraded',
     };
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>> | null} activation - Durable activation.
+   * @returns {Readonly<Record<string, any>>[]} - Sole release authority set.
+   */
+  function getActivationAuthority(activation) {
+    if (!activation) return [];
+    /** @type {Readonly<Record<string, any>>[]} */
+    const authority = [];
+    for (const reference of [
+      activation.selected,
+      activation.desired,
+      activation.rollbackCandidate,
+      activation.transition?.source,
+      activation.transition?.target,
+    ]) {
+      if (
+        reference &&
+        !authority.some((candidate) =>
+          hasSameReleaseReference(candidate, reference),
+        )
+      ) {
+        authority.push(reference);
+      }
+    }
+    return authority;
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>> | null | undefined} reference - Physical identity.
+   * @param {Readonly<Record<string, any>>[]} authority - Durable identities.
+   * @returns {boolean} - Whether strict activation state authorizes the identity.
+   */
+  function hasActivationAuthority(reference, authority) {
+    return (
+      reference === null ||
+      reference === undefined ||
+      authority.some((candidate) =>
+        hasSameReleaseReference(candidate, reference),
+      )
+    );
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>>} snapshot - Status snapshot.
+   * @param {Readonly<Record<string, any>>[]} authority - Activation authority.
+   * @returns {'conflict'|'unknown'|null} - Global blocker.
+   */
+  function classifyStatusSnapshotBlocker(snapshot, authority) {
+    if (snapshot.marker !== null) return 'conflict';
+    if (
+      snapshot.stateRoots.state === 'conflicting' ||
+      snapshot.manager.state === 'conflicting' ||
+      snapshot.selected.state === 'conflicting'
+    ) {
+      return 'conflict';
+    }
+    if (snapshot.unitFile.state === 'conflicting') {
+      return isTransientObservationError(snapshot.unitFile.error)
+        ? 'unknown'
+        : 'conflict';
+    }
+    if (
+      snapshot.stateRoots.state === 'unknown' ||
+      snapshot.manager.state === 'unknown' ||
+      snapshot.selected.state === 'unknown' ||
+      !snapshot.systemdAvailable ||
+      !snapshot.lingerAvailable ||
+      !snapshot.runtimeAvailable
+    ) {
+      return 'unknown';
+    }
+    if (snapshot.linger === false) return 'conflict';
+
+    for (const reference of authority) {
+      const observation = getReleaseObservation(snapshot, reference);
+      if (observation?.state === 'conflicting') return 'conflict';
+      if (observation?.state !== 'verified') return 'unknown';
+    }
+
+    const installation = snapshot.installation;
+    if (
+      installation?.state === 'installed' ||
+      (installation?.state === 'uninstalled' &&
+        snapshot.activation?.transition?.action ===
+          LocalApplicationActivationAction.UPDATE)
+    ) {
+      for (const release of [
+        installation.current,
+        installation.previous,
+      ].filter(Boolean)) {
+        if (!hasActivationAuthority(release, authority)) return 'conflict';
+        const observation = getReleaseObservation(snapshot, release);
+        if (
+          observation?.state === 'conflicting' ||
+          (observation?.state === 'verified' &&
+            !hasSameReleaseRecord(observation.release, release))
+        ) {
+          return 'conflict';
+        }
+        if (observation?.state !== 'verified') return 'unknown';
+      }
+    }
+    if (
+      snapshot.selected.state === 'verified' &&
+      !hasActivationAuthority(snapshot.selected.release, authority)
+    ) {
+      return 'conflict';
+    }
+    if (snapshot.selected.state === 'verified') {
+      const observation = getReleaseObservation(
+        snapshot,
+        snapshot.selected.release,
+      );
+      if (
+        observation?.state === 'verified' &&
+        !hasSameReleaseRecord(observation.release, snapshot.selected.release)
+      ) {
+        return 'conflict';
+      }
+    }
+
+    const systemd = snapshot.systemd;
+    if (
+      systemd.dropInPaths !== '' ||
+      (systemd.fragmentPath !== '' &&
+        systemd.fragmentPath !== snapshot.layout.unitPath)
+    ) {
+      return 'conflict';
+    }
+    if (systemd.loadState !== 'not-found' && systemd.loadState !== 'loaded') {
+      return 'unknown';
+    }
+    if (
+      systemd.loadState === 'loaded' &&
+      !hasExpectedUnitSource(systemd, snapshot.layout)
+    ) {
+      return 'conflict';
+    }
+
+    const runtime = snapshot.runtime;
+    const managerHasLiveProcess =
+      systemd.mainPid > 0 || systemd.activeState === 'active';
+    if (runtime === null) return managerHasLiveProcess ? 'conflict' : null;
+    if (
+      runtime.status === 'UNKNOWN' ||
+      runtime.status === 'UNAVAILABLE' ||
+      runtime.session === 'unknown'
+    ) {
+      return 'unknown';
+    }
+    const hasArtifact = typeof runtime.artifactId === 'string';
+    const hasRevision = typeof runtime.revisionId === 'string';
+    if (
+      hasArtifact !== hasRevision ||
+      (hasArtifact && !hasActivationAuthority(runtime, authority))
+    ) {
+      return 'conflict';
+    }
+    if (
+      runtime.session === 'manual' ||
+      runtime.ownerKind === 'manual' ||
+      (runtime.currentOwner === true &&
+        (runtime.ownerKind !== LedgerServiceOwnerKind.RESIDENT ||
+          runtime.session !== 'active'))
+    ) {
+      return 'conflict';
+    }
+    if (
+      runtime.session === 'active' &&
+      (runtime.ownerKind !== LedgerServiceOwnerKind.RESIDENT ||
+        runtime.currentOwner !== true ||
+        !hasArtifact ||
+        !hasSameReleaseReference(runtime, snapshot.activation?.selected) ||
+        !Number.isSafeInteger(runtime.processId) ||
+        runtime.processId < 1 ||
+        systemd.mainPid < 1 ||
+        runtime.processId !== systemd.mainPid)
+    ) {
+      return 'conflict';
+    }
+    if (
+      managerHasLiveProcess &&
+      (runtime.session !== 'active' ||
+        runtime.ownerKind !== LedgerServiceOwnerKind.RESIDENT ||
+        runtime.currentOwner !== true ||
+        (runtime.status !== LedgerServiceLifecycleStatus.READY &&
+          runtime.status !== LedgerServiceLifecycleStatus.STARTING))
+    ) {
+      return 'conflict';
+    }
+    return null;
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>>} snapshot - Status snapshot.
+   * @param {Readonly<Record<string, any>>} current - Expected current release.
+   * @param {Readonly<Record<string, any>> | null} previous - Expected previous release.
+   * @returns {boolean} - Whether receipt metadata exactly matches a projection.
+   */
+  function hasExactReceiptProjection(snapshot, current, previous) {
+    const installation = snapshot.installation;
+    return (
+      installation?.state === 'installed' &&
+      hasSameReleaseReference(installation.current, current) &&
+      hasSameReleaseReference(installation.previous, previous) &&
+      hasVerifiedReleaseRecord(snapshot, installation.current) &&
+      (installation.previous === null ||
+        hasVerifiedReleaseRecord(snapshot, installation.previous))
+    );
+  }
+
+  /**
+   * @param {Readonly<Record<string, any>>} snapshot - Status snapshot.
+   * @param {Readonly<Record<string, any>>} current - Expected selector.
+   * @param {Readonly<Record<string, any>> | null} previous - Expected rollback receipt.
+   * @returns {boolean} - Exact persistent physical projection.
+   */
+  function hasExactPhysicalProjection(snapshot, current, previous) {
+    return (
+      hasExactReceiptProjection(snapshot, current, previous) &&
+      snapshot.selected.state === 'verified' &&
+      hasSameReleaseReference(snapshot.selected.release, current) &&
+      snapshot.stateRoots.state === 'managed' &&
+      snapshot.unitFile.state === 'managed' &&
+      hasExpectedEffectiveUnit(
+        snapshot.systemd,
+        snapshot.installation.layout,
+      ) &&
+      snapshot.systemd.unitFileState === 'enabled' &&
+      snapshot.linger === true
+    );
+  }
+
+  /**
+   * ACTIVE repair accepts absence for receipt and selector, but every present
+   * component must already be the exact durable selected/rollback projection.
+   * @param {Readonly<Record<string, any>>} snapshot - Status snapshot.
+   * @param {Readonly<Record<string, any>>} current - Durable selection.
+   * @param {Readonly<Record<string, any>> | null} previous - Durable rollback.
+   * @returns {boolean} - Whether reinstall can safely consume the snapshot.
+   */
+  function hasActiveRepairEnvelope(snapshot, current, previous) {
+    const installation = snapshot.installation;
+    const receiptCompatible =
+      installation === null ||
+      ((installation.state === 'installed' ||
+        installation.state === 'uninstalled') &&
+        hasSameReleaseReference(installation.current, current) &&
+        hasSameReleaseReference(installation.previous, previous) &&
+        hasVerifiedReleaseRecord(snapshot, installation.current) &&
+        (installation.previous === null ||
+          hasVerifiedReleaseRecord(snapshot, installation.previous)));
+    const selectorCompatible =
+      snapshot.selected.state === 'absent' ||
+      (snapshot.selected.state === 'verified' &&
+        hasSameReleaseReference(snapshot.selected.release, current));
+    return receiptCompatible && selectorCompatible;
+  }
+
+  /**
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>}} context - App context.
+   * @param {Readonly<Record<string, any>>} snapshot - Coherent raw snapshot.
+   * @returns {Readonly<Record<string, any>>} - Exact V1 convergence proof.
+   */
+  function createDesiredConvergenceStatus(context, snapshot) {
+    /**
+     * @param {'authorized'|'conflict'|'unknown'} disposition - Decision.
+     * @param {'physical-absence'|'durable-install'|'durable-change'|'durable-active'|null} [basis] - Authority basis.
+     * @returns {Readonly<Record<string, any>>} - Exact proof.
+     */
+    const decision = (disposition, basis = null) =>
+      Object.freeze({
+        schemaVersion: DESIRED_CONVERGENCE_SCHEMA_VERSION,
+        kind: DESIRED_CONVERGENCE_KIND,
+        appId: context.pair.runtime.appId,
+        unit: context.layout.unitName,
+        desired: snapshot.desired,
+        disposition,
+        basis: disposition === 'authorized' ? basis : null,
+      });
+
+    const activation = snapshot.activation;
+    const authority = getActivationAuthority(activation);
+    const blocker = classifyStatusSnapshotBlocker(snapshot, authority);
+    if (blocker !== null) return decision(blocker);
+    if (!snapshot.manager.includesFixedPath) return decision('unknown');
+
+    if (activation === null) {
+      if (
+        snapshot.installation?.state === 'installed' ||
+        snapshot.selected.state !== 'absent' ||
+        snapshot.unitFile.state !== 'absent' ||
+        snapshot.systemd.loadState !== 'not-found' ||
+        snapshot.runtime !== null
+      ) {
+        return decision('conflict');
+      }
+      if (snapshot.systemd.needDaemonReload !== false) {
+        return decision('unknown');
+      }
+      return decision('authorized', 'physical-absence');
+    }
+
+    if (
+      activation.transition?.action ===
+      LocalApplicationActivationAction.ROLLBACK
+    ) {
+      return decision('conflict');
+    }
+
+    if (activation.phase === LocalApplicationActivationPhase.ACTIVE) {
+      if (!activation.selected) {
+        return decision('unknown');
+      }
+      if (
+        !hasActiveRepairEnvelope(
+          snapshot,
+          activation.selected,
+          activation.rollbackCandidate,
+        )
+      ) {
+        return decision('conflict');
+      }
+      return decision('authorized', 'durable-active');
+    }
+
+    const transition = activation.transition;
+    if (
+      !transition ||
+      !hasSameReleaseReference(transition.target, snapshot.desired)
+    ) {
+      return decision('unknown');
+    }
+    if (
+      transition.action !== LocalApplicationActivationAction.INSTALL &&
+      transition.action !== LocalApplicationActivationAction.UPDATE
+    ) {
+      return decision('conflict');
+    }
+
+    const selectedPhase =
+      activation.phase === LocalApplicationActivationPhase.SELECTED ||
+      activation.phase === LocalApplicationActivationPhase.ACTIVATING;
+    if (selectedPhase) {
+      const previous =
+        transition.action === LocalApplicationActivationAction.INSTALL
+          ? null
+          : getActivationPhysicalPrevious(activation);
+      if (
+        !activation.selected ||
+        previous === undefined ||
+        !hasExactPhysicalProjection(snapshot, activation.selected, previous)
+      ) {
+        return decision('unknown');
+      }
+    } else if (
+      activation.phase === LocalApplicationActivationPhase.QUIESCING &&
+      transition.action === LocalApplicationActivationAction.UPDATE &&
+      hasSameReleaseReference(activation.desired, transition.target)
+    ) {
+      if (
+        !transition.source ||
+        !hasExactPhysicalProjection(
+          snapshot,
+          transition.source,
+          activation.rollbackCandidate,
+        )
+      ) {
+        return decision('unknown');
+      }
+    } else if (
+      activation.phase !== LocalApplicationActivationPhase.QUIESCING &&
+      activation.phase !== LocalApplicationActivationPhase.QUIESCENT
+    ) {
+      return decision('unknown');
+    }
+
+    return decision(
+      'authorized',
+      transition.action === LocalApplicationActivationAction.INSTALL
+        ? 'durable-install'
+        : 'durable-change',
+    );
   }
 
   /**
@@ -2916,6 +3659,42 @@ export function createSystemdUserServiceOperator(options = {}) {
       }
     }
 
+    /**
+     * Refresh only a stale cache whose loaded source and local unit bytes are
+     * both already exact. Missing local bytes are repaired later by selection
+     * convergence, after the exact cached unit has safely stopped.
+     * @param {Readonly<Record<string, any>>} observed - Manager observation.
+     * @returns {Promise<Readonly<Record<string, any>>>} - Revalidated manager state.
+     */
+    async function refreshExactStaleUnit(observed) {
+      if (
+        !hasExpectedUnitSource(observed, context.layout) ||
+        observed.needDaemonReload !== true
+      ) {
+        return observed;
+      }
+      const unitFile = await inspectFixedUnitFile({
+        fsOps,
+        layout: context.layout,
+        uid: context.filesystemUid,
+      });
+      if (unitFile.state !== 'managed') return observed;
+      await systemctl(['daemon-reload']);
+      return await readSystemd(context.layout);
+    }
+
+    /**
+     * @param {Readonly<Record<string, any>>} observed - Manager observation.
+     * @returns {boolean} - Whether loaded source identity is safe for stop proof.
+     */
+    function hasExpectedStopUnit(observed) {
+      return (
+        hasExpectedEffectiveUnit(observed, context.layout) ||
+        (hasExpectedUnitSource(observed, context.layout) &&
+          observed.needDaemonReload === true)
+      );
+    }
+
     return Object.freeze({
       /** @param {Readonly<Record<string, any>>} input - Staging request. @returns {Promise<void>} - Resolves after staging. */
       async stageRelease(input) {
@@ -2967,7 +3746,9 @@ export function createSystemdUserServiceOperator(options = {}) {
       /** @param {Readonly<Record<string, any>>} input - Stop request. @returns {Promise<void>} - Resolves after stop. */
       async stopService(input) {
         assertApp(input);
-        const systemd = await readSystemd(context.layout);
+        const systemd = await refreshExactStaleUnit(
+          await readSystemd(context.layout),
+        );
         if (systemd.loadState === 'not-found') {
           if (systemd.activeState !== 'inactive') {
             throw new Error(
@@ -2976,7 +3757,7 @@ export function createSystemdUserServiceOperator(options = {}) {
           }
           return;
         }
-        if (!hasExpectedEffectiveUnit(systemd, context.layout)) {
+        if (!hasExpectedStopUnit(systemd)) {
           throw new Error(
             'Systemd loaded different or stale wiring while activation tried to stop the service.',
           );
@@ -3001,14 +3782,16 @@ export function createSystemdUserServiceOperator(options = {}) {
       /** @param {Readonly<Record<string, any>>} input - Inactivity proof request. @returns {Promise<void>} - Resolves for inactive service. */
       async proveServiceInactive(input) {
         assertApp(input);
-        const systemd = await readSystemd(context.layout);
+        const systemd = await refreshExactStaleUnit(
+          await readSystemd(context.layout),
+        );
         if (
           systemd.loadState === 'not-found' &&
           systemd.activeState === 'inactive'
         ) {
           return;
         }
-        if (!hasExpectedEffectiveUnit(systemd, context.layout)) {
+        if (!hasExpectedStopUnit(systemd)) {
           throw new Error(
             'Systemd activation could not prove exact service wiring before inactivity.',
           );
@@ -3682,16 +4465,9 @@ export function createSystemdUserServiceOperator(options = {}) {
       context.pair.runtime.target,
       { allowUninstalledTargetMismatch: true },
     );
-    if (installation?.state === 'uninstalled') {
-      await reinstallActiveSelection(context, runtime, current, {
-        requireInvokingRelease: false,
-        recoveryRemediation: options.repairRecoveryRemediation,
-      });
-      return;
-    }
     if (
-      options.repairAuthorizedSource === true &&
-      installation?.state === 'installed'
+      installation?.state === 'uninstalled' ||
+      options.repairAuthorizedSource === true
     ) {
       await reinstallActiveSelection(context, runtime, current, {
         requireInvokingRelease: false,
@@ -3980,6 +4756,11 @@ export function createSystemdUserServiceOperator(options = {}) {
       uid: context.uid,
     });
     try {
+      const artifact = await inspectBytes(artifactPath);
+      const desired = Object.freeze({
+        artifactId: artifact.artifactId,
+        revisionId: context.pair.runtime.revisionId,
+      });
       const activation = await readActivationSnapshot(context);
       const installation = await readInstallation(
         context.layout,
@@ -3989,12 +4770,14 @@ export function createSystemdUserServiceOperator(options = {}) {
         { allowUninstalledTargetMismatch: activation === null },
       );
       const marker = await readUninstallMarker(context, installation);
-      const observed =
-        !installation || installation.state === 'uninstalled' || marker !== null
-          ? await observeDetachedInstallation(context, installation, marker)
-          : await observeInstallation(installation, {
-              tolerateSystemdFailure: true,
-            });
+      const snapshot = await readStatusObservationSnapshot(
+        context,
+        activation,
+        installation,
+        marker,
+        desired,
+      );
+      const observed = createObservedStatusFromSnapshot(context, snapshot);
       const expectedPrevious = activation
         ? getActivationPhysicalPrevious(activation)
         : undefined;
@@ -4023,6 +4806,7 @@ export function createSystemdUserServiceOperator(options = {}) {
       return {
         ...observed,
         activation: createActivationStatusView(activation),
+        desiredConvergence: createDesiredConvergenceStatus(context, snapshot),
         ...(activationMismatch
           ? {
               integrity: { status: 'invalid' },

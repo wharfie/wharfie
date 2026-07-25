@@ -329,16 +329,24 @@ exact retained source before entering the ordinary durable update. If the
 receipt disappears without that tombstone, the operation fails closed and the
 exact selected SEA must run `service install` to repair it.
 
-Status schema V2 reports `wiring.state` as `managed`, `absent`, `orphaned`,
+Status schema V3 reports `wiring.state` as `managed`, `absent`, `orphaned`,
 `conflicting`, or `unknown`; `wiring.selection` separately reports the redacted
-immutable-selector state. If wiring is `orphaned`, run `service uninstall`:
-that existing command is the explicit cleanup path and returns
-`outcome: orphan-reconciled`. There is no separate `service reconcile`
-command. A missing receipt, selector, or unit is repairable only when the
-durable activation record names the exact projection. Physical wiring with no
-activation record is degraded and is not adopted by install, converge, start,
-update, rollback, or recovery; uninstall's exact orphan checks are cleanup
-authority, not activation authority.
+immutable-selector state. It also requires one `desiredConvergence` V1
+decision whose application, unit, artifact, and revision identify the exact
+SEA that ran status. The disposition is `authorized`, `conflict`, or `unknown`.
+An authorized decision has exactly one basis: `physical-absence`,
+`durable-install`, `durable-change`, or `durable-active`. Conflict and unknown
+decisions have a null basis. The decision is read-only: it reports whether
+retrying `service converge` from that SEA is authorized without itself
+repairing or adopting host state.
+
+If wiring is `orphaned`, run `service uninstall`: that existing command is the
+explicit cleanup path and returns `outcome: orphan-reconciled`. There is no
+separate `service reconcile` command. A missing receipt, selector, or unit is
+repairable only when the durable activation record names the exact projection.
+Physical wiring with no activation record is degraded and is not adopted by
+install, converge, start, update, rollback, or recovery; uninstall's exact
+orphan checks are cleanup authority, not activation authority.
 
 First install requires physical absence and records a transition with no
 source. Existing queued work is compatible when every nonterminal run has the
