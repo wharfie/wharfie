@@ -860,6 +860,7 @@ describe('AWS single-node deployment provider client-family assembly', () => {
       'inspect',
       'plan',
       'stageClaimedArtifact',
+      'validateStagedArtifact',
       'converge',
       'convergePreStaged',
       'resume',

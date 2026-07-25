@@ -5,6 +5,7 @@ import { WHARFIE_VERSION } from '../core/lib/version.js';
 
 import opsCommand from './cmds/ops.js';
 import appCommand from './cmds/app.js';
+import { createSourceDeploymentCommand } from './cmds/deployment.js';
 
 /**
  * @typedef {object} CreateProgramOptions
@@ -28,6 +29,7 @@ export function createProgram(options = {}) {
 
   program.addCommand(appCommand);
   program.addCommand(opsCommand);
+  program.addCommand(createSourceDeploymentCommand());
 
   program.hook('preAction', async () => {
     await pathsModule.createWharfiePaths();

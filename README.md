@@ -516,10 +516,53 @@ version, and receipt are durably present and revalidated. Direct
 against durable state and never opens or substitutes its running executable.
 Ordinary `converge` deliberately remains the packaged running-SEA path.
 
-Deployment commands, the privileged host observer and publisher, guest service
-projection, and clean-account proof remain unfinished. External resource
-verification is represented by the generic V6 contract but remains unreachable
-through the fixed all-managed AWS profile and planner.
+The experimental deployment command tree is now mounted in both operator
+surfaces. Source uses `wharfie deployment ...`; a generated SEA uses
+`<app> wharfie deployment ...`. There are exactly five leaves: `plan`, `apply`,
+`inspect`, `reconcile`, and `destroy`. The exact source grammar is:
+
+```text
+wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
+wharfie deployment apply <deployment> --profile <canonical-profile.json> [--dir <app-dir>] [--output-dir <package-dir>] [--control-policy <policy>] [--json]
+wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
+wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
+wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+```
+
+Packaged commands have the same leaves and options except that `plan` and
+direct `apply` do not accept source `--dir` or `--output-dir`. The canonical
+DeploymentProfileV2 supplied through `--profile` is operator input outside the
+app manifest and contains no credentials. Both surfaces resolve the ordinary
+AWS credential chain. Source plan/direct apply package and durably pre-stage a
+selected SEA; source `apply --plan` and reconcile consume exact durable staged
+evidence. Packaged plan/apply and non-destroy reconcile instead prove the
+running SEA. Recovery of an active destroy remains executable-independent,
+matching destroy's durable-only authority.
+Create the canonical profile with
+`@wharfie/wharfie/deployment-profile`, whose narrow Node authoring API exports
+`DEPLOYMENT_MODE`, `createAwsSingleNodeProvider()`, and
+`createDeploymentProfile()`; the quickstart contains a complete recipe.
+Source `plan --json` output includes staged-artifact evidence and is reusable
+only by source `apply --plan`. Packaged plan output omits that evidence and is
+reusable only by an exact matching SEA; the two plan envelopes deliberately do
+not cross command surfaces.
+Plan always requires an explicit `--control-policy`, because source planning
+may package, stage, and create bootstrap control state. Direct apply defaults to
+`bootstrap`; prepared apply, inspect, reconcile, and destroy default to
+`require-active`. Source `apply --plan` rejects `--dir` and `--output-dir`
+rather than silently ignoring artifact-selection options. Scalar selectors
+such as profile, plan, region, policy, and source paths may be supplied only
+once. A correlated controller head that still carries an active operation is a
+nonzero incomplete result; inspect it and use confirmed reconcile after the
+former coordinator is known stopped.
+
+Command mounting is not a production claim. The privileged host observer and
+publisher, guest service projection, exact live STS session proof,
+clean-account lifecycle proof, and complete deployed-service readiness remain
+unfinished. External resource verification is represented by the generic V6
+contract but remains unreachable through the fixed all-managed AWS profile and
+planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -530,7 +573,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Durable selected SEA plan checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md) — the current handoff for source staging, portable pre-staged evidence, and the distinct source-versus-packaged convergence paths.
+- [Deployment command surface checkpoint](llm/checkpoints/2026-07-24-v63-deployment-command-surface.md) — the latest recorded checkpoint for mounted source and packaged lifecycle commands, profile authoring, recovery fencing, bounded operator input, and exact artifact-authority boundaries.
+- [Durable selected SEA plan checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md) — the parent handoff for source staging, portable pre-staged evidence, and the distinct source-versus-packaged convergence paths.
 - [Selected SEA artifact authority checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md) — the parent handoff for fresh-generation trust, one retained descriptor, observed deployment identity, and linear claim-or-discard ownership.
 - [One-shot deployment operation runner checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md) — the parent handoff for explicit control policy, one finite operation, unconditional cleanup, and deterministic failure precedence.
 - [Read-only deployment inspection checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md) — the parent handoff for exact durable inspection hydration, completed-destroy observation, guarded controller operations, active-call draining, and one owned AWS lifetime.

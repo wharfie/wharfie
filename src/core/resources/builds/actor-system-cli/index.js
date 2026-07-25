@@ -4,6 +4,7 @@ import { createExecutionLedgerOperatorCommands } from '../../../runtime/operator
 import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.js';
 import manifestCommand from './control_cmds/manifest.js';
 import metadataCommand from './control_cmds/metadata.js';
+import { createPackagedDeploymentCommand } from './control_cmds/deployment.js';
 import { createPackagedDurableRunCommand } from './control_cmds/run.js';
 import { createPackagedSystemdUserServiceCommand } from './control_cmds/service.js';
 import { createPackagedDurableWorkflowSignalCommand } from './control_cmds/signal.js';
@@ -117,6 +118,11 @@ export function createProgram(options = {}) {
       ? {}
       : { processRef: options.processRef }),
   });
+  const deploymentCommand = createPackagedDeploymentCommand({
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
 
   const program = new Command()
     .name('wharfie')
@@ -134,7 +140,8 @@ export function createProgram(options = {}) {
     .addCommand(retryEffectCommand)
     .addCommand(cancelCommand)
     .addCommand(signalCommand)
-    .addCommand(serviceCommand);
+    .addCommand(serviceCommand)
+    .addCommand(deploymentCommand);
 
   return program;
 }

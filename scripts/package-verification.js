@@ -99,6 +99,8 @@ function requiredRuntimeFiles() {
     'bin/wharfie',
     'src/app.js',
     'src/app.d.ts',
+    'src/deployment-profile.js',
+    'src/deployment-profile.d.ts',
     ...coreFiles,
     ...cliFiles,
   ];
@@ -140,6 +142,11 @@ export function assertPackageContents(manifest) {
   assert.equal(packageMetadata.license, 'Apache-2.0');
   assert.equal(packageMetadata.exports?.['./app']?.types, './src/app.d.ts');
   assert.equal(packageMetadata.exports?.['./app']?.import, './src/app.js');
+  assert.deepEqual(packageMetadata.exports?.['./deployment-profile'], {
+    types: './src/deployment-profile.d.ts',
+    import: './src/deployment-profile.js',
+    default: './src/deployment-profile.js',
+  });
   assert.match(packageMetadata.packageManager, /^npm@\d+\.\d+\.\d+$/);
   assert.deepEqual(packageMetadata.devEngines, {
     runtime: {

@@ -92,7 +92,43 @@ rejections rather than a buffered inbox. Exact-run `inspect --json` emits the sh
 activation-aware cursor, timer, signal-wait, and signal-delivery lifecycle;
 confirmed `recover` and evidence-backed `reconcile` use the same safe view.
 
-The shipped top-level CLI contains `app` and `ops`. Continue with the
+The source CLI also mounts an experimental provider-backed lifecycle:
+
+```text
+wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
+wharfie deployment apply <deployment> --profile <canonical-profile.json> [--dir <app-dir>] [--output-dir <package-dir>] [--control-policy <policy>] [--json]
+wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
+wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
+wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+```
+
+These are the only five deployment leaves. A canonical DeploymentProfileV2 is
+operator input outside the manifest, and the commands use the ordinary AWS
+credential chain without serializing credentials. Source plan/direct apply
+package and durably pre-stage a selected SEA; source `apply --plan` and
+reconcile consume exact durable staged evidence. Generated SEAs mount the same
+leaves at `<app> wharfie deployment ...`, accept neither `--dir` nor
+`--output-dir`, and use the running SEA for plan, apply, and non-destroy
+reconcile authority. Active destroy recovery remains durable-only.
+The supported `@wharfie/wharfie/deployment-profile` Node authoring API creates
+the canonical profile and its `wpr2` identity. Source plan JSON is reusable
+only on source `apply --plan`; packaged plan JSON is reusable only from the
+exact matching SEA. Their artifact-authority envelopes intentionally do not
+cross surfaces.
+Plan requires an explicit control policy because source planning may package,
+stage, and create bootstrap control state. Direct apply defaults to `bootstrap`;
+prepared apply, inspect, reconcile, and destroy default to `require-active`.
+Source `apply --plan` rejects `--dir` and `--output-dir`. Scalar selectors may
+be supplied only once. An operation that returns a correlated but still-active
+head fails as incomplete rather than being reported as successful.
+
+The command surface is not a clean-account or deployed-service-readiness
+claim. Guest projection, the privileged host observer/publisher, live STS
+session proof, and a complete provider lifecycle proof remain unfinished.
+
+The shipped source top-level CLI contains `app`, `ops`, and experimental
+`deployment`. Continue with the
 [installation guide](./guides/installation.md), [quickstart](./guides/quickstart.md),
 and [application structure guide](./guides/application-structure.md). The
 [project charter](../PROJECT.md), [roadmap](../ROADMAP.md), [architecture
@@ -101,8 +137,8 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [durable selected SEA plan
-checkpoint](../llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md).
+The latest recorded restart handoff is the [deployment command surface
+checkpoint](../llm/checkpoints/2026-07-24-v63-deployment-command-surface.md).
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only
 control inspection and require-active, existing-only reconciliation that can
@@ -135,12 +171,14 @@ passes the same bundle to `convergePreStaged()`. The one-shot runner's
 bundle against durable evidence without opening or falling back to the running
 SEA. Ordinary `converge` remains the packaged running-SEA path.
 
-The next priority is to mount source and packaged deployment commands while
-preserving that artifact-authority split, then wire guest projection and prove
-the complete lifecycle in a clean account. There is still no deployment
-command or service-readiness claim.
+Source and packaged deployment commands now preserve that artifact-authority
+split. The next priority is to wire guest projection and the privileged
+observer/publisher, then prove the complete lifecycle in a clean account.
+Mounted commands alone make no service-readiness claim.
 
-The V62 checkpoint's parent is the [selected SEA artifact authority
+The V63 checkpoint's parent is the [durable selected SEA plan
+checkpoint](../llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md),
+whose parent is the [selected SEA artifact authority
 checkpoint](../llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md),
 whose parent is the [one-shot deployment operation runner
 checkpoint](../llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md),

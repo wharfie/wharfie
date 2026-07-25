@@ -20,6 +20,7 @@ const POLICIES = Object.freeze([
 const OPERATION_METHOD_BY_NAME = Object.freeze({
   inspect: 'inspect',
   plan: 'plan',
+  'validate-staged-artifact': 'validateStagedArtifact',
   converge: 'converge',
   'converge-pre-staged': 'convergePreStaged',
   resume: 'resume',
@@ -28,6 +29,7 @@ const OPERATIONS = Object.freeze(
   /** @type {const} */ ([
     'inspect',
     'plan',
+    'validate-staged-artifact',
     'converge',
     'converge-pre-staged',
     'resume',
@@ -194,7 +196,13 @@ describe('AWS single-node deployment operation runner boundary', () => {
         },
       });
       openWith(invocation);
-      const input = { deploymentInstanceId: 'deployment-1' };
+      const input =
+        operation === 'resume'
+          ? {
+              deploymentInstanceId: 'deployment-1',
+              expectedPlanId: 'expected-plan',
+            }
+          : { deploymentInstanceId: 'deployment-1' };
 
       await expect(
         runAwsSingleNodeDeploymentOperation(
@@ -342,14 +350,14 @@ describe('AWS single-node deployment operation runner boundary', () => {
     expect(rogueOpen).not.toHaveBeenCalled();
   });
 
-  it('accepts only an exact frozen twelve-key invocation before taking ownership', async () => {
+  it('accepts only an exact frozen thirteen-key invocation before taking ownership', async () => {
     const getter = jest.fn();
     const mutable = makeInvocation({}, false);
     const extra = makeInvocation({}, false);
     extra.extra = true;
     Object.freeze(extra);
     const missing = makeInvocation({}, false);
-    delete missing.inspectControl;
+    delete missing.validateStagedArtifact;
     Object.freeze(missing);
     const accessor = makeInvocation({}, false);
     Object.defineProperty(accessor, 'inspect', {
@@ -411,7 +419,7 @@ describe('AWS single-node deployment operation runner boundary', () => {
 
   it('rejects a non-function method before policy or operation work', async () => {
     const invocation = makeInvocation({}, false);
-    invocation.inspectControl = true;
+    invocation.validateStagedArtifact = true;
     Object.freeze(invocation);
     openWith(invocation);
 

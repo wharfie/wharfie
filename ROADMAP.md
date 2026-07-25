@@ -72,9 +72,12 @@ typed attachment endpoint loss requires one stable full-window signature.
 One aggregate now preflights and routes all 18 observations into V6, while a
 strict provider composer separates read, planning, and mutation ports. The
 controller requires definite intent persistence before first execution and
-replays only exact stable-token creates after recovery. Production AWS wiring,
-commands, guest storage/service projection, and clean-account proof follow · **Last updated:**
-2026-07-24
+replays only exact stable-token creates after recovery. The AWS composition
+wiring now reaches exact experimental source and packaged `plan`, `apply`,
+`inspect`, `reconcile`, and `destroy` commands while preserving
+selected/pre-staged source authority and running-SEA packaged authority. Guest
+storage/service projection, the privileged publisher, clean-account proof, and
+a deployed-service readiness claim still follow · **Last updated:** 2026-07-24
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -955,9 +958,12 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 - [x] Use provider credential chains without embedding operator credentials.
 - [ ] Record managed/external ownership, resource receipts, and narrowly scoped node identities.
 - [ ] Make reconciliation and destroy idempotent and ownership-safe.
-- [ ] Expose provider-backed plan, deploy, inspect, and destroy in the reserved
-      operator namespace and prove them in a clean account. In-flight and
-      staged multi-node evolution remains Milestone 6 work.
+- [x] Expose provider-backed `plan`, `apply`, `inspect`, `reconcile`, and
+      `destroy` in both reserved operator namespaces with exact source and
+      packaged artifact authority.
+- [ ] Prove the complete lifecycle in a clean account, including guest service
+      projection and readiness. In-flight and staged multi-node evolution
+      remains Milestone 6 work.
 
 **Exit:** one executable previews and creates a single-node durable service, survives the end of the authoring session, and later removes only what it owns.
 
@@ -1175,22 +1181,47 @@ apply stages once and converges that same bundle through
 evidence and never falls back to its running SEA. Ordinary `converge` remains
 the packaged running-SEA path.
 
-1. Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
-   `destroy` commands while preserving that source-versus-packaged artifact
-   authority split. Source plan/apply must use selected pre-staging; packaged
-   apply and reconcile must continue to re-observe the currently running SEA.
-2. Wire guest storage projection, resident-service activation, and the
+The command boundary now mounts exactly five deployment leaves at source
+`wharfie deployment ...` and packaged `<app> wharfie deployment ...`:
+
+```text
+plan <deployment> --profile <canonical-profile.json> --control-policy <policy>
+apply <deployment> --profile <canonical-profile.json>
+apply --plan <plan.json>
+inspect <deployment-instance> --region <region>
+reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped]
+destroy <deployment-instance> --region <region>
+```
+
+Every leaf accepts `--json`. Plan requires `--control-policy`; the other leaves
+accept it optionally with their documented command defaults. Source plan and
+direct apply alone accept optional `--dir` and `--output-dir`. The canonical V2
+profile is operator input outside the manifest. The commands resolve the
+ordinary AWS credential chain, source plan/direct apply durably pre-stage their
+freshly selected SEA, source prepared apply/reconcile consume durable staged
+evidence, and packaged plan/apply/non-destroy reconcile prove the running SEA.
+Active destroy recovery remains durable-only. Scalar selectors are
+single-occurrence inputs, recovery is fenced to the inspected plan ID, and an
+active returned head is an incomplete nonzero result rather than success. This
+is focused command evidence, not a clean-account or service-readiness claim.
+The narrow `@wharfie/wharfie/deployment-profile` authoring subpath creates the
+canonical operator document. Source and packaged reusable plan envelopes
+deliberately do not cross artifact-authority surfaces.
+
+1. Wire guest storage projection, resident-service activation, and the
    privileged host observer outside the application UID, then prove the
    complete lifecycle in a clean account through the user's ordinary
    credential chain, including interruption and response-loss recovery and the
    publishing caller's exact STS role/session identity.
-3. Begin provider-backed coordinator recovery only after the single-node
+2. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [durable selected SEA plan
-checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md). Its
-parent is the [selected SEA artifact authority
+The latest recorded restart point is the [deployment command surface
+checkpoint](llm/checkpoints/2026-07-24-v63-deployment-command-surface.md). Its
+parent is the [durable selected SEA plan
+checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md),
+whose parent is the [selected SEA artifact authority
 checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md),
 whose parent is the [one-shot deployment operation runner
 checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md),

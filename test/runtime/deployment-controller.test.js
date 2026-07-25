@@ -1965,6 +1965,7 @@ describe('deployment controller read-only inspection', () => {
 
     const resumed = await harness.controller.resume({
       deploymentInstanceId: active.base.deploymentInstanceId,
+      expectedPlanId: active.activePlan.planId,
     });
 
     expect(resumed).toMatchObject({
@@ -2547,6 +2548,32 @@ describe('deployment controller artifact staging', () => {
     expect(harness.events).not.toContain('head-cas');
   });
 
+  it('rejects a raced active plan before artifact validation or recovery mutation', async () => {
+    const active = makeActiveResidentState();
+    const harness = makeHarness({
+      head: active.head,
+      plans: [active.activePlan, active.applyPlan],
+      profiles: [active.base.profile],
+      physical: active.physical,
+    });
+    expect(active.activePlan.planId).not.toBe(active.applyPlan.planId);
+
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: active.base.deploymentInstanceId,
+        expectedPlanId: active.applyPlan.planId,
+      }),
+    ).rejects.toThrow(/does not match the expected recovery plan/i);
+
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 0,
+      profiles: 0,
+    });
+    expect(harness.store.head?.headId).toBe(active.head.headId);
+    expectInspectionDidNotMutate(harness);
+  });
+
   it('validates staged evidence before any recovery CAS', async () => {
     const harness = makeHarness();
     const plan = await planWith(harness, 'apply');
@@ -2571,6 +2598,7 @@ describe('deployment controller artifact staging', () => {
     await expect(
       harness.controller.resume({
         deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
     ).rejects.toThrow();
 
@@ -2628,6 +2656,7 @@ describe('deployment controller artifact staging', () => {
     await expect(
       controller.resume({
         deploymentInstanceId: ready.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
     ).resolves.toMatchObject({ phase: 'DESTROYED' });
 
@@ -2647,6 +2676,79 @@ describe('deployment controller artifact staging', () => {
 });
 
 describe('deployment controller crash recovery', () => {
+  it('requires an exact expected plan identity before reading recovery state', async () => {
+    const harness = makeHarness();
+
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: harness.base.deploymentInstanceId,
+      }),
+    ).rejects.toThrow(/expectedPlanId is required/i);
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: 'not-a-plan-id',
+      }),
+    ).rejects.toThrow(/expectedPlanId/i);
+
+    expect(harness.store.readStats).toEqual({
+      heads: 0,
+      plans: 0,
+      profiles: 0,
+    });
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('returns only the exact completed recovery plan idempotently', async () => {
+    const ready = makeReadyState();
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      profiles: [ready.base.profile],
+      physical: ready.physical,
+    });
+
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: ready.base.deploymentInstanceId,
+        expectedPlanId: ready.applyPlan.planId,
+      }),
+    ).resolves.toEqual(ready.head);
+
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 0,
+      profiles: 0,
+    });
+    expectInspectionDidNotMutate(harness);
+  });
+
+  it('rejects a different completed plan after a recovery race', async () => {
+    const ready = makeReadyState();
+    const otherPlan = makeActiveResidentState().activePlan;
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      profiles: [ready.base.profile],
+      physical: ready.physical,
+    });
+    expect(otherPlan.planId).not.toBe(ready.applyPlan.planId);
+
+    await expect(
+      harness.controller.resume({
+        deploymentInstanceId: ready.base.deploymentInstanceId,
+        expectedPlanId: otherPlan.planId,
+      }),
+    ).rejects.toThrow(/does not match the expected recovery plan/i);
+
+    expect(harness.store.readStats).toEqual({
+      heads: 1,
+      plans: 0,
+      profiles: 0,
+    });
+    expectInspectionDidNotMutate(harness);
+  });
+
   it('pins exact provider reads before acceptance and never rediscovers them during recovery or READY lineage', async () => {
     const harness = makeHarness();
     const parameterName = AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS.x86_64;
@@ -2845,6 +2947,7 @@ describe('deployment controller crash recovery', () => {
     await expect(
       harness.controller.resume({
         deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
     ).resolves.toMatchObject({ phase: 'READY' });
 
@@ -2906,6 +3009,7 @@ describe('deployment controller crash recovery', () => {
     harness.events.length = 0;
     const head = await harness.controller.resume({
       deploymentInstanceId: harness.base.deploymentInstanceId,
+      expectedPlanId: plan.planId,
     });
 
     expect(head.phase).toBe('READY');
@@ -2960,6 +3064,7 @@ describe('deployment controller crash recovery', () => {
 
     const head = await harness.controller.resume({
       deploymentInstanceId: harness.base.deploymentInstanceId,
+      expectedPlanId: plan.planId,
     });
 
     expect(head).toMatchObject({
@@ -2989,6 +3094,7 @@ describe('deployment controller crash recovery', () => {
 
     const head = await harness.controller.resume({
       deploymentInstanceId: harness.base.deploymentInstanceId,
+      expectedPlanId: plan.planId,
     });
 
     expect(head.phase).toBe('READY');
@@ -3025,6 +3131,7 @@ describe('deployment controller crash recovery', () => {
     await expect(
       harness.controller.resume({
         deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
     ).rejects.toThrow(/different provider scope/i);
 
@@ -3060,9 +3167,11 @@ describe('deployment controller crash recovery', () => {
     const results = await Promise.allSettled([
       harness.controller.resume({
         deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
       harness.controller.resume({
         deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
     ]);
 
@@ -3400,6 +3509,7 @@ describe('deployment controller crash recovery', () => {
 
     const head = await harness.controller.resume({
       deploymentInstanceId: harness.base.deploymentInstanceId,
+      expectedPlanId: plan.planId,
     });
 
     expect(replaced).toBe(true);
@@ -3651,6 +3761,7 @@ describe('deployment controller crash recovery', () => {
     await expect(
       harness.controller.resume({
         deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
     ).resolves.toMatchObject({ phase: 'READY' });
     expect(harness.provider.executeCount.get(action.actionId)).toBe(1);
@@ -3693,6 +3804,7 @@ describe('deployment controller crash recovery', () => {
     await expect(
       harness.controller.resume({
         deploymentInstanceId: harness.base.deploymentInstanceId,
+        expectedPlanId: plan.planId,
       }),
     ).resolves.toMatchObject({ phase: 'READY' });
     expect(harness.provider.executeCount.get(action.actionId)).toBe(1);

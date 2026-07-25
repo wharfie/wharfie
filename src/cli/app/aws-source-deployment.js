@@ -5,6 +5,7 @@ import {
   validateDeploymentArtifactStageReceiptContext,
 } from '../../core/runtime/deployment-artifact-stage.js';
 import { openAwsSingleNodeDeploymentInvocation } from '../../core/runtime/deployment-aws-invocation.js';
+import { validateAwsDeploymentOperationResult } from '../../core/runtime/deployment-aws-lifecycle.js';
 import { validateDeploymentPlanContext } from '../../core/runtime/deployment-plan.js';
 import { validateDeploymentProfile } from '../../core/runtime/deployment-profile.js';
 import { validateProviderScope } from '../../core/runtime/deployment-provider-scope.js';
@@ -410,13 +411,16 @@ async function runPackagedDeployment(packaging, request, shouldApply) {
       profile: request.profile,
       artifactStage,
     });
-    result = shouldApply
-      ? await Reflect.apply(
-          invocation.methods.convergePreStaged,
-          invocation.owner,
-          [prepared],
-        )
-      : prepared;
+    if (shouldApply) {
+      const operationResult = await Reflect.apply(
+        invocation.methods.convergePreStaged,
+        invocation.owner,
+        [prepared],
+      );
+      result = validateAwsDeploymentOperationResult(operationResult, plan);
+    } else {
+      result = prepared;
+    }
   } catch (error) {
     operationFailed = true;
     operationError = error;

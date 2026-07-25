@@ -13,14 +13,17 @@ and evolve it later.
 
 ## What works today?
 
-The shipped CLI exposes two top-level commands: `wharfie app` and `wharfie ops`.
-The repository contains working foundations for loading manifests, invoking
-activities locally, persisting an append-only manual run → invocation → attempt
-ledger, inspecting/recovering exact runs from source or a packaged artifact,
-asking an exact live owner to cancel a foreground run, and packaging
-target-specific Node SEA executables. A standalone Wharfie builder binary is
-withheld until its build-host dependencies can be embedded. It is not
-production ready.
+The shipped source CLI exposes three top-level command groups: `wharfie app`,
+`wharfie ops`, and experimental `wharfie deployment`. The repository contains
+working foundations for loading manifests, invoking activities locally,
+persisting an append-only manual run → invocation → attempt ledger,
+inspecting/recovering exact runs from source or a packaged artifact, asking an
+exact live owner to cancel a foreground run, packaging target-specific Node SEA
+executables, and driving the finite AWS deployment lifecycle through focused
+automated evidence. The deployment path has not yet been proven through a
+clean account or completed guest service projection. A standalone Wharfie
+builder binary is withheld until its build-host dependencies can be embedded.
+It is not production ready.
 
 ## How do `inspect`, `recover`, and `cancel` differ?
 
@@ -47,11 +50,21 @@ not part of the current product, and no backward compatibility is promised.
 
 ## Is Wharfie a general cloud infrastructure-as-code tool?
 
-No. The planned deployment model lets a Wharfie application use a provider's
-normal credential chain to preview and create the finite substrate required by
-Wharfie capabilities, such as a node, durable control state, or artifact
-storage. Provider-native application infrastructure remains application code or
+No. The experimental deployment commands use the operator's normal AWS
+credential chain to preview and create the fixed substrate required by Wharfie
+capabilities, such as a node, durable control state, or artifact storage.
+Provider-native application infrastructure remains application code or
 external IaC.
+
+The command tree has exactly five leaves: `plan`, `apply`, `inspect`,
+`reconcile`, and `destroy`. Plan and direct apply take a canonical
+DeploymentProfileV2 JSON file through `--profile`; that operator document is
+outside the app manifest and contains no credentials. Source plan and direct
+apply package and pre-stage a selected SEA; source prepared apply and reconcile
+use durable staged evidence. Packaged plan, apply, and non-destroy reconcile
+prove their running SEA and do not accept `--dir` or `--output-dir`; active
+destroy recovery remains durable-only. This is an experimental operator
+surface, not a clean-account or service-readiness claim.
 
 ## Does Wharfie require a hosted control plane?
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import appApi, { defineApp, invokeActivity } from '../../src/app.js';
+import * as deploymentProfileApi from '../../src/deployment-profile.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -55,6 +56,40 @@ describe('docs command surface', () => {
       'invokeActivity',
     ]);
     expect(appApi).toEqual({ defineApp, invokeActivity });
+  });
+
+  it('exposes only the narrow deployment-profile authoring API', () => {
+    expect(Object.keys(deploymentProfileApi).sort()).toEqual([
+      'DEPLOYMENT_MODE',
+      'createAwsSingleNodeProvider',
+      'createDeploymentProfile',
+    ]);
+
+    const profile = deploymentProfileApi.createDeploymentProfile({
+      profile: { id: 'production' },
+      appId: 'docs-app',
+      target: {
+        nodeVersion: '24.13.1',
+        platform: 'linux',
+        architecture: 'x64',
+        libc: 'glibc',
+      },
+      mode: deploymentProfileApi.DEPLOYMENT_MODE,
+      provider: deploymentProfileApi.createAwsSingleNodeProvider('us-east-1'),
+    });
+
+    expect(profile).toMatchObject({
+      schemaVersion: 2,
+      kind: 'deploymentProfile',
+      profileRevisionId: expect.stringMatching(/^wpr2_[A-Za-z0-9_-]{43}$/),
+      appId: 'docs-app',
+      provider: {
+        kind: 'aws',
+        contractVersion: 3,
+        scope: { region: 'us-east-1' },
+      },
+    });
+    expect(Object.isFrozen(profile)).toBe(true);
   });
 
   it('does not advertise unsupported command groups in public docs', async () => {
@@ -112,8 +147,15 @@ describe('docs command surface', () => {
     expect(Object.keys(packageJson.exports).sort()).toEqual([
       '.',
       './app',
+      './deployment-profile',
       './package.json',
     ]);
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        'src/deployment-profile.js',
+        'src/deployment-profile.d.ts',
+      ]),
+    );
   });
 
   it('documents working onboarding commands in the quickstart', async () => {
@@ -156,6 +198,49 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('<next-app> wharfie service rollback');
     expect(quickstart).toContain('<next-app> wharfie service recover');
     expect(quickstart).toContain('<app> wharfie service uninstall');
+    expect(quickstart).toContain(
+      "} from '@wharfie/wharfie/deployment-profile';",
+    );
+    expect(quickstart).toContain('createDeploymentProfile({');
+    expect(quickstart).toContain(
+      'node ./make-deployment-profile.mjs > deployment-profile.json',
+    );
+    expect(quickstart).toContain(
+      'wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy>',
+    );
+    expect(quickstart).toContain('wharfie deployment apply --plan <plan.json>');
+    expect(quickstart).toContain(
+      'wharfie deployment inspect <deployment-instance> --region <region>',
+    );
+    expect(quickstart).toContain(
+      'wharfie deployment reconcile <deployment-instance> --region <region>',
+    );
+    expect(quickstart).toContain(
+      'wharfie deployment destroy <deployment-instance> --region <region>',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy>',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment apply --plan <plan.json>',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment inspect <deployment-instance> --region <region>',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment reconcile <deployment-instance> --region <region>',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment destroy <deployment-instance> --region <region>',
+    );
+    expect(quickstart).toContain('--confirm-coordinator-stopped');
+    expect(quickstart).toMatch(/Direct apply defaults to\s+`bootstrap`/);
+    expect(quickstart).toMatch(
+      /prepared apply, inspect, reconcile, and destroy default to\s+`require-active`/,
+    );
+    expect(quickstart).toMatch(
+      /Source\s+plan JSON contains exact durable staged-artifact evidence[\s\S]+Packaged\s+plan JSON omits that evidence/,
+    );
     expect(quickstart).not.toContain('Update and rollback remain unavailable');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
     expect(quickstart).not.toContain('--operation-id');

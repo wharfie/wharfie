@@ -16,6 +16,8 @@
   },
   "include": [
     "src/app.d.ts",
+    "src/deployment-profile.js",
+    "src/deployment-profile.d.ts",
     "src/core/**/*.js",
     "src/cli/**/*.js",
     "scripts/package-verification.js",

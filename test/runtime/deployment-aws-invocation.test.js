@@ -29,6 +29,7 @@ const INVOCATION_KEYS = Object.freeze([
   'inspect',
   'plan',
   'stageClaimedArtifact',
+  'validateStagedArtifact',
   'converge',
   'convergePreStaged',
   'resume',
@@ -202,6 +203,9 @@ beforeEach(() => {
     stageClaimedArtifact: jest.fn(async (claim) =>
       Object.freeze({ kind: 'artifact-stage', claim }),
     ),
+    validateStagedArtifact: jest.fn(async (input) =>
+      Object.freeze({ kind: 'validated-artifact-stage', input }),
+    ),
   });
   provider = Object.freeze({ provider: true });
   controller = {
@@ -288,6 +292,7 @@ describe('AWS single-node deployment invocation construction', () => {
     expect(controller.inspect).not.toHaveBeenCalled();
     expect(controller.plan).not.toHaveBeenCalled();
     expect(artifactStager.stageClaimedArtifact).not.toHaveBeenCalled();
+    expect(artifactStager.validateStagedArtifact).not.toHaveBeenCalled();
     expect(controller.converge).not.toHaveBeenCalled();
     expect(controller.convergePreStaged).not.toHaveBeenCalled();
     expect(controller.resume).not.toHaveBeenCalled();
@@ -312,7 +317,7 @@ describe('AWS single-node deployment invocation construction', () => {
     expect(family.close).toHaveBeenCalledTimes(1);
   });
 
-  it('requires the selected-artifact transfer port before claiming the family', async () => {
+  it('requires both artifact-staging ports before claiming the family', async () => {
     const family = makeFamily();
     artifactStager = Object.freeze({});
 
@@ -322,6 +327,14 @@ describe('AWS single-node deployment invocation construction', () => {
 
     artifactStager = Object.freeze({
       stageClaimedArtifact: jest.fn(),
+    });
+    expect(() => createInvocation(family)).toThrow(
+      'artifactStager.validateStagedArtifact must be a function',
+    );
+
+    artifactStager = Object.freeze({
+      stageClaimedArtifact: jest.fn(),
+      validateStagedArtifact: jest.fn(),
     });
     const invocation = createInvocation(family);
     expect(invocation.providerScope).toEqual(PROVIDER_SCOPE);
@@ -416,14 +429,18 @@ describe('AWS deployment control orchestration', () => {
     await expect(invocation.plan(input)).rejects.toBeInstanceOf(
       AwsDeploymentControlNotReadyError,
     );
+    await expect(
+      invocation.validateStagedArtifact(input),
+    ).rejects.toBeInstanceOf(AwsDeploymentControlNotReadyError);
     await expect(invocation.convergePreStaged(input)).rejects.toBeInstanceOf(
       AwsDeploymentControlNotReadyError,
     );
     expect(controller.inspect).not.toHaveBeenCalled();
     expect(controller.plan).not.toHaveBeenCalled();
+    expect(artifactStager.validateStagedArtifact).not.toHaveBeenCalled();
     expect(controller.convergePreStaged).not.toHaveBeenCalled();
-    expect(tableLifecycle.inspect).toHaveBeenCalledTimes(4);
-    expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(4);
+    expect(tableLifecycle.inspect).toHaveBeenCalledTimes(5);
+    expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(5);
   });
 
   it.each([
@@ -436,7 +453,14 @@ describe('AWS deployment control orchestration', () => {
     'gates and delegates %s with an independent frozen input and controller receiver',
     async (publicMethod, controllerMethod) => {
       const invocation = createInvocation();
-      const input = Object.freeze({ method: publicMethod });
+      const input = Object.freeze(
+        publicMethod === 'resume'
+          ? {
+              deploymentInstanceId: 'deployment-instance',
+              expectedPlanId: 'expected-plan',
+            }
+          : { method: publicMethod },
+      );
 
       const result = await invocation[publicMethod](input);
 
@@ -449,6 +473,30 @@ describe('AWS deployment control orchestration', () => {
       expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('gates and delegates durable stage validation with an independent frozen input and stager receiver', async () => {
+    const invocation = createInvocation();
+    const input = Object.freeze({
+      deploymentRevision: Object.freeze({ deploymentRevision: true }),
+      profile: Object.freeze({ profile: true }),
+      providerScope: PROVIDER_SCOPE,
+    });
+
+    const result = await invocation.validateStagedArtifact(input);
+
+    expect(result.input).toEqual(input);
+    expect(result.input).not.toBe(input);
+    expect(Object.isFrozen(result.input)).toBe(true);
+    expect(Object.isFrozen(result.input.deploymentRevision)).toBe(true);
+    expect(artifactStager.validateStagedArtifact).toHaveBeenCalledWith(
+      result.input,
+    );
+    expect(artifactStager.validateStagedArtifact.mock.contexts[0]).toBe(
+      artifactStager,
+    );
+    expect(tableLifecycle.inspect).toHaveBeenCalledTimes(1);
+    expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(1);
+  });
 
   it('synchronously transfers one exact claimed artifact without a control-await gap', async () => {
     const invocation = createInvocation();
@@ -501,7 +549,14 @@ describe('AWS deployment control orchestration', () => {
     expect(artifactStager.stageClaimedArtifact).not.toHaveBeenCalled();
   });
 
-  it.each(['inspect', 'plan', 'converge', 'convergePreStaged', 'resume'])(
+  it.each([
+    'inspect',
+    'plan',
+    'validateStagedArtifact',
+    'converge',
+    'convergePreStaged',
+    'resume',
+  ])(
     'snapshots the complete %s request before deferred control preflight',
     async (publicMethod) => {
       const tableInspection = deferred();
@@ -513,11 +568,17 @@ describe('AWS deployment control orchestration', () => {
       const input = {
         method: publicMethod,
         nested: { deploymentInstanceId: 'before-preflight' },
+        ...(publicMethod === 'resume'
+          ? { expectedPlanId: 'expected-plan-before-preflight' }
+          : {}),
       };
 
       const operation = invocation[publicMethod](input);
       input.method = 'mutated';
       input.nested.deploymentInstanceId = 'after-preflight';
+      if (publicMethod === 'resume') {
+        input.expectedPlanId = 'expected-plan-after-preflight';
+      }
       input.extra = true;
       tableInspection.resolve(tableState());
       bucketInspection.resolve(bucketState());
@@ -526,33 +587,50 @@ describe('AWS deployment control orchestration', () => {
       expect(result.input).toEqual({
         method: publicMethod,
         nested: { deploymentInstanceId: 'before-preflight' },
+        ...(publicMethod === 'resume'
+          ? { expectedPlanId: 'expected-plan-before-preflight' }
+          : {}),
       });
       expect(Object.isFrozen(result.input)).toBe(true);
       expect(Object.isFrozen(result.input.nested)).toBe(true);
-      expect(controller[publicMethod]).toHaveBeenCalledWith(result.input);
+      const delegate =
+        publicMethod === 'validateStagedArtifact'
+          ? artifactStager.validateStagedArtifact
+          : controller[publicMethod];
+      expect(delegate).toHaveBeenCalledWith(result.input);
     },
   );
 
-  it('rejects an accessor request before control or controller I/O', async () => {
-    const invocation = createInvocation();
-    let getterCalls = 0;
-    const input = {};
-    Object.defineProperty(input, 'deploymentInstanceId', {
-      enumerable: true,
-      get() {
-        getterCalls += 1;
-        return 'should-not-be-read';
-      },
-    });
+  it.each([
+    ['inspect', 'controller', 'inspect'],
+    ['validateStagedArtifact', 'stager', 'validateStagedArtifact'],
+  ])(
+    'rejects an accessor %s request before control or %s I/O',
+    async (publicMethod, delegateKind, delegateMethod) => {
+      const invocation = createInvocation();
+      let getterCalls = 0;
+      const input = {};
+      Object.defineProperty(input, 'deploymentInstanceId', {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          return 'should-not-be-read';
+        },
+      });
 
-    await expect(invocation.inspect(input)).rejects.toThrow(
-      'must be a plain JSON property',
-    );
-    expect(getterCalls).toBe(0);
-    expect(tableLifecycle.inspect).not.toHaveBeenCalled();
-    expect(bucketLifecycle.inspect).not.toHaveBeenCalled();
-    expect(controller.inspect).not.toHaveBeenCalled();
-  });
+      await expect(invocation[publicMethod](input)).rejects.toThrow(
+        'must be a plain JSON property',
+      );
+      expect(getterCalls).toBe(0);
+      expect(tableLifecycle.inspect).not.toHaveBeenCalled();
+      expect(bucketLifecycle.inspect).not.toHaveBeenCalled();
+      const delegate =
+        delegateKind === 'stager'
+          ? artifactStager[delegateMethod]
+          : controller[delegateMethod];
+      expect(delegate).not.toHaveBeenCalled();
+    },
+  );
 
   it('preflights both controls before explicit reconcile and never bootstraps', async () => {
     const tableInspection = deferred();
@@ -703,6 +781,7 @@ describe('AWS deployment invocation ownership lifecycle', () => {
       'inspect',
       'plan',
       'stageClaimedArtifact',
+      'validateStagedArtifact',
       'converge',
       'convergePreStaged',
       'resume',

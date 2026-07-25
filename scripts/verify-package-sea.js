@@ -9169,6 +9169,32 @@ export default defineApp({
   assert.match(operatorHelp, /\bstart\b/);
   assert.match(operatorHelp, /\bsignal\b/);
   assert.match(operatorHelp, /\bservice\b/);
+  assert.match(operatorHelp, /\bdeployment\b/);
+  const deploymentHelp = runCommand(
+    cleanArtifactPath,
+    ['wharfie', 'deployment', '--help'],
+    {
+      cwd: cleanRunDirectory,
+      capture: true,
+      env: cleanEnvironment,
+    },
+  ).stdout;
+  assert.match(deploymentHelp, /\bplan\b/);
+  assert.match(deploymentHelp, /\bapply\b/);
+  assert.match(deploymentHelp, /\binspect\b/);
+  assert.match(deploymentHelp, /\breconcile\b/);
+  assert.match(deploymentHelp, /\bdestroy\b/);
+  const deploymentPlanHelp = runCommand(
+    cleanArtifactPath,
+    ['wharfie', 'deployment', 'plan', '--help'],
+    {
+      cwd: cleanRunDirectory,
+      capture: true,
+      env: cleanEnvironment,
+    },
+  ).stdout;
+  assert.doesNotMatch(deploymentPlanHelp, /--dir\b/);
+  assert.doesNotMatch(deploymentPlanHelp, /--output-dir\b/);
   const serviceStatus = spawnSync(
     cleanArtifactPath,
     ['wharfie', 'service', 'status', '--json'],

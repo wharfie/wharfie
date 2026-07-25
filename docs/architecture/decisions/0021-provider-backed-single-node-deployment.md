@@ -80,13 +80,19 @@ artifactId
 profileRevisionId
 ```
 
-Apply and reconcile must read the embedded revision/runtime records from the
-SEA that is actually running and hash the held executable bytes. The embedded
-application, revision, and target must match the profile and the observed
-`artifactId`. A caller cannot redirect that production check to another path.
-Destroy does not require historical executable bytes or a sidecar that may no
-longer exist; it uses the durable provider scope, deployment head, and exact
-ownership receipts.
+Packaged plan, apply, and non-destroy reconcile must read the embedded
+revision/runtime records from the SEA that is actually running and hash held
+executable bytes.
+The embedded application, revision, and target must match the profile and the
+observed `artifactId`; a caller cannot redirect that production check to
+another path. Source plan and direct apply instead mint authority from one
+freshly packaged selected SEA, durably pre-stage those held bytes, and return
+portable exact stage evidence. Later source apply and source reconcile validate
+that durable evidence without treating the Node process running the source CLI
+as the artifact. Destroy does not require historical executable bytes or a
+sidecar that may no longer exist; it uses the durable provider scope,
+deployment head, and exact ownership receipts. Recovery of an active destroy
+therefore also remains executable-independent.
 
 Resolving the ordinary AWS credential chain produces a secret-free provider
 scope containing the partition, account, and region. The stable deployment
@@ -826,11 +832,15 @@ hatch.
 
 ### Plans are previews, not authority
 
-`plan` performs no mutation. A plan is deterministic for one exact deployment
-revision, provider scope, incarnation, head generation, and provider
-inspection. It contains a bounded ordered action list and no timestamps or
-credentials. The plan and every action are content-addressed so retries can
-name the same operation and provider idempotency token.
+The provider planner performs no mutation. A plan is deterministic for one
+exact deployment revision, provider scope, incarnation, head generation, and
+provider inspection. It contains a bounded ordered action list and no
+timestamps or credentials. The plan and every action are content-addressed so
+retries can name the same operation and provider idempotency token. The public
+source `deployment plan` command is a wider preparation boundary: it may first
+package and durably stage the selected SEA and, under an explicit `bootstrap`
+control policy, create the fixed control substrate before invoking that pure
+planner.
 
 Structural plan validation proves only that a document is canonical and
 internally consistent. Before starting an operation, apply, reconcile, or
@@ -916,14 +926,17 @@ This protocol claims convergent, idempotent logical effects where the provider
 supports the action token and evidence checks. It does not claim that an
 arbitrary physical API request executes exactly once.
 
-`resume` is an explicit assertion that the prior coordinator has stopped. It
-first CAS-claims the active operation through a blocked recovery boundary, so
-only one of two successor sessions may retry the intended action. This initial
-one-coordinator contract has no automatic failure detector or lease and does
-not authorize takeover while the old coordinator may still be running. A
-losing CAS grants no mutation authority. The local ledger-service ownership
-record is scoped to one OS principal and is not reused as a distributed
-deployment lease.
+`resume` is an explicit assertion that the prior coordinator has stopped. Its
+request names the exact active plan ID observed before recovery. A different
+active plan or a different later completed plan fails before artifact
+validation, CAS, or provider mutation; completion of that same plan is an
+idempotent read. Resume then CAS-claims the active operation through a blocked
+recovery boundary, so only one of two successor sessions may retry the intended
+action. This initial one-coordinator contract has no automatic failure detector
+or lease and does not authorize takeover while the old coordinator may still
+be running. A losing CAS grants no mutation authority. The local ledger-service
+ownership record is scoped to one OS principal and is not reused as a
+distributed deployment lease.
 
 ### Inspection, reconciliation, and destroy
 
@@ -2101,3 +2114,65 @@ packaged-running-SEA path as separate artifact authorities. Guest storage and
 service projection, privileged publisher wiring, exact live STS session proof,
 DESTROYED-tombstone reapply, clean-account lifecycle proof, and exactly-once
 provider effects remain unfinished.
+
+The forty-fifth slice mounts that exact operator boundary without broadening
+the deployment model. Source exposes `wharfie deployment ...`; every packaged
+application exposes `<app> wharfie deployment ...` in its reserved operator
+namespace. Both parents are closed over exactly five leaves: `plan`, `apply`,
+`inspect`, `reconcile`, and `destroy`. There is no generic provider operation,
+resource subcommand, or deployment extension hook.
+
+The source grammar is:
+
+```text
+wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
+wharfie deployment apply <deployment> --profile <canonical-profile.json> [--dir <app-dir>] [--output-dir <package-dir>] [--control-policy <policy>] [--json]
+wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
+wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
+wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+```
+
+The packaged grammar is identical except that plan and direct apply omit
+source-only `--dir` and `--output-dir`. A direct plan/apply admits one exact
+canonical DeploymentProfileV2 JSON file. That profile is operator input
+outside the application manifest, contains no credentials, and remains the
+finite Wharfie capability fulfillment rather than public cloud IaC. Inspection,
+reconcile, and destroy select one durable deployment-instance ID plus one
+explicit AWS region. Reconcile carries the additional
+`--confirm-coordinator-stopped` recovery assertion. Every leaf supports
+redacted compact output or complete `--json`, and every invocation selects an
+explicit or command-default `require-active`, `reconcile-existing`, or
+`bootstrap` control policy.
+Plan has no control-policy default: it requires an explicit selection because
+source planning may package, stage, and create bootstrap control state. Direct
+apply defaults to `bootstrap`; prepared apply and the three located commands
+default to `require-active`. Source prepared apply rejects `--dir` and
+`--output-dir` instead of ignoring artifact-selection input.
+
+The source adapter connects plan and direct apply to fresh selected-SEA
+packaging and durable pre-staging; its prepared-plan apply and reconcile use
+only exact durable staged evidence. The packaged adapter has no arbitrary
+artifact path and connects plan, both apply forms, and reconcile to
+running-SEA observation except when it recovers an active destroy. Inspect,
+destroy, and active-destroy recovery need no artifact bytes in either mode.
+Both adapters resolve the user's ordinary AWS credential chain and keep
+credentials out of profiles, plans, output, and artifacts.
+
+Scalar authority selectors are single-occurrence inputs; an invalid policy is
+rejected before profile or plan file admission. Operator JSON documents are
+bounded regular UTF-8 files read through one nonblocking held descriptor and
+must remain unchanged through the read. Every returned head is revalidated
+against the exact plan, operation kind, incarnation, provider scope, basis,
+revision, and ordered actions. A valid head that still carries an active
+operation produces a typed incomplete failure rather than a successful command
+exit. Inspection envelopes receive the same active and last-plan correlation
+before they can authorize reconcile, destroy, or an already-destroyed
+read-through.
+
+This command mount is experimental. It has exact parsing, dispatch,
+artifact-authority, and focused provider evidence, but it does not claim a
+complete clean-account lifecycle or a ready resident service. Guest storage
+and service projection, privileged publisher wiring, exact live STS session
+proof, DESTROYED-tombstone reapply, clean-account lifecycle proof, and
+exactly-once provider effects remain unfinished.

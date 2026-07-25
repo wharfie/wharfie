@@ -48,7 +48,7 @@ describe('CLI entrypoint', () => {
     expect(output).not.toMatch(/^\s+config\b/m);
     expect(output).not.toMatch(/^\s+init\b/m);
     expect(output).not.toMatch(/^\s+list\b/m);
-    expect(output).not.toMatch(/^\s+deployment\b/m);
+    expect(output).toMatch(/^\s+deployment\b/m);
     expect(output).not.toMatch(/^\s+project\b/m);
     expect(output).not.toMatch(/^\s+utils\b/m);
   });
@@ -67,7 +67,32 @@ describe('CLI entrypoint', () => {
     expect(program.commands.map((command) => command.name())).toEqual([
       'app',
       'ops',
+      'deployment',
     ]);
+  });
+
+  test('mounts the exact deployment lifecycle under one namespace', () => {
+    const firstProgram = createProgram();
+    const secondProgram = createProgram();
+    const deployment = firstProgram.commands.find(
+      (command) => command.name() === 'deployment',
+    );
+    const secondDeployment = secondProgram.commands.find(
+      (command) => command.name() === 'deployment',
+    );
+
+    expect(deployment).toBeDefined();
+    expect(deployment?.commands.map((command) => command.name())).toEqual([
+      'plan',
+      'apply',
+      'inspect',
+      'reconcile',
+      'destroy',
+    ]);
+    expect(secondDeployment).toBeDefined();
+    expect(secondDeployment).not.toBe(deployment);
+    expect(deployment?.parent).toBe(firstProgram);
+    expect(secondDeployment?.parent).toBe(secondProgram);
   });
 
   test('awaits async preAction work before parseAsync resolves', async () => {

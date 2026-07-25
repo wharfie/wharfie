@@ -77,10 +77,65 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('reconcile-effect');
     expect(help).toContain('retry-effect');
     expect(help).toContain('cancel');
+    expect(help).toContain('deployment');
     expect(help).not.toMatch(/\blist\b/);
     expect(help).not.toMatch(/\bfunc\b/);
     expect(help).not.toMatch(/\binfra\b/);
     expect(help).not.toMatch(/\bctl\b/);
+  });
+
+  it('mounts the exact nested deployment lifecycle without replacing flat ledger commands', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const program = createProgram();
+    const deployment = program.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'deployment',
+    );
+
+    expect(deployment).toBeDefined();
+    expect(
+      deployment?.commands.map(
+        /** @param {import('commander').Command} command */
+        (command) => command.name(),
+      ),
+    ).toEqual(['plan', 'apply', 'inspect', 'reconcile', 'destroy']);
+    expect(
+      program.commands.filter(
+        /** @param {import('commander').Command} command */
+        (command) => command.name() === 'inspect',
+      ),
+    ).toHaveLength(1);
+    expect(
+      program.commands.filter(
+        /** @param {import('commander').Command} command */
+        (command) => command.name() === 'reconcile',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('forwards the packaged process seam to deployment command failures', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const processRef = { exitCode: undefined };
+    const globalExitCode = process.exitCode;
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const program = createProgram({ processRef });
+
+    await program.parseAsync(
+      [
+        'deployment',
+        'inspect',
+        'not-a-deployment-instance',
+        '--region',
+        'us-east-1',
+      ],
+      { from: 'user' },
+    );
+
+    expect(processRef.exitCode).toBe(1);
+    expect(process.exitCode).toBe(globalExitCode);
+    expect(consoleError).toHaveBeenCalledTimes(1);
   });
 
   it('mounts the same public retry-effect command in source and packaged parents', async () => {

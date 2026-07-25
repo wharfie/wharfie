@@ -1,7 +1,8 @@
 # ⚡️ Quickstart
 
 Wharfie is in an experimental project reset. The commands below describe the
-working local v2 surface, not a production deployment workflow.
+working local v2 surface and the newly mounted experimental deployment
+lifecycle, not a production-ready service.
 
 ## Run from source
 
@@ -598,6 +599,108 @@ wharfie app package ./path/to/app
 Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
 
+## Try the experimental deployment lifecycle
+
+Provider-backed deployment is now mounted, but it is still an experimental
+operator surface with focused automated evidence. It has not completed a
+clean-account lifecycle proof and does not yet establish that the deployed
+resident service is ready. The command tree has exactly five leaves: `plan`,
+`apply`, `inspect`, `reconcile`, and `destroy`.
+
+Plan and direct apply take a canonical DeploymentProfileV2 (`wpr2`) JSON
+document. The profile binds the app, Linux target, fixed single-node mode, AWS
+region, and fixed capability fulfillment. It is operator input outside
+`wharfie.app.js`; it contains no credentials and is not a general resource
+graph. The commands resolve the operator's ordinary AWS credential chain for
+the profile's region.
+
+Create that canonical document with the supported Node authoring API:
+
+```js
+// make-deployment-profile.mjs
+import {
+  DEPLOYMENT_MODE,
+  createAwsSingleNodeProvider,
+  createDeploymentProfile,
+} from '@wharfie/wharfie/deployment-profile';
+
+const profile = createDeploymentProfile({
+  profile: { id: 'production' },
+  appId: 'my-app',
+  target: {
+    nodeVersion: '24.13.1',
+    platform: 'linux',
+    architecture: 'x64',
+    libc: 'glibc',
+  },
+  mode: DEPLOYMENT_MODE,
+  provider: createAwsSingleNodeProvider('us-east-1'),
+});
+
+process.stdout.write(`${JSON.stringify(profile, null, 2)}\n`);
+```
+
+```bash
+node ./make-deployment-profile.mjs > deployment-profile.json
+```
+
+The helper validates the finite profile contract and computes its
+content-addressed `wpr2` identity; do not invent or copy a
+`profileRevisionId`.
+
+The exact source grammar is:
+
+```text
+wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
+wharfie deployment apply <deployment> --profile <canonical-profile.json> [--dir <app-dir>] [--output-dir <package-dir>] [--control-policy <policy>] [--json]
+wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
+wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
+wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+```
+
+`--control-policy` accepts `require-active`, `reconcile-existing`, or
+`bootstrap`. Plan requires an explicit policy because source planning may
+package, stage, and create bootstrap control state. Direct apply defaults to
+`bootstrap`; prepared apply, inspect, reconcile, and destroy default to
+`require-active`. Use `plan --json` to retain the complete reusable document;
+pass that document alone to `apply --plan` on the same command surface. Source
+plan JSON contains exact durable staged-artifact evidence and is accepted only
+by source `apply --plan`. Packaged plan JSON omits that evidence, is accepted
+only by an exact matching SEA's `apply --plan`, and cannot be moved to the
+source surface. The prepared-plan form cannot be combined with a positional
+deployment, `--profile`, `--dir`, or `--output-dir`. Supply scalar selectors
+such as profile, plan, region, policy, and source paths at most once.
+
+Source plan and direct apply freshly package the selected target and durably
+pre-stage its exact SEA before returning. Source `apply --plan` later validates
+the portable staged evidence rather than rebuilding or using the Node process
+that happens to run the CLI. Source reconcile likewise reloads and validates
+the exact durable stage instead of treating that Node process as artifact
+authority.
+
+The packaged executable exposes the same five leaves. Its direct grammar omits
+the source-only directory options:
+
+```text
+<app> wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--json]
+<app> wharfie deployment apply <deployment> --profile <canonical-profile.json> [--control-policy <policy>] [--json]
+<app> wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
+<app> wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+<app> wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
+<app> wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+```
+
+Packaged plan, both apply forms, and non-destroy reconcile validate the SEA that
+is actually running the command; no artifact-path override is accepted.
+Inspection and destroy use durable deployment identity and provider evidence
+instead of historical local artifact bytes, so recovery of an active destroy
+also remains executable-independent. `reconcile` does not silently take over
+ambiguous in-flight work: use `--confirm-coordinator-stopped` only when the
+prior coordinator is known unable to continue. A valid returned head that
+still carries an active operation is reported as an incomplete nonzero result;
+inspect it before deciding whether confirmed recovery is safe.
+
 The v2 manifest exposes only the bounded plain-data workflow definitions above;
 its public start and operator commands handle activity, persisted timer, and
 current-wait signal continuations. Branches, an early-signal inbox,
@@ -608,4 +711,5 @@ External activity packages must be pinned as exact descriptors such as
 and ambient dependency resolution are not accepted. Multiple entries must use
 lowercase npm registry names, be unique, and be sorted by name.
 
-The shipped top-level CLI surface is `app` and `ops`.
+The shipped source top-level CLI surface is `app`, `ops`, and experimental
+`deployment`.

@@ -372,6 +372,12 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
       'awsDeploymentInvocation artifactStager.stageClaimedArtifact must be a function.',
     );
   }
+  const validateStagedArtifactMethod = artifactStager.validateStagedArtifact;
+  if (typeof validateStagedArtifactMethod !== 'function') {
+    throw new TypeError(
+      'awsDeploymentInvocation artifactStager.validateStagedArtifact must be a function.',
+    );
+  }
   const provider = createAwsSingleNodeDeploymentProviderFromClientFamily({
     clientFamily,
     now,
@@ -548,6 +554,22 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
   }
 
   /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
+  function validateStagedArtifact(input) {
+    return enter(async () => {
+      const request = deepFreeze(
+        cloneJsonObject(
+          input,
+          'awsDeploymentInvocation validateStagedArtifact input',
+        ),
+      );
+      await requireControlInternal();
+      return await Reflect.apply(validateStagedArtifactMethod, artifactStager, [
+        request,
+      ]);
+    });
+  }
+
+  /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
   function converge(input) {
     return enter(async () => {
       const request = deepFreeze(
@@ -617,6 +639,7 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     inspect,
     plan,
     stageClaimedArtifact,
+    validateStagedArtifact,
     converge,
     convergePreStaged,
     resume,

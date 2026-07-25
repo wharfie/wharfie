@@ -16,6 +16,7 @@ const INVOCATION_KEYS = Object.freeze([
   'inspect',
   'plan',
   'stageClaimedArtifact',
+  'validateStagedArtifact',
   'converge',
   'convergePreStaged',
   'resume',
@@ -28,10 +29,11 @@ const CONTROL_METHOD_BY_POLICY = Object.freeze({
   'reconcile-existing': 'reconcileControl',
   bootstrap: 'bootstrapControl',
 });
-/** @type {Readonly<Record<string, 'inspect'|'plan'|'converge'|'convergePreStaged'|'resume'>>} */
+/** @type {Readonly<Record<string, 'inspect'|'plan'|'validateStagedArtifact'|'converge'|'convergePreStaged'|'resume'>>} */
 const OPERATION_METHOD_BY_NAME = Object.freeze({
   inspect: 'inspect',
   plan: 'plan',
+  'validate-staged-artifact': 'validateStagedArtifact',
   converge: 'converge',
   'converge-pre-staged': 'convergePreStaged',
   resume: 'resume',
@@ -105,7 +107,7 @@ function deepFreeze(value) {
  * Validate and snapshot the public request before any credential authority is
  * opened.
  * @param {unknown} value - Exact runner request.
- * @returns {Readonly<{region: string, controlMethod: 'requireControl'|'reconcileControl'|'bootstrapControl', operationMethod: 'inspect'|'plan'|'converge'|'convergePreStaged'|'resume', input: Readonly<Record<string, any>>}>} - Canonical request.
+ * @returns {Readonly<{region: string, controlMethod: 'requireControl'|'reconcileControl'|'bootstrapControl', operationMethod: 'inspect'|'plan'|'validateStagedArtifact'|'converge'|'convergePreStaged'|'resume', input: Readonly<Record<string, any>>}>} - Canonical request.
  */
 function validateRequest(value) {
   const request = snapshotExactObject(value, REQUEST_KEYS, INVALID_REQUEST);
@@ -177,7 +179,7 @@ function captureInvocation(invocation) {
 /**
  * Run against an invocation once its opener settles.
  * @param {unknown} opening - In-flight invocation open.
- * @param {Readonly<{region: string, controlMethod: 'requireControl'|'reconcileControl'|'bootstrapControl', operationMethod: 'inspect'|'plan'|'converge'|'convergePreStaged'|'resume', input: Readonly<Record<string, any>>}>} request - Canonical request.
+ * @param {Readonly<{region: string, controlMethod: 'requireControl'|'reconcileControl'|'bootstrapControl', operationMethod: 'inspect'|'plan'|'validateStagedArtifact'|'converge'|'convergePreStaged'|'resume', input: Readonly<Record<string, any>>}>} request - Canonical request.
  * @returns {Promise<any>} - Exact operation result after owned cleanup.
  */
 async function runOpenedInvocation(opening, request) {

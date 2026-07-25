@@ -12,6 +12,7 @@ import {
 } from './deployment-artifact-stage.js';
 import { validateDeploymentInspectionContext } from './deployment-inspection.js';
 import {
+  assertDeploymentPlanId,
   validateDeploymentPlan,
   validateDeploymentPlanContext,
 } from './deployment-plan.js';
@@ -43,7 +44,7 @@ const CONVERGE_PRE_STAGED_REQUEST_KEYS = new Set([
   'profile',
   'artifactStage',
 ]);
-const RESUME_REQUEST_KEYS = new Set(['deploymentInstanceId']);
+const RESUME_REQUEST_KEYS = new Set(['deploymentInstanceId', 'expectedPlanId']);
 const SETTLEMENT_KEYS = new Set(['status', 'binding']);
 const STATUS_ONLY_SETTLEMENT_KEYS = new Set(['status']);
 const ARTIFACT_STAGE_KEYS = new Set(['intent', 'receipt']);
@@ -2377,11 +2378,27 @@ export function createDeploymentController(dependencies) {
       input.deploymentInstanceId,
       'deploymentController.resume.deploymentInstanceId',
     );
+    assertDeploymentPlanId(
+      input.expectedPlanId,
+      'deploymentController.resume.expectedPlanId',
+    );
     let head = await readHead(input.deploymentInstanceId);
     if (head === null) {
       throw new Error('Cannot resume a deployment without a durable head.');
     }
-    if (head.activeOperation === null) return head;
+    if (head.activeOperation === null) {
+      if (head.lastOperation?.planId !== input.expectedPlanId) {
+        throw new DeploymentControllerConflictError(
+          'The last completed deployment plan does not match the expected recovery plan.',
+        );
+      }
+      return head;
+    }
+    if (head.activeOperation.planId !== input.expectedPlanId) {
+      throw new DeploymentControllerConflictError(
+        'The active deployment plan does not match the expected recovery plan.',
+      );
+    }
     const structuralPlan = await readActivePlan(head);
     if (structuralPlan === null) {
       throw new DeploymentControllerConflictError(

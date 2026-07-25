@@ -13,6 +13,8 @@ const PROVIDER_SCOPE_IMPORT =
 const DEPLOYMENT_PLAN_IMPORT = '../../../src/core/runtime/deployment-plan.js';
 const ARTIFACT_STAGE_IMPORT =
   '../../../src/core/runtime/deployment-artifact-stage.js';
+const AWS_LIFECYCLE_IMPORT =
+  '../../../src/core/runtime/deployment-aws-lifecycle.js';
 const SOURCE_DEPLOYMENT_IMPORT =
   '../../../src/cli/app/aws-source-deployment.js';
 
@@ -28,6 +30,7 @@ const validateProviderScope = jest.fn();
 const validateDeploymentPlanContext = jest.fn();
 const validateDeploymentArtifactStageIntentContext = jest.fn();
 const validateDeploymentArtifactStageReceiptContext = jest.fn();
+const validateAwsDeploymentOperationResult = jest.fn();
 const requireControl = jest.fn();
 const reconcileControl = jest.fn();
 const bootstrapControl = jest.fn();
@@ -58,6 +61,9 @@ jest.unstable_mockModule(DEPLOYMENT_PLAN_IMPORT, () => ({
 jest.unstable_mockModule(ARTIFACT_STAGE_IMPORT, () => ({
   validateDeploymentArtifactStageIntentContext,
   validateDeploymentArtifactStageReceiptContext,
+}));
+jest.unstable_mockModule(AWS_LIFECYCLE_IMPORT, () => ({
+  validateAwsDeploymentOperationResult,
 }));
 
 const { applyAwsSelectedSea, prepareAwsSelectedSeaPlan } = await import(
@@ -200,6 +206,7 @@ function installHappyPath() {
   validateDeploymentArtifactStageReceiptContext.mockImplementation((value) =>
     cloneFrozen(value),
   );
+  validateAwsDeploymentOperationResult.mockImplementation((value) => value);
   packageSelectedSeaArtifact.mockImplementation(() => {
     order.push('package');
     return authority;
@@ -528,6 +535,10 @@ describe('applyAwsSelectedSea', () => {
     ]);
     expect(stageClaimedArtifact).toHaveBeenCalledTimes(1);
     expect(convergePreStaged).toHaveBeenCalledTimes(1);
+    expect(validateAwsDeploymentOperationResult).toHaveBeenCalledWith(
+      convergeResult,
+      validateDeploymentPlanContext.mock.results[0].value,
+    );
     const submitted = /** @type {any} */ (convergePreStaged.mock.calls[0][0]);
     expect(Object.keys(submitted)).toEqual([
       'plan',
@@ -560,6 +571,27 @@ describe('applyAwsSelectedSea', () => {
 
     expect(thrown).toEqual({ threw: true, error: primary });
     expect(stageClaimedArtifact).toHaveBeenCalledTimes(1);
+    expect(discardSelectedSeaArtifact).not.toHaveBeenCalled();
+    expect(order.slice(-3)).toEqual(['stage', 'converge', 'close']);
+  });
+
+  it('rejects an incomplete or miscorrelated convergence result through the shared validator', async () => {
+    const invalidResult = Object.freeze({ phase: 'CONVERGING' });
+    const invalid = new Error('operation remains active');
+    convergePreStaged.mockImplementation(() => {
+      order.push('converge');
+      return invalidResult;
+    });
+    validateAwsDeploymentOperationResult.mockImplementation(() => {
+      throw invalid;
+    });
+
+    await expect(applyAwsSelectedSea(makeRequest())).rejects.toBe(invalid);
+
+    expect(validateAwsDeploymentOperationResult).toHaveBeenCalledWith(
+      invalidResult,
+      validateDeploymentPlanContext.mock.results[0].value,
+    );
     expect(discardSelectedSeaArtifact).not.toHaveBeenCalled();
     expect(order.slice(-3)).toEqual(['stage', 'converge', 'close']);
   });
