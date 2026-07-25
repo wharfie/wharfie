@@ -1,16 +1,26 @@
-/* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-param-description, jsdoc/require-returns, jsdoc/require-returns-description -- This boundary owns one exact host-only SDK lifetime behind the V67 adapter. */
+/* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-param-description, jsdoc/require-returns, jsdoc/require-returns-description -- This boundary owns one exact host-only SDK lifetime behind the V67 and V70 adapters. */
 
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 
 import BaseAWS from '../lib/aws/base.js';
+import { createAwsSingleNodeHostActivationAuthorityAdapter } from './deployment-aws-host-activation-authority.js';
 import { openAwsSingleNodeHostInstanceCredentialSource } from './deployment-aws-host-instance-credentials.js';
 import { createAwsSingleNodeHostRuntimeIdentityAdapter } from './deployment-aws-host-runtime-identity.js';
-import { validateProviderScope } from './deployment-provider-scope.js';
+import {
+  DEPLOYMENT_CONTROL_TABLE_NAME,
+  DEPLOYMENT_CONTROL_TABLE_RECORD_KEY,
+} from './deployment-control-table.js';
+import {
+  assertDeploymentInstanceId,
+  validateProviderScope,
+} from './deployment-provider-scope.js';
 
-const OPEN_OPTIONS_KEYS = new Set(['providerScope']);
+const OPEN_OPTIONS_KEYS = new Set(['providerScope', 'deploymentInstanceId']);
 const SUPPORTED_PARTITION = 'aws';
 const INVALID_OPEN_OPTIONS =
-  'AWS single-node host client family options must contain only one exact provider scope.';
+  'AWS single-node host client family options must contain only one exact provider scope and deployment instance.';
 const INITIALIZATION_ERROR =
   'AWS single-node host client family initialization failed.';
 const CLOSED_ERROR = 'AWS single-node host client family is closed.';
@@ -65,7 +75,7 @@ function isPlainObject(value) {
  * Reject inherited, accessor-backed, hidden, symbol, and extra opener input
  * before constructing a credential source or SDK client.
  * @param {unknown} value - Candidate exact opener options.
- * @returns {Readonly<import('./deployment-provider-scope.js').AwsProviderScope>} - Canonical provider scope.
+ * @returns {{providerScope: Readonly<import('./deployment-provider-scope.js').AwsProviderScope>, deploymentInstanceId: string}} - Canonical bound options.
  */
 function validateOpenOptions(value) {
   if (!isPlainObject(value)) throw new TypeError(INVALID_OPEN_OPTIONS);
@@ -76,22 +86,39 @@ function validateOpenOptions(value) {
   ) {
     throw new TypeError(INVALID_OPEN_OPTIONS);
   }
-  const descriptor = Object.getOwnPropertyDescriptor(value, 'providerScope');
+  const providerScopeDescriptor = Object.getOwnPropertyDescriptor(
+    value,
+    'providerScope',
+  );
+  const deploymentInstanceIdDescriptor = Object.getOwnPropertyDescriptor(
+    value,
+    'deploymentInstanceId',
+  );
   if (
-    !descriptor ||
-    !descriptor.enumerable ||
-    !Object.hasOwn(descriptor, 'value')
+    !providerScopeDescriptor ||
+    !providerScopeDescriptor.enumerable ||
+    !Object.hasOwn(providerScopeDescriptor, 'value') ||
+    !deploymentInstanceIdDescriptor ||
+    !deploymentInstanceIdDescriptor.enumerable ||
+    !Object.hasOwn(deploymentInstanceIdDescriptor, 'value')
   ) {
     throw new TypeError(INVALID_OPEN_OPTIONS);
   }
   const providerScope = validateProviderScope(
-    descriptor.value,
+    providerScopeDescriptor.value,
     'awsSingleNodeHostClientFamily options.providerScope',
   );
   if (providerScope.partition !== SUPPORTED_PARTITION) {
     throw new TypeError(INVALID_OPEN_OPTIONS);
   }
-  return providerScope;
+  assertDeploymentInstanceId(
+    deploymentInstanceIdDescriptor.value,
+    'awsSingleNodeHostClientFamily options.deploymentInstanceId',
+  );
+  return {
+    providerScope,
+    deploymentInstanceId: deploymentInstanceIdDescriptor.value,
+  };
 }
 
 /**
@@ -119,30 +146,40 @@ function discardCapability(capability, receiver) {
 }
 
 /**
- * Open the one host-owned AWS credential and STS lifetime used by the
- * single-node activation runtime. Credentials come directly from the EC2
+ * Open the one host-owned AWS credential, STS, and DynamoDB lifetime used by
+ * the single-node activation runtime. Credentials come directly from the EC2
  * instance metadata provider with IMDSv1 fallback disabled; the operator
  * default credential chain is never consulted.
- * @param {unknown} options - Exact `{providerScope}` options.
- * @returns {Readonly<{providerScope: Readonly<import('./deployment-provider-scope.js').AwsProviderScope>, runtimeIdentity: Readonly<{observe: Function, validateEvidence: Function}>, close: () => Promise<void>}>} - Owned host client family.
+ * @param {unknown} options - Exact `{providerScope,deploymentInstanceId}` options.
+ * @returns {Readonly<{providerScope: Readonly<import('./deployment-provider-scope.js').AwsProviderScope>, runtimeIdentity: Readonly<{observe: Function, validateEvidence: Function}>, activationAuthority: Readonly<{readAuthorizedRequest: Function, authorizeRequest: Function}>, close: () => Promise<void>}>} - Owned host client family.
  */
 export function openAwsSingleNodeHostClientFamily(options) {
-  const providerScope = validateOpenOptions(options);
+  const { providerScope, deploymentInstanceId } = validateOpenOptions(options);
   const lifetimeAbortController = new AbortController();
   /** @type {Set<Promise<unknown>>} */
   const activeSends = new Set();
   /** @type {STSClient|undefined} */
   let sts;
+  /** @type {DynamoDBClient|undefined} */
+  let dynamo;
+  /** @type {DynamoDBDocumentClient|undefined} */
+  let dynamoDocument;
   /** @type {Function|undefined} */
-  let destroy;
+  let destroySts;
+  /** @type {Function|undefined} */
+  let destroyDynamo;
   /** @type {Readonly<{credentials: () => Promise<Readonly<{accessKeyId: string, secretAccessKey: string, sessionToken: string, expiration: Date}>>, close: () => Promise<void>}>|undefined} */
   let credentialSource;
   /** @type {Function|undefined} */
   let closeCredentialSource;
   /** @type {Function} */
-  let send;
+  let sendSts;
+  /** @type {Function} */
+  let sendDynamo;
   /** @type {Readonly<{observe: Function, validateEvidence: Function}>} */
   let identityAdapter;
+  /** @type {Readonly<{readAuthorizedRequest: Function, authorizeRequest: Function}>} */
+  let authorityAdapter;
 
   /**
    * Preserve V67's bounded backoff while allowing owner close to stop a
@@ -192,13 +229,43 @@ export function openAwsSingleNodeHostClientFamily(options) {
       credentials,
       logger: SILENT_LOGGER,
     });
-    send = sts.send;
-    destroy = sts.destroy;
-    if (typeof send !== 'function' || typeof destroy !== 'function') {
+    sendSts = sts.send;
+    destroySts = sts.destroy;
+    if (typeof sendSts !== 'function' || typeof destroySts !== 'function') {
       throw new TypeError(INITIALIZATION_ERROR);
     }
 
-    const narrowClient = Object.freeze({
+    dynamo = new DynamoDBClient({
+      ...BaseAWS.config({ maxAttempts: 1 }),
+      maxAttempts: 1,
+      region: providerScope.region,
+      endpoint: `https://dynamodb.${providerScope.region}.amazonaws.com`,
+      useDualstackEndpoint: false,
+      useFipsEndpoint: false,
+      accountIdEndpointMode: 'disabled',
+      credentials,
+      logger: SILENT_LOGGER,
+    });
+    destroyDynamo = dynamo.destroy;
+    if (typeof destroyDynamo !== 'function') {
+      throw new TypeError(INITIALIZATION_ERROR);
+    }
+    dynamoDocument = DynamoDBDocumentClient.from(dynamo, {
+      marshallOptions: {
+        convertClassInstanceToMap: false,
+        convertEmptyValues: false,
+        removeUndefinedValues: false,
+      },
+      unmarshallOptions: {
+        wrapNumbers: false,
+      },
+    });
+    sendDynamo = dynamoDocument.send;
+    if (typeof sendDynamo !== 'function') {
+      throw new TypeError(INITIALIZATION_ERROR);
+    }
+
+    const narrowIdentityClient = Object.freeze({
       getCallerIdentity(
         /** @type {Readonly<Record<string, never>>} */ input,
         /** @type {{abortSignal: AbortSignal}} */ callOptions,
@@ -208,7 +275,7 @@ export function openAwsSingleNodeHostClientFamily(options) {
           lifetimeAbortController.signal,
         ]);
         const call = Promise.resolve(
-          Reflect.apply(send, sts, [
+          Reflect.apply(sendSts, sts, [
             new GetCallerIdentityCommand(input),
             Object.freeze({ abortSignal }),
           ]),
@@ -222,18 +289,70 @@ export function openAwsSingleNodeHostClientFamily(options) {
       },
     });
     identityAdapter = createAwsSingleNodeHostRuntimeIdentityAdapter({
-      client: narrowClient,
+      client: narrowIdentityClient,
       providerScope,
       waitForRetry: waitForIdentityRetry,
     });
+
+    const narrowAuthorityClient = Object.freeze({
+      async getControlRecord(
+        /** @type {{recordKey: string}} */ input,
+        /** @type {{abortSignal: AbortSignal}} */ callOptions,
+      ) {
+        const abortSignal = AbortSignal.any([
+          callOptions.abortSignal,
+          lifetimeAbortController.signal,
+        ]);
+        const commandInput = Object.freeze({
+          TableName: DEPLOYMENT_CONTROL_TABLE_NAME,
+          Key: Object.freeze({
+            [DEPLOYMENT_CONTROL_TABLE_RECORD_KEY]: input.recordKey,
+          }),
+          ConsistentRead: true,
+        });
+        const call = Promise.resolve(
+          Reflect.apply(sendDynamo, dynamoDocument, [
+            new GetCommand(commandInput),
+            Object.freeze({ abortSignal }),
+          ]),
+        );
+        activeSends.add(call);
+        call.then(
+          () => activeSends.delete(call),
+          () => activeSends.delete(call),
+        );
+        const response = await call;
+        if (!isPlainObject(response)) {
+          throw new TypeError(INITIALIZATION_ERROR);
+        }
+        const item = Object.getOwnPropertyDescriptor(response, 'Item');
+        if (item === undefined) return null;
+        if (
+          !item.enumerable ||
+          !Object.hasOwn(item, 'value') ||
+          !isPlainObject(item.value)
+        ) {
+          throw new TypeError(INITIALIZATION_ERROR);
+        }
+        return item.value;
+      },
+    });
+    authorityAdapter = createAwsSingleNodeHostActivationAuthorityAdapter({
+      client: narrowAuthorityClient,
+      providerScope,
+      deploymentInstanceId,
+    });
   } catch {
-    discardCapability(destroy, sts);
+    discardCapability(destroyDynamo, dynamo);
+    discardCapability(destroySts, sts);
     discardCapability(closeCredentialSource, credentialSource);
     throw new AwsSingleNodeHostClientFamilyInitializationError();
   }
 
   const adapterObserve = identityAdapter.observe;
   const adapterValidateEvidence = identityAdapter.validateEvidence;
+  const adapterReadAuthorizedRequest = authorityAdapter.readAuthorizedRequest;
+  const adapterAuthorizeRequest = authorityAdapter.authorizeRequest;
   let closing = false;
   let activeCount = 0;
   /** @type {(() => void)|undefined} */
@@ -298,6 +417,31 @@ export function openAwsSingleNodeHostClientFamily(options) {
 
   const runtimeIdentity = Object.freeze({ observe, validateEvidence });
 
+  /**
+   * @param {unknown} value - Exact deployment and request identifiers.
+   * @returns {Promise<Readonly<Record<string, any>>|null>} - Current request or absence.
+   */
+  function readAuthorizedRequest(value) {
+    return enter(() =>
+      Reflect.apply(adapterReadAuthorizedRequest, authorityAdapter, [value]),
+    );
+  }
+
+  /**
+   * @param {unknown} value - Exact V66 authorization envelope.
+   * @returns {Promise<boolean>} - Literal live-authority decision.
+   */
+  function authorizeRequest(value) {
+    return enter(() =>
+      Reflect.apply(adapterAuthorizeRequest, authorityAdapter, [value]),
+    );
+  }
+
+  const activationAuthority = Object.freeze({
+    readAuthorizedRequest,
+    authorizeRequest,
+  });
+
   /** @returns {Promise<void>} - Memoized complete close. */
   function close() {
     if (!closePromise) {
@@ -325,13 +469,23 @@ export function openAwsSingleNodeHostClientFamily(options) {
           });
         }
         let closeFailed = false;
-        try {
-          await Reflect.apply(
-            /** @type {Function} */ (destroy),
-            /** @type {STSClient} */ (sts),
-            [],
-          );
-        } catch {
+        const destroyed = await Promise.allSettled([
+          Promise.resolve().then(() =>
+            Reflect.apply(
+              /** @type {Function} */ (destroySts),
+              /** @type {STSClient} */ (sts),
+              [],
+            ),
+          ),
+          Promise.resolve().then(() =>
+            Reflect.apply(
+              /** @type {Function} */ (destroyDynamo),
+              /** @type {DynamoDBClient} */ (dynamo),
+              [],
+            ),
+          ),
+        ]);
+        if (destroyed.some((result) => result.status === 'rejected')) {
           closeFailed = true;
         }
         await Promise.allSettled([...activeSends]);
@@ -342,7 +496,12 @@ export function openAwsSingleNodeHostClientFamily(options) {
     return closePromise;
   }
 
-  return Object.freeze({ providerScope, runtimeIdentity, close });
+  return Object.freeze({
+    providerScope,
+    runtimeIdentity,
+    activationAuthority,
+    close,
+  });
 }
 
 export default {

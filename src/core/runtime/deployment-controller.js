@@ -206,7 +206,7 @@ function nextHead(head, changes) {
  * Provider calls receive immutable validated documents plus the current head;
  * credentials remain private to the provider implementation.
  *
- * @param {{store: Record<string, Function>, provider: Record<string, Function>, artifactStager: Record<string, Function>, now: () => number, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports and explicit inspection clock.
+ * @param {{store: Record<string, Function>, provider: Record<string, Function>, artifactStager: Record<string, Function>, hostActivationAuthorityPublisher: Record<string, Function>, now: () => number, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports and explicit inspection clock.
  * @returns {Readonly<{inspect: (input: unknown) => Promise<Readonly<Record<string, any>>>, plan: (input: unknown) => Promise<Readonly<Record<string, any>>>, converge: (input: unknown) => Promise<Readonly<Record<string, any>>>, convergePreStaged: (input: unknown) => Promise<Readonly<Record<string, any>>>, resume: (input: unknown) => Promise<Readonly<Record<string, any>>>}>} - Controller API.
  */
 export function createDeploymentController(dependencies) {
@@ -217,7 +217,13 @@ export function createDeploymentController(dependencies) {
   ) {
     throw new TypeError('deploymentController dependencies must be an object.');
   }
-  const { store, provider, artifactStager, now } = dependencies;
+  const {
+    store,
+    provider,
+    artifactStager,
+    hostActivationAuthorityPublisher,
+    now,
+  } = dependencies;
   const nonceFactory =
     dependencies.createOwnershipNonce || createRandomOwnershipNonce;
   const incarnationFactory =
@@ -254,6 +260,11 @@ export function createDeploymentController(dependencies) {
       'deploymentController.artifactStager',
       artifactStager,
       ['stageRunningArtifact', 'validateStagedArtifact'],
+    ],
+    [
+      'deploymentController.hostActivationAuthorityPublisher',
+      hostActivationAuthorityPublisher,
+      ['publish'],
     ],
   ];
   for (const [path, owner, methods] of ports) {
@@ -1753,6 +1764,11 @@ export function createDeploymentController(dependencies) {
     await assertPlanProviderScope(plan, profile);
     try {
       const settledPlan = await readLastOperationPlan(head);
+      if (plan.operation !== 'destroy') {
+        await hostActivationAuthorityPublisher.publish(
+          Object.freeze({ plan, settledPlan, profile, head }),
+        );
+      }
       const observed = await provider.inspect(
         Object.freeze({
           ...providerContext(

@@ -2,10 +2,16 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import { getAwsSingleNodeHostActivationIntentId } from '../../src/core/runtime/deployment-aws-host-activation.js';
 import { createAwsSingleNodeHostActivationRequest } from '../../src/core/runtime/deployment-aws-host-agent-contract.js';
+import { createAwsSingleNodeHostActivationAuthorityRecord } from '../../src/core/runtime/deployment-aws-host-activation-authority-contract.js';
 import {
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_KIND,
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_SCHEMA_VERSION,
 } from '../../src/core/runtime/deployment-aws-host-runtime-identity.js';
+import {
+  DEPLOYMENT_CONTROL_TABLE_NAME,
+  DEPLOYMENT_CONTROL_TABLE_RECORD_KEY,
+  getDeploymentControlHeadRecordKey,
+} from '../../src/core/runtime/deployment-control-table.js';
 import { createAwsProviderScope } from '../../src/core/runtime/deployment-provider-scope.js';
 import {
   clone,
@@ -28,15 +34,31 @@ const credentialSourceClose = jest.fn();
 const STSClient = jest.fn();
 /** @type {jest.Mock<(input: AnyRecord) => AnyRecord>} */
 const GetCallerIdentityCommand = jest.fn();
+/** @type {jest.Mock<(config: AnyRecord) => AnyRecord>} */
+const DynamoDBClient = jest.fn();
+/** @type {jest.Mock<(input: AnyRecord) => AnyRecord>} */
+const GetCommand = jest.fn();
+/** @type {jest.Mock<(client: AnyRecord, config: AnyRecord) => AnyRecord>} */
+const documentClientFrom = jest.fn();
 
 /** @type {AnyRecord[]} */
 let rawClients;
+/** @type {AnyRecord[]} */
+let rawDynamoClients;
+/** @type {AnyRecord[]} */
+let documentClients;
 /** @type {unknown[]} */
 let identities;
+/** @type {unknown[]} */
+let controlResponses;
 /** @type {unknown} */
 let credentialSourceConstructionFailure;
 /** @type {unknown} */
 let stsConstructionFailure;
+/** @type {unknown} */
+let dynamoConstructionFailure;
+/** @type {unknown} */
+let documentConstructionFailure;
 /** @type {AnyRecord|undefined} */
 let credentialSource;
 /** @type {((source: AnyRecord) => AnyRecord)|undefined} */
@@ -49,6 +71,10 @@ let transformRawClient;
 let sendImplementation;
 /** @type {((this: AnyRecord) => unknown)|undefined} */
 let destroyImplementation;
+/** @type {((this: AnyRecord, command: AnyRecord, options: AnyRecord) => unknown)|undefined} */
+let dynamoSendImplementation;
+/** @type {((this: AnyRecord) => unknown)|undefined} */
+let dynamoDestroyImplementation;
 
 jest.unstable_mockModule(
   '../../src/core/runtime/deployment-aws-host-instance-credentials.js',
@@ -59,6 +85,13 @@ jest.unstable_mockModule(
 jest.unstable_mockModule('@aws-sdk/client-sts', () => ({
   GetCallerIdentityCommand,
   STSClient,
+}));
+jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
+  DynamoDBClient,
+}));
+jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
+  DynamoDBDocumentClient: Object.freeze({ from: documentClientFrom }),
+  GetCommand,
 }));
 
 const {
@@ -140,6 +173,17 @@ function makeEvidence(request) {
   });
 }
 
+/** @param {Readonly<AnyRecord>} head @returns {Readonly<AnyRecord>} */
+function makeHeadRecord(head) {
+  return deepFreeze({
+    record_key: getDeploymentControlHeadRecordKey(head.deploymentInstanceId),
+    storage_schema_version: 1,
+    record_kind: 'deployment-head',
+    document_id: head.headId,
+    document: head,
+  });
+}
+
 /** @param {unknown} callback @returns {unknown} */
 function captureFailure(callback) {
   try {
@@ -152,21 +196,31 @@ function captureFailure(callback) {
 
 beforeEach(() => {
   rawClients = [];
+  rawDynamoClients = [];
+  documentClients = [];
   identities = [];
+  controlResponses = [];
   credentialSourceConstructionFailure = undefined;
   stsConstructionFailure = undefined;
+  dynamoConstructionFailure = undefined;
+  documentConstructionFailure = undefined;
   credentialSource = undefined;
   transformCredentialSource = undefined;
   credentialSourceCloseImplementation = undefined;
   transformRawClient = undefined;
   sendImplementation = undefined;
   destroyImplementation = undefined;
+  dynamoSendImplementation = undefined;
+  dynamoDestroyImplementation = undefined;
 
   credentialProvider.mockReset();
   openCredentialSource.mockReset();
   credentialSourceClose.mockReset();
   STSClient.mockReset();
   GetCallerIdentityCommand.mockReset();
+  DynamoDBClient.mockReset();
+  GetCommand.mockReset();
+  documentClientFrom.mockReset();
 
   credentialSourceClose.mockImplementation(
     /** @this {AnyRecord} */
@@ -222,10 +276,48 @@ beforeEach(() => {
     rawClients.push(transformed);
     return transformed;
   });
+  DynamoDBClient.mockImplementation((config) => {
+    if (dynamoConstructionFailure !== undefined) {
+      throw dynamoConstructionFailure;
+    }
+    const client = {
+      config,
+      destroy: jest.fn(function destroy() {
+        if (dynamoDestroyImplementation !== undefined) {
+          return dynamoDestroyImplementation.call(client);
+        }
+        return undefined;
+      }),
+    };
+    rawDynamoClients.push(client);
+    return client;
+  });
+  GetCommand.mockImplementation((input) => Object.freeze({ input }));
+  documentClientFrom.mockImplementation((client, config) => {
+    if (documentConstructionFailure !== undefined) {
+      throw documentConstructionFailure;
+    }
+    const documentClient = {
+      rawClient: client,
+      config,
+      send: jest.fn(function send(command, options) {
+        if (dynamoSendImplementation !== undefined) {
+          return dynamoSendImplementation.call(
+            documentClient,
+            /** @type {AnyRecord} */ (command),
+            /** @type {AnyRecord} */ (options),
+          );
+        }
+        return Promise.resolve(controlResponses.shift() ?? {});
+      }),
+    };
+    documentClients.push(documentClient);
+    return documentClient;
+  });
 });
 
 describe('AWS single-node host client family construction', () => {
-  it('owns one fixed credential source and one environment-independent regional STS client', async () => {
+  it('owns one credential source and environment-independent regional STS and DynamoDB clients', async () => {
     const { request } = makeActivation();
     const poisonedEnvironment = {
       AWS_ACCESS_KEY_ID: 'ambient-access-key-must-not-be-used',
@@ -233,6 +325,8 @@ describe('AWS single-node host client family construction', () => {
       AWS_SESSION_TOKEN: 'ambient-token-must-not-be-used',
       AWS_ENDPOINT_URL: 'https://ambient-endpoint.invalid',
       AWS_ENDPOINT_URL_STS: 'https://ambient-sts-endpoint.invalid',
+      AWS_ENDPOINT_URL_DYNAMODB: 'https://ambient-dynamodb.invalid',
+      AWS_ACCOUNT_ID_ENDPOINT_MODE: 'required',
       AWS_USE_DUALSTACK_ENDPOINT: 'true',
       AWS_USE_FIPS_ENDPOINT: 'true',
       AWS_MAX_ATTEMPTS: '99',
@@ -254,6 +348,7 @@ describe('AWS single-node host client family construction', () => {
     try {
       family = openAwsSingleNodeHostClientFamily({
         providerScope: request.providerScope,
+        deploymentInstanceId: request.deploymentInstanceId,
       });
 
       expect(openCredentialSource).toHaveBeenCalledTimes(1);
@@ -302,6 +397,40 @@ describe('AWS single-node host client family construction', () => {
         true,
       );
       await expect(stsConfig.retryStrategy.maxAttempts()).resolves.toBe(1);
+
+      expect(DynamoDBClient).toHaveBeenCalledTimes(1);
+      const dynamoConfig = DynamoDBClient.mock.calls[0][0];
+      expect(Object.keys(dynamoConfig)).toEqual([
+        'retryStrategy',
+        'maxAttempts',
+        'region',
+        'endpoint',
+        'useDualstackEndpoint',
+        'useFipsEndpoint',
+        'accountIdEndpointMode',
+        'credentials',
+        'logger',
+      ]);
+      expect(dynamoConfig).toMatchObject({
+        maxAttempts: 1,
+        region: request.providerScope.region,
+        endpoint: `https://dynamodb.${request.providerScope.region}.amazonaws.com`,
+        useDualstackEndpoint: false,
+        useFipsEndpoint: false,
+        accountIdEndpointMode: 'disabled',
+        credentials: credentialProvider,
+      });
+      expect(dynamoConfig.logger).toBe(stsConfig.logger);
+      await expect(dynamoConfig.retryStrategy.maxAttempts()).resolves.toBe(1);
+      expect(documentClientFrom).toHaveBeenCalledTimes(1);
+      expect(documentClientFrom).toHaveBeenCalledWith(rawDynamoClients[0], {
+        marshallOptions: {
+          convertClassInstanceToMap: false,
+          convertEmptyValues: false,
+          removeUndefinedValues: false,
+        },
+        unmarshallOptions: { wrapNumbers: false },
+      });
       expect(credentialProvider).not.toHaveBeenCalled();
     } finally {
       if (family !== undefined) await family.close();
@@ -313,24 +442,31 @@ describe('AWS single-node host client family construction', () => {
     }
   });
 
-  it('exposes only the frozen scope, narrow runtime-identity port, and owner close', async () => {
+  it('exposes only the frozen scope, narrow ports, and owner close', async () => {
     const { request } = makeActivation();
     const family = openAwsSingleNodeHostClientFamily({
       providerScope: clone(request.providerScope),
+      deploymentInstanceId: request.deploymentInstanceId,
     });
 
     expect(Object.keys(family)).toEqual([
       'providerScope',
       'runtimeIdentity',
+      'activationAuthority',
       'close',
     ]);
     expect(Object.keys(family.runtimeIdentity)).toEqual([
       'observe',
       'validateEvidence',
     ]);
+    expect(Object.keys(family.activationAuthority)).toEqual([
+      'readAuthorizedRequest',
+      'authorizeRequest',
+    ]);
     expect(family.providerScope).toEqual(request.providerScope);
     expectDeepFrozen(family.providerScope);
     expect(Object.isFrozen(family.runtimeIdentity)).toBe(true);
+    expect(Object.isFrozen(family.activationAuthority)).toBe(true);
     expect(Object.isFrozen(family)).toBe(true);
     for (const forbidden of [
       'client',
@@ -343,6 +479,7 @@ describe('AWS single-node host client family construction', () => {
     ]) {
       expect(family).not.toHaveProperty(forbidden);
       expect(family.runtimeIdentity).not.toHaveProperty(forbidden);
+      expect(family.activationAuthority).not.toHaveProperty(forbidden);
     }
 
     await family.close();
@@ -352,12 +489,21 @@ describe('AWS single-node host client family construction', () => {
     null,
     {},
     { providerScope: null },
-    { providerScope: makeActivation().request.providerScope, extra: true },
+    {
+      providerScope: makeActivation().request.providerScope,
+      deploymentInstanceId: makeActivation().request.deploymentInstanceId,
+      extra: true,
+    },
+    {
+      providerScope: makeActivation().request.providerScope,
+      deploymentInstanceId: 'wdi1_invalid',
+    },
     {
       providerScope: {
         ...clone(makeActivation().request.providerScope),
         region: 'not-a-region',
       },
+      deploymentInstanceId: makeActivation().request.deploymentInstanceId,
     },
   ])(
     'rejects invalid exact options before constructing credential authority %#',
@@ -365,6 +511,7 @@ describe('AWS single-node host client family construction', () => {
       expect(() => openAwsSingleNodeHostClientFamily(options)).toThrow();
       expect(openCredentialSource).not.toHaveBeenCalled();
       expect(STSClient).not.toHaveBeenCalled();
+      expect(DynamoDBClient).not.toHaveBeenCalled();
     },
   );
 
@@ -375,11 +522,15 @@ describe('AWS single-node host client family construction', () => {
       region: 'us-gov-west-1',
     });
 
-    expect(() => openAwsSingleNodeHostClientFamily({ providerScope })).toThrow(
-      TypeError,
-    );
+    expect(() =>
+      openAwsSingleNodeHostClientFamily({
+        providerScope,
+        deploymentInstanceId: makeActivation().request.deploymentInstanceId,
+      }),
+    ).toThrow(TypeError);
     expect(openCredentialSource).not.toHaveBeenCalled();
     expect(STSClient).not.toHaveBeenCalled();
+    expect(DynamoDBClient).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -410,6 +561,20 @@ describe('AWS single-node host client family construction', () => {
       },
       1,
     ],
+    [
+      'DynamoDB construction',
+      () => {
+        dynamoConstructionFailure = new Error('dynamodb-construction-secret');
+      },
+      1,
+    ],
+    [
+      'DynamoDB document construction',
+      () => {
+        documentConstructionFailure = new Error('document-construction-secret');
+      },
+      1,
+    ],
   ])(
     'redacts %s failures behind one fixed typed error',
     (_label, arrange, expectedSourceCloses) => {
@@ -419,6 +584,7 @@ describe('AWS single-node host client family construction', () => {
       const failure = captureFailure(() =>
         openAwsSingleNodeHostClientFamily({
           providerScope: request.providerScope,
+          deploymentInstanceId: request.deploymentInstanceId,
         }),
       );
 
@@ -436,7 +602,7 @@ describe('AWS single-node host client family construction', () => {
     },
   );
 
-  it('best-effort closes both partially constructed capabilities without leaking either failure', () => {
+  it('best-effort closes a partial STS/source lifetime without leaking either failure', () => {
     const { request } = makeActivation();
     /** @type {jest.Mock<() => void>|undefined} */
     let destroy;
@@ -455,6 +621,7 @@ describe('AWS single-node host client family construction', () => {
     const failure = captureFailure(() =>
       openAwsSingleNodeHostClientFamily({
         providerScope: request.providerScope,
+        deploymentInstanceId: request.deploymentInstanceId,
       }),
     );
 
@@ -465,6 +632,32 @@ describe('AWS single-node host client family construction', () => {
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(credentialSourceClose).toHaveBeenCalledTimes(1);
   });
+
+  it('best-effort destroys both raw clients when document-client construction fails', () => {
+    const { request } = makeActivation();
+    documentConstructionFailure = new Error('document-provider-secret');
+    destroyImplementation = () => {
+      throw new Error('sts-cleanup-secret');
+    };
+    dynamoDestroyImplementation = () => {
+      throw new Error('dynamo-cleanup-secret');
+    };
+
+    const failure = captureFailure(() =>
+      openAwsSingleNodeHostClientFamily({
+        providerScope: request.providerScope,
+        deploymentInstanceId: request.deploymentInstanceId,
+      }),
+    );
+
+    expect(failure).toBeInstanceOf(
+      AwsSingleNodeHostClientFamilyInitializationError,
+    );
+    expect(String(failure)).not.toMatch(/provider-secret|cleanup-secret/);
+    expect(rawClients[0].destroy).toHaveBeenCalledTimes(1);
+    expect(rawDynamoClients[0].destroy).toHaveBeenCalledTimes(1);
+    expect(credentialSourceClose).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('AWS single-node host runtime identity projection', () => {
@@ -473,6 +666,7 @@ describe('AWS single-node host runtime identity projection', () => {
     identities.push(makeCallerIdentity(request));
     const family = openAwsSingleNodeHostClientFamily({
       providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
     });
 
     const observation = await family.runtimeIdentity.observe(context);
@@ -513,6 +707,7 @@ describe('AWS single-node host runtime identity projection', () => {
     );
     const family = openAwsSingleNodeHostClientFamily({
       providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
     });
 
     jest.useFakeTimers();
@@ -534,6 +729,7 @@ describe('AWS single-node host runtime identity projection', () => {
     identities.push(makeCallerIdentity(request));
     const family = openAwsSingleNodeHostClientFamily({
       providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
     });
     const originalSend = rawClients[0].send;
     const originalDestroy = rawClients[0].destroy;
@@ -556,6 +752,114 @@ describe('AWS single-node host runtime identity projection', () => {
   });
 });
 
+describe('AWS single-node host activation authority projection', () => {
+  it('performs request-first/head-last strongly consistent reads through the pinned document client', async () => {
+    const fixture = makeFixture();
+    const request = createAwsSingleNodeHostActivationRequest(
+      fixture.requestContext,
+    );
+    const authorityRecord =
+      createAwsSingleNodeHostActivationAuthorityRecord(request);
+    const currentHeadRecord = makeHeadRecord(fixture.head);
+    controlResponses.push(
+      { Item: authorityRecord },
+      { Item: currentHeadRecord },
+      { Item: authorityRecord },
+      { Item: currentHeadRecord },
+    );
+    const family = openAwsSingleNodeHostClientFamily({
+      providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
+    });
+    const originalSend = documentClients[0].send;
+    const originalDestroy = rawDynamoClients[0].destroy;
+    documentClients[0].send = jest.fn(() => {
+      throw new Error('replacement document send must not run');
+    });
+    rawDynamoClients[0].destroy = jest.fn(() => {
+      throw new Error('replacement DynamoDB destroy must not run');
+    });
+
+    await expect(
+      family.activationAuthority.readAuthorizedRequest({
+        deploymentInstanceId: request.deploymentInstanceId,
+        requestId: request.requestId,
+      }),
+    ).resolves.toEqual(request);
+    await expect(
+      family.activationAuthority.authorizeRequest({
+        request,
+        purpose: 'dispatch',
+        step: 'runtime-identity',
+        receipt: null,
+      }),
+    ).resolves.toBe(true);
+
+    expect(GetCommand).toHaveBeenCalledTimes(4);
+    expect(
+      GetCommand.mock.calls.map(([input]) => input.Key.record_key),
+    ).toEqual([
+      authorityRecord.record_key,
+      currentHeadRecord.record_key,
+      authorityRecord.record_key,
+      currentHeadRecord.record_key,
+    ]);
+    for (const [input] of GetCommand.mock.calls) {
+      expect(input).toEqual({
+        TableName: DEPLOYMENT_CONTROL_TABLE_NAME,
+        Key: {
+          [DEPLOYMENT_CONTROL_TABLE_RECORD_KEY]: input.Key.record_key,
+        },
+        ConsistentRead: true,
+      });
+      expect(Object.isFrozen(input)).toBe(true);
+      expect(Object.isFrozen(input.Key)).toBe(true);
+    }
+    expect(originalSend).toHaveBeenCalledTimes(4);
+    for (const [
+      index,
+      [command, options],
+    ] of originalSend.mock.calls.entries()) {
+      expect(originalSend.mock.contexts[index]).toBe(documentClients[0]);
+      expect(command).toBe(GetCommand.mock.results[index].value);
+      expect(Object.keys(options)).toEqual(['abortSignal']);
+      expect(options.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(options.abortSignal.aborted).toBe(false);
+      expect(Object.isFrozen(options)).toBe(true);
+    }
+
+    await family.close();
+    expect(originalDestroy).toHaveBeenCalledTimes(1);
+    expect(originalDestroy.mock.contexts[0]).toBe(rawDynamoClients[0]);
+    expect(documentClients[0].send).not.toHaveBeenCalled();
+    expect(rawDynamoClients[0].destroy).not.toHaveBeenCalled();
+  });
+
+  it('never classifies a present null Item as conclusive absence', async () => {
+    const fixture = makeFixture();
+    const request = createAwsSingleNodeHostActivationRequest(
+      fixture.requestContext,
+    );
+    controlResponses.push({ Item: null });
+    const family = openAwsSingleNodeHostClientFamily({
+      providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
+    });
+
+    await expect(
+      family.activationAuthority.readAuthorizedRequest({
+        deploymentInstanceId: request.deploymentInstanceId,
+        requestId: request.requestId,
+      }),
+    ).rejects.toMatchObject({
+      name: 'AwsSingleNodeHostActivationAuthorityUnavailableError',
+      code: 'AWS_SINGLE_NODE_HOST_ACTIVATION_AUTHORITY_UNAVAILABLE',
+    });
+
+    await family.close();
+  });
+});
+
 describe('AWS single-node host client family ownership lifecycle', () => {
   it('aborts and fences immediately, drains active observation, and memoizes one destroy', async () => {
     const { request, context } = makeActivation();
@@ -572,6 +876,7 @@ describe('AWS single-node host client family ownership lifecycle', () => {
     };
     const family = openAwsSingleNodeHostClientFamily({
       providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
     });
     const active = family.runtimeIdentity.observe(context);
     await entered.promise;
@@ -587,23 +892,35 @@ describe('AWS single-node host client family ownership lifecycle', () => {
     expect(credentialSourceClose).toHaveBeenCalledTimes(1);
     expect(credentialSourceClose.mock.contexts[0]).toBe(credentialSource);
     expect(rawClients[0].destroy).not.toHaveBeenCalled();
+    expect(rawDynamoClients[0].destroy).not.toHaveBeenCalled();
     expect(() => family.runtimeIdentity.observe(context)).toThrow(
       AwsSingleNodeHostClientFamilyClosedError,
     );
     expect(() => family.runtimeIdentity.validateEvidence({}, context)).toThrow(
       AwsSingleNodeHostClientFamilyClosedError,
     );
+    expect(() =>
+      family.activationAuthority.readAuthorizedRequest({
+        deploymentInstanceId: request.deploymentInstanceId,
+        requestId: request.requestId,
+      }),
+    ).toThrow(AwsSingleNodeHostClientFamilyClosedError);
 
     response.resolve(makeCallerIdentity(request));
     await expect(active).resolves.toMatchObject({ status: 'settled' });
     await Promise.resolve();
     expect(rawClients[0].destroy).toHaveBeenCalledTimes(1);
+    expect(rawDynamoClients[0].destroy).toHaveBeenCalledTimes(1);
     expect(closeSettled).not.toHaveBeenCalled();
 
     sourceClose.resolve(undefined);
     await expect(firstClose).resolves.toBeUndefined();
     expect(rawClients[0].destroy).toHaveBeenCalledTimes(1);
     expect(rawClients[0].destroy.mock.contexts[0]).toBe(rawClients[0]);
+    expect(rawDynamoClients[0].destroy).toHaveBeenCalledTimes(1);
+    expect(rawDynamoClients[0].destroy.mock.contexts[0]).toBe(
+      rawDynamoClients[0],
+    );
     expect(family.close()).toBe(firstClose);
   });
 
@@ -620,6 +937,7 @@ describe('AWS single-node host client family ownership lifecycle', () => {
     };
     const family = openAwsSingleNodeHostClientFamily({
       providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
     });
     /** @type {Promise<unknown>|undefined} */
     let observation;
@@ -638,6 +956,7 @@ describe('AWS single-node host client family ownership lifecycle', () => {
       expect(signals[0].aborted).toBe(true);
       expect(credentialSourceClose).toHaveBeenCalledTimes(1);
       expect(rawClients[0].destroy).not.toHaveBeenCalled();
+      expect(rawDynamoClients[0].destroy).not.toHaveBeenCalled();
 
       await jest.advanceTimersByTimeAsync(10_000);
       await expect(observation).resolves.toEqual({ status: 'unknown' });
@@ -646,18 +965,85 @@ describe('AWS single-node host client family ownership lifecycle', () => {
       expect(signals).toHaveLength(1);
       expect(signals.every((signal) => signal.aborted)).toBe(true);
       expect(rawClients[0].destroy).toHaveBeenCalledTimes(1);
+      expect(rawDynamoClients[0].destroy).toHaveBeenCalledTimes(1);
       expect(closeSettled).not.toHaveBeenCalled();
 
       send.resolve(undefined);
       await expect(closeAttempt).resolves.toBeUndefined();
       expect(closeSettled).toHaveBeenCalledTimes(1);
       expect(rawClients[0].destroy).toHaveBeenCalledTimes(1);
+      expect(rawDynamoClients[0].destroy).toHaveBeenCalledTimes(1);
     } finally {
       send.resolve(undefined);
       await jest.runAllTimersAsync();
       if (close === undefined) close = family.close();
       jest.useRealTimers();
       await Promise.allSettled([observation, close]);
+    }
+  });
+
+  it('aborts a live authority read, fences new reads, and drains an abort-ignoring DynamoDB send', async () => {
+    const { request } = makeActivation();
+    const entered = deferred();
+    const send = deferred();
+    /** @type {AbortSignal|undefined} */
+    let signal;
+    dynamoSendImplementation = (_command, options) => {
+      signal = options.abortSignal;
+      entered.resolve(undefined);
+      return send.promise;
+    };
+    const family = openAwsSingleNodeHostClientFamily({
+      providerScope: request.providerScope,
+      deploymentInstanceId: request.deploymentInstanceId,
+    });
+
+    jest.useFakeTimers();
+    try {
+      const read = family.activationAuthority.readAuthorizedRequest({
+        deploymentInstanceId: request.deploymentInstanceId,
+        requestId: request.requestId,
+      });
+      const readFailure = read.then(
+        () => {
+          throw new Error('Expected authority read to fail.');
+        },
+        (/** @type {unknown} */ error) => error,
+      );
+      await entered.promise;
+      const close = family.close();
+      const closeSettled = jest.fn();
+      close.then(closeSettled, closeSettled);
+
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(true);
+      expect(() =>
+        family.activationAuthority.authorizeRequest({
+          request,
+          purpose: 'claim',
+          step: null,
+          receipt: null,
+        }),
+      ).toThrow(AwsSingleNodeHostClientFamilyClosedError);
+      expect(rawClients[0].destroy).not.toHaveBeenCalled();
+      expect(rawDynamoClients[0].destroy).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(10_000);
+      await expect(readFailure).resolves.toMatchObject({
+        code: 'AWS_SINGLE_NODE_HOST_ACTIVATION_AUTHORITY_UNAVAILABLE',
+      });
+      expect(rawClients[0].destroy).toHaveBeenCalledTimes(1);
+      expect(rawDynamoClients[0].destroy).toHaveBeenCalledTimes(1);
+      expect(closeSettled).not.toHaveBeenCalled();
+
+      send.resolve({});
+      await expect(close).resolves.toBeUndefined();
+      expect(closeSettled).toHaveBeenCalledTimes(1);
+    } finally {
+      send.resolve({});
+      await jest.runAllTimersAsync();
+      jest.useRealTimers();
+      await family.close().catch(() => undefined);
     }
   });
 
@@ -677,6 +1063,14 @@ describe('AWS single-node host client family ownership lifecycle', () => {
           Promise.reject(new Error('credential-close-provider-secret'));
       },
     ],
+    [
+      'DynamoDB destroy',
+      () => {
+        dynamoDestroyImplementation = () => {
+          throw new Error('dynamo-destroy-provider-secret');
+        };
+      },
+    ],
   ])(
     'keeps one closed lifetime and redacts a %s failure',
     async (_label, arrange) => {
@@ -684,6 +1078,7 @@ describe('AWS single-node host client family ownership lifecycle', () => {
       arrange();
       const family = openAwsSingleNodeHostClientFamily({
         providerScope: request.providerScope,
+        deploymentInstanceId: request.deploymentInstanceId,
       });
 
       const firstClose = family.close();
@@ -707,6 +1102,7 @@ describe('AWS single-node host client family ownership lifecycle', () => {
       expect(String(failure)).not.toContain('provider-secret');
       expect(credentialSourceClose).toHaveBeenCalledTimes(1);
       expect(rawClients[0].destroy).toHaveBeenCalledTimes(1);
+      expect(rawDynamoClients[0].destroy).toHaveBeenCalledTimes(1);
       expect(family.close()).toBe(firstClose);
       await expect(family.close()).rejects.toBe(failure);
       expect(() => family.runtimeIdentity.observe(context)).toThrow(

@@ -1,9 +1,15 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact internal boundary helpers are clearer than expanded parser-specific annotations. */
 
-import { validateProviderScope } from './deployment-provider-scope.js';
+import {
+  assertDeploymentInstanceId,
+  validateProviderScope,
+} from './deployment-provider-scope.js';
 
 export const DEPLOYMENT_CONTROL_TABLE_NAME = 'wharfie-deployment-control-v1';
 export const DEPLOYMENT_CONTROL_TABLE_RECORD_KEY = 'record_key';
+export const DEPLOYMENT_CONTROL_HEAD_RECORD_KEY_PREFIX = 'head/v1/';
+export const DEPLOYMENT_CONTROL_HOST_ACTIVATION_AUTHORITY_RECORD_KEY_PREFIX =
+  'host-activation-authority/v1/';
 export const DEPLOYMENT_CONTROL_TABLE_PITR_DAYS = 35;
 export const DEPLOYMENT_CONTROL_TABLE_MAX_INSPECTION_ATTEMPTS = 30;
 
@@ -65,6 +71,20 @@ export class DeploymentControlTableUnknownError extends Error {
 }
 
 class DeploymentControlTableTagsNotVisibleError extends DeploymentControlTableConflictError {}
+
+/** @param {unknown} deploymentInstanceId @returns {string} */
+export function getDeploymentControlHeadRecordKey(deploymentInstanceId) {
+  assertDeploymentInstanceId(deploymentInstanceId, 'deploymentInstanceId');
+  return `${DEPLOYMENT_CONTROL_HEAD_RECORD_KEY_PREFIX}${deploymentInstanceId}`;
+}
+
+/** @param {unknown} deploymentInstanceId @returns {string} */
+export function getDeploymentControlHostActivationAuthorityRecordKey(
+  deploymentInstanceId,
+) {
+  assertDeploymentInstanceId(deploymentInstanceId, 'deploymentInstanceId');
+  return `${DEPLOYMENT_CONTROL_HOST_ACTIVATION_AUTHORITY_RECORD_KEY_PREFIX}${deploymentInstanceId}`;
+}
 
 /** @param {unknown} value @returns {value is Record<string, any>} */
 function isPlainObject(value) {

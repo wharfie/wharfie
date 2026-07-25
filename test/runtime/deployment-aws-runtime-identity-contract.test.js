@@ -31,6 +31,11 @@ import {
   createCanonicalJsonSha256Id,
   sha256Base64Url,
 } from '../../src/core/runtime/content-id.js';
+import {
+  DEPLOYMENT_CONTROL_TABLE_NAME,
+  getDeploymentControlHeadRecordKey,
+  getDeploymentControlHostActivationAuthorityRecordKey,
+} from '../../src/core/runtime/deployment-control-table.js';
 import { createAwsProviderScope } from '../../src/core/runtime/deployment-provider-scope.js';
 import { createDeploymentIncarnationId } from '../../src/core/runtime/deployment-resource-binding.js';
 
@@ -191,7 +196,7 @@ describe('AWS single-node runtime identity contract', () => {
     expect(Object.isFrozen(location)).toBe(true);
   });
 
-  it('renders one exact minimal SSM, managed-artifact, and health policy', () => {
+  it('renders one exact minimal SSM, control-authority, managed-artifact, and health policy', () => {
     const fixture = makeFixture();
     const location = getAwsSingleNodeManagedArtifactObjectLocation(
       fixture.policyAuthority,
@@ -199,7 +204,7 @@ describe('AWS single-node runtime identity contract', () => {
     const policy = createAwsSingleNodeRuntimePolicy(fixture.policyAuthority);
 
     expect(policy.Version).toBe('2012-10-17');
-    expect(policy.Statement).toHaveLength(6);
+    expect(policy.Statement).toHaveLength(7);
     expect(
       policy.Statement.map(
         (/** @type {Readonly<Record<string, any>>} */ statement) =>
@@ -208,6 +213,7 @@ describe('AWS single-node runtime identity contract', () => {
     ).toEqual([
       'ManageWithSsm',
       'ReadExactManagedArtifact',
+      'ReadExactHostActivationAuthority',
       'ReadOwnCurrentHealth',
       'CreateOwnCurrentHealth',
       'ReplaceOwnCurrentHealth',
@@ -236,9 +242,31 @@ describe('AWS single-node runtime identity contract', () => {
       Sid: 'ReadExactManagedArtifact',
     });
 
+    expect(policy.Statement[2]).toEqual({
+      Action: 'dynamodb:GetItem',
+      Condition: {
+        Bool: { 'aws:SecureTransport': 'true' },
+        'ForAllValues:StringEquals': {
+          'dynamodb:LeadingKeys': [
+            getDeploymentControlHostActivationAuthorityRecordKey(
+              fixture.deploymentInstanceId,
+            ),
+            getDeploymentControlHeadRecordKey(fixture.deploymentInstanceId),
+          ],
+        },
+        Null: {
+          'dynamodb:EnclosingOperation': 'true',
+          'dynamodb:LeadingKeys': 'false',
+        },
+      },
+      Effect: 'Allow',
+      Resource: `arn:aws:dynamodb:us-east-1:123456789012:table/${DEPLOYMENT_CONTROL_TABLE_NAME}`,
+      Sid: 'ReadExactHostActivationAuthority',
+    });
+
     const healthArn = `arn:aws:s3:::${location.bucketName}/health/v3/\${aws:userid}`;
-    expect(policy.Statement[2].Resource).toBe(healthArn);
-    expect(policy.Statement[3].Condition).toEqual({
+    expect(policy.Statement[3].Resource).toBe(healthArn);
+    expect(policy.Statement[4].Condition).toEqual({
       Bool: { 'aws:SecureTransport': 'true' },
       StringEquals: {
         's3:ResourceAccount': '123456789012',
@@ -247,7 +275,7 @@ describe('AWS single-node runtime identity contract', () => {
         's3:x-amz-storage-class': 'STANDARD',
       },
     });
-    expect(policy.Statement[4].Condition).toEqual({
+    expect(policy.Statement[5].Condition).toEqual({
       Bool: { 'aws:SecureTransport': 'true' },
       Null: { 's3:if-match': 'false' },
       StringEquals: {
@@ -256,14 +284,14 @@ describe('AWS single-node runtime identity contract', () => {
         's3:x-amz-storage-class': 'STANDARD',
       },
     });
-    expect(policy.Statement[5]).toEqual({
+    expect(policy.Statement[6]).toEqual({
       Action: ['s3:DeleteObject', 's3:DeleteObjectVersion'],
       Effect: 'Deny',
       Resource: healthArn,
       Sid: 'DenyDeletingOwnHealthHistory',
     });
     expect(JSON.stringify(policy)).not.toMatch(
-      /s3:ListBucket|ec2messages|ssm:GetParameter|s3:GetObjectVersion/,
+      /s3:ListBucket|ec2messages|ssm:GetParameter|s3:GetObjectVersion|dynamodb:(?:BatchGetItem|Query|Scan)|dynamodb:PartiQL/,
     );
     expect(Object.isFrozen(policy)).toBe(true);
     expect(Object.isFrozen(policy.Statement)).toBe(true);
@@ -272,7 +300,7 @@ describe('AWS single-node runtime identity contract', () => {
   it('derives the provider-spec digest from the same exact policy shape', () => {
     expect(AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST).toEqual({
       algorithm: 'sha256',
-      value: 'IQPpv2fcAo9SCtu5rK4ykyxs-wGfvN8BAn8RkokWI00',
+      value: 'cH34BV7sMmvhePjPdM3ra7IJwq5v2rVvI08sPwh2puA',
     });
     expect(getAwsSingleNodeRuntimePolicyTemplateDigest()).toBe(
       AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST,
@@ -429,6 +457,12 @@ describe('AWS single-node runtime identity contract', () => {
         extra: true,
       }),
     ).toThrow(/extra is not supported/);
+    expect(() => getDeploymentControlHeadRecordKey('wdi1_invalid')).toThrow(
+      /deploymentInstanceId/,
+    );
+    expect(() =>
+      getDeploymentControlHostActivationAuthorityRecordKey(undefined),
+    ).toThrow(/deploymentInstanceId/);
     expect(() =>
       getAwsSingleNodeRuntimeRoleName({
         ...fixture.nameAuthority,

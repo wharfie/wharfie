@@ -896,6 +896,36 @@ function makeArtifactStager(base, events = []) {
   };
 }
 
+/** @param {string[]} [events] */
+function makeHostActivationAuthorityPublisher(events = []) {
+  /** @type {Record<string, any>[]} */
+  const contexts = [];
+  let publishCount = 0;
+  /** @type {unknown} */
+  let failure;
+  const api = {
+    /** @param {Record<string, any>} context */
+    async publish(context) {
+      events.push('host-activation-authority-publish');
+      publishCount += 1;
+      contexts.push(context);
+      if (failure !== undefined) throw failure;
+      return Object.freeze({ published: true });
+    },
+  };
+  return {
+    api,
+    contexts,
+    get publishCount() {
+      return publishCount;
+    },
+    /** @param {unknown} value */
+    setFailure(value) {
+      failure = value;
+    },
+  };
+}
+
 /**
  * @param {Readonly<Record<string, any>>} base
  * @param {ReturnType<typeof makeStore>} store
@@ -1529,6 +1559,8 @@ function makeHarness(options = {}) {
   );
   const provider = makeProvider(base, store, physical, events);
   const artifactStager = makeArtifactStager(base, events);
+  const hostActivationAuthorityPublisher =
+    makeHostActivationAuthorityPublisher(events);
   let currentNow = HEALTH_NOW;
   let clockReadCount = 0;
   const factoryStats = { ownershipNonces: 0, incarnations: 0 };
@@ -1536,6 +1568,7 @@ function makeHarness(options = {}) {
     store: store.api,
     provider: provider.api,
     artifactStager: artifactStager.api,
+    hostActivationAuthorityPublisher: hostActivationAuthorityPublisher.api,
     now: () => {
       clockReadCount += 1;
       return currentNow;
@@ -1558,6 +1591,7 @@ function makeHarness(options = {}) {
     store,
     provider,
     artifactStager,
+    hostActivationAuthorityPublisher,
     events,
     controller,
     factoryStats,
@@ -1590,6 +1624,7 @@ function expectInspectionDidNotMutate(harness) {
   expect(harness.events).toEqual([]);
   expect(harness.artifactStager.stageCount).toBe(0);
   expect(harness.artifactStager.validationCount).toBe(0);
+  expect(harness.hostActivationAuthorityPublisher.publishCount).toBe(0);
   expect(harness.provider.planContexts).toEqual([]);
   expect(harness.provider.executeContexts).toEqual([]);
   expect(harness.provider.verifyContexts).toEqual([]);
@@ -2628,6 +2663,104 @@ describe('deployment controller artifact staging', () => {
     expect(harness.artifactStager.validationCount).toBe(0);
   });
 
+  it('publishes host authority at the all-settled non-destroy frontier before final inspection', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const inspect = harness.provider.api.inspect;
+    harness.provider.api.inspect = async (context) => {
+      if (
+        context.plan?.planId === plan.planId &&
+        context.pendingBinding === null &&
+        context.head.activeOperation?.nextActionIndex === plan.actions.length
+      ) {
+        harness.events.push('final-provider-inspect');
+      }
+      return await inspect(context);
+    };
+    harness.events.length = 0;
+
+    const result = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(result.phase).toBe('READY');
+    expect(harness.hostActivationAuthorityPublisher.publishCount).toBe(1);
+    expect(harness.hostActivationAuthorityPublisher.contexts).toHaveLength(1);
+    const [context] = harness.hostActivationAuthorityPublisher.contexts;
+    expect(context).toMatchObject({
+      plan,
+      settledPlan: null,
+      profile: harness.base.profile,
+    });
+    expect(context.head.phase).toBe('CONVERGING');
+    expect(context.head.activeOperation).toMatchObject({
+      status: 'running',
+      nextActionIndex: plan.actions.length,
+    });
+    expect(
+      context.head.activeOperation.intents.every(
+        (/** @type {Readonly<Record<string, any>>} */ intent) =>
+          intent.status === 'settled',
+      ),
+    ).toBe(true);
+    expect(Object.isFrozen(context)).toBe(true);
+    const publishIndex = harness.events.indexOf(
+      'host-activation-authority-publish',
+    );
+    const finalInspectionIndex = harness.events.indexOf(
+      'final-provider-inspect',
+    );
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(publishIndex).toBeLessThan(finalInspectionIndex);
+    expect(finalInspectionIndex).toBeLessThan(
+      harness.events.lastIndexOf('head-cas'),
+    );
+  });
+
+  it('blocks an all-settled non-destroy operation when authority publication fails before final inspection', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    const inspect = harness.provider.api.inspect;
+    harness.provider.api.inspect = async (context) => {
+      if (
+        context.plan?.planId === plan.planId &&
+        context.pendingBinding === null &&
+        context.head.activeOperation?.nextActionIndex === plan.actions.length
+      ) {
+        harness.events.push('final-provider-inspect');
+      }
+      return await inspect(context);
+    };
+    harness.hostActivationAuthorityPublisher.setFailure(
+      new Error('injected authority publication failure'),
+    );
+    harness.events.length = 0;
+
+    const result = await harness.controller.converge({
+      plan,
+      profile: harness.base.profile,
+    });
+
+    expect(result).toMatchObject({
+      phase: 'CONVERGING',
+      activeOperation: {
+        status: 'blocked',
+        nextActionIndex: plan.actions.length,
+      },
+    });
+    expect(
+      result.activeOperation.intents.every(
+        (/** @type {Readonly<Record<string, any>>} */ intent) =>
+          intent.status === 'settled',
+      ),
+    ).toBe(true);
+    expect(harness.hostActivationAuthorityPublisher.publishCount).toBe(1);
+    expect(harness.events).toContain('host-activation-authority-publish');
+    expect(harness.events).not.toContain('final-provider-inspect');
+    expect(harness.events.at(-1)).toBe('head-cas');
+  });
+
   it('bypasses staging and validation for destroy and passes null to every action call', async () => {
     const ready = makeReadyState();
     /** @type {string[]} */
@@ -2639,6 +2772,8 @@ describe('deployment controller artifact staging', () => {
       store: store.api,
       provider: provider.api,
       artifactStager: artifactStager.api,
+      hostActivationAuthorityPublisher:
+        makeHostActivationAuthorityPublisher(events).api,
       now: () => HEALTH_NOW,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => ready.base.incarnationId,
@@ -2664,6 +2799,7 @@ describe('deployment controller artifact staging', () => {
     expect(artifactStager.validationCount).toBe(0);
     expect(events).not.toContain('artifact-stage');
     expect(events).not.toContain('artifact-validate');
+    expect(events).not.toContain('host-activation-authority-publish');
     const actionContexts = [
       ...provider.executeContexts,
       ...provider.verifyContexts,
@@ -3962,6 +4098,8 @@ describe('deployment controller fencing', () => {
       store: store.api,
       provider: provider.api,
       artifactStager: makeArtifactStager(ready.base).api,
+      hostActivationAuthorityPublisher:
+        makeHostActivationAuthorityPublisher().api,
       now: () => HEALTH_NOW,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => ready.base.incarnationId,
@@ -4082,6 +4220,8 @@ describe('deployment controller fencing', () => {
         store: store.api,
         provider: provider.api,
         artifactStager: makeArtifactStager(ready.base).api,
+        hostActivationAuthorityPublisher:
+          makeHostActivationAuthorityPublisher().api,
         now: () => HEALTH_NOW,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
@@ -4278,6 +4418,8 @@ describe('deployment controller destroy ownership', () => {
         store: store.api,
         provider: provider.api,
         artifactStager: makeArtifactStager(ready.base).api,
+        hostActivationAuthorityPublisher:
+          makeHostActivationAuthorityPublisher().api,
         now: () => HEALTH_NOW,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
@@ -4315,6 +4457,8 @@ describe('deployment controller destroy ownership', () => {
         store: store.api,
         provider: provider.api,
         artifactStager: makeArtifactStager(ready.base).api,
+        hostActivationAuthorityPublisher:
+          makeHostActivationAuthorityPublisher().api,
         now: () => HEALTH_NOW,
         createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
         createDeploymentIncarnationId: () => ready.base.incarnationId,
@@ -4551,6 +4695,8 @@ describe('deployment controller destroy ownership', () => {
       store: store.api,
       provider: provider.api,
       artifactStager: makeArtifactStager(ready.base).api,
+      hostActivationAuthorityPublisher:
+        makeHostActivationAuthorityPublisher().api,
       now: () => HEALTH_NOW,
       createOwnershipNonce: () => createOwnershipNonce(Buffer.alloc(32, 30)),
       createDeploymentIncarnationId: () => freshIncarnationId,

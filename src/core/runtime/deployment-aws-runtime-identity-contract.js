@@ -16,6 +16,11 @@ import {
   validateProviderScope,
 } from './deployment-provider-scope.js';
 import {
+  DEPLOYMENT_CONTROL_HEAD_RECORD_KEY_PREFIX,
+  DEPLOYMENT_CONTROL_HOST_ACTIVATION_AUTHORITY_RECORD_KEY_PREFIX,
+  DEPLOYMENT_CONTROL_TABLE_NAME,
+} from './deployment-control-table.js';
+import {
   assertDeploymentIncarnationId,
   assertDeploymentActionId,
   validateOwnershipNonce,
@@ -93,7 +98,9 @@ const RUNTIME_ROLE_TRUST_POLICY = deepFreeze(
 
 const RUNTIME_POLICY_TEMPLATE = createRuntimePolicyDocument({
   partition: '${wharfie:partition}',
+  region: '${wharfie:region}',
   accountId: '${wharfie:account-id}',
+  deploymentInstanceId: '${wharfie:deployment-instance-id}',
   bucketName: '${wharfie:control-bucket}',
   artifactKey: '${wharfie:managed-artifact-key}',
 });
@@ -241,9 +248,12 @@ export function getAwsSingleNodeRuntimePolicyTemplateDigest() {
   return AWS_SINGLE_NODE_RUNTIME_POLICY_TEMPLATE_DIGEST;
 }
 
-/** @param {{partition: string, accountId: string, bucketName: string, artifactKey: string}} value @returns {Readonly<Record<string, any>>} */
+/** @param {{partition: string, region: string, accountId: string, deploymentInstanceId: string, bucketName: string, artifactKey: string}} value @returns {Readonly<Record<string, any>>} */
 function createRuntimePolicyDocument(value) {
   const artifactArn = `arn:${value.partition}:s3:::${value.bucketName}/${value.artifactKey}`;
+  const controlTableArn = `arn:${value.partition}:dynamodb:${value.region}:${value.accountId}:table/${DEPLOYMENT_CONTROL_TABLE_NAME}`;
+  const hostActivationAuthorityRecordKey = `${DEPLOYMENT_CONTROL_HOST_ACTIVATION_AUTHORITY_RECORD_KEY_PREFIX}${value.deploymentInstanceId}`;
+  const headRecordKey = `${DEPLOYMENT_CONTROL_HEAD_RECORD_KEY_PREFIX}${value.deploymentInstanceId}`;
   const healthArn = `arn:${value.partition}:s3:::${value.bucketName}/${DEPLOYMENT_SERVICE_HEALTH_OBJECT_PREFIX}\${aws:userid}`;
   const resourceAccount = value.accountId;
   return deepFreeze(
@@ -270,6 +280,25 @@ function createRuntimePolicyDocument(value) {
           Condition: {
             Bool: { 'aws:SecureTransport': 'true' },
             StringEquals: { 's3:ResourceAccount': resourceAccount },
+          },
+        },
+        {
+          Sid: 'ReadExactHostActivationAuthority',
+          Effect: 'Allow',
+          Action: 'dynamodb:GetItem',
+          Resource: controlTableArn,
+          Condition: {
+            Bool: { 'aws:SecureTransport': 'true' },
+            'ForAllValues:StringEquals': {
+              'dynamodb:LeadingKeys': [
+                hostActivationAuthorityRecordKey,
+                headRecordKey,
+              ],
+            },
+            Null: {
+              'dynamodb:EnclosingOperation': 'true',
+              'dynamodb:LeadingKeys': 'false',
+            },
           },
         },
         {
@@ -376,7 +405,9 @@ export function createAwsSingleNodeRuntimePolicy(value) {
   const authority = validatePolicyAuthority(value);
   return createRuntimePolicyDocument({
     partition: authority.providerScope.partition,
+    region: authority.providerScope.region,
     accountId: authority.providerScope.accountId,
+    deploymentInstanceId: authority.deploymentInstanceId,
     bucketName: authority.bucketName,
     artifactKey: authority.artifactKey,
   });

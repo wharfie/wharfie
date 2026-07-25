@@ -17,6 +17,7 @@ import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
 } from '../../src/core/runtime/deployment-aws-provider-spec.js';
+import { createAwsSingleNodeHostActivationRequest } from '../../src/core/runtime/deployment-aws-host-agent-contract.js';
 import {
   createDeploymentArtifactStageIntent,
   createDeploymentArtifactStageReceipt,
@@ -50,6 +51,10 @@ import {
   createMockedDynamoDB,
   createVanillaDB,
 } from '../helpers/db-adapters.js';
+import {
+  makeFixture,
+  makeReconcileFixture,
+} from './fixtures/deployment-aws-host-activation.js';
 
 const TABLE_NAME = 'deployment-control';
 
@@ -442,6 +447,198 @@ const ADAPTERS = [
 ];
 
 describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
+  it('strongly reads and atomically publishes one complete host-activation authority', async () => {
+    const harness = await create();
+    try {
+      /** @type {Array<Record<string, any>>} */
+      const reads = [];
+      /** @type {Array<Record<string, any>>} */
+      const transactions = [];
+      const db = {
+        ...harness.db,
+        async get(/** @type {any} */ params) {
+          reads.push(params);
+          return await harness.db.get(params);
+        },
+        async transactionWrite(/** @type {any} */ params) {
+          transactions.push(params);
+          return await harness.db.transactionWrite(params);
+        },
+      };
+      const store = createDeploymentControlStore({ db, tableName: TABLE_NAME });
+      const fixture = makeFixture();
+      const request = createAwsSingleNodeHostActivationRequest(
+        fixture.requestContext,
+      );
+
+      await expect(
+        store.readHostActivationAuthority(fixture.deploymentInstanceId),
+      ).resolves.toBeNull();
+      await expect(
+        store.compareAndSetHead({
+          expectedHeadId: null,
+          nextHead: fixture.head,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        store.compareAndSetHostActivationAuthority({
+          expectedRequest: null,
+          nextRequest: request,
+          authorizedHead: fixture.head,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        store.readHostActivationAuthority(fixture.deploymentInstanceId),
+      ).resolves.toEqual(request);
+
+      expect(
+        reads
+          .filter((read) =>
+            read.keyValue.startsWith(
+              DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.hostActivationAuthority,
+            ),
+          )
+          .every((read) => read.consistentRead === true),
+      ).toBe(true);
+      const publication = transactions.find(
+        (transaction) =>
+          transaction.putRequests?.[0]?.record?.record_kind ===
+          DEPLOYMENT_CONTROL_RECORD_TYPES.hostActivationAuthority,
+      );
+      expect(publication).toMatchObject({
+        tableName: TABLE_NAME,
+        conditionChecks: [
+          {
+            keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+            keyValue: `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.head}${fixture.deploymentInstanceId}`,
+            conditions: expect.arrayContaining([
+              {
+                conditionType: 'EQUALS',
+                propertyName: 'document_id',
+                propertyValue: fixture.head.headId,
+              },
+            ]),
+          },
+        ],
+        putRequests: [
+          {
+            keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+            record: {
+              record_key: `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.hostActivationAuthority}${fixture.deploymentInstanceId}`,
+              storage_schema_version: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+              record_kind:
+                DEPLOYMENT_CONTROL_RECORD_TYPES.hostActivationAuthority,
+              document_id: request.requestId,
+              document: request,
+            },
+            conditions: [
+              {
+                conditionType: 'NOT_EXISTS',
+                propertyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+              },
+            ],
+          },
+        ],
+      });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('leaves no authority record when the exact authorizing head lost its transaction condition', async () => {
+    const harness = await create();
+    try {
+      const store = createDeploymentControlStore({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const fixture = makeFixture();
+      const request = createAwsSingleNodeHostActivationRequest(
+        fixture.requestContext,
+      );
+      await store.compareAndSetHead({
+        expectedHeadId: null,
+        nextHead: fixture.head,
+      });
+      await store.compareAndSetHead({
+        expectedHeadId: fixture.head.headId,
+        nextHead: fixture.readyHead,
+      });
+
+      await expect(
+        store.compareAndSetHostActivationAuthority({
+          expectedRequest: null,
+          nextRequest: request,
+          authorizedHead: fixture.head,
+        }),
+      ).resolves.toBe(false);
+      await expect(
+        store.readHostActivationAuthority(fixture.deploymentInstanceId),
+      ).resolves.toBeNull();
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('replaces an earlier operation by exact predecessor and rejects a stale predecessor without changing the winner', async () => {
+    const harness = await create();
+    try {
+      const store = createDeploymentControlStore({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const fixture = makeFixture();
+      const reconcile = makeReconcileFixture(fixture);
+      const initialRequest = createAwsSingleNodeHostActivationRequest(
+        fixture.requestContext,
+      );
+      const reconcileRequest = createAwsSingleNodeHostActivationRequest(
+        reconcile.requestContext,
+      );
+      await store.compareAndSetHead({
+        expectedHeadId: null,
+        nextHead: fixture.head,
+      });
+      await store.compareAndSetHostActivationAuthority({
+        expectedRequest: null,
+        nextRequest: initialRequest,
+        authorizedHead: fixture.head,
+      });
+      await store.compareAndSetHead({
+        expectedHeadId: fixture.head.headId,
+        nextHead: fixture.readyHead,
+      });
+      await store.compareAndSetHead({
+        expectedHeadId: fixture.readyHead.headId,
+        nextHead: reconcile.head,
+      });
+
+      await expect(
+        store.compareAndSetHostActivationAuthority({
+          expectedRequest: initialRequest,
+          nextRequest: reconcileRequest,
+          authorizedHead: reconcile.head,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        store.readHostActivationAuthority(fixture.deploymentInstanceId),
+      ).resolves.toEqual(reconcileRequest);
+
+      await expect(
+        store.compareAndSetHostActivationAuthority({
+          expectedRequest: initialRequest,
+          nextRequest: reconcileRequest,
+          authorizedHead: reconcile.head,
+        }),
+      ).resolves.toBe(false);
+      await expect(
+        store.readHostActivationAuthority(fixture.deploymentInstanceId),
+      ).resolves.toEqual(reconcileRequest);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   it('stores and strongly validates immutable profiles and plans', async () => {
     const harness = await create();
     try {

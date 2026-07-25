@@ -13,6 +13,13 @@ import {
   validateDeploymentHead,
 } from './deployment-head.js';
 import {
+  AWS_SINGLE_NODE_HOST_ACTIVATION_AUTHORITY_RECORD_KIND,
+  AWS_SINGLE_NODE_HOST_ACTIVATION_AUTHORITY_STORAGE_SCHEMA_VERSION,
+  createAwsSingleNodeHostActivationAuthorityRecord,
+  isAwsSingleNodeHostActivationRequestAuthorizedByHead,
+  validateAwsSingleNodeHostActivationAuthorityRecord,
+} from './deployment-aws-host-activation-authority-contract.js';
+import {
   assertDeploymentPlanId,
   validateDeploymentPlan,
 } from './deployment-plan.js';
@@ -24,6 +31,12 @@ import {
   DEPLOYMENT_PROFILE_ID_PREFIX,
   validateDeploymentProfile,
 } from './deployment-profile.js';
+import {
+  DEPLOYMENT_CONTROL_HEAD_RECORD_KEY_PREFIX,
+  DEPLOYMENT_CONTROL_HOST_ACTIVATION_AUTHORITY_RECORD_KEY_PREFIX,
+  getDeploymentControlHeadRecordKey,
+  getDeploymentControlHostActivationAuthorityRecordKey,
+} from './deployment-control-table.js';
 import { cloneBoundedJsonObject } from './json-value.js';
 
 export const DEPLOYMENT_CONTROL_RECORD_KEY_NAME = 'record_key';
@@ -34,6 +47,8 @@ export const DEPLOYMENT_CONTROL_RECORD_TYPES = Object.freeze({
   artifactStageIntent: 'deployment-artifact-stage-intent',
   artifactStageReceipt: 'deployment-artifact-stage-receipt',
   head: 'deployment-head',
+  hostActivationAuthority:
+    AWS_SINGLE_NODE_HOST_ACTIVATION_AUTHORITY_RECORD_KIND,
   plan: 'deployment-plan',
   profile: 'deployment-profile',
 });
@@ -41,7 +56,9 @@ export const DEPLOYMENT_CONTROL_RECORD_TYPES = Object.freeze({
 export const DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES = Object.freeze({
   artifactStageIntent: 'artifact-stage-intent/v1/',
   artifactStageReceipt: 'artifact-stage-receipt/v1/',
-  head: 'head/v1/',
+  head: DEPLOYMENT_CONTROL_HEAD_RECORD_KEY_PREFIX,
+  hostActivationAuthority:
+    DEPLOYMENT_CONTROL_HOST_ACTIVATION_AUTHORITY_RECORD_KEY_PREFIX,
   plan: 'plan/v2/',
   profile: 'profile/v2/',
 });
@@ -55,6 +72,11 @@ const RECORD_KEYS = new Set([
 ]);
 const FACTORY_KEYS = new Set(['db', 'tableName']);
 const CAS_KEYS = new Set(['expectedHeadId', 'nextHead']);
+const HOST_ACTIVATION_AUTHORITY_CAS_KEYS = new Set([
+  'expectedRequest',
+  'nextRequest',
+  'authorizedHead',
+]);
 const DYNAMODB_TABLE_NAME_PATTERN = /^[A-Za-z0-9_.-]{3,255}$/;
 
 /**
@@ -89,7 +111,7 @@ function isNormalizedConditionalFailure(error) {
 }
 
 /**
- * @typedef {'deployment-artifact-stage-intent'|'deployment-artifact-stage-receipt'|'deployment-head'|'deployment-plan'|'deployment-profile'} DeploymentControlRecordType
+ * @typedef {'deployment-artifact-stage-intent'|'deployment-artifact-stage-receipt'|'deployment-head'|'aws-single-node-host-activation-authority'|'deployment-plan'|'deployment-profile'} DeploymentControlRecordType
  */
 
 /**
@@ -131,6 +153,15 @@ function canonicalRecordComponents(recordType, document, path) {
       logicalId: canonical.deploymentInstanceId,
       documentId: canonical.headId,
       document: canonical,
+    };
+  }
+  if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.hostActivationAuthority) {
+    const record =
+      createAwsSingleNodeHostActivationAuthorityRecord(boundedDocument);
+    return {
+      logicalId: record.document.deploymentInstanceId,
+      documentId: record.document_id,
+      document: record.document,
     };
   }
   if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.plan) {
@@ -197,7 +228,10 @@ function createRecordKey(recordType, logicalId) {
     return `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.artifactStageReceipt}${logicalId}`;
   }
   if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.head) {
-    return `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.head}${logicalId}`;
+    return getDeploymentControlHeadRecordKey(logicalId);
+  }
+  if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.hostActivationAuthority) {
+    return getDeploymentControlHostActivationAuthorityRecordKey(logicalId);
   }
   if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.plan) {
     return `${DEPLOYMENT_CONTROL_RECORD_KEY_PREFIXES.plan}${logicalId}`;
@@ -214,6 +248,9 @@ function createRecordKey(recordType, logicalId) {
  * @returns {Readonly<Record<string, any>>} - Physical record.
  */
 function createRecord(recordType, document) {
+  if (recordType === DEPLOYMENT_CONTROL_RECORD_TYPES.hostActivationAuthority) {
+    return createAwsSingleNodeHostActivationAuthorityRecord(document);
+  }
   const components = canonicalRecordComponents(
     recordType,
     document,
@@ -243,6 +280,25 @@ function createRecord(recordType, document) {
  * @returns {Readonly<Record<string, any>>} - Canonical document.
  */
 function validateStoredRecord(value, expectedType, expectedLogicalId, path) {
+  if (
+    expectedType === DEPLOYMENT_CONTROL_RECORD_TYPES.hostActivationAuthority
+  ) {
+    try {
+      const record = validateAwsSingleNodeHostActivationAuthorityRecord(
+        value,
+        path,
+      );
+      if (record.document.deploymentInstanceId !== expectedLogicalId) {
+        throw new Error(`${path}.record_key does not match its lookup key.`);
+      }
+      return record.document;
+    } catch (error) {
+      throw new DeploymentControlStoreIntegrityError(
+        `${path} is not an exact Wharfie deployment-control record.`,
+        { cause: error },
+      );
+    }
+  }
   let record;
   try {
     record = cloneBoundedJsonObject(
@@ -471,6 +527,144 @@ export function createDeploymentControlStore(options) {
     }
   }
 
+  /** @param {string} deploymentInstanceId @returns {Promise<Readonly<Record<string, any>>|null>} */
+  async function readHostActivationAuthority(deploymentInstanceId) {
+    assertDeploymentInstanceId(
+      deploymentInstanceId,
+      'deploymentControlStore hostActivationAuthority.deploymentInstanceId',
+    );
+    return readRecord(
+      DEPLOYMENT_CONTROL_RECORD_TYPES.hostActivationAuthority,
+      deploymentInstanceId,
+    );
+  }
+
+  /**
+   * Atomically publish one complete V65 request only while its exact
+   * authorizing HeadV2 still occupies the deployment head key and the observed
+   * authority predecessor still occupies the stable authority key.
+   * @param {unknown} value - Exact predecessor, successor request, and head.
+   * @returns {Promise<boolean>} - Whether this call definitely committed.
+   */
+  async function compareAndSetHostActivationAuthority(value) {
+    const input = cloneBoundedJsonObject(
+      value,
+      DEPLOYMENT_CONTROL_MAX_RECORD_BYTES * 3,
+      'deploymentControlStore hostActivationAuthority CAS',
+    );
+    assertExactKeys(
+      input,
+      HOST_ACTIVATION_AUTHORITY_CAS_KEYS,
+      'deploymentControlStore hostActivationAuthority CAS',
+    );
+    const authorizedHeadRecord = createRecord(
+      DEPLOYMENT_CONTROL_RECORD_TYPES.head,
+      input.authorizedHead,
+    );
+    const nextRecord = createAwsSingleNodeHostActivationAuthorityRecord(
+      input.nextRequest,
+    );
+    const expectedRecord =
+      input.expectedRequest === null
+        ? null
+        : createAwsSingleNodeHostActivationAuthorityRecord(
+            input.expectedRequest,
+          );
+    const nextRequest = nextRecord.document;
+    const authorizedHead = authorizedHeadRecord.document;
+    if (
+      nextRequest.deploymentInstanceId !==
+        authorizedHead.deploymentInstanceId ||
+      nextRequest.authorizedHeadId !== authorizedHead.headId ||
+      nextRequest.authorizedHeadGeneration !== authorizedHead.generation ||
+      !isAwsSingleNodeHostActivationRequestAuthorizedByHead(
+        nextRequest,
+        authorizedHead,
+      )
+    ) {
+      throw new TypeError(
+        'deploymentControlStore hostActivationAuthority CAS request does not match its exact authorizing head.',
+      );
+    }
+    if (
+      expectedRecord !== null &&
+      (expectedRecord.document.deploymentInstanceId !==
+        nextRequest.deploymentInstanceId ||
+        nextRequest.authorizedHeadGeneration <=
+          expectedRecord.document.authorizedHeadGeneration)
+    ) {
+      throw new TypeError(
+        'deploymentControlStore hostActivationAuthority CAS predecessor is not an earlier authority for this deployment.',
+      );
+    }
+    const authorityConditions =
+      expectedRecord === null
+        ? [
+            {
+              conditionType: CONDITION_TYPE.NOT_EXISTS,
+              propertyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+            },
+          ]
+        : [
+            {
+              conditionType: CONDITION_TYPE.EQUALS,
+              propertyName: 'storage_schema_version',
+              propertyValue:
+                AWS_SINGLE_NODE_HOST_ACTIVATION_AUTHORITY_STORAGE_SCHEMA_VERSION,
+            },
+            {
+              conditionType: CONDITION_TYPE.EQUALS,
+              propertyName: 'record_kind',
+              propertyValue:
+                AWS_SINGLE_NODE_HOST_ACTIVATION_AUTHORITY_RECORD_KIND,
+            },
+            {
+              conditionType: CONDITION_TYPE.EQUALS,
+              propertyName: 'document_id',
+              propertyValue: expectedRecord.document_id,
+            },
+          ];
+    try {
+      await db.transactionWrite({
+        tableName,
+        conditionChecks: [
+          {
+            keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+            keyValue: authorizedHeadRecord.record_key,
+            conditions: [
+              {
+                conditionType: CONDITION_TYPE.EQUALS,
+                propertyName: 'storage_schema_version',
+                propertyValue: DEPLOYMENT_CONTROL_STORAGE_SCHEMA_VERSION,
+              },
+              {
+                conditionType: CONDITION_TYPE.EQUALS,
+                propertyName: 'record_kind',
+                propertyValue: DEPLOYMENT_CONTROL_RECORD_TYPES.head,
+              },
+              {
+                conditionType: CONDITION_TYPE.EQUALS,
+                propertyName: 'document_id',
+                propertyValue: authorizedHeadRecord.document_id,
+              },
+            ],
+          },
+        ],
+        putRequests: [
+          {
+            keyName: DEPLOYMENT_CONTROL_RECORD_KEY_NAME,
+            record: nextRecord,
+            conditions: authorityConditions,
+          },
+        ],
+      });
+      return true;
+    } catch (error) {
+      if (isNormalizedConditionalFailure(error)) return false;
+      throw error;
+    }
+  }
+
   /** @param {unknown} plan @returns {Promise<boolean>} */
   async function putPlanIfAbsent(plan) {
     return putImmutableIfAbsent(DEPLOYMENT_CONTROL_RECORD_TYPES.plan, plan);
@@ -608,6 +802,8 @@ export function createDeploymentControlStore(options) {
   return Object.freeze({
     readHead,
     compareAndSetHead,
+    readHostActivationAuthority,
+    compareAndSetHostActivationAuthority,
     putPlanIfAbsent,
     readPlan,
     putProfileIfAbsent,

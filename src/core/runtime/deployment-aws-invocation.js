@@ -1,6 +1,7 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-param-description, jsdoc/require-returns, jsdoc/require-returns-description -- This boundary composes heterogeneous exact runtime ports behind one owned invocation. */
 
 import { openAwsDeploymentClientFamily } from './deployment-aws-client-family.js';
+import { createAwsSingleNodeHostActivationAuthorityPublisher } from './deployment-aws-host-activation-authority-publisher.js';
 import { createAwsSingleNodeDeploymentProviderFromClientFamily } from './deployment-aws-provider-assembly.js';
 import { createDeploymentArtifactStager } from './deployment-artifact-stager.js';
 import { createDeploymentControlBucket } from './deployment-control-bucket.js';
@@ -366,6 +367,11 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     client: clientFamily.clients.s3Control,
     store,
   });
+  const hostActivationAuthorityPublisher =
+    createAwsSingleNodeHostActivationAuthorityPublisher({
+      client: clientFamily.clients.managedArtifact,
+      store,
+    });
   const stageClaimedArtifactMethod = artifactStager.stageClaimedArtifact;
   if (typeof stageClaimedArtifactMethod !== 'function') {
     throw new TypeError(
@@ -388,6 +394,7 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     store,
     provider,
     artifactStager,
+    hostActivationAuthorityPublisher,
     now,
   });
   const controllerOwner = /** @type {Record<string, Function>} */ (

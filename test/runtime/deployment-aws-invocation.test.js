@@ -48,6 +48,8 @@ let store;
 /** @type {Record<string, any>} */
 let artifactStager;
 /** @type {Record<string, any>} */
+let hostActivationAuthorityPublisher;
+/** @type {Record<string, any>} */
 let provider;
 /** @type {Record<string, jest.Mock<(...args: any[]) => any>>} */
 let controller;
@@ -62,6 +64,10 @@ const createBucketLifecycle = jest.fn((_options) => bucketLifecycle);
 const createStore = jest.fn((_options) => store);
 /** @type {jest.Mock<(options: any) => any>} */
 const createArtifactStager = jest.fn((_options) => artifactStager);
+/** @type {jest.Mock<(options: any) => any>} */
+const createHostActivationAuthorityPublisher = jest.fn(
+  (_options) => hostActivationAuthorityPublisher,
+);
 /** @type {jest.Mock<(options: any) => any>} */
 const createProvider = jest.fn((_options) => provider);
 /** @type {jest.Mock<(options: any) => any>} */
@@ -83,6 +89,13 @@ jest.unstable_mockModule(
   '../../src/core/runtime/deployment-artifact-stager.js',
   () => ({
     createDeploymentArtifactStager: createArtifactStager,
+  }),
+);
+jest.unstable_mockModule(
+  '../../src/core/runtime/deployment-aws-host-activation-authority-publisher.js',
+  () => ({
+    createAwsSingleNodeHostActivationAuthorityPublisher:
+      createHostActivationAuthorityPublisher,
   }),
 );
 jest.unstable_mockModule(
@@ -207,6 +220,9 @@ beforeEach(() => {
       Object.freeze({ kind: 'validated-artifact-stage', input }),
     ),
   });
+  hostActivationAuthorityPublisher = Object.freeze({
+    publish: jest.fn(),
+  });
   provider = Object.freeze({ provider: true });
   controller = {
     inspect: jest.fn(async (input) =>
@@ -229,6 +245,7 @@ beforeEach(() => {
     createBucketLifecycle,
     createStore,
     createArtifactStager,
+    createHostActivationAuthorityPublisher,
     createProvider,
     createController,
   ]) {
@@ -271,6 +288,10 @@ describe('AWS single-node deployment invocation construction', () => {
       client: openedFamily.clients.s3Control,
       store,
     });
+    expect(createHostActivationAuthorityPublisher).toHaveBeenCalledWith({
+      client: openedFamily.clients.managedArtifact,
+      store,
+    });
     expect(createProvider).toHaveBeenCalledWith({
       clientFamily: openedFamily,
       now,
@@ -281,6 +302,7 @@ describe('AWS single-node deployment invocation construction', () => {
       store,
       provider,
       artifactStager,
+      hostActivationAuthorityPublisher,
       now,
     });
 
