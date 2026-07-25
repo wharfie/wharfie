@@ -127,7 +127,9 @@ be supplied only once. An operation that returns a correlated but still-active
 head fails as incomplete rather than being reported as successful.
 
 The command surface is not a clean-account or deployed-service-readiness
-claim. Guest projection, the privileged host observer/publisher, live STS
+claim. The strict content-addressed privileged-host request/receipt contract is
+now defined at the controller's all-settled active-operation frontier, but its
+durable kernel, guest projection, privileged host observer/publisher, live STS
 session proof, and a complete provider lifecycle proof remain unfinished.
 
 The shipped source top-level CLI contains `app`, `ops`, and experimental
@@ -140,9 +142,11 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [target service convergence
-checkpoint](../llm/checkpoints/2026-07-25-v64-target-service-convergence.md).
-Its parent is the [deployment command surface
+The latest recorded restart handoff is the [host activation contract
+checkpoint](../llm/checkpoints/2026-07-25-v65-host-activation-contract.md).
+Its parent is the [target service convergence
+checkpoint](../llm/checkpoints/2026-07-25-v64-target-service-convergence.md),
+whose parent is the [deployment command surface
 checkpoint](../llm/checkpoints/2026-07-24-v63-deployment-command-surface.md).
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only

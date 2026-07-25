@@ -23,8 +23,18 @@ bindings plus immutable IAM RoleId and EC2 instance ID at
 `health/v3/<RoleId>:<InstanceId>`. Initial publication is a conditional
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
 Inspection V6/`win6` correlates both identities before readiness. Live STS
-caller proof and the privileged production publisher remain unwired. The
-recoverable node launches with a stable token and atomic instance/root tags,
+caller proof and the privileged production publisher remain unwired. The V65
+host boundary now distills one all-infrastructure-settled, still-active
+deployment operation into a bounded content-addressed request with exact node,
+role, managed-object version, desired release, and both retained-volume
+attachment identities. It refuses READY, blocked, destroy, and incomplete
+frontiers, borrows no unrelated graph action, and binds one success-only
+receipt to the existing durable service-health receipt across the later READY
+successor. Provider freshness, live STS proof, guest device/mount proof, and
+the trusted durable host kernel remain intentionally outside that pure
+contract.
+
+The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
 Amazon-owned auto-assigned public address and non-root volume survival,
 restarts a validated stopped instance, and repeats the full proof before
@@ -75,9 +85,11 @@ controller requires definite intent persistence before first execution and
 replays only exact stable-token creates after recovery. The AWS composition
 wiring now reaches exact experimental source and packaged `plan`, `apply`,
 `inspect`, `reconcile`, and `destroy` commands while preserving
-selected/pre-staged source authority and running-SEA packaged authority. Guest
-storage/service projection, the privileged publisher, clean-account proof, and
-a deployed-service readiness claim still follow · **Last updated:** 2026-07-24
+selected/pre-staged source authority and running-SEA packaged authority. The
+pure privileged-host request/receipt boundary is defined; its durable kernel,
+guest storage/artifact/service projection, privileged publisher, clean-account
+proof, and a deployed-service readiness claim still follow · **Last updated:**
+2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -1219,6 +1231,17 @@ The narrow `@wharfie/wharfie/deployment-profile` authoring subpath creates the
 canonical operator document. Source and packaged reusable plan envelopes
 deliberately do not cross artifact-authority surfaces.
 
+The first privileged-host boundary is now explicit without pretending the
+host is already implemented. One `whaq1` request can be minted only from a
+running, all-actions-settled `CONVERGING` operation and its exact predecessor
+plan. It content-addresses complete node/role/release/versioned-object and
+retained-volume attachment authority. One `whar1` success receipt binds that
+request to DeploymentServiceHealthReceiptV3 and remains valid across the
+controller's READY successor. Serialized S3 head evidence is only a canonical
+projection, and the receipt is only a trusted-host attestation: the next pure
+kernel must independently prove live STS identity, exact downloaded bytes,
+devices, filesystems, mounts, and local service health before settlement.
+
 1. Wire guest storage projection, resident-service activation, and the
    privileged host observer outside the application UID, then prove the
    complete lifecycle in a clean account through the user's ordinary
@@ -1228,9 +1251,11 @@ deliberately do not cross artifact-authority surfaces.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [target service convergence
-checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md). Its
-parent is the [deployment command surface
+The latest recorded restart point is the [host activation contract
+checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md). Its
+parent is the [target service convergence
+checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md),
+whose parent is the [deployment command surface
 checkpoint](llm/checkpoints/2026-07-24-v63-deployment-command-surface.md),
 whose parent is the [durable selected SEA plan
 checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md),

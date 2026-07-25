@@ -558,12 +558,16 @@ once. A correlated controller head that still carries an active operation is a
 nonzero incomplete result; inspect it and use confirmed reconcile after the
 former coordinator is known stopped.
 
-Command mounting is not a production claim. The privileged host observer and
-publisher, guest service projection, exact live STS session proof,
-clean-account lifecycle proof, and complete deployed-service readiness remain
-unfinished. External resource verification is represented by the generic V6
-contract but remains unreachable through the fixed all-managed AWS profile and
-planner.
+Command mounting is not a production claim. The first strict privileged-host
+request/receipt contract now binds an all-settled active deployment operation
+to its exact node, role, versioned artifact, desired release, and retained
+volume attachments, then binds successful host attestation to durable V3
+service health across READY finalization. The durable privileged host kernel,
+observer and publisher, guest storage/artifact/service projection, exact live
+STS session proof, clean-account lifecycle proof, and complete
+deployed-service readiness remain unfinished. External resource verification
+is represented by the generic V6 contract but remains unreachable through the
+fixed all-managed AWS profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -574,7 +578,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Target service convergence checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md) — the latest recorded checkpoint for retry-safe desired-SEA activation, exact liveness repair, honest settlement, verification limits, and the next privileged host-agent boundary.
+- [Host activation contract checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md) — the latest recorded checkpoint for exact controller-to-host request authority, READY-safe success receipts, proof limits, verification, and the next pure durable activation kernel.
+- [Target service convergence checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md) — the parent checkpoint for retry-safe desired-SEA activation, exact liveness repair, honest settlement, and the privileged host-agent boundary.
 - [Deployment command surface checkpoint](llm/checkpoints/2026-07-24-v63-deployment-command-surface.md) — the parent handoff for mounted source and packaged lifecycle commands, profile authoring, recovery fencing, bounded operator input, and exact artifact-authority boundaries.
 - [Durable selected SEA plan checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md) — the parent handoff for source staging, portable pre-staged evidence, and the distinct source-versus-packaged convergence paths.
 - [Selected SEA artifact authority checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md) — the parent handoff for fresh-generation trust, one retained descriptor, observed deployment identity, and linear claim-or-discard ownership.
