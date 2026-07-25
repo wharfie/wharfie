@@ -58,7 +58,11 @@ verifies the complete managed-object envelope and bytes before atomically
 publishing one immutable root-owned/runtime-readable local SEA. Exact readback
 and authenticated full-chain fsync recover rename and process-restart
 ambiguity; provider VersionId and ETag values never enter durable evidence.
-Selector delivery and guest storage, service, and health adapters remain.
+V72 hardens the fixed runtime account and root-managed bootstrap paths, verifies
+the exact projected SEA again before every fixed-user launch, contains
+ambiguous transient execution without reusable-name ABA, and maps exact V64
+service status into V66 convergence and request-derived settlement. Selector
+delivery plus guest storage and health adapters remain.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -115,9 +119,10 @@ selected/pre-staged source authority and running-SEA packaged authority. The
 pure privileged-host request/receipt boundary, durable activation kernel, exact
 live STS identity adapter, fixed owned host AWS lifetime, root-owned local
 persistence boundary, and authenticated current-head controller authority are
-defined; the remaining storage, service, and health effect adapters,
-privileged packaging and selector delivery, clean-account proof, and a
-deployed-service readiness claim still follow ·
+defined; fixed-user service convergence is now concrete, while richer partial
+projection recovery, storage and health effect adapters, privileged packaging
+and selector delivery, clean-account proof, and a deployed-service readiness
+claim still follow ·
 **Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -1303,15 +1308,23 @@ implements all four V66 authorization purposes through one pinned host
 DynamoDB client and exact-key runtime IAM grant. V71 reads only that request's
 explicit managed-artifact VersionId, verifies every managed header and byte,
 and publishes the immutable SEA at one fixed root-owned/runtime-readable path
-through response-loss-safe directory rename and full-chain durability. The
-fixed bootstrap still provides no deployment/request selector path, and the
-control-table lifecycle does not yet rule out an independently attached
-DynamoDB resource policy.
+through response-loss-safe directory rename and full-chain durability. V72
+establishes one fail-closed fixed runtime principal and root-managed path
+projection. Its privileged launcher independently verifies the V71 SEA and
+embedded revision, then invokes metadata, status, and convergence in bounded
+capability-empty transient systemd user units. Every launch has a non-reused
+identity; V64's app-scoped kernel operation lock serializes status and
+convergence across process replacement without reusable-name ABA. A pure
+adapter conservatively maps exact V64 status into V66 readiness, conflict,
+uncertainty, or request-derived settlement. The fixed bootstrap still provides
+no deployment/request selector path, and the control-table lifecycle does not
+yet rule out an independently attached DynamoDB resource policy.
 
-1. Add the fixed-user service-convergence adapter over the existing packaged
-   `service converge` semantics. Bind only the exact projected SEA and desired
-   release, recover response loss from durable service selection and live
-   health, and never execute authored application bytes as root.
+1. Add the V73 read-only desired-convergence proof to status V3. Join durable
+   activation, authorized immutable releases, selector, receipt, exact unit
+   wiring, manager state, and resident ownership under the existing V64 lock
+   so authorized crash residue can recover without weakening foreign-state
+   refusal.
 2. Add concrete application- and control-storage adapters with exact
    format/mount/readback plus stop/quiesce/unmount recovery, then add the V3 S3
    health publisher and mint the V65 success receipt. Prove these stages on
@@ -1323,9 +1336,11 @@ DynamoDB resource policy.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [exact host artifact projection
-checkpoint](llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md).
-Its parent is the [authenticated current-head authority
+The latest recorded restart point is the [fixed-user service convergence
+checkpoint](llm/checkpoints/2026-07-25-v72-fixed-user-service-convergence.md).
+Its parent is the [exact host artifact projection
+checkpoint](llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md),
+whose parent is the [authenticated current-head authority
 checkpoint](llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md),
 whose parent is the [root host activation persistence
 checkpoint](llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md),
