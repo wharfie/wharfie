@@ -50,8 +50,15 @@ controller authority: fresh managed-artifact evidence derives one complete V65
 request, an atomic DynamoDB head condition publishes it at one stable key, and
 the host reads that request first and the strongly consistent head last for
 selector resolution and every V66 authorization purpose. One exact-key runtime
-IAM grant and a pinned owned DynamoDB client complete that read path. Selector
-delivery and guest storage, artifact, service, and health adapters remain.
+IAM grant and a pinned owned DynamoDB client complete that read path. V71 adds
+the first concrete guest-content effect: the owned host lifetime now includes
+a pinned exact-version S3 capability, the runtime policy grants only
+`s3:GetObjectVersion` on the managed artifact, and the artifact adapter
+verifies the complete managed-object envelope and bytes before atomically
+publishing one immutable root-owned/runtime-readable local SEA. Exact readback
+and authenticated full-chain fsync recover rename and process-restart
+ambiguity; provider VersionId and ETag values never enter durable evidence.
+Selector delivery and guest storage, service, and health adapters remain.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -108,8 +115,9 @@ selected/pre-staged source authority and running-SEA packaged authority. The
 pure privileged-host request/receipt boundary, durable activation kernel, exact
 live STS identity adapter, fixed owned host AWS lifetime, root-owned local
 persistence boundary, and authenticated current-head controller authority are
-defined; effect adapters, privileged packaging and selector delivery,
-clean-account proof, and a deployed-service readiness claim still follow ·
+defined; the remaining storage, service, and health effect adapters,
+privileged packaging and selector delivery, clean-account proof, and a
+deployed-service readiness claim still follow ·
 **Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -1278,35 +1286,48 @@ That adapter now runs behind one owned host-only AWS lifetime. Credentials come
 only from a fixed IPv4 IMDSv2 token/profile/document sequence with absolute
 per-request deadlines, coalesced rotation, no stale extension, and owned
 cancellation. STS and DynamoDB are fixed to their exact commercial regional
-HTTPS endpoints and one SDK attempt; ambient credentials, metadata endpoints,
-service endpoints, FIPS, dual-stack, global endpoint, region, and retry
-settings cannot replace those choices. The family exposes only the identity
-and activation-authority adapters and one draining close.
+HTTPS endpoints and one SDK attempt; V71 adds the equally pinned regional S3
+client and owns response-body lifetime through terminal completion. Ambient
+credentials, metadata endpoints, service endpoints, FIPS, dual-stack, global
+endpoint, region, and retry settings cannot replace those choices. The family
+exposes only the identity, activation-authority, and exact artifact-read
+adapters and one draining close.
 
 The V69 root-owned store, deployment lock, bounded retention, and fence-aware
-local inspection are complete. V70 now mints the complete V65 request from
+local inspection are complete; initialization now fsyncs the authenticated
+record-bearing directory before reading so state-rename ambiguity cannot be
+forgotten across process recreation. V70 mints the complete V65 request from
 fresh managed-current evidence, atomically conditions its stable publication
 on the exact current head, strongly reads authority first and head last, and
 implements all four V66 authorization purposes through one pinned host
-DynamoDB client and exact-key runtime IAM grant. The fixed bootstrap still
-provides no deployment/request selector path, and the control-table lifecycle
-does not yet rule out an independently attached DynamoDB resource policy.
+DynamoDB client and exact-key runtime IAM grant. V71 reads only that request's
+explicit managed-artifact VersionId, verifies every managed header and byte,
+and publishes the immutable SEA at one fixed root-owned/runtime-readable path
+through response-loss-safe directory rename and full-chain durability. The
+fixed bootstrap still provides no deployment/request selector path, and the
+control-table lifecycle does not yet rule out an independently attached
+DynamoDB resource policy.
 
-1. Add concrete storage, exact versioned-artifact, fixed-user
-   service-convergence,
-   and S3 health-publication adapters. Prove format/mount and response-loss
-   recovery on disposable Linux hosts without ever executing application bytes
-   as root.
-2. Only after that lifecycle is proven, expose the root framework host command
+1. Add the fixed-user service-convergence adapter over the existing packaged
+   `service converge` semantics. Bind only the exact projected SEA and desired
+   release, recover response loss from durable service selection and live
+   health, and never execute authored application bytes as root.
+2. Add concrete application- and control-storage adapters with exact
+   format/mount/readback plus stop/quiesce/unmount recovery, then add the V3 S3
+   health publisher and mint the V65 success receipt. Prove these stages on
+   disposable Linux.
+3. Only after that lifecycle is proven, expose the root framework host command
    and SEA, add SSM as wakeup/delivery rather than durable authority, and run a
    complete clean-account proof through the user's ordinary credential chain.
-3. Begin provider-backed coordinator recovery only after the single-node
+4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [authenticated current-head authority
-checkpoint](llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md).
-Its parent is the [root host activation persistence
+The latest recorded restart point is the [exact host artifact projection
+checkpoint](llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md).
+Its parent is the [authenticated current-head authority
+checkpoint](llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md),
+whose parent is the [root host activation persistence
 checkpoint](llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md),
 whose parent is the [owned host AWS lifetime
 checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md), whose

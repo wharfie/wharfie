@@ -132,22 +132,29 @@ and its pure injected durable activation kernel are now defined. Its first
 concrete adapter now proves the live STS runtime identity from the exact EC2
 role session; provider uncertainty remains bounded and redacted. One owned
 host-only AWS lifetime now supplies rotating credentials through a fixed IPv4
-IMDSv2 token flow, pins the commercial regional STS and DynamoDB endpoints and
-one-attempt policy, cancels and drains active work, and exposes only the
-identity and activation-authority adapters.
+IMDSv2 token flow, pins the commercial regional STS, DynamoDB, and S3
+endpoints and one-attempt policy, cancels and drains active work and S3
+response bodies, and exposes only the identity, activation-authority, and
+artifact-read adapters.
 One production persistence boundary now supplies the V66 four-method store,
 deployment lock, bounded retention, fence-aware inspection, and draining close.
 It requires Linux with real and effective UID 0, fixes state beneath
 `/var/lib/wharfie/host-activation/v1/<deploymentInstanceId>`, and accepts no
-caller redirection of that root. The inspection `authority` field classifies
-only the durable local fence relationship. Independently, the controller now
-publishes one complete V65 request at a stable DynamoDB key only while its
-exact all-settled head remains current and after fresh managed-artifact
-evidence. The host strongly reads that request first and current head last for
-selector resolution and every V66 authorization purpose. Selector delivery,
-storage, exact versioned-artifact projection, fixed-user service convergence,
-health publication, and a clean-account provider lifecycle proof remain
-unfinished.
+caller redirection of that root. Initialization now fsyncs the authenticated
+record-bearing directory before reading, so predecessor rename ambiguity
+cannot escape through process-local poison. The inspection `authority` field
+classifies only the durable local fence relationship. Independently, the
+controller now publishes one complete V65 request at a stable DynamoDB key
+only while its exact all-settled head remains current and after fresh
+managed-artifact evidence. The host strongly reads that request first and
+current head last for selector resolution and every V66 authorization purpose.
+The concrete artifact adapter reads only that request's explicit S3 VersionId
+under `s3:GetObjectVersion`, verifies the complete managed-object envelope and
+bytes, and atomically publishes an immutable fixed-path SEA. Exact final
+readback and authenticated full-chain fsync recover rename and process-response
+ambiguity without persisting opaque VersionId or ETag values in evidence.
+Selector delivery, storage, fixed-user service convergence, health
+publication, and a clean-account provider lifecycle proof remain unfinished.
 
 The shipped source top-level CLI contains `app`, `ops`, and experimental
 `deployment`. Continue with the
@@ -159,10 +166,11 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [authenticated current-head
-authority
-checkpoint](../llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md).
-Its parent is the [root host activation persistence
+The latest recorded restart handoff is the [exact host artifact projection
+checkpoint](../llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md).
+Its parent is the [authenticated current-head authority
+checkpoint](../llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md),
+whose parent is the [root host activation persistence
 checkpoint](../llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md),
 whose parent is the [owned host AWS lifetime
 checkpoint](../llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md),
@@ -207,9 +215,11 @@ bundle against durable evidence without opening or falling back to the running
 SEA. Ordinary `converge` remains the packaged running-SEA path.
 
 Source and packaged deployment commands now preserve that artifact-authority
-split. The next priority is to wire guest projection and the privileged
-observer/publisher, then prove the complete lifecycle in a clean account.
-Mounted commands alone make no service-readiness claim.
+split. Exact guest artifact projection is now implemented and
+integration-tested behind the privileged host contract. The next priority is
+fixed-user service convergence, followed by retained-volume storage and the
+privileged health publisher, before proving the complete lifecycle in a clean
+account. Mounted commands alone make no service-readiness claim.
 
 The V63 checkpoint's parent is the [durable selected SEA plan
 checkpoint](../llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md),
