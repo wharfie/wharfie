@@ -1,7 +1,6 @@
 import { execFile as nodeExecFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants, promises as fsp } from 'node:fs';
-import net from 'node:net';
 import { userInfo } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -32,6 +31,10 @@ import {
   inspectArtifactBytes,
 } from '../packaged-artifact.js';
 import { probeLocalServiceSession } from '../local-service-session.js';
+import {
+  LinuxAbstractOperationLockBusyError,
+  acquireLinuxAbstractOperationLock,
+} from '../linux-abstract-operation-lock.js';
 import { readEmbeddedRevisionRuntimePair } from '../../resources/builds/lib/revision-runtime-assets.js';
 import { getBuildTargetId } from '../build-target.js';
 import {
@@ -1312,66 +1315,26 @@ async function verifyInstalledSelection(options) {
  * namespace. Bind is atomic across processes, and the address disappears when
  * the owning process exits, so recovery needs no stale-file deletion or PID
  * reuse heuristic.
- * @param {{serviceRoot: string, uid: number, createServer?: typeof net.createServer}} options - Lock identity and test seam.
+ * @param {{serviceRoot: string, uid: number, createServer?: typeof import('node:net').createServer}} options - Lock identity and test seam.
  * @returns {Promise<() => Promise<void>>} - Idempotent release callback.
  */
 async function acquireOperationLock(options) {
-  const digest = createHash('sha256')
-    .update('wharfie:systemd-user-service-operation-lock:v1', 'utf8')
-    .update('\0', 'utf8')
-    .update(String(options.uid), 'utf8')
-    .update('\0', 'utf8')
-    .update(options.serviceRoot, 'utf8')
-    .digest('base64url');
-  const address = `\0wharfie-service-op-${options.uid}-${digest}`;
-  const createServer = options.createServer || net.createServer;
-  const server = createServer((socket) => socket.destroy());
-  // A post-bind server error must not become an uncaught EventEmitter error.
-  server.on('error', () => undefined);
-
   try {
-    await new Promise((resolve, reject) => {
-      /** @param {Error} error - Bind failure. */
-      const onError = (error) => {
-        cleanup();
-        reject(error);
-      };
-      const onListening = () => {
-        cleanup();
-        resolve(undefined);
-      };
-      const cleanup = () => {
-        server.removeListener('error', onError);
-        server.removeListener('listening', onListening);
-      };
-      server.once('error', onError);
-      server.once('listening', onListening);
-      server.listen(address);
+    return await acquireLinuxAbstractOperationLock({
+      domain: 'wharfie:systemd-user-service-operation-lock:v1',
+      scope: JSON.stringify([String(options.uid), options.serviceRoot]),
+      ...(options.createServer === undefined
+        ? {}
+        : { createServer: options.createServer }),
     });
   } catch (error) {
-    await new Promise((resolve) =>
-      server.close(() => resolve(undefined)),
-    ).catch(() => undefined);
-    if (hasCode(error, 'EADDRINUSE')) {
+    if (error instanceof LinuxAbstractOperationLockBusyError) {
       throw new Error(
         'Another systemd user-service operation is already active.',
       );
     }
     throw error;
   }
-  server.unref();
-
-  let released = false;
-  return async () => {
-    if (released) return;
-    await new Promise((resolve, reject) => {
-      server.close((error) => {
-        if (error) reject(error);
-        else resolve(undefined);
-      });
-    });
-    released = true;
-  };
 }
 
 /**
