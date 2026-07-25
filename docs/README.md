@@ -140,7 +140,9 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [deployment command surface
+The latest recorded restart handoff is the [target service convergence
+checkpoint](../llm/checkpoints/2026-07-25-v64-target-service-convergence.md).
+Its parent is the [deployment command surface
 checkpoint](../llm/checkpoints/2026-07-24-v63-deployment-command-surface.md).
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only

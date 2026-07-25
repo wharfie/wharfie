@@ -1228,9 +1228,11 @@ deliberately do not cross artifact-authority surfaces.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [deployment command surface
-checkpoint](llm/checkpoints/2026-07-24-v63-deployment-command-surface.md). Its
-parent is the [durable selected SEA plan
+The latest recorded restart point is the [target service convergence
+checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md). Its
+parent is the [deployment command surface
+checkpoint](llm/checkpoints/2026-07-24-v63-deployment-command-surface.md),
+whose parent is the [durable selected SEA plan
 checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md),
 whose parent is the [selected SEA artifact authority
 checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md),
