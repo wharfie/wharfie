@@ -101,16 +101,17 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The current restart handoff is the [selected SEA artifact authority
-checkpoint](../llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md).
+The current restart handoff is the [durable selected SEA plan
+checkpoint](../llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md).
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only
 control inspection and require-active, existing-only reconciliation that can
 never create, and separately explicit bootstrap. Top-level deployment
 inspection returns an exact frozen absent or hydrated envelope without
 ProviderSpec selection, planning, staging, writes, CAS, or effects. Inspection,
-plan, converge, and resume require both controls to be freshly active. Close
-fences new calls, waits for entered work, and closes the AWS family once.
+plan, ordinary converge, pre-staged converge, and resume require both controls
+to be freshly active. Close fences new calls, waits for entered work, and
+closes the AWS family once.
 The finite operation runner snapshots one exact request before credentials,
 selects explicit require-active, reconcile-existing, or bootstrap policy,
 dispatches one operation, and unconditionally closes that lifetime with
@@ -120,10 +121,28 @@ A closed source-packaging path can now mint an empty frozen token whose private
 WeakMap state binds exactly one fresh generation-backed SEA record to one
 retained descriptor. That token creates one deployment revision from the same
 held-byte observation and can be claimed or discarded only once. It does not
-survive JSON, IPC, or a process exit. There are still no deployment commands,
-durable source-plan staging, or service-readiness claim.
+survive JSON, IPC, or a process exit.
 
-Its parent is the [one-shot deployment operation runner
+The source-deployment boundary now transfers that claim into the invocation
+stager without an intervening await. The stager verifies the complete V61
+record, revision, runtime, held-byte observation, deployment revision, profile,
+and provider scope before durably accepting it, and closes the descriptor on
+every outcome. `prepareAwsSelectedSeaPlan()` returns only a frozen, JSON-safe
+`{plan, profile, artifactStage}` after the exact intent, object version, and
+receipt are durable and revalidated. `applyAwsSelectedSea()` stages once and
+passes the same bundle to `convergePreStaged()`. The one-shot runner's
+`converge-pre-staged` operation lets a later process validate that supplied
+bundle against durable evidence without opening or falling back to the running
+SEA. Ordinary `converge` remains the packaged running-SEA path.
+
+The next priority is to mount source and packaged deployment commands while
+preserving that artifact-authority split, then wire guest projection and prove
+the complete lifecycle in a clean account. There is still no deployment
+command or service-readiness claim.
+
+The V62 checkpoint's parent is the [selected SEA artifact authority
+checkpoint](../llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md),
+whose parent is the [one-shot deployment operation runner
 checkpoint](../llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md),
 whose parent is the [read-only deployment inspection
 checkpoint](../llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md),

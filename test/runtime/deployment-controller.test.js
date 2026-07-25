@@ -2317,6 +2317,170 @@ describe('deployment controller artifact staging', () => {
     }
   });
 
+  it('live-validates exact pre-staged evidence before mutation without running-artifact fallback', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+
+    await expect(
+      harness.controller.convergePreStaged({
+        plan,
+        profile: harness.base.profile,
+        artifactStage: harness.artifactStager.bundle,
+      }),
+    ).resolves.toMatchObject({ phase: 'READY' });
+
+    expect(Object.keys(harness.controller)).toEqual([
+      'inspect',
+      'plan',
+      'converge',
+      'convergePreStaged',
+      'resume',
+    ]);
+    expect(Object.isFrozen(harness.controller)).toBe(true);
+    expect(harness.artifactStager.stageCount).toBe(0);
+    expect(harness.artifactStager.validationCount).toBe(1);
+    expect(harness.artifactStager.validationContexts[0]).toEqual({
+      deploymentRevision: plan.deploymentRevision,
+      profile: harness.base.profile,
+      providerScope: plan.providerScope,
+    });
+    expect(Object.isFrozen(harness.artifactStager.validationContexts[0])).toBe(
+      true,
+    );
+    expect(harness.events).not.toContain('artifact-stage');
+    const validationIndex = harness.events.indexOf('artifact-validate');
+    expect(validationIndex).toBeGreaterThanOrEqual(0);
+    for (const laterEvent of [
+      'profile-put',
+      'plan-put',
+      'head-cas',
+      'action-execute',
+      'action-verify',
+    ]) {
+      expect(validationIndex).toBeLessThan(harness.events.indexOf(laterEvent));
+    }
+
+    const actionContexts = [
+      ...harness.provider.executeContexts,
+      ...harness.provider.verifyContexts,
+    ];
+    expect(actionContexts.length).toBeGreaterThan(0);
+    expect(actionContexts[0].artifactStage).toEqual(
+      harness.artifactStager.bundle,
+    );
+    expect(
+      actionContexts.every(
+        (context) =>
+          context.artifactStage !== null &&
+          context.artifactStage === actionContexts[0].artifactStage,
+      ),
+    ).toBe(true);
+  });
+
+  it.each(['missing', 'locally mismatched'])(
+    'rejects %s pre-staged evidence before stager calls or mutation',
+    async (corruption) => {
+      const harness = makeHarness();
+      const plan = await planWith(harness, 'apply');
+      const request =
+        corruption === 'missing'
+          ? { plan, profile: harness.base.profile }
+          : {
+              plan,
+              profile: harness.base.profile,
+              artifactStage: makeArtifactStageBundle(makeContext(2)),
+            };
+
+      await expect(
+        harness.controller.convergePreStaged(request),
+      ).rejects.toThrow();
+
+      expect(harness.artifactStager.stageCount).toBe(0);
+      expect(harness.artifactStager.validationCount).toBe(0);
+      expect(harness.store.stats).toEqual({
+        puts: 0,
+        casAttempts: 0,
+        casSuccesses: 0,
+      });
+      expect(harness.store.head).toBeNull();
+      expect(harness.provider.executeContexts).toHaveLength(0);
+      expect(harness.provider.verifyContexts).toHaveLength(0);
+      expect(harness.events).toEqual([]);
+    },
+  );
+
+  it('rejects durable staged evidence that differs from the exact submitted bundle', async () => {
+    const harness = makeHarness();
+    const plan = await planWith(harness, 'apply');
+    harness.artifactStager.setValidationResult(
+      makeArtifactStageBundle(harness.base, 42, 'controller-stage-version-2'),
+    );
+
+    await expect(
+      harness.controller.convergePreStaged({
+        plan,
+        profile: harness.base.profile,
+        artifactStage: harness.artifactStager.bundle,
+      }),
+    ).rejects.toThrow(/does not exactly match the submitted evidence/i);
+
+    expect(harness.artifactStager.stageCount).toBe(0);
+    expect(harness.artifactStager.validationCount).toBe(1);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+    expect(harness.store.head).toBeNull();
+    expect(harness.provider.executeContexts).toHaveLength(0);
+    expect(harness.provider.verifyContexts).toHaveLength(0);
+    expect(harness.events).toEqual(['artifact-validate']);
+  });
+
+  it('requires null pre-staged evidence for destroy and bypasses both stager paths', async () => {
+    const ready = makeReadyState();
+    const harness = makeHarness({
+      head: ready.head,
+      plans: [ready.applyPlan],
+      physical: ready.physical,
+    });
+    const plan = await planWith(harness, 'destroy');
+
+    await expect(
+      harness.controller.convergePreStaged({
+        plan,
+        profile: harness.base.profile,
+        artifactStage: harness.artifactStager.bundle,
+      }),
+    ).rejects.toThrow(/artifactStage must be null for destroy/i);
+    expect(harness.store.stats).toEqual({
+      puts: 0,
+      casAttempts: 0,
+      casSuccesses: 0,
+    });
+
+    await expect(
+      harness.controller.convergePreStaged({
+        plan,
+        profile: harness.base.profile,
+        artifactStage: null,
+      }),
+    ).resolves.toMatchObject({ phase: 'DESTROYED' });
+
+    expect(harness.artifactStager.stageCount).toBe(0);
+    expect(harness.artifactStager.validationCount).toBe(0);
+    expect(harness.events).not.toContain('artifact-stage');
+    expect(harness.events).not.toContain('artifact-validate');
+    const actionContexts = [
+      ...harness.provider.executeContexts,
+      ...harness.provider.verifyContexts,
+    ];
+    expect(actionContexts.length).toBeGreaterThan(0);
+    expect(
+      actionContexts.every((context) => context.artifactStage === null),
+    ).toBe(true);
+  });
+
   it.each(['malformed bundle', 'mismatched receipt'])(
     'refuses %s before plan, head, or action mutation',
     async (corruption) => {

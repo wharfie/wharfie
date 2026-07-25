@@ -38,6 +38,15 @@ const CLIENT_KEYS = new Set([
   'node',
   'volumeAttachment',
 ]);
+const CLAIMED_ARTIFACT_KEYS = new Set([
+  'deploymentRevision',
+  'profile',
+  'providerScope',
+  'source',
+  'revision',
+  'runtime',
+  'record',
+]);
 const CONTROL_LIFECYCLE_METHODS = Object.freeze([
   'inspect',
   'reconcile',
@@ -63,6 +72,7 @@ const REUSED_CLIENT_FAMILY =
 const INVALID_CONTROL_STATE = 'AWS deployment control inspection is invalid.';
 const CLOSED_ERROR = 'AWS deployment invocation is closed.';
 const NOT_READY_ERROR = 'AWS deployment control resources are not active.';
+const INVALID_CLAIMED_ARTIFACT = 'AWS deployment claimed artifact is invalid.';
 
 /** A public invocation was used after its owned close began. */
 export class AwsDeploymentInvocationClosedError extends Error {
@@ -356,6 +366,12 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     client: clientFamily.clients.s3Control,
     store,
   });
+  const stageClaimedArtifactMethod = artifactStager.stageClaimedArtifact;
+  if (typeof stageClaimedArtifactMethod !== 'function') {
+    throw new TypeError(
+      'awsDeploymentInvocation artifactStager.stageClaimedArtifact must be a function.',
+    );
+  }
   const provider = createAwsSingleNodeDeploymentProviderFromClientFamily({
     clientFamily,
     now,
@@ -371,7 +387,13 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
   const controllerOwner = /** @type {Record<string, Function>} */ (
     /** @type {unknown} */ (controller)
   );
-  for (const method of ['inspect', 'plan', 'converge', 'resume']) {
+  for (const method of [
+    'inspect',
+    'plan',
+    'converge',
+    'convergePreStaged',
+    'resume',
+  ]) {
     if (typeof controllerOwner[method] !== 'function') {
       throw new TypeError(
         `awsDeploymentInvocation controller.${method} must be a function.`,
@@ -382,6 +404,7 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     inspect: controllerOwner.inspect,
     plan: controllerOwner.plan,
     converge: controllerOwner.converge,
+    convergePreStaged: controllerOwner.convergePreStaged,
     resume: controllerOwner.resume,
   });
   const familyClose = clientFamily.close;
@@ -497,6 +520,33 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     });
   }
 
+  /**
+   * Transfer one V61 claimed source directly into durable staging. This path
+   * cannot JSON-clone the held descriptor and deliberately performs no
+   * asynchronous control preflight after the claim; the caller must establish
+   * control before atomically claiming and entering this method.
+   * @param {unknown} input - Exact claimed selected-artifact bundle.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Durable stage bundle.
+   */
+  function stageClaimedArtifact(input) {
+    return enter(() => {
+      const claim = exactDataObject(
+        input,
+        CLAIMED_ARTIFACT_KEYS,
+        CLAIMED_ARTIFACT_KEYS,
+        INVALID_CLAIMED_ARTIFACT,
+      );
+      const claimScope = validateProviderScope(
+        claim.providerScope,
+        'awsDeploymentInvocation claimedArtifact.providerScope',
+      );
+      if (claimScope.providerScopeId !== providerScope.providerScopeId) {
+        throw new TypeError(INVALID_CLAIMED_ARTIFACT);
+      }
+      return Reflect.apply(stageClaimedArtifactMethod, artifactStager, [claim]);
+    });
+  }
+
   /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
   function converge(input) {
     return enter(async () => {
@@ -507,6 +557,24 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
       return await Reflect.apply(controllerMethods.converge, controller, [
         request,
       ]);
+    });
+  }
+
+  /** @param {unknown} input @returns {Promise<Readonly<Record<string, any>>>} */
+  function convergePreStaged(input) {
+    return enter(async () => {
+      const request = deepFreeze(
+        cloneJsonObject(
+          input,
+          'awsDeploymentInvocation convergePreStaged input',
+        ),
+      );
+      await requireControlInternal();
+      return await Reflect.apply(
+        controllerMethods.convergePreStaged,
+        controller,
+        [request],
+      );
     });
   }
 
@@ -548,7 +616,9 @@ export function createAwsSingleNodeDeploymentInvocationFromClientFamily(
     bootstrapControl,
     inspect,
     plan,
+    stageClaimedArtifact,
     converge,
+    convergePreStaged,
     resume,
     close,
   });

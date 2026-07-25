@@ -38,6 +38,11 @@ const PLAN_REQUEST_KEYS = new Set([
 ]);
 const INSPECT_REQUEST_KEYS = new Set(['deploymentInstanceId']);
 const CONVERGE_REQUEST_KEYS = new Set(['plan', 'profile']);
+const CONVERGE_PRE_STAGED_REQUEST_KEYS = new Set([
+  'plan',
+  'profile',
+  'artifactStage',
+]);
 const RESUME_REQUEST_KEYS = new Set(['deploymentInstanceId']);
 const SETTLEMENT_KEYS = new Set(['status', 'binding']);
 const STATUS_ONLY_SETTLEMENT_KEYS = new Set(['status']);
@@ -201,7 +206,7 @@ function nextHead(head, changes) {
  * credentials remain private to the provider implementation.
  *
  * @param {{store: Record<string, Function>, provider: Record<string, Function>, artifactStager: Record<string, Function>, now: () => number, createOwnershipNonce?: () => string|Promise<string>, createDeploymentIncarnationId?: () => string|Promise<string>}} dependencies - Bounded controller ports and explicit inspection clock.
- * @returns {Readonly<{inspect: (input: unknown) => Promise<Readonly<Record<string, any>>>, plan: (input: unknown) => Promise<Readonly<Record<string, any>>>, converge: (input: unknown) => Promise<Readonly<Record<string, any>>>, resume: (input: unknown) => Promise<Readonly<Record<string, any>>>}>} - Controller API.
+ * @returns {Readonly<{inspect: (input: unknown) => Promise<Readonly<Record<string, any>>>, plan: (input: unknown) => Promise<Readonly<Record<string, any>>>, converge: (input: unknown) => Promise<Readonly<Record<string, any>>>, convergePreStaged: (input: unknown) => Promise<Readonly<Record<string, any>>>, resume: (input: unknown) => Promise<Readonly<Record<string, any>>>}>} - Controller API.
  */
 export function createDeploymentController(dependencies) {
   if (
@@ -2184,20 +2189,35 @@ export function createDeploymentController(dependencies) {
     return await createFreshPlan({ ...request, providerSpec }, head);
   }
 
-  /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
-  async function converge(value) {
-    const input = exactObject(
-      value,
-      CONVERGE_REQUEST_KEYS,
-      'deploymentController.converge',
-    );
-    const profile = validateDeploymentProfile(
-      input.profile,
-      'deploymentController.converge.profile',
-    );
+  /**
+   * Validate the common submitted plan/profile portion of a converge request.
+   * @param {unknown} value - Candidate request.
+   * @param {Set<string>} keys - Exact request keys.
+   * @param {string} path - Human-readable request path.
+   * @returns {{input: Record<string, any>, profile: Readonly<Record<string, any>>, submittedPlan: Readonly<Record<string, any>>}} - Canonical request documents.
+   */
+  function validateConvergeRequest(value, keys, path) {
+    const input = exactObject(value, keys, path);
+    const profile = validateDeploymentProfile(input.profile, `${path}.profile`);
     const submittedPlan = validateDeploymentPlanContext(input.plan, {
       profile,
     });
+    return { input, profile, submittedPlan };
+  }
+
+  /**
+   * Accept and run one exact fresh plan after resolving the artifact evidence
+   * required by the caller's explicit converge mode.
+   * @param {Readonly<Record<string, any>>} submittedPlan - Canonical submitted plan.
+   * @param {Readonly<Record<string, any>>} profile - Canonical plan profile.
+   * @param {() => Promise<Readonly<{intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}>|null>} resolveAcceptedArtifactStage - Mode-specific artifact evidence resolver.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Settled or active deployment head.
+   */
+  async function convergePlan(
+    submittedPlan,
+    profile,
+    resolveAcceptedArtifactStage,
+  ) {
     let head = await readHead(submittedPlan.deploymentInstanceId);
     if (
       head !== null &&
@@ -2246,25 +2266,24 @@ export function createDeploymentController(dependencies) {
       await assertProviderSpecValid(request, head);
     }
 
-    // Reject an already-stale preview before the potentially large upload.
-    // Stage intent/receipt records deliberately precede controller plan,
-    // profile, and head state, then a second head read and provider plan close
-    // the upload window before controller-state acceptance.
+    // Reject an already-stale preview before mode-specific artifact
+    // acceptance. Running mode stages the upload here; pre-staged mode
+    // independently validates its durable exact object version. Both precede
+    // controller plan, profile, and head state, then a second head read and
+    // provider plan close the acceptance window.
     const preflightPlan = await createFreshPlan(request, head);
     if (!sameJson(preflightPlan, submittedPlan)) {
       throw new StaleDeploymentPlanError(
         'Submitted deployment plan no longer matches the fresh provider plan.',
       );
     }
-    const artifactStage = await resolveArtifactStage(
-      'stageRunningArtifact',
-      submittedPlan,
-      profile,
+    const artifactStage = await resolveAcceptedArtifactStage();
+    const headAfterArtifactAcceptance = await readHead(
+      submittedPlan.deploymentInstanceId,
     );
-    const headAfterStaging = await readHead(submittedPlan.deploymentInstanceId);
-    if (!sameJson(headAfterStaging, head)) {
+    if (!sameJson(headAfterArtifactAcceptance, head)) {
       throw new StaleDeploymentPlanError(
-        'Durable deployment head changed during artifact staging.',
+        'Durable deployment head changed during artifact staging or validation.',
       );
     }
     if (head !== null && head.phase === 'READY') {
@@ -2280,7 +2299,7 @@ export function createDeploymentController(dependencies) {
     const acceptancePlan = await createFreshPlan(request, head);
     if (!sameJson(acceptancePlan, submittedPlan)) {
       throw new StaleDeploymentPlanError(
-        'Submitted deployment plan changed while its artifact was staged.',
+        'Submitted deployment plan changed while its artifact was staged or validated.',
       );
     }
     const intents = await createIntents(submittedPlan, head);
@@ -2290,6 +2309,61 @@ export function createDeploymentController(dependencies) {
     const transition = await compareAndSet(head, initial);
     head = transition.head;
     return await runOperation(submittedPlan, profile, head, artifactStage);
+  }
+
+  /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
+  async function converge(value) {
+    const { profile, submittedPlan } = validateConvergeRequest(
+      value,
+      CONVERGE_REQUEST_KEYS,
+      'deploymentController.converge',
+    );
+    return await convergePlan(submittedPlan, profile, async () =>
+      resolveArtifactStage('stageRunningArtifact', submittedPlan, profile),
+    );
+  }
+
+  /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
+  async function convergePreStaged(value) {
+    const { input, profile, submittedPlan } = validateConvergeRequest(
+      value,
+      CONVERGE_PRE_STAGED_REQUEST_KEYS,
+      'deploymentController.convergePreStaged',
+    );
+    /** @type {Readonly<{intent: Readonly<Record<string, any>>, receipt: Readonly<Record<string, any>>}>|null} */
+    let submittedArtifactStage = null;
+    if (submittedPlan.operation === 'destroy') {
+      if (input.artifactStage !== null) {
+        throw new TypeError(
+          'deploymentController.convergePreStaged.artifactStage must be null for destroy.',
+        );
+      }
+    } else {
+      submittedArtifactStage = validateArtifactStage(
+        input.artifactStage,
+        submittedPlan,
+        profile,
+        'deploymentController.convergePreStaged.artifactStage',
+      );
+    }
+
+    return await convergePlan(submittedPlan, profile, async () => {
+      if (submittedPlan.operation === 'destroy') return null;
+      const durableArtifactStage = await resolveArtifactStage(
+        'validateStagedArtifact',
+        submittedPlan,
+        profile,
+      );
+      if (
+        durableArtifactStage === null ||
+        !sameJson(durableArtifactStage, submittedArtifactStage)
+      ) {
+        throw new DeploymentOwnershipError(
+          'Durable staged artifact evidence does not exactly match the submitted evidence.',
+        );
+      }
+      return durableArtifactStage;
+    });
   }
 
   /** @param {unknown} value @returns {Promise<Readonly<Record<string, any>>>} */
@@ -2355,7 +2429,13 @@ export function createDeploymentController(dependencies) {
     return await runOperation(storedPlan, profile, head, artifactStage);
   }
 
-  return Object.freeze({ inspect, plan, converge, resume });
+  return Object.freeze({
+    inspect,
+    plan,
+    converge,
+    convergePreStaged,
+    resume,
+  });
 }
 
 export default { createDeploymentController };

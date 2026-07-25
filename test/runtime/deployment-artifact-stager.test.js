@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { createApplicationRevision } from '../../src/core/runtime/application-revision.js';
+import { createArtifactRecord } from '../../src/core/runtime/artifact-record.js';
 import {
   createDeploymentArtifactStageIntent,
   createDeploymentArtifactStageReceipt,
@@ -122,6 +123,35 @@ function makeApplicationRevision(
   });
 }
 
+/**
+ * @param {ReturnType<typeof makeApplicationRevision>} revision
+ * @param {Readonly<Record<string, any>>} [target]
+ */
+function makeProvenance(revision, target = TARGET) {
+  return {
+    schemaVersion: 1,
+    builder: {
+      name: '@wharfie/wharfie',
+      version: '0.0.15',
+      runtimeDigest: clone(revision.inputs.runtime.digest),
+      toolchainDigest: digest('toolchain'),
+    },
+    node: {
+      version: target.nodeVersion,
+      archive: {
+        fileName: `node-v${target.nodeVersion}-${target.platform}-${target.architecture}.tar.gz`,
+        digest: digest('node-archive'),
+      },
+      binary: { digest: digest('node-binary') },
+    },
+    dependencies: {
+      lock: clone(revision.inputs.dependencies),
+      digest: digest('target-dependency-closure'),
+    },
+    signing: { mode: 'unsigned' },
+  };
+}
+
 /** @param {string} [appId] @param {Readonly<Record<string, any>>} [target] @param {string} [region] */
 function makeProfile(
   appId = 'artifact-stager-demo',
@@ -152,9 +182,15 @@ function makeFixture(
   bytes = Buffer.from('exact held SEA bytes'),
   region = 'us-east-1',
 ) {
-  const observation = makeArtifactObservation(bytes);
   const profile = makeProfile('artifact-stager-demo', TARGET, region);
   const revision = makeApplicationRevision(profile.appId);
+  const record = createArtifactRecord({
+    bytes,
+    revision,
+    target: profile.target,
+    provenance: makeProvenance(revision, profile.target),
+  });
+  const observation = makeArtifactObservation(bytes);
   const runtime = Object.freeze({
     schemaVersion: 1,
     kind: 'artifactRuntime',
@@ -181,11 +217,30 @@ function makeFixture(
     observation,
     profile,
     providerScope,
+    record,
     revision,
     runtime,
     readEmbeddedRevisionRuntimePair,
     deploymentRevision,
     authority: { deploymentRevision, profile, providerScope },
+  };
+}
+
+/**
+ * @param {ReturnType<typeof makeFixture>} fixture
+ * @param {Readonly<Record<string, any>>} source
+ * @param {Record<string, any>} [overrides]
+ */
+function makeClaim(fixture, source, overrides = {}) {
+  return {
+    deploymentRevision: fixture.deploymentRevision,
+    profile: fixture.profile,
+    providerScope: fixture.providerScope,
+    source,
+    revision: fixture.revision,
+    runtime: fixture.runtime,
+    record: fixture.record,
+    ...overrides,
   };
 }
 
@@ -540,6 +595,233 @@ describe('deployment artifact stager', () => {
     expect(DEPLOYMENT_ARTIFACT_STAGE_METADATA_SCHEMA).toBe(
       'deployment-artifact-stage-v1',
     );
+  });
+
+  it('stages one claimed selected source without opening or observing the running executable', async () => {
+    const fixture = makeFixture();
+    const harness = makeHarness(fixture);
+
+    const bundle = await harness.stager.stageClaimedArtifact(
+      makeClaim(fixture, harness.source.source),
+    );
+
+    expect(bundle).toEqual({
+      intent: harness.store.state.intent,
+      receipt: harness.store.state.receipt,
+    });
+    expect(Object.keys(harness.stager)).toEqual([
+      'stageClaimedArtifact',
+      'stageRunningArtifact',
+      'validateStagedArtifact',
+    ]);
+    expect(Object.isFrozen(harness.stager)).toBe(true);
+    expect(harness.source.wasConsumed()).toBe(true);
+    expect(harness.source.verifyUnchanged).toHaveBeenCalledTimes(1);
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.openArtifactSource).not.toHaveBeenCalled();
+    expect(harness.readEmbeddedRevisionRuntimePair).not.toHaveBeenCalled();
+    expect(harness.client.putObject).toHaveBeenCalledTimes(1);
+    expect(harness.client.state.uploadedBytes).toEqual(fixture.bytes);
+  });
+
+  it.each([
+    [
+      'record bytes',
+      /** @type {(fixture: ReturnType<typeof makeFixture>) => Record<string, any>} */ (
+        (fixture) => {
+          const record = clone(fixture.record);
+          record.size += 1;
+          return { record };
+        }
+      ),
+    ],
+    [
+      'record target',
+      /** @type {(fixture: ReturnType<typeof makeFixture>) => Record<string, any>} */ (
+        (fixture) => {
+          const target = { ...TARGET, architecture: 'arm64' };
+          return {
+            record: createArtifactRecord({
+              bytes: fixture.bytes,
+              revision: fixture.revision,
+              target,
+              provenance: makeProvenance(fixture.revision, target),
+            }),
+          };
+        }
+      ),
+    ],
+    [
+      'application revision',
+      /** @type {(fixture: ReturnType<typeof makeFixture>) => Record<string, any>} */ (
+        (fixture) => ({
+          revision: makeApplicationRevision(fixture.profile.appId, 'other'),
+        })
+      ),
+    ],
+    [
+      'runtime target',
+      /** @type {(fixture: ReturnType<typeof makeFixture>) => Record<string, any>} */ (
+        (fixture) => ({
+          runtime: {
+            ...clone(fixture.runtime),
+            target: { ...TARGET, architecture: 'arm64' },
+          },
+        })
+      ),
+    ],
+    [
+      'deployment revision',
+      /** @type {(fixture: ReturnType<typeof makeFixture>) => Record<string, any>} */ (
+        (fixture) => ({
+          deploymentRevision: makeDeploymentRevision(
+            fixture.observation,
+            fixture.profile,
+            makeApplicationRevision(fixture.profile.appId, 'other').revisionId,
+          ),
+        })
+      ),
+    ],
+  ])(
+    'rejects mismatched claimed %s before durable or provider mutation and closes it',
+    async (_name, mutate) => {
+      const fixture = makeFixture();
+      const harness = makeHarness(fixture);
+
+      await expect(
+        harness.stager.stageClaimedArtifact(
+          makeClaim(fixture, harness.source.source, mutate(fixture)),
+        ),
+      ).rejects.toBeInstanceOf(DeploymentArtifactStageConflictError);
+
+      expect(harness.source.close).toHaveBeenCalledTimes(1);
+      expect(harness.source.createReadStream).not.toHaveBeenCalled();
+      expect(harness.source.verifyUnchanged).not.toHaveBeenCalled();
+      expect(harness.createNonce).not.toHaveBeenCalled();
+      expect(
+        harness.store.store.putArtifactStageIntentIfAbsent,
+      ).not.toHaveBeenCalled();
+      expect(harness.client.putObject).not.toHaveBeenCalled();
+      expect(harness.client.headObject).not.toHaveBeenCalled();
+      expect(harness.openArtifactSource).not.toHaveBeenCalled();
+      expect(harness.readEmbeddedRevisionRuntimePair).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reuses exact claimed-source receipt evidence without streaming and still closes ownership', async () => {
+    const fixture = makeFixture();
+    const intent = makeIntent(fixture);
+    const receipt = makeReceipt(intent, 'claimed-retained-version');
+    const store = makeStore({ intent, receipt });
+    const client = makeClient();
+    client.installHead(makeHead(intent, 'claimed-retained-version'), false);
+    const harness = makeHarness(fixture, { store, client });
+
+    await expect(
+      harness.stager.stageClaimedArtifact(
+        makeClaim(fixture, harness.source.source),
+      ),
+    ).resolves.toEqual({ intent, receipt });
+
+    expect(harness.source.createReadStream).not.toHaveBeenCalled();
+    expect(harness.source.verifyUnchanged).not.toHaveBeenCalled();
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.openArtifactSource).not.toHaveBeenCalled();
+    expect(harness.readEmbeddedRevisionRuntimePair).not.toHaveBeenCalled();
+    expect(client.putObject).not.toHaveBeenCalled();
+    expect(client.headObject).toHaveBeenCalledWith(
+      expect.objectContaining({ VersionId: 'claimed-retained-version' }),
+    );
+  });
+
+  it('preserves claimed-source close failure unchanged after successful staging', async () => {
+    const fixture = makeFixture();
+    const closeFailure = Object.freeze({ code: 'CLAIMED_SOURCE_CLOSE_FAILED' });
+    const source = makeSource(fixture.bytes, { closeFailure });
+    const harness = makeHarness(fixture, { source });
+
+    await expect(
+      captureRejection(
+        harness.stager.stageClaimedArtifact(makeClaim(fixture, source.source)),
+      ),
+    ).resolves.toBe(closeFailure);
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains claimed staging and close failures in primary-first order', async () => {
+    const fixture = makeFixture();
+    const primaryFailure = undefined;
+    const closeFailure = undefined;
+    const store = makeStore();
+    store.store.putArtifactStageIntentIfAbsent.mockRejectedValueOnce(
+      primaryFailure,
+    );
+    const source = makeSource(fixture.bytes, { closeFailure });
+    const harness = makeHarness(fixture, { store, source });
+
+    const failure = await captureRejection(
+      harness.stager.stageClaimedArtifact(makeClaim(fixture, source.source)),
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(/** @type {AggregateError} */ (failure).errors).toEqual([
+      primaryFailure,
+      closeFailure,
+    ]);
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a transferred source when the claimed top-level shape is invalid', async () => {
+    const fixture = makeFixture();
+    const harness = makeHarness(fixture);
+
+    await expect(
+      harness.stager.stageClaimedArtifact({
+        ...makeClaim(fixture, harness.source.source),
+        extra: true,
+      }),
+    ).rejects.toThrow(/exact supported fields/i);
+
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.source.createReadStream).not.toHaveBeenCalled();
+    expect(
+      harness.store.store.putArtifactStageIntentIfAbsent,
+    ).not.toHaveBeenCalled();
+    expect(harness.client.putObject).not.toHaveBeenCalled();
+  });
+
+  it('retains and closes a source captured before a later claim descriptor trap throws', async () => {
+    const fixture = makeFixture();
+    const harness = makeHarness(fixture);
+    const validClaim = makeClaim(fixture, harness.source.source);
+    const trapped = new Proxy(validClaim, {
+      ownKeys: () => [
+        'source',
+        'deploymentRevision',
+        'profile',
+        'providerScope',
+        'revision',
+        'runtime',
+        'record',
+      ],
+      getOwnPropertyDescriptor(target, property) {
+        if (property === 'source') {
+          return Object.getOwnPropertyDescriptor(target, property);
+        }
+        throw new Error('later claim descriptor trap');
+      },
+    });
+
+    await expect(harness.stager.stageClaimedArtifact(trapped)).rejects.toThrow(
+      /exact supported fields/i,
+    );
+
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.source.createReadStream).not.toHaveBeenCalled();
+    expect(
+      harness.store.store.putArtifactStageIntentIfAbsent,
+    ).not.toHaveBeenCalled();
+    expect(harness.client.putObject).not.toHaveBeenCalled();
   });
 
   it('heads the current object when a successful PutObject omits VersionId', async () => {

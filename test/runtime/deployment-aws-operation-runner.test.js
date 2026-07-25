@@ -17,7 +17,25 @@ const POLICIES = Object.freeze([
   ['reconcile-existing', 'reconcileControl'],
   ['bootstrap', 'bootstrapControl'],
 ]);
-const OPERATIONS = Object.freeze(['inspect', 'plan', 'converge', 'resume']);
+const OPERATION_METHOD_BY_NAME = Object.freeze({
+  inspect: 'inspect',
+  plan: 'plan',
+  converge: 'converge',
+  'converge-pre-staged': 'convergePreStaged',
+  resume: 'resume',
+});
+const OPERATIONS = Object.freeze(
+  /** @type {const} */ ([
+    'inspect',
+    'plan',
+    'converge',
+    'converge-pre-staged',
+    'resume',
+  ]),
+);
+const INVOCATION_OPERATION_METHODS = Object.freeze(
+  Object.values(OPERATION_METHOD_BY_NAME),
+);
 const AGGREGATE_MESSAGE =
   'AWS deployment operation and invocation cleanup both failed.';
 
@@ -55,7 +73,8 @@ function makeInvocation(implementations = {}, freeze = true) {
     'requireControl',
     'reconcileControl',
     'bootstrapControl',
-    ...OPERATIONS,
+    ...INVOCATION_OPERATION_METHODS,
+    'stageClaimedArtifact',
     'close',
   ]) {
     invocation[method] = jest.fn(
@@ -135,11 +154,16 @@ describe('AWS single-node deployment operation runner boundary', () => {
 
   it.each(
     POLICIES.flatMap(([policy, controlMethod]) =>
-      OPERATIONS.map((operation) => [policy, controlMethod, operation]),
+      OPERATIONS.map((operation) => [
+        policy,
+        controlMethod,
+        operation,
+        OPERATION_METHOD_BY_NAME[operation],
+      ]),
     ),
   )(
-    'maps %s through %s before receiver-preserving %s',
-    async (policy, controlMethod, operation) => {
+    'maps %s through %s before receiver-preserving %s/%s',
+    async (policy, controlMethod, operation, operationMethod) => {
       /** @type {{phase: string, receiver: unknown, args: any[]}[]} */
       const events = [];
       const operationResult = Object.freeze({ operationResult: operation });
@@ -152,7 +176,7 @@ describe('AWS single-node deployment operation runner boundary', () => {
           });
           return Promise.resolve();
         },
-        [operation]: function run(/** @type {any} */ input) {
+        [operationMethod]: function run(/** @type {any} */ input) {
           events.push({
             phase: 'operation',
             receiver: this,
@@ -203,11 +227,12 @@ describe('AWS single-node deployment operation runner boundary', () => {
           otherPolicyMethod === controlMethod ? 1 : 0,
         );
       }
-      for (const otherOperation of OPERATIONS) {
-        expect(invocation[otherOperation]).toHaveBeenCalledTimes(
-          otherOperation === operation ? 1 : 0,
+      for (const otherOperationMethod of INVOCATION_OPERATION_METHODS) {
+        expect(invocation[otherOperationMethod]).toHaveBeenCalledTimes(
+          otherOperationMethod === operationMethod ? 1 : 0,
         );
       }
+      expect(invocation.stageClaimedArtifact).not.toHaveBeenCalled();
       expect(invocation.close).toHaveBeenCalledTimes(1);
     },
   );
@@ -231,6 +256,9 @@ describe('AWS single-node deployment operation runner boundary', () => {
     request({ controlPolicy: 'toString' }),
     request({ controlPolicy: '__proto__' }),
     request({ operation: 'apply' }),
+    request({ operation: 'constructor' }),
+    request({ operation: 'toString' }),
+    request({ operation: '__proto__' }),
     request({ input: [] }),
     request({ input: null }),
     request({ input: { invalid: undefined } }),
@@ -314,7 +342,7 @@ describe('AWS single-node deployment operation runner boundary', () => {
     expect(rogueOpen).not.toHaveBeenCalled();
   });
 
-  it('accepts only an exact frozen ten-key invocation before taking ownership', async () => {
+  it('accepts only an exact frozen twelve-key invocation before taking ownership', async () => {
     const getter = jest.fn();
     const mutable = makeInvocation({}, false);
     const extra = makeInvocation({}, false);

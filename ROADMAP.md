@@ -1162,28 +1162,37 @@ record validator and deployment-revision builder share the exact held-byte
 identity without a second full-buffer read. Artifact-source validation and
 staging also preserve ordered primary/close failures.
 
-1. Consume that authority to durably stage the exact selected bytes before a
-   source-mode plan returns. A later-process converge must take an explicit
-   pre-staged path and validate the exact immutable intent, object version, and
-   receipt; it must never rebuild, reopen a path, or silently fall back to the
-   running Node executable. Direct apply should plan, stage once, then converge
-   from the receipt.
-   Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
-   `destroy` commands only after that sequencing is proven. Packaged apply and
-   reconcile must continue to re-observe the currently running SEA.
-   Then wire guest storage projection, resident-service activation, and host
-   observation.
-2. Install and wire the privileged host observer outside the application UID,
-   then prove the complete lifecycle in a clean account through the user's
-   ordinary credential chain, including interruption and response-loss
-   recovery and the publishing caller's exact STS role/session identity.
+The selected authority is now consumed by a closed source-deployment
+orchestrator. It transfers the claimed descriptor synchronously into the
+invocation stager, which revalidates the exact V61 record, revision, runtime,
+held-byte, deployment, profile, and provider-scope evidence and owns
+unconditional descriptor cleanup. Source preparation returns only one frozen,
+JSON-safe `{plan, profile, artifactStage}` after the exact immutable stage
+intent, object version, and receipt are durable and revalidated. Direct source
+apply stages once and converges that same bundle through
+`convergePreStaged`. A later process can dispatch the explicit
+`converge-pre-staged` operation; it requires exact supplied and durable stage
+evidence and never falls back to its running SEA. Ordinary `converge` remains
+the packaged running-SEA path.
+
+1. Mount source and packaged `plan`, `apply`, `inspect`, `reconcile`, and
+   `destroy` commands while preserving that source-versus-packaged artifact
+   authority split. Source plan/apply must use selected pre-staging; packaged
+   apply and reconcile must continue to re-observe the currently running SEA.
+2. Wire guest storage projection, resident-service activation, and the
+   privileged host observer outside the application UID, then prove the
+   complete lifecycle in a clean account through the user's ordinary
+   credential chain, including interruption and response-loss recovery and the
+   publishing caller's exact STS role/session identity.
 3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The current restart point is the [selected SEA artifact authority
-checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md).
-Its parent is the [one-shot deployment operation runner
+The current restart point is the [durable selected SEA plan
+checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md). Its
+parent is the [selected SEA artifact authority
+checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md),
+whose parent is the [one-shot deployment operation runner
 checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md),
 whose parent is the [read-only deployment inspection
 checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md),

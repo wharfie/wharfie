@@ -192,13 +192,16 @@ caller-owned S3, EBS-volume, and IAM/EC2 runtime-identity capabilities. Wharfie
 can bootstrap one retained,
 versioned control bucket with no bucket policy, wait through S3's documented
 first-enable propagation interval, persist an immutable stage intent before
-streaming the running SEA through a held descriptor, and accept only exact
+streaming a held SEA descriptor, and accept only exact
 checksum, encryption, metadata, and non-`null` object-version readback. The
-held bytes are also cross-checked against the SEA's embedded app, revision, and
-runtime target. Converge requires that receipt and regenerates provider
-authority after staging before accepting a plan; resume revalidates the
-retained version without historical local bytes, while destroy deliberately
-does not require it. The fixed graph's managed artifact now has one
+held bytes are also cross-checked against their exact app, revision, and
+runtime target. Packaged converge stages and proves the currently running SEA.
+Source preparation instead transfers one freshly selected SEA descriptor into
+the same stager, returns only after its exact intent, object version, and
+receipt are durable, and can later converge through an explicit pre-staged
+path that never falls back to the running Node executable. Resume revalidates
+the retained version without historical local bytes, while destroy
+deliberately does not require it. The fixed graph's managed artifact now has one
 incarnation-stable S3 identity at
 `artifact/v1/<deploymentInstanceId>/<incarnationId>/current`; its exact ARN,
 not an allocated object version, is the durable provider binding. Create and
@@ -482,15 +485,16 @@ live or destroyed head hydrates its exact active and last-operation plans,
 profile, pinned ProviderSpec, and InspectionV6 without selecting prerequisites,
 planning, staging, writing, CAS, or effects. Unknown and conflict remain
 truthful inspection data. The invocation first requires fresh active control
-evidence for inspection, plan, converge, and resume. Shutdown fences new calls,
-drains entered work, and closes the family once.
+evidence for inspection, plan, ordinary converge, pre-staged converge, and
+resume. Shutdown fences new calls, drains entered work, and closes the family
+once.
 
 One finite operation runner now opens exactly one invocation, applies an
 explicit `require-active`, `reconcile-existing`, or `bootstrap` control policy,
-dispatches exactly one inspection, plan, converge, or resume operation, and
-unconditionally closes the invocation. It snapshots the complete request
-before opening credentials and preserves deterministic primary-operation and
-cleanup failures.
+dispatches exactly one inspection, plan, ordinary converge, explicit
+pre-staged converge, or resume operation, and unconditionally closes the
+invocation. It snapshots the complete request before opening credentials and
+preserves deterministic primary-operation and cleanup failures.
 
 Source packaging can now mint one opaque, process-local selected-SEA authority
 only from a fresh successful `packageLocalApp()` generation and one retained
@@ -499,11 +503,23 @@ descriptor's exact bytes, creates one deployment revision from that same
 evidence, and permits exactly one source claim or deterministic discard.
 Paths, sidecars, copies, JSON, and reconstructed objects carry no authority.
 
-This does not yet durably stage that selected source during planning or provide
-operator commands, the privileged host observer and publisher, guest service
-projection, or clean-account proof. External resource verification is
-represented by the generic V6 contract but remains unreachable through the
-fixed all-managed AWS profile and planner.
+Source preparation now claims that authority directly into the invocation's
+artifact stager. The stager revalidates the exact generation record, revision,
+runtime, held-byte observation, deployment revision, profile, and provider
+scope, durably stages the bytes, and unconditionally closes the claimed
+descriptor. `prepareAwsSelectedSeaPlan()` returns the frozen, JSON-safe
+`{plan, profile, artifactStage}` only after the immutable intent, exact object
+version, and receipt are durably present and revalidated. Direct
+`applyAwsSelectedSea()` stages once and passes that same evidence to
+`convergePreStaged()`. A later process can select the one-shot
+`converge-pre-staged` runner operation, which validates the supplied evidence
+against durable state and never opens or substitutes its running executable.
+Ordinary `converge` deliberately remains the packaged running-SEA path.
+
+Deployment commands, the privileged host observer and publisher, guest service
+projection, and clean-account proof remain unfinished. External resource
+verification is represented by the generic V6 contract but remains unreachable
+through the fixed all-managed AWS profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -514,7 +530,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Selected SEA artifact authority checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md) — the current handoff for fresh-generation trust, one retained descriptor, observed deployment identity, and linear claim-or-discard ownership.
+- [Durable selected SEA plan checkpoint](llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md) — the current handoff for source staging, portable pre-staged evidence, and the distinct source-versus-packaged convergence paths.
+- [Selected SEA artifact authority checkpoint](llm/checkpoints/2026-07-24-v61-selected-sea-artifact-authority.md) — the parent handoff for fresh-generation trust, one retained descriptor, observed deployment identity, and linear claim-or-discard ownership.
 - [One-shot deployment operation runner checkpoint](llm/checkpoints/2026-07-24-v60-one-shot-deployment-operation-runner.md) — the parent handoff for explicit control policy, one finite operation, unconditional cleanup, and deterministic failure precedence.
 - [Read-only deployment inspection checkpoint](llm/checkpoints/2026-07-24-v59-read-only-deployment-inspection.md) — the parent handoff for exact durable inspection hydration, completed-destroy observation, guarded controller operations, active-call draining, and one owned AWS lifetime.
 - [Owned AWS deployment invocation checkpoint](llm/checkpoints/2026-07-24-v58-owned-aws-deployment-invocation.md) — the parent handoff for explicit inspect/require/reconcile/bootstrap control policy, guarded controller operations, active-call draining, and one owned AWS lifetime.

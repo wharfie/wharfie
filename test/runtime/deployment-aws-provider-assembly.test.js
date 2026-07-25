@@ -859,7 +859,9 @@ describe('AWS single-node deployment provider client-family assembly', () => {
       'bootstrapControl',
       'inspect',
       'plan',
+      'stageClaimedArtifact',
       'converge',
+      'convergePreStaged',
       'resume',
       'close',
     ]);

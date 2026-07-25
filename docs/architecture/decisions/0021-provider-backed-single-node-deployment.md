@@ -2062,3 +2062,42 @@ apply and reconcile continue to prove the running SEA. Guest service
 projection, privileged publisher wiring, live STS role/session proof,
 DESTROYED-tombstone reapply, clean-account proof, and exactly-once provider
 effects remain unfinished.
+
+The forty-fourth slice consumes the selected authority without weakening its
+process-local ownership boundary. Source preparation binds the fresh selected
+SEA to one apply plan, claims its held descriptor, and enters the
+invocation-owned artifact stager synchronously, with no await between claim and
+transfer. The stager cross-checks the generation-backed ArtifactRecord,
+application revision, runtime target, held-byte observation, DeploymentRevision,
+profile, and provider scope before durable staging. It owns and closes the
+claimed descriptor on every success or failure path, while the source
+orchestrator unconditionally closes the invocation and deterministically
+preserves primary and cleanup failures.
+
+`prepareAwsSelectedSeaPlan()` exposes only one deeply frozen, JSON-safe
+`{plan, profile, artifactStage}`. It does not return until the immutable stage
+intent, exact non-null object VersionId, and complete receipt are durable and
+revalidated. No descriptor, path, selected-SEA token, credential authority, or
+invocation escapes in that result. `applyAwsSelectedSea()` uses the same
+invocation to stage exactly once and passes that exact prepared bundle to
+`convergePreStaged()`.
+
+Pre-staged convergence is a distinct controller contract, not an option on the
+ordinary converge path. It accepts the exact plan, profile, and artifact-stage
+bundle, calls only durable staged-artifact validation, and requires the
+submitted intent and receipt to equal the durable evidence before any plan is
+accepted. It never calls running-artifact staging and never falls back to the
+current executable. The one-shot runner exposes this boundary under the
+explicit external operation name `converge-pre-staged`, so a later process can
+consume a portable prepared result without possessing the original local
+artifact capability. Ordinary `converge` remains the packaged path and
+continues to open, observe, and stage the currently running SEA. Destroy uses a
+null stage in either mode.
+
+This slice still does not mount source or packaged deployment commands. The
+next boundary must expose `plan`, `apply`, `inspect`, `reconcile`, and `destroy`
+while preserving the source-selected/pre-staged path and the
+packaged-running-SEA path as separate artifact authorities. Guest storage and
+service projection, privileged publisher wiring, exact live STS session proof,
+DESTROYED-tombstone reapply, clean-account lifecycle proof, and exactly-once
+provider effects remain unfinished.

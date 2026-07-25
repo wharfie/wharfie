@@ -28,7 +28,9 @@ const INVOCATION_KEYS = Object.freeze([
   'bootstrapControl',
   'inspect',
   'plan',
+  'stageClaimedArtifact',
   'converge',
+  'convergePreStaged',
   'resume',
   'close',
 ]);
@@ -196,7 +198,11 @@ beforeEach(() => {
     bootstrap: jest.fn(async () => bucketState()),
   };
   store = Object.freeze({ store: true });
-  artifactStager = Object.freeze({ artifactStager: true });
+  artifactStager = Object.freeze({
+    stageClaimedArtifact: jest.fn(async (claim) =>
+      Object.freeze({ kind: 'artifact-stage', claim }),
+    ),
+  });
   provider = Object.freeze({ provider: true });
   controller = {
     inspect: jest.fn(async (input) =>
@@ -205,6 +211,9 @@ beforeEach(() => {
     plan: jest.fn(async (input) => Object.freeze({ kind: 'plan', input })),
     converge: jest.fn(async (input) =>
       Object.freeze({ kind: 'converged-head', input }),
+    ),
+    convergePreStaged: jest.fn(async (input) =>
+      Object.freeze({ kind: 'pre-staged-converged-head', input }),
     ),
     resume: jest.fn(async (input) =>
       Object.freeze({ kind: 'resumed-head', input }),
@@ -278,7 +287,9 @@ describe('AWS single-node deployment invocation construction', () => {
     }
     expect(controller.inspect).not.toHaveBeenCalled();
     expect(controller.plan).not.toHaveBeenCalled();
+    expect(artifactStager.stageClaimedArtifact).not.toHaveBeenCalled();
     expect(controller.converge).not.toHaveBeenCalled();
+    expect(controller.convergePreStaged).not.toHaveBeenCalled();
     expect(controller.resume).not.toHaveBeenCalled();
     expect(openedFamily.close).not.toHaveBeenCalled();
   });
@@ -299,6 +310,22 @@ describe('AWS single-node deployment invocation construction', () => {
     );
     await invocation.close();
     expect(family.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires the selected-artifact transfer port before claiming the family', async () => {
+    const family = makeFamily();
+    artifactStager = Object.freeze({});
+
+    expect(() => createInvocation(family)).toThrow(
+      'artifactStager.stageClaimedArtifact must be a function',
+    );
+
+    artifactStager = Object.freeze({
+      stageClaimedArtifact: jest.fn(),
+    });
+    const invocation = createInvocation(family);
+    expect(invocation.providerScope).toEqual(PROVIDER_SCOPE);
+    await invocation.close();
   });
 
   it.each([
@@ -389,16 +416,21 @@ describe('AWS deployment control orchestration', () => {
     await expect(invocation.plan(input)).rejects.toBeInstanceOf(
       AwsDeploymentControlNotReadyError,
     );
+    await expect(invocation.convergePreStaged(input)).rejects.toBeInstanceOf(
+      AwsDeploymentControlNotReadyError,
+    );
     expect(controller.inspect).not.toHaveBeenCalled();
     expect(controller.plan).not.toHaveBeenCalled();
-    expect(tableLifecycle.inspect).toHaveBeenCalledTimes(3);
-    expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(3);
+    expect(controller.convergePreStaged).not.toHaveBeenCalled();
+    expect(tableLifecycle.inspect).toHaveBeenCalledTimes(4);
+    expect(bucketLifecycle.inspect).toHaveBeenCalledTimes(4);
   });
 
   it.each([
     ['inspect', 'inspect'],
     ['plan', 'plan'],
     ['converge', 'converge'],
+    ['convergePreStaged', 'convergePreStaged'],
     ['resume', 'resume'],
   ])(
     'gates and delegates %s with an independent frozen input and controller receiver',
@@ -418,7 +450,58 @@ describe('AWS deployment control orchestration', () => {
     },
   );
 
-  it.each(['inspect', 'plan', 'converge', 'resume'])(
+  it('synchronously transfers one exact claimed artifact without a control-await gap', async () => {
+    const invocation = createInvocation();
+    const claim = Object.freeze({
+      deploymentRevision: Object.freeze({ deploymentRevision: true }),
+      profile: Object.freeze({ profile: true }),
+      providerScope: PROVIDER_SCOPE,
+      source: Object.freeze({ source: true }),
+      revision: Object.freeze({ revision: true }),
+      runtime: Object.freeze({ runtime: true }),
+      record: Object.freeze({ record: true }),
+    });
+    const stageResult = Object.freeze({ intent: {}, receipt: {} });
+    artifactStager.stageClaimedArtifact.mockReturnValueOnce(
+      Promise.resolve(stageResult),
+    );
+
+    const staging = invocation.stageClaimedArtifact(claim);
+
+    expect(artifactStager.stageClaimedArtifact).toHaveBeenCalledTimes(1);
+    expect(artifactStager.stageClaimedArtifact).toHaveBeenCalledWith(claim);
+    expect(artifactStager.stageClaimedArtifact.mock.contexts[0]).toBe(
+      artifactStager,
+    );
+    expect(tableLifecycle.inspect).not.toHaveBeenCalled();
+    expect(bucketLifecycle.inspect).not.toHaveBeenCalled();
+    await expect(staging).resolves.toBe(stageResult);
+  });
+
+  it('rejects a claimed artifact for another invocation scope before transfer', async () => {
+    const invocation = createInvocation();
+    const otherScope = createAwsProviderScope({
+      partition: 'aws',
+      accountId: '123456789012',
+      region: 'us-west-2',
+    });
+    const claim = Object.freeze({
+      deploymentRevision: {},
+      profile: {},
+      providerScope: otherScope,
+      source: {},
+      revision: {},
+      runtime: {},
+      record: {},
+    });
+
+    expect(() => invocation.stageClaimedArtifact(claim)).toThrow(
+      'AWS deployment claimed artifact is invalid.',
+    );
+    expect(artifactStager.stageClaimedArtifact).not.toHaveBeenCalled();
+  });
+
+  it.each(['inspect', 'plan', 'converge', 'convergePreStaged', 'resume'])(
     'snapshots the complete %s request before deferred control preflight',
     async (publicMethod) => {
       const tableInspection = deferred();
@@ -619,7 +702,9 @@ describe('AWS deployment invocation ownership lifecycle', () => {
       'bootstrapControl',
       'inspect',
       'plan',
+      'stageClaimedArtifact',
       'converge',
+      'convergePreStaged',
       'resume',
     ]) {
       expect(() => invocation[method]({})).toThrow(
