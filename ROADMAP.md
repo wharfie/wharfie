@@ -38,9 +38,11 @@ and authorized higher-generation supersession. V67 implements its first live
 host observation: exact STS account, `RoleId:InstanceId`, and assumed-role ARN
 proof behind one abort-aware narrow client. Well-formed foreign identity is a
 conflict; malformed, failed, or timed-out reads remain bounded redacted
-uncertainty. Concrete IMDS-only credential/client wiring, root-owned
-store/lock/authority, guest storage, artifact, service, and health adapters
-remain.
+uncertainty. V68 owns the host-only AWS lifetime behind it: one fixed IPv4
+IMDSv2 token flow and rotating cache, one pinned commercial regional STS
+client, no ambient credential or endpoint authority, and fenced cancellation
+plus complete close draining. Root-owned store/lock/controller authority,
+guest storage, artifact, service, and health adapters remain.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -94,10 +96,11 @@ replays only exact stable-token creates after recovery. The AWS composition
 wiring now reaches exact experimental source and packaged `plan`, `apply`,
 `inspect`, `reconcile`, and `destroy` commands while preserving
 selected/pre-staged source authority and running-SEA packaged authority. The
-pure privileged-host request/receipt boundary, durable activation kernel, and
-exact live STS identity adapter are defined; concrete host composition,
-privileged packaging and delivery, clean-account proof, and a deployed-service
-readiness claim still follow · **Last updated:** 2026-07-25
+pure privileged-host request/receipt boundary, durable activation kernel, exact
+live STS identity adapter, and fixed owned host AWS lifetime are defined;
+durable host authority and effect adapters, privileged packaging and delivery,
+clean-account proof, and a deployed-service readiness claim still follow ·
+**Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -1261,27 +1264,34 @@ identity, and distinguishes conclusive foreign credentials from malformed or
 unavailable provider evidence. This proves one AWS credential session, not the
 physical host, current instance-profile association, or controller head.
 
-1. Compose one IMDS-only host credential/client lifetime with the narrow
-   abort-aware STS port. Do not reuse the operator-facing default credential
-   chain on the privileged node.
-2. Add a root-owned authenticated durable state store, a deployment-scoped
+That adapter now runs behind one owned host-only AWS lifetime. Credentials come
+only from a fixed IPv4 IMDSv2 token/profile/document sequence with absolute
+per-request deadlines, coalesced rotation, no stale extension, and owned
+cancellation. STS is fixed to the exact commercial regional HTTPS endpoint and
+one SDK attempt; ambient credentials, metadata endpoints, service endpoints,
+FIPS, dual-stack, global endpoint, region, and retry settings cannot replace
+those choices. The family exposes only the V67 adapter and one draining close.
+
+1. Add a root-owned authenticated durable state store, a deployment-scoped
    crash-releasing lock, and a trusted current-head authority transport. Make
    operator inspection fence-aware and define bounded retention for superseded
    historical states.
-3. Add concrete storage, versioned-artifact, fixed-user service-convergence,
+2. Add concrete storage, versioned-artifact, fixed-user service-convergence,
    and S3 health-publication adapters. Prove format/mount and response-loss
    recovery on disposable Linux hosts without ever executing application bytes
    as root.
-4. Only after that lifecycle is proven, expose the root framework host command
+3. Only after that lifecycle is proven, expose the root framework host command
    and SEA, add SSM as wakeup/delivery rather than durable authority, and run a
    complete clean-account proof through the user's ordinary credential chain.
-5. Begin provider-backed coordinator recovery only after the single-node
+4. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [live host runtime identity
-checkpoint](llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md). Its
-parent is the [durable host activation kernel
+The latest recorded restart point is the [owned host AWS lifetime
+checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md). Its
+parent is the [live host runtime identity
+checkpoint](llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md),
+whose parent is the [durable host activation kernel
 checkpoint](llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md),
 whose parent is the [host activation contract
 checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md), whose
