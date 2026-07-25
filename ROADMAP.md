@@ -41,8 +41,12 @@ conflict; malformed, failed, or timed-out reads remain bounded redacted
 uncertainty. V68 owns the host-only AWS lifetime behind it: one fixed IPv4
 IMDSv2 token flow and rotating cache, one pinned commercial regional STS
 client, no ambient credential or endpoint authority, and fenced cancellation
-plus complete close draining. Root-owned store/lock/controller authority,
-guest storage, artifact, service, and health adapters remain.
+plus complete close draining. V69 adds the production Linux/root persistence
+boundary: a fixed private filesystem layout, exact V66 state/fence CAS, atomic
+fsynced publication, deployment and transaction locks released on process
+death, bounded recovery and deterministic retention, local fence-aware
+inspection, and draining shutdown. Authenticated current-head controller
+authority and guest storage, artifact, service, and health adapters remain.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -97,9 +101,10 @@ wiring now reaches exact experimental source and packaged `plan`, `apply`,
 `inspect`, `reconcile`, and `destroy` commands while preserving
 selected/pre-staged source authority and running-SEA packaged authority. The
 pure privileged-host request/receipt boundary, durable activation kernel, exact
-live STS identity adapter, and fixed owned host AWS lifetime are defined;
-durable host authority and effect adapters, privileged packaging and delivery,
-clean-account proof, and a deployed-service readiness claim still follow ·
+live STS identity adapter, fixed owned host AWS lifetime, and root-owned local
+persistence boundary are defined; authenticated controller authority and
+effect adapters, privileged packaging and delivery, clean-account proof, and a
+deployed-service readiness claim still follow ·
 **Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -1272,10 +1277,18 @@ one SDK attempt; ambient credentials, metadata endpoints, service endpoints,
 FIPS, dual-stack, global endpoint, region, and retry settings cannot replace
 those choices. The family exposes only the V67 adapter and one draining close.
 
-1. Add a root-owned authenticated durable state store, a deployment-scoped
-   crash-releasing lock, and a trusted current-head authority transport. Make
-   operator inspection fence-aware and define bounded retention for superseded
-   historical states.
+The V69 root-owned store, deployment lock, bounded retention, and fence-aware
+local inspection are complete.
+
+1. Add authenticated current-head authority across controller request
+   mint/persist, a stable DynamoDB
+   `host-activation-authority/v1/<deploymentInstanceId>` record containing the
+   complete V65 request, a strongly consistent read of
+   `head/v1/<deploymentInstanceId>`, the minimum runtime IAM `GetItem` grant,
+   and one pinned owned host DynamoDB client. Implement the exact V66
+   `authorizeRequest({request,purpose,step,receipt})` port for `claim`,
+   `dispatch`, `settle`, and `replay`. SSM carries identifiers and wakeup only;
+   it is not authority. Do not substitute an S3 pointer or ad hoc signatures.
 2. Add concrete storage, versioned-artifact, fixed-user service-convergence,
    and S3 health-publication adapters. Prove format/mount and response-loss
    recovery on disposable Linux hosts without ever executing application bytes
@@ -1287,8 +1300,10 @@ those choices. The family exposes only the V67 adapter and one draining close.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [owned host AWS lifetime
-checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md). Its
+The latest recorded restart point is the [root host activation persistence
+checkpoint](llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md).
+Its parent is the [owned host AWS lifetime
+checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md), whose
 parent is the [live host runtime identity
 checkpoint](llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md),
 whose parent is the [durable host activation kernel

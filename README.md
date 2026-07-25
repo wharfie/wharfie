@@ -573,13 +573,20 @@ request, with bounded timeout/retry and a fail-closed conflict/unknown taxonomy.
 One owned host-only AWS lifetime now supplies rotating credentials through a
 fixed IPv4 IMDSv2 token flow, pins the commercial regional STS endpoint and
 one-attempt SDK policy, cancels and drains active work, and exposes only that
-V67 adapter. Root-owned store/lock/controller authority, storage, artifact,
-service, and health adapters, the privileged host command and SEA, and a
-clean-account lifecycle proof remain unfinished. The protocol does not claim
-physical exactly-once execution; mutations must be exact-convergent and safe
-to replay. External resource verification is represented by the generic V6
-contract but remains unreachable through the fixed all-managed AWS profile and
-planner.
+V67 adapter. One production Linux/root persistence boundary now implements the
+V66 four-method durable store and deployment-scoped crash-releasing lock under
+the fixed
+`/var/lib/wharfie/host-activation/v1/<deploymentInstanceId>` layout. It
+publishes canonical private records through fsync and atomic rename, bounds
+recovery and superseded-history retention, classifies retained state against
+the current local fence, and fences and drains admitted work on close. That
+local fence relationship is not controller authorization. The authenticated
+current-head authority transport, storage, artifact, service, and health
+adapters, the privileged host command and SEA, and a clean-account lifecycle
+proof remain unfinished. The protocol does not claim physical exactly-once
+execution; mutations must be exact-convergent and safe to replay. External
+resource verification is represented by the generic V6 contract but remains
+unreachable through the fixed all-managed AWS profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -590,7 +597,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Owned host AWS lifetime checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md) — the latest recorded checkpoint for fixed IMDSv2 credential rotation, pinned regional STS composition, complete cancellation and draining, verification, limitations, and the next privileged-host boundary.
+- [Root host activation persistence checkpoint](llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md) — the latest recorded checkpoint for fixed root-owned state, exact durable CAS, crash-releasing locks, bounded retention, fence-aware local inspection, lifecycle draining, security limits, and the next controller-authority slice.
+- [Owned host AWS lifetime checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md) — the parent checkpoint for fixed IMDSv2 credential rotation, pinned regional STS composition, complete cancellation and draining, verification, limitations, and the next privileged-host boundary.
 - [Live host runtime identity checkpoint](llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md) — the parent checkpoint for exact live STS EC2 instance-profile proof, bounded retry and timeout, conflict-versus-unknown classification, and request-bound evidence.
 - [Durable host activation kernel checkpoint](llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md) — the parent checkpoint for the fenced six-stage state machine, exact CAS dispatch authority, crash recovery, authorized supersession, verification, limitations, and the next concrete host adapters.
 - [Host activation contract checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md) — the parent checkpoint for exact controller-to-host request authority, READY-safe success receipts, and proof limits.

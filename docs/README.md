@@ -134,8 +134,14 @@ role session; provider uncertainty remains bounded and redacted. One owned
 host-only AWS lifetime now supplies rotating credentials through a fixed IPv4
 IMDSv2 token flow, pins the commercial regional STS endpoint and one-attempt
 policy, cancels and drains active work, and exposes only the identity adapter.
-Concrete root-owned store, lock, and authority adapters, storage, artifact,
-service, and health adapters, and a clean-account provider lifecycle proof
+One production persistence boundary now supplies the V66 four-method store,
+deployment lock, bounded retention, fence-aware inspection, and draining close.
+It requires Linux with real and effective UID 0, fixes state beneath
+`/var/lib/wharfie/host-activation/v1/<deploymentInstanceId>`, and accepts no
+caller redirection of that root. The inspection `authority` field classifies
+only the durable local fence relationship; V69 does not yet implement the
+independent `authorizeRequest` controller-authority port. Storage, artifact,
+service, and health adapters and a clean-account provider lifecycle proof
 remain unfinished.
 
 The shipped source top-level CLI contains `app`, `ops`, and experimental
@@ -148,9 +154,11 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [owned host AWS lifetime
-checkpoint](../llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md).
-Its parent is the [live host runtime identity
+The latest recorded restart handoff is the [root host activation persistence
+checkpoint](../llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md).
+Its parent is the [owned host AWS lifetime
+checkpoint](../llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md),
+whose parent is the [live host runtime identity
 checkpoint](../llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md),
 whose parent is the [durable host activation kernel
 checkpoint](../llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md),
