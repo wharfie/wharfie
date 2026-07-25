@@ -16,6 +16,7 @@ import {
   AWS_SINGLE_NODE_HOST_ACTIVATION_STATE_ID_PREFIX,
   AWS_SINGLE_NODE_HOST_ACTIVATION_STEP_KINDS,
   createAwsSingleNodeHostActivationKernel,
+  getAwsSingleNodeHostActivationIntentId,
   validateAwsSingleNodeHostActivationFence,
   validateAwsSingleNodeHostActivationState,
 } from '../../src/core/runtime/deployment-aws-host-activation.js';
@@ -28,6 +29,7 @@ import {
   createAwsSingleNodeHostArtifactProjectionAdapter,
   getAwsSingleNodeHostArtifactProjectionLayout,
 } from '../../src/core/runtime/deployment-aws-host-artifact-projection.js';
+import { createAwsSingleNodeHostServiceConvergenceAdapter } from '../../src/core/runtime/deployment-aws-host-service-convergence.js';
 import { getAwsSingleNodeManagedArtifactStateDigest } from '../../src/core/runtime/deployment-aws-managed-artifact-evidence.js';
 import {
   DEPLOYMENT_REVISION_ID_DOMAIN,
@@ -795,6 +797,294 @@ describe('AWS single-node durable host activation', () => {
           ),
         ),
       ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await fsp.rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('composes exact service convergence through command response loss and launches nothing on terminal replay', async () => {
+    const bytes = Buffer.from(
+      'exact portable SEA bytes composed through service convergence',
+      'utf8',
+    );
+    const integration = makeArtifactProjectionIntegrationRequest(bytes);
+    const base = await fsp.mkdtemp(
+      path.join(tmpdir(), 'wharfie-host-activation-service-'),
+    );
+    try {
+      await fsp.chmod(base, 0o700);
+      const root = path.join(base, 'projection');
+      const client = {
+        async getObject() {
+          return makeArtifactProjectionGetResponse(
+            integration.fixture,
+            integration.request,
+            bytes,
+          );
+        },
+      };
+      const artifactProjection =
+        createAwsSingleNodeHostArtifactProjectionAdapter({
+          client,
+          root,
+          testOnlyRoot: true,
+          expectedUid: process.getuid?.() ?? 0,
+          runtimeGid: (process.getgid?.() ?? 0) || 1,
+        });
+      const layout = getAwsSingleNodeHostArtifactProjectionLayout(
+        integration.request,
+        root,
+      );
+      const unitName = `wharfie-${integration.request.appId}.service`;
+      const unitPath = path.join(
+        '/var/lib/wharfie-runtime',
+        '.config',
+        'systemd',
+        'user',
+        unitName,
+      );
+      /** @type {AnyRecord[]} */
+      const events = [];
+      /** @type {AnyRecord[]} */
+      const serviceCalls = [];
+      let active = false;
+
+      /** @returns {AnyRecord} */
+      function absentStatus() {
+        return {
+          schemaVersion: 2,
+          kind: 'wharfie.service.status',
+          appId: integration.request.appId,
+          unit: unitName,
+          installation: { state: 'absent' },
+          systemd: {
+            loadState: 'not-found',
+            unitFileState: '',
+            activeState: 'inactive',
+            subState: 'dead',
+            result: 'success',
+            mainPid: 0,
+            execMainStatus: 0,
+            fragmentPath: '',
+            dropInPaths: '',
+            needDaemonReload: false,
+          },
+          runtime: null,
+          wiring: {
+            state: 'absent',
+            unitFile: 'absent',
+            selection: 'absent',
+            effectiveUnit: 'absent',
+            cleanupPending: false,
+          },
+          health: 'absent',
+          activation: null,
+        };
+      }
+
+      /** @returns {AnyRecord} */
+      function healthyStatus() {
+        const selected = {
+          artifactId: integration.request.artifactId,
+          revisionId: integration.request.revisionId,
+        };
+        return {
+          schemaVersion: 2,
+          kind: 'wharfie.service.status',
+          appId: integration.request.appId,
+          unit: unitName,
+          installation: {
+            state: 'installed',
+            activeArtifactId: selected.artifactId,
+            activeRevisionId: selected.revisionId,
+            previousArtifactId: null,
+            previousRevisionId: null,
+          },
+          systemd: {
+            loadState: 'loaded',
+            unitFileState: 'enabled',
+            activeState: 'active',
+            subState: 'running',
+            result: 'success',
+            mainPid: 731,
+            execMainStatus: 0,
+            fragmentPath: unitPath,
+            dropInPaths: '',
+            needDaemonReload: false,
+          },
+          runtime: {
+            status: 'READY',
+            artifactId: selected.artifactId,
+            revisionId: selected.revisionId,
+            generation: 7,
+            ownerKind: 'resident',
+            ownerGeneration: 3,
+            session: 'active',
+            processId: 731,
+            currentOwner: true,
+          },
+          integrity: {
+            status: 'verified',
+            artifactId: selected.artifactId,
+            revisionId: selected.revisionId,
+          },
+          wiring: {
+            state: 'managed',
+            unitFile: 'managed',
+            selection: 'managed',
+            effectiveUnit: 'managed',
+            cleanupPending: false,
+          },
+          persistence: {
+            linger: true,
+            unitEnabled: true,
+            bootEnabled: true,
+          },
+          health: 'healthy',
+          activation: {
+            phase: 'ACTIVE',
+            action: null,
+            desired: selected,
+            selected,
+            rollback: null,
+            lastOutcome: 'target-active',
+          },
+        };
+      }
+
+      const serviceConvergence =
+        createAwsSingleNodeHostServiceConvergenceAdapter({
+          root,
+          testOnlyRoot: true,
+          command: {
+            /** @param {Readonly<AnyRecord>} input */
+            async inspectExactService(input) {
+              serviceCalls.push({
+                method: 'inspectExactService',
+                input: frozenClone(input),
+              });
+              events.push({
+                surface: 'service-port',
+                action: 'inspect',
+                active,
+              });
+              return frozenClone(active ? healthyStatus() : absentStatus());
+            },
+            /** @param {Readonly<AnyRecord>} input */
+            async convergeExactService(input) {
+              serviceCalls.push({
+                method: 'convergeExactService',
+                input: frozenClone(input),
+              });
+              events.push({
+                surface: 'service-port',
+                action: 'converge',
+              });
+              active = true;
+              throw new Error(
+                'simulated service command response loss after activation',
+              );
+            },
+          },
+        });
+      const memory = createMemoryStore({ events });
+      const harness = createStepHarness({
+        request: integration.request,
+        healthFixture: integration.fixture,
+        events,
+      });
+      const steps = Object.freeze({
+        ...harness.steps,
+        artifactProjection,
+        serviceConvergence,
+      });
+      const { kernel } = createKernel(memory.store, steps, integration.request);
+
+      const result = await kernel.converge(integration.request);
+      const state = await kernel.inspect({
+        requestId: integration.request.requestId,
+      });
+      const serviceStep = state.steps.find(
+        (/** @type {AnyRecord} */ step) => step.kind === 'service-convergence',
+      );
+      const dispatchCalls = serviceCalls.filter(
+        (call) => call.method === 'convergeExactService',
+      );
+      const statusCalls = serviceCalls.filter(
+        (call) => call.method === 'inspectExactService',
+      );
+
+      expect(result.status).toBe('succeeded');
+      expect(state.status).toBe('succeeded');
+      expect(dispatchCalls).toHaveLength(1);
+      expect(statusCalls.length).toBeGreaterThanOrEqual(2);
+      expect(dispatchCalls[0].input).toMatchObject({
+        requestId: integration.request.requestId,
+        intentId: getAwsSingleNodeHostActivationIntentId(
+          integration.request,
+          'service-convergence',
+        ),
+        attemptGeneration: 1,
+        deploymentInstanceId: integration.request.deploymentInstanceId,
+        appId: integration.request.appId,
+        artifactId: integration.request.artifactId,
+        revisionId: integration.request.revisionId,
+        targetId: integration.request.targetId,
+        artifactPath: layout.artifactPath,
+        contentLength: bytes.byteLength,
+        byteDigest: integration.request.artifact.byteDigest,
+      });
+      expect(Object.isFrozen(dispatchCalls[0].input)).toBe(true);
+      expect(serviceStep.evidence.value).toMatchObject({
+        kind: 'awsSingleNodeHostServiceConvergenceEvidence',
+        requestId: integration.request.requestId,
+        artifactPath: layout.artifactPath,
+        artifactId: integration.request.artifactId,
+        revisionId: integration.request.revisionId,
+        unitName,
+        outcome: 'target-active',
+        health: 'healthy',
+        bootPersistent: true,
+      });
+      expect(JSON.stringify(serviceStep.evidence.value)).not.toContain(
+        'simulated service command response loss',
+      );
+
+      const intendedIndex = events.findIndex(
+        (event) =>
+          event.surface === 'store' &&
+          event.action === 'state-cas-commit' &&
+          event.current?.steps?.[4]?.status === 'intended' &&
+          event.next?.steps?.[4]?.attemptGeneration === 1,
+      );
+      const dispatchIndex = events.findIndex(
+        (event) =>
+          event.surface === 'service-port' && event.action === 'converge',
+      );
+      const postEffectStatusIndex = events.findIndex(
+        (event, index) =>
+          index > dispatchIndex &&
+          event.surface === 'service-port' &&
+          event.action === 'inspect' &&
+          event.active === true,
+      );
+      const settlementIndex = events.findIndex(
+        (event, index) =>
+          index > postEffectStatusIndex &&
+          event.surface === 'store' &&
+          event.action === 'state-cas-commit' &&
+          event.current?.steps?.[4]?.status === 'intended' &&
+          event.next?.steps?.[4]?.status === 'settled',
+      );
+      expect(intendedIndex).toBeGreaterThanOrEqual(0);
+      expect(dispatchIndex).toBeGreaterThan(intendedIndex);
+      expect(postEffectStatusIndex).toBeGreaterThan(dispatchIndex);
+      expect(settlementIndex).toBeGreaterThan(postEffectStatusIndex);
+
+      const callsBeforeReplay = serviceCalls.length;
+      const replay = await kernel.converge(integration.request);
+      expect(replay).toEqual(result);
+      expect(serviceCalls).toHaveLength(callsBeforeReplay);
     } finally {
       await fsp.rm(base, { recursive: true, force: true });
     }
