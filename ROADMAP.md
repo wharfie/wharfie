@@ -23,7 +23,7 @@ bindings plus immutable IAM RoleId and EC2 instance ID at
 `health/v3/<RoleId>:<InstanceId>`. Initial publication is a conditional
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
 Inspection V6/`win6` correlates both identities before readiness. The
-privileged production publisher remains unwired. The V65 host boundary
+privileged production health publisher remains unwired. The V65 host boundary
 distills one all-infrastructure-settled, still-active deployment operation into
 a bounded content-addressed request with exact node, role, managed-object
 version, desired release, and both retained-volume attachment identities. It
@@ -45,8 +45,13 @@ plus complete close draining. V69 adds the production Linux/root persistence
 boundary: a fixed private filesystem layout, exact V66 state/fence CAS, atomic
 fsynced publication, deployment and transaction locks released on process
 death, bounded recovery and deterministic retention, local fence-aware
-inspection, and draining shutdown. Authenticated current-head controller
-authority and guest storage, artifact, service, and health adapters remain.
+inspection, and draining shutdown. V70 closes authenticated current-head
+controller authority: fresh managed-artifact evidence derives one complete V65
+request, an atomic DynamoDB head condition publishes it at one stable key, and
+the host reads that request first and the strongly consistent head last for
+selector resolution and every V66 authorization purpose. One exact-key runtime
+IAM grant and a pinned owned DynamoDB client complete that read path. Selector
+delivery and guest storage, artifact, service, and health adapters remain.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -101,10 +106,10 @@ wiring now reaches exact experimental source and packaged `plan`, `apply`,
 `inspect`, `reconcile`, and `destroy` commands while preserving
 selected/pre-staged source authority and running-SEA packaged authority. The
 pure privileged-host request/receipt boundary, durable activation kernel, exact
-live STS identity adapter, fixed owned host AWS lifetime, and root-owned local
-persistence boundary are defined; authenticated controller authority and
-effect adapters, privileged packaging and delivery, clean-account proof, and a
-deployed-service readiness claim still follow ·
+live STS identity adapter, fixed owned host AWS lifetime, root-owned local
+persistence boundary, and authenticated current-head controller authority are
+defined; effect adapters, privileged packaging and selector delivery,
+clean-account proof, and a deployed-service readiness claim still follow ·
 **Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -1272,37 +1277,38 @@ physical host, current instance-profile association, or controller head.
 That adapter now runs behind one owned host-only AWS lifetime. Credentials come
 only from a fixed IPv4 IMDSv2 token/profile/document sequence with absolute
 per-request deadlines, coalesced rotation, no stale extension, and owned
-cancellation. STS is fixed to the exact commercial regional HTTPS endpoint and
-one SDK attempt; ambient credentials, metadata endpoints, service endpoints,
-FIPS, dual-stack, global endpoint, region, and retry settings cannot replace
-those choices. The family exposes only the V67 adapter and one draining close.
+cancellation. STS and DynamoDB are fixed to their exact commercial regional
+HTTPS endpoints and one SDK attempt; ambient credentials, metadata endpoints,
+service endpoints, FIPS, dual-stack, global endpoint, region, and retry
+settings cannot replace those choices. The family exposes only the identity
+and activation-authority adapters and one draining close.
 
 The V69 root-owned store, deployment lock, bounded retention, and fence-aware
-local inspection are complete.
+local inspection are complete. V70 now mints the complete V65 request from
+fresh managed-current evidence, atomically conditions its stable publication
+on the exact current head, strongly reads authority first and head last, and
+implements all four V66 authorization purposes through one pinned host
+DynamoDB client and exact-key runtime IAM grant. The fixed bootstrap still
+provides no deployment/request selector path, and the control-table lifecycle
+does not yet rule out an independently attached DynamoDB resource policy.
 
-1. Add authenticated current-head authority across controller request
-   mint/persist, a stable DynamoDB
-   `host-activation-authority/v1/<deploymentInstanceId>` record containing the
-   complete V65 request, a strongly consistent read of
-   `head/v1/<deploymentInstanceId>`, the minimum runtime IAM `GetItem` grant,
-   and one pinned owned host DynamoDB client. Implement the exact V66
-   `authorizeRequest({request,purpose,step,receipt})` port for `claim`,
-   `dispatch`, `settle`, and `replay`. SSM carries identifiers and wakeup only;
-   it is not authority. Do not substitute an S3 pointer or ad hoc signatures.
-2. Add concrete storage, versioned-artifact, fixed-user service-convergence,
+1. Add concrete storage, exact versioned-artifact, fixed-user
+   service-convergence,
    and S3 health-publication adapters. Prove format/mount and response-loss
    recovery on disposable Linux hosts without ever executing application bytes
    as root.
-3. Only after that lifecycle is proven, expose the root framework host command
+2. Only after that lifecycle is proven, expose the root framework host command
    and SEA, add SSM as wakeup/delivery rather than durable authority, and run a
    complete clean-account proof through the user's ordinary credential chain.
-4. Begin provider-backed coordinator recovery only after the single-node
+3. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [root host activation persistence
-checkpoint](llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md).
-Its parent is the [owned host AWS lifetime
+The latest recorded restart point is the [authenticated current-head authority
+checkpoint](llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md).
+Its parent is the [root host activation persistence
+checkpoint](llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md),
+whose parent is the [owned host AWS lifetime
 checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md), whose
 parent is the [live host runtime identity
 checkpoint](llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md),
