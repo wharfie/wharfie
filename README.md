@@ -567,9 +567,12 @@ the fixed runtime-identity, application-storage, control-storage,
 artifact-projection, service-convergence, and health-publication stages. It
 persists intent before effects, settles only from exact observations, fences
 each deployment, authorizes claim/dispatch/settle/replay independently, and
-recovers conservatively from ambiguous responses. Concrete root-owned
-store/lock/authority, live STS, storage, artifact, service, and health adapters,
-the privileged host command and SEA, and a clean-account lifecycle proof remain
+recovers conservatively from ambiguous responses. The first live host adapter
+now proves the exact STS EC2 instance-profile identity pinned by the activation
+request, with bounded timeout/retry and a fail-closed conflict/unknown taxonomy.
+Concrete IMDS-only shared credential/client ownership, root-owned
+store/lock/authority, storage, artifact, service, and health adapters, the
+privileged host command and SEA, and a clean-account lifecycle proof remain
 unfinished. The protocol does not claim physical exactly-once execution;
 mutations must be exact-convergent and safe to replay. External resource
 verification is represented by the generic V6 contract but remains unreachable
@@ -584,7 +587,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Durable host activation kernel checkpoint](llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md) — the latest recorded checkpoint for the fenced six-stage state machine, exact CAS dispatch authority, crash recovery, authorized supersession, verification, limitations, and the next concrete host adapters.
+- [Live host runtime identity checkpoint](llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md) — the latest recorded checkpoint for exact live STS EC2 instance-profile proof, bounded retry and timeout, conflict-versus-unknown classification, verification, limitations, and the next concrete host adapters.
+- [Durable host activation kernel checkpoint](llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md) — the parent checkpoint for the fenced six-stage state machine, exact CAS dispatch authority, crash recovery, authorized supersession, verification, limitations, and the next concrete host adapters.
 - [Host activation contract checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md) — the parent checkpoint for exact controller-to-host request authority, READY-safe success receipts, and proof limits.
 - [Target service convergence checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md) — the parent checkpoint for retry-safe desired-SEA activation, exact liveness repair, honest settlement, and the privileged host-agent boundary.
 - [Deployment command surface checkpoint](llm/checkpoints/2026-07-24-v63-deployment-command-surface.md) — the parent handoff for mounted source and packaged lifecycle commands, profile authoring, recovery fencing, bounded operator input, and exact artifact-authority boundaries.

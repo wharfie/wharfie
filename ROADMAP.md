@@ -22,21 +22,25 @@ V3/`whr3` binds the exact runtime-role and node
 bindings plus immutable IAM RoleId and EC2 instance ID at
 `health/v3/<RoleId>:<InstanceId>`. Initial publication is a conditional
 PUT-first protocol with exact readback and no `ListBucket` absence dependency;
-Inspection V6/`win6` correlates both identities before readiness. Live STS
-caller proof and the privileged production publisher remain unwired. The V65
-host boundary distills one all-infrastructure-settled, still-active deployment
-operation into a bounded content-addressed request with exact node, role,
-managed-object version, desired release, and both retained-volume attachment
-identities. It refuses READY, blocked, destroy, and incomplete frontiers,
-borrows no unrelated graph action, and binds one success-only receipt to the
-existing durable service-health receipt across the later READY successor. V66
-adds the pure trusted-host activation kernel: one deployment fence, one bounded
-request state, six fixed evidence-backed stages, persisted intent before
-mutation, definite CAS-winner dispatch authority, mandatory independent
+Inspection V6/`win6` correlates both identities before readiness. The
+privileged production publisher remains unwired. The V65 host boundary
+distills one all-infrastructure-settled, still-active deployment operation into
+a bounded content-addressed request with exact node, role, managed-object
+version, desired release, and both retained-volume attachment identities. It
+refuses READY, blocked, destroy, and incomplete frontiers, borrows no unrelated
+graph action, and binds one success-only receipt to the existing durable
+service-health receipt across the later READY successor. V66 adds the pure
+trusted-host activation kernel: one deployment fence, one bounded request
+state, six fixed evidence-backed stages, persisted intent before mutation,
+definite CAS-winner dispatch authority, mandatory independent
 claim/dispatch/settle/replay authorization, conservative ambiguity recovery,
-and authorized higher-generation supersession. Concrete root-owned
-store/lock/authority, live STS, guest storage, artifact, service, and health
-adapters remain outside that pure protocol.
+and authorized higher-generation supersession. V67 implements its first live
+host observation: exact STS account, `RoleId:InstanceId`, and assumed-role ARN
+proof behind one abort-aware narrow client. Well-formed foreign identity is a
+conflict; malformed, failed, or timed-out reads remain bounded redacted
+uncertainty. Concrete IMDS-only credential/client wiring, root-owned
+store/lock/authority, guest storage, artifact, service, and health adapters
+remain.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -90,10 +94,10 @@ replays only exact stable-token creates after recovery. The AWS composition
 wiring now reaches exact experimental source and packaged `plan`, `apply`,
 `inspect`, `reconcile`, and `destroy` commands while preserving
 selected/pre-staged source authority and running-SEA packaged authority. The
-pure privileged-host request/receipt boundary and durable activation kernel are
-defined; concrete host adapters, privileged packaging and delivery,
-clean-account proof, and a deployed-service readiness claim still follow ·
-**Last updated:** 2026-07-25
+pure privileged-host request/receipt boundary, durable activation kernel, and
+exact live STS identity adapter are defined; concrete host composition,
+privileged packaging and delivery, clean-account proof, and a deployed-service
+readiness claim still follow · **Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -1249,23 +1253,37 @@ freshness, and an authorized higher head generation may supersede old work.
 It deliberately promises at-least-once-safe convergence rather than physical
 exactly-once execution.
 
-1. Add a root-owned authenticated durable state store, a deployment-scoped
-   crash-releasing lock, and a live authority adapter. Make operator inspection
-   fence-aware and define bounded retention for superseded historical states.
-2. Add exact live STS identity proof, then concrete storage, versioned-artifact,
-   fixed-user service-convergence, and S3 health-publication adapters. Prove
-   format/mount and response-loss recovery on disposable Linux hosts without
-   ever executing application bytes as root.
-3. Only after that lifecycle is proven, expose the root framework host command
+The first live adapter now settles runtime identity only after a fresh STS
+response exactly matches the request's account, immutable IAM RoleId, EC2
+instance ID, runtime role name, and partition. It retries short-lived credential
+turnover, bounds each read with an abort signal and local timeout, never caches
+identity, and distinguishes conclusive foreign credentials from malformed or
+unavailable provider evidence. This proves one AWS credential session, not the
+physical host, current instance-profile association, or controller head.
+
+1. Compose one IMDS-only host credential/client lifetime with the narrow
+   abort-aware STS port. Do not reuse the operator-facing default credential
+   chain on the privileged node.
+2. Add a root-owned authenticated durable state store, a deployment-scoped
+   crash-releasing lock, and a trusted current-head authority transport. Make
+   operator inspection fence-aware and define bounded retention for superseded
+   historical states.
+3. Add concrete storage, versioned-artifact, fixed-user service-convergence,
+   and S3 health-publication adapters. Prove format/mount and response-loss
+   recovery on disposable Linux hosts without ever executing application bytes
+   as root.
+4. Only after that lifecycle is proven, expose the root framework host command
    and SEA, add SSM as wakeup/delivery rather than durable authority, and run a
    complete clean-account proof through the user's ordinary credential chain.
-4. Begin provider-backed coordinator recovery only after the single-node
+5. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [durable host activation kernel
-checkpoint](llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md).
-Its parent is the [host activation contract
+The latest recorded restart point is the [live host runtime identity
+checkpoint](llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md). Its
+parent is the [durable host activation kernel
+checkpoint](llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md),
+whose parent is the [host activation contract
 checkpoint](llm/checkpoints/2026-07-25-v65-host-activation-contract.md), whose
 parent is the [target service convergence
 checkpoint](llm/checkpoints/2026-07-25-v64-target-service-convergence.md),

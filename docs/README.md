@@ -128,10 +128,12 @@ head fails as incomplete rather than being reported as successful.
 
 The command surface is not a clean-account or deployed-service-readiness
 claim. The strict content-addressed privileged-host request/receipt contract
-and its durable activation kernel are now defined. The kernel is a pure
-injected, evidence-backed protocol; concrete root-owned store, lock, and
-authority adapters, live STS identity, storage, artifact, service, and health
-adapters, and a clean-account provider lifecycle proof remain unfinished.
+and its pure injected durable activation kernel are now defined. Its first
+concrete adapter now proves the live STS runtime identity from the exact EC2
+role session; provider uncertainty remains bounded and redacted. An IMDS-only
+owned client family, concrete root-owned store, lock, and authority adapters,
+storage, artifact, service, and health adapters, and a clean-account provider
+lifecycle proof remain unfinished.
 
 The shipped source top-level CLI contains `app`, `ops`, and experimental
 `deployment`. Continue with the
@@ -143,14 +145,14 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [durable host activation kernel
-checkpoint](../llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md).
-Its parent is the [host activation contract
+The latest recorded restart handoff is the [live host runtime identity
+checkpoint](../llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md).
+Its parent is the [durable host activation kernel
+checkpoint](../llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md),
+whose parent is the [host activation contract
 checkpoint](../llm/checkpoints/2026-07-25-v65-host-activation-contract.md),
 whose parent is the [target service convergence
-checkpoint](../llm/checkpoints/2026-07-25-v64-target-service-convergence.md),
-whose parent is the [deployment command surface
-checkpoint](../llm/checkpoints/2026-07-24-v63-deployment-command-surface.md).
+checkpoint](../llm/checkpoints/2026-07-25-v64-target-service-convergence.md).
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only
 control inspection and require-active, existing-only reconciliation that can
