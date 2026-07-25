@@ -670,7 +670,7 @@ describe('AWS single-node host artifact projection', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('repairs safe non-writable namespace mode drift but refuses arbitrary custom roots', async () => {
+  it('repairs safe mode drift and confines owner/filesystem seams to isolated test roots', async () => {
     const bytes = Buffer.from('repairable namespace bytes', 'utf8');
     const { fixture, request } = makeRequestForBytes(bytes);
     const { body } = makeBody([bytes]);
@@ -694,6 +694,19 @@ describe('AWS single-node host artifact projection', () => {
         runtimeGid: (process.getgid?.() ?? 0) || 1,
       }),
     ).toThrow(/isolated test-only path/u);
+    for (const productionSeam of [
+      { expectedUid: 0 },
+      { fsOps: fsp },
+      { testOnlyRoot: false },
+    ]) {
+      expect(() =>
+        createAwsSingleNodeHostArtifactProjectionAdapter({
+          client: { getObject: async () => response },
+          runtimeGid: (process.getgid?.() ?? 0) || 1,
+          ...productionSeam,
+        }),
+      ).toThrow(/isolated custom test root/u);
+    }
   });
 
   it('classifies canonical-record whitespace tampering as a local conflict', async () => {

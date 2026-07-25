@@ -1441,13 +1441,14 @@ function validateFactoryOptions(value) {
         'awsSingleNodeHostArtifactProjection custom root must be an explicit isolated test-only path.',
       );
     }
-  } else if (
-    Object.hasOwn(options, 'testOnlyRoot') &&
-    options.testOnlyRoot !== false
-  ) {
-    throw new TypeError(
-      'awsSingleNodeHostArtifactProjection testOnlyRoot is supported only with an isolated custom root.',
-    );
+  } else {
+    for (const key of ['expectedUid', 'fsOps', 'testOnlyRoot']) {
+      if (Object.hasOwn(options, key)) {
+        throw new TypeError(
+          `awsSingleNodeHostArtifactProjection options.${key} is supported only with an isolated custom test root.`,
+        );
+      }
+    }
   }
   const expectedUid = nonnegativeSafeInteger(
     options.expectedUid ?? 0,
