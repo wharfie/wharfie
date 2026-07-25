@@ -4,11 +4,27 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { sortCanonicalJsonValue } from './canonical-order.js';
-import { validateAwsSingleNodeHostActivationRequest } from './deployment-aws-host-agent-contract.js';
+import { assertDomainSeparatedSha256Id } from './content-id.js';
+import {
+  AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_ID_PREFIX,
+  validateAwsSingleNodeHostActivationRequest,
+} from './deployment-aws-host-agent-contract.js';
 import { getAwsSingleNodeHostActivationIntentId } from './deployment-aws-host-activation.js';
+import { getAwsSingleNodeHostRetainedStorageMountUnitName } from './deployment-aws-host-retained-storage-projection.js';
 import { validateAwsSingleNodeHostRuntimeIdentityEvidence } from './deployment-aws-host-runtime-identity.js';
+import { AWS_SINGLE_NODE_VOLUME_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX } from './deployment-aws-volume-attachment-evidence.js';
+import { assertAwsEc2InstanceId } from './deployment-aws-runtime-identity-contract.js';
+import {
+  assertDeploymentInstanceId,
+  PROVIDER_SCOPE_ID_PREFIX,
+} from './deployment-provider-scope.js';
+import {
+  assertDeploymentIncarnationId,
+  DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
+} from './deployment-resource-binding.js';
 import { cloneBoundedJsonObject } from './json-value.js';
 import { createLocalAppStorageLayout } from './local-app-storage.js';
+import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DATA_ROOT =
@@ -16,6 +32,8 @@ export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DATA_ROOT =
 export const AWS_SINGLE_NODE_HOST_RETAINED_FILESYSTEM_UUID_DOMAIN =
   'wharfie:aws-single-node-host-retained-filesystem:v1';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DESIRED_SCHEMA_VERSION = 1;
+export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DESIRED_MAX_BYTES =
+  16 * 1024;
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_EVIDENCE_SCHEMA_VERSION = 1;
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_EVIDENCE_MAX_BYTES =
   24 * 1024;
@@ -35,6 +53,10 @@ export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP =
   'wharfie-runtime';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DIRECTORY_MODE = 0o700;
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE = 'ext4';
+export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_PROFILE_ID =
+  'wharfie-ext4-v1';
+export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID =
+  'wharfie-systemd-retained-storage-v1';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL =
   'Amazon Elastic Block Store';
 
@@ -61,6 +83,8 @@ const CONTROL_PRIOR_EVIDENCE_KEYS = new Set([
   RUNTIME_IDENTITY_STEP,
   APPLICATION_STORAGE_STEP,
 ]);
+const LINUX_RUNTIME_ID_MAX = 4_294_967_293;
+const LINUX_NOBODY_ID = 65_534;
 const DESIRED_KEYS = new Set([
   'schemaVersion',
   'kind',
@@ -83,7 +107,7 @@ const DESIRED_KEYS = new Set([
   'bootWiring',
 ]);
 const EVIDENCE_KEYS = new Set([...DESIRED_KEYS, 'device']);
-const FILESYSTEM_KEYS = new Set(['type', 'uuid']);
+const FILESYSTEM_KEYS = new Set(['type', 'uuid', 'profileId']);
 const DESIRED_MOUNT_KEYS = new Set([
   'target',
   'readOnly',
@@ -100,9 +124,10 @@ const EVIDENCE_MOUNT_KEYS = new Set([
 const DIRECTORY_KEYS = new Set(['user', 'group', 'uid', 'gid', 'mode']);
 const BOOT_WIRING_KEYS = new Set([
   'id',
+  'projectionId',
   'persistent',
   'enabled',
-  'sourceByFilesystemUuid',
+  'sourceByVolumeIdentity',
   'orderedBeforeRuntimeUserManager',
 ]);
 const DEVICE_KEYS = new Set([
@@ -121,6 +146,9 @@ const OBSERVATION_STATUSES = new Set([
   'settled',
 ]);
 const NVME_DEVICE_PATTERN = /^\/dev\/nvme[0-9]+n[0-9]+$/u;
+const FILESYSTEM_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const VOLUME_ID_PATTERN = /^vol-[0-9a-f]{8,32}$/u;
 
 /** Exact settled media or wiring contradicts the request-bound contract. */
 export class AwsSingleNodeHostRetainedStorageConflictError extends Error {
@@ -230,6 +258,17 @@ function positiveSafeInteger(value, valuePath) {
   return Number(value);
 }
 
+/** @param {unknown} value @param {string} valuePath @returns {number} */
+function linuxRuntimeId(value, valuePath) {
+  const id = positiveSafeInteger(value, valuePath);
+  if (id > LINUX_RUNTIME_ID_MAX || id === LINUX_NOBODY_ID) {
+    throw new TypeError(
+      `${valuePath} must be a usable Linux account ID from 1 through ${LINUX_RUNTIME_ID_MAX}, excluding nobody.`,
+    );
+  }
+  return id;
+}
+
 /** @param {unknown} value @param {string} valuePath @returns {string} */
 function canonicalNvmeDevicePath(value, valuePath) {
   if (
@@ -258,6 +297,53 @@ function volumeFor(request, capabilityKind) {
   return volume;
 }
 
+/** @param {string} kind @returns {Readonly<Record<string, string>>} */
+function roleForDesiredKind(kind) {
+  if (kind === APPLICATION_ROLE.desiredKind) return APPLICATION_ROLE;
+  if (kind === CONTROL_ROLE.desiredKind) return CONTROL_ROLE;
+  throw new TypeError(
+    'awsSingleNodeHostRetainedStorageDesired.kind is not supported.',
+  );
+}
+
+/** @param {string} appId @returns {Readonly<{dataRoot: string, applicationMountTarget: string, controlMountTarget: string}>} */
+function retainedStorageLayoutForApp(appId) {
+  assertLogicalId(appId, 'awsSingleNodeHostRetainedStorage appId');
+  const local = createLocalAppStorageLayout({
+    appId,
+    dataRoot: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DATA_ROOT,
+  });
+  return Object.freeze({
+    dataRoot: local.dataRoot,
+    applicationMountTarget: local.applicationStatePath,
+    controlMountTarget: local.controlPath,
+  });
+}
+
+/** @param {{providerScopeId: string, deploymentInstanceId: string, incarnationId: string, capabilityKind: string, volumeProviderResourceId: string}} authority @returns {string} */
+function deriveRetainedFilesystemUuid(authority) {
+  const stableAuthority = sortCanonicalJsonValue({
+    providerScopeId: authority.providerScopeId,
+    deploymentInstanceId: authority.deploymentInstanceId,
+    incarnationId: authority.incarnationId,
+    capabilityKind: authority.capabilityKind,
+    volumeProviderResourceId: authority.volumeProviderResourceId,
+  });
+  const bytes = createHash('sha256')
+    .update(AWS_SINGLE_NODE_HOST_RETAINED_FILESYSTEM_UUID_DOMAIN, 'utf8')
+    .update('\0', 'utf8')
+    .update(JSON.stringify(stableAuthority), 'utf8')
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+    12,
+    16,
+  )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 /**
  * Derive both retained mount targets through the public local-app layout.
  * Neither the activation request nor a command can choose these paths.
@@ -266,15 +352,7 @@ function volumeFor(request, capabilityKind) {
  */
 export function getAwsSingleNodeHostRetainedStorageLayout(requestValue) {
   const request = validateAwsSingleNodeHostActivationRequest(requestValue);
-  const local = createLocalAppStorageLayout({
-    appId: request.appId,
-    dataRoot: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DATA_ROOT,
-  });
-  return Object.freeze({
-    dataRoot: local.dataRoot,
-    applicationMountTarget: local.applicationStatePath,
-    controlMountTarget: local.controlPath,
-  });
+  return retainedStorageLayoutForApp(request.appId);
 }
 
 /**
@@ -299,26 +377,13 @@ export function getAwsSingleNodeHostRetainedFilesystemUuid(
   }
   const capabilityKind = String(capabilityKindValue);
   const volume = volumeFor(request, capabilityKind);
-  const stableAuthority = sortCanonicalJsonValue({
+  return deriveRetainedFilesystemUuid({
     providerScopeId: request.providerScope.providerScopeId,
     deploymentInstanceId: request.deploymentInstanceId,
     incarnationId: request.incarnationId,
     capabilityKind,
     volumeProviderResourceId: volume.volumeProviderResourceId,
   });
-  const bytes = createHash('sha256')
-    .update(AWS_SINGLE_NODE_HOST_RETAINED_FILESYSTEM_UUID_DOMAIN, 'utf8')
-    .update('\0', 'utf8')
-    .update(JSON.stringify(stableAuthority), 'utf8')
-    .digest()
-    .subarray(0, 16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x80;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
-    12,
-    16,
-  )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 /** @param {Readonly<Record<string, any>>} request @returns {Readonly<Record<string, any>>} */
@@ -460,6 +525,7 @@ function createDesired(request, runtimeUid, runtimeGid, role) {
     filesystem: {
       type: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE,
       uuid: filesystemUuid,
+      profileId: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_PROFILE_ID,
     },
     mount: {
       target:
@@ -481,17 +547,14 @@ function createDesired(request, runtimeUid, runtimeGid, role) {
     },
     bootWiring: {
       id: `wharfie-retained-${role.capabilityKind}-${filesystemUuid}`,
+      projectionId: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID,
       persistent: true,
       enabled: true,
-      sourceByFilesystemUuid: true,
+      sourceByVolumeIdentity: true,
       orderedBeforeRuntimeUserManager: true,
     },
   });
-  assertManifestIsSecretFree(
-    desired,
-    `awsSingleNodeHost${role.stepKind} desired`,
-  );
-  return deepFreeze(desired);
+  return validateAwsSingleNodeHostRetainedStorageDesired(desired);
 }
 
 /** @param {unknown} value @param {string} valuePath @returns {Readonly<Record<string, any>>} */
@@ -510,10 +573,217 @@ function validateDirectory(value, valuePath) {
   return Object.freeze({
     user: directory.user,
     group: directory.group,
-    uid: positiveSafeInteger(directory.uid, `${valuePath}.uid`),
-    gid: positiveSafeInteger(directory.gid, `${valuePath}.gid`),
+    uid: linuxRuntimeId(directory.uid, `${valuePath}.uid`),
+    gid: linuxRuntimeId(directory.gid, `${valuePath}.gid`),
     mode: directory.mode,
   });
+}
+
+/**
+ * Validate one complete role-specific desired retained-storage document
+ * independently of a V66 context. The filesystem UUID and mount target are
+ * recomputed from stable authority; callers cannot choose either path.
+ * @param {unknown} value - Candidate desired document.
+ * @returns {Readonly<Record<string, any>>} - Canonical frozen desired state.
+ */
+export function validateAwsSingleNodeHostRetainedStorageDesired(value) {
+  const valuePath = 'awsSingleNodeHostRetainedStorageDesired';
+  const desired = cloneBoundedJsonObject(
+    value,
+    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DESIRED_MAX_BYTES,
+    valuePath,
+  );
+  assertExactKeys(desired, DESIRED_KEYS, valuePath);
+  if (
+    desired.schemaVersion !==
+    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DESIRED_SCHEMA_VERSION
+  ) {
+    throw new TypeError(`${valuePath}.schemaVersion must be the integer 1.`);
+  }
+  const role = roleForDesiredKind(desired.kind);
+  if (desired.capabilityKind !== role.capabilityKind) {
+    throw new TypeError(
+      `${valuePath}.capabilityKind does not match its role-specific kind.`,
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    desired.requestId,
+    AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_ID_PREFIX,
+    `${valuePath}.requestId`,
+  );
+  assertDomainSeparatedSha256Id(
+    desired.providerScopeId,
+    PROVIDER_SCOPE_ID_PREFIX,
+    `${valuePath}.providerScopeId`,
+  );
+  assertDeploymentInstanceId(
+    desired.deploymentInstanceId,
+    `${valuePath}.deploymentInstanceId`,
+  );
+  assertDeploymentIncarnationId(
+    desired.incarnationId,
+    `${valuePath}.incarnationId`,
+  );
+  assertAwsEc2InstanceId(
+    desired.nodeProviderResourceId,
+    `${valuePath}.nodeProviderResourceId`,
+  );
+  assertLogicalId(desired.appId, `${valuePath}.appId`);
+  assertDomainSeparatedSha256Id(
+    desired.volumeBindingId,
+    DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
+    `${valuePath}.volumeBindingId`,
+  );
+  if (
+    typeof desired.volumeProviderResourceId !== 'string' ||
+    !VOLUME_ID_PATTERN.test(desired.volumeProviderResourceId)
+  ) {
+    throw new TypeError(
+      `${valuePath}.volumeProviderResourceId must be a canonical EBS volume ID.`,
+    );
+  }
+  const sizeBytes = positiveSafeInteger(
+    desired.sizeBytes,
+    `${valuePath}.sizeBytes`,
+  );
+  if (desired.createdWithoutSnapshot !== true) {
+    throw new TypeError(
+      `${valuePath}.createdWithoutSnapshot must be literal true.`,
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    desired.attachmentBindingId,
+    DEPLOYMENT_RESOURCE_BINDING_ID_PREFIX,
+    `${valuePath}.attachmentBindingId`,
+  );
+  if (desired.attachmentBindingId === desired.volumeBindingId) {
+    throw new TypeError(
+      `${valuePath} volume and attachment binding IDs must be distinct.`,
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    desired.attachmentProviderResourceId,
+    AWS_SINGLE_NODE_VOLUME_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX,
+    `${valuePath}.attachmentProviderResourceId`,
+  );
+
+  const filesystem = exactPlainObject(
+    desired.filesystem,
+    `${valuePath}.filesystem`,
+  );
+  assertExactKeys(filesystem, FILESYSTEM_KEYS, `${valuePath}.filesystem`);
+  if (
+    filesystem.type !== AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE ||
+    filesystem.profileId !==
+      AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_PROFILE_ID ||
+    typeof filesystem.uuid !== 'string' ||
+    !FILESYSTEM_UUID_PATTERN.test(filesystem.uuid)
+  ) {
+    throw new TypeError(
+      `${valuePath}.filesystem must use the fixed ext4 UUIDv8 contract.`,
+    );
+  }
+  const expectedFilesystemUuid = deriveRetainedFilesystemUuid({
+    providerScopeId: desired.providerScopeId,
+    deploymentInstanceId: desired.deploymentInstanceId,
+    incarnationId: desired.incarnationId,
+    capabilityKind: role.capabilityKind,
+    volumeProviderResourceId: desired.volumeProviderResourceId,
+  });
+  if (filesystem.uuid !== expectedFilesystemUuid) {
+    throw new Error(
+      `${valuePath}.filesystem.uuid does not match its stable volume authority.`,
+    );
+  }
+
+  const mount = exactPlainObject(desired.mount, `${valuePath}.mount`);
+  assertExactKeys(mount, DESIRED_MOUNT_KEYS, `${valuePath}.mount`);
+  const layout = retainedStorageLayoutForApp(desired.appId);
+  const expectedMountTarget =
+    role === APPLICATION_ROLE
+      ? layout.applicationMountTarget
+      : layout.controlMountTarget;
+  getAwsSingleNodeHostRetainedStorageMountUnitName(expectedMountTarget);
+  if (
+    mount.target !== expectedMountTarget ||
+    mount.readOnly !== false ||
+    mount.nodev !== true ||
+    mount.noexec !== true ||
+    mount.nosuid !== true ||
+    mount.privatePropagation !== true
+  ) {
+    throw new TypeError(
+      `${valuePath}.mount does not match the fixed secure role-specific mount contract.`,
+    );
+  }
+  const directory = validateDirectory(
+    desired.directory,
+    `${valuePath}.directory`,
+  );
+  const bootWiring = exactPlainObject(
+    desired.bootWiring,
+    `${valuePath}.bootWiring`,
+  );
+  assertExactKeys(bootWiring, BOOT_WIRING_KEYS, `${valuePath}.bootWiring`);
+  if (
+    bootWiring.id !==
+      `wharfie-retained-${role.capabilityKind}-${expectedFilesystemUuid}` ||
+    bootWiring.projectionId !==
+      AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID ||
+    bootWiring.persistent !== true ||
+    bootWiring.enabled !== true ||
+    bootWiring.sourceByVolumeIdentity !== true ||
+    bootWiring.orderedBeforeRuntimeUserManager !== true
+  ) {
+    throw new TypeError(
+      `${valuePath}.bootWiring does not match the fixed persistent mount contract.`,
+    );
+  }
+
+  const canonical = deepFreeze(
+    sortCanonicalJsonValue({
+      schemaVersion:
+        AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DESIRED_SCHEMA_VERSION,
+      kind: role.desiredKind,
+      requestId: desired.requestId,
+      providerScopeId: desired.providerScopeId,
+      deploymentInstanceId: desired.deploymentInstanceId,
+      incarnationId: desired.incarnationId,
+      nodeProviderResourceId: desired.nodeProviderResourceId,
+      appId: desired.appId,
+      capabilityKind: role.capabilityKind,
+      volumeBindingId: desired.volumeBindingId,
+      volumeProviderResourceId: desired.volumeProviderResourceId,
+      sizeBytes,
+      createdWithoutSnapshot: true,
+      attachmentBindingId: desired.attachmentBindingId,
+      attachmentProviderResourceId: desired.attachmentProviderResourceId,
+      filesystem: {
+        type: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE,
+        uuid: expectedFilesystemUuid,
+        profileId: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_PROFILE_ID,
+      },
+      mount: {
+        target: expectedMountTarget,
+        readOnly: false,
+        nodev: true,
+        noexec: true,
+        nosuid: true,
+        privatePropagation: true,
+      },
+      directory,
+      bootWiring: {
+        id: bootWiring.id,
+        projectionId: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_BOOT_PROJECTION_ID,
+        persistent: true,
+        enabled: true,
+        sourceByVolumeIdentity: true,
+        orderedBeforeRuntimeUserManager: true,
+      },
+    }),
+  );
+  assertManifestIsSecretFree(canonical, valuePath);
+  return canonical;
 }
 
 /** @param {unknown} value @param {string} valuePath @returns {Readonly<Record<string, any>>} */
@@ -732,11 +1002,11 @@ function createAdapter(optionsValue, role) {
       : 'awsSingleNodeHostControlStorage options';
   const options = exactPlainObject(optionsValue, valuePath);
   assertExactKeys(options, FACTORY_KEYS, valuePath);
-  const runtimeUid = positiveSafeInteger(
+  const runtimeUid = linuxRuntimeId(
     ownDataValue(options, 'runtimeUid', valuePath),
     `${valuePath}.runtimeUid`,
   );
-  const runtimeGid = positiveSafeInteger(
+  const runtimeGid = linuxRuntimeId(
     ownDataValue(options, 'runtimeGid', valuePath),
     `${valuePath}.runtimeGid`,
   );

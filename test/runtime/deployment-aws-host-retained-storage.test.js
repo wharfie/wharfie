@@ -14,6 +14,7 @@ import {
   getAwsSingleNodeHostRetainedStorageLayout,
   validateAwsSingleNodeHostApplicationStorageEvidence,
   validateAwsSingleNodeHostControlStorageEvidence,
+  validateAwsSingleNodeHostRetainedStorageDesired,
 } from '../../src/core/runtime/deployment-aws-host-retained-storage.js';
 import {
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_KIND,
@@ -232,6 +233,10 @@ describe('AWS single-node host retained storage', () => {
       volumeProviderResourceId: request.volumes[0].volumeProviderResourceId,
       sizeBytes: request.volumes[0].sizeBytes,
       createdWithoutSnapshot: true,
+      filesystem: {
+        type: 'ext4',
+        profileId: 'wharfie-ext4-v1',
+      },
       mount: {
         target:
           getAwsSingleNodeHostRetainedStorageLayout(request)
@@ -250,16 +255,92 @@ describe('AWS single-node host retained storage', () => {
         mode: 0o700,
       },
       bootWiring: {
+        projectionId: 'wharfie-systemd-retained-storage-v1',
         persistent: true,
         enabled: true,
-        sourceByFilesystemUuid: true,
+        sourceByVolumeIdentity: true,
         orderedBeforeRuntimeUserManager: true,
       },
     });
     expect(JSON.stringify(desired)).not.toContain(
       request.volumes[0].requestedDeviceName,
     );
+    const validatedDesired = validateAwsSingleNodeHostRetainedStorageDesired(
+      clone(desired),
+    );
+    expect(validatedDesired).toEqual(desired);
+    expect(validatedDesired).not.toBe(desired);
+    expectDeepFrozen(validatedDesired);
     expectDeepFrozen(desired);
+  });
+
+  it('independently rejects desired role, stable identity, path, security, account, and wiring forgeries', async () => {
+    const request = createAwsSingleNodeHostActivationRequest(
+      makeFixture().requestContext,
+    );
+    /** @type {Readonly<AnyRecord>|undefined} */
+    let desired;
+    const { adapter } = makeAdapter('application', (input) => {
+      desired = input;
+      return { status: 'ready' };
+    });
+    await adapter.observe(makeContext(request, 'application-storage', null));
+    if (desired === undefined) throw new Error('desired storage was not read');
+
+    const mutations = [
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.kind = 'awsSingleNodeHostControlStorageDesired';
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.filesystem.uuid = '00000000-0000-8000-8000-000000000000';
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.filesystem.profileId = 'forged-profile';
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.mount.target = `${candidate.mount.target}-forged`;
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.appId = `${'a-'.repeat(31)}a`;
+        candidate.mount.target = `${AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DATA_ROOT}/applications/${candidate.appId}/state/application-state`;
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.mount.nodev = false;
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.directory.user = 'root';
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.bootWiring.id = `${candidate.bootWiring.id}-forged`;
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.bootWiring.projectionId = 'forged-projection';
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.directory.uid = 65_534;
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.attachmentBindingId = candidate.volumeBindingId;
+      },
+    ];
+    for (const mutate of mutations) {
+      const candidate = clone(desired);
+      mutate(candidate);
+      expect(() =>
+        validateAwsSingleNodeHostRetainedStorageDesired(candidate),
+      ).toThrow();
+    }
+
+    const accessor = clone(desired);
+    Object.defineProperty(accessor, 'mount', {
+      enumerable: true,
+      get() {
+        throw new Error('must not invoke desired accessor');
+      },
+    });
+    expect(() =>
+      validateAwsSingleNodeHostRetainedStorageDesired(accessor),
+    ).toThrow(/plain JSON property/u);
   });
 
   it.each(['ready', 'unknown', 'conflict'])(
