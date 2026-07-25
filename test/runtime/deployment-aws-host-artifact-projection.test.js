@@ -35,11 +35,21 @@ import {
   makeFixture,
   reidentifyRequest,
 } from './fixtures/deployment-aws-host-activation.js';
+import { createAwsSingleNodeHostSettledStorageFixture } from './fixtures/deployment-aws-host-settled-storage.js';
 
 /** @typedef {Record<string, any>} AnyRecord */
 
 /** @type {string[]} */
 const temporaryRoots = [];
+/** @type {WeakMap<Readonly<AnyRecord>, Readonly<AnyRecord>>} */
+const settledStorageByRequest = new WeakMap();
+
+/** @param {Readonly<AnyRecord>} request @returns {Promise<void>} */
+async function prepareSettledStorage(request) {
+  if (settledStorageByRequest.has(request)) return;
+  const storage = await createAwsSingleNodeHostSettledStorageFixture(request);
+  settledStorageByRequest.set(request, storage.priorEvidence);
+}
 
 afterEach(async () => {
   jest.restoreAllMocks();
@@ -106,6 +116,10 @@ function makeRequestForBytes(bytes) {
 
 /** @param {Readonly<AnyRecord>} request @param {number} [attemptGeneration] @param {AnyRecord} [overrides] @returns {Readonly<AnyRecord>} */
 function makeContext(request, attemptGeneration = 1, overrides = {}) {
+  const priorEvidence = settledStorageByRequest.get(request);
+  if (priorEvidence === undefined) {
+    throw new Error('settled storage fixture is missing for request');
+  }
   return deepFreeze({
     request,
     step: {
@@ -116,11 +130,7 @@ function makeContext(request, attemptGeneration = 1, overrides = {}) {
       kind: 'artifact-projection',
       attemptGeneration,
     },
-    priorEvidence: {
-      'runtime-identity': { proof: 'runtime' },
-      'application-storage': { proof: 'application-storage' },
-      'control-storage': { proof: 'control-storage' },
-    },
+    priorEvidence,
     ...overrides,
   });
 }
@@ -178,6 +188,7 @@ function makeBody(chunks) {
 
 /** @param {Readonly<AnyRecord>} request @param {AnyRecord} response @param {AnyRecord} [overrides] @returns {Promise<{adapter: Readonly<AnyRecord>, root: string, calls: AnyRecord[]}>} */
 async function makeAdapter(request, response, overrides = {}) {
+  await prepareSettledStorage(request);
   const base = await fsp.mkdtemp(
     path.join(tmpdir(), 'wharfie-host-artifact-projection-'),
   );
@@ -623,6 +634,7 @@ describe('AWS single-node host artifact projection', () => {
       path.join(tmpdir(), 'wharfie-host-artifact-projection-redaction-'),
     );
     temporaryRoots.push(base);
+    await prepareSettledStorage(request);
     const adapter = createAwsSingleNodeHostArtifactProjectionAdapter({
       client: {
         async getObject() {
@@ -664,6 +676,26 @@ describe('AWS single-node host artifact projection', () => {
         }),
       ),
     ).rejects.toThrow(/control-storage/u);
+
+    const forgedRuntime = clone(makeContext(request));
+    forgedRuntime.priorEvidence['runtime-identity'].accountId = '999999999999';
+    await expect(adapter.converge(forgedRuntime)).rejects.toThrow(
+      /accountId does not match/u,
+    );
+
+    const forgedApplication = clone(makeContext(request));
+    forgedApplication.priorEvidence['application-storage'].requestId =
+      `whaq1_${'A'.repeat(43)}`;
+    await expect(adapter.converge(forgedApplication)).rejects.toThrow(
+      /settled-evidence-mismatch/u,
+    );
+
+    const forgedControl = clone(makeContext(request));
+    forgedControl.priorEvidence['control-storage'].directory.uid += 1;
+    await expect(adapter.converge(forgedControl)).rejects.toThrow(
+      /cross-role-runtime-account-mismatch/u,
+    );
+
     await expect(adapter.converge(makeContext(request, 0))).rejects.toThrow(
       /positive attemptGeneration/u,
     );

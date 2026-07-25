@@ -9,7 +9,6 @@ import { sortCanonicalJsonValue } from './canonical-order.js';
 import { validateAwsSingleNodeHostActivationRequest } from './deployment-aws-host-agent-contract.js';
 import { getAwsSingleNodeHostActivationIntentId } from './deployment-aws-host-activation.js';
 import {
-  AWS_SINGLE_NODE_HOST_ARTIFACT_PROJECTION_EVIDENCE_MAX_BYTES,
   AWS_SINGLE_NODE_HOST_ARTIFACT_PROJECTION_ROOT,
   validateAwsSingleNodeHostArtifactProjectionEvidence,
 } from './deployment-aws-host-artifact-projection.js';
@@ -427,9 +426,9 @@ function validateContext(value, root) {
   /** @type {Record<string, any>} */
   const artifactPriorEvidence = {};
   for (const key of ARTIFACT_PRIOR_EVIDENCE_KEYS) {
-    artifactPriorEvidence[key] = cloneBoundedJsonObject(
-      priorEvidence[key],
-      AWS_SINGLE_NODE_HOST_ARTIFACT_PROJECTION_EVIDENCE_MAX_BYTES,
+    artifactPriorEvidence[key] = ownDataValue(
+      priorEvidence,
+      key,
       `awsSingleNodeHostServiceConvergence context.priorEvidence.${key}`,
     );
   }

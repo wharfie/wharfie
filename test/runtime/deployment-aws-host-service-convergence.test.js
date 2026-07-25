@@ -24,6 +24,7 @@ import {
   makeFixture,
   semanticId,
 } from './fixtures/deployment-aws-host-activation.js';
+import { createAwsSingleNodeHostSettledStorageFixture } from './fixtures/deployment-aws-host-settled-storage.js';
 
 /** @typedef {Record<string, any>} AnyRecord */
 
@@ -31,8 +32,10 @@ import {
 let request;
 /** @type {string} */
 let root;
+/** @type {Readonly<AnyRecord>} */
+let storagePriorEvidence;
 
-beforeAll(() => {
+beforeAll(async () => {
   const fixture = makeFixture();
   request = createAwsSingleNodeHostActivationRequest(fixture.requestContext);
   root = path.join(
@@ -40,6 +43,9 @@ beforeAll(() => {
     'wharfie-host-service-convergence-test',
     request.requestId,
   );
+  storagePriorEvidence = (
+    await createAwsSingleNodeHostSettledStorageFixture(request)
+  ).priorEvidence;
 });
 
 /** @template T @param {T} value @returns {T} */
@@ -62,9 +68,7 @@ function makeArtifactContext(exactRequest) {
       attemptGeneration: 1,
     },
     priorEvidence: {
-      'runtime-identity': { proof: 'runtime' },
-      'application-storage': { proof: 'application-storage' },
-      'control-storage': { proof: 'control-storage' },
+      ...storagePriorEvidence,
     },
   });
 }
@@ -113,9 +117,7 @@ function makeContext(exactRequest, attemptGeneration = 1, overrides = {}) {
       attemptGeneration,
     },
     priorEvidence: {
-      'runtime-identity': { proof: 'runtime' },
-      'application-storage': { proof: 'application-storage' },
-      'control-storage': { proof: 'control-storage' },
+      ...storagePriorEvidence,
       'artifact-projection': makeArtifactEvidence(exactRequest),
     },
     ...overrides,
@@ -1308,7 +1310,7 @@ describe('AWS single-node host service convergence', () => {
     ).toThrow(/exec is not supported/u);
   });
 
-  it('binds evidence to strict V71 artifact proof and rejects evidence drift', async () => {
+  it('binds evidence to the exact transitive storage and artifact proof', async () => {
     const { adapter, inspectExactService } = makeAdapter(
       healthyStatus(request),
     );
@@ -1321,6 +1323,26 @@ describe('AWS single-node host service convergence', () => {
     await expect(adapter.observe(forgedContext)).rejects.toThrow(
       /does not match the exact request/u,
     );
+
+    const forgedRuntime = clone(makeContext(request, 0));
+    forgedRuntime.priorEvidence['runtime-identity'].accountId = '999999999999';
+    await expect(adapter.observe(forgedRuntime)).rejects.toThrow(
+      /accountId does not match/u,
+    );
+
+    const forgedApplication = clone(makeContext(request, 0));
+    forgedApplication.priorEvidence['application-storage'].requestId =
+      `whaq1_${'A'.repeat(43)}`;
+    await expect(adapter.observe(forgedApplication)).rejects.toThrow(
+      /settled-evidence-mismatch/u,
+    );
+
+    const forgedControl = clone(makeContext(request, 0));
+    forgedControl.priorEvidence['control-storage'].directory.gid += 1;
+    await expect(adapter.observe(forgedControl)).rejects.toThrow(
+      /cross-role-runtime-account-mismatch/u,
+    );
+
     expect(inspectExactService).not.toHaveBeenCalled();
 
     const observation = await adapter.observe(makeContext(request, 0));

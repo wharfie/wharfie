@@ -8,6 +8,7 @@ import path from 'node:path';
 import { sortCanonicalJsonValue } from './canonical-order.js';
 import { validateAwsSingleNodeHostActivationRequest } from './deployment-aws-host-agent-contract.js';
 import { getAwsSingleNodeHostActivationIntentId } from './deployment-aws-host-activation.js';
+import { validateAwsSingleNodeHostControlStorageEvidence } from './deployment-aws-host-retained-storage.js';
 import {
   AWS_SINGLE_NODE_MANAGED_ARTIFACT_CACHE_CONTROL,
   AWS_SINGLE_NODE_MANAGED_ARTIFACT_CONTENT_TYPE,
@@ -263,9 +264,8 @@ export function getAwsSingleNodeHostArtifactProjectionLayout(
 
 /**
  * Revalidate the complete V66 artifact-projection context before filesystem
- * or provider I/O. Predecessor evidence is already canonical V66 evidence;
- * this adapter owns only its exact key frontier until concrete storage
- * evidence contracts exist.
+ * or provider I/O. The control-storage validator transitively revalidates the
+ * exact runtime-identity and application-storage evidence prefix.
  * @param {unknown} value - Candidate effect context.
  * @returns {Readonly<{request: Readonly<Record<string, any>>, attemptGeneration: number}>}
  */
@@ -318,13 +318,29 @@ function validateContext(value) {
     PRIOR_EVIDENCE_KEYS,
     'awsSingleNodeHostArtifactProjection context.priorEvidence',
   );
-  for (const key of PRIOR_EVIDENCE_KEYS) {
-    cloneBoundedJsonObject(
-      priorEvidence[key],
-      AWS_SINGLE_NODE_HOST_ARTIFACT_PROJECTION_EVIDENCE_MAX_BYTES,
-      `awsSingleNodeHostArtifactProjection context.priorEvidence.${key}`,
-    );
-  }
+  const runtimeEvidence = ownDataValue(priorEvidence, 'runtime-identity');
+  const applicationEvidence = ownDataValue(
+    priorEvidence,
+    'application-storage',
+  );
+  validateAwsSingleNodeHostControlStorageEvidence(
+    ownDataValue(priorEvidence, 'control-storage'),
+    Object.freeze({
+      request,
+      step: Object.freeze({
+        intentId: getAwsSingleNodeHostActivationIntentId(
+          request,
+          'control-storage',
+        ),
+        kind: 'control-storage',
+        attemptGeneration: 0,
+      }),
+      priorEvidence: Object.freeze({
+        'runtime-identity': runtimeEvidence,
+        'application-storage': applicationEvidence,
+      }),
+    }),
+  );
   return Object.freeze({ request, attemptGeneration });
 }
 
@@ -996,28 +1012,11 @@ async function inspectProjection(options) {
     options.expectedUid,
     options.runtimeGid,
   );
-  const context = Object.freeze({
-    request: options.request,
-    step: Object.freeze({
-      intentId: getAwsSingleNodeHostActivationIntentId(
-        options.request,
-        ARTIFACT_PROJECTION_STEP,
-      ),
-      kind: ARTIFACT_PROJECTION_STEP,
-      attemptGeneration: 0,
-    }),
-    priorEvidence: Object.freeze({
-      'runtime-identity': Object.freeze({ projectionReadback: true }),
-      'application-storage': Object.freeze({ projectionReadback: true }),
-      'control-storage': Object.freeze({ projectionReadback: true }),
-    }),
-  });
-  const evidence = validateAwsSingleNodeHostArtifactProjectionEvidence(
-    record.value,
-    context,
-    options.root,
-  );
-  if (record.text !== `${JSON.stringify(evidence)}\n`) {
+  const evidence = createEvidence(options.request, options.layout);
+  if (
+    !sameJson(record.value, evidence) ||
+    record.text !== `${JSON.stringify(evidence)}\n`
+  ) {
     throw new AwsSingleNodeHostArtifactProjectionConflictError();
   }
   const bytes = await inspectProjectedArtifact(

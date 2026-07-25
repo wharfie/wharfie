@@ -44,6 +44,7 @@ import {
   makeReconcileFixture,
   reidentifyRequest,
 } from './fixtures/deployment-aws-host-activation.js';
+import { createAwsSingleNodeHostSettledStorageFixture } from './fixtures/deployment-aws-host-settled-storage.js';
 
 /** @typedef {Record<string, any>} AnyRecord */
 /** @typedef {'success'|'throw-before'|'throw-after'} EffectMode */
@@ -748,8 +749,12 @@ describe('AWS single-node durable host activation', () => {
         request: integration.request,
         healthFixture: integration.fixture,
       });
+      const storage = await createAwsSingleNodeHostSettledStorageFixture(
+        integration.request,
+      );
       const steps = Object.freeze({
         ...harness.steps,
+        ...storage.steps,
         artifactProjection,
       });
       const { kernel } = createKernel(memory.store, steps, integration.request);
@@ -1015,8 +1020,12 @@ describe('AWS single-node durable host activation', () => {
         healthFixture: integration.fixture,
         events,
       });
+      const storage = await createAwsSingleNodeHostSettledStorageFixture(
+        integration.request,
+      );
       const steps = Object.freeze({
         ...harness.steps,
+        ...storage.steps,
         artifactProjection,
         serviceConvergence,
       });
