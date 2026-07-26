@@ -1037,7 +1037,13 @@ async function observePhysicalSnapshot(desired, ports) {
     mounted,
     ports,
   );
-  if (filesystemState === 'blank' && (mounted || bootState === 'enabled')) {
+  // Activation ignores preparation convergence results, so both observer views
+  // must reject blank media once role-specific boot wiring exists. Only absent
+  // and shared gate-only wiring are safe before dispatch.
+  if (
+    filesystemState === 'blank' &&
+    (mounted || (bootState !== 'absent' && bootState !== 'gate-only'))
+  ) {
     throw new RetainedStorageConflictError();
   }
   return deepFreeze({

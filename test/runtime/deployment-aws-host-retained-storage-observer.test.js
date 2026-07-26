@@ -577,6 +577,45 @@ describe('AWS single-node host retained-storage observer', () => {
   );
 
   it.each([
+    ['gate-only', 'gate-only', 'ready', 'blank'],
+    ['unit', 'partial', 'conflict', 'conflict'],
+    ['gated', 'gated', 'conflict', 'conflict'],
+    ['enabled', 'exact', 'conflict', 'conflict'],
+  ])(
+    'aligns coarse and blank-format inspection for blank media with %s boot state',
+    async (_label, boot, coarseStatus, fineStatus) => {
+      const options = {
+        filesystem: 'blank',
+        mount: 'absent',
+        boot,
+      };
+      const coarseFixture = makePorts(applicationDesired, options);
+      const coarseObserver =
+        createAwsSingleNodeHostRetainedStorageObserverForTest({
+          ports: coarseFixture.ports,
+        });
+      const fineFixture = makePorts(applicationDesired, options);
+      const fineObserver =
+        createAwsSingleNodeHostRetainedStorageObserverForTest({
+          ports: fineFixture.ports,
+        });
+
+      const coarseResult = await coarseObserver.inspect(applicationDesired);
+      const fineResult =
+        await fineObserver.inspectBlankFormat(applicationDesired);
+
+      expect(coarseResult).toEqual({ status: coarseStatus });
+      expect(fineResult).toEqual(
+        fineStatus === 'blank'
+          ? { status: 'blank', proof: expect.any(Object) }
+          : { status: 'conflict' },
+      );
+      expectDeepFrozen(coarseResult);
+      expectDeepFrozen(fineResult);
+    },
+  );
+
+  it.each([
     ['device identity changes', { changeIdentity: true }, 'unknown'],
     ['mount state changes', { changeMount: true, mount: 'exact' }, 'conflict'],
     ['mount namespace changes', { changeMountNamespace: true }, 'unknown'],
@@ -793,16 +832,8 @@ describe('AWS single-node host retained-storage observer', () => {
       },
     ],
     [
-      'blank media with incomplete exact wiring',
-      { filesystem: 'blank', mount: 'absent', boot: 'partial' },
-    ],
-    [
       'blank media behind a gate staged before either role unit',
       { filesystem: 'blank', mount: 'absent', boot: 'gate-only' },
-    ],
-    [
-      'blank media gated before enablement',
-      { filesystem: 'blank', mount: 'absent', boot: 'gated' },
     ],
   ])('reports ready for %s', async (_label, options) => {
     const fixture = makePorts(applicationDesired, options);
