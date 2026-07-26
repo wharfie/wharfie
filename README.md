@@ -188,7 +188,15 @@ pinned parameter version and exact Amazon-owned, public, available,
 Linux/EBS/HVM/ENA image association, exact pinned zone/instance offering, and
 exact default EBS key without selecting a newer default or replacement zone.
 Frozen-candidate bounded retries distinguish missing, contradictory, and
-unresolved provider evidence. The same snapshot also exposes narrow
+unresolved provider evidence. A separate V79 evidence-only experiment now
+binds an exact provider scope/spec, caller-asserted source commit, selected
+retained-volume role, and expiring purge-tag contract. Its mutation-incapable
+SSM/EC2 collector double-reads the pinned AMI, dedicated running instance,
+root and evidence volumes, and both attachment views into a strict
+content-addressed but explicitly non-authoritative receipt. It has not run
+against live AWS, does not attest the injected credential scope or host/device
+state, and grants no create, delete, attachment, or formatting authority. The
+same snapshot also exposes narrow
 caller-owned S3, EBS-volume, and IAM/EC2 runtime-identity capabilities. Wharfie
 can bootstrap one retained,
 versioned control bucket with no bucket policy, wait through S3's documented
@@ -629,7 +637,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Read-only host toolchain fingerprint checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md) — the latest restart point for the bounded command-free/device-free AL2023 fingerprint, strict non-authoritative receipt, path-free CLI, verification, and live-evidence boundary.
+- [Read-only retained-storage provider evidence checkpoint](llm/checkpoints/2026-07-25-v79-read-only-provider-evidence.md) — the latest restart point for the expiring evidence-only contract, mutation-incapable double-read SSM/EC2 collector, strict non-authoritative receipt, verification, and portable-delivery boundary.
+- [Read-only host toolchain fingerprint checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md) — the parent restart point for the bounded command-free/device-free AL2023 fingerprint, strict non-authoritative receipt, path-free CLI, verification, and live-evidence boundary.
 - [Authorized storage preparation checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md) — the parent checkpoint for the exact preparation command, authorized/fenced real-persistence integration, observer liveness correction, verification, and the disposable-host evidence boundary.
 - [Closed blank-format preparation checkpoint](llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md) — the parent checkpoint for the closed blank-proof contract, recoverable durable preparation, real host-lock persistence composition, and formatter limits.
 - [Retained-storage format journal checkpoint](llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md) — the parent checkpoint for the shared two-mount gate, fixed host account, immutable format-history contract, and authenticated journal persistence.

@@ -79,7 +79,12 @@ wiring remain. V78 adds a bounded, double-observed AL2023 host/toolchain
 fingerprint with no child command, device path, cloud call, or write
 capability. Its strict non-authoritative receipt and path-free CLI are ready
 for disposable-host delivery, but no live host or EBS evidence has been
-collected.
+collected. V79 adds an expiring evidence-only experiment descriptor and a
+mutation-incapable SSM/EC2 collector that double-reads the exact pinned AMI,
+dedicated instance, root volume, disposable evidence volume, attachment, and
+root-exclusion facts. Its content-addressed receipt is explicitly
+non-authoritative; injected credentials, the caller-asserted source commit,
+host/device state, and live AWS behavior remain unattested.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -1348,14 +1353,16 @@ non-destructive preparation. V77 closes the adapter-compatible preparation
 command and proves its authorized, fenced, host-lock-scoped integration while
 keeping activation pending. V78 closes a path-free, command-free, device-free
 AL2023 host/toolchain fingerprint collector and strict non-authoritative
-receipt, but has not run it on a live host. No formatter or mount mutation
-exists.
+receipt, but has not run it on a live host. V79 closes the local
+controller-side read-only provider-evidence contract for an expiring dedicated
+test instance and evidence volume, but has not run it against AWS or joined it
+to host evidence. No formatter or mount mutation exists.
 
-1. Before formatter code, add portable source-bound delivery plus
-   controller-side read-only provider evidence, then run an explicitly
-   authorized disposable AL2023/real-EBS proof for exact e2fsprogs tools and
-   output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id identity and
-   path-retarget containment, flush and udev behavior,
+1. Before formatter code, add portable source-bound zero-argument SEA delivery
+   for the V78 collector, then run an explicitly authorized disposable
+   AL2023/real-EBS proof that joins V79 provider evidence to exact e2fsprogs
+   tools and output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id
+   identity and path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
 2. Only after that proof, implement the destructive formatter boundary with a
@@ -1373,9 +1380,12 @@ exists.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [read-only host toolchain fingerprint
-checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md).
-Its parent is the [authorized storage preparation command
+The latest recorded restart point is the [read-only retained-storage provider
+evidence
+checkpoint](llm/checkpoints/2026-07-25-v79-read-only-provider-evidence.md).
+Its parent is the [read-only host toolchain fingerprint
+checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md),
+whose parent is the [authorized storage preparation command
 checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md),
 whose parent is the [closed blank-format preparation
 checkpoint](llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md),

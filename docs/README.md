@@ -167,7 +167,11 @@ repository-only preflight now double-reads and fingerprints fixed AL2023 OS,
 configuration, and tool paths without executing a command or accepting a
 filesystem path, and without touching a device, calling AWS, or publishing raw
 configuration bytes. Its receipt is non-authoritative and has not run on a live
-host.
+host. A separate expiring provider experiment now double-reads an exact pinned
+AMI, dedicated instance, root volume, evidence volume, and attachment through
+mutation-incapable injected SSM/EC2 facades. Its receipt is also
+non-authoritative, has not run against live AWS, and is not yet joined to the
+host fingerprint.
 Selector delivery, destructive formatting and exact-profile verification,
 mounting, control-storage convergence, health publication, production host
 assembly, deactivation execution, and a clean-account provider lifecycle proof
@@ -183,10 +187,12 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [read-only host toolchain
-fingerprint
-checkpoint](../llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md).
-Its parent is the [authorized storage preparation
+The latest recorded restart handoff is the [read-only retained-storage
+provider evidence
+checkpoint](../llm/checkpoints/2026-07-25-v79-read-only-provider-evidence.md).
+Its parent is the [read-only host toolchain fingerprint
+checkpoint](../llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md),
+whose parent is the [authorized storage preparation
 checkpoint](../llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md),
 whose parent is the [closed blank-format preparation
 checkpoint](../llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md),
@@ -253,9 +259,11 @@ service convergence and authorized non-destructive retained-storage
 preparation are also component- and activation-integration-tested with injected
 host observations; retained preparation additionally exercises real V69
 persistence. The command-free/device-free V78 host fingerprint collector is
-implemented but has not run on AL2023. Before formatter code, the next priority
-is portable source-bound delivery and controller-side provider evidence,
-followed by explicitly authorized disposable AL2023/real-EBS evidence for the
+implemented but has not run on AL2023. V79 adds the local controller-side
+provider-evidence contract and strict double-read receipt, but it has not run
+against AWS or been joined to host evidence. Before formatter code, the next
+priority is portable source-bound zero-argument SEA delivery, followed by
+explicitly authorized disposable AL2023/real-EBS evidence for the
 exact toolchain, filesystem profile, device-path races, interruption, reboot,
 and detach/reattach behavior.
 Formatting/profile verification, persistent mounts, control storage, and the
