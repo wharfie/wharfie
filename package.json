@@ -77,7 +77,8 @@
     "verify:package": "node ./scripts/verify-package-contents.js",
     "verify:package:sea": "node ./scripts/verify-package-sea.js",
     "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
-    "verify:host:retained-storage:preflight": "node ./scripts/collect-aws-host-retained-storage-preflight-linux.js"
+    "verify:host:retained-storage:preflight": "node ./scripts/collect-aws-host-retained-storage-preflight-linux.js",
+    "package:host:retained-storage:preflight:sea": "node ./scripts/aws-host-retained-storage-host-preflight-sea-package.js"
   },
   "prettier": {
     "singleQuote": true,

@@ -7,7 +7,6 @@ import {
   promises,
   existsSync,
   writeFileSync,
-  readFileSync,
 } from 'node:fs';
 import { build as _build } from '../../lib/esbuild.js';
 import paths from '../../lib/paths.js';
@@ -60,6 +59,9 @@ let _originalStderrWrite = null;
  * @typedef SuccessfulBuildEvidence
  * @property {string} binaryPath - Final SEA path for this generation.
  * @property {import('../../runtime/application-revision.js').Sha256Digest} binaryDigest - Exact current final-byte digest.
+ * @property {{digest: import('../../runtime/application-revision.js').Sha256Digest, size: number}} entryCode - Exact UTF-8 entry code handed to esbuild for this generation.
+ * @property {{digest: import('../../runtime/application-revision.js').Sha256Digest, size: number}} codeBundle - Exact JavaScript bundle handed to Node's SEA blob generator.
+ * @property {{digest: import('../../runtime/application-revision.js').Sha256Digest, size: number}} seaBlob - Exact generated SEA blob handed to postject.
  * @property {{path: string, digest: import('../../runtime/application-revision.js').Sha256Digest, size: number, archive: null | {fileName: string, digest: import('../../runtime/application-revision.js').Sha256Digest}}} nodeSource - Exact pre-injection Node source and same-generation archive evidence.
  * @property {Record<string, import('../../runtime/application-revision.js').Sha256Digest>} assets - Exact generic asset bytes consumed by SEA.
  * @property {Record<string, any>} functionAssets - Strict parsed function-asset evidence.
@@ -85,6 +87,23 @@ function freezeJsonSnapshot(value) {
   }
   for (const child of Object.values(value)) freezeJsonSnapshot(child);
   return Object.freeze(value);
+}
+
+/**
+ * Observe one immutable byte snapshot without retaining the potentially large
+ * bytes in successful-build evidence.
+ * @param {Buffer | Uint8Array} bytes - Exact same-generation bytes.
+ * @returns {{digest: import('../../runtime/application-revision.js').Sha256Digest, size: number}} - Digest and length.
+ */
+function observeBytes(bytes) {
+  const snapshot = Buffer.from(bytes);
+  return {
+    digest: {
+      algorithm: /** @type {'sha256'} */ ('sha256'),
+      value: createHash('sha256').update(snapshot).digest('base64url'),
+    },
+    size: snapshot.length,
+  };
 }
 
 /**
@@ -441,7 +460,9 @@ async function captureNodeArchiveEvidence(
       'code' in error &&
       error.code === 'ENOENT'
     ) {
-      return null;
+      throw new Error(
+        'NodeBinary integrity receipt is required for SEA generation provenance.',
+      );
     }
     throw error;
   }
@@ -673,7 +694,21 @@ class SeaBuild extends BaseResource {
     try {
       await promises.mkdir(tmpBuildDir, { mode: 0o700, recursive: true });
       await promises.chmod(tmpBuildDir, 0o700);
-      await this.esbuild(tmpBuildDir);
+      const entryCode = this.get('entryCode');
+      if (typeof entryCode !== 'string') {
+        throw new TypeError('SEA build entryCode must resolve to a string.');
+      }
+      const entryCodeBytes = Buffer.from(entryCode, 'utf8');
+      const entryCodeEvidence = {
+        digest: {
+          algorithm: /** @type {'sha256'} */ ('sha256'),
+          value: createHash('sha256')
+            .update(entryCodeBytes)
+            .digest('base64url'),
+        },
+        size: entryCodeBytes.length,
+      };
+      await this.esbuild(tmpBuildDir, entryCode);
       await this.prepareExternalBinaries();
 
       if (!existsSync(SeaBuild.BINARIES_DIR)) {
@@ -706,9 +741,13 @@ class SeaBuild extends BaseResource {
         !seaResult ||
         typeof seaResult !== 'object' ||
         !seaResult.assetEvidence ||
-        !seaResult.functionAssetEvidence
+        !seaResult.functionAssetEvidence ||
+        !seaResult.codeBundleEvidence ||
+        !seaResult.seaBlobEvidence
       ) {
-        throw new Error('SEA build did not return sealed asset evidence.');
+        throw new Error(
+          'SEA build did not return complete same-generation evidence.',
+        );
       }
       await promises.copyFile(tempNodeBinaryPath, binaryPath);
       const binaryBytes = await readStableRegularFile(
@@ -721,6 +760,9 @@ class SeaBuild extends BaseResource {
           algorithm: 'sha256',
           value: createHash('sha256').update(binaryBytes).digest('base64url'),
         },
+        entryCode: entryCodeEvidence,
+        codeBundle: seaResult.codeBundleEvidence,
+        seaBlob: seaResult.seaBlobEvidence,
         nodeSource: {
           path: nodeSourcePath,
           digest: nodeSourceDigest,
@@ -827,13 +869,21 @@ class SeaBuild extends BaseResource {
 
   /**
    * @param {string} buildDir - buildDir.
+   * @param {string} [capturedEntryCode] - Exact entry code captured by build().
    */
-  async esbuild(buildDir) {
+  async esbuild(buildDir, capturedEntryCode) {
     const nodeVersion = this.assertNodeVersionCompatible();
     const outputPath = join(buildDir, 'esbundle.js');
+    const entryCode =
+      capturedEntryCode === undefined
+        ? this.get('entryCode')
+        : capturedEntryCode;
+    if (typeof entryCode !== 'string') {
+      throw new TypeError('SEA build entryCode must resolve to a string.');
+    }
     const { errors, warnings } = await _build({
       stdin: {
-        contents: this.get('entryCode'),
+        contents: entryCode,
         resolveDir: this.get('resolveDir'),
         sourcefile: 'index.js',
       },
@@ -860,9 +910,7 @@ class SeaBuild extends BaseResource {
     });
 
     if (errors.length > 0) {
-      console.error(errors);
-      // eslint-disable-next-line n/no-process-exit
-      process.exit(1);
+      throw new Error('SEA JavaScript bundling failed.');
     }
 
     if (warnings.length > 0) {
@@ -1059,11 +1107,12 @@ class SeaBuild extends BaseResource {
   /**
    * @param {string} buildDir - buildDir.
    * @param {string} nodeBinaryPath - nodeBinaryPath.
-   * @returns {Promise<{assetEvidence: Record<string, import('../../runtime/application-revision.js').Sha256Digest>, functionAssetEvidence: Record<string, any>, coreRuntimeDependencyEvidence?: SuccessfulBuildEvidence['coreRuntimeDependencies']}>} - Exact asset evidence consumed by SEA generation.
+   * @returns {Promise<{assetEvidence: Record<string, import('../../runtime/application-revision.js').Sha256Digest>, functionAssetEvidence: Record<string, any>, coreRuntimeDependencyEvidence?: SuccessfulBuildEvidence['coreRuntimeDependencies'], codeBundleEvidence: SuccessfulBuildEvidence['codeBundle'], seaBlobEvidence: SuccessfulBuildEvidence['seaBlob']}>} - Exact code, blob, and asset evidence consumed by SEA generation.
    */
   async seaBuild(buildDir, nodeBinaryPath) {
     this.assertNodeVersionCompatible();
     const seaConfigPath = join(buildDir, 'sea-config.json');
+    const codeBundlePath = join(buildDir, 'esbundle.js');
     const blobPath = join(buildDir, 'sea.blob');
     const preparedAssets = await this._prepareSeaAssetsWithEvidence(buildDir);
     const assets = preparedAssets.assets;
@@ -1073,24 +1122,47 @@ class SeaBuild extends BaseResource {
       disableExperimentalSEAWarning: true,
       useSnapshot: false,
       useCodeCache: false,
+      execArgv: [],
+      execArgvExtension: 'none',
       assets,
     };
 
     writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
+    const codeBundleBefore = await readStableRegularFile(
+      codeBundlePath,
+      'SEA JavaScript bundle',
+    );
+    if (codeBundleBefore.length === 0) {
+      throw new Error('SEA JavaScript bundle must not be empty.');
+    }
     await execFile(
       process.execPath,
       ['--no-warnings', '--experimental-sea-config', seaConfigPath],
       {},
       true,
     );
+    const codeBundleAfter = await readStableRegularFile(
+      codeBundlePath,
+      'SEA JavaScript bundle',
+    );
+    if (!codeBundleAfter.equals(codeBundleBefore)) {
+      throw new Error(
+        'SEA JavaScript bundle changed while its blob was generated.',
+      );
+    }
     if (this.get('platform') === 'darwin') {
       await runCmd('codesign', ['--remove-signature', nodeBinaryPath]);
     }
-    const blobData = readFileSync(blobPath);
+    const blobData = await readStableRegularFile(blobPath, 'SEA blob');
+    if (blobData.length === 0) {
+      throw new Error('SEA blob must not be empty.');
+    }
+    const seaBlobEvidence = freezeJsonSnapshot(observeBytes(blobData));
+    const injectionBlob = Buffer.from(blobData);
     // base64 encoded fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
     // see https://github.com/nodejs/postject/issues/92#issuecomment-2283508514
     await _withSuppressedPostjectWarnings(async () => {
-      await inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
+      await inject(nodeBinaryPath, 'NODE_SEA_BLOB', injectionBlob, {
         sentinelFuse: Buffer.from(
           'Tk9ERV9TRUFfRlVTRV9mY2U2ODBhYjJjYzQ2N2I2ZTA3MmI4YjVkZjE5OTZiMg==',
           'base64',
@@ -1100,7 +1172,12 @@ class SeaBuild extends BaseResource {
           : {}),
       });
     });
+    if (!injectionBlob.equals(blobData)) {
+      throw new Error('SEA blob changed while it was being injected.');
+    }
     return {
+      codeBundleEvidence: freezeJsonSnapshot(observeBytes(codeBundleBefore)),
+      seaBlobEvidence,
       assetEvidence: preparedAssets.assetEvidence,
       functionAssetEvidence: preparedAssets.functionAssetEvidence,
       coreRuntimeDependencyEvidence:

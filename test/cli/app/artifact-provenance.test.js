@@ -418,6 +418,18 @@ async function makeBuild(target, binaryPath, dependencies, revision) {
   const generation = {
     binaryPath,
     binaryDigest: digest(binaryBytes),
+    entryCode: {
+      digest: digest('void 0;'),
+      size: Buffer.byteLength('void 0;', 'utf8'),
+    },
+    codeBundle: {
+      digest: digest('void 0;'),
+      size: Buffer.byteLength('void 0;', 'utf8'),
+    },
+    seaBlob: {
+      digest: digest(binaryBytes),
+      size: binaryBytes.length,
+    },
     nodeSource: {
       path: binaryPath,
       digest: digest(binaryBytes),

@@ -23,7 +23,18 @@ const CHILD_PROCESS_IMPORT = 'node:child_process';
 const MISMATCHED_NODE_VERSION =
   process.versions.node === '0.0.0' ? '0.0.1' : '0.0.0';
 
+/** @param {string} value @returns {{digest: import('../../../src/core/runtime/application-revision.js').Sha256Digest, size: number}} */
+const evidenceFor = (value) => ({
+  digest: {
+    algorithm: /** @type {'sha256'} */ ('sha256'),
+    value: createHash('sha256').update(value).digest('base64url'),
+  },
+  size: Buffer.byteLength(value),
+});
+
 const emptySeaEvidence = () => ({
+  codeBundleEvidence: evidenceFor('mock-code-bundle'),
+  seaBlobEvidence: evidenceFor('mock-sea-blob'),
   assetEvidence: {},
   functionAssetEvidence: {},
 });
@@ -98,6 +109,127 @@ describe('SeaBuild', () => {
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
+  it('disables environment and inherited execution arguments in the SEA configuration', async () => {
+    const generatedBlob = Buffer.from('generated-sea-blob', 'utf8');
+    /** @type {Record<string, any> | undefined} */
+    let observedConfig;
+    const execFile = jest.fn(
+      /**
+       * @param {string} _file
+       * @param {string[]} args
+       * @param {Record<string, any>} _options
+       * @param {boolean} _rejectOnStderr
+       */
+      async (_file, args, _options, _rejectOnStderr) => {
+        const configPath = args[2];
+        const parsedConfig = JSON.parse(await fsp.readFile(configPath, 'utf8'));
+        observedConfig = parsedConfig;
+        await fsp.writeFile(parsedConfig.output, generatedBlob);
+      },
+    );
+    const inject = jest.fn(
+      /**
+       * @param {string} _binaryPath
+       * @param {string} _resourceName
+       * @param {Buffer} _blob
+       * @param {Record<string, any>} _options
+       */
+      async (_binaryPath, _resourceName, _blob, _options) => {},
+    );
+    jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+      execFile: jest.fn(),
+      spawn: jest.fn(),
+      spawnSync: jest.fn(() => ({
+        stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+        stderr: '',
+        status: 0,
+      })),
+    }));
+    jest.unstable_mockModule('../../../src/core/lib/cmd.js', () => ({
+      execFile,
+      runCmd: jest.fn(),
+    }));
+    jest.unstable_mockModule('postject', () => ({ inject }));
+
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-exec-argv-'),
+    );
+    const buildDir = path.join(tmpRoot, 'build');
+    const nodeBinaryPath = path.join(tmpRoot, 'node');
+    const codeBundle = Buffer.from('void 0;\n', 'utf8');
+    await fsp.mkdir(buildDir, { mode: 0o700 });
+    await Promise.all([
+      fsp.writeFile(path.join(buildDir, 'esbundle.js'), codeBundle),
+      fsp.writeFile(nodeBinaryPath, 'node-binary', 'utf8'),
+    ]);
+    const build = new SeaBuild({
+      name: 'closed-exec-argv',
+      properties: {
+        entryCode: codeBundle.toString('utf8'),
+        resolveDir: tmpRoot,
+        nodeBinaryPath,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+      },
+    });
+
+    try {
+      const evidence = await build.seaBuild(buildDir, nodeBinaryPath);
+
+      expect(observedConfig).toMatchObject({
+        main: path.join(buildDir, 'esbundle.js'),
+        output: path.join(buildDir, 'sea.blob'),
+        execArgv: [],
+        execArgvExtension: 'none',
+        assets: {},
+      });
+      expect(execFile).toHaveBeenCalledWith(
+        process.execPath,
+        [
+          '--no-warnings',
+          '--experimental-sea-config',
+          path.join(buildDir, 'sea-config.json'),
+        ],
+        {},
+        true,
+      );
+      expect(inject).toHaveBeenCalledWith(
+        nodeBinaryPath,
+        'NODE_SEA_BLOB',
+        generatedBlob,
+        expect.any(Object),
+      );
+      expect(evidence.codeBundleEvidence).toEqual(
+        evidenceFor(codeBundle.toString('utf8')),
+      );
+      expect(evidence.seaBlobEvidence).toEqual(
+        evidenceFor(generatedBlob.toString('utf8')),
+      );
+
+      const mutationBuildDir = path.join(tmpRoot, 'mutation-build');
+      await fsp.mkdir(mutationBuildDir, { mode: 0o700 });
+      await fsp.writeFile(
+        path.join(mutationBuildDir, 'esbundle.js'),
+        codeBundle,
+      );
+      inject.mockImplementationOnce(async (...args) => {
+        const injectedBlob = args[2];
+        injectedBlob.fill(0, 0, 1);
+      });
+      await expect(
+        build.seaBuild(mutationBuildDir, nodeBinaryPath),
+      ).rejects.toThrow(/SEA blob changed while it was being injected/i);
+      await expect(
+        fsp.readFile(path.join(mutationBuildDir, 'sea.blob')),
+      ).resolves.toEqual(generatedBlob);
+    } finally {
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
   it.each([
     ['success', false],
     ['failure', true],
@@ -159,6 +291,63 @@ describe('SeaBuild', () => {
       }
       expect(observedMode).toBe(0o700);
       expect(existsSync(String(observedBuildDir))).toBe(false);
+    } finally {
+      SeaBuild.BUILD_DIR = originalBuildDir;
+      SeaBuild.BINARIES_DIR = originalBinariesDir;
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('resolves entryCode once and uses the same captured string for bundling and evidence', async () => {
+    jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+      execFile: jest.fn(),
+      spawn: jest.fn(),
+      spawnSync: jest.fn(() => ({
+        stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+        stderr: '',
+        status: 0,
+      })),
+    }));
+
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const originalBuildDir = SeaBuild.BUILD_DIR;
+    const originalBinariesDir = SeaBuild.BINARIES_DIR;
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-entry-capture-'),
+    );
+    const sourceBinary = path.join(tmpRoot, 'source-node');
+    const capturedEntry = 'process.stdout.write("captured");\n';
+    const resolveEntryCode = jest.fn(() => capturedEntry);
+    await fsp.writeFile(sourceBinary, 'node-binary', 'utf8');
+    SeaBuild.BUILD_DIR = path.join(tmpRoot, 'builds');
+    SeaBuild.BINARIES_DIR = path.join(tmpRoot, 'binaries');
+    const build = new SeaBuild({
+      name: 'entry-capture',
+      properties: {
+        entryCode: resolveEntryCode,
+        resolveDir: process.cwd(),
+        nodeBinaryPath: sourceBinary,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+      },
+    });
+    const esbuild = jest
+      .spyOn(build, 'esbuild')
+      .mockImplementation(async () => {});
+    jest.spyOn(build, 'seaBuild').mockImplementation(async () => {
+      return emptySeaEvidence();
+    });
+
+    try {
+      await build.build();
+      const artifactBytes = await fsp.readFile(build.get('binaryPath'));
+      const evidence = build.getSuccessfulBuildEvidence(artifactBytes);
+
+      expect(resolveEntryCode).toHaveBeenCalledTimes(1);
+      expect(esbuild).toHaveBeenCalledWith(expect.any(String), capturedEntry);
+      expect(evidence.entryCode).toEqual(evidenceFor(capturedEntry));
     } finally {
       SeaBuild.BUILD_DIR = originalBuildDir;
       SeaBuild.BINARIES_DIR = originalBinariesDir;
@@ -349,6 +538,19 @@ describe('SeaBuild', () => {
       const evidence = build.getSuccessfulBuildEvidence(artifactBytes);
 
       expect(evidence.binaryPath).toBe(build.get('binaryPath'));
+      expect(evidence.entryCode).toEqual({
+        digest: {
+          algorithm: 'sha256',
+          value: createHash('sha256')
+            .update('void 0;', 'utf8')
+            .digest('base64url'),
+        },
+        size: Buffer.byteLength('void 0;', 'utf8'),
+      });
+      expect(Object.isFrozen(evidence.entryCode)).toBe(true);
+      expect(Object.isFrozen(evidence.entryCode.digest)).toBe(true);
+      expect(evidence.codeBundle).toEqual(evidenceFor('mock-code-bundle'));
+      expect(evidence.seaBlob).toEqual(evidenceFor('mock-sea-blob'));
       expect(evidence.signing).toEqual({ mode: 'unsigned' });
       expect(() =>
         build.getSuccessfulBuildEvidence(Buffer.from('different-sea-bytes')),
@@ -468,6 +670,10 @@ describe('SeaBuild', () => {
       await expect(build.build()).rejects.toThrow(
         /receipt does not match the exact target binary selected for SEA generation/i,
       );
+      await fsp.rm(receiptPath);
+      await expect(build.build()).rejects.toThrow(
+        /integrity receipt is required for SEA generation provenance/i,
+      );
     } finally {
       SeaBuild.BUILD_DIR = originalBuildDir;
       SeaBuild.BINARIES_DIR = originalBinariesDir;
@@ -529,6 +735,8 @@ describe('SeaBuild', () => {
     });
     jest.spyOn(build, 'esbuild').mockImplementation(async () => {});
     jest.spyOn(build, 'seaBuild').mockImplementation(async () => ({
+      codeBundleEvidence: evidenceFor('committed-code-bundle'),
+      seaBlobEvidence: evidenceFor('committed-sea-blob'),
       assetEvidence: { committed: committedDigest },
       functionAssetEvidence: {},
     }));

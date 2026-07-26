@@ -258,6 +258,7 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
 
   for (const resource of actorSystem.getResources()) {
     if (!(resource instanceof SeaBuild)) continue;
+    const entryCode = String(resource.get('entryCode'));
     const sealedAssetsDir = await fsp.mkdtemp(
       path.join(buildDir, 'sealed-assets-'),
     );
@@ -282,6 +283,18 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
       .mockImplementation((artifactBytes) => ({
         binaryPath: String(resource.get('binaryPath')),
         binaryDigest: getSha256Digest(artifactBytes),
+        entryCode: {
+          digest: getSha256Digest(Buffer.from(entryCode, 'utf8')),
+          size: Buffer.byteLength(entryCode, 'utf8'),
+        },
+        codeBundle: {
+          digest: getSha256Digest(Buffer.from(entryCode, 'utf8')),
+          size: Buffer.byteLength(entryCode, 'utf8'),
+        },
+        seaBlob: {
+          digest: getSha256Digest(artifactBytes),
+          size: artifactBytes.byteLength,
+        },
         nodeSource: {
           path: nodeSourcePath,
           digest: getSha256Digest(nodeSourceBytes),
