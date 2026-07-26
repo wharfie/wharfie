@@ -594,13 +594,27 @@ bytes, and atomically publishes the immutable SEA at
 `/opt/wharfie/app/v1/<deploymentInstanceId>/<requestId>/app`. Exact final
 readback and full authenticated directory-chain fsync recover rename and
 process-response ambiguity without exposing provider VersionId or ETag values
-in durable evidence. Selector delivery, concrete storage, fixed-user service
-convergence, health publication, the privileged host command and SEA, and a
-clean-account lifecycle proof remain unfinished. The protocol does not claim
-physical exactly-once execution; mutations must be exact-convergent and safe
-to replay. External resource verification is represented by the generic V6
-contract but remains unreachable through the fixed all-managed AWS profile
-and planner.
+in durable evidence. The fixed `wharfie-runtime` account now has one pinned
+numeric identity, and desired service convergence joins the immutable release,
+selector, exact unit wiring, live manager state, and resident ownership before
+authorizing repair. The retained application and control storage contracts
+bind exact request-scoped desired state and evidence to stable retained-volume
+identities, a closed Linux inspection observer, one shared two-mount runtime
+gate, recoverable deactivation authority, an immutable format-history
+contract, and a host-lock-admitted journal store. The real V66/V69
+activation/persistence integration proves that, given a synthetic stable
+blank-media observation, the application-storage command durably publishes the
+non-destructive `prepared` prerequisite only after the activation kernel's
+definite attempt, fresh dispatch authorization, and current local fence. It
+deliberately leaves activation pending and exposes no formatter or settlement
+claim. Selector
+delivery, destructive formatting and exact-profile verification, mounting,
+control-storage convergence, health publication, the privileged host command
+and SEA, deactivation execution, and a clean-account lifecycle proof remain
+unfinished. The protocol does not claim physical exactly-once execution;
+mutations must be exact-convergent and safe to replay. External resource
+verification is represented by the generic V6 contract but remains unreachable
+through the fixed all-managed AWS profile and planner.
 Fresh apply from a DESTROYED tombstone is also currently unsupported:
 InspectionV6 requires retained resources to remain exactly bound, while the
 controller permits a fresh incarnation only after those bindings are gone.
@@ -611,7 +625,13 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Exact host artifact projection checkpoint](llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md) — the latest recorded checkpoint for pinned exact-version S3 reads, immutable crash-safe local publication, provider-selector secrecy, real V66 integration, restart-durability repair, proof limits, and the V72 fixed-user service adapter.
+- [Authorized storage preparation checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md) — the latest restart point for the exact preparation command, authorized/fenced real-persistence integration, observer liveness correction, verification, and the disposable-host evidence boundary.
+- [Closed blank-format preparation checkpoint](llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md) — the parent checkpoint for the closed blank-proof contract, recoverable durable preparation, real host-lock persistence composition, and formatter limits.
+- [Retained-storage format journal checkpoint](llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md) — the parent checkpoint for the shared two-mount gate, fixed host account, immutable format-history contract, and authenticated journal persistence.
+- [Retained host storage checkpoint](llm/checkpoints/2026-07-25-v74-retained-host-storage-boundary.md) — the parent checkpoint for exact application/control storage identities, closed Linux observation, activation integration, and deactivation authority.
+- [Desired service convergence checkpoint](llm/checkpoints/2026-07-25-v73-desired-service-convergence-proof.md) — the parent checkpoint for Status V3 desired-state proof and fail-closed repair authorization.
+- [Fixed-user service convergence checkpoint](llm/checkpoints/2026-07-25-v72-fixed-user-service-convergence.md) — the parent checkpoint for the fixed runtime principal, root-owned launcher, V64 status mapping, and first service-adapter integration.
+- [Exact host artifact projection checkpoint](llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md) — the earlier checkpoint for pinned exact-version S3 reads, immutable crash-safe local publication, provider-selector secrecy, real V66 integration, and restart-durability repair.
 - [Authenticated current-head authority checkpoint](llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md) — the parent checkpoint for fresh artifact-backed request publication, atomic head fencing, strong host reads, exact V66 authorization, runtime IAM limits, and bootstrap and resource-policy caveats.
 - [Root host activation persistence checkpoint](llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md) — the parent checkpoint for fixed root-owned state, exact durable CAS, crash-releasing locks, bounded retention, fence-aware local inspection, lifecycle draining, and security limits.
 - [Owned host AWS lifetime checkpoint](llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md) — the parent checkpoint for fixed IMDSv2 credential rotation, pinned regional STS composition, complete cancellation and draining, verification, limitations, and the next privileged-host boundary.

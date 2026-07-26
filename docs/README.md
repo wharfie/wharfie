@@ -153,8 +153,20 @@ under `s3:GetObjectVersion`, verifies the complete managed-object envelope and
 bytes, and atomically publishes an immutable fixed-path SEA. Exact final
 readback and authenticated full-chain fsync recover rename and process-response
 ambiguity without persisting opaque VersionId or ETag values in evidence.
-Selector delivery, storage, fixed-user service convergence, health
-publication, and a clean-account provider lifecycle proof remain unfinished.
+The fixed `wharfie-runtime` account, root-owned launcher, Status V3 desired
+convergence proof, and fail-closed service-repair authorization are now
+concrete. Retained application/control storage now has exact contracts, a
+closed Linux inspection observer, one shared two-mount gate, recoverable
+deactivation authority, an immutable format-history contract, and an
+authenticated host-lock-scoped journal. Integration with real V66/V69
+persistence proves that a synthetic stable blank-media observation may durably
+publish only the non-destructive `prepared` prerequisite after a definite
+attempt, fresh dispatch authorization, and current local fence; it deliberately
+remains pending and cannot format or claim settlement.
+Selector delivery, destructive formatting and exact-profile verification,
+mounting, control-storage convergence, health publication, production host
+assembly, deactivation execution, and a clean-account provider lifecycle proof
+remain unfinished.
 
 The shipped source top-level CLI contains `app`, `ops`, and experimental
 `deployment`. Continue with the
@@ -166,9 +178,21 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [exact host artifact projection
-checkpoint](../llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md).
-Its parent is the [authenticated current-head authority
+The latest recorded restart handoff is the [authorized storage preparation
+checkpoint](../llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md).
+Its parent is the [closed blank-format preparation
+checkpoint](../llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md),
+whose parent is the [retained-storage format journal
+checkpoint](../llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md),
+whose parent is the [retained host storage
+checkpoint](../llm/checkpoints/2026-07-25-v74-retained-host-storage-boundary.md),
+whose parent is the [desired service convergence
+checkpoint](../llm/checkpoints/2026-07-25-v73-desired-service-convergence-proof.md),
+whose parent is the [fixed-user service convergence
+checkpoint](../llm/checkpoints/2026-07-25-v72-fixed-user-service-convergence.md),
+whose parent is the [exact host artifact projection
+checkpoint](../llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md),
+whose parent is the [authenticated current-head authority
 checkpoint](../llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md),
 whose parent is the [root host activation persistence
 checkpoint](../llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md),
@@ -216,10 +240,16 @@ SEA. Ordinary `converge` remains the packaged running-SEA path.
 
 Source and packaged deployment commands now preserve that artifact-authority
 split. Exact guest artifact projection is now implemented and
-integration-tested behind the privileged host contract. The next priority is
-fixed-user service convergence, followed by retained-volume storage and the
-privileged health publisher, before proving the complete lifecycle in a clean
-account. Mounted commands alone make no service-readiness claim.
+integration-tested behind the privileged host contract. Fixed-user desired
+service convergence and authorized non-destructive retained-storage
+preparation are also component- and activation-integration-tested with injected
+host observations; retained preparation additionally exercises real V69
+persistence. Before formatter code, the next priority is disposable
+AL2023/real-EBS evidence for the exact toolchain, filesystem profile,
+device-path races, interruption, reboot, and detach/reattach behavior.
+Formatting/profile verification, persistent mounts, control storage, and the
+privileged health publisher then precede a complete clean-account proof.
+Mounted commands alone make no service-readiness claim.
 
 The V63 checkpoint's parent is the [durable selected SEA plan
 checkpoint](../llm/checkpoints/2026-07-24-v62-durable-selected-sea-plan.md),
