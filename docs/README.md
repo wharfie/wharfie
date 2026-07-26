@@ -162,7 +162,12 @@ authenticated host-lock-scoped journal. Integration with real V66/V69
 persistence proves that a synthetic stable blank-media observation may durably
 publish only the non-destructive `prepared` prerequisite after a definite
 attempt, fresh dispatch authorization, and current local fence; it deliberately
-remains pending and cannot format or claim settlement.
+remains pending and cannot format or claim settlement. A separate
+repository-only preflight now double-reads and fingerprints fixed AL2023 OS,
+configuration, and tool paths without executing a command or accepting a
+filesystem path, and without touching a device, calling AWS, or publishing raw
+configuration bytes. Its receipt is non-authoritative and has not run on a live
+host.
 Selector delivery, destructive formatting and exact-profile verification,
 mounting, control-storage convergence, health publication, production host
 assembly, deactivation execution, and a clean-account provider lifecycle proof
@@ -178,9 +183,12 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [authorized storage preparation
-checkpoint](../llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md).
-Its parent is the [closed blank-format preparation
+The latest recorded restart handoff is the [read-only host toolchain
+fingerprint
+checkpoint](../llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md).
+Its parent is the [authorized storage preparation
+checkpoint](../llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md),
+whose parent is the [closed blank-format preparation
 checkpoint](../llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md),
 whose parent is the [retained-storage format journal
 checkpoint](../llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md),
@@ -244,9 +252,12 @@ integration-tested behind the privileged host contract. Fixed-user desired
 service convergence and authorized non-destructive retained-storage
 preparation are also component- and activation-integration-tested with injected
 host observations; retained preparation additionally exercises real V69
-persistence. Before formatter code, the next priority is disposable
-AL2023/real-EBS evidence for the exact toolchain, filesystem profile,
-device-path races, interruption, reboot, and detach/reattach behavior.
+persistence. The command-free/device-free V78 host fingerprint collector is
+implemented but has not run on AL2023. Before formatter code, the next priority
+is portable source-bound delivery and controller-side provider evidence,
+followed by explicitly authorized disposable AL2023/real-EBS evidence for the
+exact toolchain, filesystem profile, device-path races, interruption, reboot,
+and detach/reattach behavior.
 Formatting/profile verification, persistent mounts, control storage, and the
 privileged health publisher then precede a complete clean-account proof.
 Mounted commands alone make no service-readiness claim.

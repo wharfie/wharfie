@@ -607,7 +607,11 @@ blank-media observation, the application-storage command durably publishes the
 non-destructive `prepared` prerequisite only after the activation kernel's
 definite attempt, fresh dispatch authorization, and current local fence. It
 deliberately leaves activation pending and exposes no formatter or settlement
-claim. Selector
+claim. A separate repository-only preflight now double-reads and fingerprints
+fixed AL2023 OS, configuration, and tool paths without executing a command or
+accepting a filesystem path, and without touching a device, calling AWS, or
+publishing raw configuration bytes. Its strict content-addressed receipt is
+explicitly non-authoritative and has not yet been collected on a live host. Selector
 delivery, destructive formatting and exact-profile verification, mounting,
 control-storage convergence, health publication, the privileged host command
 and SEA, deactivation execution, and a clean-account lifecycle proof remain
@@ -625,7 +629,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Authorized storage preparation checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md) — the latest restart point for the exact preparation command, authorized/fenced real-persistence integration, observer liveness correction, verification, and the disposable-host evidence boundary.
+- [Read-only host toolchain fingerprint checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md) — the latest restart point for the bounded command-free/device-free AL2023 fingerprint, strict non-authoritative receipt, path-free CLI, verification, and live-evidence boundary.
+- [Authorized storage preparation checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md) — the parent checkpoint for the exact preparation command, authorized/fenced real-persistence integration, observer liveness correction, verification, and the disposable-host evidence boundary.
 - [Closed blank-format preparation checkpoint](llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md) — the parent checkpoint for the closed blank-proof contract, recoverable durable preparation, real host-lock persistence composition, and formatter limits.
 - [Retained-storage format journal checkpoint](llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md) — the parent checkpoint for the shared two-mount gate, fixed host account, immutable format-history contract, and authenticated journal persistence.
 - [Retained host storage checkpoint](llm/checkpoints/2026-07-25-v74-retained-host-storage-boundary.md) — the parent checkpoint for exact application/control storage identities, closed Linux observation, activation integration, and deactivation authority.

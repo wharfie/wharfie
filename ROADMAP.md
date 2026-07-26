@@ -75,7 +75,11 @@ V69 host-lock admission, and keeps activation pending. Blank media with any
 role-specific mount-unit projection now conflicts in both observer views,
 preventing an unproductive prepare/reobserve loop. Formatting, mounting,
 control storage, health publication, selector delivery, and production host
-wiring remain.
+wiring remain. V78 adds a bounded, double-observed AL2023 host/toolchain
+fingerprint with no child command, device path, cloud call, or write
+capability. Its strict non-authoritative receipt and path-free CLI are ready
+for disposable-host delivery, but no live host or EBS evidence has been
+collected.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -133,10 +137,11 @@ pure privileged-host request/receipt boundary, durable activation kernel, exact
 live STS identity adapter, fixed owned host AWS lifetime, root-owned local
 persistence boundary, and authenticated current-head controller authority are
 defined; fixed-user desired convergence and authorized non-destructive
-application-storage preparation are now concrete, while disposable-host format
-evidence, destructive formatting, exact profile verification, mounting,
-control storage, health effects, privileged packaging and selector delivery,
-clean-account proof, and a deployed-service readiness claim still follow ·
+application-storage preparation are now concrete. The read/digest-only V78
+host fingerprint is also concrete, while live disposable-host format evidence,
+destructive formatting, exact profile verification, mounting, control storage,
+health effects, privileged packaging and selector delivery, clean-account
+proof, and a deployed-service readiness claim still follow ·
 **Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -1341,11 +1346,16 @@ the shared two-mount gate, numeric host account, format-history contract, and
 host-lock-scoped persistence. V76 closes stable blank proof and durable
 non-destructive preparation. V77 closes the adapter-compatible preparation
 command and proves its authorized, fenced, host-lock-scoped integration while
-keeping activation pending. No formatter or mount mutation exists.
+keeping activation pending. V78 closes a path-free, command-free, device-free
+AL2023 host/toolchain fingerprint collector and strict non-authoritative
+receipt, but has not run it on a live host. No formatter or mount mutation
+exists.
 
-1. Before formatter code, run a disposable AL2023/real-EBS proof for exact
-   e2fsprogs tools and output, `wharfie-ext4-v1` format/readback arguments,
-   NVMe/by-id identity and path-retarget containment, flush and udev behavior,
+1. Before formatter code, add portable source-bound delivery plus
+   controller-side read-only provider evidence, then run an explicitly
+   authorized disposable AL2023/real-EBS proof for exact e2fsprogs tools and
+   output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id identity and
+   path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
 2. Only after that proof, implement the destructive formatter boundary with a
@@ -1363,9 +1373,11 @@ keeping activation pending. No formatter or mount mutation exists.
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [authorized storage preparation
-command checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md).
-Its parent is the [closed blank-format preparation
+The latest recorded restart point is the [read-only host toolchain fingerprint
+checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md).
+Its parent is the [authorized storage preparation command
+checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md),
+whose parent is the [closed blank-format preparation
 checkpoint](llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md),
 whose parent is the [retained-storage format journal
 checkpoint](llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md),
