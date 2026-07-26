@@ -43,6 +43,33 @@ import {
   createAwsSingleNodeHostActivationPersistence,
 } from '../../src/core/runtime/deployment-aws-host-activation-persistence.js';
 import {
+  advanceAwsSingleNodeHostRetainedStorageFormatJournal,
+  createAwsSingleNodeHostRetainedStorageAdoptedFormatJournal,
+  createAwsSingleNodeHostRetainedStorageBlankFormatProof,
+  createAwsSingleNodeHostRetainedStorageExactProfileFormatProof,
+  createAwsSingleNodeHostRetainedStoragePreparedFormatJournal,
+  getAwsSingleNodeHostRetainedStorageFormatTarget,
+  getAwsSingleNodeHostRetainedStorageProfileMarkerId,
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_PROFILE_FEATURES,
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_PROFILE_LABEL,
+} from '../../src/core/runtime/deployment-aws-host-retained-storage-format-journal.js';
+import {
+  AWS_SINGLE_NODE_HOST_APPLICATION_STORAGE_EVIDENCE_KIND,
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_EVIDENCE_SCHEMA_VERSION,
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL,
+  createAwsSingleNodeHostApplicationStorageAdapter,
+  createAwsSingleNodeHostControlStorageAdapter,
+} from '../../src/core/runtime/deployment-aws-host-retained-storage.js';
+import { getAwsSingleNodeHostRetainedStorageByIdPath } from '../../src/core/runtime/deployment-aws-host-retained-storage-projection.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_KIND,
+  AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_SCHEMA_VERSION,
+} from '../../src/core/runtime/deployment-aws-host-runtime-identity.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+} from '../../src/core/runtime/deployment-aws-host-runtime-account.js';
+import {
   LinuxAbstractOperationLockBusyError,
   acquireLinuxAbstractOperationLock,
 } from '../../src/core/runtime/linux-abstract-operation-lock.js';
@@ -65,13 +92,26 @@ const itPosix = process.platform === 'win32' ? it.skip : it;
 const itLinux = process.platform === 'linux' ? it : it.skip;
 /** @type {Readonly<AnyRecord>} */
 let baseRequest;
+/** @type {Readonly<AnyRecord>} */
+let applicationStorageDesired;
+/** @type {Readonly<AnyRecord>} */
+let controlStorageDesired;
 /** @type {string[]} */
 const temporaryDirectories = [];
 
-beforeAll(() => {
+beforeAll(async () => {
   const fixture = makeFixture();
   baseRequest = createAwsSingleNodeHostActivationRequest(
     fixture.requestContext,
+  );
+  applicationStorageDesired =
+    await captureApplicationStorageDesired(baseRequest);
+  const applicationEvidence = createApplicationStorageEvidence(
+    applicationStorageDesired,
+  );
+  controlStorageDesired = await captureControlStorageDesired(
+    baseRequest,
+    applicationEvidence,
   );
 });
 
@@ -179,6 +219,250 @@ function currentUid() {
     throw new Error('Focused persistence tests require a numeric process UID.');
   }
   return process.getuid();
+}
+
+/** @template T @param {T} value @returns {T} */
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+/** @param {Readonly<AnyRecord>} request @returns {Readonly<AnyRecord>} */
+function runtimeIdentityEvidence(request) {
+  return deepFreeze({
+    schemaVersion:
+      AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_SCHEMA_VERSION,
+    kind: AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_KIND,
+    requestId: request.requestId,
+    accountId: request.providerScope.accountId,
+    userId: `${request.runtimeRoleId}:${request.nodeProviderResourceId}`,
+    arn: `arn:${request.providerScope.partition}:sts::${request.providerScope.accountId}:assumed-role/${request.runtimeRoleName}/${request.nodeProviderResourceId}`,
+  });
+}
+
+/** @param {Readonly<AnyRecord>} request @returns {Promise<Readonly<AnyRecord>>} */
+async function captureApplicationStorageDesired(request) {
+  /** @type {Readonly<AnyRecord>|undefined} */
+  let captured;
+  const adapter = createAwsSingleNodeHostApplicationStorageAdapter({
+    command: {
+      inspect(/** @type {Readonly<AnyRecord>} */ desired) {
+        captured = desired;
+        return { status: 'ready' };
+      },
+      converge() {
+        throw new Error('desired capture must not converge');
+      },
+    },
+  });
+  await adapter.observe(
+    deepFreeze({
+      request,
+      step: {
+        intentId: getAwsSingleNodeHostActivationIntentId(
+          request,
+          'application-storage',
+        ),
+        kind: 'application-storage',
+        attemptGeneration: 0,
+      },
+      priorEvidence: {
+        'runtime-identity': runtimeIdentityEvidence(request),
+      },
+    }),
+  );
+  if (captured === undefined) {
+    throw new Error('application storage desired state was not captured');
+  }
+  return captured;
+}
+
+/** @param {Readonly<AnyRecord>} desired @returns {Readonly<AnyRecord>} */
+function createApplicationStorageEvidence(desired) {
+  const device = {
+    nvmeModel: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL,
+    nvmeSerialVolumeId: desired.volumeProviderResourceId,
+    path: '/dev/nvme1n1',
+    major: 259,
+    minor: 1,
+  };
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      ...desired,
+      schemaVersion:
+        AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_EVIDENCE_SCHEMA_VERSION,
+      kind: AWS_SINGLE_NODE_HOST_APPLICATION_STORAGE_EVIDENCE_KIND,
+      device,
+      mount: {
+        ...desired.mount,
+        sourcePath: device.path,
+        mounted: true,
+      },
+    }),
+  );
+}
+
+/**
+ * @param {Readonly<AnyRecord>} request
+ * @param {Readonly<AnyRecord>} applicationEvidence
+ * @returns {Promise<Readonly<AnyRecord>>}
+ */
+async function captureControlStorageDesired(request, applicationEvidence) {
+  /** @type {Readonly<AnyRecord>|undefined} */
+  let captured;
+  const adapter = createAwsSingleNodeHostControlStorageAdapter({
+    command: {
+      inspect(/** @type {Readonly<AnyRecord>} */ desired) {
+        captured = desired;
+        return { status: 'ready' };
+      },
+      converge() {
+        throw new Error('desired capture must not converge');
+      },
+    },
+  });
+  await adapter.observe(
+    deepFreeze({
+      request,
+      step: {
+        intentId: getAwsSingleNodeHostActivationIntentId(
+          request,
+          'control-storage',
+        ),
+        kind: 'control-storage',
+        attemptGeneration: 0,
+      },
+      priorEvidence: {
+        'runtime-identity': runtimeIdentityEvidence(request),
+        'application-storage': applicationEvidence,
+      },
+    }),
+  );
+  if (captured === undefined) {
+    throw new Error('control storage desired state was not captured');
+  }
+  return captured;
+}
+
+/** @param {Readonly<AnyRecord>} desired @returns {Readonly<AnyRecord>} */
+function formatProofDevice(desired) {
+  const controller = desired.capabilityKind === 'application-state' ? 1 : 2;
+  return deepFreeze({
+    path: `/dev/nvme${controller}n1`,
+    major: 259,
+    minor: controller,
+    nvmeModel: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL,
+    nvmeSerialVolumeId: desired.volumeProviderResourceId,
+    byIdPath: getAwsSingleNodeHostRetainedStorageByIdPath(
+      desired.volumeProviderResourceId,
+    ),
+    byIdTarget: `../../nvme${controller}n1`,
+  });
+}
+
+/** @param {Readonly<AnyRecord>} desired @returns {Readonly<AnyRecord>} */
+function exactFormatProfile(desired) {
+  const target = getAwsSingleNodeHostRetainedStorageFormatTarget(desired);
+  return deepFreeze({
+    profileId: 'wharfie-ext4-v1',
+    markerId: getAwsSingleNodeHostRetainedStorageProfileMarkerId(target),
+    filesystem: {
+      type: 'ext4',
+      uuid: target.filesystem.uuid,
+      label: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_PROFILE_LABEL,
+      blockSizeBytes: 4096,
+      inodeSizeBytes: 256,
+      reservedBlockCount: 0,
+      creatorOs: 'Linux',
+      revision: 'dynamic',
+      errorsBehavior: 'remount-ro',
+      defaultMountOptions: [],
+      directoryHashAlgorithm: 'half_md4',
+      directoryHashSeed: target.filesystem.uuid,
+      features: [...AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_PROFILE_FEATURES],
+    },
+    journal: {
+      kind: 'internal',
+      inode: 8,
+      sizeBytes: 134_217_728,
+    },
+    root: {
+      inode: 2,
+      type: 'directory',
+      uid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+      gid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+      mode: 0o700,
+    },
+    initialization: {
+      filesystemState: 'clean',
+      fullReadOnlyCheck: 'clean',
+      completionMarkerXattr: 'trusted.wharfie.profile',
+    },
+  });
+}
+
+/** @param {Readonly<AnyRecord>} desired @returns {Readonly<AnyRecord>} */
+function createBlankFormatProof(desired) {
+  return createAwsSingleNodeHostRetainedStorageBlankFormatProof({
+    desired,
+    device: formatProofDevice(desired),
+    mountNamespace: 'mnt:[4026531841]',
+  });
+}
+
+/** @param {Readonly<AnyRecord>} desired @returns {Readonly<AnyRecord>} */
+function createExactProfileFormatProof(desired) {
+  return createAwsSingleNodeHostRetainedStorageExactProfileFormatProof({
+    desired,
+    device: formatProofDevice(desired),
+    mountNamespace: 'mnt:[4026531841]',
+    profile: exactFormatProfile(desired),
+  });
+}
+
+/**
+ * @param {Readonly<AnyRecord>} request
+ * @param {Readonly<AnyRecord>} desired
+ * @returns {string}
+ */
+function retainedStorageIntentId(request, desired) {
+  return getAwsSingleNodeHostActivationIntentId(
+    request,
+    desired.capabilityKind === 'application-state'
+      ? 'application-storage'
+      : 'control-storage',
+  );
+}
+
+/**
+ * @param {Readonly<AnyRecord>} request
+ * @param {Readonly<AnyRecord>} desired
+ * @returns {Readonly<AnyRecord>}
+ */
+function createPreparedFormatJournal(request, desired) {
+  return createAwsSingleNodeHostRetainedStoragePreparedFormatJournal({
+    desired,
+    intentId: retainedStorageIntentId(request, desired),
+    attemptGeneration: 0,
+    blankProof: createBlankFormatProof(desired),
+  });
+}
+
+/**
+ * @param {Readonly<AnyRecord>} request
+ * @param {Readonly<AnyRecord>} desired
+ * @returns {Readonly<AnyRecord>}
+ */
+function createAdoptedFormatJournal(request, desired) {
+  return createAwsSingleNodeHostRetainedStorageAdoptedFormatJournal({
+    desired,
+    intentId: retainedStorageIntentId(request, desired),
+    attemptGeneration: 0,
+    profileProof: createExactProfileFormatProof(desired),
+  });
 }
 
 /**
@@ -493,6 +777,467 @@ describe('Linux abstract operation lock', () => {
 });
 
 describe('AWS single-node host activation persistence', () => {
+  it('persists distinct application/control journals and only their legal CAS transitions', async () => {
+    const { persistence, stateDirectory } = await openTestPersistence();
+    const journalStore = persistence.retainedStorageFormatJournalStore;
+    const applicationPrepared = createPreparedFormatJournal(
+      baseRequest,
+      applicationStorageDesired,
+    );
+    const applicationFormatted =
+      advanceAwsSingleNodeHostRetainedStorageFormatJournal({
+        journal: applicationPrepared,
+        profileProof: createExactProfileFormatProof(applicationStorageDesired),
+      });
+    const controlAdopted = createAdoptedFormatJournal(
+      baseRequest,
+      controlStorageDesired,
+    );
+    const applicationTarget = getAwsSingleNodeHostRetainedStorageFormatTarget(
+      applicationStorageDesired,
+    );
+    const controlTarget = getAwsSingleNodeHostRetainedStorageFormatTarget(
+      controlStorageDesired,
+    );
+
+    expect(Object.isFrozen(journalStore)).toBe(true);
+    expect(Object.keys(persistence.store).sort()).toEqual([
+      'compareAndSetActivationFence',
+      'compareAndSetActivationState',
+      'readActivationFence',
+      'readActivationState',
+    ]);
+    expect(applicationTarget.filesystem.uuid).not.toBe(
+      controlTarget.filesystem.uuid,
+    );
+
+    await persistence.withHostLock(
+      { deploymentInstanceId: baseRequest.deploymentInstanceId },
+      async () => {
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(
+            applicationStorageDesired,
+          ),
+        ).resolves.toBeNull();
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(controlStorageDesired),
+        ).resolves.toBeNull();
+        await expect(
+          journalStore.compareAndSetRetainedStorageFormatJournal({
+            desired: applicationStorageDesired,
+            expectedJournalId: null,
+            nextJournal: applicationPrepared,
+          }),
+        ).resolves.toBe(true);
+        await expect(
+          journalStore.compareAndSetRetainedStorageFormatJournal({
+            desired: applicationStorageDesired,
+            expectedJournalId: applicationPrepared.journalId,
+            nextJournal: applicationPrepared,
+          }),
+        ).resolves.toBe(false);
+        await expect(
+          journalStore.compareAndSetRetainedStorageFormatJournal({
+            desired: applicationStorageDesired,
+            expectedJournalId: null,
+            nextJournal: applicationFormatted,
+          }),
+        ).resolves.toBe(false);
+        await expect(
+          journalStore.compareAndSetRetainedStorageFormatJournal({
+            desired: applicationStorageDesired,
+            expectedJournalId: applicationPrepared.journalId,
+            nextJournal: applicationFormatted,
+          }),
+        ).resolves.toBe(true);
+        await expect(
+          journalStore.compareAndSetRetainedStorageFormatJournal({
+            desired: applicationStorageDesired,
+            expectedJournalId: applicationFormatted.journalId,
+            nextJournal: applicationFormatted,
+          }),
+        ).resolves.toBe(false);
+        await expect(
+          journalStore.compareAndSetRetainedStorageFormatJournal({
+            desired: controlStorageDesired,
+            expectedJournalId: null,
+            nextJournal: controlAdopted,
+          }),
+        ).resolves.toBe(true);
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(
+            applicationStorageDesired,
+          ),
+        ).resolves.toEqual(applicationFormatted);
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(controlStorageDesired),
+        ).resolves.toEqual(controlAdopted);
+      },
+    );
+
+    const formatDirectory = path.join(stateDirectory, 'format-journals');
+    const applicationPath = path.join(
+      formatDirectory,
+      `${applicationTarget.filesystem.uuid}.json`,
+    );
+    const controlPath = path.join(
+      formatDirectory,
+      `${controlTarget.filesystem.uuid}.json`,
+    );
+    expect((await fsp.lstat(formatDirectory)).mode & 0o777).toBe(0o700);
+    expect((await fsp.lstat(applicationPath)).mode & 0o777).toBe(0o600);
+    expect((await fsp.lstat(controlPath)).mode & 0o777).toBe(0o600);
+    expect(await fsp.readFile(applicationPath, 'utf8')).toBe(
+      `${JSON.stringify(applicationFormatted)}\n`,
+    );
+    expect(await fsp.readFile(controlPath, 'utf8')).toBe(
+      `${JSON.stringify(controlAdopted)}\n`,
+    );
+    await persistence.close();
+  });
+
+  it('requires live host-lock admission, rebinds request churn, and fails closed on target drift', async () => {
+    const { persistence } = await openTestPersistence();
+    const journalStore = persistence.retainedStorageFormatJournalStore;
+    const prepared = createPreparedFormatJournal(
+      baseRequest,
+      applicationStorageDesired,
+    );
+
+    expect(() =>
+      journalStore.readRetainedStorageFormatJournal(applicationStorageDesired),
+    ).toThrow(AwsSingleNodeHostActivationPersistenceOperationError);
+    expect(() =>
+      journalStore.compareAndSetRetainedStorageFormatJournal({
+        desired: applicationStorageDesired,
+        expectedJournalId: null,
+        nextJournal: prepared,
+      }),
+    ).toThrow(AwsSingleNodeHostActivationPersistenceOperationError);
+
+    const churnRequest = makeRequest(baseRequest, 50, 'journal-churn');
+    const churnDesired = await captureApplicationStorageDesired(churnRequest);
+    expect(
+      getAwsSingleNodeHostRetainedStorageFormatTarget(churnDesired),
+    ).toEqual(
+      getAwsSingleNodeHostRetainedStorageFormatTarget(
+        applicationStorageDesired,
+      ),
+    );
+    const driftedDesired = /** @type {AnyRecord} */ (clone(churnDesired));
+    driftedDesired.sizeBytes += 1;
+
+    await persistence.withHostLock(
+      { deploymentInstanceId: baseRequest.deploymentInstanceId },
+      async () => {
+        await expect(
+          journalStore.compareAndSetRetainedStorageFormatJournal({
+            desired: applicationStorageDesired,
+            expectedJournalId: null,
+            nextJournal: prepared,
+          }),
+        ).resolves.toBe(true);
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(churnDesired),
+        ).resolves.toEqual(prepared);
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(driftedDesired),
+        ).rejects.toBeInstanceOf(
+          AwsSingleNodeHostActivationPersistenceOperationError,
+        );
+      },
+    );
+    await persistence.close();
+  });
+
+  it('snapshots queued journal inputs before waiting for the transaction lock', async () => {
+    let formatDirectory = '';
+    /** @type {{entered: ReturnType<typeof deferred>, release: ReturnType<typeof deferred>}|null} */
+    let journalScanGate = null;
+    const gatedFs = Object.create(fsp);
+    gatedFs.opendir = async (
+      /** @type {import('node:fs').PathLike} */ target,
+      /** @type {import('node:fs').OpenDirOptions|undefined} */ options,
+    ) => {
+      if (journalScanGate !== null && String(target) === formatDirectory) {
+        const activeGate = journalScanGate;
+        journalScanGate = null;
+        activeGate.entered.resolve();
+        await activeGate.release.promise;
+      }
+      return fsp.opendir(target, options);
+    };
+    const { persistence, stateDirectory } = await openTestPersistence({
+      fsOps: gatedFs,
+    });
+    formatDirectory = path.join(stateDirectory, 'format-journals');
+    const journalStore = persistence.retainedStorageFormatJournalStore;
+    const prepared = createPreparedFormatJournal(
+      baseRequest,
+      applicationStorageDesired,
+    );
+    const formatted = advanceAwsSingleNodeHostRetainedStorageFormatJournal({
+      journal: prepared,
+      profileProof: createExactProfileFormatProof(applicationStorageDesired),
+    });
+    const controlAdopted = createAdoptedFormatJournal(
+      baseRequest,
+      controlStorageDesired,
+    );
+
+    await persistence.withHostLock(
+      { deploymentInstanceId: baseRequest.deploymentInstanceId },
+      async () => {
+        await journalStore.compareAndSetRetainedStorageFormatJournal({
+          desired: applicationStorageDesired,
+          expectedJournalId: null,
+          nextJournal: prepared,
+        });
+
+        const readGate = {
+          entered: deferred(),
+          release: deferred(),
+        };
+        journalScanGate = readGate;
+        const blockingRead = journalStore.readRetainedStorageFormatJournal(
+          controlStorageDesired,
+        );
+        await readGate.entered.promise;
+        const mutableReadDesired = /** @type {AnyRecord} */ (
+          clone(applicationStorageDesired)
+        );
+        const queuedRead =
+          journalStore.readRetainedStorageFormatJournal(mutableReadDesired);
+        mutableReadDesired.sizeBytes += 1;
+        readGate.release.resolve();
+        await expect(blockingRead).resolves.toBeNull();
+        await expect(queuedRead).resolves.toEqual(prepared);
+
+        const casGate = {
+          entered: deferred(),
+          release: deferred(),
+        };
+        journalScanGate = casGate;
+        const secondBlockingRead =
+          journalStore.readRetainedStorageFormatJournal(controlStorageDesired);
+        await casGate.entered.promise;
+        const casInput = {
+          desired: clone(applicationStorageDesired),
+          expectedJournalId: prepared.journalId,
+          nextJournal: clone(formatted),
+        };
+        const queuedCas =
+          journalStore.compareAndSetRetainedStorageFormatJournal(casInput);
+        casInput.desired = clone(controlStorageDesired);
+        casInput.expectedJournalId = null;
+        casInput.nextJournal = clone(controlAdopted);
+        casGate.release.resolve();
+        await expect(secondBlockingRead).resolves.toBeNull();
+        await expect(queuedCas).resolves.toBe(true);
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(
+            applicationStorageDesired,
+          ),
+        ).resolves.toEqual(formatted);
+        await expect(
+          journalStore.readRetainedStorageFormatJournal(controlStorageDesired),
+        ).resolves.toBeNull();
+      },
+    );
+    await persistence.close();
+  });
+
+  it('reopens durable journals and removes only exact stale journal temporaries', async () => {
+    const { stateDirectory } = await createStateDirectory();
+    const registry = createAbstractServerRegistry();
+    const first = (await createTestPersistence({ stateDirectory, registry }))
+      .persistence;
+    const prepared = createPreparedFormatJournal(
+      baseRequest,
+      applicationStorageDesired,
+    );
+    const target = getAwsSingleNodeHostRetainedStorageFormatTarget(
+      applicationStorageDesired,
+    );
+    await first.withHostLock(
+      { deploymentInstanceId: baseRequest.deploymentInstanceId },
+      async () => {
+        await expect(
+          first.retainedStorageFormatJournalStore.compareAndSetRetainedStorageFormatJournal(
+            {
+              desired: applicationStorageDesired,
+              expectedJournalId: null,
+              nextJournal: prepared,
+            },
+          ),
+        ).resolves.toBe(true);
+      },
+    );
+    await first.close();
+
+    const temporaryPath = path.join(
+      stateDirectory,
+      'format-journals',
+      `.format-journal.${target.filesystem.uuid}.stale-token.tmp`,
+    );
+    await fsp.writeFile(temporaryPath, 'stale\n', {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+
+    const reopened = (await createTestPersistence({ stateDirectory, registry }))
+      .persistence;
+    await expect(fsp.lstat(temporaryPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await reopened.withHostLock(
+      { deploymentInstanceId: baseRequest.deploymentInstanceId },
+      async () => {
+        await expect(
+          reopened.retainedStorageFormatJournalStore.readRetainedStorageFormatJournal(
+            applicationStorageDesired,
+          ),
+        ).resolves.toEqual(prepared);
+      },
+    );
+    await reopened.close();
+  });
+
+  it('makes a response-lost journal publication discoverable without claiming the retry won', async () => {
+    let loseResponseFor = '';
+    const responseLosingFs = Object.create(fsp);
+    responseLosingFs.rename = async (
+      /** @type {import('node:fs').PathLike} */ source,
+      /** @type {import('node:fs').PathLike} */ destination,
+    ) => {
+      await fsp.rename(source, destination);
+      if (String(destination).endsWith(loseResponseFor)) {
+        loseResponseFor = '';
+        throw new Error('simulated response loss after journal rename');
+      }
+    };
+    const { persistence } = await openTestPersistence({
+      fsOps: responseLosingFs,
+    });
+    const prepared = createPreparedFormatJournal(
+      baseRequest,
+      applicationStorageDesired,
+    );
+    const target = getAwsSingleNodeHostRetainedStorageFormatTarget(
+      applicationStorageDesired,
+    );
+
+    await persistence.withHostLock(
+      { deploymentInstanceId: baseRequest.deploymentInstanceId },
+      async () => {
+        loseResponseFor = `${target.filesystem.uuid}.json`;
+        await expect(
+          persistence.retainedStorageFormatJournalStore.compareAndSetRetainedStorageFormatJournal(
+            {
+              desired: applicationStorageDesired,
+              expectedJournalId: null,
+              nextJournal: prepared,
+            },
+          ),
+        ).rejects.toBeInstanceOf(
+          AwsSingleNodeHostActivationPersistenceOperationError,
+        );
+        await expect(
+          persistence.retainedStorageFormatJournalStore.readRetainedStorageFormatJournal(
+            applicationStorageDesired,
+          ),
+        ).resolves.toEqual(prepared);
+        await expect(
+          persistence.retainedStorageFormatJournalStore.compareAndSetRetainedStorageFormatJournal(
+            {
+              desired: applicationStorageDesired,
+              expectedJournalId: null,
+              nextJournal: prepared,
+            },
+          ),
+        ).resolves.toBe(false);
+      },
+    );
+    await persistence.close();
+  });
+
+  it.each([
+    'unknown-entry',
+    'symlink',
+    'hard-link',
+    'group-writable',
+    'oversized',
+    'noncanonical',
+    'cross-key',
+  ])('rejects %s corruption in the format-journal namespace', async (kind) => {
+    const { persistence, stateDirectory, registry } =
+      await openTestPersistence();
+    const prepared = createPreparedFormatJournal(
+      baseRequest,
+      applicationStorageDesired,
+    );
+    const applicationTarget = getAwsSingleNodeHostRetainedStorageFormatTarget(
+      applicationStorageDesired,
+    );
+    const controlTarget = getAwsSingleNodeHostRetainedStorageFormatTarget(
+      controlStorageDesired,
+    );
+    await persistence.withHostLock(
+      { deploymentInstanceId: baseRequest.deploymentInstanceId },
+      async () => {
+        await persistence.retainedStorageFormatJournalStore.compareAndSetRetainedStorageFormatJournal(
+          {
+            desired: applicationStorageDesired,
+            expectedJournalId: null,
+            nextJournal: prepared,
+          },
+        );
+      },
+    );
+    await persistence.close();
+
+    const formatDirectory = path.join(stateDirectory, 'format-journals');
+    const journalPath = path.join(
+      formatDirectory,
+      `${applicationTarget.filesystem.uuid}.json`,
+    );
+    if (kind === 'unknown-entry') {
+      await fsp.writeFile(path.join(formatDirectory, 'unexpected'), 'x\n', {
+        mode: 0o600,
+      });
+    } else if (kind === 'symlink') {
+      const targetPath = path.join(
+        path.dirname(stateDirectory),
+        'journal-target',
+      );
+      await fsp.rename(journalPath, targetPath);
+      await fsp.symlink(targetPath, journalPath);
+    } else if (kind === 'hard-link') {
+      await fsp.link(
+        journalPath,
+        path.join(path.dirname(stateDirectory), 'journal-hard-link'),
+      );
+    } else if (kind === 'group-writable') {
+      await fsp.chmod(journalPath, 0o620);
+    } else if (kind === 'oversized') {
+      await fsp.writeFile(journalPath, 'x'.repeat(40 * 1024), 'utf8');
+    } else if (kind === 'noncanonical') {
+      await fsp.writeFile(journalPath, JSON.stringify(prepared), 'utf8');
+    } else {
+      await fsp.rename(
+        journalPath,
+        path.join(formatDirectory, `${controlTarget.filesystem.uuid}.json`),
+      );
+    }
+
+    await expect(
+      createTestPersistence({ stateDirectory, registry }),
+    ).rejects.toBeInstanceOf(
+      AwsSingleNodeHostActivationPersistenceCorruptError,
+    );
+  });
+
   it('implements exact state and fence CAS with durable readback', async () => {
     const { persistence } = await openTestPersistence();
     const firstRequest = makeRequest(baseRequest, 10);
@@ -842,7 +1587,7 @@ describe('AWS single-node host activation persistence', () => {
     await reopened.close();
   });
 
-  itPosix.each(['fence', 'state'])(
+  itPosix.each(['fence', 'state', 'format-journal'])(
     'rejects a FIFO at the %s record path in a bounded child',
     async (recordKind) => {
       const { persistence, stateDirectory } = await openTestPersistence();
@@ -850,11 +1595,21 @@ describe('AWS single-node host activation persistence', () => {
       const fifoPath =
         recordKind === 'fence'
           ? path.join(stateDirectory, 'fence.json')
-          : path.join(
-              stateDirectory,
-              'states',
-              `${baseRequest.requestId}.json`,
-            );
+          : recordKind === 'state'
+            ? path.join(
+                stateDirectory,
+                'states',
+                `${baseRequest.requestId}.json`,
+              )
+            : path.join(
+                stateDirectory,
+                'format-journals',
+                `${
+                  getAwsSingleNodeHostRetainedStorageFormatTarget(
+                    applicationStorageDesired,
+                  ).filesystem.uuid
+                }.json`,
+              );
       await execFileAsync('mkfifo', [fifoPath], { timeout: 2_000 });
       await fsp.chmod(fifoPath, 0o600);
 
@@ -1083,7 +1838,7 @@ describe('AWS single-node host activation persistence', () => {
       ),
     ).toMatchObject({ request: requests[requests.length - 1] });
     await reopened.close();
-  });
+  }, 10_000);
 
   it('excludes concurrent host work and releases after callback completion', async () => {
     const registry = createAbstractServerRegistry();

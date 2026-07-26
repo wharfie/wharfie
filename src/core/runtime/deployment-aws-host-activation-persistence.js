@@ -17,6 +17,15 @@ import {
 } from './deployment-aws-host-activation.js';
 import { AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_ID_PREFIX } from './deployment-aws-host-agent-contract.js';
 import {
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FORMAT_JOURNAL_ID_PREFIX,
+  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FORMAT_JOURNAL_MAX_BYTES,
+  getAwsSingleNodeHostRetainedStorageFormatTarget,
+  validateAwsSingleNodeHostRetainedStorageFormatJournal,
+  validateAwsSingleNodeHostRetainedStorageFormatJournalForDesired,
+  validateAwsSingleNodeHostRetainedStorageFormatJournalSuccessor,
+} from './deployment-aws-host-retained-storage-format-journal.js';
+import { validateAwsSingleNodeHostRetainedStorageDesired } from './deployment-aws-host-retained-storage.js';
+import {
   LinuxAbstractOperationLockBusyError,
   acquireLinuxAbstractOperationLock,
 } from './linux-abstract-operation-lock.js';
@@ -30,10 +39,13 @@ export const AWS_SINGLE_NODE_HOST_ACTIVATION_MAX_STATE_DIRECTORY_ENTRIES = 128;
 
 const FENCE_FILE_NAME = 'fence.json';
 const STATES_DIRECTORY_NAME = 'states';
+const FORMAT_JOURNALS_DIRECTORY_NAME = 'format-journals';
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const MAX_DEPLOYMENT_DIRECTORY_ENTRIES = 16;
 const MAX_STATE_TEMP_RECOVERY_ENTRIES = 16;
+const MAX_FORMAT_JOURNAL_DIRECTORY_ENTRIES = 128;
+const MAX_FORMAT_JOURNAL_TEMP_RECOVERY_ENTRIES = 16;
 const TRANSACTION_LOCK_ATTEMPTS = 250;
 const TRANSACTION_LOCK_WAIT_MS = 20;
 const HOST_LOCK_DOMAIN = 'wharfie:aws-host-activation-operation-lock:v1';
@@ -61,11 +73,20 @@ const STATE_CAS_INPUT_KEYS = new Set([
   'expectedStateId',
   'nextState',
 ]);
+const FORMAT_JOURNAL_CAS_INPUT_KEYS = new Set([
+  'desired',
+  'expectedJournalId',
+  'nextJournal',
+]);
 const INSPECTION_KEYS = new Set(['authority', 'fence', 'state']);
 const TEMP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const STATE_TEMP_PATTERN =
   /^\.state\.(whaq1_[A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{1,128})\.tmp$/;
 const FENCE_TEMP_PATTERN = /^\.fence\.([A-Za-z0-9_-]{1,128})\.tmp$/;
+const FORMAT_JOURNAL_FILE_PATTERN =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/;
+const FORMAT_JOURNAL_TEMP_PATTERN =
+  /^\.format-journal\.([0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.([A-Za-z0-9_-]{1,128})\.tmp$/;
 const BOOT_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LOCK_NAMESPACE_CLAIM_KEYS = new Set([
@@ -680,7 +701,7 @@ function newestStateFirst(left, right) {
  * requires Linux real/effective UID 0 and supplies only native dependencies.
  *
  * @param {unknown} value - Exact construction options.
- * @returns {Promise<Readonly<{store: Readonly<Record<string, Function>>, withHostLock: Function, inspectActivation: Function, close: () => Promise<void>}>>} - Open persistence.
+ * @returns {Promise<Readonly<{store: Readonly<Record<string, Function>>, retainedStorageFormatJournalStore: Readonly<Record<string, Function>>, withHostLock: Function, inspectActivation: Function, close: () => Promise<void>}>>} - Open persistence.
  */
 export async function createAwsSingleNodeHostActivationPersistence(value) {
   const options = exactDataObject(
@@ -736,6 +757,10 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
     );
   }
   const statesDirectory = path.join(stateDirectory, STATES_DIRECTORY_NAME);
+  const formatJournalsDirectory = path.join(
+    stateDirectory,
+    FORMAT_JOURNALS_DIRECTORY_NAME,
+  );
   const fencePath = path.join(stateDirectory, FENCE_FILE_NAME);
   const lockScope = JSON.stringify([
     String(expectedUid),
@@ -762,6 +787,28 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
       'AWS single-node host activation persistence requestId',
     );
     return path.join(statesDirectory, `${requestId}.json`);
+  }
+
+  /** @param {string} filesystemUuid @returns {string} */
+  function getFormatJournalPath(filesystemUuid) {
+    if (
+      typeof filesystemUuid !== 'string' ||
+      !FORMAT_JOURNAL_FILE_PATTERN.test(`${filesystemUuid}.json`)
+    ) {
+      throw new AwsSingleNodeHostActivationPersistenceCorruptError();
+    }
+    return path.join(formatJournalsDirectory, `${filesystemUuid}.json`);
+  }
+
+  /** @param {unknown} desired @returns {Readonly<Record<string, any>>} */
+  function getStoreFormatJournalTarget(desired) {
+    const target = getAwsSingleNodeHostRetainedStorageFormatTarget(desired);
+    if (target.deploymentInstanceId !== deploymentInstanceId) {
+      throw new TypeError(
+        'AWS single-node host retained-storage format journal desired state does not match this store.',
+      );
+    }
+    return target;
   }
 
   /** @returns {Promise<() => Promise<void>>} */
@@ -861,6 +908,33 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
   }
 
   /**
+   * @param {string} filesystemUuid - Canonical journal storage key.
+   * @returns {Promise<Readonly<Record<string, any>>|null>} - Journal or null.
+   */
+  async function readFormatJournalRaw(filesystemUuid) {
+    await assertTrustedDirectory(fsOps, formatJournalsDirectory, expectedUid);
+    const stored = await readPrivateText({
+      fsOps,
+      filePath: getFormatJournalPath(filesystemUuid),
+      expectedUid,
+      maxBytes:
+        AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FORMAT_JOURNAL_MAX_BYTES + 1,
+    });
+    if (stored === null) return null;
+    const journal = parseCanonicalRecord(
+      stored.text,
+      validateAwsSingleNodeHostRetainedStorageFormatJournal,
+    );
+    if (
+      journal.target.deploymentInstanceId !== deploymentInstanceId ||
+      journal.target.filesystem.uuid !== filesystemUuid
+    ) {
+      throw new AwsSingleNodeHostActivationPersistenceCorruptError();
+    }
+    return journal;
+  }
+
+  /**
    * Validate and read every bounded state-directory entry. Strictly patterned
    * private temporary files are the only entries cleanup may remove without
    * parsing as durable state.
@@ -930,6 +1004,55 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
   }
 
   /**
+   * Authenticate every bounded format-journal entry and remove only exact
+   * private temporary files left before rename. Durable journals are never
+   * pruned automatically.
+   * @returns {Promise<number>} - Authenticated durable journal count.
+   */
+  async function cleanFormatJournalTempsAndValidateRaw() {
+    await assertTrustedDirectory(fsOps, formatJournalsDirectory, expectedUid);
+    const entries = await readBoundedDirectory(
+      fsOps,
+      formatJournalsDirectory,
+      MAX_FORMAT_JOURNAL_DIRECTORY_ENTRIES +
+        MAX_FORMAT_JOURNAL_TEMP_RECOVERY_ENTRIES,
+    );
+    let durableCount = 0;
+    let temporaryCount = 0;
+    let removedTemporary = false;
+    for (const entry of entries) {
+      const filePath = path.join(formatJournalsDirectory, entry.name);
+      const temporary = FORMAT_JOURNAL_TEMP_PATTERN.exec(entry.name);
+      if (temporary) {
+        temporaryCount += 1;
+        if (temporaryCount > MAX_FORMAT_JOURNAL_TEMP_RECOVERY_ENTRIES) {
+          throw new AwsSingleNodeHostActivationPersistenceCapacityError();
+        }
+        const stats = await fsOps.lstat(filePath);
+        assertPrivateStats(stats, 'file', expectedUid, PRIVATE_FILE_MODE);
+        await fsOps.unlink(filePath);
+        removedTemporary = true;
+        continue;
+      }
+      const durable = FORMAT_JOURNAL_FILE_PATTERN.exec(entry.name);
+      if (!entry.isFile() || durable === null) {
+        throw new AwsSingleNodeHostActivationPersistenceCorruptError();
+      }
+      durableCount += 1;
+      if (durableCount > MAX_FORMAT_JOURNAL_DIRECTORY_ENTRIES) {
+        throw new AwsSingleNodeHostActivationPersistenceCapacityError();
+      }
+      if ((await readFormatJournalRaw(durable[1])) === null) {
+        throw new AwsSingleNodeHostActivationPersistenceCorruptError();
+      }
+    }
+    if (removedTemporary) {
+      await syncDirectory(fsOps, formatJournalsDirectory);
+    }
+    return durableCount;
+  }
+
+  /**
    * Remove only deterministic excess history that the current local fence
    * proves superseded. Current, same-generation ambiguous, and higher
    * state-before-fence records are never pruned.
@@ -979,7 +1102,8 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
     for (const entry of entries) {
       if (
         entry.name === FENCE_FILE_NAME ||
-        entry.name === STATES_DIRECTORY_NAME
+        entry.name === STATES_DIRECTORY_NAME ||
+        entry.name === FORMAT_JOURNALS_DIRECTORY_NAME
       ) {
         continue;
       }
@@ -1008,16 +1132,19 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
     );
     await ensurePrivateDirectory(fsOps, stateDirectory, expectedUid);
     await ensurePrivateDirectory(fsOps, statesDirectory, expectedUid);
+    await ensurePrivateDirectory(fsOps, formatJournalsDirectory, expectedUid);
     // The preceding ensure authenticates this exact private directory but
     // syncs only its parent. Sync the record-bearing directory itself before
     // reading so a predecessor's rename ambiguity becomes durable truth after
     // a process restart rather than escaping the predecessor's memory poison.
     await syncDirectory(fsOps, statesDirectory);
+    await syncDirectory(fsOps, formatJournalsDirectory);
     const releaseHost = await acquireHostLock();
     try {
       await withTransaction(async () => {
         await cleanFenceTempsRaw();
         await cleanupAndRetainRaw();
+        await cleanFormatJournalTempsAndValidateRaw();
       });
     } finally {
       await releaseHost();
@@ -1058,6 +1185,14 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
     }
     if (closing && (!admission || admission.active !== true)) {
       throw new AwsSingleNodeHostActivationPersistenceClosedError();
+    }
+  }
+
+  /** @returns {void} */
+  function assertActiveHostLockAdmission() {
+    const admission = admittedHostLock.getStore();
+    if (!admission || admission.active !== true) {
+      throw new AwsSingleNodeHostActivationPersistenceOperationError();
     }
   }
 
@@ -1163,6 +1298,7 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
           await withTransaction(async () => {
             await cleanFenceTempsRaw();
             await cleanupAndRetainRaw();
+            await cleanFormatJournalTempsAndValidateRaw();
           });
           try {
             return await admittedHostLock.run(
@@ -1183,6 +1319,112 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
       }),
     );
   }
+
+  /**
+   * Read one role-specific journal only while this deployment's host lock is
+   * actively admitting the caller.
+   * @param {unknown} desired - Exact current retained-storage desired state.
+   * @returns {Promise<Readonly<Record<string, any>>|null>} - Matching journal.
+   */
+  function readRetainedStorageFormatJournal(desired) {
+    assertActiveHostLockAdmission();
+    return enter(() =>
+      protectOperation(async () => {
+        const canonicalDesired =
+          validateAwsSingleNodeHostRetainedStorageDesired(desired);
+        const target = getStoreFormatJournalTarget(canonicalDesired);
+        return await withTransaction(async () => {
+          await cleanFormatJournalTempsAndValidateRaw();
+          const current = await readFormatJournalRaw(target.filesystem.uuid);
+          if (current === null) return null;
+          return validateAwsSingleNodeHostRetainedStorageFormatJournalForDesired(
+            current,
+            canonicalDesired,
+          );
+        });
+      }),
+    );
+  }
+
+  /**
+   * Publish an initial or exact successor journal under the actual durable
+   * current ID. This capability never deletes, resets, or authorizes a
+   * physical formatter.
+   * @param {unknown} value - Exact desired-bound journal CAS.
+   * @returns {Promise<boolean>} - Literal definite winner.
+   */
+  function compareAndSetRetainedStorageFormatJournal(value) {
+    assertActiveHostLockAdmission();
+    return enter(() =>
+      protectOperation(async () => {
+        const input = exactDataObject(
+          value,
+          FORMAT_JOURNAL_CAS_INPUT_KEYS,
+          'AWS single-node host retained-storage format journal CAS',
+        );
+        const desired = validateAwsSingleNodeHostRetainedStorageDesired(
+          input.desired,
+        );
+        const target = getStoreFormatJournalTarget(desired);
+        const expectedJournalId = input.expectedJournalId;
+        if (expectedJournalId !== null) {
+          assertDomainSeparatedSha256Id(
+            expectedJournalId,
+            AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FORMAT_JOURNAL_ID_PREFIX,
+            'AWS single-node host retained-storage format journal CAS expectedJournalId',
+          );
+        }
+        const next =
+          validateAwsSingleNodeHostRetainedStorageFormatJournalForDesired(
+            input.nextJournal,
+            desired,
+          );
+        return await withTransaction(async () => {
+          const durableCount = await cleanFormatJournalTempsAndValidateRaw();
+          const current = await readFormatJournalRaw(target.filesystem.uuid);
+          const matchingCurrent =
+            current === null
+              ? null
+              : validateAwsSingleNodeHostRetainedStorageFormatJournalForDesired(
+                  current,
+                  desired,
+                );
+          if ((matchingCurrent?.journalId ?? null) !== expectedJournalId) {
+            return false;
+          }
+          if (matchingCurrent?.journalId === next.journalId) return false;
+          const successor =
+            validateAwsSingleNodeHostRetainedStorageFormatJournalSuccessor(
+              matchingCurrent,
+              next,
+            );
+          if (
+            matchingCurrent === null &&
+            durableCount >= MAX_FORMAT_JOURNAL_DIRECTORY_ENTRIES
+          ) {
+            throw new AwsSingleNodeHostActivationPersistenceCapacityError();
+          }
+          const token = nextToken();
+          await writePrivateTextAtomic({
+            fsOps,
+            filePath: getFormatJournalPath(target.filesystem.uuid),
+            text: canonicalRecordText(successor),
+            expectedUid,
+            temporaryPath: path.join(
+              formatJournalsDirectory,
+              `.format-journal.${target.filesystem.uuid}.${token}.tmp`,
+            ),
+          });
+          return true;
+        });
+      }),
+    );
+  }
+
+  const retainedStorageFormatJournalStore = Object.freeze({
+    readRetainedStorageFormatJournal,
+    compareAndSetRetainedStorageFormatJournal,
+  });
 
   /**
    * @param {string} value - Deployment key.
@@ -1455,14 +1697,20 @@ export async function createAwsSingleNodeHostActivationPersistence(value) {
     return closePromise;
   }
 
-  return Object.freeze({ store, withHostLock, inspectActivation, close });
+  return Object.freeze({
+    store,
+    retainedStorageFormatJournalStore,
+    withHostLock,
+    inspectActivation,
+    close,
+  });
 }
 
 /**
  * Open the production Linux/root persistence boundary at the one fixed
  * `/var/lib` layout. Caller input cannot redirect durable root state.
  * @param {unknown} value - Exact `{deploymentInstanceId}`.
- * @returns {Promise<Readonly<{store: Readonly<Record<string, Function>>, withHostLock: Function, inspectActivation: Function, close: () => Promise<void>}>>} - Open persistence.
+ * @returns {Promise<Readonly<{store: Readonly<Record<string, Function>>, retainedStorageFormatJournalStore: Readonly<Record<string, Function>>, withHostLock: Function, inspectActivation: Function, close: () => Promise<void>}>>} - Open persistence.
  */
 export async function openAwsSingleNodeHostActivationPersistence(value) {
   const options = exactDataObject(
