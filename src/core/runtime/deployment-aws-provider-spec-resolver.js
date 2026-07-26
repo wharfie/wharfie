@@ -1,6 +1,13 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact provider-boundary contracts are clearer than parser-specific expansions. */
 
 import {
+  AwsSingleNodeMachineImageEvidenceConflictError,
+  AwsSingleNodeMachineImageEvidenceTransientError,
+  AwsSingleNodeMachineImageEvidenceUnknownError,
+  decodeAwsSingleNodeExactMachineImageParameterResponse,
+  decodeAwsSingleNodeExactMachineImageResponse,
+} from './deployment-aws-machine-image-evidence.js';
+import {
   AWS_SINGLE_NODE_MACHINE_IMAGE_PARAMETERS,
   createAwsSingleNodeProviderSpec,
   validateAwsSingleNodeProviderSpecContext,
@@ -47,14 +54,9 @@ const REQUIRED_CLIENT_METHODS = Object.freeze([
   'describeInstanceTypeOfferings',
   'getEbsDefaultKmsKeyId',
 ]);
-const AMI_ID_PATTERN = /^ami-[0-9a-f]{8,32}$/;
-const SNAPSHOT_ID_PATTERN = /^snap-[0-9a-f]{8,32}$/;
-const ROOT_DEVICE_NAME_PATTERN = /^\/dev\/(?:xvd|sd)[a-z](?:[1-9][0-9]*)?$/;
-const AWS_ACCOUNT_ID_PATTERN = /^[0-9]{12}$/;
 const AVAILABILITY_ZONE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-az[1-9][0-9]*$/;
 const KMS_KEY_ARN_PATTERN =
   /^arn:([a-z0-9-]+):kms:([a-z0-9-]+):([0-9]{12}):key\/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$/;
-const TRANSITIONAL_IMAGE_STATES = new Set(['pending', 'transient']);
 const INSTANCE_TYPE_OFFERING_MAX_RESULTS = 1000;
 const INSTANCE_TYPE_OFFERING_MAX_PAGES = 10;
 
@@ -247,15 +249,9 @@ function validateContext(value, keys, configuredScope) {
   return context;
 }
 
-/** @param {Readonly<Record<string, any>>} providerScope @param {string} parameterName @returns {string} */
-function parameterArn(providerScope, parameterName) {
-  return `arn:${providerScope.partition}:ssm:${providerScope.region}::parameter${parameterName}`;
-}
-
 /**
- * Turn one strict SSM response into a frozen selection. Its timestamp is
- * validated but deliberately excluded from the content-addressed provider
- * specification because it is provider observation metadata, not behavior.
+ * Translate pure machine-image evidence into this resolver's public error
+ * contract without changing its retry classifications.
  * @param {unknown} value - GetParameter response.
  * @param {Readonly<Record<string, any>>} providerScope - Exact AWS scope.
  * @param {string} parameterName - Fixed AL2023 public parameter.
@@ -268,66 +264,27 @@ function validateParameterResponse(
   parameterName,
   expectedVersion,
 ) {
-  if (
-    !isPlainObject(value) ||
-    value.Parameter === undefined ||
-    !isPlainObject(value.Parameter)
-  ) {
-    throw new ProviderResponseUnknownError();
+  try {
+    return decodeAwsSingleNodeExactMachineImageParameterResponse(
+      value,
+      providerScope,
+      parameterName,
+      expectedVersion,
+    );
+  } catch (error) {
+    if (error instanceof AwsSingleNodeMachineImageEvidenceConflictError) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    if (error instanceof AwsSingleNodeMachineImageEvidenceUnknownError) {
+      throw new ProviderResponseUnknownError();
+    }
+    throw error;
   }
-  const parameter = value.Parameter;
-  const modifiedAt =
-    parameter.LastModifiedDate instanceof Date
-      ? parameter.LastModifiedDate.getTime()
-      : Number.NaN;
-  const selector = parameter.Selector;
-  const selectorMatches =
-    selector === undefined ||
-    (expectedVersion !== null && selector === `:${expectedVersion}`);
-  if (
-    parameter.Name !== parameterName ||
-    parameter.Type !== 'String' ||
-    parameter.DataType !== 'text' ||
-    parameter.ARN !== parameterArn(providerScope, parameterName) ||
-    typeof parameter.Value !== 'string' ||
-    !AMI_ID_PATTERN.test(parameter.Value) ||
-    !Number.isSafeInteger(parameter.Version) ||
-    parameter.Version < 1 ||
-    (expectedVersion !== null && parameter.Version !== expectedVersion) ||
-    !Number.isFinite(modifiedAt) ||
-    modifiedAt < 0 ||
-    !selectorMatches ||
-    parameter.SourceResult !== undefined
-  ) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  return deepFreeze({
-    name: parameterName,
-    version: parameter.Version,
-    imageId: parameter.Value,
-  });
-}
-
-/** @param {unknown} value @param {number} now @returns {boolean} */
-function isNonexpiredDeprecation(value, now) {
-  if (value === undefined) return true;
-  if (typeof value !== 'string') return false;
-  const match =
-    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/u.exec(value);
-  if (!match) return false;
-  const milliseconds = Date.parse(value);
-  const normalized = `${match[1]}.${(match[2] || '').padEnd(3, '0')}Z`;
-  return (
-    Number.isFinite(milliseconds) &&
-    new Date(milliseconds).toISOString() === normalized &&
-    milliseconds > now
-  );
 }
 
 /**
- * Validate the one exact EC2 image returned for a frozen SSM selection.
- * Pending/transient states are distinguished so the caller may re-read this
- * exact AMI without ever returning to the moving SSM alias.
+ * Translate pure machine-image evidence into this resolver's public error
+ * contract without changing its retry classifications.
  * @param {unknown} value - DescribeImages response.
  * @param {Readonly<{name: string, version: number, imageId: string}>} selection - Frozen SSM selection.
  * @param {'x86_64'|'arm64'} architecture - Exact target architecture.
@@ -335,101 +292,25 @@ function isNonexpiredDeprecation(value, now) {
  * @returns {Readonly<Record<string, any>>} - Provider-spec machine-image receipt.
  */
 function validateImageResponse(value, selection, architecture, now) {
-  if (!isPlainObject(value) || !Array.isArray(value.Images)) {
-    throw new ProviderResponseUnknownError();
+  try {
+    return decodeAwsSingleNodeExactMachineImageResponse(
+      value,
+      selection,
+      architecture,
+      now,
+    );
+  } catch (error) {
+    if (error instanceof AwsSingleNodeMachineImageEvidenceConflictError) {
+      throw new AwsSingleNodeProviderSpecConflictError();
+    }
+    if (error instanceof AwsSingleNodeMachineImageEvidenceUnknownError) {
+      throw new ProviderResponseUnknownError();
+    }
+    if (error instanceof AwsSingleNodeMachineImageEvidenceTransientError) {
+      throw new ImageTransitionError();
+    }
+    throw error;
   }
-  if (value.NextToken !== undefined && value.NextToken !== null) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  if (value.Images.length === 0) {
-    throw new ImageTransitionError();
-  }
-  if (value.Images.length !== 1) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  if (!isPlainObject(value.Images[0])) {
-    throw new ProviderResponseUnknownError();
-  }
-  const image = value.Images[0];
-  if (image.ImageId !== selection.imageId) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  if (TRANSITIONAL_IMAGE_STATES.has(image.State)) {
-    throw new ImageTransitionError();
-  }
-  if (
-    typeof image.OwnerId !== 'string' ||
-    !AWS_ACCOUNT_ID_PATTERN.test(image.OwnerId) ||
-    image.ImageOwnerAlias !== 'amazon' ||
-    image.Public !== true ||
-    image.Architecture !== architecture ||
-    image.ImageType !== 'machine' ||
-    image.RootDeviceType !== 'ebs' ||
-    image.VirtualizationType !== 'hvm' ||
-    image.EnaSupport !== true ||
-    image.Platform !== undefined ||
-    image.PlatformDetails !== 'Linux/UNIX' ||
-    image.PublicSsmParameterName !== selection.name.slice(1) ||
-    image.ImageAllowed === false ||
-    !isNonexpiredDeprecation(image.DeprecationTime, now)
-  ) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  if (image.State !== 'available') {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  if (
-    typeof image.RootDeviceName !== 'string' ||
-    !ROOT_DEVICE_NAME_PATTERN.test(image.RootDeviceName) ||
-    !Array.isArray(image.BlockDeviceMappings) ||
-    image.BlockDeviceMappings.length !== 1 ||
-    !isPlainObject(image.BlockDeviceMappings[0])
-  ) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  const rootMapping = image.BlockDeviceMappings[0];
-  if (
-    rootMapping.DeviceName !== image.RootDeviceName ||
-    rootMapping.VirtualName !== undefined ||
-    rootMapping.NoDevice !== undefined ||
-    !isPlainObject(rootMapping.Ebs)
-  ) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  const rootEbs = rootMapping.Ebs;
-  if (
-    typeof rootEbs.SnapshotId !== 'string' ||
-    !SNAPSHOT_ID_PATTERN.test(rootEbs.SnapshotId) ||
-    rootEbs.VolumeType !== 'gp3' ||
-    !Number.isSafeInteger(rootEbs.VolumeSize) ||
-    rootEbs.VolumeSize < 8 ||
-    rootEbs.VolumeSize > 64 ||
-    rootEbs.Encrypted !== false ||
-    rootEbs.DeleteOnTermination !== true
-  ) {
-    throw new AwsSingleNodeProviderSpecConflictError();
-  }
-  return deepFreeze({
-    sourceParameter: {
-      name: selection.name,
-      version: selection.version,
-    },
-    imageId: selection.imageId,
-    ownerAccountId: image.OwnerId,
-    architecture,
-    imageType: 'machine',
-    rootDeviceType: 'ebs',
-    virtualizationType: 'hvm',
-    enaSupport: true,
-    rootDeviceName: image.RootDeviceName,
-    rootBlockDevice: {
-      snapshotId: rootEbs.SnapshotId,
-      volumeType: 'gp3',
-      volumeSizeGiB: rootEbs.VolumeSize,
-      encrypted: false,
-      deleteOnTermination: true,
-    },
-  });
 }
 
 /** @param {Record<string, any>} value @param {string} key @param {unknown} expected @returns {void} */
