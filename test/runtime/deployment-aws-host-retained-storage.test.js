@@ -21,6 +21,10 @@ import {
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_SCHEMA_VERSION,
 } from '../../src/core/runtime/deployment-aws-host-runtime-identity.js';
 import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+} from '../../src/core/runtime/deployment-aws-host-runtime-account.js';
+import {
   clone,
   expectDeepFrozen,
   makeFixture,
@@ -29,8 +33,8 @@ import {
 
 /** @typedef {Record<string, any>} AnyRecord */
 
-const RUNTIME_UID = 1001;
-const RUNTIME_GID = 1002;
+const RUNTIME_UID = AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID;
+const RUNTIME_GID = AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID;
 
 /** @template T @param {T} value @returns {T} */
 function deepFreeze(value) {
@@ -142,8 +146,6 @@ function makeAdapter(
       ? createAwsSingleNodeHostApplicationStorageAdapter
       : createAwsSingleNodeHostControlStorageAdapter;
   const adapter = create({
-    runtimeUid: RUNTIME_UID,
-    runtimeGid: RUNTIME_GID,
     command: { inspect, converge },
     ...optionOverrides,
   });
@@ -321,6 +323,12 @@ describe('AWS single-node host retained storage', () => {
         candidate.directory.uid = 65_534;
       },
       (/** @type {AnyRecord} */ candidate) => {
+        candidate.directory.uid = RUNTIME_UID + 1;
+      },
+      (/** @type {AnyRecord} */ candidate) => {
+        candidate.directory.gid = RUNTIME_GID + 1;
+      },
+      (/** @type {AnyRecord} */ candidate) => {
         candidate.attachmentBindingId = candidate.volumeBindingId;
       },
     ];
@@ -474,15 +482,17 @@ describe('AWS single-node host retained storage', () => {
     expect(() =>
       createAwsSingleNodeHostApplicationStorageAdapter({
         runtimeUid: RUNTIME_UID,
-        runtimeGid: RUNTIME_GID,
+        command,
+      }),
+    ).toThrow(/runtimeUid is not supported/u);
+    expect(() =>
+      createAwsSingleNodeHostApplicationStorageAdapter({
         command,
         role: 'control-state',
       }),
     ).toThrow(/role is not supported/u);
     expect(() =>
       createAwsSingleNodeHostControlStorageAdapter({
-        runtimeUid: RUNTIME_UID,
-        runtimeGid: RUNTIME_GID,
         command: {
           get inspect() {
             throw new Error('must not invoke accessor');
@@ -629,27 +639,25 @@ describe('AWS single-node host retained storage', () => {
     expectDeepFrozen(result);
   });
 
-  it('binds factory UID/GID while generic validation accepts only their strict shape', async () => {
+  it('binds both desired roles and both evidence validators to the fixed runtime account', async () => {
     const request = createAwsSingleNodeHostActivationRequest(
       makeFixture().requestContext,
     );
     const application = await makeApplicationEvidence(request);
-    const genericEvidence = clone(application.evidence);
-    genericEvidence.directory.uid = 2001;
-    genericEvidence.directory.gid = 2002;
-    const generic = validateAwsSingleNodeHostApplicationStorageEvidence(
-      genericEvidence,
-      application.context,
-    );
-    expect(generic.directory).toMatchObject({ uid: 2001, gid: 2002 });
-
-    const { adapter } = makeAdapter('application', () => ({
-      status: 'settled',
-      evidence: genericEvidence,
-    }));
-    await expect(adapter.observe(application.context)).resolves.toEqual({
-      status: 'conflict',
+    expect(application.desired.directory).toMatchObject({
+      uid: RUNTIME_UID,
+      gid: RUNTIME_GID,
     });
+    for (const key of ['uid', 'gid']) {
+      const substituted = clone(application.evidence);
+      substituted.directory[key] += 1;
+      expect(() =>
+        validateAwsSingleNodeHostApplicationStorageEvidence(
+          substituted,
+          application.context,
+        ),
+      ).toThrow(/exact fixed wharfie-runtime account/u);
+    }
 
     /** @type {Readonly<AnyRecord>|undefined} */
     let controlDesired;
@@ -665,17 +673,22 @@ describe('AWS single-node host retained storage', () => {
     await control.adapter.observe(controlContext);
     if (controlDesired === undefined)
       throw new Error('control desired missing');
-    const differentControlAccount = /** @type {AnyRecord} */ (
-      clone(evidenceFromDesired(controlDesired))
-    );
-    differentControlAccount.directory.uid = 2001;
-    differentControlAccount.directory.gid = 2002;
-    expect(() =>
-      validateAwsSingleNodeHostControlStorageEvidence(
-        differentControlAccount,
-        controlContext,
-      ),
-    ).toThrow(/cross-role-runtime-account-mismatch/u);
+    expect(controlDesired.directory).toMatchObject({
+      uid: RUNTIME_UID,
+      gid: RUNTIME_GID,
+    });
+    for (const key of ['uid', 'gid']) {
+      const substituted = /** @type {AnyRecord} */ (
+        clone(evidenceFromDesired(controlDesired))
+      );
+      substituted.directory[key] += 1;
+      expect(() =>
+        validateAwsSingleNodeHostControlStorageEvidence(
+          substituted,
+          controlContext,
+        ),
+      ).toThrow(/exact fixed wharfie-runtime account/u);
+    }
   });
 
   it('binds stable request evidence while allowing reboot-variable device identity', async () => {

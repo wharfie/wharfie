@@ -10,6 +10,15 @@ import {
   getAwsSingleNodeBootstrapBytes,
 } from '../../src/core/runtime/deployment-aws-node-bootstrap-contract.js';
 import { sha256Base64Url } from '../../src/core/runtime/content-id.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GECOS,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_SHELL,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER,
+} from '../../src/core/runtime/deployment-aws-host-runtime-account.js';
 
 describe('AWS single-node bootstrap contract', () => {
   it('returns deterministic bytes without exposing its private buffer', () => {
@@ -29,9 +38,9 @@ describe('AWS single-node bootstrap contract', () => {
   it('pins the versioned domain-separated digest of the exact raw bytes', () => {
     const bytes = getAwsSingleNodeBootstrapBytes();
 
-    expect(AWS_SINGLE_NODE_NODE_BOOTSTRAP_CONTRACT_VERSION).toBe(2);
+    expect(AWS_SINGLE_NODE_NODE_BOOTSTRAP_CONTRACT_VERSION).toBe(3);
     expect(AWS_SINGLE_NODE_BOOTSTRAP_DIGEST_DOMAIN).toBe(
-      'wharfie:aws-single-node-bootstrap:v2',
+      'wharfie:aws-single-node-bootstrap:v3',
     );
     expect(AWS_SINGLE_NODE_BOOTSTRAP_MAX_RAW_BYTES).toBe(16_384);
     expect(AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST).toEqual({
@@ -45,7 +54,7 @@ describe('AWS single-node bootstrap contract', () => {
     });
     expect(AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST).toEqual({
       algorithm: 'sha256',
-      value: '2wVex9gsS0vcLFvb6FJX0_PvtfRLXMxbXNuFltpsPzg',
+      value: 'ojMgit_HvWEtmgQoLbQ224MDEzCMCCLaB4z59SFZJW0',
     });
     expect(AWS_SINGLE_NODE_NODE_BOOTSTRAP_DIGEST.value).toMatch(
       /^[A-Za-z0-9_-]{43}$/,
@@ -58,7 +67,7 @@ describe('AWS single-node bootstrap contract', () => {
     const text = bytes.toString('utf8');
     const base64 = getAwsSingleNodeBootstrapBase64();
 
-    expect(bytes.byteLength).toBe(12_992);
+    expect(bytes.byteLength).toBe(14_651);
     expect(bytes.byteLength).toBeLessThanOrEqual(
       AWS_SINGLE_NODE_BOOTSTRAP_MAX_RAW_BYTES,
     );
@@ -68,7 +77,7 @@ describe('AWS single-node bootstrap contract', () => {
     expect(text).not.toContain('\r');
     expect(text).not.toContain('\0');
     expect(base64).toBe(getAwsSingleNodeBootstrapBase64());
-    expect(base64).toHaveLength(17_324);
+    expect(base64).toHaveLength(19_536);
     expect(Buffer.from(base64, 'base64')).toEqual(bytes);
 
     const syntax = spawnSync('/bin/bash', ['-n'], {
@@ -99,86 +108,108 @@ describe('AWS single-node bootstrap contract', () => {
       'set -Eeuo pipefail\numask 027\nexport PATH=/usr/sbin:/usr/bin:/sbin:/bin\nexport LANG=C\nexport LC_ALL=C\n',
     );
     expect(text).toContain(
+      [
+        `readonly runtime_expected_user=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER}`,
+        `readonly runtime_expected_group=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP}`,
+        `readonly runtime_expected_uid=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}`,
+        `readonly runtime_expected_gid=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID}`,
+        `readonly runtime_expected_gecos=${JSON.stringify(
+          AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GECOS,
+        )}`,
+        `readonly runtime_expected_home=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME}`,
+        `readonly runtime_expected_shell=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_SHELL}`,
+      ].join('\n'),
+    );
+    expect(text).toContain(
       'validate_runtime_id_number() {\n  case "$1" in\n    \'\'|0|*[!0-9]*|0[0-9]*|???????????*) exit 1 ;;\n  esac\n  if [ "$1" -gt 4294967293 ] || [ "$1" -eq 65534 ]; then',
     );
     expect(text).toContain(
-      'validate_runtime_group() {\n  runtime_group_record=$(/usr/bin/getent group wharfie-runtime)',
+      'validate_runtime_group() {\n  runtime_group_record=$(/usr/bin/getent group "$runtime_expected_group")',
     );
     expect(text).toContain(
       'IFS=: read -r runtime_group_name runtime_group_marker runtime_gid runtime_group_members runtime_group_extra <<< "$runtime_group_record"',
     );
     expect(text).toContain(
-      'if [ "$runtime_group_name" != wharfie-runtime ] || [ "$runtime_group_marker" != x ] || [ -n "$runtime_group_members" ] || [ -n "$runtime_group_extra" ]; then',
+      'if [ "$runtime_group_name" != "$runtime_expected_group" ] || [ "$runtime_group_marker" != x ] || [ "$runtime_gid" != "$runtime_expected_gid" ] || [ -n "$runtime_group_members" ] || [ -n "$runtime_group_extra" ]; then',
     );
     expect(text).toContain('validate_runtime_id_number "$runtime_gid"');
     expect(text).toContain(
       'validate_runtime_id_number "$runtime_uid"\n  validate_runtime_id_number "$runtime_user_gid"\n  if [ "$runtime_user_gid" -ne "$runtime_gid" ]; then',
     );
     expect(text).toContain(
-      'runtime_group_name_count=$(/usr/bin/getent group | /usr/bin/awk -F: \'$1 == "wharfie-runtime" { count += 1 } END { print count + 0 }\')',
+      'runtime_group_numeric_record=$(/usr/bin/getent group "$runtime_expected_gid")\n  if [ "$runtime_group_record" != "$runtime_group_numeric_record" ]; then',
     );
     expect(text).toContain(
-      'runtime_group_gid_count=$(/usr/bin/getent group | /usr/bin/awk -F: -v gid="$runtime_gid" \'$3 == gid { count += 1 } END { print count + 0 }\')',
+      'runtime_user_numeric_record=$(/usr/bin/getent passwd "$runtime_expected_uid")\n  if [ "$runtime_user_record" != "$runtime_user_numeric_record" ]; then',
     );
     expect(text).toContain(
-      'runtime_group_numeric_name_count=$(/usr/bin/getent group | /usr/bin/awk -F: -v name="$runtime_gid" -v plus_name="+$runtime_gid" \'$1 == name || $1 == plus_name { count += 1 } END { print count + 0 }\')',
+      '[ -n "$runtime_user_gecos" ] || [ "$runtime_user_home" != "$runtime_expected_home" ]',
     );
     expect(text).toContain(
-      'runtime_user_name_count=$(/usr/bin/getent passwd | /usr/bin/awk -F: \'$1 == "wharfie-runtime" { count += 1 } END { print count + 0 }\')',
+      'validate_runtime_group_shadow_record() {\n  runtime_group_shadow_record=$1',
     );
     expect(text).toContain(
-      'runtime_user_uid_count=$(/usr/bin/getent passwd | /usr/bin/awk -F: -v uid="$runtime_uid" \'$3 == uid { count += 1 } END { print count + 0 }\')',
+      'validate_runtime_user_shadow_record() {\n  runtime_user_shadow_record=$1',
     );
     expect(text).toContain(
-      'runtime_user_gid_count=$(/usr/bin/getent passwd | /usr/bin/awk -F: -v gid="$runtime_gid" \'$4 == gid { count += 1 } END { print count + 0 }\')',
+      'runtime_group_preflight=$(/usr/bin/getent group "$runtime_expected_group") || runtime_group_status=$?',
     );
     expect(text).toContain(
-      'runtime_user_numeric_name_count=$(/usr/bin/getent passwd | /usr/bin/awk -F: -v name="$runtime_uid" -v plus_name="+$runtime_uid" \'$1 == name || $1 == plus_name { count += 1 } END { print count + 0 }\')',
+      'runtime_user_preflight=$(/usr/bin/getent passwd "$runtime_expected_user") || runtime_user_status=$?',
     );
     expect(text).toContain(
-      'validate_runtime_group_shadow() {\n  runtime_group_shadow_record=$(/usr/bin/getent gshadow wharfie-runtime)',
+      'runtime_gid_preflight=$(/usr/bin/getent group "$runtime_expected_gid") || runtime_gid_status=$?',
     );
     expect(text).toContain(
-      'if [ "$runtime_group_shadow_name" != wharfie-runtime ] || [ "$runtime_group_shadow_hash" != "!" ] || [ -n "$runtime_group_shadow_admins" ] || [ -n "$runtime_group_shadow_members" ] || [ -n "$runtime_group_shadow_extra" ]; then',
+      'runtime_uid_preflight=$(/usr/bin/getent passwd "$runtime_expected_uid") || runtime_uid_status=$?',
     );
     expect(text).toContain(
-      'validate_runtime_user_shadow() {\n  runtime_user_shadow_record=$(/usr/bin/getent shadow wharfie-runtime)',
+      'runtime_gshadow_preflight=$(/usr/bin/getent gshadow "$runtime_expected_group") || runtime_gshadow_status=$?',
     );
     expect(text).toContain(
-      'if [ "$runtime_user_shadow_name" != wharfie-runtime ] || [ "$runtime_user_shadow_hash" != "!" ] || [ -n "$runtime_user_shadow_extra" ]; then',
-    );
-    expect(text).toContain(
-      'runtime_group_preflight=$(/usr/bin/getent group wharfie-runtime) || runtime_group_status=$?',
-    );
-    expect(text).toContain(
-      'runtime_user_preflight=$(/usr/bin/getent passwd wharfie-runtime) || runtime_user_status=$?',
+      'runtime_shadow_preflight=$(/usr/bin/getent shadow "$runtime_expected_user") || runtime_shadow_status=$?',
     );
     expect(text).toContain(
       'if [ "$runtime_group_status" -eq 2 ] && [ "$runtime_user_status" -eq 2 ]; then',
     );
     expect(text).toContain(
+      'if [ "$runtime_gid_status" -ne 2 ] || [ "$runtime_uid_status" -ne 2 ] || [ "$runtime_gshadow_status" -ne 2 ] || [ "$runtime_shadow_status" -ne 2 ]; then',
+    );
+    expect(text).toContain(
       'elif [ "$runtime_group_status" -eq 0 ] && [ "$runtime_user_status" -eq 2 ]; then',
     );
     expect(text).toContain(
-      'runtime_preflight_gid_users=$(/usr/bin/getent passwd | /usr/bin/awk -F: -v gid="$runtime_gid" \'$4 == gid { count += 1 } END { print count + 0 }\')',
+      'if [ "$runtime_gid_status" -ne 0 ] || [ "$runtime_uid_status" -ne 2 ] || [ "$runtime_gshadow_status" -ne 0 ] || [ "$runtime_shadow_status" -ne 2 ]',
     );
     expect(text).toContain(
       'elif [ "$runtime_group_status" -eq 0 ] && [ "$runtime_user_status" -eq 0 ]; then',
     );
-    expect(text).toContain('/usr/sbin/groupadd --system wharfie-runtime');
     expect(text).toContain(
-      'runtime_new_group_gid_users=$(/usr/bin/getent passwd | /usr/bin/awk -F: -v gid="$runtime_gid" \'$4 == gid { count += 1 } END { print count + 0 }\')',
+      'if [ "$runtime_gid_status" -ne 0 ] || [ "$runtime_uid_status" -ne 0 ] || [ "$runtime_gshadow_status" -ne 0 ] || [ "$runtime_shadow_status" -ne 0 ]',
     );
     expect(text).toContain(
-      "validate_runtime_group\n/usr/sbin/groupmod -p '!' wharfie-runtime\nvalidate_runtime_group\nvalidate_runtime_group_shadow\n/usr/bin/sync --file-system /etc",
+      '/usr/sbin/groupadd --system --gid "$runtime_expected_gid" "$runtime_expected_group"',
     );
-    expect(text).toContain('/usr/sbin/useradd --system --gid wharfie-runtime');
     expect(text).toContain(
-      '/usr/sbin/useradd --system --gid wharfie-runtime --no-create-home --home-dir /var/lib/wharfie-runtime --shell /usr/sbin/nologin wharfie-runtime',
+      'runtime_group_shadow_before=$(/usr/bin/getent gshadow "$runtime_expected_group")\nvalidate_runtime_group_shadow_record "$runtime_group_shadow_before"\nruntime_group_shadow_locked_expected=$runtime_group_shadow_locked_record',
     );
-    expect(text).toContain('runtime_groups=$(/usr/bin/id -G wharfie-runtime)');
     expect(text).toContain(
-      "esac\nvalidate_runtime_identity\n/usr/sbin/usermod -p '!' wharfie-runtime\nvalidate_runtime_identity\nvalidate_runtime_user_shadow\n/usr/bin/sync --file-system /etc",
+      'runtime_group_shadow_after=$(/usr/bin/getent gshadow "$runtime_expected_group")\nif [ "$runtime_group_shadow_after" != "$runtime_group_shadow_locked_expected" ]; then',
+    );
+    expect(text).toContain(
+      '/usr/sbin/useradd --system --uid "$runtime_expected_uid" --gid "$runtime_expected_group"',
+    );
+    expect(text).toContain(
+      '/usr/sbin/useradd --system --uid "$runtime_expected_uid" --gid "$runtime_expected_group" --comment "$runtime_expected_gecos" --no-create-home --home-dir "$runtime_expected_home" --shell "$runtime_expected_shell" "$runtime_expected_user"',
+    );
+    expect(text).toContain(
+      'runtime_groups=$(/usr/bin/id -G "$runtime_expected_user")',
+    );
+    expect(text).toContain(
+      'runtime_user_shadow_before=$(/usr/bin/getent shadow "$runtime_expected_user")\nvalidate_runtime_user_shadow_record "$runtime_user_shadow_before"\nruntime_user_shadow_locked_expected=$runtime_user_shadow_locked_record',
+    );
+    expect(text).toContain(
+      'runtime_user_shadow_after=$(/usr/bin/getent shadow "$runtime_expected_user")\nif [ "$runtime_user_shadow_after" != "$runtime_user_shadow_locked_expected" ]; then',
     );
     const firstMutation = text.indexOf('/usr/sbin/groupadd ');
     expect(text).toContain('runtime_identity_state=absent');
@@ -188,20 +219,22 @@ describe('AWS single-node bootstrap contract', () => {
       firstMutation,
     );
     expect(text.indexOf('runtime_user_preflight=')).toBeLessThan(firstMutation);
-    expect(text.indexOf('runtime_preflight_group_names=')).toBeLessThan(
+    expect(text.indexOf('runtime_gid_preflight=')).toBeLessThan(firstMutation);
+    expect(text.indexOf('runtime_uid_preflight=')).toBeLessThan(firstMutation);
+    expect(text.indexOf('runtime_gshadow_preflight=')).toBeLessThan(
       firstMutation,
     );
-    expect(text.indexOf('runtime_preflight_user_names=')).toBeLessThan(
+    expect(text.indexOf('runtime_shadow_preflight=')).toBeLessThan(
       firstMutation,
+    );
+    expect(text).not.toMatch(
+      /getent (?:passwd|group|shadow|gshadow)(?: \||\))/u,
     );
     expect(text).not.toContain(
       'elif [ "$runtime_group_status" -eq 2 ] && [ "$runtime_user_status" -eq 0 ]; then',
     );
     expect(text).not.toContain('--user-group');
     expect(text).not.toContain('--create-home');
-    expect(text).not.toContain(
-      '/usr/sbin/usermod --gid wharfie-runtime --home /var/lib/wharfie-runtime --shell /usr/sbin/nologin',
-    );
     expect(text).not.toContain(
       '/usr/sbin/useradd --system --gid "$runtime_gid" ',
     );
@@ -214,33 +247,33 @@ describe('AWS single-node bootstrap contract', () => {
 
     expect(text).toContain('verify_runtime_directory /var/lib 0 0 755');
     expect(text).toContain(
-      'if [ -L /var/lib/wharfie-runtime ]; then\n  exit 1\nelif [ -e /var/lib/wharfie-runtime ]; then\n  verify_runtime_directory /var/lib/wharfie-runtime "$runtime_uid" "$runtime_gid" 700',
+      'if [ -L "$runtime_expected_home" ]; then\n  exit 1\nelif [ -e "$runtime_expected_home" ]; then\n  verify_runtime_directory "$runtime_expected_home" "$runtime_uid" "$runtime_gid" 700',
     );
     expect(text).toContain(
-      '/usr/bin/install -d -o wharfie-runtime -g wharfie-runtime -m 0700 -- /var/lib/wharfie-runtime',
+      '/usr/bin/install -d -o "$runtime_expected_user" -g "$runtime_expected_group" -m 0700 -- "$runtime_expected_home"',
     );
     expect(text).toContain(
-      'for runtime_descendant in /var/lib/wharfie-runtime/tmp /var/lib/wharfie-runtime/.config /var/lib/wharfie-runtime/.config/systemd /var/lib/wharfie-runtime/.config/systemd/user; do',
+      'for runtime_descendant in "$runtime_expected_home/tmp" "$runtime_expected_home/.config" "$runtime_expected_home/.config/systemd" "$runtime_expected_home/.config/systemd/user"; do',
     );
     expect(text).toContain(
-      `${setprivPrefix}/usr/bin/install -d -m 0700 -- /var/lib/wharfie-runtime/tmp`,
+      `${setprivPrefix}/usr/bin/install -d -m 0700 -- "$runtime_expected_home/tmp"`,
     );
     expect(text).toContain(
-      `${setprivPrefix}/usr/bin/install -d -m 0750 -- /var/lib/wharfie-runtime/.config /var/lib/wharfie-runtime/.config/systemd /var/lib/wharfie-runtime/.config/systemd/user`,
+      `${setprivPrefix}/usr/bin/install -d -m 0750 -- "$runtime_expected_home/.config" "$runtime_expected_home/.config/systemd" "$runtime_expected_home/.config/systemd/user"`,
     );
     expect(text).toContain(
-      `${setprivPrefix}/usr/bin/chmod 0700 -- /var/lib/wharfie-runtime/tmp`,
+      `${setprivPrefix}/usr/bin/chmod 0700 -- "$runtime_expected_home/tmp"`,
     );
     expect(text).toContain(
-      `${setprivPrefix}/usr/bin/chmod 0750 -- /var/lib/wharfie-runtime/.config /var/lib/wharfie-runtime/.config/systemd /var/lib/wharfie-runtime/.config/systemd/user`,
+      `${setprivPrefix}/usr/bin/chmod 0750 -- "$runtime_expected_home/.config" "$runtime_expected_home/.config/systemd" "$runtime_expected_home/.config/systemd/user"`,
     );
     expect(text.split(setprivPrefix)).toHaveLength(5);
     for (const [directory, mode] of [
-      ['/var/lib/wharfie-runtime', '700'],
-      ['/var/lib/wharfie-runtime/tmp', '700'],
-      ['/var/lib/wharfie-runtime/.config', '750'],
-      ['/var/lib/wharfie-runtime/.config/systemd', '750'],
-      ['/var/lib/wharfie-runtime/.config/systemd/user', '750'],
+      ['"$runtime_expected_home"', '700'],
+      ['"$runtime_expected_home/tmp"', '700'],
+      ['"$runtime_expected_home/.config"', '750'],
+      ['"$runtime_expected_home/.config/systemd"', '750'],
+      ['"$runtime_expected_home/.config/systemd/user"', '750'],
     ]) {
       expect(text).toContain(
         `verify_runtime_directory ${directory} "$runtime_uid" "$runtime_gid" ${mode}`,
@@ -259,9 +292,10 @@ describe('AWS single-node bootstrap contract', () => {
       rootInstallLines.filter((line) =>
         line.includes('/var/lib/wharfie-runtime'),
       ),
-    ).toEqual([
-      '/usr/bin/install -d -o wharfie-runtime -g wharfie-runtime -m 0700 -- /var/lib/wharfie-runtime',
-    ]);
+    ).toEqual([]);
+    expect(rootInstallLines).toContain(
+      '/usr/bin/install -d -o "$runtime_expected_user" -g "$runtime_expected_group" -m 0700 -- "$runtime_expected_home"',
+    );
     expect(text).toContain(
       'verify_runtime_directory /etc 0 0 755\nensure_runtime_directory /etc/wharfie 0 0 755',
     );
@@ -299,7 +333,9 @@ describe('AWS single-node bootstrap contract', () => {
     expect(text).not.toContain(
       'cat > "$runtime_manager_dropin/50-wharfie-imds.conf"',
     );
-    expect(text).toContain('/usr/bin/loginctl enable-linger wharfie-runtime');
+    expect(text).toContain(
+      '/usr/bin/loginctl enable-linger "$runtime_expected_user"',
+    );
     expect(text).toContain(
       '/usr/bin/systemctl restart "user@$runtime_uid.service"',
     );

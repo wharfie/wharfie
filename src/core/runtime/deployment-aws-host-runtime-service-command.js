@@ -17,19 +17,22 @@ import { DEPLOYMENT_ARTIFACT_STAGE_MAX_BYTES } from './deployment-artifact-stage
 import { AWS_SINGLE_NODE_HOST_ACTIVATION_INTENT_ID_PREFIX } from './deployment-aws-host-activation.js';
 import { AWS_SINGLE_NODE_HOST_ACTIVATION_REQUEST_ID_PREFIX } from './deployment-aws-host-agent-contract.js';
 import { AWS_SINGLE_NODE_HOST_ARTIFACT_PROJECTION_ROOT } from './deployment-aws-host-artifact-projection.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GECOS,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_SHELL,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER,
+} from './deployment-aws-host-runtime-account.js';
 import { assertDeploymentInstanceId } from './deployment-provider-scope.js';
 import { assertLogicalId } from './logical-id.js';
 import { validateEmbeddedRevisionRuntimePair } from '../resources/builds/lib/revision-runtime-assets.js';
 
-export const AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER = 'wharfie-runtime';
-export const AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_GROUP = 'wharfie-runtime';
-export const AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_HOME =
-  '/var/lib/wharfie-runtime';
-export const AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_SHELL = '/usr/sbin/nologin';
-
-const RUNTIME_TMP = `${AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_HOME}/tmp`;
-const RUNTIME_CONFIG = `${AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_HOME}/.config`;
-const RUNTIME_DATA = `${AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_HOME}/.local/share`;
+const RUNTIME_TMP = `${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME}/tmp`;
+const RUNTIME_CONFIG = `${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME}/.config`;
+const RUNTIME_DATA = `${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME}/.local/share`;
 const GETENT_PATH = '/usr/bin/getent';
 const ID_PATH = '/usr/bin/id';
 const SETPRIV_PATH = '/usr/bin/setpriv';
@@ -110,7 +113,6 @@ const DESIRED_CONVERGENCE_KIND = 'wharfie.service.desired-convergence';
 
 const ACCOUNT_COMMAND_TIMEOUT_MILLISECONDS = 5_000;
 const ACCOUNT_RECORD_MAX_OUTPUT_BYTES = 16 * 1024;
-const ACCOUNT_DATABASE_MAX_OUTPUT_BYTES = 1024 * 1024;
 const SERVICE_RUNTIME_MAX_SECONDS = 300;
 const SERVICE_STOP_TIMEOUT_SECONDS = 30;
 const SERVICE_COMMAND_TIMEOUT_MILLISECONDS =
@@ -751,8 +753,8 @@ async function resolveRuntimeAccount(ports) {
     const [
       selectedPasswdBytes,
       selectedGroupBytes,
-      allPasswdBytes,
-      allGroupBytes,
+      numericPasswdBytes,
+      numericGroupBytes,
       idUidBytes,
       idGidBytes,
       idGroupsBytes,
@@ -760,110 +762,79 @@ async function resolveRuntimeAccount(ports) {
       queryAccountDatabase(
         ports,
         GETENT_PATH,
-        ['passwd', AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER],
+        ['passwd', AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER],
         ACCOUNT_RECORD_MAX_OUTPUT_BYTES,
       ),
       queryAccountDatabase(
         ports,
         GETENT_PATH,
-        ['group', AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_GROUP],
+        ['group', AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP],
         ACCOUNT_RECORD_MAX_OUTPUT_BYTES,
       ),
       queryAccountDatabase(
         ports,
         GETENT_PATH,
-        ['passwd'],
-        ACCOUNT_DATABASE_MAX_OUTPUT_BYTES,
+        ['passwd', String(AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID)],
+        ACCOUNT_RECORD_MAX_OUTPUT_BYTES,
       ),
       queryAccountDatabase(
         ports,
         GETENT_PATH,
-        ['group'],
-        ACCOUNT_DATABASE_MAX_OUTPUT_BYTES,
-      ),
-      queryAccountDatabase(
-        ports,
-        ID_PATH,
-        ['-u', AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER],
+        ['group', String(AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID)],
         ACCOUNT_RECORD_MAX_OUTPUT_BYTES,
       ),
       queryAccountDatabase(
         ports,
         ID_PATH,
-        ['-g', AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER],
+        ['-u', AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER],
         ACCOUNT_RECORD_MAX_OUTPUT_BYTES,
       ),
       queryAccountDatabase(
         ports,
         ID_PATH,
-        ['-G', AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER],
+        ['-g', AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER],
+        ACCOUNT_RECORD_MAX_OUTPUT_BYTES,
+      ),
+      queryAccountDatabase(
+        ports,
+        ID_PATH,
+        ['-G', AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER],
         ACCOUNT_RECORD_MAX_OUTPUT_BYTES,
       ),
     ]);
     const selectedPasswdLines = decodeCanonicalLines(selectedPasswdBytes);
     const selectedGroupLines = decodeCanonicalLines(selectedGroupBytes);
-    if (selectedPasswdLines.length !== 1 || selectedGroupLines.length !== 1) {
+    const numericPasswdLines = decodeCanonicalLines(numericPasswdBytes);
+    const numericGroupLines = decodeCanonicalLines(numericGroupBytes);
+    if (
+      selectedPasswdLines.length !== 1 ||
+      selectedGroupLines.length !== 1 ||
+      numericPasswdLines.length !== 1 ||
+      numericGroupLines.length !== 1 ||
+      numericPasswdLines[0] !== selectedPasswdLines[0] ||
+      numericGroupLines[0] !== selectedGroupLines[0]
+    ) {
       throw new AwsSingleNodeHostRuntimeServiceAccountError();
     }
     const selectedPasswd = parsePasswdLine(selectedPasswdLines[0]);
     const selectedGroup = parseGroupLine(selectedGroupLines[0]);
     if (
-      selectedPasswd.name !== AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER ||
+      selectedPasswd.name !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER ||
       selectedPasswd.marker !== 'x' ||
       positiveLinuxIdentity(selectedPasswd.uid, 'runtime uid') !==
         selectedPasswd.uid ||
-      selectedPasswd.home !== AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_HOME ||
-      selectedPasswd.shell !== AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_SHELL ||
-      selectedGroup.name !== AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_GROUP ||
+      selectedPasswd.uid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID ||
+      selectedPasswd.gid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID ||
+      selectedPasswd.gecos !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GECOS ||
+      selectedPasswd.home !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME ||
+      selectedPasswd.shell !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_SHELL ||
+      selectedGroup.name !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP ||
       selectedGroup.marker !== 'x' ||
       positiveLinuxIdentity(selectedGroup.gid, 'runtime gid') !==
         selectedGroup.gid ||
+      selectedGroup.gid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID ||
       selectedGroup.members.length !== 0 ||
       selectedPasswd.gid !== selectedGroup.gid
-    ) {
-      throw new AwsSingleNodeHostRuntimeServiceAccountError();
-    }
-    const allPasswd = decodeCanonicalLines(allPasswdBytes).map(parsePasswdLine);
-    const allGroups = decodeCanonicalLines(allGroupBytes).map(parseGroupLine);
-    const passwdNameMatches = allPasswd.filter(
-      (record) => record.name === AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER,
-    );
-    const groupNameMatches = allGroups.filter(
-      (record) => record.name === AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_GROUP,
-    );
-    const uidMatches = allPasswd.filter(
-      (record) => record.uid === selectedPasswd.uid,
-    );
-    const primaryGidMatches = allPasswd.filter(
-      (record) => record.gid === selectedGroup.gid,
-    );
-    const groupGidMatches = allGroups.filter(
-      (record) => record.gid === selectedGroup.gid,
-    );
-    const ambiguousUserNames = new Set([
-      String(selectedPasswd.uid),
-      `+${selectedPasswd.uid}`,
-    ]);
-    const ambiguousGroupNames = new Set([
-      String(selectedGroup.gid),
-      `+${selectedGroup.gid}`,
-    ]);
-    if (
-      passwdNameMatches.length !== 1 ||
-      passwdNameMatches[0].text !== selectedPasswd.text ||
-      groupNameMatches.length !== 1 ||
-      groupNameMatches[0].text !== selectedGroup.text ||
-      uidMatches.length !== 1 ||
-      uidMatches[0].text !== selectedPasswd.text ||
-      primaryGidMatches.length !== 1 ||
-      primaryGidMatches[0].text !== selectedPasswd.text ||
-      groupGidMatches.length !== 1 ||
-      groupGidMatches[0].text !== selectedGroup.text ||
-      allPasswd.some((record) => ambiguousUserNames.has(record.name)) ||
-      allGroups.some((record) => ambiguousGroupNames.has(record.name)) ||
-      allGroups.some((record) =>
-        record.members.includes(AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER),
-      )
     ) {
       throw new AwsSingleNodeHostRuntimeServiceAccountError();
     }
@@ -878,7 +849,10 @@ async function resolveRuntimeAccount(ports) {
     ) {
       throw new AwsSingleNodeHostRuntimeServiceAccountError();
     }
-    return Object.freeze({ uid: selectedPasswd.uid, gid: selectedGroup.gid });
+    return Object.freeze({
+      uid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+      gid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+    });
   } catch (error) {
     if (error instanceof AwsSingleNodeHostRuntimeServiceAccountError) {
       throw error;
@@ -1013,9 +987,9 @@ async function verifyProjectedArtifact(ports, input, runtimeGid) {
 /** @param {Readonly<{uid: number, gid: number}>} account @returns {readonly string[]} */
 function runtimeEnvironment(account) {
   return Object.freeze([
-    `HOME=${AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_HOME}`,
-    `USER=${AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER}`,
-    `LOGNAME=${AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_USER}`,
+    `HOME=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME}`,
+    `USER=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER}`,
+    `LOGNAME=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER}`,
     `XDG_CONFIG_HOME=${RUNTIME_CONFIG}`,
     `XDG_DATA_HOME=${RUNTIME_DATA}`,
     `XDG_RUNTIME_DIR=/run/user/${account.uid}`,
@@ -1090,7 +1064,7 @@ function createLauncher(action, input, account) {
     '--pipe',
     '--collect',
     `--unit=${unitName}`,
-    `--working-directory=${AWS_SINGLE_NODE_HOST_RUNTIME_SERVICE_HOME}`,
+    `--working-directory=${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME}`,
     '--property=Type=exec',
     '--property=NoNewPrivileges=yes',
     '--property=UMask=0077',

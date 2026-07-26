@@ -19,11 +19,16 @@ import {
   createAwsSingleNodeHostRuntimeServiceCommand,
   createAwsSingleNodeHostRuntimeServiceCommandForTest,
 } from '../../src/core/runtime/deployment-aws-host-runtime-service-command.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+} from '../../src/core/runtime/deployment-aws-host-runtime-account.js';
 
 const PROJECTION_ROOT = '/test/wharfie/app/v1';
-const RUNTIME_UID = 987;
-const RUNTIME_GID = 988;
-const RUNTIME_HOME = '/var/lib/wharfie-runtime';
+const RUNTIME_UID = AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID;
+const RUNTIME_GID = AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID;
+const RUNTIME_HOME = AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_HOME;
 const SETPRIV_PATH = '/usr/bin/setpriv';
 const SYSTEMD_RUN_PATH = '/usr/bin/systemd-run';
 const SYSTEMCTL_PATH = '/usr/bin/systemctl';
@@ -226,8 +231,8 @@ function makePorts(bytes, options = {}) {
   const account = {
     selectedPasswd: `wharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
     selectedGroup: `wharfie-runtime:x:${RUNTIME_GID}:\n`,
-    allPasswd: `root:x:0:0:root:/root:/bin/bash\nwharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
-    allGroup: `root:x:0:\nwharfie-runtime:x:${RUNTIME_GID}:\n`,
+    numericPasswd: `wharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
+    numericGroup: `wharfie-runtime:x:${RUNTIME_GID}:\n`,
     idUid: `${RUNTIME_UID}\n`,
     idGid: `${RUNTIME_GID}\n`,
     idGroups: `${RUNTIME_GID}\n`,
@@ -291,14 +296,18 @@ function makePorts(bytes, options = {}) {
       async (command, args, processOptions) => {
         processCalls.push([command, [...args], processOptions]);
         if (command === '/usr/bin/getent') {
+          if (args[0] === 'passwd' && args[1] === String(RUNTIME_UID)) {
+            return exited(0, account.numericPasswd);
+          }
+          if (args[0] === 'group' && args[1] === String(RUNTIME_GID)) {
+            return exited(0, account.numericGroup);
+          }
           if (args[0] === 'passwd' && args.length === 2) {
             return exited(0, account.selectedPasswd);
           }
           if (args[0] === 'group' && args.length === 2) {
             return exited(0, account.selectedGroup);
           }
-          if (args[0] === 'passwd') return exited(0, account.allPasswd);
-          if (args[0] === 'group') return exited(0, account.allGroup);
         }
         if (command === '/usr/bin/id') {
           if (args[0] === '-u') return exited(0, account.idUid);
@@ -397,7 +406,7 @@ describe('AWS single-node host runtime service command', () => {
     expect(fixture.ports.platform).not.toHaveBeenCalled();
   });
 
-  it('re-resolves the exact runtime account, verifies through O_NOFOLLOW, and launches fixed clean argv after close', async () => {
+  it('resolves against keyed-only NSS, verifies through O_NOFOLLOW, and launches fixed clean argv after close', async () => {
     const bytes = Buffer.from('exact projected sea bytes');
     const fixture = makePorts(bytes);
     const command = createAwsSingleNodeHostRuntimeServiceCommandForTest(
@@ -432,14 +441,20 @@ describe('AWS single-node host runtime service command', () => {
       expect.arrayContaining([
         ['/usr/bin/getent', ['passwd', 'wharfie-runtime']],
         ['/usr/bin/getent', ['group', 'wharfie-runtime']],
-        ['/usr/bin/getent', ['passwd']],
-        ['/usr/bin/getent', ['group']],
+        ['/usr/bin/getent', ['passwd', String(RUNTIME_UID)]],
+        ['/usr/bin/getent', ['group', String(RUNTIME_GID)]],
         ['/usr/bin/id', ['-u', 'wharfie-runtime']],
         ['/usr/bin/id', ['-g', 'wharfie-runtime']],
         ['/usr/bin/id', ['-G', 'wharfie-runtime']],
       ]),
     );
     expect(accountCalls).toHaveLength(7);
+    expect(
+      accountCalls.some(
+        ([commandPath, args]) =>
+          commandPath === '/usr/bin/getent' && args.length !== 2,
+      ),
+    ).toBe(false);
 
     const launcher = fixture.processCalls.find(
       ([commandPath, args]) =>
@@ -832,66 +847,13 @@ describe('AWS single-node host runtime service command', () => {
 
   it.each([
     [
-      'explicit group membership',
+      'fixed group membership',
       {
-        allGroup: `root:x:0:\nwheel:x:10:wharfie-runtime\nwharfie-runtime:x:${RUNTIME_GID}:\n`,
+        selectedGroup: `wharfie-runtime:x:${RUNTIME_GID}:alias\n`,
+        numericGroup: `wharfie-runtime:x:${RUNTIME_GID}:alias\n`,
       },
     ],
     ['supplementary id group', { idGroups: `${RUNTIME_GID} 10\n` }],
-    [
-      'duplicate uid',
-      {
-        allPasswd: `root:x:0:0:root:/root:/bin/bash\nalias:x:${RUNTIME_UID}:100::/var/empty:/usr/sbin/nologin\nwharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
-      },
-    ],
-    [
-      'duplicate primary gid',
-      {
-        allPasswd: `root:x:0:0:root:/root:/bin/bash\nalias:x:986:${RUNTIME_GID}::/var/empty:/usr/sbin/nologin\nwharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
-      },
-    ],
-    [
-      'duplicate group gid',
-      {
-        allGroup: `root:x:0:\nalias:x:${RUNTIME_GID}:\nwharfie-runtime:x:${RUNTIME_GID}:\n`,
-      },
-    ],
-    [
-      'duplicate fixed passwd name with different ids',
-      {
-        allPasswd: `root:x:0:0:root:/root:/bin/bash\nwharfie-runtime:x:986:100::/var/empty:/usr/sbin/nologin\nwharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
-      },
-    ],
-    [
-      'duplicate fixed group name with different gid',
-      {
-        allGroup: `root:x:0:\nwharfie-runtime:x:100:\nwharfie-runtime:x:${RUNTIME_GID}:\n`,
-      },
-    ],
-    [
-      'bare numeric uid name',
-      {
-        allPasswd: `root:x:0:0:root:/root:/bin/bash\n${RUNTIME_UID}:x:986:100::/var/empty:/usr/sbin/nologin\nwharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
-      },
-    ],
-    [
-      'plus numeric uid name',
-      {
-        allPasswd: `root:x:0:0:root:/root:/bin/bash\n+${RUNTIME_UID}:x:986:100::/var/empty:/usr/sbin/nologin\nwharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
-      },
-    ],
-    [
-      'bare numeric gid name',
-      {
-        allGroup: `root:x:0:\n${RUNTIME_GID}:x:100:\nwharfie-runtime:x:${RUNTIME_GID}:\n`,
-      },
-    ],
-    [
-      'plus numeric gid name',
-      {
-        allGroup: `root:x:0:\n+${RUNTIME_GID}:x:100:\nwharfie-runtime:x:${RUNTIME_GID}:\n`,
-      },
-    ],
     [
       'nobody uid',
       {
@@ -899,9 +861,40 @@ describe('AWS single-node host runtime service command', () => {
       },
     ],
     [
+      'usable but substituted uid',
+      {
+        selectedPasswd: `wharfie-runtime:x:${RUNTIME_UID + 1}:${RUNTIME_GID}::${RUNTIME_HOME}:/usr/sbin/nologin\n`,
+      },
+    ],
+    [
+      'usable but substituted gid',
+      {
+        selectedGroup: `wharfie-runtime:x:${RUNTIME_GID + 1}:\n`,
+      },
+    ],
+    [
+      'numeric uid lookup alias',
+      {
+        numericPasswd: `alias:x:${RUNTIME_UID}:${RUNTIME_GID}::/var/empty:/usr/sbin/nologin\n`,
+      },
+    ],
+    [
+      'numeric gid lookup alias',
+      {
+        numericGroup: `alias:x:${RUNTIME_GID}:\n`,
+      },
+    ],
+    [
       'wrong shell',
       {
         selectedPasswd: `wharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}::${RUNTIME_HOME}:/bin/bash\n`,
+      },
+    ],
+    [
+      'nonempty GECOS',
+      {
+        selectedPasswd: `wharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}:Wharfie:${RUNTIME_HOME}:/usr/sbin/nologin\n`,
+        numericPasswd: `wharfie-runtime:x:${RUNTIME_UID}:${RUNTIME_GID}:Wharfie:${RUNTIME_HOME}:/usr/sbin/nologin\n`,
       },
     ],
   ])('rejects an invalid runtime account: %s', async (_label, account) => {

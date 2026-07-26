@@ -20,6 +20,10 @@ import {
   validateAwsSingleNodeHostDeactivationRequestContext,
 } from '../../src/core/runtime/deployment-aws-host-deactivation-contract.js';
 import { createAwsSingleNodeHostActivationRequest } from '../../src/core/runtime/deployment-aws-host-agent-contract.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+} from '../../src/core/runtime/deployment-aws-host-runtime-account.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import { createDeploymentHead } from '../../src/core/runtime/deployment-head.js';
 import { createDeploymentPlan } from '../../src/core/runtime/deployment-plan.js';
@@ -331,8 +335,8 @@ describe('AWS single-node host deactivation contract', () => {
       runtimeAccount: {
         user: 'wharfie-runtime',
         group: 'wharfie-runtime',
-        uid: 1001,
-        gid: 1002,
+        uid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+        gid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
       },
       service: {
         unitName: `wharfie-${destroy.activationRequest.appId}.service`,
@@ -374,12 +378,11 @@ describe('AWS single-node host deactivation contract', () => {
       );
     }
     expect(request.userManagerGate).toEqual({
-      userManagerUnitName: 'user@1001.service',
-      dropInPath:
-        '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-storage.conf',
+      userManagerUnitName: `user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service`,
+      dropInPath: `/etc/systemd/system/user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service.d/60-wharfie-retained-storage.conf`,
       legacyDropInPaths: [
-        '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-application-state.conf',
-        '/etc/systemd/system/user@1001.service.d/61-wharfie-retained-control-state.conf',
+        `/etc/systemd/system/user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service.d/60-wharfie-retained-application-state.conf`,
+        `/etc/systemd/system/user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service.d/61-wharfie-retained-control-state.conf`,
       ],
       retainedMountUnitNames: request.storage.map(
         (/** @type {Readonly<AnyRecord>} */ storage) => storage.mountUnitName,
@@ -475,8 +478,8 @@ describe('AWS single-node host deactivation contract', () => {
     const substitutedGatePath = clone(request);
     substitutedGatePath.userManagerGate.dropInPath =
       substitutedGatePath.userManagerGate.dropInPath.replace(
-        'user@1001.service',
-        'user@1003.service',
+        `user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service`,
+        `user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID + 2}.service`,
       );
     expect(() =>
       validateAwsSingleNodeHostDeactivationRequest(
@@ -484,9 +487,16 @@ describe('AWS single-node host deactivation contract', () => {
       ),
     ).toThrow(/shared projection/i);
 
+    const substitutedRuntimeAccount = clone(request);
+    substitutedRuntimeAccount.runtimeAccount.uid += 1;
+    expect(() =>
+      validateAwsSingleNodeHostDeactivationRequest(
+        reidentifyRequest(substitutedRuntimeAccount),
+      ),
+    ).toThrow(/exact fixed wharfie-runtime account/i);
+
     const substitutedLegacyPath = clone(request);
-    substitutedLegacyPath.userManagerGate.legacyDropInPaths[0] =
-      '/etc/systemd/system/user@1001.service.d/60-forged.conf';
+    substitutedLegacyPath.userManagerGate.legacyDropInPaths[0] = `/etc/systemd/system/user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service.d/60-forged.conf`;
     expect(() =>
       validateAwsSingleNodeHostDeactivationRequest(
         reidentifyRequest(substitutedLegacyPath),
@@ -712,8 +722,7 @@ describe('AWS single-node host deactivation contract', () => {
     ).toThrow(/mountUnitFileStatus/i);
 
     const forgedGatePath = clone(receipt);
-    forgedGatePath.userManagerGate.dropInPath =
-      '/etc/systemd/system/user@1001.service.d/60-forged.conf';
+    forgedGatePath.userManagerGate.dropInPath = `/etc/systemd/system/user@${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service.d/60-forged.conf`;
     expect(() =>
       validateAwsSingleNodeHostDeactivationReceipt(
         reidentifyReceipt(forgedGatePath),
@@ -729,8 +738,7 @@ describe('AWS single-node host deactivation contract', () => {
     ).toThrow(/canonical V1 paths/i);
 
     const noncanonicalUserManager = clone(receipt);
-    noncanonicalUserManager.userManagerGate.userManagerUnitName =
-      'user@01001.service';
+    noncanonicalUserManager.userManagerGate.userManagerUnitName = `user@0${AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID}.service`;
     expect(() =>
       validateAwsSingleNodeHostDeactivationReceipt(
         reidentifyReceipt(noncanonicalUserManager),

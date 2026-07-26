@@ -26,8 +26,6 @@ import {
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DIRECTORY_MODE,
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_PROFILE_ID,
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE,
-  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP,
-  AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_USER,
   getAwsSingleNodeHostRetainedFilesystemUuid,
   getAwsSingleNodeHostRetainedStorageBootProjection,
   getAwsSingleNodeHostRetainedStorageLayout,
@@ -42,6 +40,12 @@ import {
   getAwsSingleNodeHostRetainedStorageByIdPath,
   getAwsSingleNodeHostRetainedStorageMountUnitName,
 } from './deployment-aws-host-retained-storage-projection.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER,
+} from './deployment-aws-host-runtime-account.js';
 import { AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX } from './deployment-aws-provider-spec.js';
 import {
   assertAwsEc2InstanceId,
@@ -400,18 +404,20 @@ function validateRuntimeAccount(value, path) {
   const account = cloneDocument(value, path);
   assertExactKeys(account, RUNTIME_ACCOUNT_KEYS, path);
   if (
-    account.user !== AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_USER ||
-    account.group !== AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP
+    account.user !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER ||
+    account.group !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP ||
+    account.uid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID ||
+    account.gid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID
   ) {
     throw new TypeError(
-      `${path} must name the fixed wharfie-runtime user and group.`,
+      `${path} must use the exact fixed wharfie-runtime account.`,
     );
   }
   return deepFreeze({
-    user: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_USER,
-    group: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP,
-    uid: linuxRuntimeId(account.uid, `${path}.uid`),
-    gid: linuxRuntimeId(account.gid, `${path}.gid`),
+    user: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER,
+    group: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP,
+    uid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+    gid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
   });
 }
 
@@ -1490,6 +1496,11 @@ function validateReceiptUserManagerGate(value, path) {
     Number(gate.userManagerUnitName.slice(5, -8)),
     `${path}.userManagerUnitName UID`,
   );
+  if (runtimeUid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID) {
+    throw new TypeError(
+      `${path}.userManagerUnitName must use the fixed wharfie-runtime UID.`,
+    );
+  }
   const userManagerUnitName = `user@${runtimeUid}.service`;
   if (gate.userManagerUnitName !== userManagerUnitName) {
     throw new TypeError(

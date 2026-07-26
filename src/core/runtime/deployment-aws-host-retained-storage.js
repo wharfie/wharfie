@@ -14,6 +14,12 @@ import {
   getAwsSingleNodeHostRetainedStorageMountUnitName,
   projectAwsSingleNodeHostRetainedStorageBoot,
 } from './deployment-aws-host-retained-storage-projection.js';
+import {
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+  AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER,
+} from './deployment-aws-host-runtime-account.js';
 import { validateAwsSingleNodeHostRuntimeIdentityEvidence } from './deployment-aws-host-runtime-identity.js';
 import { AWS_SINGLE_NODE_VOLUME_ATTACHMENT_PROVIDER_RESOURCE_ID_PREFIX } from './deployment-aws-volume-attachment-evidence.js';
 import { assertAwsEc2InstanceId } from './deployment-aws-runtime-identity-contract.js';
@@ -50,10 +56,6 @@ export const AWS_SINGLE_NODE_HOST_APPLICATION_STORAGE_EVIDENCE_KIND =
   'awsSingleNodeHostApplicationStorageEvidence';
 export const AWS_SINGLE_NODE_HOST_CONTROL_STORAGE_EVIDENCE_KIND =
   'awsSingleNodeHostControlStorageEvidence';
-export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_USER =
-  'wharfie-runtime';
-export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP =
-  'wharfie-runtime';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DIRECTORY_MODE = 0o700;
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_TYPE = 'ext4';
 export const AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_FILESYSTEM_PROFILE_ID =
@@ -77,7 +79,7 @@ const CONTROL_ROLE = Object.freeze({
 });
 const RUNTIME_IDENTITY_STEP = 'runtime-identity';
 const APPLICATION_STORAGE_STEP = 'application-storage';
-const FACTORY_KEYS = new Set(['runtimeUid', 'runtimeGid', 'command']);
+const FACTORY_KEYS = new Set(['command']);
 const COMMAND_KEYS = new Set(['inspect', 'converge']);
 const CONTEXT_KEYS = new Set(['request', 'step', 'priorEvidence']);
 const STEP_KEYS = new Set(['intentId', 'kind', 'attemptGeneration']);
@@ -86,8 +88,6 @@ const CONTROL_PRIOR_EVIDENCE_KEYS = new Set([
   RUNTIME_IDENTITY_STEP,
   APPLICATION_STORAGE_STEP,
 ]);
-const LINUX_RUNTIME_ID_MAX = 4_294_967_293;
-const LINUX_NOBODY_ID = 65_534;
 const DESIRED_KEYS = new Set([
   'schemaVersion',
   'kind',
@@ -259,17 +259,6 @@ function positiveSafeInteger(value, valuePath) {
     throw new TypeError(`${valuePath} must be a positive safe integer.`);
   }
   return Number(value);
-}
-
-/** @param {unknown} value @param {string} valuePath @returns {number} */
-function linuxRuntimeId(value, valuePath) {
-  const id = positiveSafeInteger(value, valuePath);
-  if (id > LINUX_RUNTIME_ID_MAX || id === LINUX_NOBODY_ID) {
-    throw new TypeError(
-      `${valuePath} must be a usable Linux account ID from 1 through ${LINUX_RUNTIME_ID_MAX}, excluding nobody.`,
-    );
-  }
-  return id;
 }
 
 /** @param {unknown} value @param {string} valuePath @returns {string} */
@@ -501,8 +490,8 @@ function validateContext(value, role) {
   });
 }
 
-/** @param {Readonly<Record<string, any>>} request @param {number} runtimeUid @param {number} runtimeGid @param {Readonly<Record<string, string>>} role @returns {Readonly<Record<string, any>>} */
-function createDesired(request, runtimeUid, runtimeGid, role) {
+/** @param {Readonly<Record<string, any>>} request @param {Readonly<Record<string, string>>} role @returns {Readonly<Record<string, any>>} */
+function createDesired(request, role) {
   const volume = volumeFor(request, role.capabilityKind);
   const layout = getAwsSingleNodeHostRetainedStorageLayout(request);
   const filesystemUuid = getAwsSingleNodeHostRetainedFilesystemUuid(
@@ -542,10 +531,10 @@ function createDesired(request, runtimeUid, runtimeGid, role) {
       privatePropagation: true,
     },
     directory: {
-      user: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_USER,
-      group: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP,
-      uid: runtimeUid,
-      gid: runtimeGid,
+      user: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER,
+      group: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP,
+      uid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+      gid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
       mode: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DIRECTORY_MODE,
     },
     bootWiring: {
@@ -565,19 +554,21 @@ function validateDirectory(value, valuePath) {
   const directory = exactPlainObject(value, valuePath);
   assertExactKeys(directory, DIRECTORY_KEYS, valuePath);
   if (
-    directory.user !== AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_USER ||
-    directory.group !== AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_RUNTIME_GROUP ||
+    directory.user !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_USER ||
+    directory.group !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GROUP ||
+    directory.uid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID ||
+    directory.gid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID ||
     directory.mode !== AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_DIRECTORY_MODE
   ) {
     throw new TypeError(
-      `${valuePath} must use the fixed wharfie-runtime account and 0700 mode.`,
+      `${valuePath} must use the exact fixed wharfie-runtime account and 0700 mode.`,
     );
   }
   return Object.freeze({
     user: directory.user,
     group: directory.group,
-    uid: linuxRuntimeId(directory.uid, `${valuePath}.uid`),
-    gid: linuxRuntimeId(directory.gid, `${valuePath}.gid`),
+    uid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID,
+    gid: AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID,
     mode: directory.mode,
   });
 }
@@ -868,7 +859,7 @@ function canonicalEvidence(evidence, expected, device, valuePath) {
 
 /**
  * Validate role-specific evidence against the stable request and V66 frontier.
- * UID/GID syntax is generic; a concrete factory additionally binds both IDs.
+ * The desired document and settled evidence both bind the fixed host account.
  * @param {unknown} value - Candidate evidence.
  * @param {unknown} context - Exact role-specific V66 context.
  * @param {Readonly<Record<string, string>>} role - Fixed adapter role.
@@ -895,17 +886,9 @@ function validateEvidence(value, context, role) {
   if (evidence.kind !== role.evidenceKind) {
     throw new TypeError(`${valuePath}.kind must be '${role.evidenceKind}'.`);
   }
-  const directory = validateDirectory(
-    evidence.directory,
-    `${valuePath}.directory`,
-  );
+  validateDirectory(evidence.directory, `${valuePath}.directory`);
   const device = validateDevice(evidence.device, `${valuePath}.device`);
-  const expected = createDesired(
-    validated.request,
-    directory.uid,
-    directory.gid,
-    role,
-  );
+  const expected = createDesired(validated.request, role);
   const canonical = canonicalEvidence(evidence, expected, device, valuePath);
   if (
     canonical.device.nvmeSerialVolumeId !== canonical.volumeProviderResourceId
@@ -1019,14 +1002,6 @@ function createAdapter(optionsValue, role) {
       : 'awsSingleNodeHostControlStorage options';
   const options = exactPlainObject(optionsValue, valuePath);
   assertExactKeys(options, FACTORY_KEYS, valuePath);
-  const runtimeUid = linuxRuntimeId(
-    ownDataValue(options, 'runtimeUid', valuePath),
-    `${valuePath}.runtimeUid`,
-  );
-  const runtimeGid = linuxRuntimeId(
-    ownDataValue(options, 'runtimeGid', valuePath),
-    `${valuePath}.runtimeGid`,
-  );
   const command = exactPlainObject(
     ownDataValue(options, 'command', valuePath),
     `${valuePath}.command`,
@@ -1049,7 +1024,7 @@ function createAdapter(optionsValue, role) {
     assertBoundApplicationAccount(validated);
     return Object.freeze({
       validated,
-      desired: createDesired(validated.request, runtimeUid, runtimeGid, role),
+      desired: createDesired(validated.request, role),
     });
   }
 
@@ -1057,8 +1032,10 @@ function createAdapter(optionsValue, role) {
   function assertBoundApplicationAccount(validated) {
     if (
       validated.applicationEvidence !== null &&
-      (validated.applicationEvidence.directory.uid !== runtimeUid ||
-        validated.applicationEvidence.directory.gid !== runtimeGid)
+      (validated.applicationEvidence.directory.uid !==
+        AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID ||
+        validated.applicationEvidence.directory.gid !==
+          AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID)
     ) {
       throw new AwsSingleNodeHostRetainedStorageConflictError(
         'cross-role-runtime-account-mismatch',
@@ -1071,8 +1048,8 @@ function createAdapter(optionsValue, role) {
     assertBoundApplicationAccount(validateContext(context, role));
     const canonical = validateEvidence(evidence, context, role);
     if (
-      canonical.directory.uid !== runtimeUid ||
-      canonical.directory.gid !== runtimeGid
+      canonical.directory.uid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID ||
+      canonical.directory.gid !== AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_GID
     ) {
       throw new AwsSingleNodeHostRetainedStorageConflictError(
         'runtime-account-mismatch',
@@ -1134,7 +1111,7 @@ function createAdapter(optionsValue, role) {
 /**
  * Create the application-state V66 adapter. The role is fixed by this public
  * factory and cannot be supplied or changed by its caller.
- * @param {unknown} options - Exact runtime account and command port.
+ * @param {unknown} options - Exact command port.
  * @returns {Readonly<Record<string, any>>}
  */
 export function createAwsSingleNodeHostApplicationStorageAdapter(options) {
@@ -1144,7 +1121,7 @@ export function createAwsSingleNodeHostApplicationStorageAdapter(options) {
 /**
  * Create the control-state V66 adapter. It revalidates and excludes aliases
  * with the settled application-state evidence before accepting settlement.
- * @param {unknown} options - Exact runtime account and command port.
+ * @param {unknown} options - Exact command port.
  * @returns {Readonly<Record<string, any>>}
  */
 export function createAwsSingleNodeHostControlStorageAdapter(options) {

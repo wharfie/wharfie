@@ -35,8 +35,6 @@ import {
 
 /** @typedef {Record<string, any>} AnyRecord */
 
-const RUNTIME_UID = 1001;
-const RUNTIME_GID = 1002;
 const CONTEXT_KEYS = Object.freeze(['priorEvidence', 'request', 'step']);
 const STEP_KEYS = Object.freeze(['attemptGeneration', 'intentId', 'kind']);
 
@@ -488,13 +486,9 @@ describe('AWS single-node retained storage through durable host activation', () 
           },
         },
         applicationStorage: createAwsSingleNodeHostApplicationStorageAdapter({
-          runtimeUid: RUNTIME_UID,
-          runtimeGid: RUNTIME_GID,
           command: applicationCommand.command,
         }),
         controlStorage: createAwsSingleNodeHostControlStorageAdapter({
-          runtimeUid: RUNTIME_UID,
-          runtimeGid: RUNTIME_GID,
           command: controlCommand.command,
         }),
         artifactProjection: artifactAdapter,

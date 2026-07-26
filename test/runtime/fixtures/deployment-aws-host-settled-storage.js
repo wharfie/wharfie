@@ -11,9 +11,6 @@ import { createAwsSingleNodeHostRuntimeIdentityAdapter } from '../../../src/core
 
 /** @typedef {Record<string, any>} AnyRecord */
 
-const RUNTIME_UID = 1001;
-const RUNTIME_GID = 1002;
-
 /** @template T @param {T} value @returns {T} */
 function deepFreeze(value) {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
@@ -129,8 +126,6 @@ export async function createAwsSingleNodeHostSettledStorageFixture(request) {
   }
 
   const applicationStorage = createAwsSingleNodeHostApplicationStorageAdapter({
-    runtimeUid: RUNTIME_UID,
-    runtimeGid: RUNTIME_GID,
     command: createStorageCommand(),
   });
   const applicationContext = createAwsSingleNodeHostTestStepContext(
@@ -147,8 +142,6 @@ export async function createAwsSingleNodeHostSettledStorageFixture(request) {
   }
 
   const controlStorage = createAwsSingleNodeHostControlStorageAdapter({
-    runtimeUid: RUNTIME_UID,
-    runtimeGid: RUNTIME_GID,
     command: createStorageCommand(),
   });
   const controlContext = createAwsSingleNodeHostTestStepContext(

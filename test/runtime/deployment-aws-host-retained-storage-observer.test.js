@@ -26,6 +26,7 @@ import {
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_KIND,
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_SCHEMA_VERSION,
 } from '../../src/core/runtime/deployment-aws-host-runtime-identity.js';
+import { AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID } from '../../src/core/runtime/deployment-aws-host-runtime-account.js';
 import {
   clone,
   expectDeepFrozen,
@@ -34,8 +35,7 @@ import {
 
 /** @typedef {Record<string, any>} AnyRecord */
 
-const RUNTIME_UID = 1001;
-const RUNTIME_GID = 1002;
+const RUNTIME_UID = AWS_SINGLE_NODE_HOST_RUNTIME_ACCOUNT_UID;
 const DEVICE_PATH = '/dev/nvme1n1';
 const DEVICE_MAJOR = 259;
 const DEVICE_MINOR = 1;
@@ -122,8 +122,6 @@ async function captureDesiredDocuments() {
     return { status: 'ready' };
   });
   const application = createAwsSingleNodeHostApplicationStorageAdapter({
-    runtimeUid: RUNTIME_UID,
-    runtimeGid: RUNTIME_GID,
     command: {
       inspect: applicationInspect,
       converge: jest.fn(),
@@ -136,8 +134,6 @@ async function captureDesiredDocuments() {
     return { status: 'ready' };
   });
   const control = createAwsSingleNodeHostControlStorageAdapter({
-    runtimeUid: RUNTIME_UID,
-    runtimeGid: RUNTIME_GID,
     command: {
       inspect: controlInspect,
       converge: jest.fn(),
@@ -529,7 +525,7 @@ describe('AWS single-node host retained-storage observer', () => {
     );
     expect(application.userManagerGate).toEqual(control.userManagerGate);
     expect(application.userManagerGate.dropInPath).toBe(
-      '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-storage.conf',
+      `/etc/systemd/system/user@${RUNTIME_UID}.service.d/60-wharfie-retained-storage.conf`,
     );
     expect(application.unitText).toContain(
       'Options=rw,nodev,noexec,nosuid,relatime,errors=remount-ro,private\nDirectoryMode=0700\nReadWriteOnly=yes\nTimeoutSec=90s\n',
@@ -549,8 +545,8 @@ describe('AWS single-node host retained-storage observer', () => {
       control.unitName,
     ]);
     expect(application.userManagerGate.legacyDropInPaths).toEqual([
-      '/etc/systemd/system/user@1001.service.d/60-wharfie-retained-application-state.conf',
-      '/etc/systemd/system/user@1001.service.d/61-wharfie-retained-control-state.conf',
+      `/etc/systemd/system/user@${RUNTIME_UID}.service.d/60-wharfie-retained-application-state.conf`,
+      `/etc/systemd/system/user@${RUNTIME_UID}.service.d/61-wharfie-retained-control-state.conf`,
     ]);
     expect(application.unitText).toContain(
       'X-Wharfie-Retained-Storage-Projection=wharfie-systemd-retained-storage-v2',
