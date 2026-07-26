@@ -21,6 +21,7 @@
     "src/core/**/*.js",
     "src/cli/**/*.js",
     "scripts/aws-host-retained-storage-host-preflight.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-delivery.js",
     "scripts/collect-aws-host-retained-storage-preflight-linux.js",
     "scripts/package-verification.js",
     "scripts/sea-inspector.js",
