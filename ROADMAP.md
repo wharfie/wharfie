@@ -62,7 +62,20 @@ V72 hardens the fixed runtime account and root-managed bootstrap paths, verifies
 the exact projected SEA again before every fixed-user launch, contains
 ambiguous transient execution without reusable-name ABA, and maps exact V64
 service status into V66 convergence and request-derived settlement. Selector
-delivery plus guest storage and health adapters remain.
+delivery remains. V73 adds the exact Status V3 desired-convergence proof and
+fail-closed repair authorization. V74 defines the two retained-storage
+contracts, threads them through activation, closes physical observation, and
+defines deactivation authority without mutation. V75 fixes the shared runtime
+gate and host account and adds an immutable authenticated format journal under
+the host lock. V76 proves stable blank media and the recoverable
+`null -> prepared` transition without formatting. V77 exposes that preparation
+as the exact application-storage command, proves it runs only after the V66
+kernel's definite claim, fresh dispatch authorization, current local fence, and
+V69 host-lock admission, and keeps activation pending. Blank media with any
+role-specific mount-unit projection now conflicts in both observer views,
+preventing an unproductive prepare/reobserve loop. Formatting, mounting,
+control storage, health publication, selector delivery, and production host
+wiring remain.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -119,10 +132,11 @@ selected/pre-staged source authority and running-SEA packaged authority. The
 pure privileged-host request/receipt boundary, durable activation kernel, exact
 live STS identity adapter, fixed owned host AWS lifetime, root-owned local
 persistence boundary, and authenticated current-head controller authority are
-defined; fixed-user service convergence is now concrete, while richer partial
-projection recovery, storage and health effect adapters, privileged packaging
-and selector delivery, clean-account proof, and a deployed-service readiness
-claim still follow ·
+defined; fixed-user desired convergence and authorized non-destructive
+application-storage preparation are now concrete, while disposable-host format
+evidence, destructive formatting, exact profile verification, mounting,
+control storage, health effects, privileged packaging and selector delivery,
+clean-account proof, and a deployed-service readiness claim still follow ·
 **Last updated:** 2026-07-25
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -1320,25 +1334,48 @@ uncertainty, or request-derived settlement. The fixed bootstrap still provides
 no deployment/request selector path, and the control-table lifecycle does not
 yet rule out an independently attached DynamoDB resource policy.
 
-1. Add the V73 read-only desired-convergence proof to status V3. Join durable
-   activation, authorized immutable releases, selector, receipt, exact unit
-   wiring, manager state, and resident ownership under the existing V64 lock
-   so authorized crash residue can recover without weakening foreign-state
-   refusal.
-2. Add concrete application- and control-storage adapters with exact
-   format/mount/readback plus stop/quiesce/unmount recovery, then add the V3 S3
-   health publisher and mint the V65 success receipt. Prove these stages on
-   disposable Linux.
-3. Only after that lifecycle is proven, expose the root framework host command
+V73 closes the Status V3 desired-convergence proof and fail-closed repair
+authorization. V74 closes retained application/control storage identity,
+observation, and deactivation-authority contracts without mutation. V75 fixes
+the shared two-mount gate, numeric host account, format-history contract, and
+host-lock-scoped persistence. V76 closes stable blank proof and durable
+non-destructive preparation. V77 closes the adapter-compatible preparation
+command and proves its authorized, fenced, host-lock-scoped integration while
+keeping activation pending. No formatter or mount mutation exists.
+
+1. Before formatter code, run a disposable AL2023/real-EBS proof for exact
+   e2fsprogs tools and output, `wharfie-ext4-v1` format/readback arguments,
+   NVMe/by-id identity and path-retarget containment, flush and udev behavior,
+   interruption/partial-format/power-loss classification, reboot, and
+   detach/reattach recovery. Preserve deterministic evidence and fixtures.
+2. Only after that proof, implement the destructive formatter boundary with a
+   fresh controller authorization and current local fence immediately before
+   mutation, a prepared-journal reread, immediate exact-media reobservation,
+   path-retarget-safe device access, complete profile verification, and
+   interruption recovery.
+3. Then implement persistent mount/systemd projection and runtime-manager
+   recovery, control storage, the V3 health publisher and V65 receipt, and the
+   deactivation producer/executor.
+4. After the host lifecycle is proven, expose the root framework host command
    and SEA, add SSM as wakeup/delivery rather than durable authority, and run a
    complete clean-account proof through the user's ordinary credential chain.
-4. Begin provider-backed coordinator recovery only after the single-node
+5. Begin provider-backed coordinator recovery only after the single-node
    service lifecycle and control-store fencing are proven outside a developer
    session.
 
-The latest recorded restart point is the [fixed-user service convergence
-checkpoint](llm/checkpoints/2026-07-25-v72-fixed-user-service-convergence.md).
-Its parent is the [exact host artifact projection
+The latest recorded restart point is the [authorized storage preparation
+command checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md).
+Its parent is the [closed blank-format preparation
+checkpoint](llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md),
+whose parent is the [retained-storage format journal
+checkpoint](llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md),
+whose parent is the [retained host storage boundary
+checkpoint](llm/checkpoints/2026-07-25-v74-retained-host-storage-boundary.md),
+whose parent is the [desired service convergence proof
+checkpoint](llm/checkpoints/2026-07-25-v73-desired-service-convergence-proof.md),
+whose parent is the [fixed-user service convergence
+checkpoint](llm/checkpoints/2026-07-25-v72-fixed-user-service-convergence.md),
+whose parent is the [exact host artifact projection
 checkpoint](llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md),
 whose parent is the [authenticated current-head authority
 checkpoint](llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md),
