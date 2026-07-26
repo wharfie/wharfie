@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import { createAwsSingleNodeHostActivationRequest } from '../../src/core/runtime/deployment-aws-host-agent-contract.js';
 import { getAwsSingleNodeHostActivationIntentId } from '../../src/core/runtime/deployment-aws-host-activation.js';
+import { createAwsSingleNodeHostRetainedStorageBlankFormatProof } from '../../src/core/runtime/deployment-aws-host-retained-storage-format-journal.js';
 import {
   AWS_SINGLE_NODE_HOST_APPLICATION_STORAGE_EVIDENCE_KIND,
   AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_EVIDENCE_SCHEMA_VERSION,
@@ -22,6 +23,7 @@ import {
   createAwsSingleNodeHostRetainedStorageObserver,
   createAwsSingleNodeHostRetainedStorageObserverForTest,
 } from '../../src/core/runtime/deployment-aws-host-retained-storage-observer.js';
+import { getAwsSingleNodeHostRetainedStorageByIdPath } from '../../src/core/runtime/deployment-aws-host-retained-storage-projection.js';
 import {
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_KIND,
   AWS_SINGLE_NODE_HOST_RUNTIME_IDENTITY_EVIDENCE_SCHEMA_VERSION,
@@ -52,6 +54,17 @@ function deepFreeze(value) {
   if (value === null || typeof value !== 'object') return value;
   for (const child of Object.values(value)) deepFreeze(child);
   return Object.freeze(value);
+}
+
+/** @returns {{promise: Promise<void>, resolve: () => void}} */
+function deferred() {
+  /** @type {() => void} */
+  let resolve = () => {};
+  /** @type {Promise<void>} */
+  const promise = new Promise((_resolve) => {
+    resolve = () => _resolve();
+  });
+  return { promise, resolve };
 }
 
 /** @param {Readonly<AnyRecord>} activationRequest @returns {Readonly<AnyRecord>} */
@@ -261,6 +274,7 @@ function makePorts(desired, options = {}) {
   };
   let lsblkReads = 0;
   let mountinfoReads = 0;
+  let mountNamespaceReads = 0;
   const filesystem = options.filesystem ?? 'exact';
   const boot = options.boot ?? 'exact';
   const target = options.target ?? 'exact';
@@ -364,11 +378,17 @@ function makePorts(desired, options = {}) {
         input.path ===
           AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_PID1_MOUNT_NAMESPACE_PATH
       ) {
-        return options.splitMountNamespace === true &&
+        const changed =
+          options.changeMountNamespace === true && mountNamespaceReads >= 2;
+        mountNamespaceReads += 1;
+        if (
+          options.splitMountNamespace === true &&
           input.path ===
             AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_SELF_MOUNT_NAMESPACE_PATH
-          ? 'mnt:[4026539999]'
-          : 'mnt:[4026531841]';
+        ) {
+          return 'mnt:[4026539999]';
+        }
+        return changed ? 'mnt:[4026539999]' : 'mnt:[4026531841]';
       }
       if (input.path === projection.enableLinkPath) {
         return boot === 'wrong-link'
@@ -495,7 +515,7 @@ describe('AWS single-node host retained-storage observer', () => {
     });
     expect(originalRun).toHaveBeenCalled();
     expect(fixture.ports.run).not.toHaveBeenCalled();
-    expect(Object.keys(observer)).toEqual(['inspect']);
+    expect(Object.keys(observer)).toEqual(['inspect', 'inspectBlankFormat']);
     expect(Object.isFrozen(observer)).toBe(true);
     expect(() => createAwsSingleNodeHostRetainedStorageObserver({})).toThrow(
       /accepts no options/u,
@@ -511,6 +531,180 @@ describe('AWS single-node host retained-storage observer', () => {
     expect(() =>
       createAwsSingleNodeHostRetainedStorageObserverForTest(accessor),
     ).toThrow(/own data property/u);
+  });
+
+  it.each(['absent', 'gate-only'])(
+    'mints one exact deep-frozen blank proof with %s shared-gate state',
+    async (boot) => {
+      const fixture = makePorts(applicationDesired, {
+        filesystem: 'blank',
+        mount: 'absent',
+        boot,
+      });
+      const observer = createAwsSingleNodeHostRetainedStorageObserverForTest({
+        ports: fixture.ports,
+      });
+      const expectedProof =
+        createAwsSingleNodeHostRetainedStorageBlankFormatProof({
+          desired: applicationDesired,
+          device: {
+            path: DEVICE_PATH,
+            major: DEVICE_MAJOR,
+            minor: DEVICE_MINOR,
+            nvmeModel: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL,
+            nvmeSerialVolumeId: applicationDesired.volumeProviderResourceId,
+            byIdPath: getAwsSingleNodeHostRetainedStorageByIdPath(
+              applicationDesired.volumeProviderResourceId,
+            ),
+            byIdTarget: '../../nvme1n1',
+          },
+          mountNamespace: 'mnt:[4026531841]',
+        });
+
+      const result = await observer.inspectBlankFormat(applicationDesired);
+
+      expect(result).toEqual({ status: 'blank', proof: expectedProof });
+      expectDeepFrozen(result);
+      expect(result.proof.safety).toEqual({
+        stableObservationCount: 2,
+        partitionCount: 0,
+        holderCount: 0,
+        mounted: false,
+        bootEnabled: false,
+        mountNamespace: 'mnt:[4026531841]',
+      });
+    },
+  );
+
+  it.each([
+    ['device identity changes', { changeIdentity: true }, 'unknown'],
+    ['mount state changes', { changeMount: true, mount: 'exact' }, 'conflict'],
+    ['mount namespace changes', { changeMountNamespace: true }, 'unknown'],
+    [
+      'observer and PID1 mount namespaces differ',
+      { splitMountNamespace: true },
+      'unknown',
+    ],
+  ])('does not mint a blank proof when %s', async (_label, options, status) => {
+    const fixture = makePorts(applicationDesired, {
+      filesystem: 'blank',
+      mount: 'absent',
+      boot: 'absent',
+      ...options,
+    });
+    const observer = createAwsSingleNodeHostRetainedStorageObserverForTest({
+      ports: fixture.ports,
+    });
+
+    const result = await observer.inspectBlankFormat(applicationDesired);
+
+    expect(result).toEqual({ status });
+    expect(result).not.toHaveProperty('proof');
+    expectDeepFrozen(result);
+  });
+
+  it.each([
+    [
+      'mounted blank media',
+      { filesystem: 'blank', mount: 'exact', boot: 'absent' },
+      'conflict',
+    ],
+    [
+      'held blank media',
+      { filesystem: 'blank', mount: 'absent', boot: 'absent', holders: true },
+      'conflict',
+    ],
+    [
+      'partitioned blank media',
+      { filesystem: 'blank', mount: 'absent', boot: 'absent', children: true },
+      'conflict',
+    ],
+    [
+      'a staged role unit',
+      { filesystem: 'blank', mount: 'absent', boot: 'partial' },
+      'conflict',
+    ],
+    [
+      'a gated role unit',
+      { filesystem: 'blank', mount: 'absent', boot: 'gated' },
+      'conflict',
+    ],
+    [
+      'an enabled role unit',
+      { filesystem: 'blank', mount: 'absent', boot: 'exact' },
+      'conflict',
+    ],
+    [
+      'foreign signatures',
+      { filesystem: 'foreign', mount: 'absent', boot: 'absent' },
+      'conflict',
+    ],
+    [
+      'an existing exact-UUID ext4 filesystem',
+      { filesystem: 'exact', mount: 'absent', boot: 'absent' },
+      'unknown',
+    ],
+  ])(
+    'rejects %s without minting a blank proof',
+    async (_label, options, status) => {
+      const fixture = makePorts(applicationDesired, options);
+      const observer = createAwsSingleNodeHostRetainedStorageObserverForTest({
+        ports: fixture.ports,
+      });
+
+      const result = await observer.inspectBlankFormat(applicationDesired);
+
+      expect(result).toEqual({ status });
+      expect(result).not.toHaveProperty('proof');
+      expectDeepFrozen(result);
+    },
+  );
+
+  it('snapshots desired input before its first host await', async () => {
+    const fixture = makePorts(applicationDesired, {
+      filesystem: 'blank',
+      mount: 'absent',
+      boot: 'absent',
+    });
+    const originalRun = fixture.ports.run;
+    const udevAdmission = deferred();
+    fixture.ports.run = jest.fn(async (/** @type {AnyRecord} */ input) => {
+      if (input.file === AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_UDEVADM_PATH) {
+        await udevAdmission.promise;
+      }
+      return await originalRun(input);
+    });
+    const observer = createAwsSingleNodeHostRetainedStorageObserverForTest({
+      ports: fixture.ports,
+    });
+    const mutableDesired = /** @type {AnyRecord} */ (clone(applicationDesired));
+
+    const pending = observer.inspectBlankFormat(mutableDesired);
+    mutableDesired.filesystem.uuid = '00000000-0000-8000-8000-000000000000';
+    mutableDesired.volumeProviderResourceId = 'vol-00000000000000fff';
+    mutableDesired.directory.uid += 1;
+    udevAdmission.resolve();
+
+    const result = await pending;
+    expect(result.status).toBe('blank');
+    expect(result.proof.targetId).toBe(
+      createAwsSingleNodeHostRetainedStorageBlankFormatProof({
+        desired: applicationDesired,
+        device: {
+          path: DEVICE_PATH,
+          major: DEVICE_MAJOR,
+          minor: DEVICE_MINOR,
+          nvmeModel: AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_NVME_MODEL,
+          nvmeSerialVolumeId: applicationDesired.volumeProviderResourceId,
+          byIdPath: getAwsSingleNodeHostRetainedStorageByIdPath(
+            applicationDesired.volumeProviderResourceId,
+          ),
+          byIdTarget: '../../nvme1n1',
+        },
+        mountNamespace: 'mnt:[4026531841]',
+      }).targetId,
+    );
+    expectDeepFrozen(result);
   });
 
   it('projects exact role mounts behind one shared two-mount user-manager gate', () => {

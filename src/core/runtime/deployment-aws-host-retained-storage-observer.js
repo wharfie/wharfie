@@ -15,6 +15,7 @@ import {
   getAwsSingleNodeHostRetainedStorageBootProjection,
   validateAwsSingleNodeHostRetainedStorageDesired,
 } from './deployment-aws-host-retained-storage.js';
+import { createAwsSingleNodeHostRetainedStorageBlankFormatProof } from './deployment-aws-host-retained-storage-format-journal.js';
 import { getAwsSingleNodeHostRetainedStorageByIdPath } from './deployment-aws-host-retained-storage-projection.js';
 import { cloneBoundedJsonObject } from './json-value.js';
 
@@ -1050,7 +1051,29 @@ async function observePhysicalSnapshot(desired, ports) {
   });
 }
 
-/** @param {Readonly<Record<string, Function>>} ports @returns {Readonly<{inspect: Function}>} */
+/**
+ * Capture the same complete physical state twice after udev settles. The
+ * returned snapshot is observation only; callers separately decide whether
+ * it is sufficient for activation inspection or blank-format proof.
+ * @param {Readonly<Record<string, any>>} desired - Exact desired storage.
+ * @param {Readonly<Record<string, Function>>} ports - Closed read-only ports.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Stable snapshot.
+ */
+async function observeStablePhysicalSnapshot(desired, ports) {
+  const settled = await runTool(
+    ports,
+    AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_UDEVADM_PATH,
+    ['settle', '--timeout=10'],
+    SMALL_OUTPUT_MAX_BYTES,
+  );
+  if (settled.exitCode !== 0) throw new RetainedStorageUnknownError();
+  const before = await observePhysicalSnapshot(desired, ports);
+  const after = await observePhysicalSnapshot(desired, ports);
+  if (!sameJson(before, after)) throw new RetainedStorageUnknownError();
+  return after;
+}
+
+/** @param {Readonly<Record<string, Function>>} ports @returns {Readonly<{inspect: Function, inspectBlankFormat: Function}>} */
 function createObserver(ports) {
   return Object.freeze({
     /** @param {unknown} desiredValue @returns {Promise<Readonly<Record<string, any>>>} */
@@ -1058,16 +1081,7 @@ function createObserver(ports) {
       const desired =
         validateAwsSingleNodeHostRetainedStorageDesired(desiredValue);
       try {
-        const settled = await runTool(
-          ports,
-          AWS_SINGLE_NODE_HOST_RETAINED_STORAGE_UDEVADM_PATH,
-          ['settle', '--timeout=10'],
-          SMALL_OUTPUT_MAX_BYTES,
-        );
-        if (settled.exitCode !== 0) throw new RetainedStorageUnknownError();
-        const before = await observePhysicalSnapshot(desired, ports);
-        const after = await observePhysicalSnapshot(desired, ports);
-        if (!sameJson(before, after)) throw new RetainedStorageUnknownError();
+        const after = await observeStablePhysicalSnapshot(desired, ports);
         if (after.filesystemState === 'blank') {
           return Object.freeze({ status: 'ready' });
         }
@@ -1076,6 +1090,56 @@ function createObserver(ports) {
         // bounded profile verifier exists, never mint settled evidence from
         // an existing ext4 filesystem.
         return Object.freeze({ status: 'unknown' });
+      } catch (error) {
+        return Object.freeze({
+          status:
+            error instanceof RetainedStorageConflictError
+              ? 'conflict'
+              : 'unknown',
+        });
+      }
+    },
+
+    /**
+     * Mint a blank-media proof only from the same closed, stable physical
+     * observation used by activation inspection. A shared gate by itself is
+     * safe and expected to precede formatting; a role-specific unit, gated
+     * unit, or enabled unit is already media wiring and blocks the proof.
+     *
+     * This proof authenticates exact observed bytes, not current controller
+     * authority and not permission to run a formatter.
+     * @param {unknown} desiredValue - Exact desired retained storage.
+     * @returns {Promise<Readonly<Record<string, any>>>} - Blank proof or fixed fail-closed status.
+     */
+    async inspectBlankFormat(desiredValue) {
+      const desired =
+        validateAwsSingleNodeHostRetainedStorageDesired(desiredValue);
+      try {
+        const after = await observeStablePhysicalSnapshot(desired, ports);
+        if (after.filesystemState !== 'blank') {
+          return Object.freeze({ status: 'unknown' });
+        }
+        if (
+          after.mounted !== false ||
+          !['absent', 'gate-only'].includes(after.bootState)
+        ) {
+          throw new RetainedStorageConflictError();
+        }
+        const identity = after.identity;
+        const proof = createAwsSingleNodeHostRetainedStorageBlankFormatProof({
+          desired,
+          device: {
+            path: identity.path,
+            major: identity.major,
+            minor: identity.minor,
+            nvmeModel: identity.model,
+            nvmeSerialVolumeId: identity.serial,
+            byIdPath: identity.byIdPath,
+            byIdTarget: identity.byIdTarget,
+          },
+          mountNamespace: after.mountNamespace,
+        });
+        return deepFreeze({ status: 'blank', proof });
       } catch (error) {
         return Object.freeze({
           status:
@@ -1335,7 +1399,7 @@ function nativePorts() {
 /**
  * Create the production read-only Linux observer. Construction is closed:
  * callers cannot replace tools, files, identity, or privilege checks.
- * @returns {Readonly<{inspect: Function}>}
+ * @returns {Readonly<{inspect: Function, inspectBlankFormat: Function}>}
  */
 export function createAwsSingleNodeHostRetainedStorageObserver() {
   if (arguments.length !== 0) {
@@ -1361,7 +1425,7 @@ export function createAwsSingleNodeHostRetainedStorageObserver() {
  * Create the same observer over exact synthetic read-only ports. This export
  * exists only for semantic tests; production construction never accepts it.
  * @param {unknown} optionsValue - Exact own-data port bundle.
- * @returns {Readonly<{inspect: Function}>}
+ * @returns {Readonly<{inspect: Function, inspectBlankFormat: Function}>}
  */
 export function createAwsSingleNodeHostRetainedStorageObserverForTest(
   optionsValue,
