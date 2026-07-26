@@ -191,8 +191,8 @@ Frozen-candidate bounded retries distinguish missing, contradictory, and
 unresolved provider evidence. A separate V79 evidence-only experiment now
 binds an exact provider scope/spec, caller-asserted source commit, selected
 retained-volume role, and expiring purge-tag contract. Its mutation-incapable
-SSM/EC2 collector double-reads the pinned AMI, dedicated running instance,
-root and evidence volumes, and both attachment views into a strict
+SSM/EC2 collector double-reads the pinned AMI, selected experiment-tagged
+running instance, root and evidence volumes, and both attachment views into a strict
 content-addressed but explicitly non-authoritative receipt. It has not run
 against live AWS, does not attest the injected credential scope or host/device
 state, and grants no create, delete, attachment, or formatting authority. The
@@ -637,7 +637,7 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Read-only retained-storage provider evidence checkpoint](llm/checkpoints/2026-07-25-v79-read-only-provider-evidence.md) — the latest restart point for the expiring evidence-only contract, mutation-incapable double-read SSM/EC2 collector, strict non-authoritative receipt, verification, and portable-delivery boundary.
+- [Read-only retained-storage provider evidence checkpoint](llm/checkpoints/2026-07-26-v79-read-only-provider-evidence.md) — the latest restart point for the expiring evidence-only contract, mutation-incapable double-read SSM/EC2 collector, strict non-authoritative receipt, verification, and portable-delivery boundary.
 - [Read-only host toolchain fingerprint checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md) — the parent restart point for the bounded command-free/device-free AL2023 fingerprint, strict non-authoritative receipt, path-free CLI, verification, and live-evidence boundary.
 - [Authorized storage preparation checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md) — the parent checkpoint for the exact preparation command, authorized/fenced real-persistence integration, observer liveness correction, verification, and the disposable-host evidence boundary.
 - [Closed blank-format preparation checkpoint](llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md) — the parent checkpoint for the closed blank-proof contract, recoverable durable preparation, real host-lock persistence composition, and formatter limits.

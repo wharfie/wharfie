@@ -81,8 +81,8 @@ capability. Its strict non-authoritative receipt and path-free CLI are ready
 for disposable-host delivery, but no live host or EBS evidence has been
 collected. V79 adds an expiring evidence-only experiment descriptor and a
 mutation-incapable SSM/EC2 collector that double-reads the exact pinned AMI,
-dedicated instance, root volume, disposable evidence volume, attachment, and
-root-exclusion facts. Its content-addressed receipt is explicitly
+selected experiment-tagged instance, root volume, evidence volume, attachment,
+and root-exclusion facts. Its content-addressed receipt is explicitly
 non-authoritative; injected credentials, the caller-asserted source commit,
 host/device state, and live AWS behavior remain unattested.
 
@@ -1354,9 +1354,9 @@ command and proves its authorized, fenced, host-lock-scoped integration while
 keeping activation pending. V78 closes a path-free, command-free, device-free
 AL2023 host/toolchain fingerprint collector and strict non-authoritative
 receipt, but has not run it on a live host. V79 closes the local
-controller-side read-only provider-evidence contract for an expiring dedicated
-test instance and evidence volume, but has not run it against AWS or joined it
-to host evidence. No formatter or mount mutation exists.
+controller-side read-only provider-evidence contract for an expiring selected
+experiment-tagged instance and evidence volume, but has not run it against AWS
+or joined it to host evidence. No formatter or mount mutation exists.
 
 1. Before formatter code, add portable source-bound zero-argument SEA delivery
    for the V78 collector, then run an explicitly authorized disposable
@@ -1382,7 +1382,7 @@ to host evidence. No formatter or mount mutation exists.
 
 The latest recorded restart point is the [read-only retained-storage provider
 evidence
-checkpoint](llm/checkpoints/2026-07-25-v79-read-only-provider-evidence.md).
+checkpoint](llm/checkpoints/2026-07-26-v79-read-only-provider-evidence.md).
 Its parent is the [read-only host toolchain fingerprint
 checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md),
 whose parent is the [authorized storage preparation command

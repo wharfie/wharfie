@@ -168,8 +168,8 @@ configuration, and tool paths without executing a command or accepting a
 filesystem path, and without touching a device, calling AWS, or publishing raw
 configuration bytes. Its receipt is non-authoritative and has not run on a live
 host. A separate expiring provider experiment now double-reads an exact pinned
-AMI, dedicated instance, root volume, evidence volume, and attachment through
-mutation-incapable injected SSM/EC2 facades. Its receipt is also
+AMI, selected experiment-tagged instance, root volume, evidence volume, and
+attachment through mutation-incapable injected SSM/EC2 facades. Its receipt is also
 non-authoritative, has not run against live AWS, and is not yet joined to the
 host fingerprint.
 Selector delivery, destructive formatting and exact-profile verification,
@@ -189,7 +189,7 @@ evidence.
 
 The latest recorded restart handoff is the [read-only retained-storage
 provider evidence
-checkpoint](../llm/checkpoints/2026-07-25-v79-read-only-provider-evidence.md).
+checkpoint](../llm/checkpoints/2026-07-26-v79-read-only-provider-evidence.md).
 Its parent is the [read-only host toolchain fingerprint
 checkpoint](../llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md),
 whose parent is the [authorized storage preparation

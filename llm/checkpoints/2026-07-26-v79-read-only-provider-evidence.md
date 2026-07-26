@@ -1,6 +1,6 @@
 # V79 read-only retained-storage provider evidence checkpoint
 
-Date: 2026-07-25
+Date: 2026-07-26
 
 Parent:
 [V78 read-only host toolchain fingerprint](./2026-07-25-v78-read-only-host-toolchain-fingerprint.md)
@@ -31,12 +31,12 @@ V78 added a bounded, command-free, device-free AL2023 host/toolchain
 fingerprint. It still requires an ambient Node runtime and has not run on a
 live AL2023 host.
 
-V79 adds the controller-side half of the future disposable storage
-experiment. It can double-read a pinned public AMI, one dedicated instance,
-its root volume, and one attached disposable evidence volume through injected
-SSM/EC2 read facades. It emits a strict non-authoritative receipt only when
-the normalized observations agree. It cannot create, modify, format, detach,
-or delete anything.
+V79 adds the controller-side half of the future purge-intended storage
+experiment. It can double-read a pinned public AMI, one selected
+experiment-tagged instance, its root volume, and one attached
+experiment-tagged evidence volume through injected SSM/EC2 read facades. It
+emits a strict non-authoritative receipt only when the normalized observations
+agree. It cannot create, modify, format, detach, or delete anything.
 
 ## Evidence-only experiment contract
 
@@ -57,12 +57,12 @@ Creation and deserialized validation are both bounded to 64 KiB. The
 validator recomputes the exact semantic ID and returns a new deeply frozen
 canonical value.
 
-The experiment derives three exact tag sets for the dedicated instance, root
+The experiment derives three exact tag sets for the selected instance, root
 volume, and evidence volume. They bind the experiment ID, purpose, source
 commit, expiration, resource kind, and evidence-volume role where applicable.
-Every resource is deliberately tagged `wharfie:retention=purge`; the tag sets
-contain no production binding, ownership nonce, action ID, or formatter
-authority.
+Every resource is deliberately tagged with purge intent through
+`wharfie:retention=purge`; the tag sets contain no production binding,
+ownership nonce, action ID, or formatter authority.
 
 ## Read-only provider collector
 
@@ -161,11 +161,12 @@ root-volume, evidence-volume, attachment, and root-exclusion facts. It does
 not contain raw SDK responses, credentials, client tokens, provider errors,
 tool output, host paths, or device data.
 
-Content addressing authenticates the exact receipt bytes, not the issuer or
-truth of those bytes. The conclusion is intentionally narrow: it reports two
-stable provider-side observations and an instance **storage projection**
-matching the provider spec. It does not claim the complete instance matches
-every production resource contract.
+Content addressing binds and identifies the exact receipt content; it does not
+authenticate the issuer or truth, because an attacker can alter unsigned
+content and recompute its hash. The conclusion is intentionally narrow: it
+reports two stable provider-side observations and an instance **storage
+projection** matching the provider spec. It does not claim the complete
+instance matches every production resource contract.
 
 ## Shared machine-image evidence
 
@@ -191,8 +192,8 @@ Validation used pinned Node **24.13.1**.
 
 No full-repository Jest gate, coverage run, broad build, SEA/native package
 build, npm install/pack, native LMDB execution, host storage tool, block-device
-operation, live AWS call, resource creation, or disposable AL2023/EBS proof
-was run.
+operation, live AWS call, resource creation, or purge-intended AL2023/EBS
+proof was run.
 
 The dedicated `/private/tmp/wharfie-v79-final` tree was removed immediately
 after the focused run and verified absent. No generated build, coverage,
@@ -212,9 +213,9 @@ storage qualification:
 - the receipt is not signed and does not authenticate its issuer;
 - AWS reads are not an atomic snapshot; two identical normalized passes only
   reduce, rather than eliminate, observation races;
-- the dedicated test-host shape requires exactly two block mappings;
-- the disposable evidence volume uses purge tags while its physical profile
-  is compared with the retained production capability;
+- the selected experiment-host shape requires exactly two block mappings;
+- the evidence volume has purge-intent tags while its physical profile is
+  compared with the retained production capability;
 - no provider mutation authority, resource creation/deletion path, or
   production provider assembly integration is added;
 - no host identity binds this receipt to the V78 host fingerprint;
@@ -241,7 +242,7 @@ delivery for the V78 host collector:
 6. verify the schema and orchestration with injected build ports under pinned
    Node 24.13.1, without performing a native build on this Mac.
 
-Actual AWS calls or creation of a disposable host/volume still require
+Actual AWS calls or creation of a purge-intended host/volume still require
 explicit user approval. When approved, create only new expiring purge-tagged
 resources, collect the V79 provider receipt and V78 host fingerprint first,
 and qualify device/tool behavior separately before any destructive formatting
