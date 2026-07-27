@@ -434,6 +434,85 @@ describe('manual ledger activity runner', () => {
     });
   });
 
+  it('forwards one log under the exact started attempt scope without duplicating its terminal', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {Record<string, any>[]} */
+      const appendRequests = [];
+      const observingLedger = {
+        ...ledger,
+        appendActivityAttemptLog: async (
+          /** @type {Parameters<typeof ledger.appendActivityAttemptLog>[0]} */ request,
+        ) => {
+          appendRequests.push(structuredClone(request));
+          return await ledger.appendActivityAttemptLog(request);
+        },
+      };
+      /** @type {Readonly<Record<string, any>> | undefined} */
+      let deliveredLog;
+      /** @type {Readonly<Record<string, any>> | undefined} */
+      let deliveredTerminal;
+      const options = runOptions(observingLedger, {
+        executeAttempt: async (
+          /** @type {Readonly<Record<string, any>>} */ startFrame,
+          /** @type {any} */ executionOptions,
+        ) => {
+          const { onComponentFrame } = executionOptions;
+          const transcript = new ActivityProtocolTranscriptValidator();
+          const acceptedStart = transcript.acceptHostFrame(startFrame);
+          deliveredLog = transcript.acceptComponentFrame({
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'log',
+            attemptId: acceptedStart.attemptId,
+            sequence: 1,
+            level: 'info',
+            message: 'manual runner durable log',
+            fields: { runner: 'manual' },
+          });
+          await onComponentFrame(deliveredLog);
+          deliveredTerminal = transcript.acceptComponentFrame({
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'completed',
+            attemptId: acceptedStart.attemptId,
+            sequence: 2,
+            result: { logged: true },
+          });
+          await onComponentFrame(deliveredTerminal);
+          return {
+            status: deliveredTerminal.type,
+            start: acceptedStart,
+            terminal: deliveredTerminal,
+            frames: [acceptedStart, deliveredLog, deliveredTerminal],
+            transcript: transcript.snapshot(),
+          };
+        },
+      });
+
+      const outcome = await runManualLedgerActivity(options);
+
+      expect(outcome).toMatchObject({
+        disposition: 'completed',
+        terminalSummary: { type: 'completed' },
+      });
+      expect(appendRequests).toEqual([
+        {
+          appId: options.appId,
+          revisionId: options.revisionId,
+          activityId: options.activityId,
+          runId: options.runId,
+          invocationId: MANUAL_LEDGER_INVOCATION_ID,
+          attemptId: deliveredLog?.attemptId,
+          fencingToken: 'local-test-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          frame: deliveredLog,
+        },
+      ]);
+      expect(appendRequests[0].frame).not.toEqual(deliveredTerminal);
+    });
+  });
+
   it('prepares only after a fresh claim and awaits release after the durable terminal', async () => {
     await withLedger(async (ledger) => {
       /** @type {string[]} */

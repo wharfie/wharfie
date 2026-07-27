@@ -574,7 +574,7 @@ export function createManifestActivityFunction(options) {
  * Build and execute one external-bearing activity from its sealed source
  * snapshot and dependency lock. The bundle runs the private attempt wrapper;
  * no legacy context or resource RPC is assembled on this path.
- * @param {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, activityName: string, startFrame: Readonly<Record<string, any>>, signal?: AbortSignal, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown> }} options - Bound source attempt inputs.
+ * @param {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, activityName: string, startFrame: Readonly<Record<string, any>>, signal?: AbortSignal, onComponentFrame?: (frame: Readonly<Record<string, any>>) => unknown | Promise<unknown>, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown> }} options - Bound source attempt inputs.
  * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Revalidated physical attempt evidence.
  */
 async function invokePreparedSourceExternalActivity(options) {

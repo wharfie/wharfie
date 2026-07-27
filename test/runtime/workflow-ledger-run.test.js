@@ -428,6 +428,90 @@ describe('workflow ledger activity runner', () => {
     },
   );
 
+  test('forwards one log under the exact started workflow attempt scope without duplicating its terminal', async () => {
+    await withLedger(
+      'workflow-attempt-log-sink',
+      async ({ ledger, runId, created }) => {
+        /** @type {Record<string, any>[]} */
+        const appendRequests = [];
+        const observingLedger = injectLedgerMethod(
+          ledger,
+          'appendActivityAttemptLog',
+          async (append, request) => {
+            appendRequests.push(structuredClone(request));
+            return await append(request);
+          },
+        );
+        const fencingToken = `${runId}-log-fence`;
+        /** @type {Readonly<Record<string, any>> | undefined} */
+        let deliveredLog;
+        /** @type {Readonly<Record<string, any>> | undefined} */
+        let deliveredTerminal;
+
+        const outcome = await runWorkflowLedgerActivity(
+          runOptions(observingLedger, created, runId, {
+            createFencingToken: () => fencingToken,
+            executeAttempt: async (
+              /** @type {ActivityStartFrame} */ startFrame,
+              { onComponentFrame },
+            ) => {
+              const transcript = new ActivityProtocolTranscriptValidator();
+              const acceptedStart = transcript.acceptHostFrame(startFrame);
+              deliveredLog = transcript.acceptComponentFrame({
+                protocol: ACTIVITY_PROTOCOL_NAME,
+                protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+                type: 'log',
+                attemptId: acceptedStart.attemptId,
+                sequence: 1,
+                level: 'info',
+                message: 'workflow runner durable log',
+                fields: { runner: 'workflow' },
+              });
+              await onComponentFrame(deliveredLog);
+              deliveredTerminal = transcript.acceptComponentFrame({
+                protocol: ACTIVITY_PROTOCOL_NAME,
+                protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+                type: 'completed',
+                attemptId: acceptedStart.attemptId,
+                sequence: 2,
+                result: { logged: true },
+              });
+              await onComponentFrame(deliveredTerminal);
+              return {
+                status: deliveredTerminal.type,
+                start: acceptedStart,
+                terminal: deliveredTerminal,
+                frames: [acceptedStart, deliveredLog, deliveredTerminal],
+                transcript: transcript.snapshot(),
+              };
+            },
+          }),
+        );
+
+        expect(outcome).toMatchObject({
+          disposition: 'completed',
+          invocation: { terminal: { type: 'completed' } },
+          attempt: { terminal: { type: 'completed' } },
+        });
+        expect(appendRequests).toEqual([
+          {
+            appId: APP_ID,
+            revisionId: REVISION_ID,
+            activityId: ACTIVITY_ID,
+            runId,
+            invocationId: created.invocation.invocationId,
+            attemptId: deliveredLog?.attemptId,
+            fencingToken,
+            generation: 1,
+            coordinatorEpoch: 0,
+            frame: deliveredLog,
+          },
+        ]);
+        expect(appendRequests[0].frame).not.toEqual(deliveredTerminal);
+      },
+    );
+  });
+
   test('runs a two-activity continuation from the exact persisted successor input', async () => {
     await withLedger(
       'two-activity-continuation',

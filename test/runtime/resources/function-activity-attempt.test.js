@@ -78,8 +78,9 @@ async function waitForPath(filePath, timeoutMs = 2_000) {
 function deferred() {
   /** @type {() => void} */
   let release = () => {};
+  /** @type {Promise<void>} */
   const promise = new Promise((resolve) => {
-    release = () => resolve();
+    release = () => resolve(undefined);
   });
   return { promise, resolve: release };
 }

@@ -15,6 +15,7 @@ import { assertApplicationRevisionId } from './application-revision.js';
 import { createCanonicalJsonSha256Id } from './content-id.js';
 import { assertLogicalId } from './logical-id.js';
 import { serializeActivityAttemptError } from './activity-attempt.js';
+import { createDurableActivityLogSink } from './activity-log-sink.js';
 
 export const MANUAL_LEDGER_INVOCATION_ID = 'manual';
 
@@ -88,7 +89,7 @@ export const MANUAL_LEDGER_ACTIVE_ATTEMPT_CANCELLATION_PORT_VERSION = 1;
  * Resources acquired specifically for one fresh physical dispatch. `release`
  * is awaited only after durable outcome selection and local cancellation
  * cleanup have both settled.
- * @typedef {{executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, release: () => void|Promise<void>}} ManualLedgerPreparedAttemptDispatch
+ * @typedef {{executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal, onComponentFrame: (frame: Readonly<Record<string, any>>) => Promise<void>}) => Promise<Readonly<Record<string, any>>>, release: () => void|Promise<void>}} ManualLedgerPreparedAttemptDispatch
  */
 
 /**
@@ -1357,7 +1358,7 @@ export async function submitManualLedgerActivity(options) {
  * append-only ledger. A normal repeat never steals a RUNNING attempt because
  * coordinator leases do not exist yet; recovery is a separate operator action
  * that never accepts or compiles current application source.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt?: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, prepareAttemptDispatch?: (context: Readonly<ManualLedgerAttemptDispatchContext>) => ManualLedgerPreparedAttemptDispatch|Promise<ManualLedgerPreparedAttemptDispatch>}} options - Bound authored activity execution. Exactly one dispatch option is required.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt?: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal, onComponentFrame: (frame: Readonly<Record<string, any>>) => Promise<void>}) => Promise<Readonly<Record<string, any>>>, prepareAttemptDispatch?: (context: Readonly<ManualLedgerAttemptDispatchContext>) => ManualLedgerPreparedAttemptDispatch|Promise<ManualLedgerPreparedAttemptDispatch>}} options - Bound authored activity execution. Exactly one dispatch option is required.
  * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Durable terminal, blocked, or in-progress result.
  */
 export async function runManualLedgerActivity(options) {
@@ -1906,6 +1907,10 @@ export async function runManualLedgerActivity(options) {
     try {
       evidence = await executeAttempt(started.startFrame, {
         signal: attemptController.signal,
+        onComponentFrame: createDurableActivityLogSink({
+          ledger,
+          attempt: started.attempt,
+        }),
       });
     } catch (executionError) {
       if (foregroundCancellationPromise) {

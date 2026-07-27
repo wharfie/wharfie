@@ -270,7 +270,10 @@ async function runResolvedDurableManifestActivity(request, options) {
       return {
         executeAttempt: async (
           /** @type {Readonly<Record<string, any>>} */ startFrame,
-          /** @type {{signal: AbortSignal}} */ { signal },
+          /** @type {{signal: AbortSignal, onComponentFrame: (frame: Readonly<Record<string, any>>) => Promise<void>}} */ {
+            signal,
+            onComponentFrame,
+          },
         ) => {
           // Store identity is application data. Initialize the catalog only
           // after this exact attempt wins durable dispatch authorization.
@@ -284,6 +287,7 @@ async function runResolvedDurableManifestActivity(request, options) {
             activityName: request.activityName,
             startFrame,
             signal,
+            onComponentFrame,
             handleEffect: createBuiltinManagedEffectHandler({
               ledger: options.ledger,
               runId: request.runId,

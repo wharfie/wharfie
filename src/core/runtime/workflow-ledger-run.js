@@ -15,6 +15,7 @@ import {
 } from '../lib/ledger/workflow-execution-contract.js';
 import { assertLedgerOpaqueId } from '../lib/ledger/record-key.js';
 import { serializeActivityAttemptError } from './activity-attempt.js';
+import { createDurableActivityLogSink } from './activity-log-sink.js';
 import { assertApplicationRevisionId } from './application-revision.js';
 import { createCanonicalJsonSha256Id } from './content-id.js';
 import { assertLogicalId } from './logical-id.js';
@@ -1095,7 +1096,7 @@ export async function recoverWorkflowLedgerActivity(options) {
  * Execute one exact persisted workflow activity activation. The caller must
  * already hold the application mutation owner and must have cross-checked the
  * persisted plan against the exact executing revision.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, ownerCancellation?: WorkflowLedgerOwnerCancellation, registerActiveWorkflowCancellationPort?: WorkflowLedgerActiveCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>}} options - Exact resident workflow activation.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, workflowId: string, planId: string, invocationId: string, activityId: string, generation: number, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, actor?: {kind: string, id: string}, admissionSignal?: AbortSignal, signal?: AbortSignal, ownerCancellation?: WorkflowLedgerOwnerCancellation, registerActiveWorkflowCancellationPort?: WorkflowLedgerActiveCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal, onComponentFrame: (frame: Readonly<Record<string, any>>) => Promise<void>}) => Promise<Readonly<Record<string, any>>>}} options - Exact resident workflow activation.
  * @returns {Promise<Record<string, any>>} - Durable current workflow outcome.
  */
 export async function runWorkflowLedgerActivity(options) {
@@ -1527,6 +1528,10 @@ export async function runWorkflowLedgerActivity(options) {
       try {
         evidence = await options.executeAttempt(started.startFrame, {
           signal: attemptController.signal,
+          onComponentFrame: createDurableActivityLogSink({
+            ledger: options.ledger,
+            attempt: started.attempt,
+          }),
         });
       } catch (error) {
         executionError = error;

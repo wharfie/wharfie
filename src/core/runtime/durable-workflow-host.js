@@ -271,11 +271,12 @@ export async function runPersistedDurableManifestWorkflowActivity(options) {
       ? {}
       : { registerActiveWorkflowCancellationPort }),
     ...(createFencingToken === undefined ? {} : { createFencingToken }),
-    executeAttempt: async (startFrame, { signal }) =>
+    executeAttempt: async (startFrame, { signal, onComponentFrame }) =>
       await invokeManifestActivityAttemptWithStart({
         activityName: activityId,
         startFrame,
         signal,
+        onComponentFrame,
         execution: binding.execution,
       }),
   });
