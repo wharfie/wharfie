@@ -30,5 +30,6 @@ These records capture product-level decisions that should survive implementation
 | [0024 — Revision-bound workflow schedules](0024-revision-bound-workflow-schedules.md)                                      | Accepted; pending admission superseded by 0025         |
 | [0025 — Atomic scheduled-workflow admission](0025-atomic-scheduled-workflow-admission.md)                                  | Accepted; internal kernel carried forward by 0026      |
 | [0026 — Resident revision-bound workflow schedules](0026-resident-workflow-schedules.md)                                   | Accepted; replaces strict V2 with executable V3        |
+| [0027 — Relocated SEA schedule/restart proof](0027-relocated-sea-schedule-restart-proof.md)                                | Accepted; Linux execution evidence remains pending     |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

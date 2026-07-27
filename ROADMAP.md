@@ -144,8 +144,14 @@ wakes the existing ready-work loop after atomic admission, resumes exact
 cursors after restart and backward clock correction, and enters `STOPPING` on
 observer failure. Package serialization, source verification, embedded and
 prepared-source composition, vanilla restart/cutover behavior, and focused
-runtime tests are covered; an actual relocated Linux SEA due-occurrence and
-cursor-recovery proof remains. Five focused V87 safe suites pass; one
+runtime tests are covered. V93 adds the bounded Linux-only proof path: it builds
+a dedicated frequent-schedule revision under one owned root, deletes the
+original publication before running the relocated artifact with Node absent
+from `PATH`, observes one due workflow and a fsynced physical-dispatch record,
+uses real `SIGKILL`, and requires an unchanged cursor, occurrence, workflow,
+raw-row, run-directory, marker, and ready-work snapshot after replacement.
+Hermetic orchestration is covered; the native Linux execution itself remains
+an explicit evidence boundary. Five focused V87 safe suites pass; one
 separately attempted operations-error suite exits 134 locally for an unresolved
 reason and is not part of that passing matrix or a full-suite claim. The
 committed V83 driver still has not produced a `whlp2` receipt, and no successful
@@ -746,9 +752,11 @@ surface remains.
       execute the same sealed manifest V3 contract before replacing strict V2.
       V92 completes the implementation and focused source/embedded composition,
       package-serialization, restart, cutover, backward-clock, readiness, and
-      shutdown proofs. The actual relocated Linux SEA due-occurrence and cursor
-      recovery run remains explicit follow-up evidence rather than an implied
-      claim.
+      shutdown proofs. V93 commits a Linux-gated, owned-root relocated-SEA
+      due-occurrence/SIGKILL/replacement harness with independently checked
+      logical identities, raw durable projections, and a physical-dispatch
+      log. Its actual native Linux run remains explicit follow-up evidence
+      rather than an implied claim.
 - [ ] After durable schedule semantics and projections exist, add only the
       source/packaged schedule operator surface needed to `list`, `inspect`,
       `pause`, and `resume` schedules. Do not expose public schedule firing,
@@ -1259,8 +1267,8 @@ catch-up, and atomically commits the occurrence, cursor, ordinary workflow run,
 and ready-work row. Initial reconciliation gates readiness and owner commands;
 observer failure requests durable `STOPPING` before bounded worker drain.
 Source-prepared and embedded executions share this composition. The public
-schedule operator surface and an actual relocated Linux SEA schedule/restart
-proof remain open.
+schedule operator surface and execution of the committed relocated Linux SEA
+schedule/restart proof remain open.
 
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
@@ -1515,9 +1523,10 @@ controller-side read-only provider-evidence contract for an expiring selected
 experiment-tagged instance and evidence volume, but has not run it against AWS
 or joined it to host evidence. No formatter or mount mutation exists.
 
-1. Run one actual relocated Linux SEA due-occurrence and cursor-restart proof
-   with Node absent from `PATH`, using the bounded disposable proof tooling and
-   explicit authority required by that environment. After that evidence,
+1. Execute the committed V93 relocated Linux SEA due-occurrence and
+   cursor-restart proof with Node absent from `PATH`, using the bounded
+   disposable proof tooling and explicit authority required by that
+   environment. After that evidence,
    expose only the source/packaged schedule `list`, `inspect`, `pause`, and
    `resume` surface; do not add manual fire, tail, or search.
 2. Run V84 against one already-present immutable local Linux/amd64 image. If
@@ -1544,9 +1553,11 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V92 resident workflow-schedules
-checkpoint](llm/checkpoints/2026-07-27-v92-resident-workflow-schedules.md).
-Its parent is the [V91 atomic schedule-admission
+The latest recorded restart point is the [V93 relocated SEA schedule/restart
+proof checkpoint](llm/checkpoints/2026-07-27-v93-relocated-sea-schedule-restart-proof.md).
+Its parent is the [V92 resident workflow-schedules
+checkpoint](llm/checkpoints/2026-07-27-v92-resident-workflow-schedules.md),
+whose parent is the [V91 atomic schedule-admission
 checkpoint](llm/checkpoints/2026-07-27-v91-atomic-schedule-admission.md), whose
 parent is the [V90 workflow-schedule contract
 checkpoint](llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md),
