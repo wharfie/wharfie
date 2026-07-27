@@ -158,6 +158,10 @@ import {
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 import { comparePortablePageKeys } from '../utils.js';
 import { getLocalApplicationRunCreationFence } from './local-application-activation.js';
+import {
+  reconcilePreparedScheduleWorkflowAdmission,
+  resolvePreparedScheduleWorkflowAdmission,
+} from './schedule-control.js';
 
 export {
   AttemptStatus,
@@ -11637,7 +11641,7 @@ export function createExecutionLedger({
    * the affected projections, including the current ready-work locator. The
    * caller supplies already-folded snapshots so the event remains sufficient
    * to reconstruct every authoritative projection.
-   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, conditionChecks?: import('../base.js').TransactionConditionCheck[], nextInvocation?: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextTimer?: Record<string, any>, currentTimer?: Record<string, any>, nextAdditionalTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, currentSignalWait?: Record<string, any>, nextAdditionalSignalWait?: Record<string, any>, nextSignalDelivery?: Record<string, any>, signalDeliveryIdentityRecord?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
+   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, conditionChecks?: import('../base.js').TransactionConditionCheck[], scheduleMutation?: {conditionChecks: Array<import('../base.js').TransactionConditionCheck>, putRequests: Array<import('../base.js').TransactionPutRequest>}, nextInvocation?: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextTimer?: Record<string, any>, currentTimer?: Record<string, any>, nextAdditionalTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, currentSignalWait?: Record<string, any>, nextAdditionalSignalWait?: Record<string, any>, nextSignalDelivery?: Record<string, any>, signalDeliveryIdentityRecord?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
    * @returns {Promise<void>} - Resolves only after the durable transaction commits.
    */
   async function appendTransition(input) {
@@ -11848,6 +11852,9 @@ export function createExecutionLedger({
           : [notExists(SORT_KEY_NAME)],
       },
     ];
+    if (input.scheduleMutation) {
+      putRequests.push(...input.scheduleMutation.putRequests);
+    }
     if (input.nextInvocation) {
       const invocationRecord = createInvocationProjectionRecord(
         input.runId,
@@ -12040,8 +12047,14 @@ export function createExecutionLedger({
 
     await db.transactionWrite({
       tableName: resolvedTableName,
-      ...(input.conditionChecks?.length
-        ? { conditionChecks: input.conditionChecks }
+      ...(input.conditionChecks?.length ||
+      input.scheduleMutation?.conditionChecks.length
+        ? {
+            conditionChecks: [
+              ...(input.conditionChecks || []),
+              ...(input.scheduleMutation?.conditionChecks || []),
+            ],
+          }
         : {}),
       putRequests,
       ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
@@ -12627,12 +12640,21 @@ export function createExecutionLedger({
   /**
    * Create the first persisted continuation of one static workflow, headed by
    * an activity, timer, or signal wait.
-   * @param {{runId: string, appId: string, revisionId: string, workflowId: string, definition: Record<string, any>, input?: any, callerMetadata?: Record<string, any>, cause?: Record<string, any>, transitionId: string, actor?: {kind: string, id: string}, observedAt?: number}} options - Immutable workflow start.
+   * @param {{runId: string, appId: string, revisionId: string, workflowId: string, definition: Record<string, any>, input?: any, callerMetadata?: Record<string, any>, cause?: Record<string, any>, scheduleAdmission?: unknown, transitionId: string, actor?: {kind: string, id: string}, observedAt?: number}} options - Immutable workflow start.
    * @returns {Promise<Record<string, any>>} - Created or exactly deduplicated workflow.
    */
   async function createWorkflowRun(options) {
+    const hasScheduleAdmission =
+      options !== null &&
+      typeof options === 'object' &&
+      Object.prototype.hasOwnProperty.call(options, 'scheduleAdmission');
+    const scheduleAdmission = hasScheduleAdmission
+      ? options.scheduleAdmission
+      : undefined;
+    const serializableOptions = hasScheduleAdmission ? { ...options } : options;
+    if (hasScheduleAdmission) delete serializableOptions.scheduleAdmission;
     const value = cloneBoundedJsonObject(
-      options,
+      serializableOptions,
       EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
       'createWorkflowRun',
     );
@@ -12728,6 +12750,11 @@ export function createExecutionLedger({
           label: 'createWorkflowRun.cause',
         })
       : undefined;
+    if ((cause !== undefined) !== hasScheduleAdmission) {
+      throw new TypeError(
+        'createWorkflowRun cause and scheduleAdmission must be provided together.',
+      );
+    }
     const observedAt = normalizeObservedAt(
       Object.prototype.hasOwnProperty.call(value, 'observedAt')
         ? value.observedAt
@@ -12746,6 +12773,35 @@ export function createExecutionLedger({
       const creation = await getMatchingWorkflowCreation(existing, requested);
       if (!creation || !existing.workflowCursor) {
         throw new ExecutionLedgerRunConflictError(runId);
+      }
+      if (cause) {
+        const scheduleReconciliation =
+          await reconcilePreparedScheduleWorkflowAdmission(
+            scheduleAdmission,
+            {
+              appId,
+              revisionId,
+              scheduleId: cause.scheduleId,
+              definitionId: cause.definitionId,
+              workflowId,
+              planId: existing.workflowCursor.planId,
+              runId,
+              cause,
+            },
+            {
+              db,
+              tableName: resolvedTableName,
+            },
+          );
+        if (scheduleReconciliation.status === 'absent') {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'scheduled workflow run exists without its occurrence projection',
+          );
+        }
+        if (scheduleReconciliation.status !== 'exact') {
+          throw new ExecutionLedgerRunConflictError(runId);
+        }
       }
       const requestDigest = createWorkflowRunRequestDigest({
         runId,
@@ -12904,6 +12960,41 @@ export function createExecutionLedger({
       startRef,
       trigger,
     });
+    const scheduleExpected = cause
+      ? {
+          appId,
+          revisionId,
+          scheduleId: cause.scheduleId,
+          definitionId: cause.definitionId,
+          workflowId,
+          planId: materialized.planId,
+          runId,
+          cause,
+        }
+      : undefined;
+    const resolvedScheduleMutation = cause
+      ? resolvePreparedScheduleWorkflowAdmission(
+          scheduleAdmission,
+          scheduleExpected,
+          {
+            db,
+            tableName: resolvedTableName,
+          },
+        )
+      : undefined;
+    if (resolvedScheduleMutation?.mode === 'replay') {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'scheduled workflow occurrence exists without its workflow run',
+      );
+    }
+    const scheduleMutation =
+      resolvedScheduleMutation?.mode === 'create'
+        ? {
+            conditionChecks: [...resolvedScheduleMutation.conditionChecks],
+            putRequests: [...resolvedScheduleMutation.putRequests],
+          }
+        : undefined;
     const event = createEventRecord(
       runId,
       1,
@@ -12935,16 +13026,48 @@ export function createExecutionLedger({
         ...(signalWait ? { nextSignalWait: signalWait } : {}),
         nextWorkflowCursor: workflowCursor,
         conditionChecks: [admissionFence],
+        ...(scheduleMutation ? { scheduleMutation } : {}),
       });
     } catch (error) {
-      if (!isConditionalCheckFailed(error)) throw error;
-      const raced = await readVerifiedRun(runId);
+      if (!scheduleExpected && !isConditionalCheckFailed(error)) throw error;
+      let raced = await readVerifiedRun(runId);
+      let scheduleReconciliation = scheduleExpected
+        ? await reconcilePreparedScheduleWorkflowAdmission(
+            scheduleAdmission,
+            scheduleExpected,
+            {
+              db,
+              tableName: resolvedTableName,
+            },
+          )
+        : undefined;
+      if (!raced && scheduleReconciliation?.status === 'exact') {
+        raced = await readVerifiedRun(runId);
+      } else if (
+        raced &&
+        scheduleExpected &&
+        scheduleReconciliation?.status === 'absent'
+      ) {
+        scheduleReconciliation =
+          await reconcilePreparedScheduleWorkflowAdmission(
+            scheduleAdmission,
+            scheduleExpected,
+            {
+              db,
+              tableName: resolvedTableName,
+            },
+          );
+      }
       if (raced) {
         const racedCreation = await getMatchingWorkflowCreation(
           raced,
           requested,
         );
-        if (racedCreation && raced.workflowCursor) {
+        if (
+          racedCreation &&
+          raced.workflowCursor &&
+          (!scheduleReconciliation || scheduleReconciliation.status === 'exact')
+        ) {
           const racedRequestDigest = createWorkflowRunRequestDigest({
             runId,
             activation: workflowCreationActivationDigest(racedCreation),
@@ -12979,8 +13102,28 @@ export function createExecutionLedger({
           }
           return workflowCreationResult(raced, receipt, false);
         }
+        if (
+          racedCreation &&
+          raced.workflowCursor &&
+          scheduleReconciliation?.status === 'absent'
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'scheduled workflow run exists without its occurrence projection',
+          );
+        }
+      }
+      if (!raced && scheduleReconciliation?.status === 'exact') {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'scheduled workflow occurrence exists without its workflow run',
+        );
       }
       if (raced) throw new ExecutionLedgerRunConflictError(runId);
+      if (scheduleReconciliation?.status === 'conflict') {
+        throw new ExecutionLedgerRunConflictError(runId);
+      }
+      if (!isConditionalCheckFailed(error)) throw error;
       await getLocalApplicationRunCreationFence({
         db,
         tableName: resolvedTableName,
@@ -13008,6 +13151,26 @@ export function createExecutionLedger({
         runId,
         'created workflow transition missing',
       );
+    }
+    if (scheduleExpected) {
+      const scheduleReconciliation =
+        await reconcilePreparedScheduleWorkflowAdmission(
+          scheduleAdmission,
+          scheduleExpected,
+          {
+            db,
+            tableName: resolvedTableName,
+          },
+        );
+      if (scheduleReconciliation.status === 'absent') {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'created scheduled workflow occurrence missing',
+        );
+      }
+      if (scheduleReconciliation.status !== 'exact') {
+        throw new ExecutionLedgerRunConflictError(runId);
+      }
     }
     return workflowCreationResult(next, receipt, true);
   }
