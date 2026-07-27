@@ -44,7 +44,10 @@ ready-work row. The resident claims, starts, and executes exact manifest-bound
 ordinary workflow activities and fires exact due timers as framework work,
 atomically persisting each output and next activation or terminal cursor. The
 ledger's redacted per-service history directory is transactionally bound to
-every run transition. Its exact-revision ready-work projection is bound to each
+every run transition. Shared source and packaged `list` commands expose that
+directory as a read-only, app-scoped run-discovery surface while continuing to
+verify every returned row against its rebuilt run. Its exact-revision ready-work
+projection is bound to each
 relevant manual activity, workflow activity, recovery, and timer transition,
 while
 revision-backed source and SEA activities consume
@@ -149,8 +152,8 @@ covers exact-unit startup, resident `SIGKILL` replacement, abrupt VM power
 loss, pre-login recovery, durable workflow continuation, all five post-commit
 update and rollback boundaries, all five failed-target source-restoration
 boundaries, ambiguous-response recovery, and state-preserving uninstall.
-Multi-host leases and heartbeats and public run history/listing are still later
-work. The npm package remains deliberately private. It is not ready for
+Multi-host leases and heartbeats and public log retrieval are still later work.
+The npm package remains deliberately private. It is not ready for
 production use.
 
 The first provider deployment authority is now defined. A strict AWS-shaped
@@ -863,6 +866,23 @@ receives physical drain cancellation and becomes durably uncertain unless it
 still returns a supported terminal. That shutdown path remains physical-only;
 an operator `cancel` request is the separate durable run-level decision.
 
+Durable runs can be rediscovered without retaining their IDs:
+
+```bash
+wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]
+<app> wharfie list [--limit <1..100>] [--cursor <opaque>] [--json]
+```
+
+Listing is read-only and app-scoped across revisions, with newest-created runs
+first. The default page size is 50 and the maximum is 100. Every directory row
+is checked against its rebuilt run before it is returned; an absent local
+control store is an honest empty page and is not created. Pagination cursors
+are opaque and bound to the app scope. Schema-v1 JSON has kind
+`wharfie.execution-ledger.run-page`, declares that the page grants no authority
+and is non-authoritative discovery data, reports verified integrity, and
+contains `scope`, `items`, and a string-or-null `nextCursor`. Neither output
+mode exposes payloads, evidence, fences, or filesystem paths.
+
 On Linux with a usable systemd user manager and administrator-enabled user
 lingering, the packaged artifact can manage that same resident as a fixed user
 service:
@@ -940,8 +960,7 @@ and immutable-byte evidence. Run it with
 `npm run verify:service:systemd:lima`. A due timer remains persisted until the
 exact-revision resident observes and fires it; there is deliberately no public
 timer-fire command. Wharfie does not yet provide schedules, managed-effect
-workflow successors, multi-host reassignment, or public run-history/listing
-commands.
+workflow successors, multi-host reassignment, or public log retrieval.
 
 ## Reconcile one uncertain managed effect
 

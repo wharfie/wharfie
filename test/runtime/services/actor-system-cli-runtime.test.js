@@ -2,6 +2,9 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const ACTOR_SYSTEM_CLI_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/index.js';
@@ -71,6 +74,7 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('submit');
     expect(help).toContain('start');
     expect(help).toContain('worker');
+    expect(help).toContain('list');
     expect(help).toContain('inspect');
     expect(help).toContain('recover');
     expect(help).toContain('reconcile');
@@ -78,7 +82,6 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('retry-effect');
     expect(help).toContain('cancel');
     expect(help).toContain('deployment');
-    expect(help).not.toMatch(/\blist\b/);
     expect(help).not.toMatch(/\bfunc\b/);
     expect(help).not.toMatch(/\binfra\b/);
     expect(help).not.toMatch(/\bctl\b/);
@@ -167,6 +170,83 @@ describe('packaged application dispatch', () => {
     );
     expect(sourceOps.helpInformation()).toContain('retry-effect');
     expect(packaged.helpInformation()).toContain('retry-effect');
+  });
+
+  it('mounts app-scoped run history with only the source directory option', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const packaged = createProgram();
+    const sourceList = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'list',
+    );
+    const packagedList = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'list',
+    );
+
+    expect(sourceList).toBeDefined();
+    expect(packagedList).toBeDefined();
+    expect(packagedList?.description()).toBe(sourceList?.description());
+    expect(
+      sourceList?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(
+      expect.arrayContaining(['--dir', '--limit', '--cursor', '--json']),
+    );
+    expect(
+      packagedList?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(expect.arrayContaining(['--limit', '--cursor', '--json']));
+    expect(
+      packagedList?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).not.toContain('--dir');
+    expect(sourceOps.helpInformation()).toContain('list');
+    expect(packaged.helpInformation()).toContain('list');
+  });
+
+  it('narrows packaged revision authority to app-scoped history at action time', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const root = mkdtempSync(join(tmpdir(), 'wharfie-packaged-history-'));
+    const controlRoot = join(root, 'missing-control');
+    try {
+      process.env.WHARFIE_CONTROL_ADAPTER = 'vanilla';
+      process.env.WHARFIE_CONTROL_PATH = controlRoot;
+      const consoleLog = jest
+        .spyOn(console, 'log')
+        .mockImplementation(() => undefined);
+      const consoleError = jest
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      const resolveExpectedIdentity = jest.fn(async () => ({
+        appId: 'packaged-history-demo',
+        revisionId: `wrv1_${'A'.repeat(43)}`,
+      }));
+      const packaged = createProgram({ resolveExpectedIdentity });
+
+      await packaged.parseAsync(['list', '--json'], { from: 'user' });
+
+      expect(resolveExpectedIdentity).toHaveBeenCalledTimes(1);
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(consoleLog).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(consoleLog.mock.calls[0][0]))).toEqual(
+        expect.objectContaining({
+          scope: { appId: 'packaged-history-demo' },
+          items: [],
+          nextCursor: null,
+        }),
+      );
+      expect(existsSync(controlRoot)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('mounts the flat public workflow-start command with the expected source-only directory option', async () => {

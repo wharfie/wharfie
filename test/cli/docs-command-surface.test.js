@@ -28,10 +28,8 @@ const staleCommands = [
   'wharfie project cost',
   'wharfie project dev',
   'wharfie config',
-  'wharfie list',
   'wharfie init',
   'wharfie build-self',
-  'wharfie ops list',
   'wharfie ops run --recover',
   '--operation-id',
 ];
@@ -181,6 +179,9 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops signal --run-id <run-id> --signal <signal-step-id>',
     );
+    expect(quickstart).toContain(
+      'wharfie ops list --dir ./path/to/app --limit 50 --json',
+    );
     expect(quickstart).toContain('wharfie ops worker --dir ./path/to/app');
     expect(quickstart).toContain(
       '<app> wharfie submit --activity <activity-id>',
@@ -191,6 +192,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       '<app> wharfie signal --run-id <run-id> --signal <signal-step-id>',
     );
+    expect(quickstart).toContain('<app> wharfie list --limit 50 --json');
     expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('<app> wharfie service install');
     expect(quickstart).toContain('<app> wharfie service status --json');
@@ -272,7 +274,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       '<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
     );
-    expect(quickstart).not.toContain('wharfie ops list');
+    expect(quickstart).not.toMatch(/^wharfie list(?:\s|$)/m);
     expect(quickstart).not.toContain('<app> wharfie ops cancel');
     expect(quickstart).not.toContain('<app> wharfie ops start');
   });

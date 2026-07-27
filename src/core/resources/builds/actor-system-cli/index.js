@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 
+import { createExecutionLedgerHistoryCommand } from '../../../runtime/operator/execution-ledger-history-command.js';
 import { createExecutionLedgerOperatorCommands } from '../../../runtime/operator/execution-ledger-operator.js';
 import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.js';
 import manifestCommand from './control_cmds/manifest.js';
@@ -38,6 +39,12 @@ export function createProgram(options = {}) {
   } = createExecutionLedgerOperatorCommands({
     resolveExpectedIdentity,
     requireLocalOwnership: true,
+  });
+  const listCommand = createExecutionLedgerHistoryCommand({
+    async resolveIdentity() {
+      const identity = await resolveExpectedIdentity();
+      return { appId: identity.appId };
+    },
   });
   const runCommand = createPackagedDurableRunCommand({
     ...(options.loadDurableRunExecution === undefined
@@ -133,6 +140,7 @@ export function createProgram(options = {}) {
     .addCommand(startCommand)
     .addCommand(submitCommand)
     .addCommand(workerCommand)
+    .addCommand(listCommand)
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
     .addCommand(reconcileCommand)

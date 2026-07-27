@@ -18,13 +18,30 @@ by the current cursor is accepted; `early-signal`, `unexpected-signal`, and
 `late-signal` are durable, exactly replayable rejections rather than entries in
 an early-signal inbox. Reusing a delivery ID with changed contents conflicts.
 
+Discover retained durable runs with
+`wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]`
+or packaged
+`<app> wharfie list [--limit <1..100>] [--cursor <opaque>] [--json]`.
+The source command derives app scope from the selected application directory;
+the packaged command uses its embedded app identity. Both list that app's runs
+across revisions in newest-first creation order. Pages default to 50 rows and
+are capped at 100. Cursors are opaque and app-scope-bound. Listing opens the
+control store read-only, reports a missing store as an honest empty page without
+creating it, and verifies every directory row against its rebuilt run.
+
+Schema-v1 JSON has kind `wharfie.execution-ledger.run-page`, authority `none`,
+non-authoritative discovery semantics, verified integrity, `scope`, redacted
+`items`, and a string-or-null `nextCursor`. Human and JSON output omit payloads,
+evidence, fences, and filesystem paths. The listing grants no scheduling,
+cancellation, or mutation authority.
+
 Generic exact-run `inspect`, confirmed `recover`, evidence-backed `reconcile`,
 and run-level `cancel` are workflow-aware. JSON inspection uses the schema-v7
 redacted view with safe timer, signal-wait, and signal-delivery lifecycle state,
 whose dedicated projection rows omit signal payloads, payload references,
 digests, and actor fields. The existing event history retains its safe actor
-metadata. Branches, schedules, and managed-effect workflow successors remain
-unsupported.
+metadata. Branches, schedules, managed-effect workflow successors, and public
+log retrieval remain unsupported.
 
 The provider-backed `deployment` group has exactly five leaves: `plan`,
 `apply`, `inspect`, `reconcile`, and `destroy`. Source plan and direct apply

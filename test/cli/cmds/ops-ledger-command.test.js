@@ -1153,7 +1153,7 @@ describe('ledger-native operator commands', () => {
     }
   }, 30000);
 
-  it('exposes the supported ledger operator surface and removes legacy list', () => {
+  it('exposes the supported ledger operator surface including verified history', () => {
     const env = { ...process.env, NODE_ENV: 'development' };
     const help = runCli(['ops', '--help'], env, repoRoot);
     expect(help.status).toBe(0);
@@ -1165,7 +1165,7 @@ describe('ledger-native operator commands', () => {
     expect(help.stdout).toContain('cancel');
     expect(help.stdout).toContain('run');
     expect(help.stdout).toContain('start');
-    expect(help.stdout).not.toContain('list');
+    expect(help.stdout).toContain('list');
 
     const startHelp = runCli(['ops', 'start', '--help'], env, repoRoot);
     expect(startHelp.status).toBe(0);
@@ -1196,7 +1196,9 @@ describe('ledger-native operator commands', () => {
 
     const list = runCli(['ops', 'list'], env, repoRoot);
     expect(list.status).toBe(1);
-    expect(list.stderr).toMatch(/unknown command/i);
+    expect(list.stderr).toMatch(
+      /durable run history could not be read safely/i,
+    );
 
     const cancel = runCli(
       ['ops', 'cancel', '--request-id', 'missing-run-id-request'],

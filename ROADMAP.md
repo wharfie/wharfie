@@ -310,8 +310,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 - [x] Add a typed, redacted,
       atomically maintained per-service run-history directory and a bounded
       portable pagination primitive. Its internal API verifies every directory
-      row against a rebuilt run projection; it deliberately does not create a
-      ready-work queue or expose a source-only `ops list` command.
+      row against a rebuilt run projection. This storage checkpoint deliberately
+      did not create a ready-work queue or expose the historical source-only
+      `ops list`; the shared source/packaged surface below now exposes only its
+      read-only discovery contract.
 - [x] Separate durable activity submission from physical execution. Source
       `wharfie ops submit --dir ...` and packaged `<app> wharfie submit`
       append one exact app/revision-pinned manual request without claiming it.
@@ -627,7 +629,17 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       refused, exact source bytes and health are restored, and durable state
       remains preserved through uninstall.
 - [x] Make service status available as human-readable and JSON operations in the reserved packaged operator namespace.
-- [ ] Add logs, run history/listing, and any remaining operator surfaces that are still deliberately absent.
+- [x] Expose the verified bounded run directory through shared source
+      `wharfie ops list` and packaged `<app> wharfie list` commands. Listing is
+      read-only, app-scoped across revisions, newest-created-first, limited to
+      1–100 rows with a default of 50, and continued with opaque scope-bound
+      cursors. Every returned directory row is checked against its rebuilt run;
+      a missing store is an honest empty page. Schema-v1 JSON kind
+      `wharfie.execution-ledger.run-page` explicitly grants no authority,
+      identifies the data as non-authoritative discovery with verified
+      integrity, and omits payloads, evidence, fences, and paths.
+- [ ] Add public logs and any remaining operator surfaces that are still
+      deliberately absent.
 - [x] Build one shared source/packaged foreground durable-run host. Source
       `wharfie ops run` supplies a sealed prepared revision. The packaged
       command `<app> wharfie run` binds only its embedded manifest/revision/

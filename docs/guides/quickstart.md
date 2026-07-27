@@ -397,6 +397,8 @@ resident owner; a workflow run can instead route through a resident or acquire
 short-lived local ownership for an activation that needs no physical delivery:
 
 ```bash
+wharfie ops list --dir ./path/to/app --limit 50 --json
+wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]
 wharfie ops inspect --run-id <run-id>
 wharfie ops recover --run-id <run-id> --confirm-runner-stopped
 wharfie ops reconcile --run-id <run-id> --reconciliation-id <stable-id> \
@@ -405,10 +407,12 @@ wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconci
 wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
-The packaged executable exposes the same exact-run operations directly under
-its reserved operator namespace:
+The packaged executable exposes the same listing and exact-run operations
+directly under its reserved operator namespace:
 
 ```bash
+<app> wharfie list --limit 50 --json
+<app> wharfie list [--limit <1..100>] [--cursor <opaque>] [--json]
 <app> wharfie inspect --run-id <run-id>
 <app> wharfie recover --run-id <run-id> --confirm-runner-stopped
 <app> wharfie reconcile --run-id <run-id> --reconciliation-id <stable-id> \
@@ -417,11 +421,28 @@ its reserved operator namespace:
 <app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
+Source `list` resolves app scope from the selected application directory; the
+packaged form uses the immutable app identity embedded in the artifact. Both
+list runs across that app's revisions in newest-first creation order. The
+default page contains at most 50 rows; `--limit` accepts 1 through 100, and an
+opaque `--cursor` continues only within the same app scope. Listing is read-only.
+It does not create an absent control store, which is reported as an honest empty
+page, and it verifies every directory row against the rebuilt run before
+returning it.
+
+With `--json`, `list` emits schema v1 with kind
+`wharfie.execution-ledger.run-page`. Its authority is `none`: the page is
+non-authoritative discovery data and cannot schedule, cancel, or otherwise
+mutate a run. The document reports verified integrity and includes its `scope`,
+redacted `items`, and a `nextCursor` that is either an opaque string or `null`.
+Human and JSON listing omit payloads, evidence, fencing tokens, and filesystem
+paths.
+
 Packaged inspection, recovery, reconciliation, effect reconciliation,
-cancellation, and signal delivery are scoped to the immutable app identity
-embedded in the artifact. They can operate an older revision of that same app,
-but reject another app's run ID before output or mutation. With `--json`, the source and
-packaged forms of `inspect` emit the same schema-v7 redacted run view, including
+cancellation, and signal delivery are also scoped to the embedded app identity.
+They can operate an older revision of that same app, but reject another app's
+run ID before output or mutation. With `--json`, the source and packaged forms
+of `inspect` emit the same schema-v7 redacted run view, including
 the safe manual/workflow trigger, activation-aware cursor, timer timing and
 status, signal-wait status, signal-delivery outcome/rejection, and effect
 identity/status/adapter-lifecycle rows. They do not expose requests,
@@ -559,15 +580,15 @@ second transition or signal. Verified completion or failure evidence remains
 authoritative, but a non-final completion observed after cancellation cannot
 create a successor; unconfirmed termination remains blocked uncertainty.
 
-There is still no public run-history/list: the verified bounded V8 run
-directory paired with the V10
-ledger is internal rather than the retired `ops list` surface. The resident now
-submits, claims, and executes exact-revision manual activities serially and
-consumes exact manifest-bound workflow activity and timer continuations created
-through public `start`; public `signal` consumes only the current declared
-signal wait. Public `inspect`, confirmed `recover`, and evidence-backed
-`reconcile` understand those workflow runs. Managed-effect workflow successors
-and schedules remain unsupported. The manual bounded
+The public run-history surface exposes the verified bounded V8 directory paired
+with the V10 ledger only as read-only, non-authoritative discovery data. The
+resident submits, claims, and executes exact-revision manual activities
+serially and consumes exact manifest-bound workflow activity and timer
+continuations created through public `start`; public `signal` consumes only the
+current declared signal wait. Public `inspect`, confirmed `recover`, and
+evidence-backed `reconcile` understand those workflow runs. Public log
+retrieval, managed-effect workflow successors, and schedules remain
+unsupported. The manual bounded
 recovery and reconciliation paths have prior real subprocess and relocated-SEA
 crash coverage across request, start, destination commit, payload publication,
 ledger settlement, and response-delivery boundaries. The manual resident
