@@ -116,8 +116,13 @@ keeps configured coverage explicit in `test:coverage` and the CI gate, and
 confines runner-owned cache and coverage paths to one OS-temporary root removed
 after normal success, failure, spawn error, thrown spawn, or child signal.
 Caller-selected output remains caller-owned, and uncatchable wrapper death can
-still leave temporary residue. The committed V83 driver still has not produced
-a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle proof
+still leave temporary residue. V87 aligns `jest`, `@jest/globals`, and
+`@types/jest` on major 30, removes stale Jest 29 runtime/type packages from the
+lock, and pins direct-plus-locked major agreement in the safe runner suite.
+Five focused safe suites pass; one separately attempted operations-error suite
+exits 134 locally for an unresolved reason and is not part of that passing
+matrix or a full-suite claim. The committed V83 driver still has not produced a
+`whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle proof
 exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
@@ -248,6 +253,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       one owned OS-temporary root, removes it after every synchronous child
       outcome, preserves caller-owned directory overrides, and keeps coverage
       explicit in `test:coverage` and mandatory in `test:ci`.
+- [x] Align the Jest runtime, imported globals, and test types on major 30.
+      Remove stale Jest 29 runtime/type lock entries and enforce direct and
+      principal locked major agreement in the disposable-runner regression
+      suite. Keep `eslint-plugin-jest` on its independent release line.
 
 **Exit:** the README, shipped package, package gate, validation commands, and
 current source describe the same v2 product; no Athena/v1 surface remains.
@@ -1435,8 +1444,10 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V86 disposable test-harness
-checkpoint](llm/checkpoints/2026-07-27-v86-disposable-test-harness.md). Its
+The latest recorded restart point is the [V87 Jest 30 alignment
+checkpoint](llm/checkpoints/2026-07-27-v87-jest-30-alignment.md). Its parent is
+the [V86 disposable test-harness
+checkpoint](llm/checkpoints/2026-07-27-v86-disposable-test-harness.md), whose
 parent is the [V85 verified durable run-history
 checkpoint](llm/checkpoints/2026-07-27-v85-verified-run-history.md), whose
 parent is the separate [V84 read-only Docker proof readiness
