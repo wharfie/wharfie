@@ -27,5 +27,6 @@ These records capture product-level decisions that should survive implementation
 | [0021 — Provider-backed single-node deployment](0021-provider-backed-single-node-deployment.md)                            | Accepted; supersedes profile V1 for managed deployment |
 | [0022 — Durable activity-log append before acknowledgement](0022-durable-activity-log-append.md)                           | Accepted                                               |
 | [0023 — Verified sensitive activity-log disclosure](0023-sensitive-activity-log-disclosure.md)                             | Accepted                                               |
+| [0024 — Revision-bound workflow schedules](0024-revision-bound-workflow-schedules.md)                                      | Accepted; manifest V3 waits for executable slice       |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).
