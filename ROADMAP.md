@@ -706,13 +706,23 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       overlap-allowing runs, deterministic app/schedule/minute occurrence
       identity, revision/plan-bound definition identity, and authoritative
       schedule causes on ordinary workflow runs.
-- [ ] Admit a due schedule occurrence and its ordinary workflow run in one
+- [x] Admit a due schedule occurrence and its ordinary workflow run in one
       transaction fenced by the exact ACTIVE application revision and current
       resident owner. The transaction must advance the exact schedule cursor,
       retain complete skipped-window and occurrence evidence, create the
       workflow event/projections/ready row, and reconcile response loss as
       both-or-neither. Prove the race against `ACTIVE` → `QUIESCING` before
-      enabling manifest V3 or resident observation.
+      enabling manifest V3 or resident observation. ADR 0025 removes the
+      unsafe durable pending state, binds opaque admission material to the
+      exact control store, and proves source-mode activation creation,
+      managed cutover, response loss, owner replacement, and cursor
+      competition without one-sided progress.
+- [ ] Integrate exact revision-bound schedule definitions into the resident as
+      a concurrent observer that admits ordinary workflow runs and wakes the
+      existing ready-work loop. Prove long activity execution cannot suppress
+      logical schedule observation, restart preserves each cursor, activation
+      cutover stops old-revision admission, and source plus packaged residents
+      execute the same sealed manifest V3 contract before replacing strict V2.
 - [ ] After durable schedule semantics and projections exist, add only the
       source/packaged schedule operator surface needed to `list`, `inspect`,
       `pause`, and `resume` schedules. Do not expose public schedule firing,
@@ -1492,9 +1502,11 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V90 workflow-schedule contract
-checkpoint](llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md).
-Its parent is the [V89 sensitive activity-log inspection
+The latest recorded restart point is the [V91 atomic schedule-admission
+checkpoint](llm/checkpoints/2026-07-27-v91-atomic-schedule-admission.md). Its
+parent is the [V90 workflow-schedule contract
+checkpoint](llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md),
+whose parent is the [V89 sensitive activity-log inspection
 checkpoint](llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md),
 whose parent is the [V88 durable attempt logs
 checkpoint](llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md), whose
