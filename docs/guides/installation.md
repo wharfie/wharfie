@@ -20,10 +20,14 @@ deliberately disabled. No standalone builder binary is published. Generated
 application SEAs are the portable deliverable and do not require Node on the
 target machine.
 
-The clean-install validation path is `npm run test:ci`. It includes lint and
-type checks, tests, package-tarball verification, and a production dependency
-audit. Native LMDB and generated-SEA proofs are separate because they exercise
-host file-locking and platform packaging behavior.
+Ordinary `npm test` is coverage-free. The runner places its default Jest cache
+and any default coverage output in one owned OS-temporary root and removes it
+after success, failure, or a child signal. Use `npm run test:coverage` when
+coverage is wanted explicitly. The clean-install path `npm run test:ci` invokes
+that coverage run, along with lint and type checks, package-tarball
+verification, and a production dependency audit. Native LMDB and generated-SEA
+proofs are separate because they exercise host file-locking and platform
+packaging behavior.
 
 Local `app` and `ops` commands do not require cloud credentials or global
 Wharfie configuration. The source CLI now also mounts an experimental

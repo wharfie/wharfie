@@ -1061,15 +1061,21 @@ and run:
 
 ```bash
 npm ci
-npm run test:ci
+npm test
 ```
 
-`npm run test:ci` covers lint, source and test type checks, the full unit and
-integration suite, package-tarball verification, and the production dependency
-audit. The parser used by the portable-module audit is a direct runtime
-dependency, and clean-install validation no longer relies on the unused
-TypeScript ESLint import preset or resolver. Native LMDB and generated-SEA
-proofs are available through `npm run test:native` and the SEA verifier.
+Ordinary `npm test` is coverage-free. The Jest runner confines its default
+cache and any default coverage output to one owned OS-temporary root and
+removes that root after success, failure, or a child signal. Explicit
+caller-supplied cache or coverage directories remain caller-owned.
+Use `npm run test:coverage` instead when you need the configured coverage
+thresholds, or `npm run test:ci` for the complete clean-install gate. That CI
+gate uses the coverage run after lint and type checks, followed by package-
+tarball verification and the production dependency audit. The parser used by
+the portable-module audit is a direct runtime dependency, and clean-install
+validation no longer relies on the unused TypeScript ESLint import preset or
+resolver. Native LMDB and generated-SEA proofs are available
+through `npm run test:native` and the SEA verifier.
 The destructive, disposable real-machine service gate is
 `npm run verify:service:systemd:lima`; it requires Lima on macOS and creates,
 force-cycles, verifies, and deletes an isolated Ubuntu VM.
