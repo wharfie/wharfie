@@ -97,7 +97,7 @@ The packaged equivalents are `<app> wharfie submit ...`, `<app> wharfie start
 the manifest and revision embedded in that artifact and do not accept `--dir`.
 Signal delivery accepts only the current wait. `early-signal`,
 `unexpected-signal`, and `late-signal` are durable, exactly replayable
-rejections rather than a buffered inbox. Exact-run `inspect --json` emits the shared schema-v7 redacted trigger,
+rejections rather than a buffered inbox. Exact-run `inspect --json` emits the shared schema-v8 redacted trigger,
 activation-aware cursor, timer, signal-wait, and signal-delivery lifecycle;
 confirmed `recover` and evidence-backed `reconcile` use the same safe view.
 
@@ -193,9 +193,11 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [sensitive activity-log inspection
-checkpoint](../llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md).
-Its parent is the [durable attempt logs
+The latest recorded restart handoff is the [workflow-schedule contract
+checkpoint](../llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md).
+Its parent is the [sensitive activity-log inspection
+checkpoint](../llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md),
+whose parent is the [durable attempt logs
 checkpoint](../llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md), whose
 parent is the [Jest 30 alignment
 checkpoint](../llm/checkpoints/2026-07-27-v87-jest-30-alignment.md), whose

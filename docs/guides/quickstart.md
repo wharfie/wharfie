@@ -468,7 +468,7 @@ Packaged inspection, recovery, reconciliation, effect reconciliation,
 cancellation, and signal delivery are also scoped to the embedded app identity.
 They can operate an older revision of that same app, but reject another app's
 run ID before output or mutation. With `--json`, the source and packaged forms
-of `inspect` emit the same schema-v7 redacted run view, including
+of `inspect` emit the same schema-v8 redacted run view, including
 the safe manual/workflow trigger, activation-aware cursor, timer timing and
 status, signal-wait status, signal-delivery outcome/rejection, and effect
 identity/status/adapter-lifecycle rows. They do not expose requests,
@@ -612,9 +612,10 @@ resident submits, claims, and executes exact-revision manual activities
 serially and consumes exact manifest-bound workflow activity and timer
 continuations created through public `start`; public `signal` consumes only the
 current declared signal wait. Public `inspect`, confirmed `recover`, and
-evidence-backed `reconcile` understand those workflow runs. Public log
-retrieval, managed-effect workflow successors, and schedules remain
-unsupported. The manual bounded
+evidence-backed `reconcile` understand those workflow runs. Exact-attempt
+historical log retrieval is available through `logs`; managed-effect workflow
+successors and schedules remain unsupported. Live log tail, search, and
+redaction remain absent. The manual bounded
 recovery and reconciliation paths have prior real subprocess and relocated-SEA
 crash coverage across request, start, destination commit, payload publication,
 ledger settlement, and response-delivery boundaries. The manual resident

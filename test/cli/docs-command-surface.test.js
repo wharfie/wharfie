@@ -337,11 +337,11 @@ describe('docs command surface', () => {
       expect(document).toContain('early-signal');
       expect(document).toContain('unexpected-signal');
       expect(document).toContain('late-signal');
-      expect(document).toContain('schema-v7');
+      expect(document).toContain('schema-v8');
     }
 
     const quickstart = documents[2];
-    expect(quickstart).toContain('schema-v7 redacted run view');
+    expect(quickstart).toContain('schema-v8 redacted run view');
     expect(quickstart).toContain('reused: true');
     expect(quickstart).toContain('original uncertainty event');
     expect(quickstart).not.toContain('schema-v5 redacted run view');

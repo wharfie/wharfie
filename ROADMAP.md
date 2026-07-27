@@ -700,7 +700,23 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       parsed raw values. Outside raw messages and fields, the page adds no
       Wharfie-owned fence/hash/reference; tail/search/redaction and
       execution/display authority remain absent.
-- [ ] Add any remaining operator surfaces that are still deliberately absent.
+- [x] Settle the first revision-bound workflow-schedule contract without
+      exposing it in manifest V2. ADR 0024 defines workflow-only static JSON
+      input, canonical five-field UTC cron, latest-only bounded catch-up,
+      overlap-allowing runs, deterministic app/schedule/minute occurrence
+      identity, revision/plan-bound definition identity, and authoritative
+      schedule causes on ordinary workflow runs.
+- [ ] Admit a due schedule occurrence and its ordinary workflow run in one
+      transaction fenced by the exact ACTIVE application revision and current
+      resident owner. The transaction must advance the exact schedule cursor,
+      retain complete skipped-window and occurrence evidence, create the
+      workflow event/projections/ready row, and reconcile response loss as
+      both-or-neither. Prove the race against `ACTIVE` → `QUIESCING` before
+      enabling manifest V3 or resident observation.
+- [ ] After durable schedule semantics and projections exist, add only the
+      source/packaged schedule operator surface needed to `list`, `inspect`,
+      `pause`, and `resume` schedules. Do not expose public schedule firing,
+      log tail, or search through this item.
 - [x] Build one shared source/packaged foreground durable-run host. Source
       `wharfie ops run` supplies a sealed prepared revision. The packaged
       command `<app> wharfie run` binds only its embedded manifest/revision/
@@ -1190,7 +1206,7 @@ packaged `start` commands persist the complete finite plan. Shared source and
 packaged `signal` commands require stable delivery IDs and accept only the
 current declared wait; exact accepted or rejected requests replay, while
 early, unexpected, and late signals are durably rejected without an inbox.
-Generic schema-v7 `inspect`, confirmed `recover`, and evidence-backed
+Generic schema-v8 `inspect`, confirmed `recover`, and evidence-backed
 `reconcile` expose or mutate the exact workflow cursor without leaking signal
 payloads or internal references. Generic `cancel` accepts workflow runs with a
 stable request identity: it terminalizes unstarted work, records intent before
@@ -1476,10 +1492,11 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V89 sensitive activity-log
-inspection
-checkpoint](llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md).
-Its parent is the [V88 durable attempt logs
+The latest recorded restart point is the [V90 workflow-schedule contract
+checkpoint](llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md).
+Its parent is the [V89 sensitive activity-log inspection
+checkpoint](llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md),
+whose parent is the [V88 durable attempt logs
 checkpoint](llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md), whose
 parent is the [V87 Jest 30 alignment
 checkpoint](llm/checkpoints/2026-07-27-v87-jest-30-alignment.md), whose parent

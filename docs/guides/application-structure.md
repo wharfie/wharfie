@@ -90,7 +90,7 @@ or packaged `<app> wharfie signal ...`. A signal is accepted only for the
 current declared wait. Exact accepted and rejected deliveries replay under the
 same stable delivery ID; early, unexpected, and late deliveries are durably
 classified as `early-signal`, `unexpected-signal`, or `late-signal` rather than
-buffered in an early-signal inbox. Exact-run schema-v7 inspection, confirmed
+buffered in an early-signal inbox. Exact-run schema-v8 inspection, confirmed
 recovery, and evidence-backed reconciliation are workflow-aware and redact
 signal payloads and internal references. Run-level workflow cancellation
 terminalizes unstarted work, persists before exact active-attempt delivery,

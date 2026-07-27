@@ -59,7 +59,7 @@ themselves contain any secret or internal-looking value—the page adds no
 Wharfie-owned fences, storage IDs, hashes, or payload references.
 
 Generic exact-run `inspect`, confirmed `recover`, evidence-backed `reconcile`,
-and run-level `cancel` are workflow-aware. JSON inspection uses the schema-v7
+and run-level `cancel` are workflow-aware. JSON inspection uses the schema-v8
 redacted view with safe timer, signal-wait, and signal-delivery lifecycle state,
 whose dedicated projection rows omit signal payloads, payload references,
 digests, and actor fields. The existing event history retains its safe actor

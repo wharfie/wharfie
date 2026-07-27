@@ -136,7 +136,7 @@ workflows. Source `wharfie ops signal` and packaged `<app> wharfie signal`
 deliver one stable, current-wait-only signal decision through the same local
 owner boundary. The shared exact-run inspection, recovery, cancellation, and
 evidence-reconciliation commands understand the activation-aware cursor and
-schema-v7 redacted timer/signal lifecycle state. Managed-effect workflow
+schema-v8 redacted timer/signal lifecycle state. Managed-effect workflow
 successors and schedules remain unfinished. Packaged Linux artifacts now have
 a recoverable systemd user-service
 install/converge/update/rollback/recover/start/stop/restart/status/uninstall
@@ -152,7 +152,8 @@ covers exact-unit startup, resident `SIGKILL` replacement, abrupt VM power
 loss, pre-login recovery, durable workflow continuation, all five post-commit
 update and rollback boundaries, all five failed-target source-restoration
 boundaries, ambiguous-response recovery, and state-preserving uninstall.
-Multi-host leases and heartbeats and public log retrieval are still later work.
+Multi-host leases and heartbeats are still later work. Exact-attempt historical
+log retrieval is available; live tail, search, and redaction remain absent.
 The npm package remains deliberately private. It is not ready for
 production use.
 
@@ -640,7 +641,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Sensitive activity-log inspection checkpoint](llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md) — the latest restart point for exact ambiguous-append replay, verified frozen-prefix reads, explicit raw disclosure, source/packaged CLI parity, focused verification, and V90.
+- [Workflow-schedule contract checkpoint](llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md) — the latest restart point for canonical UTC schedules, deterministic occurrence/definition identity, authoritative workflow-run causes, the rejected two-transaction cutover design, focused verification, and atomic-admission next work.
+- [Sensitive activity-log inspection checkpoint](llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md) — the parent restart point for exact ambiguous-append replay, verified frozen-prefix reads, explicit raw disclosure, source/packaged CLI parity, and V90.
 - [Durable attempt logs checkpoint](llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md) — the parent restart point for sink-settled component acknowledgements, fenced bounded append/replay, durable manual/workflow wiring, sensitive-data and no-reader boundaries, focused verification, and V89.
 - [Jest 30 alignment checkpoint](llm/checkpoints/2026-07-27-v87-jest-30-alignment.md) — the parent restart point for the coherent runtime/globals/types toolchain, direct-and-locked regression, bounded install and disk accounting, focused verification, unresolved local exit 134, and V88.
 - [Disposable test-harness checkpoint](llm/checkpoints/2026-07-27-v86-disposable-test-harness.md) — the parent restart point for coverage-free ordinary tests, explicit CI coverage, runner-owned temporary cache/output cleanup, verification, limits, and next work.
@@ -862,7 +864,7 @@ unexpected, or late delivery is durably rejected as `early-signal`,
 `unexpected-signal`, or `late-signal`, with no early-signal inbox. Repeating
 the exact delivery returns the retained accepted or rejected decision;
 changing a reused delivery ID conflicts. The shared `inspect --json` surface
-emits a schema-v7 redacted manual/workflow view, including safe cursor, timer,
+emits a schema-v8 redacted manual/workflow view, including safe cursor, timer,
 signal-wait, and signal-delivery lifecycle fields but no signal payload,
 payload reference, digest, or actor. Confirmed `recover` and evidence-backed
 `reconcile` return the same safe view around their result. The worker is
@@ -983,7 +985,8 @@ and immutable-byte evidence. Run it with
 `npm run verify:service:systemd:lima`. A due timer remains persisted until the
 exact-revision resident observes and fires it; there is deliberately no public
 timer-fire command. Wharfie does not yet provide schedules, managed-effect
-workflow successors, multi-host reassignment, or public log retrieval.
+workflow successors, multi-host reassignment, or live log tail, search, and
+redaction.
 
 ## Reconcile one uncertain managed effect
 
