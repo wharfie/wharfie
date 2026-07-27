@@ -104,8 +104,16 @@ tooling, one bound local endpoint, daemon/image/container state, output
 collision, and shared-filesystem capacity without creating, starting,
 removing, pulling, building, publishing, or reserving anything. A positive
 report is only eligibility for a bounded attempt, never authority or reusable
-evidence. The committed V83 driver still has not produced a `whlp2` receipt,
-and no successful AL2023 or live AWS/EBS lifecycle proof exists.
+evidence. V85 hardens existing vanilla control snapshots so malformed JSON or
+invalid database/table/key/record maps fail closed in both writable and
+read-only modes without changing retained bytes. It also exposes the ledger's
+verified app-wide run directory through shared source `wharfie ops list` and
+packaged `<app> wharfie list` commands. Pages are newest-created-first,
+bounded, cursor-continued, explicitly redacted, integrity-marked, and
+non-authoritative; a missing read-only store is honest empty history. Public
+logs remain deliberately absent. The committed V83 driver still has not
+produced a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle
+proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -164,7 +172,9 @@ live STS identity adapter, fixed owned host AWS lifetime, root-owned local
 persistence boundary, and authenticated current-head controller authority are
 defined; fixed-user desired convergence and authorized non-destructive
 application-storage preparation are now concrete. The read/digest-only V78
-host fingerprint is also concrete, while live disposable-host format evidence,
+host fingerprint is also concrete. The local durable ledger now has verified
+bounded application-wide run discovery from both source and packaged CLIs,
+while durable public logs remain open. Live disposable-host format evidence,
 destructive formatting, exact profile verification, mounting, control storage,
 health effects, privileged packaging and selector delivery, clean-account
 proof, and a deployed-service readiness claim still follow ·
@@ -1415,9 +1425,11 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V84 read-only Docker proof readiness
-checkpoint](llm/checkpoints/2026-07-27-v84-read-only-docker-proof-readiness.md).
-Its parent is the [V83 bounded Linux SEA proof tooling
+The latest recorded restart point is the [V85 verified durable run-history
+checkpoint](llm/checkpoints/2026-07-27-v85-verified-run-history.md). Its parent
+is the separate [V84 read-only Docker proof readiness
+checkpoint](llm/checkpoints/2026-07-27-v84-read-only-docker-proof-readiness.md),
+whose parent is the [V83 bounded Linux SEA proof tooling
 checkpoint](llm/checkpoints/2026-07-27-v83-bounded-linux-sea-proof-tooling.md),
 whose parent is the [V82 real Linux SEA proof
 checkpoint](llm/checkpoints/2026-07-26-v82-linux-sea-proof.md), whose parent is

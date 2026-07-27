@@ -187,10 +187,20 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [read-only retained-storage
-provider evidence
-checkpoint](../llm/checkpoints/2026-07-26-v79-read-only-provider-evidence.md).
-Its parent is the [read-only host toolchain fingerprint
+The latest recorded restart handoff is the [verified durable run-history
+checkpoint](../llm/checkpoints/2026-07-27-v85-verified-run-history.md).
+Its parent is the separate [read-only Docker proof readiness
+checkpoint](../llm/checkpoints/2026-07-27-v84-read-only-docker-proof-readiness.md),
+whose parent is the [bounded Linux SEA proof tooling
+checkpoint](../llm/checkpoints/2026-07-27-v83-bounded-linux-sea-proof-tooling.md),
+whose parent is the [real Linux SEA proof
+checkpoint](../llm/checkpoints/2026-07-26-v82-linux-sea-proof.md), whose parent
+is the [exact-source SEA publication
+checkpoint](../llm/checkpoints/2026-07-26-v81-exact-source-sea-publication.md).
+That checkpoint also records the V80 zero-argument delivery, and its parent is
+the [read-only retained-storage provider evidence
+checkpoint](../llm/checkpoints/2026-07-26-v79-read-only-provider-evidence.md),
+whose parent is the [read-only host toolchain fingerprint
 checkpoint](../llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md),
 whose parent is the [authorized storage preparation
 checkpoint](../llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md),

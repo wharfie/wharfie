@@ -8,7 +8,7 @@ The decisions below are an audit record, not standing authority for future GitHu
 
 ## Execution update — 2026-07-17
 
-The user authorized the current session to commit, push, and work through this cleanup after preserving the remote state. The original inventory below remains the evidence for each decision; [the live roadmap](../../ROADMAP.md) and [the latest checkpoint](../../llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md) now control ordering.
+The user authorized the current session to commit, push, and work through this cleanup after preserving the remote state. The original inventory below remains the evidence for each decision; [the live roadmap](../../ROADMAP.md) and its current restart-handoff lineage now control ordering.
 
 - All 15 remote archive tags were reverified immediately before publication; every peeled target still matches the preservation checkpoint.
 - The three unpublished packaging commits were salvaged and cleaned, the useful `jvd/pr4` behavior was reimplemented, v1 was deleted, and the strict manifest, atomic operation boundary, type-safety salvage, and immutable identity/provenance spine were completed on `agent/strict-manifest`.
