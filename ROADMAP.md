@@ -95,8 +95,17 @@ verifier, and strict `whlp2` receipt validation. The receipt now separates
 host-runner claims, builder claims, and independently reproduced or observed
 bytes; binds clean exact-HEAD transport and tool fingerprints; records exact
 container/resource/cleanup identity; and remains explicitly non-authoritative.
-The committed V83 driver has not yet been run to produce a `whlp2` receipt, and
-no successful AL2023 or live AWS/EBS lifecycle proof exists.
+V84 adds a standalone point-in-time admission observer before that driver. Its
+orchestration has only semantic read ports; its production adapter positively
+enumerates nonlocking/lazy-fetch-disabled Git reads, local-endpoint Docker
+context/info/inspect/list reads, stable no-follow tooling reads, and
+lstat/realpath/access/statfs capacity observations. It reports clean exact
+tooling, one bound local endpoint, daemon/image/container state, output
+collision, and shared-filesystem capacity without creating, starting,
+removing, pulling, building, publishing, or reserving anything. A positive
+report is only eligibility for a bounded attempt, never authority or reusable
+evidence. The committed V83 driver still has not produced a `whlp2` receipt,
+and no successful AL2023 or live AWS/EBS lifecycle proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -1370,32 +1379,42 @@ controller-side read-only provider-evidence contract for an expiring selected
 experiment-tagged instance and evidence volume, but has not run it against AWS
 or joined it to host evidence. No formatter or mount mutation exists.
 
-1. Before formatter code, add portable source-bound zero-argument SEA delivery
-   for the V78 collector, then run an explicitly authorized disposable
+1. Run V84 against one already-present immutable local Linux/amd64 image. If
+   the read-only report is attemptable, run the committed V83 Docker proof only
+   with explicit approval, retain only its checksummed `whlp2` receipt, and
+   audit cleanup and disk deltas.
+2. After that bounded proof, run an explicitly authorized disposable
    AL2023/real-EBS proof that joins V79 provider evidence to exact e2fsprogs
    tools and output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id
    identity and path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
-2. Only after that proof, implement the destructive formatter boundary with a
+3. Only after that proof, implement the destructive formatter boundary with a
    fresh controller authorization and current local fence immediately before
    mutation, a prepared-journal reread, immediate exact-media reobservation,
    path-retarget-safe device access, complete profile verification, and
    interruption recovery.
-3. Then implement persistent mount/systemd projection and runtime-manager
+4. Then implement persistent mount/systemd projection and runtime-manager
    recovery, control storage, the V3 health publisher and V65 receipt, and the
-   deactivation producer/executor.
-4. After the host lifecycle is proven, expose the root framework host command
-   and SEA, add SSM as wakeup/delivery rather than durable authority, and run a
-   complete clean-account proof through the user's ordinary credential chain.
-5. Begin provider-backed coordinator recovery only after the single-node
-   service lifecycle and control-store fencing are proven outside a developer
-   session.
+   deactivation producer/executor. Expose the root framework host command and
+   SEA only after that lifecycle is proven.
+5. Add SSM as wakeup/delivery rather than durable authority and run a complete
+   clean-account proof through the user's ordinary credential chain. Begin
+   provider-backed coordinator recovery only after the single-node service
+   lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [read-only retained-storage provider
-evidence
+The latest recorded restart point is the [V84 read-only Docker proof readiness
+checkpoint](llm/checkpoints/2026-07-27-v84-read-only-docker-proof-readiness.md).
+Its parent is the [V83 bounded Linux SEA proof tooling
+checkpoint](llm/checkpoints/2026-07-27-v83-bounded-linux-sea-proof-tooling.md),
+whose parent is the [V82 real Linux SEA proof
+checkpoint](llm/checkpoints/2026-07-26-v82-linux-sea-proof.md), whose parent is
+the [V81 exact-source SEA publication
+checkpoint](llm/checkpoints/2026-07-26-v81-exact-source-sea-publication.md),
+which also records the V80 zero-argument delivery and whose parent is the
+[read-only retained-storage provider evidence
 checkpoint](llm/checkpoints/2026-07-26-v79-read-only-provider-evidence.md).
-Its parent is the [read-only host toolchain fingerprint
+The earlier lineage continues through the [read-only host toolchain fingerprint
 checkpoint](llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md),
 whose parent is the [authorized storage preparation command
 checkpoint](llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md),
