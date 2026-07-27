@@ -63,6 +63,20 @@ import {
   verifyPayloadBytes,
 } from '../../ledger/execution-ledger-contract.js';
 import {
+  EXECUTION_LEDGER_ATTEMPT_LOG_MAX_CUMULATIVE_PAYLOAD_BYTES,
+  EXECUTION_LEDGER_ATTEMPT_LOG_MAX_ENTRIES,
+  EXECUTION_LEDGER_ATTEMPT_LOG_PAYLOAD_SCHEMA,
+  EXECUTION_LEDGER_ATTEMPT_LOG_ENTRY_SORT_KEY_PREFIX,
+  advanceExecutionLedgerAttemptLogHeadRecord,
+  createExecutionLedgerAttemptLogEntryRecord,
+  createExecutionLedgerAttemptLogScope,
+  createInitialExecutionLedgerAttemptLogHeadRecord,
+  getExecutionLedgerAttemptLogEntrySortKey,
+  getExecutionLedgerAttemptLogHeadSortKey,
+  normalizeExecutionLedgerAttemptLogEntryRecord,
+  normalizeExecutionLedgerAttemptLogHeadRecord,
+} from '../../ledger/attempt-log.js';
+import {
   EXECUTION_LEDGER_SORT_KEY_PREFIX,
   getAttemptProjectionSortKey,
   getEffectProjectionSortKey,
@@ -270,6 +284,9 @@ const WORKFLOW_ATTEMPT_UNCERTAINTY_REASON_RESERVE = Object.freeze({
 });
 /**
  * @typedef {import('../base.js').DBClient} DBClient
+ */
+/**
+ * @typedef {{appId: string, revisionId: string, activityId: string, runId: string, invocationId: string, attemptId: string, generation: number, coordinatorEpoch: number, fencingToken: string}} ActivityAttemptLogScope
  */
 /**
  * @typedef {{applied: boolean, outcome: 'cancellation-requested'|'terminal-authoritative'|'outcome-uncertain', receipt?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} ManualCancellationResult
@@ -21963,6 +21980,514 @@ export function createExecutionLedger({
   }
 
   /**
+   * Read and strictly normalize one auxiliary attempt-log entry. The ordinary
+   * run fold deliberately cannot see this separate partition.
+   * @param {ActivityAttemptLogScope} scope - Complete private attempt-log scope.
+   * @param {number} sequence - Activity Protocol component sequence.
+   * @returns {Promise<Readonly<Record<string, any>> | null>} - Canonical retained entry.
+   */
+  async function readActivityAttemptLogEntry(scope, sequence) {
+    const partition = createExecutionLedgerAttemptLogScope(scope);
+    const raw = await db.get({
+      tableName: resolvedTableName,
+      keyName: KEY_NAME,
+      keyValue: partition.attemptLogId,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: getExecutionLedgerAttemptLogEntrySortKey(sequence),
+      consistentRead: true,
+    });
+    if (!raw) return null;
+    try {
+      return normalizeExecutionLedgerAttemptLogEntryRecord(raw, scope);
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        scope.runId,
+        'retained activity attempt-log entry is invalid',
+      );
+    }
+  }
+
+  /**
+   * Read and strictly normalize one auxiliary attempt-log head.
+   * @param {ActivityAttemptLogScope} scope - Complete private attempt-log scope.
+   * @returns {Promise<Readonly<Record<string, any>> | null>} - Canonical retained head.
+   */
+  async function readActivityAttemptLogHead(scope) {
+    const partition = createExecutionLedgerAttemptLogScope(scope);
+    const raw = await db.get({
+      tableName: resolvedTableName,
+      keyName: KEY_NAME,
+      keyValue: partition.attemptLogId,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: getExecutionLedgerAttemptLogHeadSortKey(),
+      consistentRead: true,
+    });
+    if (!raw) return null;
+    try {
+      return normalizeExecutionLedgerAttemptLogHeadRecord(raw, scope);
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        scope.runId,
+        'retained activity attempt-log head is invalid',
+      );
+    }
+  }
+
+  /**
+   * Re-read, re-hash, and validate one retained log-frame payload.
+   * @param {ActivityAttemptLogScope} scope - Complete private attempt-log scope.
+   * @param {Readonly<Record<string, any>>} entry - Canonical retained entry.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Exact validated log frame.
+   */
+  async function verifyActivityAttemptLogEntryPayload(scope, entry) {
+    try {
+      const verified = verifyPayloadBytes(
+        await payloadStore.readBytes(entry.payload_ref),
+        entry.payload_ref,
+        EXECUTION_LEDGER_ATTEMPT_LOG_PAYLOAD_SCHEMA,
+        'activity attempt-log payload verification',
+      );
+      const frame = validateActivityProtocolComponentFrame(
+        verified.value,
+        'retained activity attempt-log frame',
+      );
+      if (
+        frame.type !== 'log' ||
+        frame.attemptId !== scope.attemptId ||
+        frame.sequence !== entry.protocol_sequence ||
+        frame.level !== entry.level ||
+        encodeCanonicalJsonPayload(frame).byteLength !==
+          entry.canonical_payload_bytes
+      ) {
+        throw new TypeError(
+          'retained activity attempt-log frame does not match its entry.',
+        );
+      }
+      return frame;
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        scope.runId,
+        'retained activity attempt-log payload is invalid',
+      );
+    }
+  }
+
+  /**
+   * Read a stable bounded snapshot of the entire auxiliary hash chain and
+   * re-hash every retained payload. The head is only a compact mutation
+   * guard; it is not accepted as evidence for missing intermediate entries.
+   * @param {ActivityAttemptLogScope} scope - Complete private attempt-log scope.
+   * @returns {Promise<{head: Readonly<Record<string, any>>, entries: Readonly<Record<string, any>>[], frames: Readonly<Record<string, any>>[]} | null>} - Fully verified retained chain.
+   */
+  async function readVerifiedActivityAttemptLogChain(scope) {
+    const partition = createExecutionLedgerAttemptLogScope(scope);
+    for (let snapshotAttempt = 0; snapshotAttempt < 3; snapshotAttempt += 1) {
+      const firstHead = await readActivityAttemptLogHead(scope);
+      const rawEntries = await db.query({
+        tableName: resolvedTableName,
+        consistentRead: true,
+        keyConditions: [
+          pkEq(KEY_NAME, partition.attemptLogId),
+          skBegins(
+            SORT_KEY_NAME,
+            EXECUTION_LEDGER_ATTEMPT_LOG_ENTRY_SORT_KEY_PREFIX,
+          ),
+        ],
+      });
+      const secondHead = await readActivityAttemptLogHead(scope);
+      const stableHead =
+        firstHead === null
+          ? secondHead === null
+          : secondHead !== null && hasSameCanonicalJson(firstHead, secondHead);
+      if (!stableHead) continue;
+      if (rawEntries.length > EXECUTION_LEDGER_ATTEMPT_LOG_MAX_ENTRIES) {
+        throw new ExecutionLedgerProjectionError(
+          scope.runId,
+          'retained activity attempt-log contains too many entries',
+        );
+      }
+      /** @type {Readonly<Record<string, any>>[]} */
+      let entries;
+      try {
+        entries = rawEntries
+          .map((entry) =>
+            normalizeExecutionLedgerAttemptLogEntryRecord(entry, scope),
+          )
+          .sort((left, right) =>
+            left.protocol_sequence < right.protocol_sequence
+              ? -1
+              : left.protocol_sequence > right.protocol_sequence
+                ? 1
+                : 0,
+          );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          scope.runId,
+          'retained activity attempt-log chain is invalid',
+        );
+      }
+      if (!firstHead) {
+        if (entries.length !== 0) {
+          throw new ExecutionLedgerProjectionError(
+            scope.runId,
+            'retained activity attempt-log entries lack a head',
+          );
+        }
+        return null;
+      }
+      if (entries.length !== firstHead.entry_count) {
+        throw new ExecutionLedgerProjectionError(
+          scope.runId,
+          'retained activity attempt-log entry count does not match its head',
+        );
+      }
+      /** @type {Readonly<Record<string, any>>[]} */
+      const frames = [];
+      let cumulativePayloadBytes = 0;
+      /** @type {Readonly<Record<string, any>> | null} */
+      let previous = null;
+      for (const entry of entries) {
+        if (
+          entry.previous_entry_id !== (previous?.entry_id || null) ||
+          (previous && entry.protocol_sequence <= previous.protocol_sequence)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            scope.runId,
+            'retained activity attempt-log hash chain is discontinuous',
+          );
+        }
+        cumulativePayloadBytes += entry.canonical_payload_bytes;
+        frames.push(await verifyActivityAttemptLogEntryPayload(scope, entry));
+        previous = entry;
+      }
+      if (
+        !previous ||
+        previous.protocol_sequence !== firstHead.last_protocol_sequence ||
+        previous.entry_id !== firstHead.last_entry_id ||
+        cumulativePayloadBytes !== firstHead.cumulative_payload_bytes
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          scope.runId,
+          'retained activity attempt-log head does not match its hash chain',
+        );
+      }
+      return { head: firstHead, entries, frames };
+    }
+    throw new ExecutionLedgerConflictError(
+      scope.runId,
+      'activity attempt-log changed during bounded verification',
+    );
+  }
+
+  /**
+   * Resolve an exact retained append before consulting current attempt state.
+   * This ordering lets a response-loss retry succeed after the attempt has
+   * since terminalized without allowing a new terminal-attempt append.
+   * @param {ActivityAttemptLogScope} scope - Complete private attempt-log scope.
+   * @param {Readonly<Record<string, any>>} requestedFrame - Caller-validated frame.
+   * @returns {Promise<{entry: Readonly<Record<string, any>>, head: Readonly<Record<string, any>>} | null>} - Exact replay, if retained.
+   */
+  async function readExactActivityAttemptLogReplay(scope, requestedFrame) {
+    const entry = await readActivityAttemptLogEntry(
+      scope,
+      requestedFrame.sequence,
+    );
+    if (!entry) return null;
+    const chain = await readVerifiedActivityAttemptLogChain(scope);
+    const entryIndex = chain?.entries.findIndex(
+      (candidate) => candidate.protocol_sequence === entry.protocol_sequence,
+    );
+    if (
+      !chain ||
+      entryIndex === undefined ||
+      entryIndex < 0 ||
+      !hasSameCanonicalJson(chain.entries[entryIndex], entry)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        scope.runId,
+        'retained activity attempt-log entry is not represented by its chain',
+      );
+    }
+    const retainedFrame = chain.frames[entryIndex];
+    if (!hasSameCanonicalJson(retainedFrame, requestedFrame)) {
+      throw new ExecutionLedgerConflictError(
+        scope.runId,
+        'activity attempt-log sequence was reused with different content',
+      );
+    }
+    return { entry, head: chain.head };
+  }
+
+  /**
+   * Match every mutable scalar on a retained auxiliary head. The entry put is
+   * immutable; this condition makes its hash-chain predecessor and cumulative
+   * budget advance atomically.
+   * @param {Readonly<Record<string, any>>} head - Canonical retained head.
+   * @returns {import('../base.js').KeyCondition[]} - Exact replacement conditions.
+   */
+  function activityAttemptLogHeadReplacementConditions(head) {
+    return Object.entries(head)
+      .filter(([property]) => ![KEY_NAME, SORT_KEY_NAME].includes(property))
+      .map(([property, value]) => eq(property, value));
+  }
+
+  /**
+   * Append one raw Activity Protocol log frame to a fenced physical attempt's
+   * auxiliary partition. Positive component acknowledgement is authorized
+   * only after this method returns.
+   * @param {{appId: string, revisionId: string, activityId: string, runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number, coordinatorEpoch: number, frame: Record<string, any>}} options - Exact durable append request.
+   * @returns {Promise<{applied: boolean, attemptId: string, acknowledgedComponentSequence: number, entryId: string}>} - Durable append or exact replay result.
+   */
+  async function appendActivityAttemptLog(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'appendActivityAttemptLog',
+    );
+    assertExactKeys(
+      value,
+      [
+        'appId',
+        'revisionId',
+        'activityId',
+        'runId',
+        'invocationId',
+        'attemptId',
+        'fencingToken',
+        'generation',
+        'coordinatorEpoch',
+        'frame',
+      ],
+      'appendActivityAttemptLog',
+    );
+    assertLogicalId(value.appId, 'appendActivityAttemptLog.appId');
+    assertApplicationRevisionId(
+      value.revisionId,
+      'appendActivityAttemptLog.revisionId',
+    );
+    assertLogicalId(value.activityId, 'appendActivityAttemptLog.activityId');
+    const runId = assertOpaqueId(value.runId, 'appendActivityAttemptLog.runId');
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'appendActivityAttemptLog.invocationId',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'appendActivityAttemptLog.attemptId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'appendActivityAttemptLog.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'appendActivityAttemptLog.generation',
+    );
+    const coordinatorEpoch = assertNonnegativeSafeInteger(
+      value.coordinatorEpoch,
+      'appendActivityAttemptLog.coordinatorEpoch',
+    );
+    const frame = validateActivityProtocolComponentFrame(
+      value.frame,
+      'appendActivityAttemptLog.frame',
+    );
+    if (frame.type !== 'log' || frame.attemptId !== attemptId) {
+      throw new TypeError(
+        'appendActivityAttemptLog.frame must be a log frame for the exact attempt.',
+      );
+    }
+    const scope = {
+      appId: value.appId,
+      revisionId: value.revisionId,
+      activityId: value.activityId,
+      runId,
+      invocationId,
+      attemptId,
+      fencingToken,
+      generation,
+      coordinatorEpoch,
+    };
+    const replay = await readExactActivityAttemptLogReplay(scope, frame);
+    if (replay) {
+      return {
+        applied: false,
+        attemptId,
+        acknowledgedComponentSequence: frame.sequence,
+        entryId: replay.entry.entry_id,
+      };
+    }
+
+    const state = await readVerifiedRun(runId);
+    if (!state) {
+      throw new ExecutionLedgerConflictError(
+        runId,
+        'activity attempt is not current and STARTED for log append',
+      );
+    }
+    const invocation = state.invocations.get(invocationId);
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    if (
+      state.run.appId !== scope.appId ||
+      state.run.revisionId !== scope.revisionId ||
+      state.run.status !== RunStatus.RUNNING ||
+      !invocation ||
+      invocation.appId !== scope.appId ||
+      invocation.revisionId !== scope.revisionId ||
+      invocation.activityId !== scope.activityId ||
+      invocation.status !== InvocationStatus.RUNNING ||
+      !attempt ||
+      attempt.appId !== scope.appId ||
+      attempt.revisionId !== scope.revisionId ||
+      attempt.activityId !== scope.activityId ||
+      attempt.status !== AttemptStatus.STARTED
+    ) {
+      throw new ExecutionLedgerConflictError(
+        runId,
+        'activity attempt is not current and STARTED for log append',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { fencingToken, generation, coordinatorEpoch },
+      runId,
+    );
+
+    const verifiedChain = await readVerifiedActivityAttemptLogChain(scope);
+    const currentHead = verifiedChain?.head || null;
+    if (currentHead && frame.sequence <= currentHead.last_protocol_sequence) {
+      // An identical racing append may have committed after the first replay
+      // read but before this head read.
+      const racedReplay = await readExactActivityAttemptLogReplay(scope, frame);
+      if (racedReplay) {
+        return {
+          applied: false,
+          attemptId,
+          acknowledgedComponentSequence: frame.sequence,
+          entryId: racedReplay.entry.entry_id,
+        };
+      }
+      throw new ExecutionLedgerConflictError(
+        runId,
+        'activity attempt-log sequence did not increase',
+      );
+    }
+    const canonicalPayloadBytes = encodeCanonicalJsonPayload(frame).byteLength;
+    if (
+      currentHead &&
+      (currentHead.entry_count >= EXECUTION_LEDGER_ATTEMPT_LOG_MAX_ENTRIES ||
+        currentHead.cumulative_payload_bytes + canonicalPayloadBytes >
+          EXECUTION_LEDGER_ATTEMPT_LOG_MAX_CUMULATIVE_PAYLOAD_BYTES)
+    ) {
+      throw new RangeError(
+        'activity attempt-log append exceeds its retained attempt budget.',
+      );
+    }
+    const payloadRef = await putVerifiedPayload(payloadStore, {
+      value: frame,
+      payloadSchema: EXECUTION_LEDGER_ATTEMPT_LOG_PAYLOAD_SCHEMA,
+      label: 'activity attempt-log frame',
+    });
+    if (payloadRef.size !== canonicalPayloadBytes) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'activity attempt-log payload size changed during publication',
+      );
+    }
+    const acceptedAt = assertNonnegativeSafeInteger(
+      now(),
+      'appendActivityAttemptLog acceptedAt',
+    );
+    const entry = createExecutionLedgerAttemptLogEntryRecord({
+      scope,
+      sequence: frame.sequence,
+      level: frame.level,
+      payloadRef,
+      canonicalPayloadBytes,
+      acceptedAt,
+      previousEntryId: currentHead?.last_entry_id || null,
+    });
+    const nextHead = currentHead
+      ? advanceExecutionLedgerAttemptLogHeadRecord({
+          scope,
+          previousHead: currentHead,
+          entry,
+        })
+      : createInitialExecutionLedgerAttemptLogHeadRecord({ scope, entry });
+    const attemptRecord = createAttemptProjectionRecord(runId, attempt);
+
+    try {
+      await db.transactionWrite({
+        tableName: resolvedTableName,
+        conditionChecks: [
+          {
+            keyName: KEY_NAME,
+            keyValue: runId,
+            sortKeyName: SORT_KEY_NAME,
+            sortKeyValue: getAttemptProjectionSortKey(attemptId),
+            conditions: [
+              eq('record_type', attemptRecord.record_type),
+              eq('schema_version', attemptRecord.schema_version),
+              eq('invocation_id', attemptRecord.invocation_id),
+              eq('attempt_id', attemptRecord.attempt_id),
+              eq('status', AttemptStatus.STARTED),
+              eq('generation', attemptRecord.generation),
+              eq('version', attemptRecord.version),
+              eq('fencing_token', attemptRecord.fencing_token),
+              eq('coordinator_epoch', attemptRecord.coordinator_epoch),
+              eq('revision_id', attemptRecord.revision_id),
+            ],
+          },
+        ],
+        putRequests: [
+          {
+            keyName: KEY_NAME,
+            sortKeyName: SORT_KEY_NAME,
+            record: entry,
+            conditions: [notExists(SORT_KEY_NAME)],
+          },
+          {
+            keyName: KEY_NAME,
+            sortKeyName: SORT_KEY_NAME,
+            record: nextHead,
+            conditions: currentHead
+              ? activityAttemptLogHeadReplacementConditions(currentHead)
+              : [notExists(SORT_KEY_NAME)],
+          },
+        ],
+      });
+    } catch (error) {
+      if (!isConditionalCheckFailed(error)) throw error;
+      const racedReplay = await readExactActivityAttemptLogReplay(scope, frame);
+      if (racedReplay) {
+        return {
+          applied: false,
+          attemptId,
+          acknowledgedComponentSequence: frame.sequence,
+          entryId: racedReplay.entry.entry_id,
+        };
+      }
+      throw new ExecutionLedgerConflictError(
+        runId,
+        'activity attempt-log append lost its fence or ordering race',
+      );
+    }
+
+    const retained = await readExactActivityAttemptLogReplay(scope, frame);
+    if (!retained || !hasSameCanonicalJson(retained.entry, entry)) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'accepted activity attempt-log entry is unavailable',
+      );
+    }
+    return {
+      applied: true,
+      attemptId,
+      acknowledgedComponentSequence: frame.sequence,
+      entryId: retained.entry.entry_id,
+    };
+  }
+
+  /**
    * @param {string} runId - Run identity.
    * @returns {Promise<Record<string, any>[]>} - Immutable event stream after verification.
    */
@@ -22040,6 +22565,7 @@ export function createExecutionLedger({
   return {
     abandonUnstartedAttempt,
     abandonUnstartedWorkflowActivityAttempt,
+    appendActivityAttemptLog,
     authorizeManagedEffectSuccessorRetry,
     claimInvocation,
     claimWorkflowActivity,
@@ -22103,6 +22629,7 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} reconcileManagedEffectSuccessor - Resolves a blocked successor from destination evidence without rewriting its abandoned attempt.
  * @property {(...args: any[]) => Promise<any>} claimInvocation - Claims the next physical generation.
  * @property {(...args: any[]) => Promise<any>} markAttemptStarted - Persists the handler-start boundary.
+ * @property {(options: {appId: string, revisionId: string, activityId: string, runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number, coordinatorEpoch: number, frame: Record<string, any>}) => Promise<{applied: boolean, attemptId: string, acknowledgedComponentSequence: number, entryId: string}>} appendActivityAttemptLog - Durably appends one fenced Activity Protocol log frame without advancing normal run history.
  * @property {(...args: any[]) => Promise<any>} commitVerifiedAttemptTerminal - Commits validated terminal evidence.
  * @property {(...args: any[]) => Promise<any>} recordManagedEffectRequest - Persists a logical effect before adapter start.
  * @property {(...args: any[]) => Promise<any>} markManagedEffectStarted - Persists that an adapter may have begun.
