@@ -26,6 +26,7 @@ import {
   REPO_ROOT,
   runCommand,
 } from './package-verification.js';
+import { createPackageSeaScheduleRestartProof } from './package-sea-schedule-restart-proof.js';
 import {
   attachSeaInspector,
   spawnInspectorPausedProcess,
@@ -35,6 +36,9 @@ const RESIDENT_SERVICE_TIMEOUT_MS = 20_000;
 const RESIDENT_SERVICE_POLL_INTERVAL_MS = 50;
 const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
 const CRASH_RECOVERY_POLL_INTERVAL_MS = 100;
+const SEA_SCHEDULE_PROOF_TIMEOUT_MS = 180_000;
+const SEA_SCHEDULE_PROOF_MINIMUM_START_LEAD_MS = 45_000;
+const SEA_SCHEDULE_PROOF_RESTART_GUARD_MS = 10_000;
 const CRASH_RECOVERY_MIN_RESPONSE_BYTES = 512 * 1024;
 const CRASH_RECOVERY_TERMINAL_PADDING_EFFECTS = 20;
 const SEA_CRASH_EFFECT_ID = 'persist-portable-state';
@@ -136,6 +140,11 @@ const SEA_STOPPED_ATTEMPT_RECOVERY_REASON = Object.freeze({
 });
 const SEA_WORKFLOW_ID = 'portable-linear';
 const SEA_TIMER_SIGNAL_WORKFLOW_ID = 'portable-timer-signal';
+const SEA_SCHEDULE_WORKFLOW_ID = 'portable-scheduled';
+const SEA_SCHEDULE_ID = 'portable-schedule';
+const SEA_SCHEDULE_MARKER_DIRECTORY = 'scheduled-workflow-markers';
+const SEA_SCHEDULE_PROOF_CRON =
+  '0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58 * * * *';
 const SEA_WORKFLOW_ACTIVITY_ID = 'workflow-step';
 const SEA_CRASH_CASES = Object.freeze([
   {
@@ -536,6 +545,40 @@ function delay(milliseconds) {
 }
 
 /**
+ * Return the next exact even UTC minute used by the schedule proof's
+ * deliberately sparse canonical cron expression.
+ * @param {number} observedAt - Current wall-clock timestamp.
+ * @returns {number} - Next matching minute boundary.
+ */
+function nextSeaScheduleProofMinute(observedAt) {
+  const minuteMs = 60_000;
+  let minute = Math.floor(observedAt / minuteMs) + 1;
+  if (minute % 2 !== 0) minute += 1;
+  return minute * minuteMs;
+}
+
+/**
+ * Avoid starting native packaging proof work too close to its selected due
+ * minute. If necessary, cross the imminent boundary before selecting the next
+ * occurrence; the resulting wait remains below one minute.
+ * @returns {Promise<number>} - Due minute with enough resident-start lead.
+ */
+async function selectSeaScheduleProofMinute() {
+  let observedAt = Date.now();
+  let scheduledAt = nextSeaScheduleProofMinute(observedAt);
+  if (scheduledAt - observedAt < SEA_SCHEDULE_PROOF_MINIMUM_START_LEAD_MS) {
+    await delay(scheduledAt - observedAt + 1_000);
+    observedAt = Date.now();
+    scheduledAt = nextSeaScheduleProofMinute(observedAt);
+  }
+  assert.ok(
+    scheduledAt - observedAt >= SEA_SCHEDULE_PROOF_MINIMUM_START_LEAD_MS,
+    'SEA schedule proof could not reserve enough resident-start lead time',
+  );
+  return scheduledAt;
+}
+
+/**
  * Spawn a resident SEA while retaining bounded diagnostics for a failed
  * lifecycle assertion. This is deliberately asynchronous: ledger-service
  * does not terminate until it receives a signal.
@@ -832,6 +875,106 @@ async function createInstalledLedgerLifecycleObserver(options) {
       }
     },
   };
+}
+
+/**
+ * Load the installed schedule-control identity and read paths without exposing
+ * Node to the relocated SEA. This host observer derives the same sealed
+ * workflow and schedule identities as the packaged resident, then performs
+ * read-only LMDB observations after the SEA has created the control volume.
+ * @param {{installedPackageRoot: string, controlPath: string, tableName: string, appId: string, revisionId: string, manifest: Record<string, any>, scheduleId: string}} options - Exact scheduled-artifact inputs.
+ * @returns {Promise<{scheduleId: string, workflowId: string, planId: string, definitionId: string, occurrenceIdentity: (scheduledAt: number) => Readonly<{scheduledAt: number, occurrenceId: string, runId: string}>, readCursor: () => Promise<Record<string, any> | null>, readOccurrence: (occurrenceId: string) => Promise<Record<string, any> | null>}>} - Read-only schedule observer.
+ */
+async function createInstalledScheduleControlObserver(options) {
+  const installedModule = async (/** @type {string} */ relativePath) =>
+    await import(
+      pathToFileURL(path.join(options.installedPackageRoot, relativePath)).href
+    );
+  const [
+    adapterModule,
+    scheduleControlModule,
+    scheduleOccurrenceModule,
+    workflowHostModule,
+    workflowContractModule,
+  ] = await Promise.all([
+    installedModule('src/core/lib/db/adapters/lmdb.js'),
+    installedModule('src/core/lib/db/tables/schedule-control.js'),
+    installedModule('src/core/lib/ledger/schedule-occurrence.js'),
+    installedModule('src/core/runtime/durable-workflow-host.js'),
+    installedModule('src/core/lib/ledger/workflow-execution-contract.js'),
+  ]);
+  const scheduleDefinition = options.manifest.schedules?.[options.scheduleId];
+  if (!scheduleDefinition) {
+    throw new Error(
+      `Installed schedule observer cannot find ${options.scheduleId}.`,
+    );
+  }
+  const workflowId = scheduleDefinition.workflow;
+  const workflow = workflowHostModule.resolveManifestWorkflowStartBinding({
+    identity: {
+      appId: options.appId,
+      revisionId: options.revisionId,
+      manifest: options.manifest,
+    },
+    workflowId,
+  });
+  const definitionId = scheduleOccurrenceModule.createScheduleDefinitionId({
+    appId: options.appId,
+    revisionId: options.revisionId,
+    scheduleId: options.scheduleId,
+    planId: workflow.planId,
+    definition: scheduleDefinition,
+  });
+  const withScheduleControl = async (
+    /** @type {(control: Record<string, any>) => Promise<Record<string, any> | null>} */ observe,
+  ) => {
+    const db = adapterModule.default({
+      path: options.controlPath,
+      readOnly: true,
+    });
+    try {
+      return await observe(
+        scheduleControlModule.createScheduleControl({
+          db,
+          tableName: options.tableName,
+        }),
+      );
+    } finally {
+      await db.close();
+    }
+  };
+  return Object.freeze({
+    scheduleId: options.scheduleId,
+    workflowId,
+    planId: workflow.planId,
+    definitionId,
+    occurrenceIdentity: (scheduledAt) => {
+      const occurrenceId = scheduleOccurrenceModule.createScheduleOccurrenceId({
+        appId: options.appId,
+        scheduleId: options.scheduleId,
+        scheduledAt,
+      });
+      return Object.freeze({
+        scheduledAt,
+        occurrenceId,
+        runId: workflowContractModule.createWorkflowRunId({
+          appId: options.appId,
+          idempotencyKey: occurrenceId,
+        }),
+      });
+    },
+    readCursor: async () =>
+      await withScheduleControl(async (control) =>
+        control.getCursor({
+          appId: options.appId,
+          scheduleId: options.scheduleId,
+        }),
+      ),
+    readOccurrence: async (occurrenceId) =>
+      await withScheduleControl(async (control) =>
+        control.getOccurrence({ occurrenceId }),
+      ),
+  });
 }
 
 /**
@@ -7945,6 +8088,430 @@ async function verifyRelocatedSeaTimerSignalWorkflow(options) {
 }
 
 /**
+ * Prove one actually due schedule through a copied Linux SEA, real process
+ * death, replacement ownership, and an observer poll with Node absent from
+ * PATH. The proof owns and removes only its exact work root.
+ * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, manifest: Record<string, any>, revisionId: string, root: string}} options - Scheduled SEA proof inputs.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Cleanup-complete proof evidence.
+ */
+async function verifyRelocatedSeaScheduleRestartProof(options) {
+  assert.equal(
+    process.platform,
+    'linux',
+    'the relocated SEA schedule/restart proof is Linux-only',
+  );
+  const controlPath = path.join(options.root, 'control');
+  const payloadPath = path.join(controlPath, 'execution-payloads');
+  const sessionPath = path.join(options.root, 'sessions');
+  const applicationStatePath = path.join(options.root, 'application-state');
+  const markerDirectory = path.join(
+    options.root,
+    SEA_SCHEDULE_MARKER_DIRECTORY,
+  );
+  const markerPath = path.join(markerDirectory, '1.json');
+  const dispatchLogPath = path.join(options.root, 'workflow-dispatch.jsonl');
+  const tableName = 'wharfie-package-sea-schedule-restart-proof';
+  const environment = {
+    ...options.cleanEnvironment,
+    WHARFIE_CONTROL_ADAPTER: 'lmdb',
+    WHARFIE_CONTROL_PATH: controlPath,
+    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
+    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+    WHARFIE_SEA_VERIFIER_WORKFLOW_DISPATCH_LOG: dispatchLogPath,
+  };
+  const lifecycle = await createInstalledLedgerLifecycleObserver({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    appId: options.appId,
+  });
+  const schedule = await createInstalledScheduleControlObserver({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    appId: options.appId,
+    revisionId: options.revisionId,
+    manifest: options.manifest,
+    scheduleId: SEA_SCHEDULE_ID,
+  });
+  const fixture = await createInstalledExecutionLedgerFixture({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    payloadPath,
+    applicationStatePath,
+    revisionId: options.revisionId,
+  });
+  assert.equal(schedule.workflowId, SEA_SCHEDULE_WORKFLOW_ID);
+  const scheduledAt = await selectSeaScheduleProofMinute();
+  const scheduleIdentity = schedule.occurrenceIdentity(scheduledAt);
+
+  /**
+   * Read and independently validate every durable and physical oracle that
+   * must remain byte-equivalent after resident replacement.
+   * @param {Readonly<Record<string, any>>} expected - Harness-derived identity.
+   * @returns {Promise<Record<string, any>>} - Exact bounded snapshot.
+   */
+  const readCompletedSnapshot = async (expected) => {
+    assert.equal(expected.occurrenceId, scheduleIdentity.occurrenceId);
+    assert.equal(expected.runId, scheduleIdentity.runId);
+    const [cursor, occurrence, run, rawRows, runDirectory, readyWork] =
+      await Promise.all([
+        schedule.readCursor(),
+        schedule.readOccurrence(expected.occurrenceId),
+        fixture.readRun(expected.runId),
+        fixture.readRawLedgerRunRows(expected.runId),
+        fixture.listRunDirectory(options.appId),
+        fixture.listReadyWork(options.appId, options.revisionId),
+      ]);
+    assert.ok(cursor, 'scheduled SEA proof cursor is unavailable');
+    assert.ok(occurrence, 'scheduled SEA proof occurrence is unavailable');
+    assert.ok(run, 'scheduled SEA proof run is unavailable');
+    assert.equal(occurrence.skipped, null);
+    assert.ok(
+      Number.isSafeInteger(occurrence.scannedMinuteCount) &&
+        occurrence.scannedMinuteCount >= 1,
+    );
+    assert.equal(
+      occurrence.windowAfterExclusive + occurrence.scannedMinuteCount * 60_000,
+      occurrence.throughInclusive,
+    );
+    assert.deepEqual(
+      run.events.map((/** @type {Record<string, any>} */ event) => event.type),
+      [
+        'workflow-run-created',
+        'workflow-activity-claimed',
+        'workflow-activity-started',
+        'workflow-activity-succeeded',
+      ],
+    );
+    assert.deepEqual(
+      run.invocations.map(
+        (/** @type {Record<string, any>} */ invocation) => invocation.status,
+      ),
+      ['COMPLETED'],
+    );
+    assert.deepEqual(
+      run.attempts.map(
+        (/** @type {Record<string, any>} */ attempt) => attempt.status,
+      ),
+      ['COMPLETED'],
+    );
+    assert.equal(run.effects.length, 0);
+    assert.equal(run.timers.length, 0);
+    assert.equal(run.signalWaits.length, 0);
+    assert.equal(run.signalDeliveries.length, 0);
+    assert.deepEqual(readyWork, []);
+    assert.equal(readPayloadReachability(payloadPath, run).orphans.length, 0);
+    assert.deepEqual(readdirSync(markerDirectory).sort(), ['1.json']);
+    const markerBytes = readFileSync(markerPath);
+    const markerRecord = JSON.parse(markerBytes.toString('utf8'));
+    assert.deepEqual(markerRecord, {
+      kind: 'packaged-workflow-step',
+      ordinal: 1,
+      executable: realpathSync(options.artifactPath),
+      result: {
+        ordinal: 2,
+        markerDirectory: SEA_SCHEDULE_MARKER_DIRECTORY,
+        secret: null,
+        value: 'portable-workflow-step-1',
+      },
+    });
+    const dispatchLogBytes = readFileSync(dispatchLogPath);
+    const dispatchRecords = dispatchLogBytes
+      .toString('utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const expectedDispatchRecord = {
+      kind: 'packaged-workflow-step-dispatch',
+      ordinal: 1,
+      executable: realpathSync(options.artifactPath),
+    };
+    assert.deepEqual(dispatchRecords, [expectedDispatchRecord]);
+    assert.equal(
+      dispatchLogBytes.toString('utf8'),
+      `${JSON.stringify(expectedDispatchRecord)}\n`,
+    );
+    return {
+      cursor,
+      occurrence,
+      run,
+      rawRows,
+      runDirectory,
+      readyWork,
+      marker: {
+        bytesBase64: markerBytes.toString('base64'),
+        record: markerRecord,
+      },
+      dispatchCount: dispatchRecords.length,
+    };
+  };
+
+  /**
+   * Await the exact due occurrence and terminal workflow without permitting a
+   * silent resident exit.
+   * @param {ReturnType<typeof spawnResidentService>} service - Live SEA.
+   * @param {Readonly<Record<string, any>>} expected - Exact proof identity.
+   * @returns {Promise<Record<string, any>>} - Completed durable snapshot.
+   */
+  const waitForCompletion = async (service, expected) => {
+    const deadline = Date.now() + SEA_SCHEDULE_PROOF_TIMEOUT_MS;
+    /** @type {unknown} */
+    let lastError;
+    while (Date.now() < deadline) {
+      if (service.getExit()) {
+        throw residentServiceError(
+          service,
+          'Relocated SEA exited before its due schedule completed.',
+        );
+      }
+      try {
+        const occurrence = await schedule.readOccurrence(expected.occurrenceId);
+        const run = occurrence ? await fixture.readRun(expected.runId) : null;
+        if (
+          occurrence &&
+          run?.run?.status === 'COMPLETED' &&
+          run.workflowCursor?.disposition === 'COMPLETED'
+        ) {
+          return await readCompletedSnapshot(expected);
+        }
+      } catch (error) {
+        lastError = error;
+      }
+      await delay(CRASH_RECOVERY_POLL_INTERVAL_MS);
+    }
+    const detail = lastError instanceof Error ? ` ${lastError.message}` : '';
+    throw residentServiceError(
+      service,
+      `Relocated SEA did not complete its due schedule within ${SEA_SCHEDULE_PROOF_TIMEOUT_MS}ms.${detail}`,
+    );
+  };
+
+  /** @type {Map<string, Record<string, any>>} */
+  const readyByPhase = new Map();
+  const proof = createPackageSeaScheduleRestartProof({
+    ports: {
+      startResident: ({ phase }) => {
+        if (phase === 'initial') {
+          rmSync(options.root, { recursive: true, force: true });
+          mkdirSync(markerDirectory, { recursive: true, mode: 0o700 });
+        } else {
+          assert.ok(
+            Date.now() <
+              scheduledAt + 60_000 - SEA_SCHEDULE_PROOF_RESTART_GUARD_MS,
+            'too little time remains for an unchanged post-restart schedule poll',
+          );
+        }
+        return spawnResidentService(options.artifactPath, {
+          cwd: options.root,
+          env: environment,
+          args: ['wharfie', 'worker'],
+        });
+      },
+      waitReady: async ({ phase, resident }) => {
+        const ready = await waitForResidentLifecycle(
+          lifecycle,
+          (snapshot) =>
+            snapshot?.status === 'READY' &&
+            snapshot.revisionId === options.revisionId &&
+            snapshot.generation === (phase === 'initial' ? 1 : 2),
+          resident,
+          `schedule proof ${phase} resident READY`,
+        );
+        readyByPhase.set(phase, ready);
+        return ready;
+      },
+      waitForCompletion: async ({ resident, expected }) =>
+        await waitForCompletion(resident, expected),
+      signalResident: async ({ phase, resident, signal }) => {
+        const exit = await signalResidentService(resident, signal);
+        const ready = readyByPhase.get(phase);
+        assert.ok(ready, `schedule proof ${phase} READY snapshot is missing`);
+        if (signal === 'SIGKILL') {
+          const ownership = await lifecycle.readOwnership();
+          assert.equal(ownership?.ownerKind, 'resident');
+          assert.equal(ownership?.generation, ready.generation);
+          assert.equal(ownership?.sessionId, ready.sessionId);
+        } else {
+          const stopped = await waitForDurableLifecycle(
+            lifecycle,
+            (snapshot) =>
+              snapshot?.status === 'STOPPED' &&
+              snapshot.generation === ready.generation &&
+              snapshot.sessionId === ready.sessionId,
+            'schedule proof replacement resident STOPPED',
+          );
+          assert.equal(stopped.revisionId, options.revisionId);
+          assert.equal(await lifecycle.readOwnership(), null);
+        }
+        return exit;
+      },
+      pollAfterRestart: async ({ resident, expected }) => {
+        await delay(2_500);
+        if (
+          Date.now() >=
+          scheduledAt + 60_000 - SEA_SCHEDULE_PROOF_RESTART_GUARD_MS
+        ) {
+          throw residentServiceError(
+            resident,
+            'Post-restart schedule poll crossed into another cursor minute.',
+          );
+        }
+        return await readCompletedSnapshot(expected);
+      },
+      cleanup: async ({ residents }) => {
+        await Promise.all(
+          residents.map(
+            async (
+              /** @type {{resident: ReturnType<typeof spawnResidentService>}} */ item,
+            ) => await stopResidentServiceForCleanup(item.resident),
+          ),
+        );
+        rmSync(options.root, { recursive: true, force: true });
+      },
+      workRootAbsent: () => !existsSync(options.root),
+    },
+  });
+  const result = await proof.verify({
+    appId: options.appId,
+    revisionId: options.revisionId,
+    scheduleId: SEA_SCHEDULE_ID,
+    definitionId: schedule.definitionId,
+    workflowId: schedule.workflowId,
+    planId: schedule.planId,
+    scheduledAt,
+    workRoot: path.resolve(options.root),
+  });
+  assert.equal(result.expected.occurrenceId, scheduleIdentity.occurrenceId);
+  assert.equal(result.expected.runId, scheduleIdentity.runId);
+  return result;
+}
+
+/**
+ * Build a dedicated frequent-schedule revision on Linux, relocate its only
+ * executable, remove the original publication, and run the restart proof.
+ * The main verifier artifact remains on its inert leap-day definition.
+ * @param {{wharfieBin: string, appDirectory: string, cleanEnvironment: Record<string, string>, cleanRunDirectory: string, installedPackageRoot: string, baseRevisionId: string}} options - Installed-package build inputs.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Schedule proof evidence.
+ */
+async function packageAndVerifyRelocatedSeaScheduleRestart(options) {
+  assert.equal(process.platform, 'linux');
+  const outputDirectory = path.join(
+    options.appDirectory,
+    'schedule-proof-dist',
+  );
+  const publicationRoot = path.join(
+    options.cleanRunDirectory,
+    'schedule-proof-publication',
+  );
+  const proofRoot = path.join(
+    options.cleanRunDirectory,
+    'schedule-proof-state',
+  );
+  rmSync(outputDirectory, { recursive: true, force: true });
+  rmSync(publicationRoot, { recursive: true, force: true });
+  rmSync(proofRoot, { recursive: true, force: true });
+  mkdirSync(publicationRoot, { recursive: true, mode: 0o700 });
+  try {
+    const packageResult = parseFinalJsonLine(
+      runCommand(
+        options.wharfieBin,
+        [
+          'app',
+          'package',
+          options.appDirectory,
+          '--output-dir',
+          outputDirectory,
+          '--no-pretty',
+        ],
+        {
+          cwd: options.appDirectory,
+          capture: true,
+          env: {
+            ...process.env,
+            WHARFIE_SEA_VERIFIER_SCHEDULE_CRON: SEA_SCHEDULE_PROOF_CRON,
+          },
+        },
+      ).stdout,
+    );
+    assert.equal(packageResult.artifacts.length, 1);
+    assert.notEqual(packageResult.revision.revisionId, options.baseRevisionId);
+    assert.deepEqual(
+      packageResult.revision.contract.schedules[SEA_SCHEDULE_ID],
+      {
+        cron: SEA_SCHEDULE_PROOF_CRON,
+        workflow: SEA_SCHEDULE_WORKFLOW_ID,
+        input: {
+          ordinal: 1,
+          markerDirectory: SEA_SCHEDULE_MARKER_DIRECTORY,
+        },
+        missed: 'latest',
+        overlap: 'allow',
+      },
+    );
+    const packagedArtifact = packageResult.artifacts[0];
+    const movedArtifactPath = path.join(
+      publicationRoot,
+      'wharfie-schedule-proof',
+    );
+    copyFileSync(packagedArtifact.path, movedArtifactPath);
+    chmodSync(movedArtifactPath, 0o755);
+    assert.equal(
+      createHash('sha256')
+        .update(readFileSync(movedArtifactPath))
+        .digest('base64url'),
+      packagedArtifact.byteDigest.value,
+    );
+
+    // Execution below must depend only on the relocated bytes. Removing the
+    // original output also bounds the second native build's disk lifetime.
+    rmSync(outputDirectory, { recursive: true, force: true });
+    assert.equal(existsSync(outputDirectory), false);
+    const manifest = JSON.parse(
+      runCommand(movedArtifactPath, ['wharfie', 'manifest', '--no-pretty'], {
+        cwd: publicationRoot,
+        capture: true,
+        env: options.cleanEnvironment,
+      }).stdout,
+    );
+    assert.deepEqual(
+      manifest.schedules[SEA_SCHEDULE_ID],
+      packageResult.revision.contract.schedules[SEA_SCHEDULE_ID],
+    );
+    const metadata = JSON.parse(
+      runCommand(movedArtifactPath, ['wharfie', 'metadata', '--no-pretty'], {
+        cwd: publicationRoot,
+        capture: true,
+        env: options.cleanEnvironment,
+      }).stdout,
+    );
+    assert.equal(
+      metadata.revision.revisionId,
+      packageResult.revision.revisionId,
+    );
+    const proof = await verifyRelocatedSeaScheduleRestartProof({
+      artifactPath: movedArtifactPath,
+      appId: manifest.app.id,
+      cleanEnvironment: options.cleanEnvironment,
+      installedPackageRoot: options.installedPackageRoot,
+      manifest,
+      revisionId: packageResult.revision.revisionId,
+      root: proofRoot,
+    });
+    assert.deepEqual(proof.cleanup, { workRootRemoved: true });
+    return proof;
+  } finally {
+    rmSync(outputDirectory, { recursive: true, force: true });
+    rmSync(proofRoot, { recursive: true, force: true });
+    rmSync(publicationRoot, { recursive: true, force: true });
+  }
+}
+
+/**
  * Prove public workflow start, resident execution, conservative recovery, and
  * response-loss reconciliation through one relocated SEA with no Node on PATH.
  * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string, wharfieBin: string, appDirectory: string}} options - Matrix inputs.
@@ -8668,15 +9235,44 @@ assert.equal(
   'the SEA smoke test must run under the exact repository Node version',
 );
 
-const packaged = createPackageTarball();
-const installDirectory = mkdtempSync(
-  path.join(os.tmpdir(), 'wharfie-package-install-'),
+const verificationRoot = mkdtempSync(
+  path.join(os.tmpdir(), 'wharfie-package-sea-'),
 );
-const cleanRunDirectory = mkdtempSync(
-  path.join(os.tmpdir(), 'wharfie-generated-sea-run-'),
-);
-
+const verificationHome = path.join(verificationRoot, 'home');
+const verificationTemporaryDirectory = path.join(verificationRoot, 'tmp');
+const installDirectory = path.join(verificationRoot, 'install');
+const cleanRunDirectory = path.join(verificationRoot, 'relocated-run');
+/** @type {ReturnType<typeof createPackageTarball> | undefined} */
+let packaged;
+/** @type {unknown} */
+let verificationError;
+/** @type {unknown[]} */
+const verificationCleanupErrors = [];
 try {
+  for (const directory of [
+    verificationHome,
+    verificationTemporaryDirectory,
+    installDirectory,
+    cleanRunDirectory,
+  ]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
+  Object.assign(process.env, {
+    HOME: verificationHome,
+    TMPDIR: verificationTemporaryDirectory,
+    XDG_CACHE_HOME: path.join(verificationRoot, 'xdg-cache'),
+    XDG_CONFIG_HOME: path.join(verificationRoot, 'xdg-config'),
+    XDG_DATA_HOME: path.join(verificationRoot, 'xdg-data'),
+    npm_config_cache: path.join(verificationRoot, 'npm-cache'),
+  });
+  delete process.env.WHARFIE_SEA_VERIFIER_SCHEDULE_CRON;
+  packaged = createPackageTarball();
+  assert.ok(
+    path
+      .resolve(packaged.directory)
+      .startsWith(`${path.resolve(verificationTemporaryDirectory)}${path.sep}`),
+    'package verification escaped its owned temporary root',
+  );
   writeFileSync(
     path.join(installDirectory, 'package.json'),
     `${JSON.stringify(
@@ -8697,7 +9293,6 @@ try {
       cwd: installDirectory,
       env: {
         ...process.env,
-        npm_config_cache: path.join(packaged.directory, 'npm-cache'),
       },
     },
   );
@@ -8766,7 +9361,6 @@ try {
       cwd: appDirectory,
       env: {
         ...process.env,
-        npm_config_cache: path.join(packaged.directory, 'npm-cache'),
       },
     },
   );
@@ -8821,6 +9415,22 @@ function writeDurableMarker(filePath: string, value: unknown) {
   }
 }
 
+function appendDurableRecord(filePath: string, value: unknown) {
+  const handle = openSync(filePath, 'a', 0o600);
+  try {
+    writeFileSync(handle, JSON.stringify(value) + '\\n');
+    fsyncSync(handle);
+  } finally {
+    closeSync(handle);
+  }
+  const directory = openSync(dirname(filePath), 'r');
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+}
+
 function waitForever() {
   const word = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(word, 0, 0);
@@ -8860,6 +9470,15 @@ export async function workflowStep(input: WorkflowStepInput = {}) {
   const ordinal = Number.isSafeInteger(input.ordinal) ? input.ordinal! : 1;
   if (ordinal < 1 || !input.markerDirectory) {
     throw new Error('workflowStep requires a positive ordinal and markerDirectory');
+  }
+  const dispatchLogPath =
+    process.env.WHARFIE_SEA_VERIFIER_WORKFLOW_DISPATCH_LOG;
+  if (dispatchLogPath) {
+    appendDurableRecord(dispatchLogPath, {
+      kind: 'packaged-workflow-step-dispatch',
+      ordinal,
+      executable: process.execPath,
+    });
   }
   const result = {
     ordinal: ordinal + 1,
@@ -9046,12 +9665,23 @@ export default defineApp({
         input: { kind: 'step-output', step: 'continue' },
       }],
     },
+    'portable-scheduled': {
+      steps: [{
+        id: 'scheduled',
+        kind: 'activity',
+        activity: 'workflow-step',
+        input: { kind: 'workflow-input' },
+      }],
+    },
   },
   schedules: {
-    'portable-leap-day': {
-      cron: '0 0 29 2 *',
-      workflow: 'portable-linear',
-      input: { source: 'portable-schedule' },
+    'portable-schedule': {
+      cron: process.env.WHARFIE_SEA_VERIFIER_SCHEDULE_CRON || '0 0 29 2 *',
+      workflow: 'portable-scheduled',
+      input: {
+        ordinal: 1,
+        markerDirectory: 'scheduled-workflow-markers',
+      },
       missed: 'latest',
       overlap: 'allow',
     },
@@ -9456,11 +10086,24 @@ export default defineApp({
       },
     ],
   });
+  assert.deepEqual(embeddedManifest.workflows[SEA_SCHEDULE_WORKFLOW_ID], {
+    steps: [
+      {
+        id: 'scheduled',
+        kind: 'activity',
+        activity: SEA_WORKFLOW_ACTIVITY_ID,
+        input: { kind: 'workflow-input' },
+      },
+    ],
+  });
   assert.deepEqual(embeddedManifest.schedules, {
-    'portable-leap-day': {
+    [SEA_SCHEDULE_ID]: {
       cron: '0 0 29 2 *',
-      workflow: 'portable-linear',
-      input: { source: 'portable-schedule' },
+      workflow: SEA_SCHEDULE_WORKFLOW_ID,
+      input: {
+        ordinal: 1,
+        markerDirectory: SEA_SCHEDULE_MARKER_DIRECTORY,
+      },
       missed: 'latest',
       overlap: 'allow',
     },
@@ -10794,6 +11437,23 @@ export default defineApp({
     );
   }
 
+  // The relocated main artifact is the only remaining consumer of its build
+  // output. Remove those duplicate SEA bytes before the Linux-only second
+  // revision is constructed.
+  rmSync(outputDirectory, { recursive: true, force: true });
+  assert.equal(existsSync(outputDirectory), false);
+  const scheduleProof =
+    process.platform === 'linux'
+      ? await packageAndVerifyRelocatedSeaScheduleRestart({
+          wharfieBin,
+          appDirectory,
+          cleanEnvironment,
+          cleanRunDirectory,
+          installedPackageRoot,
+          baseRevisionId: packagedArtifact.revisionId,
+        })
+      : null;
+
   const artifactSize = statSync(cleanArtifactPath).size;
   const artifactSha256 = createHash('sha256')
     .update(readFileSync(cleanArtifactPath))
@@ -10803,10 +11463,36 @@ export default defineApp({
     Buffer.from(packagedArtifact.byteDigest.value, 'base64url').toString('hex'),
   );
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes; sha256 ${artifactSha256})\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH${scheduleProof ? `, and due schedule ${scheduleProof.expected.occurrenceId} with one physical dispatch across real SIGKILL/replacement and an unchanged post-restart poll` : ', with the due-schedule/restart proof correctly gated to Linux'} (${artifactSize} bytes; sha256 ${artifactSha256})\n`,
   );
+} catch (error) {
+  verificationError = error;
 } finally {
-  packaged.cleanup();
-  rmSync(installDirectory, { recursive: true, force: true });
-  rmSync(cleanRunDirectory, { recursive: true, force: true });
+  for (const cleanup of [
+    () => packaged?.cleanup(),
+    () => rmSync(verificationRoot, { recursive: true, force: true }),
+  ]) {
+    try {
+      cleanup();
+    } catch (error) {
+      verificationCleanupErrors.push(error);
+    }
+  }
+  if (existsSync(verificationRoot)) {
+    verificationCleanupErrors.push(
+      new Error(`SEA verifier work remains after cleanup: ${verificationRoot}`),
+    );
+  }
+}
+if (verificationError || verificationCleanupErrors.length > 0) {
+  if (verificationError && verificationCleanupErrors.length === 0) {
+    throw verificationError;
+  }
+  throw new AggregateError(
+    [
+      ...(verificationError ? [verificationError] : []),
+      ...verificationCleanupErrors,
+    ],
+    'Package SEA verification failed and cleanup was incomplete.',
+  );
 }
