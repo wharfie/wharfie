@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
@@ -13,11 +13,15 @@ import { resolveExecutionPayloadStoreId } from '../../../src/core/lib/config/db.
 import { createExecutionLedger } from '../../../src/core/lib/db/tables/execution-ledger.js';
 import { createWorkflowRunId } from '../../../src/core/lib/ledger/workflow-execution-contract.js';
 import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
-const helloWorldDir = path.join(
+const authoredHelloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
@@ -27,6 +31,21 @@ const helloWorldDir = path.join(
 const APP_ID = 'hello-world-demo';
 const WORKFLOW_ID = 'echo-twice';
 const FIRST_STEP_ID = 'echo-first';
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
+
+afterEach(() => {
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
+});
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createHelloWorldDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredHelloWorldDir, {
+    prefix: 'wharfie-ops-workflow-start-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 /**
  * @param {string[]} args - Source CLI arguments.
@@ -123,6 +142,7 @@ describe('wharfie ops start', () => {
     const root = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-ops-workflow-start-'),
     );
+    const helloWorldDir = createHelloWorldDirectory();
     const controlPath = path.join(root, 'control');
     const tableName = 'source-workflow-start';
     const idempotencyKey = 'source-workflow-start-proof';
@@ -317,6 +337,7 @@ describe('wharfie ops start', () => {
     const root = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-ops-workflow-missing-'),
     );
+    const helloWorldDir = createHelloWorldDirectory();
     const controlPath = path.join(root, 'must-not-exist');
     const env = commandEnvironment(controlPath, 'missing-workflow');
     try {

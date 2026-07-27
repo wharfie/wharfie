@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -36,17 +36,36 @@ import {
   createManualLedgerRunId,
 } from '../../../src/core/runtime/manual-ledger-run.js';
 import { acquireLocalLedgerServiceSession } from '../../../src/core/runtime/services/ledger-service.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
-const helloWorldDir = path.join(
+const authoredHelloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
   'apps',
   'hello-world',
 );
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
+
+afterEach(() => {
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
+});
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createHelloWorldDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredHelloWorldDir, {
+    prefix: 'wharfie-ops-run-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 /**
  * @param {string} dbPath - Shared local control-store root.
@@ -177,6 +196,7 @@ describe('wharfie ops run', () => {
   });
 
   it('refuses to claim work while the application resident session is active', async () => {
+    const helloWorldDir = createHelloWorldDirectory();
     const dbPath = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-ops-run-owner-'),
     );
@@ -249,6 +269,7 @@ describe('wharfie ops run', () => {
   }, 20000);
 
   it('refuses to alias application state onto the execution-control root', () => {
+    const helloWorldDir = createHelloWorldDirectory();
     const dbPath = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-ops-run-store-alias-'),
     );
@@ -292,6 +313,7 @@ describe('wharfie ops run', () => {
   ])(
     'rejects %s vanilla application state without materializing its root',
     (selection, nodeEnv) => {
+      const helloWorldDir = createHelloWorldDirectory();
       const dbPath = mkdtempSync(
         path.join(os.tmpdir(), 'wharfie-ops-run-vanilla-app-state-'),
       );
@@ -341,6 +363,7 @@ describe('wharfie ops run', () => {
   );
 
   it('executes an app activity through the append-only ledger and deduplicates an exact retry', async () => {
+    const helloWorldDir = createHelloWorldDirectory();
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-run-'));
     const tableName = 'execution-ledger-test';
     const appId = 'hello-world-demo';

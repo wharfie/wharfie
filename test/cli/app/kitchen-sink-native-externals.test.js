@@ -8,22 +8,42 @@ import { fileURLToPath } from 'node:url';
 
 import { kitchenSinkExternalDependencies } from '../../../scratch/examples/apps/kitchen-sink/config.js';
 import { runLocalApp } from '../../../src/cli/app/local-app.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const maybeIt = process.env.WHARFIE_RUN_NATIVE_EXTERNALS === '1' ? it : it.skip;
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
-const kitchenSinkDir = path.join(
+const authoredKitchenSinkDir = path.join(
   repoRoot,
   'scratch',
   'examples',
   'apps',
   'kitchen-sink',
 );
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
+
+afterEach(() => {
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
+});
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createKitchenSinkDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredKitchenSinkDir, {
+    prefix: 'wharfie-native-externals-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 describe('kitchen-sink native externals integration', () => {
   maybeIt(
     'invokes the kitchen-sink fixture with host-native externals enabled',
     async () => {
+      const kitchenSinkDir = createKitchenSinkDirectory();
       const nativeLmdbPath = mkdtempSync(
         path.join(os.tmpdir(), 'wharfie-native-externals-'),
       );

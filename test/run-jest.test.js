@@ -2,7 +2,14 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it, jest } from '@jest/globals';
-import { promises as fsp } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  promises as fsp,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { runJest } from './run-jest.js';
@@ -96,7 +103,23 @@ describe('disposable Jest runner', () => {
         '--maxWorkers=4',
       ],
       {
-        env: harness.env,
+        env: {
+          ...harness.env,
+          HOME: ownedRoot,
+          USERPROFILE: ownedRoot,
+          TMPDIR: ownedRoot,
+          TMP: ownedRoot,
+          TEMP: ownedRoot,
+          APPDATA: path.join(ownedRoot, 'app-data'),
+          LOCALAPPDATA: path.join(ownedRoot, 'local-app-data'),
+          XDG_CACHE_HOME: path.join(ownedRoot, 'xdg-cache'),
+          XDG_CONFIG_HOME: path.join(ownedRoot, 'xdg-config'),
+          XDG_DATA_HOME: path.join(ownedRoot, 'xdg-data'),
+          XDG_STATE_HOME: path.join(ownedRoot, 'xdg-state'),
+          CONFIG_DIR: path.join(ownedRoot, 'xdg-config'),
+          npm_config_cache: path.join(ownedRoot, 'npm-cache'),
+          WHARFIE_TEST_WORKSPACE: ownedRoot,
+        },
         stdio: 'inherit',
       },
     );
@@ -109,6 +132,189 @@ describe('disposable Jest runner', () => {
       'spawn',
       `remove:${ownedRoot}`,
     ]);
+  });
+
+  it('clones the caller environment and confines every temp variable', () => {
+    const harness = createHarness();
+    Object.assign(harness.env, {
+      HOME: '/caller/home',
+      USERPROFILE: '/caller/profile',
+      TMPDIR: '/caller/tmpdir',
+      TMP: '/caller/tmp',
+      TEMP: '/caller/temp',
+      APPDATA: '/caller/app-data',
+      LOCALAPPDATA: '/caller/local-app-data',
+      XDG_CACHE_HOME: '/caller/xdg-cache',
+      XDG_CONFIG_HOME: '/caller/xdg-config',
+      XDG_DATA_HOME: '/caller/xdg-data',
+      XDG_STATE_HOME: '/caller/xdg-state',
+      CONFIG_DIR: '/caller/config',
+      npm_config_cache: '/caller/npm-cache',
+      NPM_CONFIG_CACHE: '/caller/uppercase-npm-cache',
+    });
+    const callerEnvironment = { ...harness.env };
+
+    runJest([], harness.dependencies);
+
+    const childEnvironment = harness.spawn.mock.calls[0]?.[2].env;
+    expect(childEnvironment).not.toBe(harness.env);
+    expect(childEnvironment).toEqual({
+      WHARFIE_TEST_RUNNER: '1',
+      HOME: ownedRoot,
+      USERPROFILE: ownedRoot,
+      TMPDIR: ownedRoot,
+      TMP: ownedRoot,
+      TEMP: ownedRoot,
+      APPDATA: path.join(ownedRoot, 'app-data'),
+      LOCALAPPDATA: path.join(ownedRoot, 'local-app-data'),
+      XDG_CACHE_HOME: path.join(ownedRoot, 'xdg-cache'),
+      XDG_CONFIG_HOME: path.join(ownedRoot, 'xdg-config'),
+      XDG_DATA_HOME: path.join(ownedRoot, 'xdg-data'),
+      XDG_STATE_HOME: path.join(ownedRoot, 'xdg-state'),
+      CONFIG_DIR: path.join(ownedRoot, 'xdg-config'),
+      npm_config_cache: path.join(ownedRoot, 'npm-cache'),
+      WHARFIE_TEST_WORKSPACE: ownedRoot,
+    });
+    expect(harness.env).toEqual(callerEnvironment);
+  });
+
+  it('removes a real file written through the injected child temp environment', () => {
+    const outerRoot = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-jest-runner-test-'),
+    );
+    /** @type {string | undefined} */
+    let actualOwnedRoot;
+    const callerEnvironment = {
+      WHARFIE_TEST_RUNNER: 'real-file',
+      HOME: '/caller/home',
+      USERPROFILE: '/caller/profile',
+      TMPDIR: '/caller/tmpdir',
+      TMP: '/caller/tmp',
+      TEMP: '/caller/temp',
+      APPDATA: '/caller/app-data',
+      LOCALAPPDATA: '/caller/local-app-data',
+      XDG_CACHE_HOME: '/caller/xdg-cache',
+      XDG_CONFIG_HOME: '/caller/xdg-config',
+      XDG_DATA_HOME: '/caller/xdg-data',
+      XDG_STATE_HOME: '/caller/xdg-state',
+      CONFIG_DIR: '/caller/config',
+      npm_config_cache: '/caller/npm-cache',
+      NPM_CONFIG_CACHE: '/caller/uppercase-npm-cache',
+    };
+
+    try {
+      const result = runJest([], {
+        createTempRoot: (prefix) => {
+          actualOwnedRoot = mkdtempSync(prefix);
+          return actualOwnedRoot;
+        },
+        getTempDirectory: () => outerRoot,
+        env: callerEnvironment,
+        execPath: '/node',
+        spawn: (_executable, _args, options) => {
+          expect(options.env.HOME).toBe(actualOwnedRoot);
+          expect(options.env.USERPROFILE).toBe(actualOwnedRoot);
+          expect(options.env.TMPDIR).toBe(actualOwnedRoot);
+          expect(options.env.TMP).toBe(actualOwnedRoot);
+          expect(options.env.TEMP).toBe(actualOwnedRoot);
+          expect(options.env.APPDATA).toBe(
+            path.join(String(actualOwnedRoot), 'app-data'),
+          );
+          expect(options.env.LOCALAPPDATA).toBe(
+            path.join(String(actualOwnedRoot), 'local-app-data'),
+          );
+          expect(options.env.XDG_CACHE_HOME).toBe(
+            path.join(String(actualOwnedRoot), 'xdg-cache'),
+          );
+          expect(options.env.XDG_CONFIG_HOME).toBe(
+            path.join(String(actualOwnedRoot), 'xdg-config'),
+          );
+          expect(options.env.XDG_DATA_HOME).toBe(
+            path.join(String(actualOwnedRoot), 'xdg-data'),
+          );
+          expect(options.env.XDG_STATE_HOME).toBe(
+            path.join(String(actualOwnedRoot), 'xdg-state'),
+          );
+          expect(options.env.CONFIG_DIR).toBe(
+            path.join(String(actualOwnedRoot), 'xdg-config'),
+          );
+          expect(options.env.npm_config_cache).toBe(
+            path.join(String(actualOwnedRoot), 'npm-cache'),
+          );
+          expect(options.env.NPM_CONFIG_CACHE).toBeUndefined();
+          expect(options.env.WHARFIE_TEST_WORKSPACE).toBe(actualOwnedRoot);
+          const sentinelPath = path.join(
+            String(options.env.TMPDIR),
+            'child-sentinel',
+          );
+          writeFileSync(sentinelPath, 'owned\n', {
+            encoding: 'utf8',
+            flag: 'wx',
+          });
+          expect(existsSync(sentinelPath)).toBe(true);
+          return { status: 0, signal: null };
+        },
+      });
+
+      expect(result).toBe(0);
+      expect(actualOwnedRoot).toBeDefined();
+      expect(existsSync(String(actualOwnedRoot))).toBe(false);
+      expect(callerEnvironment).toEqual({
+        WHARFIE_TEST_RUNNER: 'real-file',
+        HOME: '/caller/home',
+        USERPROFILE: '/caller/profile',
+        TMPDIR: '/caller/tmpdir',
+        TMP: '/caller/tmp',
+        TEMP: '/caller/temp',
+        APPDATA: '/caller/app-data',
+        LOCALAPPDATA: '/caller/local-app-data',
+        XDG_CACHE_HOME: '/caller/xdg-cache',
+        XDG_CONFIG_HOME: '/caller/xdg-config',
+        XDG_DATA_HOME: '/caller/xdg-data',
+        XDG_STATE_HOME: '/caller/xdg-state',
+        CONFIG_DIR: '/caller/config',
+        npm_config_cache: '/caller/npm-cache',
+        NPM_CONFIG_CACHE: '/caller/uppercase-npm-cache',
+      });
+    } finally {
+      rmSync(outerRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('contains the actual default Wharfie data and build paths', async () => {
+    const workspace = process.env.WHARFIE_TEST_WORKSPACE;
+    expect(workspace).toEqual(expect.any(String));
+    if (!workspace)
+      throw new Error('Jest did not receive its owned workspace.');
+    const [{ default: paths }, { default: NodeBinary }, { default: SeaBuild }] =
+      await Promise.all([
+        import('../src/core/lib/paths.js'),
+        import('../src/core/resources/builds/node-binary.js'),
+        import('../src/core/resources/builds/sea-build.js'),
+      ]);
+    /** @param {string} value */
+    const ownedPath = (value) => {
+      const relative = path.relative(workspace, value);
+      return (
+        relative === '' ||
+        (!path.isAbsolute(relative) &&
+          relative !== '..' &&
+          !relative.startsWith(`..${path.sep}`))
+      );
+    };
+
+    for (const value of [
+      paths.data,
+      paths.config,
+      paths.cache,
+      paths.log,
+      paths.temp,
+      paths.getConfigDir(),
+      NodeBinary.BINARIES_DIR,
+      SeaBuild.BINARIES_DIR,
+    ]) {
+      expect(ownedPath(value)).toBe(true);
+    }
   });
 
   it('returns a nonzero child status after cleanup', () => {

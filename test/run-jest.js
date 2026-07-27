@@ -66,7 +66,8 @@ function hasDirectoryOption(argv, optionNames) {
 }
 
 /**
- * Run Jest with all runner-owned artifacts confined to a disposable root.
+ * Run Jest with its cache, coverage, child temporary files, and child tool
+ * caches confined to one disposable root.
  *
  * @param {string[]} argv - Forwarded Jest arguments.
  * @param {JestRunnerDependencies} [dependencies] - Test seams.
@@ -87,6 +88,32 @@ export function runJest(argv, dependencies = {}) {
   const ownedRoot = createTempRoot(
     path.join(getTempDirectory(), 'wharfie-jest-'),
   );
+  const childEnvironment = { ...env };
+  const ownedEnvironment = {
+    HOME: ownedRoot,
+    USERPROFILE: ownedRoot,
+    TMPDIR: ownedRoot,
+    TMP: ownedRoot,
+    TEMP: ownedRoot,
+    APPDATA: path.join(ownedRoot, 'app-data'),
+    LOCALAPPDATA: path.join(ownedRoot, 'local-app-data'),
+    XDG_CACHE_HOME: path.join(ownedRoot, 'xdg-cache'),
+    XDG_CONFIG_HOME: path.join(ownedRoot, 'xdg-config'),
+    XDG_DATA_HOME: path.join(ownedRoot, 'xdg-data'),
+    XDG_STATE_HOME: path.join(ownedRoot, 'xdg-state'),
+    CONFIG_DIR: path.join(ownedRoot, 'xdg-config'),
+    npm_config_cache: path.join(ownedRoot, 'npm-cache'),
+    WHARFIE_TEST_WORKSPACE: ownedRoot,
+  };
+  const ownedEnvironmentKeys = new Set(
+    Object.keys(ownedEnvironment).map((key) => key.toLowerCase()),
+  );
+  for (const key of Object.keys(childEnvironment)) {
+    if (ownedEnvironmentKeys.has(key.toLowerCase())) {
+      delete childEnvironment[key];
+    }
+  }
+  Object.assign(childEnvironment, ownedEnvironment);
   const forwardedArgs = [...argv];
   /** @type {string[]} */
   const ownedArguments = [];
@@ -133,7 +160,7 @@ export function runJest(argv, dependencies = {}) {
         ...forwardedArgs,
       ],
       {
-        env,
+        env: childEnvironment,
         stdio: 'inherit',
       },
     );

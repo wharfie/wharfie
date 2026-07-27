@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -15,11 +15,15 @@ import {
   RunStatus,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
 import { createManualLedgerRunId } from '../../../src/core/runtime/manual-ledger-run.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
-const helloWorldDir = path.join(
+const authoredHelloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
@@ -27,6 +31,21 @@ const helloWorldDir = path.join(
   'hello-world',
 );
 const itOnUnix = process.platform === 'win32' ? it.skip : it;
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
+
+afterEach(() => {
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
+});
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createHelloWorldDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredHelloWorldDir, {
+    prefix: 'wharfie-ops-resident-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 /**
  * @param {string[]} args - Source CLI arguments.
@@ -205,6 +224,7 @@ describe('wharfie ops resident worker', () => {
       const root = mkdtempSync(
         path.join(os.tmpdir(), 'wharfie-ops-resident-e2e-'),
       );
+      const helloWorldDir = createHelloWorldDirectory();
       const controlPath = path.join(root, 'control');
       const tableName = 'source-resident-worker-e2e';
       const idempotencyKey = 'offline-source-resident-e2e';

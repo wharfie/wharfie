@@ -15,12 +15,16 @@ import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
 } from '../../../src/core/runtime/manual-ledger-run.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const REPOSITORY_ROOT = path.resolve(
   fileURLToPath(new URL('../../..', import.meta.url)),
 );
 const BIN_PATH = path.join(REPOSITORY_ROOT, 'bin', 'wharfie');
-const APP_DIRECTORY = path.join(
+const AUTHORED_APP_DIRECTORY = path.join(
   REPOSITORY_ROOT,
   'scratch/examples/apps/hello-world',
 );
@@ -30,12 +34,15 @@ const REVISION_B = `wrv1_${'Q'.repeat(43)}`;
 
 /** @type {Set<string>} */
 const temporaryDirectories = new Set();
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
 
 afterEach(() => {
   for (const directory of temporaryDirectories) {
     rmSync(directory, { recursive: true, force: true });
   }
   temporaryDirectories.clear();
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
 });
 
 /**
@@ -46,6 +53,15 @@ function createTemporaryRoot(label) {
   const root = mkdtempSync(path.join(os.tmpdir(), label));
   temporaryDirectories.add(root);
   return root;
+}
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createAppDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(AUTHORED_APP_DIRECTORY, {
+    prefix: 'wharfie-ops-list-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
 }
 
 /**
@@ -90,15 +106,16 @@ async function seedRun(ledger, input) {
  * @param {string} root - Isolated process root.
  * @param {string} controlRoot - Durable control root.
  * @param {string} tableName - Ledger table.
+ * @param {string} appDir - Isolated authored application directory.
  * @param {string[]} args - List-specific CLI arguments.
  * @returns {import('node:child_process').SpawnSyncReturns<string>} - Completed CLI process.
  */
-function runList(root, controlRoot, tableName, args) {
+function runList(root, controlRoot, tableName, appDir, args) {
   const xdgConfig = path.join(root, 'xdg-config');
   const xdgData = path.join(root, 'xdg-data');
   return spawnSync(
     process.execPath,
-    [BIN_PATH, 'ops', 'list', '--dir', APP_DIRECTORY, ...args],
+    [BIN_PATH, 'ops', 'list', '--dir', appDir, ...args],
     {
       cwd: REPOSITORY_ROOT,
       encoding: 'utf8',
@@ -128,6 +145,7 @@ function runList(root, controlRoot, tableName, args) {
 describe('source run-history command', () => {
   it('lists verified app-wide history newest-first without changing durable bytes', async () => {
     const root = createTemporaryRoot('wharfie-ops-list-');
+    const appDir = createAppDirectory();
     const controlRoot = path.join(root, 'control');
     const tableName = 'ops-list-history';
     const db = createVanillaDB({ path: controlRoot });
@@ -159,7 +177,7 @@ describe('source run-history command', () => {
     const snapshotPath = path.join(controlRoot, 'database.json');
     const durableBytes = readFileSync(snapshotPath);
 
-    const first = runList(root, controlRoot, tableName, [
+    const first = runList(root, controlRoot, tableName, appDir, [
       '--limit',
       '1',
       '--json',
@@ -199,7 +217,7 @@ describe('source run-history command', () => {
       expect(first.stdout).not.toContain(secret);
     }
 
-    const second = runList(root, controlRoot, tableName, [
+    const second = runList(root, controlRoot, tableName, appDir, [
       '--limit',
       '1',
       '--cursor',
@@ -234,9 +252,12 @@ describe('source run-history command', () => {
 
   it('returns an honest empty page without creating a missing control root', () => {
     const root = createTemporaryRoot('wharfie-ops-list-empty-');
+    const appDir = createAppDirectory();
     const controlRoot = path.join(root, 'missing-control');
 
-    const result = runList(root, controlRoot, 'ops-list-empty', ['--json']);
+    const result = runList(root, controlRoot, 'ops-list-empty', appDir, [
+      '--json',
+    ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');

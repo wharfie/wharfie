@@ -8,14 +8,34 @@ import { fileURLToPath } from 'node:url';
 
 import { invokeActivity } from '../../../src/app.js';
 import { runLocalApp } from '../../../src/cli/app/local-app.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const examplesDir = path.join(repoRoot, 'scratch', 'examples');
+const authoredHelloWorldDir = path.join(examplesDir, 'apps', 'hello-world');
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
+
+afterEach(() => {
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
+});
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createHelloWorldDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredHelloWorldDir, {
+    prefix: 'wharfie-examples-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 describe('schemaVersion 3 app demos', () => {
   it('loads the canonical hello-world manifest and runs an activity', async () => {
-    const dir = path.join(examplesDir, 'apps', 'hello-world');
+    const dir = createHelloWorldDirectory();
     const { manifest, result } = await runLocalApp({
       dir,
       activityName: 'echo-event',
@@ -132,7 +152,7 @@ describe('schemaVersion 3 app demos', () => {
   });
 
   it('invokes a named source activity through the public app API', async () => {
-    const dir = path.join(examplesDir, 'apps', 'hello-world');
+    const dir = createHelloWorldDirectory();
 
     await expect(
       invokeActivity('echo-event', {
@@ -242,7 +262,7 @@ describe('schemaVersion 3 app demos', () => {
   });
 
   it('treats a resources key in caller metadata as ordinary inert JSON', async () => {
-    const dir = path.join(examplesDir, 'apps', 'hello-world');
+    const dir = createHelloWorldDirectory();
 
     await expect(
       runLocalApp({

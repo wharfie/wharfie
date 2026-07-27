@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import {
@@ -33,6 +33,10 @@ import {
   WorkflowCursorDisposition,
   createWorkflowRunId,
 } from '../../../src/core/lib/ledger/workflow-execution-contract.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
@@ -40,7 +44,7 @@ const binPath = path.join(repoRoot, 'bin', 'wharfie');
 const childPath = fileURLToPath(
   new URL('../../fixtures/workflow-crash-child.js', import.meta.url),
 );
-const appDir = fileURLToPath(
+const authoredAppDir = fileURLToPath(
   new URL('../../fixtures/apps/workflow-crash/', import.meta.url),
 );
 const APP_ID = 'workflow-crash-source';
@@ -52,14 +56,20 @@ const CHILD_BOUNDARY_TIMEOUT_MS = 30_000;
 const CHILD_EXIT_TIMEOUT_MS = 5_000;
 const DURABLE_STATE_WAIT_TIMEOUT_MS = 60_000;
 const itOnUnix = process.platform === 'win32' ? it.skip : it;
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
 
 /** @typedef {{adapterName: 'lmdb', controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string}} ControlConfiguration */
-/** @typedef {{root: string, configuration: ControlConfiguration, env: Record<string, string | undefined>, runId: string, idempotencyKey: string, markerPath: string}} WorkflowFixture */
+/** @typedef {{root: string, appDir: string, configuration: ControlConfiguration, env: Record<string, string | undefined>, runId: string, idempotencyKey: string, markerPath: string}} WorkflowFixture */
 /** @typedef {{code: number | null, signal: NodeJS.Signals | null, stdout: string, stderr: string}} ChildExit */
 /** @typedef {{child: import('node:child_process').ChildProcess, exited: Promise<ChildExit>, output: () => {stdout: string, stderr: string}}} LiveWorker */
 
 /** @param {string} label @returns {WorkflowFixture} */
 function createFixture(label) {
+  const authoredApp = createIsolatedAuthoredAppFixture(authoredAppDir, {
+    prefix: 'wharfie-workflow-kill-app-',
+  });
+  authoredAppFixtures.push(authoredApp);
   const root = mkdtempSync(path.join(os.tmpdir(), 'wharfie-workflow-kill-'));
   const controlPath = path.join(root, 'control');
   const payloadPath = path.join(root, 'execution-payloads');
@@ -75,6 +85,7 @@ function createFixture(label) {
   });
   return /** @type {WorkflowFixture} */ ({
     root,
+    appDir: authoredApp.appDir,
     configuration,
     idempotencyKey,
     runId: createWorkflowRunId({ appId: APP_ID, idempotencyKey }),
@@ -96,6 +107,10 @@ function createFixture(label) {
     },
   });
 }
+
+afterEach(() => {
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
+});
 
 /**
  * @param {string[]} args
@@ -158,7 +173,7 @@ function startWorkflow(fixture, workflowId = WORKFLOW_ID) {
         '--idempotency-key',
         fixture.idempotencyKey,
         '--dir',
-        appDir,
+        fixture.appDir,
         '--input',
         JSON.stringify({ markerPath: fixture.markerPath }),
         '--json',
@@ -355,7 +370,7 @@ async function crashChild(fixture, options, expectedBoundary) {
       childPath,
       JSON.stringify({
         ...options,
-        appDir,
+        appDir: fixture.appDir,
         configuration: fixture.configuration,
       }),
     ],
@@ -446,7 +461,7 @@ async function crashChild(fixture, options, expectedBoundary) {
 function startLiveWorker(fixture) {
   const child = spawn(
     process.execPath,
-    [binPath, 'ops', 'worker', '--dir', appDir],
+    [binPath, 'ops', 'worker', '--dir', fixture.appDir],
     {
       cwd: repoRoot,
       env: fixture.env,
@@ -588,7 +603,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
               '--idempotency-key',
               fixture.idempotencyKey,
               '--dir',
-              appDir,
+              fixture.appDir,
               '--input',
               JSON.stringify({
                 markerPath: fixture.markerPath,

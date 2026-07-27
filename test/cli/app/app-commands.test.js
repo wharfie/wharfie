@@ -8,11 +8,15 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { kitchenSinkExternalDependencies } from '../../../scratch/examples/apps/kitchen-sink/config.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
-const helloWorldDir = path.join(
+const authoredHelloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
@@ -26,6 +30,21 @@ const kitchenSinkDir = path.join(
   'apps',
   'kitchen-sink',
 );
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
+
+afterEach(() => {
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
+});
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createHelloWorldDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredHelloWorldDir, {
+    prefix: 'wharfie-app-command-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 /**
  * @param {string[]} args - args.
@@ -44,6 +63,7 @@ function runCli(args, options = {}) {
 
 describe('wharfie app commands', () => {
   it('runs a demo activity from the CLI with --input JSON', () => {
+    const helloWorldDir = createHelloWorldDirectory();
     const result = runCli([
       'app',
       'run',
@@ -68,6 +88,7 @@ describe('wharfie app commands', () => {
   });
 
   it('runs a demo activity from the CLI using stdin JSON as input', () => {
+    const helloWorldDir = createHelloWorldDirectory();
     const result = runCli(
       ['app', 'run', 'echo-event', '--dir', helloWorldDir, '--no-pretty'],
       { input: '{"who":"stdin-user"}' },

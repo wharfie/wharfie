@@ -1,4 +1,5 @@
-import { defineApp } from '../../../../src/app.js';
+// eslint-disable-next-line import/no-unresolved -- resolved through the package self-reference or isolated-fixture bridge.
+import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
   schemaVersion: 3,

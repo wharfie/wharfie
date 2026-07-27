@@ -37,10 +37,14 @@ import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binar
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
 import SeaBuild from '../../../src/core/resources/builds/sea-build.js';
 import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
-const helloWorldDir = path.join(
+const authoredHelloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
@@ -63,6 +67,17 @@ const localAppUrl = new URL(
 ).href;
 const mismatchedNodeVersion =
   process.versions.node === '0.0.0' ? '0.0.1' : '0.0.0';
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createHelloWorldDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredHelloWorldDir, {
+    prefix: 'wharfie-package-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 /**
  * @param {{ nodeVersion: string, platform: string, architecture: string, libc?: string }} target - target.
@@ -311,6 +326,7 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
 
 afterEach(() => {
   jest.restoreAllMocks();
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
 });
 
 describe('packageLocalApp', () => {
@@ -680,6 +696,7 @@ describe('packageLocalApp', () => {
   });
 
   it('packages strict manifests before NodeBinary exactVersion exists', async () => {
+    const helloWorldDir = createHelloWorldDirectory();
     const outputDir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-actor-system-package-'),
     );
@@ -1532,6 +1549,7 @@ try {
   });
 
   it('removes function and manifest temp assets when reconciliation fails', async () => {
+    const helloWorldDir = createHelloWorldDirectory();
     const outputDir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-failed-package-cleanup-'),
     );

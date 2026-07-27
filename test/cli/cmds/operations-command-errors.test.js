@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
 
 import { createExecutionLedgerOperatorCommands } from '../../../src/core/runtime/operator/execution-ledger-operator.js';
 import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
+import {
+  cleanupIsolatedAuthoredAppFixtures,
+  createIsolatedAuthoredAppFixture,
+} from '../../helpers/isolated-authored-app.js';
 
 const { inspectCommand, recoverCommand, reconcileCommand, cancelCommand } =
   createExecutionLedgerOperatorCommands();
@@ -16,15 +20,26 @@ const { inspectCommand, recoverCommand, reconcileCommand, cancelCommand } =
 const ORIGINAL_ENV = process.env;
 /** @type {string[]} */
 const temporaryDirectories = [];
+/** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
+const authoredAppFixtures = [];
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-const helloWorldDir = path.join(
+const authoredHelloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
   'apps',
   'hello-world',
 );
+
+/** @returns {string} - Fresh copy of the tracked authored application. */
+function createHelloWorldDirectory() {
+  const fixture = createIsolatedAuthoredAppFixture(authoredHelloWorldDir, {
+    prefix: 'wharfie-command-errors-app-',
+  });
+  authoredAppFixtures.push(fixture);
+  return fixture.appDir;
+}
 
 /**
  * @param {{ mock: { calls: unknown[][] } }} spy - spy.
@@ -99,6 +114,7 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
+  cleanupIsolatedAuthoredAppFixtures(authoredAppFixtures);
 });
 
 afterAll(() => {
@@ -165,7 +181,14 @@ describe.each([
     'wharfie ops run',
     () =>
       runCommand.parseAsync(
-        ['node', 'run', '--dir', helloWorldDir, '--activity', 'echo-event'],
+        [
+          'node',
+          'run',
+          '--dir',
+          createHelloWorldDirectory(),
+          '--activity',
+          'echo-event',
+        ],
         {
           from: 'node',
         },
@@ -390,7 +413,14 @@ test('wharfie ops run uses an isolated zero-config control store in tests', asyn
 
   await expectCliSuccess(() =>
     runCommand.parseAsync(
-      ['node', 'run', '--dir', helloWorldDir, '--activity', 'echo-event'],
+      [
+        'node',
+        'run',
+        '--dir',
+        createHelloWorldDirectory(),
+        '--activity',
+        'echo-event',
+      ],
       { from: 'node' },
     ),
   );
