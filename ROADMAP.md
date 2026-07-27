@@ -151,11 +151,15 @@ from `PATH`, observes one due workflow and a fsynced physical-dispatch record,
 uses real `SIGKILL`, and requires an unchanged cursor, occurrence, workflow,
 raw-row, run-directory, marker, and ready-work snapshot after replacement.
 Hermetic orchestration is covered; the native Linux execution itself remains
-an explicit evidence boundary. Five focused V87 safe suites pass; one
-separately attempted operations-error suite exits 134 locally for an unresolved
-reason and is not part of that passing matrix or a full-suite claim. The
-committed V83 driver still has not produced a `whlp2` receipt, and no successful
-AL2023 or live AWS/EBS lifecycle proof exists.
+an explicit evidence boundary. V94 extends the disposable Jest boundary across
+child home, platform-data, configuration, cache, npm-cache, and temporary
+paths. Revision-producing tests now operate on owned copies of authored
+applications, exclude generated trees, and fingerprint the checkout sources
+before cleanup. Its final safe matrix passes 48 tests across five suites plus
+seven targeted package and operations-command cases; this is not a full-suite,
+native, or relocated-Linux proof. The committed V83 driver still has not
+produced a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle
+proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -284,9 +288,13 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       repository-tool, and test type-check boundaries explicitly.
 - [x] Make ordinary Jest validation coverage-free and disposable by default.
       The shared runner directs its cache and any default coverage output into
-      one owned OS-temporary root, removes it after every synchronous child
-      outcome, preserves caller-owned directory overrides, and keeps coverage
-      explicit in `test:coverage` and mandatory in `test:ci`.
+      one owned OS-temporary root, redirects child home, platform-data,
+      configuration, cache, npm-cache, and temporary paths beneath it, and
+      removes it after every synchronous child outcome. Tests that prepare
+      revisions from repository applications use generated-tree-free owned
+      copies and verify that the authored sources did not change before
+      cleanup. Caller-owned directory overrides remain caller-owned; coverage
+      stays explicit in `test:coverage` and mandatory in `test:ci`.
 - [x] Align the Jest runtime, imported globals, and test types on major 30.
       Remove stale Jest 29 runtime/type lock entries and enforce direct and
       principal locked major agreement in the disposable-runner regression
@@ -1270,6 +1278,13 @@ Source-prepared and embedded executions share this composition. The public
 schedule operator surface and execution of the committed relocated Linux SEA
 schedule/restart proof remain open.
 
+V94 closes the known local test-disk leak without broadening product claims.
+The Jest child and its tools share one disposable environment root, and tests
+that can prepare revisions no longer point those writes at checkout-owned
+application directories. The previous 2.5 GiB of generated local Node, actor,
+and VM artifacts was removed while the small durable database files were
+preserved. No V94 temporary root or checkout-local `.wharfie` tree remains.
+
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
 responses, resident generation takeover, persisted timer firing, current-wait
@@ -1529,33 +1544,39 @@ or joined it to host evidence. No formatter or mount mutation exists.
    environment. After that evidence,
    expose only the source/packaged schedule `list`, `inspect`, `pause`, and
    `resume` surface; do not add manual fire, tail, or search.
-2. Run V84 against one already-present immutable local Linux/amd64 image. If
+2. While that native proof remains externally gated, define stable versioned
+   JSON documents for source and packaged `run`, `submit`, `start`, and
+   `signal`, with shared schemas and parity tests. Keep human rendering
+   separate and do not turn the documents into a hosted API.
+3. Run V84 against one already-present immutable local Linux/amd64 image. If
    the read-only report is attemptable, run the committed V83 Docker proof only
    with explicit approval, retain only its checksummed `whlp2` receipt, and
    audit cleanup and disk deltas.
-3. After that bounded proof, run an explicitly authorized disposable
+4. After that bounded proof, run an explicitly authorized disposable
    AL2023/real-EBS proof that joins V79 provider evidence to exact e2fsprogs
    tools and output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id
    identity and path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
-4. Only after that proof, implement the destructive formatter boundary with a
+5. Only after that proof, implement the destructive formatter boundary with a
    fresh controller authorization and current local fence immediately before
    mutation, a prepared-journal reread, immediate exact-media reobservation,
    path-retarget-safe device access, complete profile verification, and
    interruption recovery.
-5. Then implement persistent mount/systemd projection and runtime-manager
+6. Then implement persistent mount/systemd projection and runtime-manager
    recovery, control storage, the V3 health publisher and V65 receipt, and the
    deactivation producer/executor. Expose the root framework host command and
    SEA only after that lifecycle is proven.
-6. Add SSM as wakeup/delivery rather than durable authority and run a complete
+7. Add SSM as wakeup/delivery rather than durable authority and run a complete
    clean-account proof through the user's ordinary credential chain. Begin
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V93 relocated SEA schedule/restart
-proof checkpoint](llm/checkpoints/2026-07-27-v93-relocated-sea-schedule-restart-proof.md).
-Its parent is the [V92 resident workflow-schedules
+The latest recorded restart point is the [V94 owned test-workspace
+checkpoint](llm/checkpoints/2026-07-27-v94-owned-test-workspace.md). Its parent
+is the [V93 relocated SEA schedule/restart proof
+checkpoint](llm/checkpoints/2026-07-27-v93-relocated-sea-schedule-restart-proof.md),
+whose parent is the [V92 resident workflow-schedules
 checkpoint](llm/checkpoints/2026-07-27-v92-resident-workflow-schedules.md),
 whose parent is the [V91 atomic schedule-admission
 checkpoint](llm/checkpoints/2026-07-27-v91-atomic-schedule-admission.md), whose
