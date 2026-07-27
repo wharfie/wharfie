@@ -161,8 +161,6 @@ describe('durable activity log sink', () => {
     new RangeError('attempt log budget exhausted'),
     new ExecutionLedgerConflictError('run-1', 'stale append fence'),
     new ExecutionLedgerProjectionError('run-1', 'corrupt retained chain'),
-    Object.assign(new Error('append aborted'), { name: 'AbortError' }),
-    Object.assign(new Error('append aborted'), { code: 'ABORT_ERR' }),
   ])('does not retry definitive append rejection %s', async (rejection) => {
     const appendActivityAttemptLog = jest.fn(async () => {
       throw rejection;
@@ -177,6 +175,38 @@ describe('durable activity log sink', () => {
     await expect(sink(logFrame())).rejects.toBe(rejection);
     expect(appendActivityAttemptLog).toHaveBeenCalledTimes(1);
   });
+
+  test.each([
+    Object.assign(new Error('provider request aborted'), {
+      name: 'AbortError',
+    }),
+    Object.assign(new Error('provider request aborted'), {
+      code: 'ABORT_ERR',
+    }),
+  ])(
+    'reconciles an ambiguous provider rejection named like cancellation: %s',
+    async (rejection) => {
+      const appendActivityAttemptLog = jest
+        .fn()
+        .mockRejectedValueOnce(rejection)
+        .mockResolvedValueOnce({
+          applied: false,
+          attemptId: 'attempt-1',
+          acknowledgedComponentSequence: 1,
+          entryId: 'replayed-entry',
+        });
+      const sink = createDurableActivityLogSink({
+        ledger: /** @type {any} */ ({ appendActivityAttemptLog }),
+        attempt: attempt(),
+      });
+
+      await expect(sink(logFrame())).resolves.toBeUndefined();
+      expect(appendActivityAttemptLog).toHaveBeenCalledTimes(2);
+      expect(appendActivityAttemptLog.mock.calls[1][0]).toBe(
+        appendActivityAttemptLog.mock.calls[0][0],
+      );
+    },
+  );
 
   test('propagates the second opaque rejection without a third append', async () => {
     const first = new Error('first durable append response unavailable');

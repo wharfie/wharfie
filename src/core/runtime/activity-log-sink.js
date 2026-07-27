@@ -5,8 +5,10 @@ import {
 
 /**
  * Retry only an opaque operational rejection that may represent response
- * loss. Contract, budget, fence, corruption, and cancellation failures are
- * already definitive.
+ * loss. Contract, budget, fence, and corruption failures are already
+ * definitive. A generic provider error remains ambiguous even when it is
+ * named AbortError: this call has no pre-dispatch cancellation contract, and
+ * the exact replay is what discovers whether the first append committed.
  * @param {unknown} error - First append rejection.
  * @returns {boolean} - Whether one exact immediate retry is allowed.
  */
@@ -16,9 +18,7 @@ function isRetryableActivityLogAppendError(error) {
     !(error instanceof TypeError) &&
     !(error instanceof RangeError) &&
     !(error instanceof ExecutionLedgerConflictError) &&
-    !(error instanceof ExecutionLedgerProjectionError) &&
-    error.name !== 'AbortError' &&
-    /** @type {{code?: unknown}} */ (error).code !== 'ABORT_ERR'
+    !(error instanceof ExecutionLedgerProjectionError)
   );
 }
 
