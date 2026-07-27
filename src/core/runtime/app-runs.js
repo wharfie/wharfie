@@ -672,6 +672,9 @@ async function invokePreparedSourceExternalActivity(options) {
       ...(options.handleEffect === undefined
         ? {}
         : { handleEffect: options.handleEffect }),
+      ...(options.onComponentFrame === undefined
+        ? {}
+        : { onComponentFrame: options.onComponentFrame }),
     },
   );
 }
@@ -742,6 +745,7 @@ function validateManifestActivityAttemptWithStartOptions(options) {
     'execution',
     'signal',
     'handleEffect',
+    'onComponentFrame',
   ]);
   for (const key of Object.keys(options)) {
     if (!allowed.has(key)) {
@@ -768,6 +772,14 @@ function validateManifestActivityAttemptWithStartOptions(options) {
   ) {
     throw new TypeError(
       'invokeManifestActivityAttemptWithStart.handleEffect must be a function when provided.',
+    );
+  }
+  if (
+    options.onComponentFrame !== undefined &&
+    typeof options.onComponentFrame !== 'function'
+  ) {
+    throw new TypeError(
+      'invokeManifestActivityAttemptWithStart.onComponentFrame must be a function when provided.',
     );
   }
 }
@@ -895,7 +907,7 @@ export function resolveManifestActivityExecutionIdentity(execution) {
  * @param {{kind: 'prepared-source', source: ReturnType<typeof validatePreparedSourceExecution>} | {kind: 'embedded', embedded: ReturnType<typeof validateEmbeddedExecution>}} execution - Resolved execution identity.
  * @param {string} activityName - Declared activity ID.
  * @param {Readonly<Record<string, any>>} startFrame - Exact host-owned start frame.
- * @param {{signal?: AbortSignal, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>}} [options] - Trusted host-owned attempt controls.
+ * @param {{signal?: AbortSignal, onComponentFrame?: (frame: Readonly<Record<string, any>>) => unknown | Promise<unknown>, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>}} [options] - Trusted host-owned attempt controls.
  * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
  */
 async function dispatchManifestActivityAttempt(
@@ -948,7 +960,7 @@ async function dispatchManifestActivityAttempt(
  * frame. This is the narrow scheduler seam: the frame must name the selected
  * revision and activity, but its run/invocation/attempt/fence identity is not
  * regenerated or otherwise changed by the runtime.
- * @param {{ activityName: string, startFrame: Record<string, any>, signal?: AbortSignal, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>, execution: { kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision } | { kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair } }} options - Durable invocation options.
+ * @param {{ activityName: string, startFrame: Record<string, any>, signal?: AbortSignal, onComponentFrame?: (frame: Readonly<Record<string, any>>) => unknown | Promise<unknown>, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>, execution: { kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision } | { kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair } }} options - Durable invocation options.
  * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
  */
 export async function invokeManifestActivityAttemptWithStart(options) {
@@ -972,6 +984,9 @@ export async function invokeManifestActivityAttemptWithStart(options) {
       ...(options.handleEffect === undefined
         ? {}
         : { handleEffect: options.handleEffect }),
+      ...(options.onComponentFrame === undefined
+        ? {}
+        : { onComponentFrame: options.onComponentFrame }),
     },
   );
 }

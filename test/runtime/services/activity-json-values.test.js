@@ -395,17 +395,19 @@ describe('JSON activity values', () => {
     const handleEffect = () => {
       throw new Error('Effect execution is not expected in this seam test.');
     };
+    const onComponentFrame = () => {};
     const evidence = await invokeManifestActivityAttemptWithStart({
       activityName: 'echo',
       startFrame,
       execution,
       signal: controller.signal,
       handleEffect,
+      onComponentFrame,
     });
 
     expect(evidence.start).toEqual(startFrame);
     expect(attemptOptions).toEqual([
-      { signal: controller.signal, handleEffect },
+      { signal: controller.signal, handleEffect, onComponentFrame },
     ]);
     expect(invocationCalls).toHaveLength(1);
     expect(invocationCalls[0].runtime.invocation).toEqual({
@@ -444,6 +446,16 @@ describe('JSON activity values', () => {
         handleEffect: /** @type {any} */ ({}),
       }),
     ).rejects.toThrow(/handleEffect must be a function/i);
+    expect(invocationCalls).toHaveLength(1);
+
+    await expect(
+      invokeManifestActivityAttemptWithStart({
+        activityName: 'echo',
+        startFrame,
+        execution,
+        onComponentFrame: /** @type {any} */ ({}),
+      }),
+    ).rejects.toThrow(/onComponentFrame must be a function/i);
     expect(invocationCalls).toHaveLength(1);
   });
 

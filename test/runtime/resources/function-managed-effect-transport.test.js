@@ -97,6 +97,18 @@ function successfulEffectResult(request, result, evidence = {}) {
   };
 }
 
+/**
+ * @returns {{promise: Promise<void>, resolve: () => void}} - Deferred gate.
+ */
+function deferred() {
+  /** @type {() => void} */
+  let release = () => {};
+  const promise = new Promise((resolve) => {
+    release = () => resolve();
+  });
+  return { promise, resolve: release };
+}
+
 afterEach(async () => {
   await worker._clearSandboxCache();
   await Promise.all(
@@ -169,6 +181,191 @@ describe('Function managed-effect worker transport', () => {
       terminal: { result: { stored: { key: 'stored-42' } } },
       transcript: { pendingEffectIds: [], terminalType: 'completed' },
     });
+  });
+
+  it('does not start a host effect before its component sink acknowledges the request', async () => {
+    const activityId = `managed-effect-sink-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const bundle = await buildPreparedActivity(
+      activityId,
+      [
+        'export async function execute(_input, runtime) {',
+        '  return await runtime.effects.request({',
+        "    effectId: 'sink-gated-effect',",
+        "    capability: 'test-store',",
+        "    operation: 'get',",
+        '    input: { key: 1 },',
+        "    requestedReplayProperties: ['idempotent'],",
+        '  });',
+        '}',
+      ].join('\n'),
+    );
+    const sinkGate = deferred();
+    const effectFrameStarted = deferred();
+    let handlerCalls = 0;
+
+    const attempt = WharfieFunction.runPreparedActivityAttempt(
+      activityId,
+      bundle,
+      startFrame(activityId),
+      {
+        onComponentFrame: async (frame) => {
+          if (frame.type !== 'effect-request') return;
+          effectFrameStarted.resolve();
+          await sinkGate.promise;
+        },
+        handleEffect: (request) => {
+          handlerCalls += 1;
+          return successfulEffectResult(request, { acknowledged: true });
+        },
+      },
+    );
+
+    try {
+      await effectFrameStarted.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(handlerCalls).toBe(0);
+
+      sinkGate.resolve();
+      const evidence = await attempt;
+
+      expect(handlerCalls).toBe(1);
+      expect(evidence.terminal.result).toEqual({ acknowledged: true });
+    } finally {
+      sinkGate.resolve();
+    }
+  });
+
+  it('does not start a sink-gated effect after host cancellation wins', async () => {
+    const activityId = `managed-effect-sink-cancel-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const bundle = await buildPreparedActivity(
+      activityId,
+      [
+        'export async function execute(_input, runtime) {',
+        '  return await runtime.effects.request({',
+        "    effectId: 'cancelled-sink-effect',",
+        "    capability: 'test-store',",
+        "    operation: 'get',",
+        '    input: { key: 1 },',
+        "    requestedReplayProperties: ['idempotent'],",
+        '  });',
+        '}',
+      ].join('\n'),
+    );
+    const controller = new AbortController();
+    const sinkGate = deferred();
+    const effectFrameStarted = deferred();
+    let handlerCalls = 0;
+
+    const attempt = WharfieFunction.runPreparedActivityAttempt(
+      activityId,
+      bundle,
+      startFrame(activityId),
+      {
+        signal: controller.signal,
+        cancellationGraceMs: 500,
+        onComponentFrame: async (frame) => {
+          if (frame.type !== 'effect-request') return;
+          effectFrameStarted.resolve();
+          await sinkGate.promise;
+        },
+        handleEffect: (request) => {
+          handlerCalls += 1;
+          return successfulEffectResult(request, { shouldNotRun: true });
+        },
+      },
+    );
+
+    try {
+      await effectFrameStarted.promise;
+      controller.abort(new Error('cancel before component ACK'));
+      sinkGate.resolve();
+
+      const evidence = await attempt;
+
+      expect(handlerCalls).toBe(0);
+      expect(evidence.status).toBe('cancelled');
+      expect(evidence.frames.map((frame) => frame.type)).toEqual([
+        'start',
+        'effect-request',
+        'cancel',
+        'cancelled',
+      ]);
+    } finally {
+      sinkGate.resolve();
+    }
+  });
+
+  it('fails closed when a terminal overtakes one sink-gated effect frame', async () => {
+    const activityId = `managed-effect-sink-overtake-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const privateSymbol = getActivityAttemptProtocolSymbol(activityId);
+    const codeString = `
+      globalThis[Symbol.for(${JSON.stringify(privateSymbol)})] =
+        async ({ startFrame, transport }) => {
+          const effect = transport.onComponentFrame({
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'effect-request',
+            attemptId: startFrame.attemptId,
+            sequence: 1,
+            effectId: 'overtaken-effect',
+            capability: 'test-store',
+            operation: 'get',
+            input: { key: 1 },
+            requestedReplayProperties: ['idempotent'],
+          });
+          const terminal = transport.onComponentFrame({
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'completed',
+            attemptId: startFrame.attemptId,
+            sequence: 2,
+            result: { shouldNotComplete: true },
+          });
+          await Promise.allSettled([effect, terminal]);
+        };
+    `;
+    const sinkGate = deferred();
+    const sinkStarted = deferred();
+    /** @type {number[]} */
+    const delivered = [];
+    let handlerCalls = 0;
+
+    const attempt = WharfieFunction.runPreparedActivityAttempt(
+      activityId,
+      { codeString },
+      startFrame(activityId),
+      {
+        onComponentFrame: async (frame) => {
+          delivered.push(frame.sequence);
+          sinkStarted.resolve();
+          await sinkGate.promise;
+        },
+        handleEffect: (request) => {
+          handlerCalls += 1;
+          return successfulEffectResult(request, { shouldNotRun: true });
+        },
+      },
+    );
+
+    try {
+      await sinkStarted.promise;
+      await expect(attempt).rejects.toBeInstanceOf(
+        ActivityAttemptEvidenceError,
+      );
+      sinkGate.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(delivered).toEqual([1]);
+      expect(handlerCalls).toBe(0);
+    } finally {
+      sinkGate.resolve();
+    }
   });
 
   it('returns ordinary failed evidence when the host has no managed-effect handler', async () => {

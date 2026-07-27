@@ -245,7 +245,7 @@ describe('revision-backed source externals', () => {
     );
   });
 
-  it('forwards durable effect controls through the prepared external seam', async () => {
+  it('forwards durable component controls through the prepared external seam', async () => {
     const { invokeManifestActivityAttemptWithStart } = await import(
       APP_RUNS_IMPORT
     );
@@ -270,6 +270,7 @@ describe('revision-backed source externals', () => {
     const handleEffect = () => {
       throw new Error('Effect execution is not expected in this seam test.');
     };
+    const onComponentFrame = () => {};
 
     await invokeManifestActivityAttemptWithStart({
       activityName: 'work',
@@ -277,6 +278,7 @@ describe('revision-backed source externals', () => {
       execution: { kind: 'prepared-source', prepared },
       signal: controller.signal,
       handleEffect,
+      onComponentFrame,
     });
 
     expect(runPreparedActivityAttempt).toHaveBeenCalledWith(
@@ -291,7 +293,7 @@ describe('revision-backed source externals', () => {
         activityId: 'work',
         attemptId: 'durable-attempt-1',
       }),
-      { signal: controller.signal, handleEffect },
+      { signal: controller.signal, handleEffect, onComponentFrame },
     );
   });
 

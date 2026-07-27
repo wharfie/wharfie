@@ -72,6 +72,18 @@ async function waitForPath(filePath, timeoutMs = 2_000) {
   }
 }
 
+/**
+ * @returns {{promise: Promise<void>, resolve: () => void}} - Deferred gate.
+ */
+function deferred() {
+  /** @type {() => void} */
+  let release = () => {};
+  const promise = new Promise((resolve) => {
+    release = () => resolve();
+  });
+  return { promise, resolve: release };
+}
+
 afterEach(async () => {
   await worker._clearSandboxCache();
   jest.restoreAllMocks();
@@ -175,6 +187,284 @@ describe('Function Activity Protocol v1 attempt execution', () => {
       ]);
       expect(Object.isFrozen(evidence)).toBe(true);
     } finally {
+      await fsp.rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('acknowledges prepared component frames only after their ordered host sink settles', async () => {
+    const root = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-function-attempt-sink-'),
+    );
+    const entryPath = path.join(root, 'activity.js');
+    const activityId = `attempt-sink-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    await fsp.writeFile(
+      entryPath,
+      [
+        'export async function execute(_input, runtime) {',
+        "  runtime.logger.info('first');",
+        "  runtime.logger.warn('second');",
+        "  return 'done';",
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+    const resource = new FunctionResource({
+      name: activityId,
+      properties: {
+        functionName: activityId,
+        entrypoint: { path: entryPath, export: 'execute' },
+        buildTarget: currentBuildTarget(),
+      },
+    });
+    const firstGate = deferred();
+    const terminalGate = deferred();
+    const firstStarted = deferred();
+    const terminalStarted = deferred();
+    /** @type {Readonly<Record<string, any>>[]} */
+    const delivered = [];
+    let settled = false;
+
+    try {
+      const attempt = WharfieFunction.runPreparedActivityAttempt(
+        activityId,
+        { codeString: await resource.esbuild() },
+        startFrame(activityId),
+        {
+          onComponentFrame: async (frame) => {
+            delivered.push(frame);
+            if (frame.sequence === 1) {
+              firstStarted.resolve();
+              await firstGate.promise;
+            }
+            if (frame.type === 'completed') {
+              terminalStarted.resolve();
+              await terminalGate.promise;
+            }
+          },
+        },
+      );
+      attempt.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await firstStarted.promise;
+      await Promise.resolve();
+      expect(delivered.map((frame) => frame.sequence)).toEqual([1]);
+      expect(settled).toBe(false);
+
+      firstGate.resolve();
+      await terminalStarted.promise;
+      expect(delivered.map((frame) => frame.sequence)).toEqual([1, 2, 3]);
+      expect(delivered.map((frame) => frame.type)).toEqual([
+        'log',
+        'log',
+        'completed',
+      ]);
+      expect(settled).toBe(false);
+
+      terminalGate.resolve();
+      const evidence = await attempt;
+
+      expect(delivered).toEqual(evidence.frames.slice(1));
+      expect(delivered.every((frame) => Object.isFrozen(frame))).toBe(true);
+      expect(evidence.status).toBe('completed');
+    } finally {
+      firstGate.resolve();
+      terminalGate.resolve();
+      await fsp.rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('turns a rejected prepared component sink into transport uncertainty', async () => {
+    const root = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-function-attempt-sink-reject-'),
+    );
+    const entryPath = path.join(root, 'activity.js');
+    const activityId = `attempt-sink-reject-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    await fsp.writeFile(
+      entryPath,
+      [
+        'export async function execute(_input, runtime) {',
+        "  runtime.logger.info('not durable');",
+        "  return 'not authoritative';",
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+    const resource = new FunctionResource({
+      name: activityId,
+      properties: {
+        functionName: activityId,
+        entrypoint: { path: entryPath, export: 'execute' },
+        buildTarget: currentBuildTarget(),
+      },
+    });
+    /** @type {number[]} */
+    const delivered = [];
+
+    try {
+      await expect(
+        WharfieFunction.runPreparedActivityAttempt(
+          activityId,
+          { codeString: await resource.esbuild() },
+          startFrame(activityId),
+          {
+            onComponentFrame: (frame) => {
+              delivered.push(frame.sequence);
+              throw new Error('ledger append rejected');
+            },
+          },
+        ),
+      ).rejects.toMatchObject({
+        name: 'ActivityAttemptTransportError',
+        code: 'activity-attempt-transport-failed',
+        cause: {
+          message:
+            'The activity component-frame sink rejected an accepted frame.',
+        },
+      });
+      expect(delivered).toEqual([1]);
+    } finally {
+      await fsp.rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('forwards the ordered component sink through direct source execution', async () => {
+    const root = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-function-source-sink-'),
+    );
+    const entryPath = path.join(root, 'activity.mjs');
+    const activityId = `source-sink-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    await fsp.writeFile(
+      entryPath,
+      [
+        'export async function execute(_input, runtime) {',
+        "  runtime.logger.info('source-log');",
+        "  return 'source-done';",
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+    const activity = new WharfieFunction({
+      name: activityId,
+      entrypoint: { path: entryPath, export: 'execute' },
+    });
+    /** @type {Readonly<Record<string, any>>[]} */
+    const delivered = [];
+
+    try {
+      const evidence = await activity.runActivityAttempt(
+        startFrame(activityId),
+        {
+          onComponentFrame: async (frame) => {
+            await Promise.resolve();
+            delivered.push(frame);
+          },
+        },
+      );
+
+      expect(delivered).toEqual(evidence.frames.slice(1));
+      expect(delivered.map((frame) => frame.type)).toEqual([
+        'log',
+        'completed',
+      ]);
+    } finally {
+      await fsp.rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('does not start an effect when its sink settles after cancellation cleanup', async () => {
+    const root = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-function-attempt-sink-cancel-'),
+    );
+    const entryPath = path.join(root, 'activity.js');
+    const activityId = `attempt-sink-cancel-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    await fsp.writeFile(
+      entryPath,
+      [
+        'export async function execute(_input, runtime) {',
+        '  return await runtime.effects.request({',
+        "    effectId: 'cancelled-before-ack',",
+        "    capability: 'test-store',",
+        "    operation: 'get',",
+        '    input: { key: 1 },',
+        "    requestedReplayProperties: ['idempotent'],",
+        '  });',
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+    const resource = new FunctionResource({
+      name: activityId,
+      properties: {
+        functionName: activityId,
+        entrypoint: { path: entryPath, export: 'execute' },
+        buildTarget: currentBuildTarget(),
+      },
+    });
+    const sinkGate = deferred();
+    const sinkStarted = deferred();
+    const controller = new AbortController();
+    /** @type {number[]} */
+    const delivered = [];
+    let handlerCalls = 0;
+
+    try {
+      const attempt = WharfieFunction.runPreparedActivityAttempt(
+        activityId,
+        { codeString: await resource.esbuild() },
+        startFrame(activityId),
+        {
+          signal: controller.signal,
+          cancellationGraceMs: 25,
+          onComponentFrame: async (frame) => {
+            delivered.push(frame.sequence);
+            sinkStarted.resolve();
+            await sinkGate.promise;
+          },
+          handleEffect: (request) => {
+            handlerCalls += 1;
+            return {
+              protocol: ACTIVITY_PROTOCOL_NAME,
+              protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+              type: 'effect-result',
+              attemptId: request.attemptId,
+              effectId: request.effectId,
+              ok: true,
+              result: { shouldNotRun: true },
+              substantiatedReplayProperties: ['idempotent'],
+              evidence: {},
+            };
+          },
+        },
+      );
+      await sinkStarted.promise;
+      expect(handlerCalls).toBe(0);
+      controller.abort(new Error('cancel while append is pending'));
+
+      await expect(attempt).rejects.toBeInstanceOf(
+        ActivityAttemptTransportError,
+      );
+      sinkGate.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(delivered).toEqual([1]);
+      expect(handlerCalls).toBe(0);
+    } finally {
+      sinkGate.resolve();
       await fsp.rm(root, { force: true, recursive: true });
     }
   });

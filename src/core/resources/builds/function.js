@@ -62,6 +62,7 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 /**
  * @typedef ActivityAttemptRunOptions
  * @property {AbortSignal} [signal] - Optional host cancellation signal.
+ * @property {(frame: Readonly<Record<string, any>>) => unknown | Promise<unknown>} [onComponentFrame] - Optional ordered host component-frame sink. Resolution acknowledges the frame.
  * @property {(request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>} [handleEffect] - Optional trusted host managed-effect handler. Once dispatched it must eventually settle after options.signal aborts; the attempt retains its lifetime until it does.
  * @property {number} [readyTimeoutMs] - Maximum time for the one-shot worker to load its private wrapper.
  * @property {number} [cancellationGraceMs] - Cooperative cancellation grace before the one-shot worker is terminated.
@@ -454,6 +455,9 @@ class Function {
           ...(options.handleEffect !== undefined
             ? { handleEffect: options.handleEffect }
             : {}),
+          ...(options.onComponentFrame !== undefined
+            ? { onComponentFrame: options.onComponentFrame }
+            : {}),
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
           ...(options.readyTimeoutMs !== undefined
             ? { readyTimeoutMs: options.readyTimeoutMs }
@@ -617,6 +621,9 @@ class Function {
       ...(options.handleEffect === undefined
         ? {}
         : { handleEffect: options.handleEffect }),
+      ...(options.onComponentFrame === undefined
+        ? {}
+        : { onComponentFrame: options.onComponentFrame }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   }

@@ -76,6 +76,8 @@ const DEFAULT_ACTIVITY_WORKER_READY_TIMEOUT_MS = 5_000;
  * @property {import('node:worker_threads').MessagePort} port - Private host/runner Activity Protocol port, never exposed to bundle code.
  * @property {string} transportAuth - Opaque per-attempt authenticator required on runner lifecycle messages.
  * @property {number} nextHostControlSequence - Next authenticated host-to-runner control sequence.
+ * @property {((frame: Readonly<Record<string, any>>) => unknown | Promise<unknown>) | null} onComponentFrame - Ordered host-owned component-frame sink.
+ * @property {{frame: Readonly<Record<string, any>>, sequence: number} | null} pendingComponentDelivery - The one accepted frame awaiting sink settlement and acknowledgement.
  * @property {((request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>) | null} handleEffect - Host-owned managed-effect handler.
  * @property {AbortController} effectController - Host-owned effect interruption boundary.
  * @property {Map<string, Readonly<Record<string, any>>>} effectRequests - Exact host-accepted effect requests awaiting results.
@@ -220,6 +222,9 @@ function findRunnerWorkerPath() {
  * @returns {void}
  */
 function cleanupPendingActivityAttempt(attempt) {
+  // Arbitrary host sinks cannot be cancelled. Clearing the identity makes any
+  // later settlement inert after worker exit, forced termination, or failure.
+  attempt.pendingComponentDelivery = null;
   if (attempt.readyTimer) {
     clearTimeout(attempt.readyTimer);
     attempt.readyTimer = null;
@@ -733,6 +738,130 @@ function sendActivityAttemptStart(state, id, attempt) {
 }
 
 /**
+ * Acknowledge one already accepted component frame and only then expose any
+ * effect request to its host handler. The no-sink path calls this
+ * synchronously, preserving the existing transport behavior.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Exact pending attempt.
+ * @param {Readonly<Record<string, any>>} frame - Accepted component frame.
+ * @returns {void}
+ */
+function acknowledgeActivityAttemptComponent(state, id, attempt, frame) {
+  if (
+    frame.type === 'completed' ||
+    frame.type === 'failed' ||
+    frame.type === 'cancelled' ||
+    frame.type === 'deadline-exceeded' ||
+    frame.type === 'protocol-failed'
+  ) {
+    armActivityAttemptTerminalWatchdog(state, id, attempt);
+  }
+  sendAuthenticatedActivityAttemptControl(attempt, {
+    kind: 'activity-attempt-component-ack',
+    id,
+    sequence: frame.sequence,
+    ok: true,
+  });
+  if (frame.type !== 'effect-request') return;
+  if (
+    attempt.effectHandlerFailed ||
+    attempt.cancelRequested ||
+    attempt.effectController.signal.aborted
+  ) {
+    attempt.effectRequests.delete(frame.effectId);
+    sendAuthenticatedActivityAttemptControl(attempt, {
+      kind: 'activity-attempt-effect-rejected',
+      id,
+      effectId: frame.effectId,
+      error: attempt.effectHandlerFailed
+        ? 'The host managed-effect handler is closed.'
+        : 'The host rejected the activity effect request after interruption.',
+    });
+    return;
+  }
+  beginActivityAttemptEffect(state, id, attempt, frame);
+}
+
+/**
+ * Deliver one accepted component frame to the optional host sink. A physical
+ * runner already serializes component sends around acknowledgements; retain a
+ * single explicit pending identity so a malformed overtaking frame and a late
+ * promise settlement both fail closed.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Exact pending attempt.
+ * @param {Readonly<Record<string, any>>} frame - Accepted component frame.
+ * @returns {void}
+ */
+function deliverAcceptedActivityAttemptComponent(state, id, attempt, frame) {
+  if (attempt.pendingComponentDelivery) {
+    throw new Error(
+      'The activity runner emitted a component frame before its prior frame was acknowledged.',
+    );
+  }
+  if (!attempt.onComponentFrame) {
+    acknowledgeActivityAttemptComponent(state, id, attempt, frame);
+    return;
+  }
+
+  const pending = {
+    frame,
+    sequence: frame.sequence,
+  };
+  attempt.pendingComponentDelivery = pending;
+  Promise.resolve()
+    .then(() => attempt.onComponentFrame?.(frame))
+    .then(
+      () => {
+        if (
+          state.activityAttempts.get(id) !== attempt ||
+          attempt.pendingComponentDelivery !== pending
+        ) {
+          return;
+        }
+        attempt.pendingComponentDelivery = null;
+        // A separately detected failure may be waiting for an earlier host
+        // effect to settle. It must not be superseded by a late successful
+        // component delivery.
+        if (attempt.deferredFailure) return;
+        try {
+          acknowledgeActivityAttemptComponent(state, id, attempt, frame);
+        } catch (cause) {
+          const error = new Error(
+            'The activity host could not acknowledge an accepted component frame.',
+          );
+          /** @type {Error & {cause?: unknown}} */ (error).cause = cause;
+          failActivityAttempt(state, id, error);
+        }
+      },
+      (cause) => {
+        if (
+          state.activityAttempts.get(id) !== attempt ||
+          attempt.pendingComponentDelivery !== pending
+        ) {
+          return;
+        }
+        attempt.pendingComponentDelivery = null;
+        try {
+          sendAuthenticatedActivityAttemptControl(attempt, {
+            kind: 'activity-attempt-component-ack',
+            id,
+            sequence: frame.sequence,
+            ok: false,
+            error: 'The host rejected the activity component frame.',
+          });
+        } catch {}
+        const error = new Error(
+          'The activity component-frame sink rejected an accepted frame.',
+        );
+        /** @type {Error & {cause?: unknown}} */ (error).cause = cause;
+        failActivityAttempt(state, id, error);
+      },
+    );
+}
+
+/**
  * Accept and acknowledge a terminal only after every already-dispatched host
  * effect handler has settled. Until this point the outer transcript remains
  * active so successful handler receipts can still be recorded before terminal.
@@ -764,13 +893,7 @@ function acceptActivityAttemptTerminal(state, id, attempt, candidate) {
     } catch {}
   }
   stopActivityAttemptInterruptionWatchdogs(attempt);
-  armActivityAttemptTerminalWatchdog(state, id, attempt);
-  sendAuthenticatedActivityAttemptControl(attempt, {
-    kind: 'activity-attempt-component-ack',
-    id,
-    sequence: terminal.sequence,
-    ok: true,
-  });
+  deliverAcceptedActivityAttemptComponent(state, id, attempt, terminal);
 }
 
 /**
@@ -1002,6 +1125,16 @@ function handleActivityAttemptMessage(state, msg) {
       );
       return true;
     }
+    if (attempt.pendingComponentDelivery) {
+      failActivityAttempt(
+        state,
+        id,
+        createActivityAttemptEvidenceError(
+          'The activity runner emitted a component frame before its prior frame was acknowledged.',
+        ),
+      );
+      return true;
+    }
     try {
       const hasDeadline = Object.prototype.hasOwnProperty.call(
         attempt.start,
@@ -1084,25 +1217,7 @@ function handleActivityAttemptMessage(state, msg) {
       if (frame.type === 'effect-request') {
         attempt.effectRequests.set(frame.effectId, frame);
       }
-      sendAuthenticatedActivityAttemptControl(attempt, {
-        kind: 'activity-attempt-component-ack',
-        id,
-        sequence: frame.sequence,
-        ok: true,
-      });
-      if (frame.type === 'effect-request') {
-        if (attempt.effectHandlerFailed) {
-          attempt.effectRequests.delete(frame.effectId);
-          sendAuthenticatedActivityAttemptControl(attempt, {
-            kind: 'activity-attempt-effect-rejected',
-            id,
-            effectId: frame.effectId,
-            error: 'The host managed-effect handler is closed.',
-          });
-        } else {
-          beginActivityAttemptEffect(state, id, attempt, frame);
-        }
-      }
+      deliverAcceptedActivityAttemptComponent(state, id, attempt, frame);
     } catch (cause) {
       failActivityAttempt(
         state,
@@ -1121,6 +1236,7 @@ function handleActivityAttemptMessage(state, msg) {
       !attempt.ready ||
       !attempt.startSent ||
       attempt.finished ||
+      attempt.pendingComponentDelivery ||
       !attempt.terminal
     ) {
       failActivityAttempt(
@@ -1535,6 +1651,7 @@ async function materializeExternalBundle(externalsTar) {
  * @property {Object<string,string>} [env] - Fixed sandbox environment additions.
  * @property {string} entrypointSymbol - Fixed private protocol wrapper symbol.
  * @property {AbortSignal} [signal] - Optional host cancellation signal.
+ * @property {(frame: Readonly<Record<string, any>>) => unknown | Promise<unknown>} [onComponentFrame] - Optional ordered host component-frame sink. Resolution acknowledges the frame.
  * @property {(request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>} [handleEffect] - Optional trusted host managed-effect handler. Once dispatched it must eventually settle after signal abort; the attempt retains its lifetime until it does.
  * @property {number} [readyTimeoutMs] - Maximum private-wrapper startup time.
  * @property {number} [cancellationGraceMs] - Cooperative cancellation grace before worker termination.
@@ -1600,6 +1717,7 @@ async function runActivityAttemptInSandbox(
     env = {},
     entrypointSymbol,
     signal,
+    onComponentFrame,
     handleEffect,
     readyTimeoutMs,
     cancellationGraceMs,
@@ -1624,6 +1742,14 @@ async function runActivityAttemptInSandbox(
   if (handleEffect !== undefined && typeof handleEffect !== 'function') {
     throw new TypeError(
       'handleEffect must be a function when provided to the worker transport.',
+    );
+  }
+  if (
+    onComponentFrame !== undefined &&
+    typeof onComponentFrame !== 'function'
+  ) {
+    throw new TypeError(
+      'onComponentFrame must be a function when provided to the worker transport.',
     );
   }
 
@@ -1706,6 +1832,8 @@ async function runActivityAttemptInSandbox(
         port: port1,
         transportAuth,
         nextHostControlSequence: 1,
+        onComponentFrame: onComponentFrame || null,
+        pendingComponentDelivery: null,
         handleEffect: handleEffect || null,
         effectController: new AbortController(),
         effectRequests: new Map(),
