@@ -1,9 +1,10 @@
 # Wharfie application demos
 
-These small applications exercise the strict schemaVersion 2 authoring model:
-a developer-owned CLI, named activities, strict JSON input, and exact package
-targets. They intentionally do not expose Wharfie's internal `ActorSystem`
-or legacy resource-injection implementation as an authoring API.
+These small applications exercise the strict schemaVersion 3 authoring model:
+a developer-owned CLI, named activities, finite workflows, revision-bound UTC
+schedules, strict JSON input, and exact package targets. They intentionally do
+not expose Wharfie's internal `ActorSystem` or legacy resource-injection
+implementation as an authoring API.
 
 ## Included handlers
 
@@ -17,13 +18,13 @@ metadata from `runtime.caller.metadata`, and returns a JSON result.
 ### `apps/hello-world/wharfie.app.js`
 
 The primary approachable example. It defines a normal CLI, one named activity,
-and exact SEA targets.
+one finite workflow, an hourly workflow schedule, and exact SEA targets.
 
 ### `apps/kitchen-sink/wharfie.app.js`
 
-A heavier packaging fixture with multiple targets and an exact LMDB native
-package pin. Use it to exercise a target-specific dependency; use
-`hello-world` for the normal quick path.
+A heavier packaging fixture with multiple targets, a scheduled workflow, and
+an exact LMDB native package pin. Use it to exercise a target-specific
+dependency; use `hello-world` for the normal quick path.
 
 ## CLI usage
 

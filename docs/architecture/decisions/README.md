@@ -9,7 +9,7 @@ These records capture product-level decisions that should survive implementation
 | [0003 — Capability fulfillment, not general IaC](0003-capability-fulfillment.md)                                           | Accepted                                               |
 | [0004 — One authoritative terminal outcome and explicit effects](0004-logical-outcomes-and-effects.md)                     | Accepted                                               |
 | [0005 — TypeScript control plane with a component boundary](0005-typescript-and-component-boundary.md)                     | Accepted                                               |
-| [0006 — One strict version 2 application manifest](0006-strict-v2-app-manifest.md)                                         | Accepted; amended by 0012 and 0019                     |
+| [0006 — One strict version 2 application manifest](0006-strict-v2-app-manifest.md)                                         | Superseded by 0026                                     |
 | [0007 — Atomic, fenced operation snapshots](0007-atomic-operation-snapshots.md)                                            | Superseded by 0011                                     |
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md)                 | Accepted; profile V1 superseded by 0021                |
 | [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                                      | Accepted                                               |
@@ -28,6 +28,7 @@ These records capture product-level decisions that should survive implementation
 | [0022 — Durable activity-log append before acknowledgement](0022-durable-activity-log-append.md)                           | Accepted                                               |
 | [0023 — Verified sensitive activity-log disclosure](0023-sensitive-activity-log-disclosure.md)                             | Accepted                                               |
 | [0024 — Revision-bound workflow schedules](0024-revision-bound-workflow-schedules.md)                                      | Accepted; pending admission superseded by 0025         |
-| [0025 — Atomic scheduled-workflow admission](0025-atomic-scheduled-workflow-admission.md)                                  | Accepted; internal kernel, manifest V3 remains gated   |
+| [0025 — Atomic scheduled-workflow admission](0025-atomic-scheduled-workflow-admission.md)                                  | Accepted; internal kernel carried forward by 0026      |
+| [0026 — Resident revision-bound workflow schedules](0026-resident-workflow-schedules.md)                                   | Accepted; replaces strict V2 with executable V3        |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

@@ -19,7 +19,7 @@ be available as a durable activity:
 
 ```js
 export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'my-app' },
   cli: {
     entrypoint: {
@@ -38,16 +38,24 @@ export default {
     },
   },
   workflows: {
-    'sync-on-approval': {
+    'scheduled-sync': {
       steps: [
-        { id: 'approval', kind: 'signal' },
         {
           id: 'sync',
           kind: 'activity',
           activity: 'sync',
-          input: { kind: 'step-output', step: 'approval' },
+          input: { kind: 'workflow-input' },
         },
       ],
+    },
+  },
+  schedules: {
+    hourly: {
+      cron: '0 * * * *',
+      workflow: 'scheduled-sync',
+      input: { source: 'hourly' },
+      missed: 'latest',
+      overlap: 'allow',
     },
   },
   targets: [
@@ -61,15 +69,16 @@ export default {
 };
 ```
 
-`schemaVersion`, `app`, and `cli` are required. `activities`, `workflows`, and
-`targets` are optional, although packaging requires a nonempty target list. All
-entrypoints currently use `{ kind: 'node', path, export }`; both `path` and the
-named `export` are required.
+`schemaVersion`, `app`, and `cli` are required. `activities`, `workflows`,
+`schedules`, and `targets` are optional, although every declared map and the
+packaging target list must be nonempty. All entrypoints currently use
+`{ kind: 'node', path, export }`; both `path` and the named `export` are
+required.
 
 Logical IDs match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and contain at most 63
 ASCII bytes. The compiler rejects aliases and unknown fields instead of
-normalizing them. The v2 schema has no `ActorSystem`, `functions`,
-`capabilities`, scheduler, or public packaging/signing section.
+normalizing them. The v3 schema has no `ActorSystem`, `functions`,
+`capabilities`, application `resources`, or public packaging/signing section.
 
 A workflow is plain revision-bound data: one to 64 uniquely named ordered
 `activity`, `timer`, or `signal` steps. An activity names a declared activity
@@ -94,8 +103,36 @@ buffered in an early-signal inbox. Exact-run schema-v8 inspection, confirmed
 recovery, and evidence-backed reconciliation are workflow-aware and redact
 signal payloads and internal references. Run-level workflow cancellation
 terminalizes unstarted work, persists before exact active-attempt delivery,
-and fences uncertain work against continuation. Schedules and managed-effect
-workflow successors remain later runtime slices.
+and fences uncertain work against continuation.
+
+A schedule is also plain revision-bound data. It names one workflow from the
+same manifest, supplies static JSON input, and uses a canonical five-field UTC
+cron expression. The first policy surface is fixed to latest-only missed-run
+catch-up and overlap-allowing workflow runs:
+
+```js
+{
+  cron: '0 * * * *',
+  workflow: 'scheduled-sync',
+  input: { source: 'hourly' },
+  missed: 'latest',
+  overlap: 'allow',
+}
+```
+
+Each cron field is only `*` or a strictly ascending comma-separated numeric
+set. Ranges, steps, names, macros, seconds, timezones, and Sunday alias `7` are
+not accepted. A manifest may declare at most 128 schedules in 1 MiB, each
+static input is limited to 256 KiB, and the resident fails closed instead of
+partially evaluating a catch-up window longer than 527,040 minutes (366 days).
+
+The exact-revision resident observes schedules concurrently with its serial
+physical execution loop. A due occurrence advances its durable cursor and
+creates its ordinary workflow run in one owner- and activation-fenced
+transaction. Restart resumes the retained cursor and performs latest-only
+catch-up. Direct activity schedules, dynamic inputs, non-UTC timezones,
+schedule pause/resume controls, and managed-effect workflow successors remain
+later runtime slices.
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains

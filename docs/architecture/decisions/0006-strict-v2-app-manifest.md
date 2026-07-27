@@ -1,12 +1,15 @@
 # 0006 — One strict version 2 application manifest
 
-**Status:** Accepted in part · **Date:** 2026-07-16
+**Status:** Superseded by [0026](0026-resident-workflow-schedules.md) ·
+**Date:** 2026-07-16
 
 The resource-declaration portion of this decision is superseded by
 [0012](0012-no-manifest-resource-injection.md). Its temporary rejection of
 workflow declarations is superseded by the finite plain-data contract in
-[0019](0019-persisted-linear-workflow-continuations.md). The rest remains
-accepted.
+[0019](0019-persisted-linear-workflow-continuations.md). ADR 0026 carries the
+strict single-manifest rules forward in version 3, adds optional revision-bound
+workflow schedules, and fully rejects version 2. The decision below remains
+historical context.
 
 ## Context
 

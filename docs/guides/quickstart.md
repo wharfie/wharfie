@@ -1,7 +1,7 @@
 # ⚡️ Quickstart
 
 Wharfie is in an experimental project reset. The commands below describe the
-working local v2 surface and the newly mounted experimental deployment
+working local v3 surface and the newly mounted experimental deployment
 lifecycle, not a production-ready service.
 
 ## Run from source
@@ -21,10 +21,10 @@ the project reset. The examples below use `wharfie` as shorthand for
 ## Create an app
 
 Create a `wharfie.app.js` beside your TypeScript or JavaScript sources. The
-manifest identifies the developer-owned CLI, named activities, and package
-targets. Its default export must be a plain object using the exact v2
-schema; unknown or malformed fields are errors. Wharfie does not require a
-generated project tree. See [Application
+manifest identifies the developer-owned CLI, named activities, workflows,
+schedules, and package targets. Its default export must be a plain object using
+the exact v3 schema; unknown or malformed fields are errors. Wharfie does not
+require a generated project tree. See [Application
 Structure](./application-structure.md) for a minimal layout. The
 `@wharfie/wharfie/app` subpath ships TypeScript declarations for the manifest
 helper and activity invocation API.
@@ -41,7 +41,7 @@ Every Node entrypoint declares its export explicitly:
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'my-app' },
   cli: {
     entrypoint: {
@@ -71,17 +71,35 @@ export default defineApp({
       ],
     },
   },
+  schedules: {
+    hourly: {
+      cron: '0 * * * *',
+      workflow: 'greet',
+      input: { name: 'scheduled user' },
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
 });
 ```
 
-The optional `workflows` map accepts the finite revision-bound contract from
-ADR 0019: one to 64 ordered `activity`, `timer`, or `signal` steps. Activity
-input is exactly the workflow input, a JSON literal, or one named earlier
-step's output. The source and packaged `start` commands accept the complete
-finite activity/timer/signal plan and atomically create its first activation.
-Branches, schedules, and managed-effect workflow successors remain
-unsupported. See [Application Structure](./application-structure.md) for the
-exact shape.
+The v3 manifest keeps `workflows` and `schedules` optional so an ordinary CLI
+can become durable progressively; either map must be nonempty when declared. A
+workflow contains one to 64 ordered `activity`, `timer`, or `signal` steps.
+Activity input is exactly the workflow input, a JSON literal, or one named
+earlier step's output. A schedule names one workflow in the same immutable
+revision, carries static JSON input, and uses a canonical five-field UTC cron
+expression. Its initial policies are fixed to `missed: 'latest'` and
+`overlap: 'allow'`. Each cron field is only `*` or a strictly ascending
+comma-separated numeric set; ranges, steps, names, macros, seconds, timezones,
+and Sunday alias `7` are rejected. A manifest may declare at most 128 schedules
+in 1 MiB, each static input is limited to 256 KiB, and the resident fails closed
+instead of partially evaluating a catch-up window longer than 527,040 minutes
+(366 days). The source and packaged residents observe schedules while
+executing physical work serially; each due occurrence advances its cursor and
+admits its ordinary workflow run atomically. Branches and managed-effect
+workflow successors remain unsupported. See
+[Application Structure](./application-structure.md) for the exact shape.
 
 The application ID, activity keys, and other logical IDs use lowercase kebab
 case: `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with at most 63 ASCII bytes. Wharfie
@@ -150,7 +168,7 @@ export async function launch(argv: string[] = process.argv) {
 `input` and `callerMetadata` must be JSON values (with metadata specifically a
 JSON object). `deadlineUnixMs`, when supplied, is a positive safe Unix epoch
 millisecond value. The former `event` and `context` option names are not part
-of the v2 activity API.
+of the current activity API.
 
 ## Inspect the app manifest
 
@@ -613,9 +631,11 @@ serially and consumes exact manifest-bound workflow activity and timer
 continuations created through public `start`; public `signal` consumes only the
 current declared signal wait. Public `inspect`, confirmed `recover`, and
 evidence-backed `reconcile` understand those workflow runs. Exact-attempt
-historical log retrieval is available through `logs`; managed-effect workflow
-successors and schedules remain unsupported. Live log tail, search, and
-redaction remain absent. The manual bounded
+historical log retrieval is available through `logs`; the same resident
+observes exact-revision schedules and performs latest-only catch-up after a
+restart. Managed-effect workflow successors and schedule pause/resume
+inspection remain unsupported. Live log tail, search, and redaction remain
+absent. The manual bounded
 recovery and reconciliation paths have prior real subprocess and relocated-SEA
 crash coverage across request, start, destination commit, payload publication,
 ledger settlement, and response-delivery boundaries. The manual resident
@@ -771,11 +791,13 @@ prior coordinator is known unable to continue. A valid returned head that
 still carries an active operation is reported as an incomplete nonzero result;
 inspect it before deciding whether confirmed recovery is safe.
 
-The v2 manifest exposes only the bounded plain-data workflow definitions above;
-its public start and operator commands handle activity, persisted timer, and
-current-wait signal continuations. Branches, an early-signal inbox,
-managed-effect workflow successors, schedules, arbitrary packaging assets,
-signing credentials, and other build secrets remain unsupported.
+The v3 manifest exposes the bounded plain-data workflow and UTC schedule
+definitions above. Its public start and operator commands handle activity,
+persisted timer, and current-wait signal continuations, while the exact-revision
+resident admits due scheduled workflow runs. Branches, an early-signal inbox,
+managed-effect workflow successors, schedule pause/resume controls, arbitrary
+packaging assets, signing credentials, and other build secrets remain
+unsupported.
 External activity packages must be pinned as exact descriptors such as
 `externalPackages: [{ name: 'sharp', version: '0.34.4' }]`; ranges, tags, URLs,
 and ambient dependency resolution are not accepted. Multiple entries must use

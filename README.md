@@ -33,11 +33,12 @@ consuming public commands.
 
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
-The abandoned v1 source and dependency graph have been deleted. The strict v2
+The abandoned v1 source and dependency graph have been deleted. The strict v3
 manifest and the append-only V10 run → invocation → attempt → effect ledger
 are now defined; the superseded mutable Operation/Action snapshot store is
-gone. The manifest can declare a bounded plain-data linear workflow, and the
-internal ledger can atomically create a workflow run headed by an activity,
+gone. The manifest can declare bounded plain-data linear workflows and
+revision-bound UTC schedules. The internal ledger can atomically create a
+workflow run headed by an activity,
 timer, or signal wait with its immutable plan and start payloads, stable cursor
 and activation identities, run-directory entry, and any cursor-bound
 ready-work row. The resident claims, starts, and executes exact manifest-bound
@@ -72,7 +73,10 @@ the hidden packaged service runtime delegates to that same implementation. The
 worker accepts only its exact app and revision, executes one physical attempt
 at a time, and consumes the bounded ready-work projection only as a locator
 before rebuilding and claiming from authoritative ledger state. On restart it
-can release and
+also resumes exact schedule cursors and performs latest-only catch-up. Schedule
+observation remains concurrent with serial physical execution, and a due
+occurrence advances its cursor and creates its ordinary workflow run in one
+owner- and activation-fenced transaction. The worker can release and
 reschedule a stale `CLAIMED` attempt that never started; a stale `STARTED`
 attempt becomes blocked `UNCERTAIN` work and is never silently redispatched.
 If that stopped attempt retains unresolved managed effects, the resident uses
@@ -116,7 +120,7 @@ abandoned authored activity. The source stays `BLOCKED` / `UNCERTAIN`.
 The public packaged command's Node-absent relocated-SEA crash/recovery matrix
 passes across every successor publication and transaction boundary, including
 redaction and response-loss replay. Generic handler retries, compensation,
-scheduled workflow starts, and wider exactly-once claims remain unfinished.
+and wider exactly-once claims remain unfinished.
 Earlier V8 real-child coverage exercises seven source/core durable-run
 `SIGKILL` boundaries and three mixed-set recovery
 boundaries. A relocated SEA with Node absent from `PATH` proves the complete
@@ -137,8 +141,8 @@ deliver one stable, current-wait-only signal decision through the same local
 owner boundary. The shared exact-run inspection, recovery, cancellation, and
 evidence-reconciliation commands understand the activation-aware cursor and
 schema-v8 redacted timer/signal lifecycle state. Managed-effect workflow
-successors and schedules remain unfinished. Packaged Linux artifacts now have
-a recoverable systemd user-service
+successors and schedule pause/resume inspection remain unfinished. Packaged
+Linux artifacts now have a recoverable systemd user-service
 install/converge/update/rollback/recover/start/stop/restart/status/uninstall
 lifecycle.
 A single local coordinator serializes release changes, closes durable work
@@ -641,7 +645,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Atomic schedule-admission checkpoint](llm/checkpoints/2026-07-27-v91-atomic-schedule-admission.md) — the latest restart point for the no-pending cursor, store-bound atomic workflow admission, response-loss reconciliation, activation cutover, focused verification, and resident-observer next work.
+- [Resident workflow-schedules checkpoint](llm/checkpoints/2026-07-27-v92-resident-workflow-schedules.md) — the latest restart point for strict manifest V3, exact revision-bound observation, readiness and STOPPING integration, source/embedded composition, proof limits, and next work.
+- [Atomic schedule-admission checkpoint](llm/checkpoints/2026-07-27-v91-atomic-schedule-admission.md) — the parent restart point for the no-pending cursor, store-bound atomic workflow admission, response-loss reconciliation, activation cutover, focused verification, and resident-observer next work.
 - [Workflow-schedule contract checkpoint](llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md) — the parent restart point for canonical UTC schedules, deterministic occurrence/definition identity, authoritative workflow-run causes, and the rejected two-transaction cutover design.
 - [Sensitive activity-log inspection checkpoint](llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md) — the parent restart point for exact ambiguous-append replay, verified frozen-prefix reads, explicit raw disclosure, source/packaged CLI parity, and V90.
 - [Durable attempt logs checkpoint](llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md) — the parent restart point for sink-settled component acknowledgements, fenced bounded append/replay, durable manual/workflow wiring, sensitive-data and no-reader boundaries, focused verification, and V89.
@@ -752,13 +757,13 @@ public command surface. Older material under `llm/design/` can be stale.
 ## Current application contract
 
 A source application is a default-exported plain object in `wharfie.app.js`.
-The v2 boundary is deliberately small and strict:
+The v3 boundary is deliberately small and strict:
 
 ```js
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'my-app' },
   cli: {
     entrypoint: {
@@ -788,21 +793,42 @@ export default defineApp({
       ],
     },
   },
+  schedules: {
+    hourly: {
+      cron: '0 * * * *',
+      workflow: 'greet',
+      input: { name: 'world' },
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
 });
 ```
 
 Application and activity IDs are lowercase kebab identifiers matching
 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with a maximum of 63 ASCII bytes. Wharfie
-does not trim or rewrite them. The CLI is required; activities and package
-targets and workflows are optional. A workflow is one to 64 ordered plain-data
-activity, timer, or signal steps; activity inputs explicitly select the
-workflow input, a JSON literal, or one earlier step's persisted output. The
-manifest compiler and packager bind that definition to the revision. The
-shared source and packaged `start` commands accept the complete finite
+does not trim or rewrite them. The CLI is required; activities, workflows,
+schedules, and package targets are optional, and every declared map must be
+nonempty. A workflow is one to 64 ordered plain-data activity, timer, or signal
+steps; activity inputs explicitly select the workflow input, a JSON literal,
+or one earlier step's persisted output. A schedule names one workflow, carries
+static JSON input, and uses a canonical five-field UTC cron expression. The
+first policy surface is deliberately fixed to latest-only missed-run catch-up
+and overlap-allowing workflow runs. The manifest compiler and packager bind
+both definitions to the immutable revision. Cron fields accept only `*` or
+strictly ascending comma-separated numbers: no ranges, steps, names, macros,
+seconds, timezones, or Sunday alias `7`. One manifest may declare at most 128
+schedules in 1 MiB, each static input is limited to 256 KiB, and a resident
+fails closed rather than partially evaluating a catch-up window longer than
+527,040 minutes (366 days). The shared source and packaged `start` commands
+accept the complete finite
 activity/timer/signal plan and atomically materialize its first activation. The
 resident executes activity steps and fires persisted due timers; a signal step
-advances only through an explicit current-wait delivery. Exact-run `inspect`,
-confirmed `recover`, and evidence-backed `reconcile` are workflow-aware.
+advances only through an explicit current-wait delivery. In parallel with
+physical execution, the held resident observes each schedule, durably advances
+its cursor, and atomically admits a due occurrence with its ordinary workflow
+run. Exact-run `inspect`, confirmed `recover`, and evidence-backed `reconcile`
+are workflow-aware.
 Generic `cancel` is run-level for workflows:
 it terminalizes unstarted work, durably records intent before signaling an
 exact active attempt, and fences a blocked uncertain activation against later
@@ -814,7 +840,7 @@ injection request. Managed effects are a separate finite API on
 `runtime.effects`; the first exact request is `application-state` /
 `put-if-absent` with `['idempotent', 'transactional']` replay properties.
 Durable `ops run` fulfills that request, while ephemeral invocation rejects it
-with `effect-handler-unavailable`. Schedules remain outside this schema. Build
+with `effect-handler-unavailable`. Build
 credentials, signing material, and extra asset configuration are also outside
 the public manifest. Branches, loops, parallel steps, a durable early-signal
 inbox, and managed-effect workflow successors remain unsupported.
@@ -985,9 +1011,9 @@ require public recovery plus independent selector, receipt, process, systemd,
 and immutable-byte evidence. Run it with
 `npm run verify:service:systemd:lima`. A due timer remains persisted until the
 exact-revision resident observes and fires it; there is deliberately no public
-timer-fire command. Wharfie does not yet provide schedules, managed-effect
-workflow successors, multi-host reassignment, or live log tail, search, and
-redaction.
+timer-fire command. Wharfie does not yet provide schedule
+inspection/pause/resume, managed-effect workflow successors, multi-host
+reassignment, or live log tail, search, and redaction.
 
 ## Reconcile one uncertain managed effect
 

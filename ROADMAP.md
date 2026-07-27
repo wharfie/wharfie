@@ -132,7 +132,20 @@ Each bounded ascending walk freezes one verified prefix and revalidates the
 run, attempt, complete log chain, and every payload before raw sensitive
 output; source inspection requires an app ID without loading source, while the
 packaged command binds its embedded app identity. Tail, search, redaction, and
-display authority remain absent. Five focused V87 safe suites pass; one
+display authority remain absent. V90 settles one revision-bound,
+workflow-only UTC schedule language and authoritative occurrence provenance.
+V91 admits a due occurrence, cursor advancement, and the ordinary workflow run
+in one owner- and activation-fenced transaction. V92 replaces strict manifest
+V2 with one strict V3 contract whose workflow and schedule maps remain
+optional and nonempty when declared. The resident resolves schedules only from
+the sealed source or embedded revision, gates readiness on initial catch-up,
+observes logical time concurrently with serial physical activity execution,
+wakes the existing ready-work loop after atomic admission, resumes exact
+cursors after restart and backward clock correction, and enters `STOPPING` on
+observer failure. Package serialization, source verification, embedded and
+prepared-source composition, vanilla restart/cutover behavior, and focused
+runtime tests are covered; an actual relocated Linux SEA due-occurrence and
+cursor-recovery proof remains. Five focused V87 safe suites pass; one
 separately attempted operations-error suite exits 134 locally for an unresolved
 reason and is not part of that passing matrix or a full-suite claim. The
 committed V83 driver still has not produced a `whlp2` receipt, and no successful
@@ -274,7 +287,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       suite. Keep `eslint-plugin-jest` on its independent release line.
 
 **Exit:** the README, shipped package, package gate, validation commands, and
-current source describe the same v2 product; no Athena/v1 surface remains.
+current source describe the same strict V3 product; no Athena/v1 or public V2
+surface remains.
 
 ## Milestone 2 — one portable application
 
@@ -284,7 +298,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 - [x] Define the strict application/activity logical-ID contract plus exact target and external-package descriptors.
 - [x] Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
 - [x] Compile one target-independent revision from the strict contract, dependency lock, Wharfie runtime, source, and behavior assets; consume a sealed application snapshot and audit the static bundled-module graph.
-- [x] Keep build-only settings outside the runtime manifest and reject ActorSystem and scheduler public authoring until their contracts are designed. The strict v2 manifest now accepts only the bounded plain-data linear workflow contract from ADR 0019.
+- [x] Keep build-only settings outside the runtime manifest and reject
+      ActorSystem and the legacy generic `scheduler` object. Strict V3 accepts
+      ADR 0019's bounded plain-data linear workflows and ADR 0026's
+      workflow-only revision-bound schedules.
 - [x] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution; the real relocated-SEA verifier compares difficult argv, raw stdin, independent stdout/stderr, and an application-selected nonzero exit code against source execution.
 - [x] Content-address each final SEA executable, pair it with an immutable artifact-record sidecar, record exact Node/toolchain/target-closure/signing provenance, and expose embedded revision/runtime metadata through the operator CLI.
 - [x] Make target packaging and revision-backed source execution consume and fail-check one frozen complete transitive external dependency closure, with semantic, archive, SEA-asset, and revision receipts that cannot drift independently.
@@ -308,9 +325,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
 
 - [x] Decide and record that durable workflows use explicitly persisted state machines and continuations rather than replaying arbitrary application code, including timers, signals, cancellation, side effects, and revision changes.
 - [x] Define the first finite workflow authoring contract in ADR 0019 and the
-      strict v2 manifest: at most 64 ordered activity, timer, or signal steps;
-      explicit workflow-input, earlier-step-output, or literal activity input;
-      exact declared activity references; and no executable decider.
+      initial strict V2 manifest, now carried into V3: at most 64 ordered
+      activity, timer, or signal steps; explicit workflow-input,
+      earlier-step-output, or literal activity input; exact declared activity
+      references; and no executable decider.
 - [x] Define the append-only run → invocation → attempt → effect ledger, rebuildable projections, and state machines in ADR 0011.
 - [x] Bind persisted manual runs, invocations, attempts, and terminal commits
       to one immutable revision; persist stable caller metadata separately from
@@ -509,8 +527,8 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       explicit `early-signal`, `unexpected-signal`, or `late-signal`
       rejections without an early-signal inbox. Schema-v7 inspection exposes
       redacted timer, signal-wait, and signal-delivery lifecycle state.
-      Branches, scheduled starts, and managed-effect workflow successors remain
-      unsupported.
+      Branches and managed-effect workflow successors remain unsupported;
+      revision-bound scheduled starts arrive in V92 below.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
@@ -594,7 +612,10 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       labels, invent a generic inverse, delete application state, or rewrite the
       source effect as `COMPENSATED`.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
-- [ ] Support manual, cron, and workflow-triggered runs through one execution path.
+- [x] Support manual, cron, and workflow-triggered runs through one execution
+      path. Manifest V3 binds workflow-only UTC schedules to the same ordinary
+      workflow creation, ready-work, serial activity, timer, signal, recovery,
+      cancellation, and inspection machinery used by explicit starts.
 - [x] Implement packaged Linux systemd user-service install/converge/update/rollback/recover/start/stop/restart/status/uninstall with fixed-unit rendering, immutable releases, PID-bound durable health, graceful drain, retry-safe desired-artifact activation and uninstall, and preserved state.
 - [x] Give every packaged application one immutable app-scoped local-storage
       layout under `<wharfie-data>/applications/<appId>` before any developer,
@@ -717,12 +738,17 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       exact control store, and proves source-mode activation creation,
       managed cutover, response loss, owner replacement, and cursor
       competition without one-sided progress.
-- [ ] Integrate exact revision-bound schedule definitions into the resident as
+- [x] Integrate exact revision-bound schedule definitions into the resident as
       a concurrent observer that admits ordinary workflow runs and wakes the
       existing ready-work loop. Prove long activity execution cannot suppress
       logical schedule observation, restart preserves each cursor, activation
       cutover stops old-revision admission, and source plus packaged residents
       execute the same sealed manifest V3 contract before replacing strict V2.
+      V92 completes the implementation and focused source/embedded composition,
+      package-serialization, restart, cutover, backward-clock, readiness, and
+      shutdown proofs. The actual relocated Linux SEA due-occurrence and cursor
+      recovery run remains explicit follow-up evidence rather than an implied
+      claim.
 - [ ] After durable schedule semantics and projections exist, add only the
       source/packaged schedule operator surface needed to `list`, `inspect`,
       `pause`, and `resume` schedules. Do not expose public schedule firing,
@@ -1225,6 +1251,17 @@ continuation. Matching cancelled evidence can reconcile only when the retained
 attempt itself carries that prior request; deadline evidence remains
 unsupported.
 
+Strict manifest V3 now adds optional nonempty workflow and schedule maps while
+keeping CLI-only applications valid. Each workflow-only schedule is sealed to
+the exact revision and workflow plan. The held resident observes canonical UTC
+minutes concurrently with serial physical work, performs latest-only restart
+catch-up, and atomically commits the occurrence, cursor, ordinary workflow run,
+and ready-work row. Initial reconciliation gates readiness and owner commands;
+observer failure requests durable `STOPPING` before bounded worker drain.
+Source-prepared and embedded executions share this composition. The public
+schedule operator surface and an actual relocated Linux SEA schedule/restart
+proof remain open.
+
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
 responses, resident generation takeover, persisted timer firing, current-wait
@@ -1478,32 +1515,39 @@ controller-side read-only provider-evidence contract for an expiring selected
 experiment-tagged instance and evidence volume, but has not run it against AWS
 or joined it to host evidence. No formatter or mount mutation exists.
 
-1. Run V84 against one already-present immutable local Linux/amd64 image. If
+1. Run one actual relocated Linux SEA due-occurrence and cursor-restart proof
+   with Node absent from `PATH`, using the bounded disposable proof tooling and
+   explicit authority required by that environment. After that evidence,
+   expose only the source/packaged schedule `list`, `inspect`, `pause`, and
+   `resume` surface; do not add manual fire, tail, or search.
+2. Run V84 against one already-present immutable local Linux/amd64 image. If
    the read-only report is attemptable, run the committed V83 Docker proof only
    with explicit approval, retain only its checksummed `whlp2` receipt, and
    audit cleanup and disk deltas.
-2. After that bounded proof, run an explicitly authorized disposable
+3. After that bounded proof, run an explicitly authorized disposable
    AL2023/real-EBS proof that joins V79 provider evidence to exact e2fsprogs
    tools and output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id
    identity and path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
-3. Only after that proof, implement the destructive formatter boundary with a
+4. Only after that proof, implement the destructive formatter boundary with a
    fresh controller authorization and current local fence immediately before
    mutation, a prepared-journal reread, immediate exact-media reobservation,
    path-retarget-safe device access, complete profile verification, and
    interruption recovery.
-4. Then implement persistent mount/systemd projection and runtime-manager
+5. Then implement persistent mount/systemd projection and runtime-manager
    recovery, control storage, the V3 health publisher and V65 receipt, and the
    deactivation producer/executor. Expose the root framework host command and
    SEA only after that lifecycle is proven.
-5. Add SSM as wakeup/delivery rather than durable authority and run a complete
+6. Add SSM as wakeup/delivery rather than durable authority and run a complete
    clean-account proof through the user's ordinary credential chain. Begin
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V91 atomic schedule-admission
-checkpoint](llm/checkpoints/2026-07-27-v91-atomic-schedule-admission.md). Its
+The latest recorded restart point is the [V92 resident workflow-schedules
+checkpoint](llm/checkpoints/2026-07-27-v92-resident-workflow-schedules.md).
+Its parent is the [V91 atomic schedule-admission
+checkpoint](llm/checkpoints/2026-07-27-v91-atomic-schedule-admission.md), whose
 parent is the [V90 workflow-schedule contract
 checkpoint](llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md),
 whose parent is the [V89 sensitive activity-log inspection
