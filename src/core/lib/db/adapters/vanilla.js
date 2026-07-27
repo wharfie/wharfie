@@ -20,6 +20,77 @@ import {
 
 const NO_SORT = '__no_sort__';
 
+export const VANILLA_DATABASE_INTEGRITY_ERROR_CODE =
+  'vanilla-database-integrity-error';
+
+/**
+ * An existing vanilla snapshot could not be parsed as the exact persisted
+ * database layout. Opening fails before a client exists so neither read-only
+ * nor writable callers can replace the retained bytes.
+ */
+export class VanillaDatabaseIntegrityError extends Error {
+  /**
+   * @param {string} dbFilePath - Existing snapshot path.
+   * @param {{cause?: unknown}} [options] - Local parse or validation cause.
+   */
+  constructor(dbFilePath, options = {}) {
+    super(
+      `Vanilla database could not load existing snapshot '${dbFilePath}': malformed JSON or invalid persisted layout.`,
+      options,
+    );
+    this.name = 'VanillaDatabaseIntegrityError';
+    this.code = VANILLA_DATABASE_INTEGRITY_ERROR_CODE;
+  }
+}
+
+/**
+ * Require one map in the persisted JSON layout. Values nested inside a record
+ * remain arbitrary JSON; only the maps that give the database its physical
+ * table/key/record structure are constrained here.
+ * @param {unknown} value - Candidate map.
+ * @returns {Record<string, unknown>} - Valid plain JSON object.
+ */
+function requirePlainJsonObject(value) {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    (Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null)
+  ) {
+    throw new TypeError(
+      'Vanilla database persisted layout requires plain JSON object maps.',
+    );
+  }
+  return /** @type {Record<string, unknown>} */ (value);
+}
+
+/**
+ * Validate the complete physical map spine:
+ * database -> table -> primary-key bucket -> sort-key record.
+ *
+ * A record itself must be a plain object because DBClient records are maps.
+ * Its property values may contain any JSON value, including nested arrays,
+ * objects, null, booleans, numbers, and strings.
+ * @param {unknown} value - Parsed snapshot.
+ * @returns {Record<string, Record<string, Record<string, import('../base.js').DBRecord>>>} - Valid database.
+ */
+function validatePersistedDatabase(value) {
+  const database = requirePlainJsonObject(value);
+  for (const tableValue of Object.values(database)) {
+    const table = requirePlainJsonObject(tableValue);
+    for (const primaryBucketValue of Object.values(table)) {
+      const primaryBucket = requirePlainJsonObject(primaryBucketValue);
+      for (const recordValue of Object.values(primaryBucket)) {
+        requirePlainJsonObject(recordValue);
+      }
+    }
+  }
+  return /** @type {Record<string, Record<string, Record<string, import('../base.js').DBRecord>>>} */ (
+    database
+  );
+}
+
 /**
  * @typedef CreateVanillaDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
@@ -66,16 +137,9 @@ export default function createVanillaDB(options = {}) {
   if (existsSync(dbFilePath)) {
     try {
       const data = readFileSync(dbFilePath, 'utf8');
-      database = JSON.parse(data) || {};
-    } catch (error) {
-      if (readOnly) {
-        const detail = error instanceof Error ? ` ${error.message}` : '';
-        throw new Error(
-          `Vanilla read-only database could not load '${dbFilePath}'.${detail}`,
-        );
-      }
-      // TODO log warning
-      database = {};
+      database = validatePersistedDatabase(JSON.parse(data));
+    } catch (cause) {
+      throw new VanillaDatabaseIntegrityError(dbFilePath, { cause });
     }
   }
 
