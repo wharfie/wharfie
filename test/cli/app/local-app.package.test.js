@@ -100,7 +100,7 @@ async function writeTransactionalPackageApp(dir, appName, targets) {
     fsp.writeFile(
       path.join(dir, 'wharfie.app.js'),
       `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: ${JSON.stringify(appName)} },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -350,7 +350,7 @@ describe('packageLocalApp', () => {
     }
   });
 
-  it('packages a plain-object v2 app with workflows into embedded assets', async () => {
+  it('packages a plain-object v3 app with workflows into embedded assets', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-plain-object-package-'),
     );
@@ -379,6 +379,15 @@ describe('packageLocalApp', () => {
         ],
       },
     };
+    const expectedSchedules = {
+      scheduled: {
+        cron: '0 0 * * *',
+        workflow: 'greet-later',
+        input: {},
+        missed: 'latest',
+        overlap: 'allow',
+      },
+    };
 
     try {
       await fsp.mkdir(path.join(dir, 'src', 'activities'), { recursive: true });
@@ -405,7 +414,7 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'plain-object-package-demo' },
   cli: {
     entrypoint: {
@@ -432,6 +441,7 @@ describe('packageLocalApp', () => {
     },
   },
   workflows: ${JSON.stringify(expectedWorkflows, null, 2)},
+  schedules: ${JSON.stringify(expectedSchedules, null, 2)},
 };
 `,
           'utf8',
@@ -553,6 +563,7 @@ describe('packageLocalApp', () => {
                 export: 'hello',
               });
               expect(embeddedManifest.workflows).toEqual(expectedWorkflows);
+              expect(embeddedManifest.schedules).toEqual(expectedSchedules);
               const embeddedManifestJson = JSON.stringify(embeddedManifest);
               expect(embeddedManifestJson).not.toContain(
                 path.join(dir, 'src', 'cli.js'),
@@ -587,6 +598,9 @@ describe('packageLocalApp', () => {
               expect(
                 embeddedRevisionRuntime.revision.contract.workflows,
               ).toEqual(expectedWorkflows);
+              expect(
+                embeddedRevisionRuntime.revision.contract.schedules,
+              ).toEqual(expectedSchedules);
               expect(embeddedRevisionRuntime.runtime.target).toEqual(target);
 
               await fsp.writeFile(
@@ -616,6 +630,7 @@ describe('packageLocalApp', () => {
 
       expect(result.app).toEqual({ id: 'plain-object-package-demo' });
       expect(result.revision.contract.workflows).toEqual(expectedWorkflows);
+      expect(result.revision.contract.schedules).toEqual(expectedSchedules);
       expect(result.targets).toEqual([currentTarget]);
       expect(result.artifacts).toHaveLength(1);
       const artifactContents = `#!/bin/sh\necho ${getTargetSelector(currentTarget)}\n`;
@@ -762,7 +777,7 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'incompatible-target-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -812,7 +827,7 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'musl-target-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -876,7 +891,7 @@ describe('packageLocalApp', () => {
           fsp.writeFile(
             path.join(dir, 'wharfie.app.js'),
             `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'invalid-target-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -919,7 +934,7 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: '../escaped-app' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -954,7 +969,7 @@ describe('packageLocalApp', () => {
       'the removed top-level resources field',
       'activity',
       "resources: { db: { adapter: 'lmdb' } },",
-      /app\.resources is not supported by schemaVersion 2/i,
+      /app\.resources is not supported by schemaVersion 3/i,
     ],
     [
       'a scheduler without a portable durable store',
@@ -991,7 +1006,7 @@ describe('packageLocalApp', () => {
           fsp.writeFile(
             path.join(dir, 'wharfie.app.js'),
             `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'nonportable-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -1049,7 +1064,7 @@ describe('packageLocalApp', () => {
   architecture: 'x64',
 };
 export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'duplicate-target-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -1176,7 +1191,7 @@ try {
           fsp.writeFile(
             path.join(dir, 'wharfie.app.js'),
             `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'invalid-asset-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -1311,7 +1326,7 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'inline-env-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -1339,7 +1354,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /environmentVariables is not supported by schemaVersion 2/i,
+        /environmentVariables is not supported by schemaVersion 3/i,
       );
       await expect(result).rejects.not.toThrow(secret);
       expect(initializeEnvironment).not.toHaveBeenCalled();
@@ -1368,7 +1383,7 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'inline-secret-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -1389,7 +1404,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /app\.resources is not supported by schemaVersion 2/i,
+        /app\.resources is not supported by schemaVersion 3/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {
@@ -1421,7 +1436,7 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'unreviewed-option-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
@@ -1454,7 +1469,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /app\.activities\.activity\.resources is not supported by schemaVersion 2/i,
+        /app\.activities\.activity\.resources is not supported by schemaVersion 3/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {
@@ -1482,7 +1497,7 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'workflow-package-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },

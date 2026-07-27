@@ -40,7 +40,7 @@ function makeEmbeddedExecution() {
     libc: /** @type {const} */ ('glibc'),
   };
   const contract = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: 'durable-host-preflight' },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

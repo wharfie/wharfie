@@ -8,7 +8,7 @@ import {
 } from './config.js';
 
 export default defineApp({
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'kitchen-sink-demo' },
   cli: {
     entrypoint: {
@@ -26,6 +26,27 @@ export default defineApp({
         export: 'start',
       },
       externalPackages: kitchenSinkExternalDependencies,
+    },
+  },
+  workflows: {
+    'scheduled-start': {
+      steps: [
+        {
+          id: 'start',
+          kind: 'activity',
+          activity: 'start',
+          input: { kind: 'workflow-input' },
+        },
+      ],
+    },
+  },
+  schedules: {
+    daily: {
+      cron: '0 0 * * *',
+      workflow: 'scheduled-start',
+      input: { source: 'daily-schedule' },
+      missed: 'latest',
+      overlap: 'allow',
     },
   },
 });

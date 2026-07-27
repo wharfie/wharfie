@@ -34,7 +34,7 @@ const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 const EMBEDDED_ACTIVITY_TIMEOUT_MS = 15_000;
 
 const embeddedManifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'embedded-demo' },
   cli: {
     entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
@@ -59,7 +59,7 @@ const embeddedManifest = {
 };
 
 const embeddedRunnableManifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'embedded-runnable-demo' },
   cli: {
     entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
@@ -159,7 +159,7 @@ describe('embedded app manifest asset helpers', () => {
     const mod =
       await import('../../../src/core/resources/builds/lib/app-manifest-asset.js');
     const value = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       cli: {
         entrypoint: { export: 'main', path: 'cli.js', kind: 'node' },
       },
@@ -236,7 +236,7 @@ describe('embedded app manifest asset helpers', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toMatch(
-      /provided manifest\.resources is not supported by schemaVersion 2/i,
+      /provided manifest\.resources is not supported by schemaVersion 3/i,
     );
     expect(String(error)).not.toContain(secret);
   });
@@ -269,7 +269,7 @@ describe('embedded app manifest asset helpers', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toMatch(
-      /embedded manifest\.resources is not supported by schemaVersion 2/i,
+      /embedded manifest\.resources is not supported by schemaVersion 3/i,
     );
     expect(String(error)).not.toContain(secret);
   });

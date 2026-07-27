@@ -65,6 +65,7 @@ import {
 } from '../operator/local-owner-command.js';
 import { cloneJsonObject } from '../json-value.js';
 import { createLedgerService } from './ledger-service.js';
+import { runResidentScheduleObserver } from './resident-schedule-observer.js';
 
 export const RESIDENT_ACTIVITY_SUBMIT_COMMAND = 'execution-ledger-submit';
 export const RESIDENT_WORKFLOW_START_COMMAND =
@@ -124,6 +125,69 @@ function resolveDrainTimeout(value) {
     );
   }
   return Number(value);
+}
+
+/**
+ * Wait for initial schedule reconciliation or abort, whichever occurs first.
+ * @param {Promise<boolean>} readiness - Observer readiness handshake.
+ * @param {AbortSignal} signal - Combined worker cancellation.
+ * @returns {Promise<boolean>} Whether schedules became ready first.
+ */
+async function waitForScheduleReadiness(readiness, signal) {
+  if (signal.aborted) return false;
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (/** @type {boolean} */ ready) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', aborted);
+      resolve(ready);
+    };
+    const aborted = () => finish(false);
+    signal.addEventListener('abort', aborted, { once: true });
+    readiness.then((ready) => finish(ready));
+    if (signal.aborted) aborted();
+  });
+}
+
+/**
+ * Bound observer cleanup so an unresponsive store or injected observer cannot
+ * retain the resident owner forever. Any later write remains fenced by the
+ * released exact owner and application activation.
+ * @param {Promise<unknown>} pending - Observer completion.
+ * @param {number} timeoutMs - Bounded cleanup allowance.
+ * @returns {Promise<boolean>} Whether the observer settled in time.
+ */
+async function waitForScheduleObserverDrain(pending, timeoutMs) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const settled = pending.then(
+    () => true,
+    () => true,
+  );
+  const expired = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  const result = await Promise.race([settled, expired]);
+  if (timer) clearTimeout(timer);
+  return Boolean(result);
+}
+
+/**
+ * @param {number} drainTimeoutMs - Bounded observer cleanup allowance.
+ * @returns {Error & {name: string, code: string, details: Readonly<{drainTimeoutMs: number}>}} Typed drain failure.
+ */
+function createScheduleObserverDrainExpiredError(drainTimeoutMs) {
+  return Object.assign(
+    new Error(
+      `Resident schedule observer did not stop within ${drainTimeoutMs}ms.`,
+    ),
+    {
+      name: 'ResidentScheduleObserverDrainExpired',
+      code: 'resident-schedule-observer-drain-expired',
+      details: Object.freeze({ drainTimeoutMs }),
+    },
+  );
 }
 
 /**
@@ -918,17 +982,18 @@ async function findRunnableWork(options) {
  * resident owner. It hosts the authenticated submission/cancellation endpoint,
  * consumes exact ready work serially, and drains an active attempt during
  * graceful shutdown.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, fireTimer?: typeof fireWorkflowLedgerTimer, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, deliverSignal?: typeof deliverWorkflowLedgerSignal, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, onReady?: () => void | Promise<void>}} options - Held service dependencies.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, fireTimer?: typeof fireWorkflowLedgerTimer, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, deliverSignal?: typeof deliverWorkflowLedgerSignal, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, runScheduleObserver?: typeof runResidentScheduleObserver, onReady?: () => void | Promise<void>, onStopping?: () => void | Promise<void>}} options - Held service dependencies.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
 export async function runResidentActivityWorker(options) {
   if (
     !options?.ledger ||
     typeof options.ledger.listReadyWork !== 'function' ||
-    typeof options.ledger.rebuildRun !== 'function'
+    typeof options.ledger.rebuildRun !== 'function' ||
+    typeof options.ledger.createWorkflowRun !== 'function'
   ) {
     throw new TypeError(
-      'runResidentActivityWorker requires a ledger with listReadyWork and rebuildRun.',
+      'runResidentActivityWorker requires a workflow ledger with listReadyWork, rebuildRun, and createWorkflowRun.',
     );
   }
   if (!options.controlContext?.db) {
@@ -953,10 +1018,22 @@ export async function runResidentActivityWorker(options) {
       'Resident activity worker owner does not match its embedded application.',
     );
   }
-  const signal = resolveOptionalAbortSignal(options.signal);
+  const externalSignal = resolveOptionalAbortSignal(options.signal);
+  const workerCancellation = new AbortController();
+  const signal = externalSignal
+    ? AbortSignal.any([externalSignal, workerCancellation.signal])
+    : workerCancellation.signal;
   if (options.onReady !== undefined && typeof options.onReady !== 'function') {
     throw new TypeError(
       'Resident activity worker onReady must be a function when provided.',
+    );
+  }
+  if (
+    options.onStopping !== undefined &&
+    typeof options.onStopping !== 'function'
+  ) {
+    throw new TypeError(
+      'Resident activity worker onStopping must be a function when provided.',
     );
   }
   const pollIntervalMs = resolvePollInterval(options.pollIntervalMs);
@@ -980,6 +1057,8 @@ export async function runResidentActivityWorker(options) {
     options.recoverManagedEffects || recoverResidentManagedEffects;
   const createCommandServer =
     options.createCommandServer || createLocalOwnerCommandServer;
+  const runScheduleObserver =
+    options.runScheduleObserver || runResidentScheduleObserver;
   const ownershipStore = createLedgerServiceOwnership({
     db: options.controlContext.db,
     tableName: options.controlContext.tableName,
@@ -1005,9 +1084,74 @@ export async function runResidentActivityWorker(options) {
     wakeListeners.add(listener);
     return () => wakeListeners.delete(listener);
   };
-  let acceptingCommands = true;
+  let stoppingNotificationStarted = false;
+  /** @type {Promise<void> | undefined} */
+  let stoppingNotification;
+  /** @type {unknown} */
+  let stoppingNotificationError;
+  const notifyStopping = () => {
+    if (stoppingNotificationStarted) return;
+    stoppingNotificationStarted = true;
+    stoppingNotification = (async () => {
+      await options.onStopping?.();
+    })().catch((error) => {
+      stoppingNotificationError = error;
+    });
+  };
+  signal.addEventListener('abort', notifyStopping, { once: true });
+  if (signal.aborted) notifyStopping();
+  let acceptingCommands = false;
   /** @type {Set<Promise<unknown>>} */
   const inFlightCommands = new Set();
+  /** @type {(ready: boolean) => void} */
+  let resolveScheduleReady;
+  const scheduleReady = new Promise((resolve) => {
+    resolveScheduleReady = resolve;
+  });
+  let scheduleReadySettled = false;
+  const settleScheduleReady = (/** @type {boolean} */ ready) => {
+    if (scheduleReadySettled) return;
+    scheduleReadySettled = true;
+    resolveScheduleReady(ready);
+  };
+  /** @type {unknown} */
+  let scheduleObserverError;
+  const scheduleObserverDone = Promise.resolve()
+    .then(
+      async () =>
+        await runScheduleObserver({
+          ledger: options.ledger,
+          execution: binding.execution,
+          controlContext: options.controlContext,
+          ownership: options.owner.ownership,
+          signal,
+          onWorkflowReady: wake,
+          onReady: () => settleScheduleReady(true),
+        }),
+    )
+    .then(
+      (result) => {
+        settleScheduleReady(false);
+        if (!signal.aborted) {
+          const error = new Error(
+            'Resident schedule observer stopped without a shutdown request.',
+          );
+          scheduleObserverError = error;
+          workerCancellation.abort(error);
+          wake();
+        }
+        return result;
+      },
+      (error) => {
+        settleScheduleReady(false);
+        scheduleObserverError = error;
+        if (!workerCancellation.signal.aborted) {
+          workerCancellation.abort(error);
+        }
+        wake();
+        return undefined;
+      },
+    );
 
   /**
    * @param {Record<string, any>} command - Authenticated owner command.
@@ -1227,9 +1371,16 @@ export async function runResidentActivityWorker(options) {
           return trackOwnerCallback(handleOwnerCommand(command));
         },
       });
-      if (!signal?.aborted) await options.onReady?.();
+      const schedulesReady = await waitForScheduleReadiness(
+        scheduleReady,
+        signal,
+      );
+      if (!signal.aborted && schedulesReady) {
+        await options.onReady?.();
+        if (!signal.aborted) acceptingCommands = true;
+      }
     }
-    while (!signal?.aborted) {
+    while (!signal.aborted) {
       wakePending = false;
       const work = await findRunnableWork({
         ledger: options.ledger,
@@ -1384,26 +1535,50 @@ export async function runResidentActivityWorker(options) {
     }
   } catch (error) {
     workerError = error;
+    if (!workerCancellation.signal.aborted) {
+      workerCancellation.abort(error);
+    }
+    wake();
   }
 
   /** @type {unknown} */
   let closeError;
   try {
     stopAcceptingCommands();
+    if (!workerCancellation.signal.aborted) workerCancellation.abort();
+    await stoppingNotification;
+    const scheduleObserverSettled = await waitForScheduleObserverDrain(
+      scheduleObserverDone,
+      drainTimeoutMs,
+    );
+    if (!scheduleObserverSettled && scheduleObserverError === undefined) {
+      scheduleObserverError =
+        createScheduleObserverDrainExpiredError(drainTimeoutMs);
+    }
     await Promise.allSettled([...inFlightCommands]);
     await commandServer?.close();
   } catch (error) {
     closeError = error;
   }
+  signal.removeEventListener('abort', notifyStopping);
   signal?.removeEventListener('abort', stopAcceptingCommands);
-  if (workerError && closeError) {
+  const errors = [
+    ...new Set(
+      [
+        workerError,
+        scheduleObserverError,
+        stoppingNotificationError,
+        closeError,
+      ].filter((error) => error !== undefined),
+    ),
+  ];
+  if (errors.length > 1) {
     throw new AggregateError(
-      [workerError, closeError],
-      'Resident activity worker and command-server cleanup both failed.',
+      errors,
+      'Resident activity worker, schedule observer, stopping callback, or cleanup failed.',
     );
   }
-  if (workerError) throw workerError;
-  if (closeError) throw closeError;
+  if (errors.length === 1) throw errors[0];
   return Object.freeze({ processed });
 }
 
@@ -1476,26 +1651,9 @@ export async function runLocalResidentActivityService(options) {
       let result;
       /** @type {unknown} */
       let workerError;
-      /** @type {Promise<void> | undefined} */
-      let beginStoppingRequest;
-      /** @type {unknown} */
-      let beginStoppingError;
-      const requestLifecycleStopping = () => {
-        if (beginStoppingRequest) return;
-        beginStoppingRequest = service.beginStopping().then(
-          () => undefined,
-          (error) => {
-            beginStoppingError = error;
-          },
-        );
-      };
       try {
         await service.start({ deferReady: true });
         started = true;
-        signal?.addEventListener('abort', requestLifecycleStopping, {
-          once: true,
-        });
-        if (signal?.aborted) requestLifecycleStopping();
         const owner = service.getLocalOwner();
         if (!owner) {
           throw new Error(
@@ -1518,6 +1676,9 @@ export async function runLocalResidentActivityService(options) {
           onReady: async () => {
             if (!signal?.aborted) await service.markReady();
           },
+          onStopping: async () => {
+            await service.beginStopping();
+          },
         });
         if (!signal?.aborted) {
           throw new Error(
@@ -1526,17 +1687,6 @@ export async function runLocalResidentActivityService(options) {
         }
       } catch (error) {
         workerError = error;
-      }
-      signal?.removeEventListener('abort', requestLifecycleStopping);
-      await beginStoppingRequest;
-      if (beginStoppingError !== undefined) {
-        workerError =
-          workerError === undefined
-            ? beginStoppingError
-            : new AggregateError(
-                [workerError, beginStoppingError],
-                'Resident activity work and STOPPING transition both failed.',
-              );
       }
 
       /** @type {unknown} */
@@ -1548,14 +1698,18 @@ export async function runLocalResidentActivityService(options) {
           stopError = error;
         }
       }
-      if (workerError && stopError) {
+      const errors = [
+        ...new Set(
+          [workerError, stopError].filter((error) => error !== undefined),
+        ),
+      ];
+      if (errors.length > 1) {
         throw new AggregateError(
-          [workerError, stopError],
+          errors,
           'Resident activity worker and graceful service shutdown both failed.',
         );
       }
-      if (workerError) throw workerError;
-      if (stopError) throw stopError;
+      if (errors.length === 1) throw errors[0];
       return /** @type {Readonly<{processed: number}>} */ (result);
     },
     { configuration },

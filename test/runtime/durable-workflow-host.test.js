@@ -128,7 +128,7 @@ function makeEmbeddedExecution(definition = activityDefinition()) {
     libc: /** @type {const} */ ('glibc'),
   };
   const contract = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: APP_ID },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

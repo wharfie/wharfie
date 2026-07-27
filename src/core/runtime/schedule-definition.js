@@ -224,7 +224,7 @@ export function validateScheduleDefinition(
 
 /**
  * Validate a nonempty logical-ID keyed schedule map and return canonical key
- * order. This codec deliberately does not expose schedules in app manifests.
+ * order for the strict application manifest and resident runtime.
  * @param {unknown} value - Candidate schedule map.
  * @param {string} [valuePath] - Human-readable schema path.
  * @returns {Record<string, ScheduleDefinition>} - Normalized schedule map.

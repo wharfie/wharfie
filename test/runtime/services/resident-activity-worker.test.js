@@ -19,8 +19,10 @@ import {
   createWorkflowRunId,
 } from '../../../src/core/lib/ledger/workflow-execution-contract.js';
 import {
+  LEDGER_SERVICE_OWNERSHIP_SCHEMA_VERSION,
   LedgerServiceOwnerKind,
   createLedgerServiceId,
+  createLedgerServiceSessionId,
 } from '../../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import {
   ARTIFACT_RUNTIME_KIND,
@@ -46,7 +48,7 @@ import {
   RESIDENT_ACTIVITY_SUBMIT_COMMAND,
   RESIDENT_WORKFLOW_SIGNAL_COMMAND,
   RESIDENT_WORKFLOW_START_COMMAND,
-  runResidentActivityWorker,
+  runResidentActivityWorker as runResidentActivityWorkerProduction,
 } from '../../../src/core/runtime/services/resident-activity-worker.js';
 
 /** @typedef {import('../../../src/core/lib/db/base.js').DBClient} DBClient */
@@ -60,6 +62,7 @@ import {
 /** @typedef {typeof import('../../../src/core/runtime/manual-ledger-run.js').recoverManualLedgerActivity} RecoverActivity */
 /** @typedef {typeof import('../../../src/core/runtime/workflow-ledger-run.js').recoverWorkflowLedgerActivity} RecoverWorkflowActivity */
 /** @typedef {typeof import('../../../src/core/runtime/operator/local-owner-command.js').createLocalOwnerCommandServer} CommandServerFactory */
+/** @typedef {typeof import('../../../src/core/runtime/services/resident-schedule-observer.js').runResidentScheduleObserver} RunScheduleObserver */
 /** @typedef {Parameters<RunActivity>[0]} RunActivityOptions */
 /** @typedef {Parameters<RunWorkflowActivity>[0]} RunWorkflowActivityOptions */
 /** @typedef {Parameters<CommandServerFactory>[0]} CommandServerOptions */
@@ -79,6 +82,12 @@ const WORKFLOW_STEP_ID = 'greet-step';
 const WORKFLOW_ACTIVITY_ID = 'greet';
 const WORKFLOW_INVOCATION_ID = 'workflow-invocation-1';
 const WORKFLOW_CONTINUATION_ID = 'workflow-continuation-1';
+const TEST_SCHEDULE_OBSERVER_SUMMARY = Object.freeze({
+  observations: 0,
+  admitted: 0,
+  replayed: 0,
+  advanced: 0,
+});
 
 /** @param {string} value */
 function digest(value) {
@@ -91,7 +100,7 @@ function digest(value) {
 /** @param {Record<string, any>[]} [steps] @returns {EmbeddedExecution} */
 function makeEmbeddedExecution(steps) {
   const contract = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: 'resident-worker-demo' },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
@@ -115,6 +124,15 @@ function makeEmbeddedExecution(steps) {
             input: { kind: 'workflow-input' },
           },
         ],
+      },
+    },
+    schedules: {
+      'resident-minute': {
+        cron: '* * * * *',
+        workflow: WORKFLOW_ID,
+        input: {},
+        missed: 'latest',
+        overlap: 'allow',
       },
     },
   };
@@ -162,6 +180,7 @@ function makeHarness(execution) {
   const appId = execution.embeddedRevision.runtime.appId;
   const revisionId = execution.embeddedRevision.runtime.revisionId;
   const serviceId = createLedgerServiceId({ appId });
+  const sessionId = createLedgerServiceSessionId();
   const close = jest.fn(async () => undefined);
   /** @type {CommandServerOptions | undefined} */
   let commandServerOptions;
@@ -195,13 +214,16 @@ function makeHarness(execution) {
       serviceId,
       commandSession: { serviceId },
       ownership: {
+        schemaVersion: LEDGER_SERVICE_OWNERSHIP_SCHEMA_VERSION,
         serviceId,
         appId,
         scopeId: 'local-machine',
         principalId: 'test-principal',
-        sessionId: 'test-session',
+        sessionId,
         ownerKind: LedgerServiceOwnerKind.RESIDENT,
         generation: 1,
+        claimedAt: 10,
+        updatedAt: 10,
       },
     },
     createCommandServer,
@@ -608,6 +630,44 @@ function asRecoverActivity(mock) {
 /** @param {unknown} mock @returns {RecoverWorkflowActivity} */
 function asRecoverWorkflowActivity(mock) {
   return /** @type {RecoverWorkflowActivity} */ (mock);
+}
+
+/**
+ * Existing worker cases isolate dispatch/command behavior from scheduling.
+ * Keep their observer resident until worker shutdown while still exercising
+ * the production readiness handshake.
+ * @param {Parameters<RunScheduleObserver>[0]} options
+ */
+async function runBenignScheduleObserver(options) {
+  await options.onReady?.();
+  if (!options.signal.aborted) {
+    await new Promise((resolve) => {
+      options.signal.addEventListener('abort', resolve, { once: true });
+    });
+  }
+  return TEST_SCHEDULE_OBSERVER_SUMMARY;
+}
+
+/**
+ * Give every isolated worker ledger the newly required workflow-start port and
+ * inject the inert observer unless a case is explicitly proving scheduling.
+ * Mutating the test double preserves the exact ledger object asserted by the
+ * older dispatch cases.
+ * @param {Parameters<typeof runResidentActivityWorkerProduction>[0]} options
+ */
+function runResidentActivityWorker(options) {
+  if (typeof options.ledger.createWorkflowRun !== 'function') {
+    options.ledger.createWorkflowRun = jest.fn(async () => {
+      throw new Error(
+        'The inert resident schedule observer must not create workflow runs.',
+      );
+    });
+  }
+  return runResidentActivityWorkerProduction({
+    ...options,
+    runScheduleObserver:
+      options.runScheduleObserver || runBenignScheduleObserver,
+  });
 }
 
 describe('resident activity worker', () => {
@@ -1057,7 +1117,13 @@ describe('resident activity worker', () => {
     expect(recoverWorkflowActivity).not.toHaveBeenCalled();
     expect(runWorkflowActivity).toHaveBeenCalledTimes(1);
     const request = runWorkflowActivity.mock.calls[0][0];
-    expect(request).toEqual({
+    const {
+      admissionSignal,
+      signal,
+      registerActiveWorkflowCancellationPort,
+      ...requestWithoutSignals
+    } = request;
+    expect(requestWithoutSignals).toEqual({
       ledger: asExecutionLedger(ledger),
       execution,
       runId,
@@ -1073,13 +1139,16 @@ describe('resident activity worker', () => {
         stepIndex: 0,
       },
       actor: { kind: 'resident-workflow', id: harness.appId },
-      admissionSignal: controller.signal,
-      signal: expect.any(AbortSignal),
       ownerCancellation: {
         actor: { kind: 'local-owner-command', id: harness.appId },
       },
-      registerActiveWorkflowCancellationPort: expect.any(Function),
     });
+    expect(admissionSignal).toBeInstanceOf(AbortSignal);
+    expect(admissionSignal === controller.signal).toBe(false);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(registerActiveWorkflowCancellationPort).toEqual(
+      expect.any(Function),
+    );
     expect(request).not.toHaveProperty('controlContext');
     expect(request).not.toHaveProperty('registerActiveAttemptCancellationPort');
   });
@@ -1433,7 +1502,7 @@ describe('resident activity worker', () => {
       requestWorkflowCancellation: requestCancellationHandler,
       createCommandServer: harness.createCommandServer,
     });
-    await waitUntil(() => harness.getCommandServerOptions() !== undefined);
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 1);
     const { handleCommand } = harness.getCommandServerOptions();
 
     await expect(
@@ -2166,7 +2235,8 @@ describe('resident activity worker', () => {
     if (!workflowRequest) {
       throw new Error('Expected resident workflow request.');
     }
-    expect(workflowRequest.admissionSignal).toBe(controller.signal);
+    expect(workflowRequest.admissionSignal).toBeInstanceOf(AbortSignal);
+    expect(workflowRequest.admissionSignal === controller.signal).toBe(false);
     expect(workflowRequest.admissionSignal?.aborted).toBe(false);
     expect(workflowRequest.signal?.aborted).toBe(false);
     expect(workflowRequest.registerActiveWorkflowCancellationPort).toEqual(
@@ -2192,6 +2262,80 @@ describe('resident activity worker', () => {
     await expect(running).resolves.toEqual({ processed: 1 });
     expect(workflowRequest.signal?.aborted).toBe(true);
     expect(runActivity).not.toHaveBeenCalled();
+  });
+
+  it('publishes STOPPING before a prolonged active attempt finishes draining', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const runId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'stopping-before-activity-drain',
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [makeRow({ ...harness, runId })],
+      })),
+      rebuildRun: jest.fn(async () => makeView({ ...harness, runId })),
+    };
+    /** @type {string[]} */
+    const order = [];
+    /** @type {Deferred<void>} */
+    const activityStarted = deferred();
+    /** @type {Deferred<void>} */
+    const releaseActivity = deferred();
+    let activityFinished = false;
+    let workerSettled = false;
+    const runActivity = jest.fn(async () => {
+      order.push('activity-started');
+      activityStarted.resolve();
+      await releaseActivity.promise;
+      activityFinished = true;
+      order.push('activity-finished');
+    });
+    const onStopping = jest.fn(async () => {
+      order.push('STOPPING');
+    });
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      drainTimeoutMs: 60_000,
+      runActivity: asRunActivity(runActivity),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+      onStopping,
+    });
+    running.then(
+      () => {
+        workerSettled = true;
+      },
+      () => {
+        workerSettled = true;
+      },
+    );
+    await activityStarted.promise;
+
+    try {
+      controller.abort(new Error('resident stopping regression'));
+      await waitUntil(() => onStopping.mock.calls.length === 1);
+
+      expect(activityFinished).toBe(false);
+      expect(workerSettled).toBe(false);
+      expect(order).toEqual(['activity-started', 'STOPPING']);
+    } finally {
+      releaseActivity.resolve();
+    }
+
+    await expect(running).resolves.toEqual({ processed: 1 });
+    expect(onStopping).toHaveBeenCalledTimes(1);
+    expect(order).toEqual([
+      'activity-started',
+      'STOPPING',
+      'activity-finished',
+    ]);
   });
 
   it('does not dispatch a locator returned after shutdown begins', async () => {
@@ -2309,6 +2453,348 @@ describe('resident activity worker', () => {
 
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for schedule observer initialization before publishing readiness', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({ items: [] })),
+      rebuildRun: jest.fn(),
+    };
+    /** @type {Deferred<void>} */
+    const initializeObserver = deferred();
+    /** @type {Deferred<void>} */
+    const observerStarted = deferred();
+    const runScheduleObserver = jest.fn(
+      async (
+        /** @type {Parameters<RunScheduleObserver>[0]} */ { signal, onReady },
+      ) => {
+        observerStarted.resolve();
+        await initializeObserver.promise;
+        await onReady?.();
+        if (!signal.aborted) {
+          await new Promise((resolve) => {
+            signal.addEventListener('abort', resolve, { once: true });
+          });
+        }
+        return TEST_SCHEDULE_OBSERVER_SUMMARY;
+      },
+    );
+    const onReady = jest.fn(async () => controller.abort());
+
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      runActivity: asRunActivity(jest.fn()),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+      runScheduleObserver,
+      onReady,
+    });
+    await observerStarted.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const commandServer = harness.getCommandServerOptions();
+    expect(commandServer).toEqual(
+      expect.objectContaining({
+        timeoutMs: LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS,
+        maxRequestBytes: LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
+      }),
+    );
+    if (!commandServer.isCurrentOwner) {
+      throw new Error('Expected resident command ownership callback.');
+    }
+    await expect(commandServer.isCurrentOwner({})).resolves.toBe(false);
+    await expect(
+      commandServer.handleCommand(
+        { requestId: 'schedule-not-ready', command: 'unused', request: {} },
+        {},
+      ),
+    ).resolves.toEqual({
+      outcome: 'request-unavailable',
+      delivery: 'not-delivered',
+    });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(ledger.listReadyWork).not.toHaveBeenCalled();
+
+    initializeObserver.resolve();
+
+    await expect(running).resolves.toEqual({ processed: 0 });
+    expect(runScheduleObserver).toHaveBeenCalledTimes(1);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds shutdown when schedule initialization ignores abort', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({ items: [] })),
+      rebuildRun: jest.fn(),
+    };
+    /** @type {Deferred<void>} */
+    const observerStarted = deferred();
+    const runScheduleObserver = jest.fn(async () => {
+      observerStarted.resolve();
+      await new Promise(() => {});
+      return TEST_SCHEDULE_OBSERVER_SUMMARY;
+    });
+    const onReady = jest.fn(async () => undefined);
+
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      drainTimeoutMs: 1,
+      runActivity: asRunActivity(jest.fn()),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+      runScheduleObserver,
+      onReady,
+    });
+    await observerStarted.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+
+    await expect(running).rejects.toMatchObject({
+      name: 'ResidentScheduleObserverDrainExpired',
+      code: 'resident-schedule-observer-drain-expired',
+      details: { drainTimeoutMs: 1 },
+    });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(ledger.listReadyWork).not.toHaveBeenCalled();
+    expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits scheduled work in the background while a long activity is blocked and dispatches it serially', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const manualRunId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'schedule-concurrency-manual',
+    });
+    const scheduledRunId = createWorkflowRunId({
+      appId: harness.appId,
+      idempotencyKey: 'schedule-concurrency-workflow',
+    });
+    const planId = workflowPlanId(execution);
+    let manualCompleted = false;
+    let scheduleAdmitted = false;
+    /** @type {string[]} */
+    const order = [];
+    /** @type {Deferred<void>} */
+    const activityStarted = deferred();
+    /** @type {Deferred<void>} */
+    const releaseActivity = deferred();
+    /** @type {Deferred<void>} */
+    const observerAdmitted = deferred();
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: manualCompleted
+          ? scheduleAdmitted
+            ? [makeWorkflowRow({ ...harness, runId: scheduledRunId })]
+            : []
+          : [makeRow({ ...harness, runId: manualRunId })],
+      })),
+      rebuildRun: jest.fn(async (/** @type {string} */ runId) => {
+        if (runId === manualRunId) {
+          return makeView({
+            ...harness,
+            runId,
+            ...(manualCompleted
+              ? {
+                  runStatus: RunStatus.COMPLETED,
+                  invocationStatus: InvocationStatus.COMPLETED,
+                }
+              : {}),
+          });
+        }
+        return makeWorkflowView({
+          ...harness,
+          runId,
+          planId,
+        });
+      }),
+      createWorkflowRun: jest.fn(
+        async (/** @type {Record<string, any>} */ _request) => {
+          scheduleAdmitted = true;
+          order.push('schedule-admitted');
+          return { outcome: 'created' };
+        },
+      ),
+    };
+    const runActivity = jest.fn(async () => {
+      order.push('manual-start');
+      activityStarted.resolve();
+      await releaseActivity.promise;
+      manualCompleted = true;
+      order.push('manual-end');
+    });
+    const runWorkflowActivity = jest.fn(async () => {
+      order.push('workflow');
+      controller.abort();
+      return { outcome: { dispatched: true } };
+    });
+    const runScheduleObserver = jest.fn(
+      async (
+        /** @type {Parameters<RunScheduleObserver>[0]} */ {
+          signal,
+          onReady,
+          onWorkflowReady,
+        },
+      ) => {
+        await onReady?.();
+        await activityStarted.promise;
+        await ledger.createWorkflowRun({
+          cause: 'resident-schedule-test-admission',
+        });
+        await onWorkflowReady?.();
+        observerAdmitted.resolve();
+        if (!signal.aborted) {
+          await new Promise((resolve) => {
+            signal.addEventListener('abort', resolve, { once: true });
+          });
+        }
+        return TEST_SCHEDULE_OBSERVER_SUMMARY;
+      },
+    );
+
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      runActivity: asRunActivity(runActivity),
+      runWorkflowActivity: asRunWorkflowActivity(runWorkflowActivity),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      recoverWorkflowActivity: asRecoverWorkflowActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+      runScheduleObserver,
+    });
+    await observerAdmitted.promise;
+
+    expect(runActivity).toHaveBeenCalledTimes(1);
+    expect(runWorkflowActivity).not.toHaveBeenCalled();
+    expect(order).toEqual(['manual-start', 'schedule-admitted']);
+
+    releaseActivity.resolve();
+
+    await expect(running).resolves.toEqual({ processed: 2 });
+    expect(ledger.createWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(runWorkflowActivity).toHaveBeenCalledTimes(1);
+    expect(order).toEqual([
+      'manual-start',
+      'schedule-admitted',
+      'manual-end',
+      'workflow',
+    ]);
+  });
+
+  it('aggregates schedule observer and STOPPING failures after bounding active work', async () => {
+    const execution = makeEmbeddedExecution();
+    const harness = makeHarness(execution);
+    const controller = new AbortController();
+    const observerError = new Error('resident schedule observer failed');
+    const stoppingError = new Error('resident STOPPING notification failed');
+    const runId = createManualLedgerRunId({
+      appId: harness.appId,
+      idempotencyKey: 'schedule-observer-failure',
+    });
+    const ledger = {
+      listReadyWork: jest.fn(async () => ({
+        items: [makeRow({ ...harness, runId })],
+      })),
+      rebuildRun: jest.fn(async () => makeView({ ...harness, runId })),
+    };
+    /** @type {Deferred<void>} */
+    const activityStarted = deferred();
+    /** @type {Deferred<unknown>} */
+    const activityInterrupted = deferred();
+    const runActivity = jest.fn(
+      async (/** @type {RunActivityOptions} */ { admissionSignal, signal }) => {
+        activityStarted.resolve();
+        if (!signal?.aborted) {
+          await new Promise((resolve) => {
+            signal?.addEventListener('abort', resolve, { once: true });
+          });
+        }
+        activityInterrupted.resolve({
+          admissionAborted: admissionSignal?.aborted,
+          reason: signal?.reason,
+        });
+      },
+    );
+    const runScheduleObserver = jest.fn(
+      async (/** @type {Parameters<RunScheduleObserver>[0]} */ { onReady }) => {
+        await onReady?.();
+        await activityStarted.promise;
+        throw observerError;
+      },
+    );
+    const onStopping = jest.fn(async () => {
+      throw stoppingError;
+    });
+
+    const running = runResidentActivityWorker({
+      ledger: asExecutionLedger(ledger),
+      execution,
+      controlContext: harness.controlContext,
+      owner: harness.owner,
+      signal: controller.signal,
+      drainTimeoutMs: 1,
+      runActivity: asRunActivity(runActivity),
+      recoverActivity: asRecoverActivity(jest.fn()),
+      createCommandServer: harness.createCommandServer,
+      runScheduleObserver,
+      onStopping,
+    });
+    const outcome = running.then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+
+    await expect(activityInterrupted.promise).resolves.toMatchObject({
+      admissionAborted: true,
+      reason: {
+        name: 'ResidentWorkerDrainExpired',
+        code: 'resident-worker-drain-expired',
+        details: { runId, drainTimeoutMs: 1 },
+      },
+    });
+    const observed = await outcome;
+    expect(observed).toEqual({ error: expect.any(AggregateError) });
+    if (!('error' in observed) || !(observed.error instanceof AggregateError)) {
+      throw new Error('Expected aggregate resident shutdown failure.');
+    }
+    expect(observed.error.errors).toEqual([observerError, stoppingError]);
+    expect(onStopping).toHaveBeenCalledTimes(1);
+
+    const commandServer = harness.getCommandServerOptions();
+    if (!commandServer.isCurrentOwner) {
+      throw new Error('Expected resident command ownership callback.');
+    }
+    await expect(commandServer.isCurrentOwner({})).resolves.toBe(false);
+    await expect(
+      commandServer.handleCommand(
+        { requestId: 'observer-failure', command: 'unused', request: {} },
+        {},
+      ),
+    ).resolves.toEqual({
+      outcome: 'request-unavailable',
+      delivery: 'not-delivered',
+    });
+    expect(harness.close).toHaveBeenCalledTimes(1);
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it('recovers a stale claimed attempt before dispatch', async () => {
@@ -2580,7 +3066,7 @@ describe('resident activity worker', () => {
       recoverActivity: asRecoverActivity(jest.fn()),
       createCommandServer: harness.createCommandServer,
     });
-    await waitUntil(() => harness.getCommandServerOptions() !== undefined);
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 1);
     const { handleCommand } = harness.getCommandServerOptions();
     const request = {
       appId: harness.appId,
@@ -2724,7 +3210,7 @@ describe('resident activity worker', () => {
       recoverActivity: asRecoverActivity(jest.fn()),
       createCommandServer: harness.createCommandServer,
     });
-    await waitUntil(() => harness.getCommandServerOptions() !== undefined);
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 1);
     const { handleCommand } = harness.getCommandServerOptions();
     const request = {
       appId: harness.appId,
@@ -2808,7 +3294,7 @@ describe('resident activity worker', () => {
         workerSettled = true;
       },
     );
-    await waitUntil(() => harness.getCommandServerOptions() !== undefined);
+    await waitUntil(() => ledger.listReadyWork.mock.calls.length === 1);
     const { handleCommand } = harness.getCommandServerOptions();
     const request = {
       appId: harness.appId,

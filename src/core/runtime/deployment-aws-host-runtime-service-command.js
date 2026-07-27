@@ -1120,7 +1120,27 @@ function decodeExactJsonObject(stdout, stderr) {
       ) {
         throw new Error();
       }
-      for (const key of Reflect.ownKeys(value)) {
+      const ownKeys = Reflect.ownKeys(value);
+      const keys = Array.isArray(value)
+        ? Array.from({ length: value.length }, (_, index) => String(index))
+        : ownKeys;
+      if (Array.isArray(value)) {
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(
+          value,
+          'length',
+        );
+        if (
+          ownKeys.length !== value.length + 1 ||
+          ownKeys.at(-1) !== 'length' ||
+          lengthDescriptor === undefined ||
+          lengthDescriptor.enumerable !== false ||
+          !Object.hasOwn(lengthDescriptor, 'value') ||
+          lengthDescriptor.value !== value.length
+        ) {
+          throw new Error();
+        }
+      }
+      for (const key of keys) {
         if (typeof key !== 'string') throw new Error();
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (

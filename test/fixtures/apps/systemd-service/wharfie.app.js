@@ -1,7 +1,7 @@
 import { defineApp } from '../../../../src/app.js';
 
 export default defineApp({
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'systemd-service-proof' },
   cli: {
     entrypoint: {

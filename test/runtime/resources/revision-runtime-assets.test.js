@@ -51,7 +51,7 @@ function digest(character) {
 function makeRevision(appId = 'embedded-demo', sourceDigest = 'A') {
   return createApplicationRevision({
     contract: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       app: { id: appId },
       cli: {
         entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

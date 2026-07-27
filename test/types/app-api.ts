@@ -6,8 +6,80 @@ import {
   type JsonObject,
 } from '@wharfie/wharfie/app';
 
+const cliOnlyApp = defineApp({
+  schemaVersion: 3,
+  app: { id: 'cli-only-app' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+  },
+});
+const cliOnlySchemaVersion: 3 = cliOnlyApp.schemaVersion;
+void cliOnlySchemaVersion;
+
+const emptyWorkflowMapApp = {
+  schemaVersion: 3,
+  app: { id: 'empty-workflow-map' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+  },
+  workflows: {},
+} as const;
+// @ts-expect-error A declared workflow map must be nonempty.
+defineApp(emptyWorkflowMapApp);
+
+const emptyScheduleMapApp = {
+  schemaVersion: 3,
+  app: { id: 'empty-schedule-map' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+  },
+  schedules: {},
+} as const;
+// @ts-expect-error A declared schedule map must be nonempty.
+defineApp(emptyScheduleMapApp);
+
+const scheduleWithoutDeclaredWorkflow = {
+  schemaVersion: 3,
+  app: { id: 'missing-schedule-workflow' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+  },
+  workflows: {
+    present: {
+      steps: [{ id: 'wait', kind: 'signal' }],
+    },
+  },
+  schedules: {
+    nightly: {
+      cron: '0 0 * * *',
+      workflow: 'missing',
+      input: {},
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
+} as const;
+// @ts-expect-error Every schedule must reference a workflow in the same manifest.
+defineApp(scheduleWithoutDeclaredWorkflow);
+
 const app = defineApp({
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'typed-app' },
   cli: {
     entrypoint: {
@@ -60,9 +132,18 @@ const app = defineApp({
       ],
     },
   },
+  schedules: {
+    nightly: {
+      cron: '0 0 * * *',
+      workflow: 'greet-later',
+      input: { source: 'typed-schedule' },
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
 });
 
-const schemaVersion: 2 = app.schemaVersion;
+const schemaVersion: 3 = app.schemaVersion;
 const appId: 'typed-app' = app.app.id;
 const entrypointKind: 'node' = app.cli.entrypoint.kind;
 const cliPath: './src/cli.ts' = app.cli.entrypoint.path;
@@ -81,8 +162,64 @@ void externalPackageName;
 void workflowStepKind;
 void workflowLiteral;
 
-const legacyApp = {
+const scheduledApp = defineApp({
+  schemaVersion: 3,
+  app: { id: 'scheduled-app' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+  },
+  workflows: {
+    refresh: {
+      steps: [{ id: 'approval', kind: 'signal' }],
+    },
+  },
+  schedules: {
+    nightly: {
+      cron: '0 0 * * *',
+      workflow: 'refresh',
+      input: { source: 'schedule' },
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
+});
+
+const scheduleSchemaVersion: 3 = scheduledApp.schemaVersion;
+const scheduleCron: '0 0 * * *' = scheduledApp.schedules.nightly.cron;
+const scheduleInput: 'schedule' = scheduledApp.schedules.nightly.input.source;
+void scheduleSchemaVersion;
+void scheduleCron;
+void scheduleInput;
+
+const v2WithSchedule = {
   schemaVersion: 2,
+  app: { id: 'invalid-v2-schedule' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+  },
+  schedules: {
+    nightly: {
+      cron: '0 0 * * *',
+      workflow: 'refresh',
+      input: {},
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
+} as const;
+// @ts-expect-error Schedules require the exact schemaVersion 3 manifest shape.
+defineApp(v2WithSchedule);
+
+const legacyApp = {
+  schemaVersion: 3,
   app: { id: 'legacy-app' },
   cli: {
     entrypoint: {
@@ -96,18 +233,41 @@ const legacyApp = {
       entrypoint: './src/workflow.ts',
     },
   },
+  schedules: {
+    legacy: {
+      cron: '0 0 * * *',
+      workflow: 'legacy',
+      input: {},
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
 } as const;
 // @ts-expect-error Workflows are strict data definitions, not code entrypoints.
 defineApp(legacyApp);
 
 const minimalApp = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'minimal-app' },
   cli: {
     entrypoint: {
       kind: 'node',
       path: './src/cli.ts',
       export: 'main',
+    },
+  },
+  workflows: {
+    wait: {
+      steps: [{ id: 'ready', kind: 'signal' }],
+    },
+  },
+  schedules: {
+    wait: {
+      cron: '0 0 * * *',
+      workflow: 'wait',
+      input: {},
+      missed: 'latest',
+      overlap: 'allow',
     },
   },
 } as const;
@@ -156,7 +316,7 @@ const appWithRemovedTopLevelResources = {
     db: { adapter: 'vanilla' },
   },
 } as const;
-// @ts-expect-error Resources are not part of the v2 manifest authoring boundary.
+// @ts-expect-error Resources are not part of the v3 manifest authoring boundary.
 defineApp(appWithRemovedTopLevelResources);
 
 const appWithRemovedActivityResources = {
@@ -172,7 +332,7 @@ const appWithRemovedActivityResources = {
     },
   },
 } as const;
-// @ts-expect-error Activity resources are not part of the v2 authoring boundary.
+// @ts-expect-error Activity resources are not part of the v3 authoring boundary.
 defineApp(appWithRemovedActivityResources);
 
 const appWithExtraActivityKey = {

@@ -13,7 +13,7 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const examplesDir = path.join(repoRoot, 'scratch', 'examples');
 
-describe('schemaVersion 2 app demos', () => {
+describe('schemaVersion 3 app demos', () => {
   it('loads the canonical hello-world manifest and runs an activity', async () => {
     const dir = path.join(examplesDir, 'apps', 'hello-world');
     const { manifest, result } = await runLocalApp({
@@ -24,7 +24,7 @@ describe('schemaVersion 2 app demos', () => {
     });
 
     expect(manifest).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       app: { id: 'hello-world-demo' },
       cli: {
         entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
@@ -69,6 +69,15 @@ describe('schemaVersion 2 app demos', () => {
           ],
         },
       },
+      schedules: {
+        'echo-hourly': {
+          cron: '0 * * * *',
+          workflow: 'echo-twice',
+          input: { message: 'hello from the resident schedule' },
+          missed: 'latest',
+          overlap: 'allow',
+        },
+      },
     });
     expect(result).toEqual({
       ok: true,
@@ -98,7 +107,7 @@ describe('schemaVersion 2 app demos', () => {
       writeFileSync(
         path.join(dir, 'wharfie.app.js'),
         `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'resource-rejection-example' },
   cli: { entrypoint: { kind: 'node', path: './cli.js', export: 'main' } },
   resources: { db: { adapter: 'vanilla' } },
@@ -116,7 +125,7 @@ describe('schemaVersion 2 app demos', () => {
           activityName: 'inspect',
           inputInput: JSON.stringify({ who: 'demo-user' }),
         }),
-      ).rejects.toThrow(/app\.resources is not supported by schemaVersion 2/i);
+      ).rejects.toThrow(/app\.resources is not supported by schemaVersion 3/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -175,7 +184,7 @@ describe('schemaVersion 2 app demos', () => {
       writeFileSync(
         path.join(dir, 'wharfie.app.js'),
         `export default {
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'ephemeral-effect-example' },
   cli: { entrypoint: { kind: 'node', path: './cli.js', export: 'main' } },
   targets: [{

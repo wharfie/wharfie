@@ -51,7 +51,7 @@ function deferred() {
 function makeRevision(appId = 'deployment-demo') {
   return createApplicationRevision({
     contract: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       app: { id: appId },
       cli: {
         entrypoint: {

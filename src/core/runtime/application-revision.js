@@ -78,7 +78,7 @@ function freezeJsonSnapshot(value) {
  * @property {1} schemaVersion - Revision schema version.
  * @property {'applicationRevision'} kind - Document kind.
  * @property {string} revisionId - Recomputed domain-separated identity.
- * @property {Record<string, any>} contract - Target-free v2 app contract.
+ * @property {Record<string, any>} contract - Target-free v3 app contract.
  * @property {RevisionInputs} inputs - Locked behavior inputs.
  */
 

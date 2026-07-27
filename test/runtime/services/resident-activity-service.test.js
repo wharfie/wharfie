@@ -73,7 +73,7 @@ function digest(value) {
  */
 function makeEmbeddedExecution(appId) {
   const contract = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: appId },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

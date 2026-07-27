@@ -284,6 +284,20 @@ describe('scheduled workflow activation cutover', () => {
           observedAt: SCHEDULED_AT + 60_000,
         }),
       ).resolves.toEqual({ applied: false, cursor: advanced.cursor });
+      const replacementAdvance = await harness.schedule.advance({
+        expectedCursor: advanced.cursor,
+        throughInclusive: SCHEDULED_AT + 60_000,
+        owner: replacementOwner,
+        observedAt: SCHEDULED_AT + 60_000,
+      });
+      expect(replacementAdvance).toMatchObject({
+        applied: true,
+        cursor: {
+          activationBoundary: activated.cursor.activationBoundary,
+          horizon: SCHEDULED_AT + 60_000,
+          version: advanced.cursor.version + 1,
+        },
+      });
       await expect(
         harness.schedule.advance({
           expectedCursor: advanced.cursor,
@@ -292,21 +306,6 @@ describe('scheduled workflow activation cutover', () => {
           observedAt: SCHEDULED_AT + 60_000,
         }),
       ).rejects.toHaveProperty('name', 'ConditionalCheckFailedException');
-      await expect(
-        harness.schedule.advance({
-          expectedCursor: advanced.cursor,
-          throughInclusive: SCHEDULED_AT + 60_000,
-          owner: replacementOwner,
-          observedAt: SCHEDULED_AT + 60_000,
-        }),
-      ).resolves.toMatchObject({
-        applied: true,
-        cursor: {
-          activationBoundary: activated.cursor.activationBoundary,
-          horizon: SCHEDULED_AT + 60_000,
-          version: advanced.cursor.version + 1,
-        },
-      });
     } finally {
       await harness.cleanup();
     }
@@ -437,6 +436,51 @@ describe('scheduled workflow activation cutover', () => {
           scheduleId: SCHEDULE_ID,
         }),
       ).resolves.toEqual(prepared.activated.cursor);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('an exact occurrence and workflow pair still replays after admission closes', async () => {
+    const harness = createHarness();
+    try {
+      await activateApplication(harness.activation);
+      const owner = await claimResident(harness.db);
+      const prepared = await prepareScheduledRun(harness.schedule, owner);
+      const ledger = createExecutionLedger({
+        db: harness.db,
+        tableName: TABLE_NAME,
+        payloadStore: harness.payloadStore,
+      });
+      const created = await ledger.createWorkflowRun(prepared.request);
+      expect(created).toMatchObject({
+        applied: true,
+        run: { runId: prepared.runId, status: 'RUNNING' },
+      });
+
+      await closeAdmission(harness.activation);
+      await expect(
+        harness.activation.get({ appId: APP_ID }),
+      ).resolves.toMatchObject({
+        phase: 'QUIESCING',
+        selected: { artifactId: ARTIFACT_A, revisionId: REVISION_A },
+      });
+
+      await expect(
+        ledger.createWorkflowRun(prepared.request),
+      ).resolves.toMatchObject({
+        applied: false,
+        run: created.run,
+      });
+      await expect(ledger.getEvents(prepared.runId)).resolves.toHaveLength(1);
+      await expect(
+        harness.schedule.getOccurrence({
+          occurrenceId: prepared.cause.occurrenceId,
+        }),
+      ).resolves.toMatchObject({
+        runId: prepared.runId,
+        cause: prepared.cause,
+      });
     } finally {
       await harness.cleanup();
     }

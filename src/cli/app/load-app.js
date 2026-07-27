@@ -16,6 +16,7 @@ const SOURCE_TOP_LEVEL_KEYS = new Set([
   'targets',
   'activities',
   'workflows',
+  'schedules',
 ]);
 const SOURCE_APP_KEYS = new Set(['id']);
 const SOURCE_CLI_KEYS = new Set(['entrypoint']);
@@ -57,15 +58,16 @@ function assertPlainObject(value, valuePath) {
  * @param {Record<string, any>} value - Object to inspect.
  * @param {Set<string>} allowedKeys - Exact supported property names.
  * @param {string} valuePath - Human-readable source path.
+ * @param {3} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
-function assertExactKeys(value, allowedKeys, valuePath) {
+function assertExactKeys(value, allowedKeys, valuePath, schemaVersion) {
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string' || !allowedKeys.has(key)) {
       const propertyPath =
         typeof key === 'string' ? `${valuePath}.${key}` : valuePath;
       throw new TypeError(
-        `${propertyPath} is not supported by schemaVersion 2.`,
+        `${propertyPath} is not supported by schemaVersion ${schemaVersion}.`,
       );
     }
 
@@ -95,12 +97,17 @@ function isWithin(parentPath, candidatePath) {
  * Resolve and validate an authored entrypoint without exposing build-host paths
  * in the canonical manifest.
  * @param {unknown} value - Source entrypoint.
- * @param {{ appDir: string, realAppDir: string, valuePath: string }} options - Compilation context.
+ * @param {{ appDir: string, realAppDir: string, valuePath: string, schemaVersion: 3 }} options - Compilation context.
  * @returns {Promise<{ kind: 'node', path: string, export: string }>} - Canonical entrypoint.
  */
 async function compileEntrypoint(value, options) {
   assertPlainObject(value, options.valuePath);
-  assertExactKeys(value, SOURCE_ENTRYPOINT_KEYS, options.valuePath);
+  assertExactKeys(
+    value,
+    SOURCE_ENTRYPOINT_KEYS,
+    options.valuePath,
+    options.schemaVersion,
+  );
   if (value.kind !== 'node') {
     throw new TypeError(`${options.valuePath}.kind must be 'node'.`);
   }
@@ -168,16 +175,22 @@ async function compileEntrypoint(value, options) {
 /**
  * @param {unknown} value - Source external package list.
  * @param {string} valuePath - Human-readable source path.
+ * @param {3} schemaVersion - Manifest schema version governing the shape.
  * @returns {unknown} - Canonically ordered package list.
  */
-function compileExternalPackages(value, valuePath) {
+function compileExternalPackages(value, valuePath, schemaVersion) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new TypeError(`${valuePath} must be a nonempty array when provided.`);
   }
   const packages = value.map((externalPackage, index) => {
     const packagePath = `${valuePath}[${index}]`;
     assertPlainObject(externalPackage, packagePath);
-    assertExactKeys(externalPackage, SOURCE_EXTERNAL_PACKAGE_KEYS, packagePath);
+    assertExactKeys(
+      externalPackage,
+      SOURCE_EXTERNAL_PACKAGE_KEYS,
+      packagePath,
+      schemaVersion,
+    );
     return { ...externalPackage };
   });
   packages.sort((left, right) =>
@@ -192,32 +205,34 @@ function compileExternalPackages(value, valuePath) {
  * Compile the authored module value into the one serialized runtime manifest.
  * @param {unknown} sourceValue - Default export from `wharfie.app.js`.
  * @param {{ appDir: string }} options - Compilation context.
- * @returns {Promise<Record<string, any>>} - Canonical v2 manifest.
+ * @returns {Promise<Record<string, any>>} - Canonical v3 manifest.
  */
 export async function compileAppManifest(sourceValue, options) {
   const source = cloneJsonObject(sourceValue, 'wharfie.app.js default export');
-  assertExactKeys(source, SOURCE_TOP_LEVEL_KEYS, 'app');
 
   if (source.schemaVersion !== APP_MANIFEST_SCHEMA_VERSION) {
     throw new TypeError(
       `app.schemaVersion must be the integer ${APP_MANIFEST_SCHEMA_VERSION}.`,
     );
   }
+  const schemaVersion = /** @type {3} */ (source.schemaVersion);
+  assertExactKeys(source, SOURCE_TOP_LEVEL_KEYS, 'app', schemaVersion);
   assertPlainObject(source.app, 'app.app');
-  assertExactKeys(source.app, SOURCE_APP_KEYS, 'app.app');
+  assertExactKeys(source.app, SOURCE_APP_KEYS, 'app.app', schemaVersion);
   assertPlainObject(source.cli, 'app.cli');
-  assertExactKeys(source.cli, SOURCE_CLI_KEYS, 'app.cli');
+  assertExactKeys(source.cli, SOURCE_CLI_KEYS, 'app.cli', schemaVersion);
 
   const appDir = path.resolve(options.appDir);
   const realAppDir = await fsp.realpath(appDir);
   const manifest = /** @type {Record<string, any>} */ ({
-    schemaVersion: APP_MANIFEST_SCHEMA_VERSION,
+    schemaVersion,
     app: { ...source.app },
     cli: {
       entrypoint: await compileEntrypoint(source.cli.entrypoint, {
         appDir,
         realAppDir,
         valuePath: 'app.cli.entrypoint',
+        schemaVersion,
       }),
     },
   });
@@ -234,18 +249,25 @@ export async function compileAppManifest(sourceValue, options) {
       const activityPath = `app.activities.${activityId}`;
       const activity = source.activities[activityId];
       assertPlainObject(activity, activityPath);
-      assertExactKeys(activity, SOURCE_ACTIVITY_KEYS, activityPath);
+      assertExactKeys(
+        activity,
+        SOURCE_ACTIVITY_KEYS,
+        activityPath,
+        schemaVersion,
+      );
       const compiledActivity = /** @type {Record<string, any>} */ ({
         entrypoint: await compileEntrypoint(activity.entrypoint, {
           appDir,
           realAppDir,
           valuePath: `${activityPath}.entrypoint`,
+          schemaVersion,
         }),
       });
       if (Object.prototype.hasOwnProperty.call(activity, 'externalPackages')) {
         compiledActivity.externalPackages = compileExternalPackages(
           activity.externalPackages,
           `${activityPath}.externalPackages`,
+          schemaVersion,
         );
       }
       manifest.activities[activityId] = compiledActivity;
@@ -253,6 +275,9 @@ export async function compileAppManifest(sourceValue, options) {
   }
   if (Object.prototype.hasOwnProperty.call(source, 'workflows')) {
     manifest.workflows = source.workflows;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'schedules')) {
+    manifest.schedules = source.schedules;
   }
 
   return validateAppManifest(manifest);
@@ -290,7 +315,7 @@ export async function loadApp(options = {}) {
   const mod = await import(createFreshImportUrl(appPath));
   if (!Object.prototype.hasOwnProperty.call(mod, 'default')) {
     throw new Error(
-      'wharfie.app.js must default-export one schemaVersion 2 app definition.',
+      'wharfie.app.js must default-export one schemaVersion 3 app definition.',
     );
   }
 

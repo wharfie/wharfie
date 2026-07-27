@@ -256,6 +256,35 @@ describe('atomic schedule control', () => {
     });
   });
 
+  test('uses the durable updatedAt floor when a definition changes after the wall clock regresses', async () => {
+    const { db, control, ownership } = createHarness();
+    await activateApplication(db);
+    const owner = await claimResident(ownership);
+    const first = await activateSchedule(control, owner);
+    const advanced = await control.advance({
+      expectedCursor: first.cursor,
+      throughInclusive: 7 * MINUTE,
+      owner,
+      observedAt: 7 * MINUTE + 42,
+    });
+
+    const changed = await activateSchedule(control, owner, {
+      definitionId: DEFINITION_B,
+      observedAt: 4 * MINUTE + 999,
+    });
+    expect(changed).toEqual({
+      applied: true,
+      cursor: {
+        ...advanced.cursor,
+        definitionId: DEFINITION_B,
+        activationBoundary: 7 * MINUTE,
+        horizon: 7 * MINUTE,
+        version: advanced.cursor.version + 1,
+        updatedAt: 7 * MINUTE + 42,
+      },
+    });
+  });
+
   test('fences no-due advancement by ACTIVE selection, owner, and cursor CAS', async () => {
     const { db, control, ownership } = createHarness();
     await activateApplication(db);

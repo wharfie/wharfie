@@ -44,7 +44,7 @@ function digest(value) {
 /** @returns {import('../../src/core/runtime/durable-activity-host.js').ManifestActivityExecution} - Valid embedded execution fixture. */
 function makeEmbeddedExecution() {
   const contract = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: 'packaged-run-demo' },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

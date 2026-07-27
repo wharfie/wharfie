@@ -11,9 +11,10 @@ import {
 import { cloneJsonObject } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
+import { validateScheduleDefinitions } from './schedule-definition.js';
 import { validateWorkflowDefinitions } from './workflow-definition.js';
 
-export const APP_MANIFEST_SCHEMA_VERSION = 2;
+export const APP_MANIFEST_SCHEMA_VERSION = 3;
 
 const TOP_LEVEL_KEYS = new Set([
   'schemaVersion',
@@ -22,6 +23,7 @@ const TOP_LEVEL_KEYS = new Set([
   'targets',
   'activities',
   'workflows',
+  'schedules',
 ]);
 const APP_KEYS = new Set(['id']);
 const CLI_KEYS = new Set(['entrypoint']);
@@ -66,15 +68,16 @@ function assertPlainObject(value, valuePath) {
  * @param {Record<string, any>} value - Object to inspect.
  * @param {Set<string>} allowed - Exact allowed property names.
  * @param {string} valuePath - Human-readable schema path.
+ * @param {3} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
-function assertExactKeys(value, allowed, valuePath) {
+function assertExactKeys(value, allowed, valuePath, schemaVersion) {
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string' || !allowed.has(key)) {
       const propertyPath =
         typeof key === 'string' ? `${valuePath}.${key}` : valuePath;
       throw new TypeError(
-        `${propertyPath} is not supported by schemaVersion 2.`,
+        `${propertyPath} is not supported by schemaVersion ${schemaVersion}.`,
       );
     }
 
@@ -130,11 +133,12 @@ function assertCanonicalEntrypointPath(value, valuePath) {
 /**
  * @param {unknown} value - Entrypoint definition.
  * @param {string} valuePath - Human-readable schema path.
+ * @param {3} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
-function assertEntrypoint(value, valuePath) {
+function assertEntrypoint(value, valuePath, schemaVersion) {
   assertPlainObject(value, valuePath);
-  assertExactKeys(value, ENTRYPOINT_KEYS, valuePath);
+  assertExactKeys(value, ENTRYPOINT_KEYS, valuePath, schemaVersion);
   if (value.kind !== 'node') {
     throw new TypeError(`${valuePath}.kind must be 'node'.`);
   }
@@ -145,9 +149,10 @@ function assertEntrypoint(value, valuePath) {
 /**
  * @param {unknown} value - Target definitions.
  * @param {string} valuePath - Human-readable schema path.
+ * @param {3} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
-function assertTargets(value, valuePath) {
+function assertTargets(value, valuePath, schemaVersion) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new TypeError(`${valuePath} must be a nonempty array when provided.`);
   }
@@ -156,7 +161,7 @@ function assertTargets(value, valuePath) {
   value.forEach((target, index) => {
     const targetPath = `${valuePath}[${index}]`;
     assertPlainObject(target, targetPath);
-    assertExactKeys(target, TARGET_KEYS, targetPath);
+    assertExactKeys(target, TARGET_KEYS, targetPath, schemaVersion);
     assertNonemptyCanonicalString(
       target.nodeVersion,
       `${targetPath}.nodeVersion`,
@@ -205,9 +210,10 @@ function assertTargets(value, valuePath) {
 /**
  * @param {unknown} value - Canonical external package list.
  * @param {string} valuePath - Human-readable schema path.
+ * @param {3} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
-function assertExternalPackages(value, valuePath) {
+function assertExternalPackages(value, valuePath, schemaVersion) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new TypeError(`${valuePath} must be a nonempty array when provided.`);
   }
@@ -216,7 +222,12 @@ function assertExternalPackages(value, valuePath) {
   value.forEach((externalPackage, index) => {
     const packagePath = `${valuePath}[${index}]`;
     assertPlainObject(externalPackage, packagePath);
-    assertExactKeys(externalPackage, EXTERNAL_PACKAGE_KEYS, packagePath);
+    assertExactKeys(
+      externalPackage,
+      EXTERNAL_PACKAGE_KEYS,
+      packagePath,
+      schemaVersion,
+    );
     assertNonemptyCanonicalString(externalPackage.name, `${packagePath}.name`);
     if (!NPM_PACKAGE_NAME_PATTERN.test(externalPackage.name)) {
       throw new TypeError(
@@ -245,32 +256,37 @@ function assertExternalPackages(value, valuePath) {
 }
 
 /**
- * Validate the one serialized Wharfie v2 runtime manifest shape. The returned
- * value is an independent JSON clone, so callers never retain mutable input.
+ * Validate the one serialized Wharfie v3 runtime manifest shape. Workflow and
+ * schedule maps are optional and nonempty when declared. The returned value is
+ * an independent JSON clone, so callers never retain mutable input.
  * @param {unknown} value - Candidate canonical manifest.
  * @param {string} [valuePath] - Human-readable boundary label.
  * @returns {Record<string, any>} - Validated independent manifest clone.
  */
 export function validateAppManifest(value, valuePath = 'manifest') {
   const manifest = cloneJsonObject(value, valuePath);
-  assertExactKeys(manifest, TOP_LEVEL_KEYS, valuePath);
-
   if (manifest.schemaVersion !== APP_MANIFEST_SCHEMA_VERSION) {
     throw new TypeError(
       `${valuePath}.schemaVersion must be the integer ${APP_MANIFEST_SCHEMA_VERSION}.`,
     );
   }
+  const schemaVersion = /** @type {3} */ (manifest.schemaVersion);
+  assertExactKeys(manifest, TOP_LEVEL_KEYS, valuePath, schemaVersion);
 
   assertPlainObject(manifest.app, `${valuePath}.app`);
-  assertExactKeys(manifest.app, APP_KEYS, `${valuePath}.app`);
+  assertExactKeys(manifest.app, APP_KEYS, `${valuePath}.app`, schemaVersion);
   assertLogicalId(manifest.app.id, `${valuePath}.app.id`);
 
   assertPlainObject(manifest.cli, `${valuePath}.cli`);
-  assertExactKeys(manifest.cli, CLI_KEYS, `${valuePath}.cli`);
-  assertEntrypoint(manifest.cli.entrypoint, `${valuePath}.cli.entrypoint`);
+  assertExactKeys(manifest.cli, CLI_KEYS, `${valuePath}.cli`, schemaVersion);
+  assertEntrypoint(
+    manifest.cli.entrypoint,
+    `${valuePath}.cli.entrypoint`,
+    schemaVersion,
+  );
 
   if (Object.prototype.hasOwnProperty.call(manifest, 'targets')) {
-    assertTargets(manifest.targets, `${valuePath}.targets`);
+    assertTargets(manifest.targets, `${valuePath}.targets`, schemaVersion);
   }
   if (Object.prototype.hasOwnProperty.call(manifest, 'activities')) {
     assertPlainObject(manifest.activities, `${valuePath}.activities`);
@@ -285,12 +301,17 @@ export function validateAppManifest(value, valuePath = 'manifest') {
       assertLogicalId(activityId, activityPath);
       const activity = manifest.activities[activityId];
       assertPlainObject(activity, activityPath);
-      assertExactKeys(activity, ACTIVITY_KEYS, activityPath);
-      assertEntrypoint(activity.entrypoint, `${activityPath}.entrypoint`);
+      assertExactKeys(activity, ACTIVITY_KEYS, activityPath, schemaVersion);
+      assertEntrypoint(
+        activity.entrypoint,
+        `${activityPath}.entrypoint`,
+        schemaVersion,
+      );
       if (Object.prototype.hasOwnProperty.call(activity, 'externalPackages')) {
         assertExternalPackages(
           activity.externalPackages,
           `${activityPath}.externalPackages`,
+          schemaVersion,
         );
       }
     }
@@ -308,6 +329,20 @@ export function validateAppManifest(value, valuePath = 'manifest') {
             `${valuePath}.workflows.${workflowId}.steps[${index}].activity must reference an activity declared by this manifest.`,
           );
         }
+      }
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(manifest, 'schedules')) {
+    manifest.schedules = validateScheduleDefinitions(
+      manifest.schedules,
+      `${valuePath}.schedules`,
+    );
+    const workflowIds = new Set(Object.keys(manifest.workflows || {}));
+    for (const [scheduleId, schedule] of Object.entries(manifest.schedules)) {
+      if (!workflowIds.has(schedule.workflow)) {
+        throw new TypeError(
+          `${valuePath}.schedules.${scheduleId}.workflow must reference a workflow declared by this manifest.`,
+        );
       }
     }
   }

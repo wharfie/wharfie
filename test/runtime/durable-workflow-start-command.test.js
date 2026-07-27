@@ -54,7 +54,7 @@ function digest(value) {
 /** @param {Record<string, any>[]} [steps] @returns {EmbeddedExecution} - Valid packaged execution fixture. */
 function makeEmbeddedExecution(steps) {
   const contract = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: APP_ID },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

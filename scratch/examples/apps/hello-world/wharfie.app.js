@@ -1,7 +1,7 @@
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'hello-world-demo' },
   cli: {
     entrypoint: {
@@ -48,6 +48,15 @@ export default defineApp({
           input: { kind: 'step-output', step: 'echo-first' },
         },
       ],
+    },
+  },
+  schedules: {
+    'echo-hourly': {
+      cron: '0 * * * *',
+      workflow: 'echo-twice',
+      input: { message: 'hello from the resident schedule' },
+      missed: 'latest',
+      overlap: 'allow',
     },
   },
 });

@@ -176,6 +176,18 @@ export interface WorkflowDefinition {
   steps: readonly [WorkflowStep, ...WorkflowStep[]];
 }
 
+/**
+ * Start one named workflow from a canonical five-field UTC cron expression.
+ * Input and policies are immutable parts of the owning application revision.
+ */
+export interface WorkflowScheduleDefinition {
+  cron: string;
+  workflow: LogicalId;
+  input: JsonValue;
+  missed: 'latest';
+  overlap: 'allow';
+}
+
 interface AppTargetBase {
   /** Exact canonical semantic version in x.y.z form. */
   nodeVersion: string;
@@ -196,14 +208,18 @@ export interface AppIdentity {
   id: LogicalId;
 }
 
-export interface WharfieAppDefinition {
-  schemaVersion: 2;
+interface WharfieAppDefinitionBase {
   app: AppIdentity;
   cli: AppCliDefinition;
   targets?: readonly AppTarget[];
   activities?: Readonly<Record<LogicalId, ActivityDefinition>>;
   workflows?: Readonly<Record<LogicalId, WorkflowDefinition>>;
+  schedules?: Readonly<Record<LogicalId, WorkflowScheduleDefinition>>;
 }
+
+export type WharfieAppDefinition = WharfieAppDefinitionBase & {
+  schemaVersion: 3;
+};
 
 type StrictShape<Actual, Shape> = Shape extends unknown
   ? Actual extends Shape
@@ -225,10 +241,37 @@ type StrictShape<Actual, Shape> = Shape extends unknown
     : never
   : never;
 
+type NonEmptyWhenDeclared<
+  Actual,
+  Key extends PropertyKey,
+> = Key extends keyof Actual
+  ? keyof Actual[Key] extends never
+    ? never
+    : unknown
+  : unknown;
+
+type ScheduleReferencesDeclaredWorkflow<Actual> = Actual extends {
+  readonly schedules: infer Schedules;
+}
+  ? Actual extends { readonly workflows: infer Workflows }
+    ? Schedules extends Readonly<Record<string, { readonly workflow: string }>>
+      ? Exclude<
+          Schedules[keyof Schedules]['workflow'],
+          keyof Workflows
+        > extends never
+        ? unknown
+        : never
+      : never
+    : never
+  : unknown;
+
 export declare function defineApp<const App>(
   definition: App &
     WharfieAppDefinition &
-    StrictShape<App, WharfieAppDefinition>,
+    StrictShape<App, WharfieAppDefinition> &
+    NonEmptyWhenDeclared<App, 'workflows'> &
+    NonEmptyWhenDeclared<App, 'schedules'> &
+    ScheduleReferencesDeclaredWorkflow<App>,
 ): App;
 
 export declare function invokeActivity<

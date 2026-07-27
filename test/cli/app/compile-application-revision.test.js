@@ -66,7 +66,7 @@ function makeManifest(
   ],
 ) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: 'revision-demo' },
     cli: {
       entrypoint: { kind: 'node', path: 'src/cli.js', export: 'main' },

@@ -79,7 +79,7 @@ function digest(value) {
 function makeRevision(salt = 'primary') {
   return createApplicationRevision({
     contract: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       app: { id: APP_ID },
       cli: {
         entrypoint: {

@@ -15,7 +15,7 @@ import { loadApp } from '../../../src/cli/app/load-app.js';
 /** @returns {any} */
 function makeValidSource() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     app: { id: 'portable-app' },
     cli: {
       entrypoint: {
@@ -75,7 +75,7 @@ describe('Wharfie app loader', () => {
   let cleanupDirs;
 
   beforeEach(async () => {
-    appDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-v2-'));
+    appDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-v3-'));
     cleanupDirs = [appDir];
     await fsp.mkdir(path.join(appDir, 'src'));
     await Promise.all([
@@ -113,11 +113,11 @@ describe('Wharfie app loader', () => {
     return loadApp({ dir: appDir });
   }
 
-  it('compiles a strict source definition into one canonical v2 manifest', async () => {
+  it('compiles a strict source definition into one canonical v3 manifest', async () => {
     await expect(loadSource(makeValidSource())).resolves.toEqual({
       appDir,
       manifest: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         app: { id: 'portable-app' },
         cli: {
           entrypoint: {
@@ -197,14 +197,14 @@ describe('Wharfie app loader', () => {
       (source) => {
         delete source.schemaVersion;
       },
-      /schemaVersion must be the integer 2/i,
+      /schemaVersion must be the integer 3/i,
     ],
     [
       'a wrong schemaVersion',
       (source) => {
-        source.schemaVersion = 1;
+        source.schemaVersion = 2;
       },
-      /schemaVersion must be the integer 2/i,
+      /schemaVersion must be the integer 3/i,
     ],
     [
       'an unknown top-level key',
@@ -454,7 +454,7 @@ describe('Wharfie app loader', () => {
     [
       'a named export without a default export',
       'export const app = ' + JSON.stringify(makeValidSource()) + ';\n',
-      /must default-export one schemaVersion 2 app definition/i,
+      /must default-export one schemaVersion 3 app definition/i,
     ],
     [
       'a non-JSON value',

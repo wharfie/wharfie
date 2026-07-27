@@ -765,11 +765,12 @@ export function createScheduleControl({
       'activate.observedAt',
     );
     const current = await readCursor(input.appId, input.scheduleId);
-    if (current && observedAt < current.updatedAt) {
-      throw new TypeError(
-        'activate.observedAt must not precede the current cursor updatedAt.',
-      );
-    }
+    // Wall clocks can regress across NTP correction or process restart.
+    // Existing cursor progress is authoritative; a changed definition starts
+    // no earlier than its last durable observation.
+    const effectiveObservedAt = current
+      ? Math.max(observedAt, current.updatedAt)
+      : observedAt;
     const sameDefinition =
       current?.revisionId === input.revisionId &&
       current.definitionId === input.definitionId;
@@ -780,10 +781,10 @@ export function createScheduleControl({
           scheduleId: input.scheduleId,
           revisionId: input.revisionId,
           definitionId: input.definitionId,
-          activationBoundary: floorScheduleMinute(observedAt),
-          horizon: floorScheduleMinute(observedAt),
+          activationBoundary: floorScheduleMinute(effectiveObservedAt),
+          horizon: floorScheduleMinute(effectiveObservedAt),
           version: current ? current.version + 1 : 1,
-          updatedAt: observedAt,
+          updatedAt: effectiveObservedAt,
         });
     const admissionFence = await getLocalApplicationRunCreationFence({
       db,
@@ -902,6 +903,22 @@ export function createScheduleControl({
         current.horizon >= throughInclusive &&
         current.version > expected.version
       ) {
+        const currentAdmissionFence = await getLocalApplicationRunCreationFence(
+          {
+            db,
+            tableName: resolvedTableName,
+            appId: current.appId,
+            revisionId: current.revisionId,
+          },
+        );
+        await db.transactionWrite({
+          tableName: resolvedTableName,
+          conditionChecks: [
+            currentAdmissionFence,
+            ownerFence(owner),
+            cursorFence(current),
+          ],
+        });
         return Object.freeze({ applied: false, cursor: current });
       }
       throw error;

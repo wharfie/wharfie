@@ -8962,7 +8962,7 @@ await main(process.argv);
     `import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 2,
+  schemaVersion: 3,
   app: { id: 'portable-app' },
   cli: {
     entrypoint: {
@@ -9045,6 +9045,15 @@ export default defineApp({
         activity: 'workflow-step',
         input: { kind: 'step-output', step: 'continue' },
       }],
+    },
+  },
+  schedules: {
+    'portable-leap-day': {
+      cron: '0 0 29 2 *',
+      workflow: 'portable-linear',
+      input: { source: 'portable-schedule' },
+      missed: 'latest',
+      overlap: 'allow',
     },
   },
 });
@@ -9371,7 +9380,7 @@ export default defineApp({
       env: cleanEnvironment,
     }).stdout,
   );
-  assert.equal(embeddedManifest.schemaVersion, 2);
+  assert.equal(embeddedManifest.schemaVersion, 3);
   assert.deepEqual(embeddedManifest.app, { id: 'portable-app' });
   assert.deepEqual(embeddedManifest.targets, [
     {
@@ -9447,6 +9456,19 @@ export default defineApp({
       },
     ],
   });
+  assert.deepEqual(embeddedManifest.schedules, {
+    'portable-leap-day': {
+      cron: '0 0 29 2 *',
+      workflow: 'portable-linear',
+      input: { source: 'portable-schedule' },
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  });
+  assert.deepEqual(
+    embeddedManifest.schedules,
+    packageResult.revision.contract.schedules,
+  );
 
   const embeddedMetadata = JSON.parse(
     runCommand(cleanArtifactPath, ['wharfie', 'metadata', '--no-pretty'], {
