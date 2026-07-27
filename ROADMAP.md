@@ -85,6 +85,18 @@ selected experiment-tagged instance, root volume, evidence volume, attachment,
 and root-exclusion facts. Its content-addressed receipt is explicitly
 non-authoritative; injected credentials, the caller-asserted source commit,
 host/device state, and live AWS behavior remain unattested.
+V80-V81 define the fixed zero-argument host-preflight SEA delivery and close
+exact-commit source capture, same-generation build evidence, immutable
+publication, and packaged artifact records. V82 preserves a real but
+non-authoritative Linux/x64 build/startup observation from a disposable
+trusted runner. V83 replaces that one-off proof harness with a committed,
+pull-disabled, residue-bounded Docker driver, a two-stage exact-Node guest
+verifier, and strict `whlp2` receipt validation. The receipt now separates
+host-runner claims, builder claims, and independently reproduced or observed
+bytes; binds clean exact-HEAD transport and tool fingerprints; records exact
+container/resource/cleanup identity; and remains explicitly non-authoritative.
+The committed V83 driver has not yet been run to produce a `whlp2` receipt, and
+no successful AL2023 or live AWS/EBS lifecycle proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -147,7 +159,7 @@ host fingerprint is also concrete, while live disposable-host format evidence,
 destructive formatting, exact profile verification, mounting, control storage,
 health effects, privileged packaging and selector delivery, clean-account
 proof, and a deployed-service readiness claim still follow ·
-**Last updated:** 2026-07-25
+**Last updated:** 2026-07-27
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
