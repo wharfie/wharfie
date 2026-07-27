@@ -4,7 +4,7 @@
  * evidence, fencing material, or event payloads. Those need an explicit future
  * disclosure and authorization policy.
  */
-export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 7;
+export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 8;
 
 /**
  * Expose only trigger identity needed to distinguish run semantics. Payload
@@ -18,6 +18,18 @@ function triggerSummary(trigger) {
         kind: trigger.kind,
         workflowId: trigger.workflowId,
         planId: trigger.planId,
+        ...(trigger.cause
+          ? {
+              cause: {
+                schemaVersion: trigger.cause.schemaVersion,
+                kind: trigger.cause.kind,
+                scheduleId: trigger.cause.scheduleId,
+                definitionId: trigger.cause.definitionId,
+                occurrenceId: trigger.cause.occurrenceId,
+                scheduledAt: trigger.cause.scheduledAt,
+              },
+            }
+          : {}),
       }
     : { kind: trigger.kind };
 }

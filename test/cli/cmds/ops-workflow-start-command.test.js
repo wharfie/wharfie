@@ -170,7 +170,7 @@ describe('wharfie ops start', () => {
         'ops inspect',
       );
       expect(inspected).toMatchObject({
-        schemaVersion: 7,
+        schemaVersion: 8,
         kind: 'wharfie.execution-ledger.run',
         integrity: { verified: true },
         run: {

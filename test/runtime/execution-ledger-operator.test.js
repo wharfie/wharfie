@@ -456,7 +456,7 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       run: {
         cancellationRequest: {
           requestId: 'cancel-request-1',
@@ -486,6 +486,14 @@ describe('shared execution-ledger operator boundary', () => {
           workflowId: 'main',
           planId: 'plan-1',
           planRef: { payloadId: 'plan-payload-secret' },
+          cause: {
+            schemaVersion: 1,
+            kind: 'schedule',
+            scheduleId: 'nightly',
+            definitionId: 'wsd_schedule-definition',
+            occurrenceId: 'wso_schedule-occurrence',
+            scheduledAt: 1_700_000_000_000,
+          },
         },
         requestRef: { payloadId: 'start-payload-secret' },
         status: 'BLOCKED',
@@ -566,9 +574,21 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       run: {
-        trigger: { kind: 'workflow', workflowId: 'main', planId: 'plan-1' },
+        trigger: {
+          kind: 'workflow',
+          workflowId: 'main',
+          planId: 'plan-1',
+          cause: {
+            schemaVersion: 1,
+            kind: 'schedule',
+            scheduleId: 'nightly',
+            definitionId: 'wsd_schedule-definition',
+            occurrenceId: 'wso_schedule-occurrence',
+            scheduledAt: 1_700_000_000_000,
+          },
+        },
       },
       workflowCursor: {
         runId: 'workflow-run',
@@ -700,7 +720,7 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       workflowCursor: {
         signalWaitId: 'signal-wait-1',
         disposition: 'SIGNAL_WAITING',
@@ -1403,7 +1423,7 @@ describe('shared execution-ledger operator boundary', () => {
         result.view,
       );
       expect(operatorView).toMatchObject({
-        schemaVersion: 7,
+        schemaVersion: 8,
         recovery: {
           action: 'settled-managed-effect-set',
           changed: true,
@@ -1745,7 +1765,7 @@ describe('shared execution-ledger operator boundary', () => {
           result.view,
         );
       expect(operatorView).toMatchObject({
-        schemaVersion: 7,
+        schemaVersion: 8,
         kind: 'wharfie.execution-ledger.effect-reconciliation',
         effectReconciliation: result.reconciliation,
         run: { status: RunStatus.BLOCKED },
@@ -1863,7 +1883,7 @@ describe('shared execution-ledger operator boundary', () => {
         result.targetView,
       );
       expect(operatorView).toMatchObject({
-        schemaVersion: 7,
+        schemaVersion: 8,
         kind: 'wharfie.execution-ledger.effect-successor',
         effectSuccessor: {
           successorId,

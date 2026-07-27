@@ -22,6 +22,10 @@ import {
   createExecutionLedgerReadyWorkScope,
   getExecutionLedgerReadyWorkSortKey,
 } from '../../src/core/lib/ledger/ready-work.js';
+import {
+  createScheduleOccurrenceId,
+  createScheduleRunCause,
+} from '../../src/core/lib/ledger/schedule-occurrence.js';
 import { createWorkflowRunId } from '../../src/core/lib/ledger/workflow-execution-contract.js';
 
 const APP_ID = 'workflow-start-app';
@@ -32,6 +36,10 @@ const WORKFLOW_ID = 'main';
 const ACTIVITY_ID = 'greet';
 const STEP_ID = 'first';
 const OBSERVED_AT = 1_700_000_000_000;
+const SCHEDULED_AT = 1_700_000_040_000;
+const SCHEDULE_DEFINITION_ID = `wsd_${createHash('sha256')
+  .update('workflow-start-schedule-definition')
+  .digest('base64url')}`;
 const PAYLOAD_ROOT = mkdtempSync(
   join(tmpdir(), 'wharfie-workflow-start-payload-'),
 );
@@ -378,6 +386,74 @@ for (const adapter of getAdapterMatrix()) {
           workflowCursor: created.workflowCursor,
           invocations: [created.invocation],
         });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('binds a scheduled workflow cause into creation and exact replay', async () => {
+      const { db, cleanup } = await adapter.create();
+      const tableName = 'execution-ledger-scheduled-workflow-start';
+      const occurrenceId = createScheduleOccurrenceId({
+        appId: APP_ID,
+        scheduleId: 'nightly',
+        scheduledAt: SCHEDULED_AT,
+      });
+      const runId = workflowRunId(occurrenceId);
+      const cause = createScheduleRunCause({
+        appId: APP_ID,
+        scheduleId: 'nightly',
+        definitionId: SCHEDULE_DEFINITION_ID,
+        scheduledAt: SCHEDULED_AT,
+      });
+      try {
+        const ledger = createExecutionLedger({ db, tableName });
+        const request = workflowRun(runId, {
+          cause,
+          actor: { kind: 'resident-schedule', id: APP_ID },
+        });
+        const created = await ledger.createWorkflowRun(request);
+        const replayed = await ledger.createWorkflowRun(request);
+
+        expect(created.run.trigger).toMatchObject({
+          kind: 'workflow',
+          workflowId: WORKFLOW_ID,
+          cause,
+        });
+        expect(replayed).toMatchObject({
+          applied: false,
+          run: created.run,
+          workflowCursor: created.workflowCursor,
+        });
+        await expect(ledger.rebuildRun(runId)).resolves.toMatchObject({
+          run: { trigger: { cause } },
+        });
+
+        await expect(
+          ledger.createWorkflowRun(workflowRun(runId)),
+        ).rejects.toBeInstanceOf(ExecutionLedgerRunConflictError);
+        await expect(
+          ledger.createWorkflowRun({
+            ...request,
+            cause: {
+              ...cause,
+              definitionId: `wsd_${createHash('sha256')
+                .update('changed-schedule-definition')
+                .digest('base64url')}`,
+            },
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerRunConflictError);
+        await expect(
+          ledger.createWorkflowRun({
+            ...request,
+            cause: createScheduleRunCause({
+              appId: APP_ID,
+              scheduleId: 'hourly',
+              definitionId: SCHEDULE_DEFINITION_ID,
+              scheduledAt: SCHEDULED_AT,
+            }),
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerRunConflictError);
       } finally {
         await cleanup();
       }

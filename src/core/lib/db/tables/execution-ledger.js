@@ -112,6 +112,7 @@ import {
   normalizeExecutionLedgerReadyWorkRecord,
   parseExecutionLedgerReadyWorkSortKey,
 } from '../../ledger/ready-work.js';
+import { normalizeScheduleRunCause } from '../../ledger/schedule-occurrence.js';
 import {
   MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID,
   assertInitialManagedEffectSuccessorRetryEligible,
@@ -460,9 +461,10 @@ function normalizeCancellationRequest(value, label) {
 
 /**
  * @param {unknown} value - Candidate run trigger.
+ * @param {string} appId - Enclosing run application identity.
  * @returns {Record<string, any>} - Validated trigger.
  */
-function normalizeRunTrigger(value) {
+function normalizeRunTrigger(value, appId) {
   const trigger = cloneBoundedJsonObject(
     value ?? { kind: 'manual' },
     EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
@@ -473,9 +475,16 @@ function normalizeRunTrigger(value) {
     return { kind: 'manual' };
   }
   if (trigger.kind === 'workflow') {
+    const hasCause = Object.prototype.hasOwnProperty.call(trigger, 'cause');
     assertExactKeys(
       trigger,
-      ['kind', 'workflowId', 'planId', 'planRef'],
+      [
+        'kind',
+        'workflowId',
+        'planId',
+        'planRef',
+        ...(hasCause ? ['cause'] : []),
+      ],
       'trigger',
     );
     assertLogicalId(trigger.workflowId, 'trigger.workflowId');
@@ -485,6 +494,12 @@ function normalizeRunTrigger(value) {
       WORKFLOW_PLAN_PAYLOAD_SCHEMA,
       'trigger.planRef',
     );
+    if (hasCause) {
+      trigger.cause = normalizeScheduleRunCause(trigger.cause, {
+        appId,
+        label: 'trigger.cause',
+      });
+    }
     return trigger;
   }
   if (trigger.kind === 'effect-successor') {
@@ -2495,7 +2510,7 @@ function normalizeRunSnapshot(run, runId) {
   assertPositiveSafeInteger(value.lastSequence, 'run projection sequence');
   normalizeObservedAt(value.createdAt, 'run projection createdAt');
   normalizeObservedAt(value.updatedAt, 'run projection updatedAt');
-  value.trigger = normalizeRunTrigger(value.trigger);
+  value.trigger = normalizeRunTrigger(value.trigger, value.appId);
   value.requestRef = normalizePayloadReference(
     value.requestRef,
     value.trigger.kind === 'workflow'
@@ -12208,7 +12223,7 @@ export function createExecutionLedger({
         : {},
       'createManualRun.callerMetadata',
     );
-    const trigger = normalizeRunTrigger(value.trigger);
+    const trigger = normalizeRunTrigger(value.trigger, appId);
     if (trigger.kind !== 'manual') {
       throw new TypeError(
         'createManualRun accepts only a manual trigger; effect successors require atomic authorization.',
@@ -12464,7 +12479,7 @@ export function createExecutionLedger({
 
   /**
    * @param {Record<string, any>} state - Verified workflow state.
-   * @param {{planPayload: Record<string, any>, startPayload: Record<string, any>, actor: {kind: string, id: string}}} requested - Exact requested immutable work.
+   * @param {{planPayload: Record<string, any>, startPayload: Record<string, any>, actor: {kind: string, id: string}, cause?: Record<string, any>}} requested - Exact requested immutable work.
    * @returns {Promise<Record<string, any> | undefined>} - Immutable creation snapshots, if the run is an exact duplicate.
    */
   async function getMatchingWorkflowCreation(state, requested) {
@@ -12472,7 +12487,10 @@ export function createExecutionLedger({
     if (
       state.run.trigger?.kind !== 'workflow' ||
       creationEvent?.type !== 'workflow-run-created' ||
-      !hasSameCanonicalJson(creationEvent.actor, requested.actor)
+      !hasSameCanonicalJson(creationEvent.actor, requested.actor) ||
+      (requested.cause === undefined
+        ? Object.prototype.hasOwnProperty.call(state.run.trigger, 'cause')
+        : !hasSameCanonicalJson(state.run.trigger.cause, requested.cause))
     ) {
       return undefined;
     }
@@ -12609,7 +12627,7 @@ export function createExecutionLedger({
   /**
    * Create the first persisted continuation of one static workflow, headed by
    * an activity, timer, or signal wait.
-   * @param {{runId: string, appId: string, revisionId: string, workflowId: string, definition: Record<string, any>, input?: any, callerMetadata?: Record<string, any>, transitionId: string, actor?: {kind: string, id: string}, observedAt?: number}} options - Immutable workflow start.
+   * @param {{runId: string, appId: string, revisionId: string, workflowId: string, definition: Record<string, any>, input?: any, callerMetadata?: Record<string, any>, cause?: Record<string, any>, transitionId: string, actor?: {kind: string, id: string}, observedAt?: number}} options - Immutable workflow start.
    * @returns {Promise<Record<string, any>>} - Created or exactly deduplicated workflow.
    */
   async function createWorkflowRun(options) {
@@ -12628,6 +12646,7 @@ export function createExecutionLedger({
         'definition',
         'input',
         'callerMetadata',
+        'cause',
         'transitionId',
         'actor',
         'observedAt',
@@ -12703,13 +12722,24 @@ export function createExecutionLedger({
       'createWorkflowRun.transitionId',
     );
     const actor = normalizeActor(value.actor);
+    const cause = Object.prototype.hasOwnProperty.call(value, 'cause')
+      ? normalizeScheduleRunCause(value.cause, {
+          appId,
+          label: 'createWorkflowRun.cause',
+        })
+      : undefined;
     const observedAt = normalizeObservedAt(
       Object.prototype.hasOwnProperty.call(value, 'observedAt')
         ? value.observedAt
         : now(),
       'createWorkflowRun.observedAt',
     );
-    const requested = { planPayload, startPayload, actor };
+    const requested = {
+      planPayload,
+      startPayload,
+      actor,
+      ...(cause === undefined ? {} : { cause }),
+    };
 
     const existing = await readVerifiedRun(runId);
     if (existing) {
@@ -12790,12 +12820,16 @@ export function createExecutionLedger({
         label: 'createWorkflowRun.activityRequestRef',
       });
     }
-    const trigger = normalizeRunTrigger({
-      kind: 'workflow',
-      workflowId,
-      planId: materialized.planId,
-      planRef,
-    });
+    const trigger = normalizeRunTrigger(
+      {
+        kind: 'workflow',
+        workflowId,
+        planId: materialized.planId,
+        planRef,
+        ...(cause === undefined ? {} : { cause }),
+      },
+      appId,
+    );
     const run = {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
       runId,
