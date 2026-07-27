@@ -35,13 +35,36 @@ non-authoritative discovery semantics, verified integrity, `scope`, redacted
 evidence, fences, and filesystem paths. The listing grants no scheduling,
 cancellation, or mutation authority.
 
+Read one exact physical attempt's retained logs with
+`wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]`
+or packaged
+`<app> wharfie logs --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]`.
+Source mode takes the application ID directly and does not load current
+application source. Packaged mode binds the app ID to the executable. Operating
+system access controls local stores; a configured provider-backed control
+adapter additionally uses its ordinary credentials and IAM. These are the
+authorization boundaries; `--confirm-sensitive-output` is mandatory disclosure
+consent, not authentication, and Wharfie adds no served log API.
+
+Each page re-verifies the exact run and historical attempt, the complete
+hash-linked retained log chain, and every content-addressed payload before
+emitting anything. Pages are ascending, default to 50 entries, cap at 100, and
+freeze the first request's verified prefix; later appends require a fresh
+no-cursor request. Schema-v1 JSON kind
+`wharfie.execution-ledger.activity-log-page` is explicitly
+`application-sensitive-unredacted`, non-authoritative diagnostic evidence.
+Serialized JSON and human message/field values are terminal-inert JSON text
+without changing parsed raw values. Outside raw messages and fields—which may
+themselves contain any secret or internal-looking value—the page adds no
+Wharfie-owned fences, storage IDs, hashes, or payload references.
+
 Generic exact-run `inspect`, confirmed `recover`, evidence-backed `reconcile`,
 and run-level `cancel` are workflow-aware. JSON inspection uses the schema-v7
 redacted view with safe timer, signal-wait, and signal-delivery lifecycle state,
 whose dedicated projection rows omit signal payloads, payload references,
 digests, and actor fields. The existing event history retains its safe actor
 metadata. Branches, schedules, managed-effect workflow successors, and public
-log retrieval remain unsupported.
+log tail/search remain unsupported.
 
 The provider-backed `deployment` group has exactly five leaves: `plan`,
 `apply`, `inspect`, `reconcile`, and `destroy`. Source plan and direct apply

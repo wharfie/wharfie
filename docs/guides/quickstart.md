@@ -399,6 +399,8 @@ short-lived local ownership for an activation that needs no physical delivery:
 ```bash
 wharfie ops list --dir ./path/to/app --limit 50 --json
 wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]
+wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> \
+  --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
 wharfie ops inspect --run-id <run-id>
 wharfie ops recover --run-id <run-id> --confirm-runner-stopped
 wharfie ops reconcile --run-id <run-id> --reconciliation-id <stable-id> \
@@ -413,6 +415,8 @@ directly under its reserved operator namespace:
 ```bash
 <app> wharfie list --limit 50 --json
 <app> wharfie list [--limit <1..100>] [--cursor <opaque>] [--json]
+<app> wharfie logs --run-id <run-id> --attempt-id <attempt-id> \
+  --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
 <app> wharfie inspect --run-id <run-id>
 <app> wharfie recover --run-id <run-id> --confirm-runner-stopped
 <app> wharfie reconcile --run-id <run-id> --reconciliation-id <stable-id> \
@@ -437,6 +441,28 @@ mutate a run. The document reports verified integrity and includes its `scope`,
 redacted `items`, and a `nextCursor` that is either an opaque string or `null`.
 Human and JSON listing omit payloads, evidence, fencing tokens, and filesystem
 paths.
+
+`inspect` identifies every historical physical attempt without revealing its
+fence. Pass the exact app/run/attempt IDs to source `logs`, or the run/attempt
+IDs to the packaged command. Source log inspection does not load current app
+source; the packaged command uses its embedded app identity. Both require
+`--confirm-sensitive-output` before opening storage because messages and fields
+are raw application-controlled data that may contain secrets.
+
+Log pages are read-only, ascending, limited to 50 entries by default and 100
+maximum, and frozen to the complete verified prefix seen by the first page.
+Every continuation re-verifies the run, historical attempt, entire retained
+hash chain, and every payload, while ignoring logs appended after that frozen
+prefix. Start a fresh no-cursor read to observe later entries. JSON kind
+`wharfie.execution-ledger.activity-log-page` declares authority `none`,
+verified integrity, and disclosure
+`application-sensitive-unredacted`. Human output renders messages and fields
+as terminal-inert JSON, and serialized JSON escapes the same terminal controls
+without changing its parsed raw values. Outside raw messages and fields—which
+may themselves contain any secret or internal-looking value—neither form adds
+Wharfie-owned fencing tokens, auxiliary keys, hashes, or payload references.
+This is historical diagnostic inspection, not tailing, search, redaction, or
+exactly-once display.
 
 Packaged inspection, recovery, reconciliation, effect reconciliation,
 cancellation, and signal delivery are also scoped to the embedded app identity.

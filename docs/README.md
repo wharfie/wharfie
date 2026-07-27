@@ -53,6 +53,12 @@ activity/timer/signal workflow plans. Source `wharfie ops signal` and packaged
 caller-stable delivery ID. The shared exact-run inspection, confirmed recovery,
 cancellation, and evidence-reconciliation commands understand the redacted
 activation-aware workflow cursor.
+The separate source/packaged `logs` command can disclose one exact physical
+attempt's fully verified retained log prefix after explicit sensitive-output
+confirmation. Its raw schema is deliberately non-authoritative and
+application-sensitive; terminal-inert serialization does not redact parsed raw
+values, which may contain any secret or internal-looking data. Ordinary run
+inspection remains redacted.
 
 This is not yet a complete durable workflow engine. Packaged Linux artifacts
 implement a systemd user-service lifecycle with real reboot evidence,

@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 
+import { createExecutionLedgerActivityLogCommand } from '../../../runtime/operator/execution-ledger-activity-log-command.js';
 import { createExecutionLedgerHistoryCommand } from '../../../runtime/operator/execution-ledger-history-command.js';
 import { createExecutionLedgerOperatorCommands } from '../../../runtime/operator/execution-ledger-operator.js';
 import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.js';
@@ -44,6 +45,11 @@ export function createProgram(options = {}) {
     async resolveIdentity() {
       const identity = await resolveExpectedIdentity();
       return { appId: identity.appId };
+    },
+  });
+  const logsCommand = createExecutionLedgerActivityLogCommand({
+    async resolveAppId() {
+      return (await resolveExpectedIdentity()).appId;
     },
   });
   const runCommand = createPackagedDurableRunCommand({
@@ -141,6 +147,7 @@ export function createProgram(options = {}) {
     .addCommand(submitCommand)
     .addCommand(workerCommand)
     .addCommand(listCommand)
+    .addCommand(logsCommand)
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
     .addCommand(reconcileCommand)

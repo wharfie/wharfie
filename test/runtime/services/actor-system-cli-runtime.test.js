@@ -212,6 +212,55 @@ describe('packaged application dispatch', () => {
     expect(packaged.helpInformation()).toContain('list');
   });
 
+  it('mounts the shared sensitive-log command with only the source application override', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const packaged = createProgram();
+    const sourceLogs = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'logs',
+    );
+    const packagedLogs = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'logs',
+    );
+
+    expect(sourceLogs).toBeDefined();
+    expect(packagedLogs).toBeDefined();
+    expect(packagedLogs?.description()).toBe(sourceLogs?.description());
+    expect(
+      sourceLogs?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual([
+      '--app-id',
+      '--run-id',
+      '--attempt-id',
+      '--limit',
+      '--cursor',
+      '--confirm-sensitive-output',
+      '--json',
+    ]);
+    expect(
+      packagedLogs?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual([
+      '--run-id',
+      '--attempt-id',
+      '--limit',
+      '--cursor',
+      '--confirm-sensitive-output',
+      '--json',
+    ]);
+    expect(sourceLogs?.helpInformation()).toContain('--app-id <appId>');
+    expect(packagedLogs?.helpInformation()).not.toContain('--app-id');
+    expect(sourceOps.helpInformation()).toContain('logs');
+    expect(packaged.helpInformation()).toContain('logs');
+  });
+
   it('narrows packaged revision authority to app-scoped history at action time', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
     const root = mkdtempSync(join(tmpdir(), 'wharfie-packaged-history-'));

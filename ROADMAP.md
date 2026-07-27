@@ -124,13 +124,19 @@ gives durable manual/workflow runners a log-only sink. One exact `STARTED`
 attempt scope and fence owns a bounded auxiliary hash-linked sparse sequence;
 stable full-chain and payload verification plus exact replay cover response
 loss, including after terminalization. The 256-entry/8 MiB store does not
-mutate normal run history. Raw logs remain sensitive and have no public reader,
-and retained append idempotency is not exactly-once execution or display. Five
-focused V87 safe suites pass; one separately attempted operations-error suite
-exits 134 locally for an unresolved reason and is not part of that passing
-matrix or a full-suite claim. The committed V83 driver still has not produced
-a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle proof
-exists.
+mutate normal run history. V88 left raw logs sensitive with no public reader,
+and retained append idempotency is not exactly-once execution or display. V89
+adds a locally invoked, explicit-confirmation reader with no served API for one
+exact app/run/attempt.
+Each bounded ascending walk freezes one verified prefix and revalidates the
+run, attempt, complete log chain, and every payload before raw sensitive
+output; source inspection requires an app ID without loading source, while the
+packaged command binds its embedded app identity. Tail, search, redaction, and
+display authority remain absent. Five focused V87 safe suites pass; one
+separately attempted operations-error suite exits 134 locally for an unresolved
+reason and is not part of that passing matrix or a full-suite claim. The
+committed V83 driver still has not produced a `whlp2` receipt, and no successful
+AL2023 or live AWS/EBS lifecycle proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -192,10 +198,11 @@ application-storage preparation are now concrete. The read/digest-only V78
 host fingerprint is also concrete. The local durable ledger now has verified
 bounded application-wide run discovery from both source and packaged CLIs and
 fenced durable activity-log append before transport acknowledgement, while
-public log disclosure and retrieval remain open. Live disposable-host format
-evidence, destructive formatting, exact profile verification, mounting,
-control storage, health effects, privileged packaging and selector delivery,
-clean-account proof, and a deployed-service readiness claim still follow ·
+local explicit-confirmation sensitive log disclosure is now concrete. Live
+tail/search, broader operator surfaces, disposable-host format evidence,
+destructive formatting, exact profile verification, mounting, control storage,
+health effects, privileged packaging and selector delivery, clean-account
+proof, and a deployed-service readiness claim still follow ·
 **Last updated:** 2026-07-27
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -683,8 +690,17 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       entries/8 MiB, and does not mutate normal run history. This foundation
       deliberately exposes no public reader, redaction, retention/GC, or
       exactly-once execution/display claim.
-- [ ] Add public logs and any remaining operator surfaces that are still
-      deliberately absent.
+- [x] Add a local source/packaged historical log-page command for one exact
+      app/run/attempt. Explicit confirmation precedes storage access; every
+      frozen-prefix page verifies the run, historical attempt, complete
+      hash-linked chain, and payloads before raw
+      `application-sensitive-unredacted` output. Source mode requires an app ID
+      without loading source; packaged mode binds embedded identity. Human
+      and serialized-JSON rendering escape terminal controls without changing
+      parsed raw values. Outside raw messages and fields, the page adds no
+      Wharfie-owned fence/hash/reference; tail/search/redaction and
+      execution/display authority remain absent.
+- [ ] Add any remaining operator surfaces that are still deliberately absent.
 - [x] Build one shared source/packaged foreground durable-run host. Source
       `wharfie ops run` supplies a sealed prepared revision. The packaged
       command `<app> wharfie run` binds only its embedded manifest/revision/

@@ -879,6 +879,8 @@ Durable runs can be rediscovered without retaining their IDs:
 ```bash
 wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]
 <app> wharfie list [--limit <1..100>] [--cursor <opaque>] [--json]
+wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
+<app> wharfie logs --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
 ```
 
 Listing is read-only and app-scoped across revisions, with newest-created runs
@@ -890,6 +892,18 @@ are opaque and bound to the app scope. Schema-v1 JSON has kind
 and is non-authoritative discovery data, reports verified integrity, and
 contains `scope`, `items`, and a string-or-null `nextCursor`. Neither output
 mode exposes payloads, evidence, fences, or filesystem paths.
+
+The separate `logs` command discloses one exact physical attempt's retained
+application logs only after explicit `--confirm-sensitive-output`. Source mode
+uses an exact app ID without loading current source; packaged mode binds its
+embedded app identity. Each ascending page freezes and fully re-verifies one
+bounded retained prefix and every referenced payload. JSON is explicitly
+`application-sensitive-unredacted` and non-authoritative; human values are
+terminal-inert JSON text, and serialized JSON escapes the same controls without
+changing its parsed raw values. Outside raw messages and fields—which may
+themselves contain any value—the page adds no Wharfie-owned private storage
+metadata. This surface provides no tail, search, redaction, or exactly-once
+display claim.
 
 On Linux with a usable systemd user manager and administrator-enabled user
 lingering, the packaged artifact can manage that same resident as a fixed user

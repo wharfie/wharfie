@@ -26,5 +26,6 @@ These records capture product-level decisions that should survive implementation
 | [0020 — Linux systemd user-service lifecycle](0020-systemd-user-service-lifecycle.md)                                      | Accepted                                               |
 | [0021 — Provider-backed single-node deployment](0021-provider-backed-single-node-deployment.md)                            | Accepted; supersedes profile V1 for managed deployment |
 | [0022 — Durable activity-log append before acknowledgement](0022-durable-activity-log-append.md)                           | Accepted                                               |
+| [0023 — Verified sensitive activity-log disclosure](0023-sensitive-activity-log-disclosure.md)                             | Accepted                                               |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

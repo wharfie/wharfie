@@ -182,6 +182,9 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops list --dir ./path/to/app --limit 50 --json',
     );
+    expect(quickstart).toContain(
+      'wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id>',
+    );
     expect(quickstart).toContain('wharfie ops worker --dir ./path/to/app');
     expect(quickstart).toContain(
       '<app> wharfie submit --activity <activity-id>',
@@ -193,6 +196,9 @@ describe('docs command surface', () => {
       '<app> wharfie signal --run-id <run-id> --signal <signal-step-id>',
     );
     expect(quickstart).toContain('<app> wharfie list --limit 50 --json');
+    expect(quickstart).toContain(
+      '<app> wharfie logs --run-id <run-id> --attempt-id <attempt-id>',
+    );
     expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('<app> wharfie service install');
     expect(quickstart).toContain('<app> wharfie service status --json');
@@ -275,8 +281,31 @@ describe('docs command surface', () => {
       '<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
     );
     expect(quickstart).not.toMatch(/^wharfie list(?:\s|$)/m);
+    expect(quickstart).not.toContain('<app> wharfie logs --app-id');
     expect(quickstart).not.toContain('<app> wharfie ops cancel');
     expect(quickstart).not.toContain('<app> wharfie ops start');
+  });
+
+  it('documents the explicit sensitive activity-log disclosure boundary', async () => {
+    const documents = await Promise.all(
+      [
+        'README.md',
+        'docs/guides/quickstart.md',
+        'src/cli/README.md',
+        'docs/architecture/decisions/0023-sensitive-activity-log-disclosure.md',
+      ].map((relativePath) =>
+        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ),
+    );
+
+    for (const document of documents) {
+      expect(document).toContain('wharfie ops logs');
+      expect(document).toContain('<app> wharfie logs');
+      expect(document).toContain('--confirm-sensitive-output');
+      expect(document).toContain('application-sensitive-unredacted');
+      expect(document).toMatch(/non-authoritative/i);
+      expect(document).toMatch(/tail|tailing/);
+    }
   });
 
   it('documents the public linear workflow operator boundary', async () => {
