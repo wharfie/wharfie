@@ -63,6 +63,7 @@ import {
   verifyPayloadBytes,
 } from '../../ledger/execution-ledger-contract.js';
 import {
+  EXECUTION_LEDGER_ATTEMPT_LOG_DISCLOSURE,
   EXECUTION_LEDGER_ATTEMPT_LOG_MAX_CUMULATIVE_PAYLOAD_BYTES,
   EXECUTION_LEDGER_ATTEMPT_LOG_MAX_ENTRIES,
   EXECUTION_LEDGER_ATTEMPT_LOG_PAYLOAD_SCHEMA,
@@ -76,6 +77,13 @@ import {
   normalizeExecutionLedgerAttemptLogEntryRecord,
   normalizeExecutionLedgerAttemptLogHeadRecord,
 } from '../../ledger/attempt-log.js';
+import {
+  createExecutionLedgerAttemptLogPage,
+  createExecutionLedgerAttemptLogPageCursor,
+  normalizeExecutionLedgerAttemptLogPageOptions,
+  normalizeExecutionLedgerAttemptLogPageScope,
+  parseExecutionLedgerAttemptLogPageCursor,
+} from '../../ledger/attempt-log-page.js';
 import {
   EXECUTION_LEDGER_SORT_KEY_PREFIX,
   getAttemptProjectionSortKey,
@@ -22180,6 +22188,147 @@ export function createExecutionLedger({
   }
 
   /**
+   * Rebuild the exact requested run and attempt, then expose one ascending
+   * page from a fully verified raw-log prefix. A continuation freezes the
+   * original prefix while still requiring every currently retained entry and
+   * payload to verify; valid later appends are deliberately outside its view.
+   * @param {{appId: string, runId: string, attemptId: string, limit?: number, cursor?: string}} options - Exact app-scoped page request.
+   * @returns {Promise<Readonly<{disclosure: 'application-sensitive-unredacted', scope: Readonly<Record<string, any>>, snapshot: Readonly<Record<string, any>>, items: Readonly<Record<string, any>>[], nextCursor?: string}> | null>} - Safe raw-log page, or null when the run/app/attempt does not match.
+   */
+  async function readActivityAttemptLogPage(options) {
+    const value = normalizeExecutionLedgerAttemptLogPageOptions(options);
+    const state = await readVerifiedRun(value.runId);
+    if (!state || state.run.appId !== value.appId) return null;
+
+    const matchingAttempts = [...state.attempts.values()].filter(
+      (candidate) => candidate.attemptId === value.attemptId,
+    );
+    if (matchingAttempts.length === 0) return null;
+    if (matchingAttempts.length !== 1) {
+      throw new ExecutionLedgerProjectionError(
+        value.runId,
+        'attempt identity is not unique within its run',
+      );
+    }
+    const attempt = matchingAttempts[0];
+    const invocation = state.invocations.get(attempt.invocationId);
+    if (
+      attempt.runId !== state.run.runId ||
+      attempt.appId !== state.run.appId ||
+      attempt.revisionId !== state.run.revisionId ||
+      !invocation ||
+      invocation.appId !== attempt.appId ||
+      invocation.revisionId !== attempt.revisionId ||
+      invocation.activityId !== attempt.activityId
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        value.runId,
+        'activity attempt-log reader scope is inconsistent',
+      );
+    }
+
+    const scope = {
+      appId: attempt.appId,
+      revisionId: attempt.revisionId,
+      activityId: attempt.activityId,
+      runId: attempt.runId,
+      invocationId: attempt.invocationId,
+      attemptId: attempt.attemptId,
+      fencingToken: attempt.fencingToken,
+      generation: attempt.generation,
+      coordinatorEpoch: attempt.coordinatorEpoch,
+    };
+    const safeScope = normalizeExecutionLedgerAttemptLogPageScope({
+      appId: scope.appId,
+      revisionId: scope.revisionId,
+      activityId: scope.activityId,
+      runId: scope.runId,
+      invocationId: scope.invocationId,
+      attemptId: scope.attemptId,
+      generation: scope.generation,
+      coordinatorEpoch: scope.coordinatorEpoch,
+    });
+    const continuation = value.cursor
+      ? parseExecutionLedgerAttemptLogPageCursor(value.cursor, safeScope)
+      : null;
+    const chain = await readVerifiedActivityAttemptLogChain(scope);
+    if (chain && !Object.prototype.hasOwnProperty.call(attempt, 'startedAt')) {
+      throw new ExecutionLedgerProjectionError(
+        value.runId,
+        'never-started activity attempt retains logs',
+      );
+    }
+
+    const currentSnapshot = chain
+      ? {
+          entryCount: chain.head.entry_count,
+          cumulativePayloadBytes: chain.head.cumulative_payload_bytes,
+          lastSequence: chain.head.last_protocol_sequence,
+        }
+      : {
+          entryCount: 0,
+          cumulativePayloadBytes: 0,
+          lastSequence: null,
+        };
+    const snapshot = continuation?.snapshot || currentSnapshot;
+    const startIndex = continuation?.nextIndex || 0;
+    if (continuation) {
+      if (!chain || chain.entries.length < snapshot.entryCount) {
+        throw new TypeError(
+          'readActivityAttemptLogPage.cursor snapshot is unavailable.',
+        );
+      }
+      const prefix = chain.entries.slice(0, snapshot.entryCount);
+      const prefixLast = prefix.at(-1);
+      const cumulativePayloadBytes = prefix.reduce(
+        (total, entry) => total + entry.canonical_payload_bytes,
+        0,
+      );
+      if (
+        !prefixLast ||
+        prefixLast.protocol_sequence !== snapshot.lastSequence ||
+        cumulativePayloadBytes !== snapshot.cumulativePayloadBytes ||
+        chain.entries[startIndex - 1]?.protocol_sequence !==
+          continuation.previousSequence
+      ) {
+        throw new TypeError(
+          'readActivityAttemptLogPage.cursor does not match its retained prefix boundary.',
+        );
+      }
+    }
+
+    const endIndex = Math.min(startIndex + value.limit, snapshot.entryCount);
+    const items = chain
+      ? chain.entries.slice(startIndex, endIndex).map((entry, offset) => {
+          const frame = chain.frames[startIndex + offset];
+          return {
+            sequence: entry.protocol_sequence,
+            acceptedAt: entry.accepted_at,
+            level: frame.level,
+            message: frame.message,
+            fields: frame.fields,
+          };
+        })
+      : [];
+    const nextCursor =
+      chain && endIndex < snapshot.entryCount
+        ? createExecutionLedgerAttemptLogPageCursor({
+            scope: safeScope,
+            snapshot,
+            nextIndex: endIndex,
+            previousSequence: chain.entries[endIndex - 1].protocol_sequence,
+          })
+        : undefined;
+    return createExecutionLedgerAttemptLogPage({
+      disclosure: EXECUTION_LEDGER_ATTEMPT_LOG_DISCLOSURE,
+      scope: safeScope,
+      snapshot,
+      items,
+      ...(nextCursor ? { nextCursor } : {}),
+    });
+  }
+
+  /**
    * Resolve an exact retained append before consulting current attempt state.
    * This ordering lets a response-loss retry succeed after the attempt has
    * since terminalized without allowing a new terminal-attempt append.
@@ -22595,6 +22744,7 @@ export function createExecutionLedger({
     markManagedEffectUncertain,
     interruptManagedEffectSuccessor,
     recordManagedEffectRequest,
+    readActivityAttemptLogPage,
     readManualRunRequest,
     readManagedEffectDelivery,
     reconcileUncertainManagedEffect,
@@ -22630,6 +22780,7 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} claimInvocation - Claims the next physical generation.
  * @property {(...args: any[]) => Promise<any>} markAttemptStarted - Persists the handler-start boundary.
  * @property {(options: {appId: string, revisionId: string, activityId: string, runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number, coordinatorEpoch: number, frame: Record<string, any>}) => Promise<{applied: boolean, attemptId: string, acknowledgedComponentSequence: number, entryId: string}>} appendActivityAttemptLog - Durably appends one fenced Activity Protocol log frame without advancing normal run history.
+ * @property {(options: {appId: string, runId: string, attemptId: string, limit?: number, cursor?: string}) => Promise<Readonly<{disclosure: 'application-sensitive-unredacted', scope: Readonly<Record<string, any>>, snapshot: Readonly<Record<string, any>>, items: Readonly<Record<string, any>>[], nextCursor?: string}> | null>} readActivityAttemptLogPage - Rebuilds an exact app-scoped attempt and returns one fully verified frozen raw-log page.
  * @property {(...args: any[]) => Promise<any>} commitVerifiedAttemptTerminal - Commits validated terminal evidence.
  * @property {(...args: any[]) => Promise<any>} recordManagedEffectRequest - Persists a logical effect before adapter start.
  * @property {(...args: any[]) => Promise<any>} markManagedEffectStarted - Persists that an adapter may have begun.
