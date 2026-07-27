@@ -260,4 +260,38 @@ describe('disposable Jest runner', () => {
     expect(packageJson.scripts['test:ci']).not.toContain('npm run test &&');
     expect(packageJson.jest.coverageThreshold).toBeDefined();
   });
+
+  it('keeps the Jest runner, imported globals, and test types on one major', async () => {
+    const [packageJson, packageLock] = await Promise.all(
+      ['../package.json', '../package-lock.json'].map(async (relativePath) =>
+        JSON.parse(
+          await fsp.readFile(new URL(relativePath, import.meta.url), 'utf8'),
+        ),
+      ),
+    );
+    /** @param {string} version */
+    const major = (version) => {
+      const match = /\d+/.exec(version);
+      if (!match) {
+        throw new TypeError(`Missing semantic version in ${version}.`);
+      }
+      return Number(match[0]);
+    };
+    const declaredMajors = [
+      packageJson.devDependencies.jest,
+      packageJson.devDependencies['@jest/globals'],
+      packageJson.devDependencies['@types/jest'],
+    ].map(major);
+    const lockedMajors = [
+      packageLock.packages['node_modules/jest'].version,
+      packageLock.packages['node_modules/@jest/globals'].version,
+      packageLock.packages['node_modules/@types/jest'].version,
+      packageLock.packages['node_modules/jest-cli'].version,
+      packageLock.packages['node_modules/jest-runtime'].version,
+    ].map(major);
+
+    expect(new Set(declaredMajors).size).toBe(1);
+    expect(new Set(lockedMajors).size).toBe(1);
+    expect(lockedMajors[0]).toBe(declaredMajors[0]);
+  });
 });
