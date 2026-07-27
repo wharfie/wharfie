@@ -170,17 +170,24 @@ describe('wharfie ops start', () => {
     try {
       const first = parseSuccessfulJson(runCli(startArgs, env), 'ops start');
       expect(first).toEqual({
-        idempotency_key: idempotencyKey,
-        run_id: runId,
-        revision: expect.stringMatching(/^wrv1_[A-Za-z0-9_-]{43}$/),
-        workflow: WORKFLOW_ID,
-        status: 'RUNNING',
-        cursor_disposition: 'ACTIVITY_RUNNABLE',
-        step: FIRST_STEP_ID,
-        step_index: 0,
-        activation_kind: 'activity',
-        activation_status: 'RUNNABLE',
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.workflow-start',
+        appId: APP_ID,
+        runId,
+        revisionId: expect.stringMatching(/^wrv1_[A-Za-z0-9_-]{43}$/),
+        workflowId: WORKFLOW_ID,
+        idempotencyKey,
         reused: false,
+        runStatus: 'RUNNING',
+        cursor: {
+          disposition: 'ACTIVITY_RUNNABLE',
+          stepId: FIRST_STEP_ID,
+          stepIndex: 0,
+        },
+        nextActivation: {
+          kind: 'activity',
+          status: 'RUNNABLE',
+        },
       });
       expect(JSON.stringify(first)).not.toContain('workflow-input-secret');
       expect(JSON.stringify(first)).not.toContain('workflow-caller-secret');
@@ -196,7 +203,7 @@ describe('wharfie ops start', () => {
         run: {
           runId,
           appId: APP_ID,
-          revisionId: first.revision,
+          revisionId: first.revisionId,
           trigger: {
             kind: 'workflow',
             workflowId: WORKFLOW_ID,
@@ -234,14 +241,14 @@ describe('wharfie ops start', () => {
             observedAt: expect.any(Number),
             actor: {
               kind: 'workflow-operator',
-              id: first.revision,
+              id: first.revisionId,
             },
           },
         ],
         workflowCursor: {
           runId,
           appId: APP_ID,
-          revisionId: first.revision,
+          revisionId: first.revisionId,
           workflowId: WORKFLOW_ID,
           planId: expect.any(String),
           stepId: FIRST_STEP_ID,
@@ -276,7 +283,7 @@ describe('wharfie ops start', () => {
         controlPath,
         tableName,
         runId,
-        first.revision,
+        first.revisionId,
       );
       expect(durableBeforeRetry.view).toMatchObject({
         run: { runId, status: 'RUNNING', version: 1 },
@@ -292,7 +299,7 @@ describe('wharfie ops start', () => {
       expect(durableBeforeRetry.ready.items).toEqual([
         expect.objectContaining({
           appId: APP_ID,
-          revisionId: first.revision,
+          revisionId: first.revisionId,
           runId,
           kind: 'ACTIVITY',
           runVersion: 1,
@@ -309,7 +316,7 @@ describe('wharfie ops start', () => {
       );
       expect(retry).toEqual({ ...first, reused: true });
       await expect(
-        readDurableState(controlPath, tableName, runId, first.revision),
+        readDurableState(controlPath, tableName, runId, first.revisionId),
       ).resolves.toEqual(durableBeforeRetry);
 
       const conflicting = runCli(
@@ -326,7 +333,7 @@ describe('wharfie ops start', () => {
         /already exists|conflict|different|does not match|immutable/i,
       );
       await expect(
-        readDurableState(controlPath, tableName, runId, first.revision),
+        readDurableState(controlPath, tableName, runId, first.revisionId),
       ).resolves.toEqual(durableBeforeRetry);
     } finally {
       rmSync(root, { recursive: true, force: true });

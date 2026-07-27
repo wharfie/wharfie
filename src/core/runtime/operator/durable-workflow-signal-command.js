@@ -1,6 +1,10 @@
 import { Command } from 'commander';
 
-import { assertWorkflowRunId } from '../../lib/ledger/workflow-execution-contract.js';
+import { RunStatus } from '../../lib/ledger/execution-ledger-contract.js';
+import {
+  WorkflowCursorDisposition,
+  assertWorkflowRunId,
+} from '../../lib/ledger/workflow-execution-contract.js';
 import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
 import { cloneJsonValue } from '../json-value.js';
 import { assertLogicalId } from '../logical-id.js';
@@ -11,6 +15,57 @@ import { resolveExecutionLedgerStoreConfiguration } from './execution-ledger-sto
 export const DURABLE_WORKFLOW_SIGNAL_RECEIPT_SCHEMA_VERSION = 1;
 export const DURABLE_WORKFLOW_SIGNAL_RECEIPT_KIND =
   'wharfie.execution-ledger.signal';
+
+const SIGNAL_CURSOR_CONTRACTS = Object.freeze({
+  [WorkflowCursorDisposition.ACTIVITY_RUNNABLE]: Object.freeze({
+    runStatus: RunStatus.RUNNING,
+    activationKey: 'invocationId',
+    activationKind: 'activity',
+  }),
+  [WorkflowCursorDisposition.ACTIVITY_RUNNING]: Object.freeze({
+    runStatus: RunStatus.RUNNING,
+    activationKey: 'invocationId',
+    activationKind: 'activity',
+  }),
+  [WorkflowCursorDisposition.ACTIVITY_UNCERTAIN]: Object.freeze({
+    runStatus: RunStatus.BLOCKED,
+    activationKey: 'invocationId',
+    activationKind: 'activity',
+  }),
+  [WorkflowCursorDisposition.TIMER_WAITING]: Object.freeze({
+    runStatus: RunStatus.RUNNING,
+    activationKey: 'timerId',
+    activationKind: 'timer',
+  }),
+  [WorkflowCursorDisposition.SIGNAL_WAITING]: Object.freeze({
+    runStatus: RunStatus.RUNNING,
+    activationKey: 'signalWaitId',
+    activationKind: 'signal',
+  }),
+  [WorkflowCursorDisposition.CANCELLED]: Object.freeze({
+    runStatus: RunStatus.CANCELLED,
+    activationKind: 'terminal',
+  }),
+  [WorkflowCursorDisposition.COMPLETED]: Object.freeze({
+    runStatus: RunStatus.COMPLETED,
+    activationKind: 'terminal',
+  }),
+  [WorkflowCursorDisposition.FAILED]: Object.freeze({
+    runStatus: RunStatus.FAILED,
+    activationKey: 'invocationId',
+    activationKind: 'terminal',
+  }),
+  [WorkflowCursorDisposition.PROTOCOL_FAILED]: Object.freeze({
+    runStatus: RunStatus.FAILED,
+    activationKey: 'invocationId',
+    activationKind: 'terminal',
+  }),
+});
+const SIGNAL_CURSOR_ACTIVATION_KEYS = Object.freeze([
+  'invocationId',
+  'timerId',
+  'signalWaitId',
+]);
 
 /**
  * @typedef DurableWorkflowSignalCommandOutput
@@ -103,18 +158,34 @@ export async function deliverLocalDurableWorkflowSignal(options) {
  * @param {Record<string, any>} cursor - Current cursor projection.
  * @returns {'activity'|'timer'|'signal'|'terminal'} - Safe activation class.
  */
-function activationKind(run, cursor) {
-  if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status)) {
-    return 'terminal';
+function validateSignalCursorLifecycle(run, cursor) {
+  const contract =
+    SIGNAL_CURSOR_CONTRACTS[
+      /** @type {keyof typeof SIGNAL_CURSOR_CONTRACTS} */ (cursor.disposition)
+    ];
+  const activationKeys = SIGNAL_CURSOR_ACTIVATION_KEYS.filter((key) =>
+    Object.prototype.hasOwnProperty.call(cursor, key),
+  );
+  const activationId =
+    activationKeys.length === 1 ? cursor[activationKeys[0]] : undefined;
+  if (
+    !contract ||
+    run.status !== contract.runStatus ||
+    activationKeys.length !== 1 ||
+    ('activationKey' in contract &&
+      activationKeys[0] !== contract.activationKey) ||
+    typeof activationId !== 'string' ||
+    activationId.length === 0 ||
+    typeof cursor.stepId !== 'string' ||
+    cursor.stepId.length === 0 ||
+    !Number.isSafeInteger(cursor.stepIndex) ||
+    cursor.stepIndex < 0
+  ) {
+    throw new TypeError(
+      'Durable workflow signal returned inconsistent durable status.',
+    );
   }
-  if (Object.prototype.hasOwnProperty.call(cursor, 'invocationId')) {
-    return 'activity';
-  }
-  if (Object.prototype.hasOwnProperty.call(cursor, 'timerId')) return 'timer';
-  if (Object.prototype.hasOwnProperty.call(cursor, 'signalWaitId')) {
-    return 'signal';
-  }
-  return 'terminal';
+  return contract.activationKind;
 }
 
 /**
@@ -161,6 +232,15 @@ export function createDurableWorkflowSignalReceipt(value, expected) {
   const cursor = result.workflowCursor;
   const delivery = result.signalDelivery;
   if (
+    !run ||
+    typeof run !== 'object' ||
+    Array.isArray(run) ||
+    !cursor ||
+    typeof cursor !== 'object' ||
+    Array.isArray(cursor) ||
+    !delivery ||
+    typeof delivery !== 'object' ||
+    Array.isArray(delivery) ||
     run.runId !== expected.runId ||
     cursor.runId !== expected.runId ||
     delivery.runId !== expected.runId ||
@@ -170,6 +250,26 @@ export function createDurableWorkflowSignalReceipt(value, expected) {
   ) {
     throw new Error(
       'Durable workflow signal returned an unexpected immutable delivery identity.',
+    );
+  }
+  if (
+    typeof run.appId !== 'string' ||
+    run.appId.length === 0 ||
+    typeof run.revisionId !== 'string' ||
+    run.revisionId.length === 0 ||
+    run.trigger?.kind !== 'workflow' ||
+    typeof run.trigger.workflowId !== 'string' ||
+    run.trigger.workflowId.length === 0 ||
+    typeof run.trigger.planId !== 'string' ||
+    run.trigger.planId.length === 0 ||
+    cursor.appId !== run.appId ||
+    cursor.revisionId !== run.revisionId ||
+    cursor.workflowId !== run.trigger.workflowId ||
+    cursor.planId !== run.trigger.planId ||
+    delivery.appId !== run.appId
+  ) {
+    throw new Error(
+      'Durable workflow signal returned an unexpected immutable workflow identity.',
     );
   }
   const hasResultRejectionReason = Object.prototype.hasOwnProperty.call(
@@ -197,6 +297,7 @@ export function createDurableWorkflowSignalReceipt(value, expected) {
       'Accepted durable workflow signal cannot contain a rejection reason.',
     );
   }
+  const nextActivationKind = validateSignalCursorLifecycle(run, cursor);
   return Object.freeze({
     schemaVersion: DURABLE_WORKFLOW_SIGNAL_RECEIPT_SCHEMA_VERSION,
     kind: DURABLE_WORKFLOW_SIGNAL_RECEIPT_KIND,
@@ -215,9 +316,72 @@ export function createDurableWorkflowSignalReceipt(value, expected) {
       stepIndex: cursor.stepIndex,
     }),
     nextActivation: Object.freeze({
-      kind: activationKind(run, cursor),
+      kind: nextActivationKind,
     }),
   });
+}
+
+/**
+ * Render the stable human table view without coupling it to the JSON schema.
+ * @param {Record<string, any>} receipt - Valid versioned signal receipt.
+ * @returns {Record<string, any>} - Concise snake_case row.
+ */
+export function formatDurableWorkflowSignalHumanRow(receipt) {
+  if (
+    !receipt ||
+    typeof receipt !== 'object' ||
+    Array.isArray(receipt) ||
+    receipt.schemaVersion !== DURABLE_WORKFLOW_SIGNAL_RECEIPT_SCHEMA_VERSION ||
+    receipt.kind !== DURABLE_WORKFLOW_SIGNAL_RECEIPT_KIND ||
+    typeof receipt.runId !== 'string' ||
+    receipt.runId.length === 0 ||
+    typeof receipt.signalId !== 'string' ||
+    receipt.signalId.length === 0 ||
+    typeof receipt.deliveryId !== 'string' ||
+    receipt.deliveryId.length === 0 ||
+    !['accepted', 'rejected', 'unknown-run'].includes(receipt.outcome) ||
+    typeof receipt.reused !== 'boolean' ||
+    (receipt.outcome === 'rejected'
+      ? !['early-signal', 'unexpected-signal', 'late-signal'].includes(
+          receipt.rejectionReason,
+        )
+      : Object.prototype.hasOwnProperty.call(receipt, 'rejectionReason'))
+  ) {
+    throw new TypeError('Durable workflow signal receipt is invalid.');
+  }
+  const cursor = receipt.cursor;
+  const nextActivation = receipt.nextActivation;
+  if (
+    receipt.outcome !== 'unknown-run' &&
+    (typeof receipt.runStatus !== 'string' ||
+      !cursor ||
+      typeof cursor !== 'object' ||
+      Array.isArray(cursor) ||
+      typeof cursor.disposition !== 'string' ||
+      typeof cursor.stepId !== 'string' ||
+      !Number.isSafeInteger(cursor.stepIndex) ||
+      !nextActivation ||
+      typeof nextActivation !== 'object' ||
+      Array.isArray(nextActivation) ||
+      !['activity', 'timer', 'signal', 'terminal'].includes(
+        nextActivation.kind,
+      ))
+  ) {
+    throw new TypeError('Durable workflow signal receipt is invalid.');
+  }
+  return {
+    delivery_id: receipt.deliveryId,
+    run_id: receipt.runId,
+    signal: receipt.signalId,
+    outcome: receipt.outcome,
+    rejection_reason: receipt.rejectionReason || '',
+    reused: receipt.reused,
+    status: receipt.runStatus || '',
+    cursor_disposition: cursor?.disposition || '',
+    step: cursor?.stepId || '',
+    step_index: cursor?.stepIndex ?? '',
+    activation_kind: nextActivation?.kind || '',
+  };
 }
 
 /**
@@ -266,7 +430,7 @@ export function createDurableWorkflowSignalCommand(options = {}) {
         });
         const receipt = createDurableWorkflowSignalReceipt(result, expected);
         if (commandOptions.json === true) output.json(receipt);
-        else output.table([receipt]);
+        else output.table([formatDurableWorkflowSignalHumanRow(receipt)]);
         if (receipt.outcome === 'accepted') {
           if (commandOptions.json !== true) {
             output.success(

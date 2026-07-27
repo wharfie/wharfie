@@ -18,6 +18,20 @@ by the current cursor is accepted; `early-signal`, `unexpected-signal`, and
 `late-signal` are durable, exactly replayable rejections rather than entries in
 an early-signal inbox. Reusing a delivery ID with changed contents conflicts.
 
+With `--json`, source and packaged durable operations emit the same
+schema-versioned camelCase receipt for the same immutable decision:
+`wharfie.execution-ledger.activity-run`,
+`wharfie.execution-ledger.activity-submit`,
+`wharfie.execution-ledger.workflow-start`, or the existing
+`wharfie.execution-ledger.signal`. Activity and start receipts bind app,
+revision, run, and public request identity, then expose only safe lifecycle and
+replay state. Signal receipts retain accepted and rejected outcomes; an
+unknown-run receipt is an explicit unpersisted absence refusal without invented
+app scope. Human tables are a separate snake_case view, not a machine schema.
+Failed/blocked/in-progress runs, rejected signals, and unknown-run refusals
+still emit their receipt before exiting nonzero; failures before a durable
+decision or explicit absence emit no JSON document.
+
 Discover retained durable runs with
 `wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]`
 or packaged

@@ -7388,17 +7388,24 @@ async function createRelocatedSeaWorkflowCase(options, boundary) {
   }).stdout.trim();
   const start = parseFinalJsonLine(startText);
   assert.deepEqual(start, {
-    idempotency_key: idempotencyKey,
-    run_id: runId,
-    revision: options.revisionId,
-    workflow: SEA_WORKFLOW_ID,
-    status: 'RUNNING',
-    cursor_disposition: 'ACTIVITY_RUNNABLE',
-    step: 'first',
-    step_index: 0,
-    activation_kind: 'activity',
-    activation_status: 'RUNNABLE',
+    schemaVersion: 1,
+    kind: 'wharfie.execution-ledger.workflow-start',
+    appId: options.appId,
+    runId,
+    revisionId: options.revisionId,
+    workflowId: SEA_WORKFLOW_ID,
+    idempotencyKey,
     reused: false,
+    runStatus: 'RUNNING',
+    cursor: {
+      disposition: 'ACTIVITY_RUNNABLE',
+      stepId: 'first',
+      stepIndex: 0,
+    },
+    nextActivation: {
+      kind: 'activity',
+      status: 'RUNNABLE',
+    },
   });
   for (const privateValue of [secret, callerSecret, markerDirectory]) {
     assert.equal(startText.includes(privateValue), false);
@@ -7762,17 +7769,24 @@ async function verifyRelocatedSeaTimerSignalWorkflow(options) {
     { cwd: options.root, capture: true, env: environment },
   ).stdout.trim();
   assert.deepEqual(parseFinalJsonLine(startText), {
-    idempotency_key: idempotencyKey,
-    run_id: runId,
-    revision: options.revisionId,
-    workflow: SEA_TIMER_SIGNAL_WORKFLOW_ID,
-    status: 'RUNNING',
-    cursor_disposition: 'ACTIVITY_RUNNABLE',
-    step: 'first',
-    step_index: 0,
-    activation_kind: 'activity',
-    activation_status: 'RUNNABLE',
+    schemaVersion: 1,
+    kind: 'wharfie.execution-ledger.workflow-start',
+    appId: options.appId,
+    runId,
+    revisionId: options.revisionId,
+    workflowId: SEA_TIMER_SIGNAL_WORKFLOW_ID,
+    idempotencyKey,
     reused: false,
+    runStatus: 'RUNNING',
+    cursor: {
+      disposition: 'ACTIVITY_RUNNABLE',
+      stepId: 'first',
+      stepIndex: 0,
+    },
+    nextActivation: {
+      kind: 'activity',
+      status: 'RUNNABLE',
+    },
   });
   for (const privateValue of [secret, markerDirectory]) {
     assert.equal(startText.includes(privateValue), false);
@@ -8557,9 +8571,26 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
         },
       ).stdout.trim();
       const sourceStart = parseFinalJsonLine(sourceText);
-      assert.equal(sourceStart.run_id, cross.runId);
-      assert.equal(sourceStart.revision, options.revisionId);
-      assert.equal(sourceStart.reused, false);
+      assert.deepEqual(sourceStart, {
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.workflow-start',
+        appId: options.appId,
+        runId: cross.runId,
+        revisionId: options.revisionId,
+        workflowId: SEA_WORKFLOW_ID,
+        idempotencyKey: cross.idempotencyKey,
+        reused: false,
+        runStatus: 'RUNNING',
+        cursor: {
+          disposition: 'ACTIVITY_RUNNABLE',
+          stepId: 'first',
+          stepIndex: 0,
+        },
+        nextActivation: {
+          kind: 'activity',
+          status: 'RUNNABLE',
+        },
+      });
       const sourceRun = await cross.fixture.readRun(cross.runId);
       assert.ok(sourceRun);
       const packagedReplay = parseFinalJsonLine(
@@ -8569,7 +8600,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
           env: cross.environment,
         }).stdout,
       );
-      assert.equal(packagedReplay.reused, true);
+      assert.deepEqual(packagedReplay, { ...sourceStart, reused: true });
       assert.deepEqual(await cross.fixture.readRun(cross.runId), sourceRun);
       const completed = await completeSeaWorkflow(
         options,
@@ -10232,15 +10263,23 @@ export default defineApp({
     capture: true,
     env: operatorEnvironment,
   }).stdout.trim();
-  assert.deepEqual(JSON.parse(firstDurableRunText), {
-    idempotency_key: durableIdempotencyKey,
-    run_id: durableRunId,
-    revision: packagedArtifact.revisionId,
-    activity: 'persist-once',
-    status: ledgerFixture.RunStatus.COMPLETED,
-    invocation_status: ledgerFixture.InvocationStatus.COMPLETED,
-    attempt_generation: 1,
-    attempt_status: ledgerFixture.AttemptStatus.COMPLETED,
+  const firstDurableRunReceipt = JSON.parse(firstDurableRunText);
+  assert.deepEqual(firstDurableRunReceipt, {
+    schemaVersion: 1,
+    kind: 'wharfie.execution-ledger.activity-run',
+    appId: embeddedManifest.app.id,
+    runId: durableRunId,
+    revisionId: packagedArtifact.revisionId,
+    activityId: 'persist-once',
+    idempotencyKey: durableIdempotencyKey,
+    disposition: 'completed',
+    reused: false,
+    runStatus: ledgerFixture.RunStatus.COMPLETED,
+    invocationStatus: ledgerFixture.InvocationStatus.COMPLETED,
+    attempt: {
+      generation: 1,
+      status: ledgerFixture.AttemptStatus.COMPLETED,
+    },
   });
   for (const secret of [
     durableInput.key,
@@ -10408,7 +10447,10 @@ export default defineApp({
     capture: true,
     env: operatorEnvironment,
   }).stdout.trim();
-  assert.equal(secondDurableRunText, firstDurableRunText);
+  assert.deepEqual(JSON.parse(secondDurableRunText), {
+    ...firstDurableRunReceipt,
+    reused: true,
+  });
   assert.deepEqual(
     await ledgerFixture.readRun(durableRunId),
     durableRunBeforeRetry,
@@ -10595,15 +10637,16 @@ export default defineApp({
       ).stdout,
     );
     assert.deepEqual(postRecoverySubmit, {
-      idempotency_key: postRecoveryIdempotencyKey,
-      run_id: postRecoveryRunId,
-      revision: packagedArtifact.revisionId,
-      activity: 'persist-once',
-      status: ledgerFixture.RunStatus.RUNNING,
-      invocation_status: ledgerFixture.InvocationStatus.RUNNABLE,
-      attempt_generation: 0,
-      attempt_status: '',
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.activity-submit',
+      appId: embeddedManifest.app.id,
+      runId: postRecoveryRunId,
+      revisionId: packagedArtifact.revisionId,
+      activityId: 'persist-once',
+      idempotencyKey: postRecoveryIdempotencyKey,
       reused: false,
+      runStatus: ledgerFixture.RunStatus.RUNNING,
+      invocationStatus: ledgerFixture.InvocationStatus.RUNNABLE,
     });
     const postRecoveryRun = await waitForDurableRun(
       { read: async () => await ledgerFixture.readRun(postRecoveryRunId) },

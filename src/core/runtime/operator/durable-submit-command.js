@@ -3,10 +3,14 @@ import { Command } from 'commander';
 import { resolveManifestActivityExecutionIdentity } from '../app-runs.js';
 import { createManualLedgerRunId } from '../manual-ledger-run.js';
 import { submitLocalDurableManifestActivity } from '../services/resident-activity-worker.js';
+import {
+  createDurableActivitySubmitReceipt,
+  formatDurableActivitySubmitHumanRow,
+} from './durable-operation-receipt.js';
 
 /**
  * @typedef DurableSubmitCommandOutput
- * @property {(value: Record<string, any>) => void} json - Write one redacted JSON row.
+ * @property {(value: Record<string, any>) => void} json - Write one redacted JSON receipt.
  * @property {(rows: Record<string, any>[]) => void} table - Write redacted table rows.
  * @property {(message: string) => void} success - Write accepted-run text.
  * @property {(error: unknown) => void} failure - Write a safe failure.
@@ -66,9 +70,8 @@ function parseJsonInput(input, label, defaultValue) {
   if (!trimmed) return defaultValue;
   try {
     return JSON.parse(trimmed);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid ${label} JSON: ${message}`);
+  } catch {
+    throw new Error(`Invalid ${label} JSON.`);
   }
 }
 
@@ -84,101 +87,9 @@ function requireIdempotencyKey(value) {
 }
 
 /**
- * Normalize the resident submission result without exposing request payloads,
- * caller metadata, physical fences, or terminal evidence. The resident API's
- * accepted snapshot may be named `outcome` or `accepted`; both carry the same
- * run/invocation projection contract.
- * @param {unknown} value - Resident submission result.
- * @param {{runId: string, appId: string, revisionId: string, activityName: string, idempotencyKey: string}} expected - Immutable request identity.
- * @returns {Record<string, any>} - Compact accepted-run row.
- */
-function formatAcceptedRow(value, expected) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('Resident activity submission returned no result.');
-  }
-  const result = /** @type {Record<string, any>} */ (value);
-  if (
-    typeof result.runStatus === 'string' &&
-    typeof result.invocationStatus === 'string'
-  ) {
-    if (
-      result.runId !== expected.runId ||
-      (result.appId !== undefined && result.appId !== expected.appId) ||
-      result.revisionId !== expected.revisionId ||
-      (result.activityId !== undefined &&
-        result.activityId !== expected.activityName) ||
-      (result.activityName !== undefined &&
-        result.activityName !== expected.activityName) ||
-      (result.idempotencyKey !== undefined &&
-        result.idempotencyKey !== expected.idempotencyKey)
-    ) {
-      throw new Error(
-        'Resident activity submission returned an unexpected immutable run identity.',
-      );
-    }
-    return {
-      idempotency_key: expected.idempotencyKey,
-      run_id: expected.runId,
-      revision: expected.revisionId,
-      activity: expected.activityName,
-      status: result.runStatus,
-      invocation_status: result.invocationStatus,
-      attempt_generation: 0,
-      attempt_status: '',
-      reused: result.reused === true,
-    };
-  }
-  const accepted = result.outcome || result.accepted;
-  if (
-    !accepted ||
-    typeof accepted !== 'object' ||
-    Array.isArray(accepted) ||
-    !accepted.run ||
-    !accepted.invocation
-  ) {
-    throw new TypeError(
-      'Resident activity submission must return an accepted run and invocation.',
-    );
-  }
-  if (
-    accepted.run.runId !== expected.runId ||
-    (accepted.run.appId !== undefined &&
-      accepted.run.appId !== expected.appId) ||
-    accepted.run.revisionId !== expected.revisionId ||
-    accepted.invocation.activityId !== expected.activityName ||
-    (result.runId !== undefined && result.runId !== expected.runId) ||
-    (result.appId !== undefined && result.appId !== expected.appId) ||
-    (result.revisionId !== undefined &&
-      result.revisionId !== expected.revisionId) ||
-    (result.activityName !== undefined &&
-      result.activityName !== expected.activityName) ||
-    (result.idempotencyKey !== undefined &&
-      result.idempotencyKey !== expected.idempotencyKey)
-  ) {
-    throw new Error(
-      'Resident activity submission returned an unexpected immutable run identity.',
-    );
-  }
-
-  return {
-    idempotency_key: expected.idempotencyKey,
-    run_id: expected.runId,
-    revision: expected.revisionId,
-    activity: expected.activityName,
-    status: accepted.run.status,
-    invocation_status: accepted.invocation.status,
-    attempt_generation: accepted.attempt?.generation ?? 0,
-    attempt_status: accepted.attempt?.status || '',
-    reused: result.reused === true,
-  };
-}
-
-/**
  * Create the shared source or packaged resident-activity submission command.
- * The injected/default submit boundary is expected to return
- * `{appId, revisionId, activityName, idempotencyKey, runId, outcome}` where
- * `outcome` contains the accepted run and invocation projections. `accepted`
- * is tolerated as an equivalent projection property during integration.
+ * The injected/default submit boundary returns the compact acceptance receipt
+ * produced by `submitManualLedgerActivity`.
  * @param {{loadExecution: (options: Record<string, any>) => Promise<DurableSubmitExecutionHandle> | DurableSubmitExecutionHandle, includeDirOption?: boolean, output?: Partial<DurableSubmitCommandOutput>, submit?: ResidentActivitySubmit, processRef?: DurableSubmitProcess}} options - Host behavior.
  * @returns {Command} - Fresh submit command.
  */
@@ -216,7 +127,7 @@ export function createDurableSubmitCommand(options) {
     )
     .option('--input <json>', 'Activity input JSON (default: {})')
     .option('--caller-metadata <json>', 'Caller metadata JSON (default: {})')
-    .option('--json', 'Write one redacted machine-readable accepted-run row')
+    .option('--json', 'Write one stable redacted activity-submit receipt')
     .action(async (commandOptions) => {
       /** @type {DurableSubmitExecutionHandle | undefined} */
       let loaded;
@@ -288,16 +199,16 @@ export function createDurableSubmitCommand(options) {
               }
             : {}),
         });
-        const row = formatAcceptedRow(result, {
+        const receipt = createDurableActivitySubmitReceipt(result, {
           runId,
           appId: identity.appId,
           revisionId: identity.revisionId,
-          activityName,
+          activityId: activityName,
           idempotencyKey,
         });
-        if (commandOptions.json === true) output.json(row);
+        if (commandOptions.json === true) output.json(receipt);
         else {
-          output.table([row]);
+          output.table([formatDurableActivitySubmitHumanRow(receipt)]);
           output.success(`Accepted durable activity run ${runId}.`);
         }
       } catch (error) {

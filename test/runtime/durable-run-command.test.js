@@ -141,9 +141,32 @@ describe('shared durable run command', () => {
         runId,
         outcome: {
           disposition: 'completed',
-          run: { runId, revisionId, status: 'COMPLETED' },
-          invocation: { activityId: 'greet', status: 'COMPLETED' },
-          attempt: { generation: 1, status: 'COMPLETED' },
+          reused: false,
+          run: {
+            runId,
+            appId,
+            revisionId,
+            trigger: { kind: 'manual' },
+            status: 'COMPLETED',
+          },
+          invocation: {
+            runId,
+            appId,
+            revisionId,
+            invocationId: 'manual',
+            activityId: 'greet',
+            generation: 1,
+            status: 'COMPLETED',
+          },
+          attempt: {
+            runId,
+            appId,
+            revisionId,
+            invocationId: 'manual',
+            activityId: 'greet',
+            generation: 1,
+            status: 'COMPLETED',
+          },
         },
       }),
     );
@@ -191,15 +214,24 @@ describe('shared durable run command', () => {
       }),
     );
     expect(output.json).toHaveBeenCalledWith({
-      idempotency_key: idempotencyKey,
-      run_id: runId,
-      revision: revisionId,
-      activity: 'greet',
-      status: 'COMPLETED',
-      invocation_status: 'COMPLETED',
-      attempt_generation: 1,
-      attempt_status: 'COMPLETED',
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.activity-run',
+      appId,
+      runId,
+      revisionId,
+      activityId: 'greet',
+      idempotencyKey,
+      disposition: 'completed',
+      reused: false,
+      runStatus: 'COMPLETED',
+      invocationStatus: 'COMPLETED',
+      attempt: { generation: 1, status: 'COMPLETED' },
     });
+    const receipt = /** @type {Record<string, any>} */ (
+      output.json.mock.calls[0][0]
+    );
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(Object.isFrozen(receipt.attempt)).toBe(true);
     expect(output.info).not.toHaveBeenCalled();
     expect(output.table).not.toHaveBeenCalled();
     expect(output.success).not.toHaveBeenCalled();
@@ -209,6 +241,324 @@ describe('shared durable run command', () => {
     expect(processRef.listenerCount('SIGTERM')).toBe(0);
     expect(processRef.exitCode).toBeUndefined();
   });
+
+  it('emits the exact same JSON receipt from source and packaged hosts', async () => {
+    const execution = makeEmbeddedExecution();
+    if (execution.kind !== 'embedded') {
+      throw new Error('Expected embedded execution fixture.');
+    }
+    const appId = execution.embeddedRevision.runtime.appId;
+    const revisionId = execution.embeddedRevision.runtime.revisionId;
+    const idempotencyKey = 'source-packaged-parity';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
+    const result = {
+      appId,
+      revisionId,
+      activityName: 'greet',
+      idempotencyKey,
+      runId,
+      outcome: {
+        disposition: 'completed',
+        reused: true,
+        run: {
+          runId,
+          appId,
+          revisionId,
+          trigger: { kind: 'manual' },
+          status: 'COMPLETED',
+        },
+        invocation: {
+          runId,
+          appId,
+          revisionId,
+          invocationId: 'manual',
+          activityId: 'greet',
+          generation: 2,
+          status: 'COMPLETED',
+        },
+        attempt: {
+          runId,
+          appId,
+          revisionId,
+          invocationId: 'manual',
+          activityId: 'greet',
+          attemptId: 'private-attempt-id',
+          fencingToken: 'private-fence',
+          generation: 2,
+          status: 'COMPLETED',
+        },
+        terminalSummary: { private: 'terminal-secret' },
+        evidenceRef: { private: 'evidence-secret' },
+      },
+    };
+    const sourceJson = jest.fn();
+    const packagedJson = jest.fn();
+    const source = createDurableRunCommand({
+      includeDirOption: true,
+      loadExecution: async () => ({ execution }),
+      runActivity: async () => result,
+      output: { json: sourceJson },
+      processRef: Object.assign(new EventEmitter(), {
+        exitCode: undefined,
+        cwd: () => '/source',
+      }),
+    });
+    const packaged = createPackagedDurableRunCommand({
+      loadExecution: async () => ({ execution }),
+      runActivity: async () => result,
+      output: { json: packagedJson },
+      processRef: Object.assign(new EventEmitter(), {
+        exitCode: undefined,
+      }),
+    });
+
+    await source.parseAsync([
+      'node',
+      'wharfie',
+      '--dir',
+      '/source',
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      idempotencyKey,
+      '--json',
+    ]);
+    await packaged.parseAsync([
+      'node',
+      'artifact',
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      idempotencyKey,
+      '--json',
+    ]);
+
+    expect(sourceJson).toHaveBeenCalledTimes(1);
+    expect(packagedJson).toHaveBeenCalledTimes(1);
+    expect(sourceJson.mock.calls[0][0]).toEqual(packagedJson.mock.calls[0][0]);
+    expect(sourceJson.mock.calls[0][0]).toEqual({
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.activity-run',
+      appId,
+      runId,
+      revisionId,
+      activityId: 'greet',
+      idempotencyKey,
+      disposition: 'completed',
+      reused: true,
+      runStatus: 'COMPLETED',
+      invocationStatus: 'COMPLETED',
+      attempt: { generation: 2, status: 'COMPLETED' },
+    });
+    expect(JSON.stringify(sourceJson.mock.calls[0][0])).not.toMatch(
+      /private-attempt-id|private-fence|terminal-secret|evidence-secret/,
+    );
+  });
+
+  it('emits a valid blocked receipt before reporting the non-completed run', async () => {
+    const execution = makeEmbeddedExecution();
+    if (execution.kind !== 'embedded') {
+      throw new Error('Expected embedded execution fixture.');
+    }
+    const appId = execution.embeddedRevision.runtime.appId;
+    const revisionId = execution.embeddedRevision.runtime.revisionId;
+    const idempotencyKey = 'blocked-receipt';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
+    const json = jest.fn();
+    const failure = jest.fn();
+    const processRef = Object.assign(new EventEmitter(), {
+      exitCode: undefined,
+    });
+    const command = createDurableRunCommand({
+      loadExecution: async () => ({ execution }),
+      runActivity: async () => ({
+        appId,
+        revisionId,
+        activityName: 'greet',
+        idempotencyKey,
+        runId,
+        outcome: {
+          disposition: 'blocked',
+          reused: true,
+          run: {
+            runId,
+            appId,
+            revisionId,
+            trigger: { kind: 'manual' },
+            status: 'BLOCKED',
+          },
+          invocation: {
+            runId,
+            appId,
+            revisionId,
+            invocationId: 'manual',
+            activityId: 'greet',
+            generation: 3,
+            status: 'UNCERTAIN',
+          },
+          attempt: {
+            runId,
+            appId,
+            revisionId,
+            invocationId: 'manual',
+            activityId: 'greet',
+            attemptId: 'private-blocked-attempt',
+            generation: 3,
+            status: 'ABANDONED',
+          },
+          evidenceRef: { private: 'blocked-evidence' },
+        },
+      }),
+      output: { json, failure },
+      processRef,
+    });
+
+    await command.parseAsync([
+      'node',
+      'artifact',
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      idempotencyKey,
+      '--json',
+    ]);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.activity-run',
+      appId,
+      runId,
+      revisionId,
+      activityId: 'greet',
+      idempotencyKey,
+      disposition: 'blocked',
+      reused: true,
+      runStatus: 'BLOCKED',
+      invocationStatus: 'UNCERTAIN',
+      attempt: { generation: 3, status: 'ABANDONED' },
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toMatch(
+      /private-blocked-attempt|blocked-evidence/,
+    );
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('rejects a mismatched returned identity before emitting JSON', async () => {
+    const execution = makeEmbeddedExecution();
+    if (execution.kind !== 'embedded') {
+      throw new Error('Expected embedded execution fixture.');
+    }
+    const appId = execution.embeddedRevision.runtime.appId;
+    const revisionId = execution.embeddedRevision.runtime.revisionId;
+    const idempotencyKey = 'identity-mismatch';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
+    const json = jest.fn();
+    const failure = jest.fn();
+    const processRef = Object.assign(new EventEmitter(), {
+      exitCode: undefined,
+    });
+    const command = createDurableRunCommand({
+      loadExecution: async () => ({ execution }),
+      runActivity: async () => ({
+        appId,
+        revisionId,
+        activityName: 'greet',
+        idempotencyKey,
+        runId: 'wlm_wrong-run',
+        outcome: {
+          disposition: 'completed',
+          reused: false,
+          run: {
+            runId,
+            appId,
+            revisionId,
+            trigger: { kind: 'manual' },
+            status: 'COMPLETED',
+          },
+          invocation: {
+            runId,
+            appId,
+            revisionId,
+            invocationId: 'manual',
+            activityId: 'greet',
+            generation: 1,
+            status: 'COMPLETED',
+          },
+          attempt: {
+            runId,
+            appId,
+            revisionId,
+            invocationId: 'manual',
+            activityId: 'greet',
+            generation: 1,
+            status: 'COMPLETED',
+          },
+        },
+      }),
+      output: { json, failure },
+      processRef,
+    });
+
+    await command.parseAsync([
+      'node',
+      'artifact',
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      idempotencyKey,
+      '--json',
+    ]);
+
+    expect(json).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it.each([
+    ['input', '--input', 'private-input-secret{', 'Invalid input JSON.'],
+    [
+      'caller metadata',
+      '--caller-metadata',
+      'private-metadata-secret{',
+      'Invalid caller metadata JSON.',
+    ],
+  ])(
+    'does not echo malformed %s JSON',
+    async (_label, flag, secret, expectedMessage) => {
+      const execution = makeEmbeddedExecution();
+      const json = jest.fn();
+      const failure = jest.fn();
+      const loadExecution = jest.fn(async () => ({ execution }));
+      const processRef = Object.assign(new EventEmitter(), {
+        exitCode: undefined,
+      });
+      const command = createDurableRunCommand({
+        loadExecution,
+        output: { json, failure },
+        processRef,
+      });
+
+      await command.parseAsync([
+        'node',
+        'artifact',
+        '--activity',
+        'greet',
+        flag,
+        secret,
+        '--json',
+      ]);
+
+      expect(loadExecution).not.toHaveBeenCalled();
+      expect(json).not.toHaveBeenCalled();
+      expect(failure).toHaveBeenCalledTimes(1);
+      const reported = failure.mock.calls[0][0];
+      expect(reported).toBeInstanceOf(Error);
+      expect(/** @type {Error} */ (reported).message).toBe(expectedMessage);
+      expect(String(reported)).not.toContain(secret);
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
 
   it('creates a random manual key and always cleans up after host failure', async () => {
     const execution = makeEmbeddedExecution();

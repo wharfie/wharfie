@@ -249,6 +249,36 @@ function expectedRow(execution, idempotencyKey, reused = false) {
   };
 }
 
+/**
+ * @param {ManifestActivityExecution} execution - Immutable execution fixture.
+ * @param {string} idempotencyKey - Public request identity.
+ * @param {boolean} [reused] - Whether the result was replayed.
+ * @returns {Record<string, any>} - Versioned safe public receipt.
+ */
+function expectedReceipt(execution, idempotencyKey, reused = false) {
+  const { appId, revisionId } = executionIdentity(execution);
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.execution-ledger.workflow-start',
+    appId,
+    runId: createWorkflowRunId({ appId, idempotencyKey }),
+    revisionId,
+    workflowId: WORKFLOW_ID,
+    idempotencyKey,
+    reused,
+    runStatus: 'RUNNING',
+    cursor: {
+      disposition: 'ACTIVITY_RUNNABLE',
+      stepId: STEP_ID,
+      stepIndex: 0,
+    },
+    nextActivation: {
+      kind: 'activity',
+      status: 'RUNNABLE',
+    },
+  };
+}
+
 function makeOutput() {
   return {
     json: jest.fn(),
@@ -417,8 +447,14 @@ describe('durable workflow start command', () => {
       },
     });
     expect(output.json).toHaveBeenCalledWith(
-      expectedRow(execution, idempotencyKey, true),
+      expectedReceipt(execution, idempotencyKey, true),
     );
+    const receipt = /** @type {Record<string, any>} */ (
+      output.json.mock.calls[0][0]
+    );
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(Object.isFrozen(receipt.cursor)).toBe(true);
+    expect(Object.isFrozen(receipt.nextActivation)).toBe(true);
     const serializedOutput = JSON.stringify(output.json.mock.calls);
     expect(serializedOutput).not.toContain('cloud-secret');
     expect(serializedOutput).not.toContain('never-print-this-token');
@@ -430,6 +466,49 @@ describe('durable workflow start command', () => {
     expect(output.failure).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(processRef.exitCode).toBeUndefined();
+  });
+
+  it('emits the exact same versioned JSON receipt from source and packaged surfaces', async () => {
+    const embedded = makeEmbeddedExecution();
+    const prepared = makePreparedExecution(embedded);
+    const idempotencyKey = 'source-package-json-parity';
+    const sourceOutput = makeOutput();
+    const packagedOutput = makeOutput();
+    const source = createDurableWorkflowStartCommand({
+      includeDirOption: true,
+      loadExecution: async () => ({ execution: prepared }),
+      startWorkflow: async () =>
+        makeStartResult(prepared, idempotencyKey, false),
+      output: sourceOutput,
+      processRef: { cwd: () => SOURCE_DIR, exitCode: undefined },
+    });
+    const packaged = createPackagedDurableWorkflowStartCommand({
+      loadExecution: async () => ({ execution: embedded }),
+      startWorkflow: async () =>
+        makeStartResult(embedded, idempotencyKey, false),
+      output: packagedOutput,
+      processRef: { exitCode: undefined },
+    });
+    const options = [
+      '--workflow',
+      WORKFLOW_ID,
+      '--idempotency-key',
+      idempotencyKey,
+      '--json',
+    ];
+
+    await source.parseAsync(nodeArgv(options));
+    await packaged.parseAsync(nodeArgv(options));
+
+    const expected = expectedReceipt(embedded, idempotencyKey, true);
+    expect(sourceOutput.json).toHaveBeenCalledWith(expected);
+    expect(packagedOutput.json).toHaveBeenCalledWith(expected);
+    expect(sourceOutput.json.mock.calls[0][0]).toEqual(
+      packagedOutput.json.mock.calls[0][0],
+    );
+    expect(JSON.stringify(sourceOutput.json.mock.calls[0][0])).toBe(
+      JSON.stringify(packagedOutput.json.mock.calls[0][0]),
+    );
   });
 
   it.each([
@@ -531,21 +610,66 @@ describe('durable workflow start command', () => {
       );
 
       expect(output.json).toHaveBeenCalledWith({
-        idempotency_key: idempotencyKey,
-        run_id: runId,
-        revision: revisionId,
-        workflow: WORKFLOW_ID,
-        status: 'RUNNING',
-        cursor_disposition: fixture.disposition,
-        step: fixture.step.id,
-        step_index: 0,
-        activation_kind: fixture.kind,
-        activation_status: fixture.status,
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.workflow-start',
+        appId,
+        runId,
+        revisionId,
+        workflowId: WORKFLOW_ID,
+        idempotencyKey,
         reused: false,
+        runStatus: 'RUNNING',
+        cursor: {
+          disposition: fixture.disposition,
+          stepId: fixture.step.id,
+          stepIndex: 0,
+        },
+        nextActivation: {
+          kind: fixture.kind,
+          status: fixture.status,
+        },
       });
       expect(JSON.stringify(output.json.mock.calls)).not.toContain(
         'never-print-activation-ref',
       );
+    },
+  );
+
+  it.each([
+    ['input', '--input', 'Invalid input JSON.'],
+    ['caller metadata', '--caller-metadata', 'Invalid caller metadata JSON.'],
+  ])(
+    'never echoes a malformed secret-bearing %s value',
+    async (_label, flag, message) => {
+      const secret = 'start-secret-never-echo';
+      const malformed = `{"credential":"${secret}"`;
+      const loadExecution = jest.fn(async () => ({
+        execution: makeEmbeddedExecution(),
+      }));
+      const output = makeOutput();
+      const command = createDurableWorkflowStartCommand({
+        loadExecution,
+        output,
+        processRef: { exitCode: undefined },
+      });
+
+      await command.parseAsync(
+        nodeArgv([
+          '--workflow',
+          WORKFLOW_ID,
+          '--idempotency-key',
+          'malformed-secret',
+          flag,
+          malformed,
+        ]),
+      );
+
+      expect(loadExecution).not.toHaveBeenCalled();
+      expect(output.failure).toHaveBeenCalledWith(
+        expect.objectContaining({ message }),
+      );
+      expect(String(output.failure.mock.calls[0][0])).not.toContain(secret);
+      expect(String(output.failure.mock.calls[0][0])).not.toContain(malformed);
     },
   );
 
@@ -560,7 +684,7 @@ describe('durable workflow start command', () => {
         '--input',
         '{',
       ],
-      'Invalid input JSON:',
+      'Invalid input JSON.',
     ],
     [
       'malformed caller metadata JSON',
@@ -572,7 +696,7 @@ describe('durable workflow start command', () => {
         '--caller-metadata',
         '{',
       ],
-      'Invalid caller metadata JSON:',
+      'Invalid caller metadata JSON.',
     ],
     [
       'array caller metadata',
@@ -725,7 +849,7 @@ describe('durable workflow start command', () => {
     expect(output.failure).toHaveBeenCalledWith(
       expect.objectContaining({
         message:
-          'Durable workflow start returned an unexpected immutable run identity.',
+          'Durable workflow start returned an unexpected immutable identity.',
       }),
     );
     expect(output.json).not.toHaveBeenCalled();
@@ -759,7 +883,7 @@ describe('durable workflow start command', () => {
     expect(output.failure).toHaveBeenCalledWith(
       expect.objectContaining({
         message:
-          'Durable workflow start must return run, workflow cursor, and exactly one activation projection.',
+          'Durable workflow start returned an unexpected immutable identity.',
       }),
     );
     expect(cleanup).toHaveBeenCalledTimes(1);
@@ -833,7 +957,7 @@ describe('durable workflow start command', () => {
     );
 
     expect(output.json).toHaveBeenCalledWith(
-      expectedRow(execution, idempotencyKey),
+      expectedReceipt(execution, idempotencyKey),
     );
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(output.failure).toHaveBeenCalledWith(cleanupError);

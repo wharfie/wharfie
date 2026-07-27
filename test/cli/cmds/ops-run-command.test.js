@@ -474,10 +474,27 @@ describe('wharfie ops run', () => {
 
       await inspectDb.close();
       inspectDb = undefined;
-      const retry = runCli(args, env);
+      const retry = runCli([...args, '--json'], env);
       expect(retry.status).toBe(0);
       expect(retry.stderr).toBe('');
-      expect(retry.stdout).toContain('attempt 1');
+      expect(JSON.parse(retry.stdout.trim())).toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.activity-run',
+        appId,
+        runId,
+        revisionId: expectedRevision.revisionId,
+        activityId: 'echo-event',
+        idempotencyKey,
+        disposition: 'completed',
+        reused: true,
+        runStatus: RunStatus.COMPLETED,
+        invocationStatus: InvocationStatus.COMPLETED,
+        attempt: {
+          generation: 1,
+          status: AttemptStatus.COMPLETED,
+        },
+      });
+      expect(retry.stdout).not.toMatch(/ops-request|ordinary metadata/);
 
       inspectDb = createVanillaDB({ path: dbPath });
       const retryView = await createExecutionLedger({

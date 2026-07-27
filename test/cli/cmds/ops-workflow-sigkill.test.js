@@ -160,10 +160,11 @@ function parseSuccessfulOperatorJson(result, label) {
 /**
  * @param {WorkflowFixture} fixture
  * @param {string} [workflowId]
+ * @param {boolean} [reused] - Expected replay state.
  * @returns {Record<string, any>}
  */
-function startWorkflow(fixture, workflowId = WORKFLOW_ID) {
-  return parseSuccessfulJson(
+function startWorkflow(fixture, workflowId = WORKFLOW_ID, reused = false) {
+  const receipt = parseSuccessfulJson(
     runCli(
       [
         'ops',
@@ -182,6 +183,27 @@ function startWorkflow(fixture, workflowId = WORKFLOW_ID) {
     ),
     'ops start',
   );
+  expect(receipt).toEqual({
+    schemaVersion: 1,
+    kind: 'wharfie.execution-ledger.workflow-start',
+    appId: APP_ID,
+    runId: fixture.runId,
+    revisionId: expect.stringMatching(/^wrv1_[A-Za-z0-9_-]{43}$/),
+    workflowId,
+    idempotencyKey: fixture.idempotencyKey,
+    reused,
+    runStatus: RunStatus.RUNNING,
+    cursor: {
+      disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+      stepId: 'first',
+      stepIndex: 0,
+    },
+    nextActivation: {
+      kind: 'activity',
+      status: InvocationStatus.RUNNABLE,
+    },
+  });
+  return receipt;
 }
 
 /**
@@ -618,7 +640,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         worker = startLiveWorker(fixture);
         await waitForWorkflowState(
           fixture,
-          started.revision,
+          started.revisionId,
           worker,
           (state) =>
             state.view.run.status === RunStatus.RUNNING &&
@@ -652,7 +674,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
 
         const cancelled = await waitForWorkflowState(
           fixture,
-          started.revision,
+          started.revisionId,
           worker,
           (state) =>
             state.view.run.status === RunStatus.CANCELLED &&
@@ -710,7 +732,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
           runStatus: RunStatus.CANCELLED,
           invocationStatus: InvocationStatus.CANCELLED,
         });
-        const afterReplay = await readState(fixture, started.revision);
+        const afterReplay = await readState(fixture, started.revisionId);
         expect(afterReplay.events).toHaveLength(eventCount);
         expect(afterReplay.view).toEqual(cancelled.view);
         expect(afterReplay.ready).toEqual(cancelled.ready);
@@ -745,7 +767,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
       const requestId = 'source-kill-workflow-cancellation';
       try {
         const started = startWorkflow(fixture);
-        const beforeCancellation = await readState(fixture, started.revision);
+        const beforeCancellation = await readState(fixture, started.revisionId);
         expect(beforeCancellation).toMatchObject({
           view: {
             run: { status: RunStatus.RUNNING, version: 1, lastSequence: 1 },
@@ -787,7 +809,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
           invocationStatus: InvocationStatus.CANCELLED,
         });
 
-        const cancelled = await readState(fixture, started.revision);
+        const cancelled = await readState(fixture, started.revisionId);
         expect(cancelled).toMatchObject({
           view: {
             run: {
@@ -824,7 +846,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
           'ops cancel replay',
         );
         expect(replay).toEqual(crashed.message.detail.response);
-        await expect(readState(fixture, started.revision)).resolves.toEqual(
+        await expect(readState(fixture, started.revisionId)).resolves.toEqual(
           cancelled,
         );
         expect(markerEntries(fixture)).toEqual([]);
@@ -854,7 +876,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         });
         expect(markerEntries(fixture)).toEqual(['enter:0']);
 
-        const beforeRecovery = await readState(fixture, started.revision);
+        const beforeRecovery = await readState(fixture, started.revisionId);
         expect(beforeRecovery.view).toMatchObject({
           run: {
             status: RunStatus.RUNNING,
@@ -902,7 +924,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
             stepIndex: 0,
           },
         });
-        const afterRecovery = await readState(fixture, started.revision);
+        const afterRecovery = await readState(fixture, started.revisionId);
         if (!afterRecovery.view)
           throw new Error('Recovered workflow vanished.');
         expect(afterRecovery.ready.items).toEqual([]);
@@ -955,7 +977,10 @@ describe('source workflow real-process SIGKILL recovery', () => {
           },
         });
 
-        const afterReconciliation = await readState(fixture, started.revision);
+        const afterReconciliation = await readState(
+          fixture,
+          started.revisionId,
+        );
         if (!afterReconciliation.view) {
           throw new Error('Reconciled workflow vanished.');
         }
@@ -1010,11 +1035,11 @@ describe('source workflow real-process SIGKILL recovery', () => {
           reconciliationId,
           changed: false,
         });
-        await expect(readState(fixture, started.revision)).resolves.toEqual(
+        await expect(readState(fixture, started.revisionId)).resolves.toEqual(
           afterReconciliation,
         );
 
-        const completed = await finishWithWorker(fixture, started.revision);
+        const completed = await finishWithWorker(fixture, started.revisionId);
         expect(completed.view).toMatchObject({
           run: { status: RunStatus.COMPLETED },
           workflowCursor: {
@@ -1044,7 +1069,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         );
         expectKilledAt(crashed, 'claim-committed');
         expect(markerEntries(fixture)).toEqual([]);
-        const claimed = await readState(fixture, started.revision);
+        const claimed = await readState(fixture, started.revisionId);
         expect(claimed.view).toMatchObject({
           run: { status: RunStatus.RUNNING, version: 2, lastSequence: 2 },
           workflowCursor: {
@@ -1079,7 +1104,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
           action: 'released-unstarted-claim',
           changed: true,
         });
-        const released = await readState(fixture, started.revision);
+        const released = await readState(fixture, started.revisionId);
         expect(released.view).toMatchObject({
           run: { version: 3, lastSequence: 3 },
           workflowCursor: {
@@ -1117,11 +1142,11 @@ describe('source workflow real-process SIGKILL recovery', () => {
           'ops recover replay',
         );
         expect(replay.recovery).toEqual({ action: 'none', changed: false });
-        await expect(readState(fixture, started.revision)).resolves.toEqual(
+        await expect(readState(fixture, started.revisionId)).resolves.toEqual(
           released,
         );
 
-        const completed = await finishWithWorker(fixture, started.revision);
+        const completed = await finishWithWorker(fixture, started.revisionId);
         expect(completed.view.run.status).toBe(RunStatus.COMPLETED);
         expect(completed.view.attempts).toEqual(
           expect.arrayContaining([
@@ -1156,7 +1181,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         );
         expectKilledAt(crashed, 'start-committed');
         expect(markerEntries(fixture)).toEqual([]);
-        const durableStarted = await readState(fixture, started.revision);
+        const durableStarted = await readState(fixture, started.revisionId);
         expect(durableStarted.view).toMatchObject({
           run: {
             status: RunStatus.RUNNING,
@@ -1193,7 +1218,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
             disposition: WorkflowCursorDisposition.ACTIVITY_UNCERTAIN,
           },
         });
-        const blocked = await readState(fixture, started.revision);
+        const blocked = await readState(fixture, started.revisionId);
         expect(blocked.ready.items).toEqual([]);
         expect(blocked.ownership).toBeNull();
         expect(blocked.events.map((event) => event.type)).toEqual([
@@ -1209,7 +1234,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
           'ops recover blocked replay',
         );
         expect(replay.recovery).toEqual({ action: 'none', changed: false });
-        await expect(readState(fixture, started.revision)).resolves.toEqual(
+        await expect(readState(fixture, started.revisionId)).resolves.toEqual(
           blocked,
         );
         expect(markerEntries(fixture)).toEqual([]);
@@ -1233,7 +1258,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         );
         expectKilledAt(crashed, 'terminal-committed');
         expect(markerEntries(fixture)).toEqual(['enter:0']);
-        const afterTerminal = await readState(fixture, started.revision);
+        const afterTerminal = await readState(fixture, started.revisionId);
         expect(afterTerminal.view).toMatchObject({
           run: {
             status: RunStatus.RUNNING,
@@ -1270,7 +1295,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
           'workflow-activity-succeeded',
         ]);
 
-        const completed = await finishWithWorker(fixture, started.revision);
+        const completed = await finishWithWorker(fixture, started.revisionId);
         expect(completed.view.run.status).toBe(RunStatus.COMPLETED);
         expect(markerEntries(fixture)).toEqual(['enter:0', 'enter:1']);
       } finally {
@@ -1307,7 +1332,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         });
         expect(markerEntries(fixture)).toEqual(['enter:0']);
 
-        const scheduled = await readState(fixture, started.revision);
+        const scheduled = await readState(fixture, started.revisionId);
         expect(scheduled).toMatchObject({
           view: {
             run: { status: RunStatus.RUNNING },
@@ -1345,7 +1370,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
 
         // readState closes and reopens the real LMDB environment every time.
         // Neither process death nor reopening may recompute now + delay.
-        const reopened = await readState(fixture, started.revision);
+        const reopened = await readState(fixture, started.revisionId);
         expect(reopened.view.timers).toEqual(scheduled.view.timers);
         expect(reopened.view.workflowCursor).toEqual(
           scheduled.view.workflowCursor,
@@ -1356,7 +1381,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         worker = startLiveWorker(fixture);
         const waiting = await waitForWorkflowState(
           fixture,
-          started.revision,
+          started.revisionId,
           worker,
           (state) =>
             state.view.workflowCursor.disposition ===
@@ -1402,7 +1427,10 @@ describe('source workflow real-process SIGKILL recovery', () => {
 
         await stopLiveWorker(worker, 'timer-to-signal resident worker');
         worker = undefined;
-        const beforeOfflineSignal = await readState(fixture, started.revision);
+        const beforeOfflineSignal = await readState(
+          fixture,
+          started.revisionId,
+        );
         expect(beforeOfflineSignal.ownership).toBeNull();
 
         const acceptedResult = runCli(
@@ -1423,7 +1451,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         });
         expect(acceptedResult.stderr).toBe('');
 
-        const afterAccepted = await readState(fixture, started.revision);
+        const afterAccepted = await readState(fixture, started.revisionId);
         expect(afterAccepted).toMatchObject({
           view: {
             workflowCursor: {
@@ -1472,11 +1500,11 @@ describe('source workflow real-process SIGKILL recovery', () => {
           outcome: 'accepted',
           reused: true,
         });
-        await expect(readState(fixture, started.revision)).resolves.toEqual(
+        await expect(readState(fixture, started.revisionId)).resolves.toEqual(
           afterAccepted,
         );
 
-        const completed = await finishWithWorker(fixture, started.revision);
+        const completed = await finishWithWorker(fixture, started.revisionId);
         expect(completed.view).toMatchObject({
           run: { status: RunStatus.COMPLETED },
           workflowCursor: {
@@ -1566,7 +1594,10 @@ describe('source workflow real-process SIGKILL recovery', () => {
           `${rejectedResult.stdout}\n${rejectedResult.stderr}`,
         ).not.toContain(fixture.markerPath);
 
-        const afterEarlyRejection = await readState(fixture, started.revision);
+        const afterEarlyRejection = await readState(
+          fixture,
+          started.revisionId,
+        );
         expect(afterEarlyRejection).toMatchObject({
           view: {
             run: { status: RunStatus.RUNNING },
@@ -1604,7 +1635,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         worker = startLiveWorker(fixture);
         const waiting = await waitForWorkflowState(
           fixture,
-          started.revision,
+          started.revisionId,
           worker,
           (state) =>
             state.view.workflowCursor.disposition ===
@@ -1641,7 +1672,10 @@ describe('source workflow real-process SIGKILL recovery', () => {
         expect(
           JSON.stringify(rejectedReplay.message.detail.response),
         ).not.toContain(fixture.markerPath);
-        const afterRejectedReplay = await readState(fixture, started.revision);
+        const afterRejectedReplay = await readState(
+          fixture,
+          started.revisionId,
+        );
         expect(afterRejectedReplay.events).toEqual(waiting.events);
         expect(afterRejectedReplay.view).toEqual(waiting.view);
         expect(afterRejectedReplay.ready).toEqual(waiting.ready);
@@ -1672,7 +1706,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
 
         const completed = await waitForCompleted(
           fixture,
-          started.revision,
+          started.revisionId,
           worker,
         );
         expect(completed.view).toMatchObject({
@@ -1738,7 +1772,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
         expect(
           `${acceptedReplayResult.stdout}\n${acceptedReplayResult.stderr}`,
         ).not.toContain(fixture.markerPath);
-        await expect(readState(fixture, started.revision)).resolves.toEqual(
+        await expect(readState(fixture, started.revisionId)).resolves.toEqual(
           completed,
         );
 
@@ -1775,11 +1809,27 @@ describe('source workflow real-process SIGKILL recovery', () => {
           'start-response-ready',
         );
         expectKilledAt(crashed, 'start-response-ready');
-        expect(crashed.message.detail.response).toMatchObject({
-          run_id: fixture.runId,
+        expect(crashed.message.detail.response).toEqual({
+          schemaVersion: 1,
+          kind: 'wharfie.execution-ledger.workflow-start',
+          appId: APP_ID,
+          runId: fixture.runId,
+          revisionId: expect.stringMatching(/^wrv1_[A-Za-z0-9_-]{43}$/),
+          workflowId: WORKFLOW_ID,
+          idempotencyKey: fixture.idempotencyKey,
           reused: false,
+          runStatus: RunStatus.RUNNING,
+          cursor: {
+            disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+            stepId: 'first',
+            stepIndex: 0,
+          },
+          nextActivation: {
+            kind: 'activity',
+            status: InvocationStatus.RUNNABLE,
+          },
         });
-        const revisionId = crashed.message.detail.response.revision;
+        const revisionId = crashed.message.detail.response.revisionId;
         const beforeReplay = await readState(fixture, revisionId);
         expect(beforeReplay).toMatchObject({
           view: {
@@ -1802,7 +1852,7 @@ describe('source workflow real-process SIGKILL recovery', () => {
           ownership: null,
         });
 
-        const replay = startWorkflow(fixture);
+        const replay = startWorkflow(fixture, WORKFLOW_ID, true);
         expect(replay).toEqual({
           ...crashed.message.detail.response,
           reused: true,

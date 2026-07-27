@@ -262,9 +262,9 @@ describe('wharfie ops resident worker', () => {
             '--idempotency-key',
             idempotencyKey,
             '--input',
-            '{"who":"resident-e2e"}',
+            '{"who":"submit-payload-private"}',
             '--caller-metadata',
-            '{"requestId":"resident-e2e-request"}',
+            '{"requestId":"submit-metadata-private"}',
             '--json',
           ],
           env,
@@ -272,17 +272,21 @@ describe('wharfie ops resident worker', () => {
         expect(submitted.status).toBe(0);
         expect(submitted.stderr).toBe('');
         const accepted = parseJsonRow(submitted.stdout, 'ops submit');
-        expect(accepted).toMatchObject({
-          idempotency_key: idempotencyKey,
-          run_id: runId,
-          activity: 'echo-event',
-          status: RunStatus.RUNNING,
-          invocation_status: InvocationStatus.RUNNABLE,
-          attempt_generation: 0,
-          attempt_status: '',
+        expect(accepted).toEqual({
+          schemaVersion: 1,
+          kind: 'wharfie.execution-ledger.activity-submit',
+          appId: 'hello-world-demo',
+          runId,
+          revisionId: expect.stringMatching(/^wrv1_[A-Za-z0-9_-]{43}$/),
+          activityId: 'echo-event',
+          idempotencyKey,
           reused: false,
+          runStatus: RunStatus.RUNNING,
+          invocationStatus: InvocationStatus.RUNNABLE,
         });
-        expect(accepted.revision).toMatch(/^wrv1_[A-Za-z0-9_-]{43}$/);
+        expect(submitted.stdout).not.toMatch(
+          /submit-payload-private|submit-metadata-private/,
+        );
 
         const runnable = inspectRun(env, runId);
         expect(runnable).toMatchObject({
@@ -290,7 +294,7 @@ describe('wharfie ops resident worker', () => {
           run: {
             runId,
             appId: 'hello-world-demo',
-            revisionId: accepted.revision,
+            revisionId: accepted.revisionId,
             status: RunStatus.RUNNING,
           },
           invocations: [
@@ -314,7 +318,7 @@ describe('wharfie ops resident worker', () => {
           integrity: { verified: true },
           run: {
             runId,
-            revisionId: accepted.revision,
+            revisionId: accepted.revisionId,
             status: RunStatus.COMPLETED,
           },
           invocations: [

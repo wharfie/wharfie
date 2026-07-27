@@ -161,15 +161,16 @@ describe('resident activity operator commands', () => {
       /** @type {import('../../src/core/runtime/operator/durable-submit-command.js').ResidentActivitySubmit} */
       (
         async () => ({
+          accepted: true,
+          reused: false,
+          runId,
           appId,
           revisionId,
-          activityName: 'greet',
+          invocationId: 'manual',
+          activityId: 'greet',
+          runStatus: 'RUNNING',
+          invocationStatus: 'RUNNABLE',
           idempotencyKey,
-          runId,
-          outcome: {
-            run: { runId, revisionId, status: 'RUNNING' },
-            invocation: { activityId: 'greet', status: 'RUNNABLE' },
-          },
         })
       ),
     );
@@ -211,16 +212,18 @@ describe('resident activity operator commands', () => {
       actor: { kind: 'packaged-operator', id: revisionId },
     });
     expect(output.json).toHaveBeenCalledWith({
-      idempotency_key: idempotencyKey,
-      run_id: runId,
-      revision: revisionId,
-      activity: 'greet',
-      status: 'RUNNING',
-      invocation_status: 'RUNNABLE',
-      attempt_generation: 0,
-      attempt_status: '',
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.activity-submit',
+      appId,
+      runId,
+      revisionId,
+      activityId: 'greet',
+      idempotencyKey,
       reused: false,
+      runStatus: 'RUNNING',
+      invocationStatus: 'RUNNABLE',
     });
+    expect(Object.isFrozen(output.json.mock.calls[0][0])).toBe(true);
     expect(output.table).not.toHaveBeenCalled();
     expect(output.success).not.toHaveBeenCalled();
     expect(output.failure).not.toHaveBeenCalled();
@@ -228,13 +231,16 @@ describe('resident activity operator commands', () => {
     expect(processRef.exitCode).toBeUndefined();
   });
 
-  it('accepts the resident API compact submission result', async () => {
+  it('rejects the obsolete projected submission result', async () => {
     const execution = makeEmbeddedExecution();
     const appId = execution.embeddedRevision.runtime.appId;
     const revisionId = execution.embeddedRevision.runtime.revisionId;
-    const idempotencyKey = 'resident-submit-compact';
+    const idempotencyKey = 'resident-submit-obsolete';
     const runId = createManualLedgerRunId({ appId, idempotencyKey });
     const json = jest.fn();
+    const failure = jest.fn();
+    /** @type {import('../../src/core/runtime/operator/durable-submit-command.js').DurableSubmitProcess} */
+    const processRef = { exitCode: undefined };
     const command = createDurableSubmitCommand({
       loadExecution: async () => ({ execution }),
       submit: async () => ({
@@ -243,12 +249,20 @@ describe('resident activity operator commands', () => {
         activityName: 'greet',
         idempotencyKey,
         runId,
-        runStatus: 'RUNNING',
-        invocationStatus: 'RUNNABLE',
+        outcome: {
+          run: { runId, appId, revisionId, status: 'RUNNING' },
+          invocation: {
+            runId,
+            appId,
+            revisionId,
+            activityId: 'greet',
+            status: 'RUNNABLE',
+          },
+        },
         reused: false,
       }),
-      output: { json },
-      processRef: { exitCode: undefined },
+      output: { json, failure },
+      processRef,
     });
 
     await command.parseAsync([
@@ -261,9 +275,214 @@ describe('resident activity operator commands', () => {
       '--json',
     ]);
 
-    expect(json).toHaveBeenCalledWith(
-      expect.objectContaining({ run_id: runId, status: 'RUNNING' }),
+    expect(json).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('emits the exact same redacted receipt from source and packaged submit hosts', async () => {
+    const execution = makeEmbeddedExecution();
+    const appId = execution.embeddedRevision.runtime.appId;
+    const revisionId = execution.embeddedRevision.runtime.revisionId;
+    const idempotencyKey = 'resident-submit-parity';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
+    const result = Object.freeze({
+      accepted: true,
+      reused: true,
+      runId,
+      appId,
+      revisionId,
+      invocationId: 'manual',
+      activityId: 'greet',
+      runStatus: 'RUNNING',
+      invocationStatus: 'RUNNABLE',
+      idempotencyKey,
+    });
+    const sourceJson = jest.fn();
+    const packagedJson = jest.fn();
+    const source = createDurableSubmitCommand({
+      includeDirOption: true,
+      loadExecution: async () => ({ execution }),
+      submit: async () => result,
+      output: { json: sourceJson },
+      processRef: { exitCode: undefined, cwd: () => '/source' },
+    });
+    const packaged = createPackagedDurableSubmitCommand({
+      loadExecution: async () => ({ execution }),
+      submit: async () => result,
+      output: { json: packagedJson },
+      processRef: { exitCode: undefined },
+    });
+    const commonArguments = [
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      idempotencyKey,
+      '--input',
+      '{"private":"input-secret"}',
+      '--caller-metadata',
+      '{"private":"metadata-secret"}',
+      '--json',
+    ];
+
+    await source.parseAsync([
+      'node',
+      'wharfie',
+      '--dir',
+      '/source',
+      ...commonArguments,
+    ]);
+    await packaged.parseAsync(['node', 'artifact', ...commonArguments]);
+
+    expect(sourceJson).toHaveBeenCalledTimes(1);
+    expect(packagedJson).toHaveBeenCalledTimes(1);
+    expect(sourceJson.mock.calls[0][0]).toEqual(packagedJson.mock.calls[0][0]);
+    expect(sourceJson.mock.calls[0][0]).toEqual({
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.activity-submit',
+      appId,
+      runId,
+      revisionId,
+      activityId: 'greet',
+      idempotencyKey,
+      reused: true,
+      runStatus: 'RUNNING',
+      invocationStatus: 'RUNNABLE',
+    });
+    expect(JSON.stringify(sourceJson.mock.calls[0][0])).not.toMatch(
+      /input-secret|metadata-secret/,
     );
+  });
+
+  it('keeps the existing snake-case human submission row', async () => {
+    const execution = makeEmbeddedExecution();
+    const appId = execution.embeddedRevision.runtime.appId;
+    const revisionId = execution.embeddedRevision.runtime.revisionId;
+    const idempotencyKey = 'resident-submit-human';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
+    const table = jest.fn();
+    const success = jest.fn();
+    const command = createDurableSubmitCommand({
+      loadExecution: async () => ({ execution }),
+      submit: async () => ({
+        accepted: true,
+        reused: false,
+        runId,
+        appId,
+        revisionId,
+        invocationId: 'manual',
+        activityId: 'greet',
+        runStatus: 'RUNNING',
+        invocationStatus: 'RUNNABLE',
+        idempotencyKey,
+      }),
+      output: { table, success },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync([
+      'node',
+      'artifact',
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      idempotencyKey,
+    ]);
+
+    expect(table).toHaveBeenCalledWith([
+      {
+        idempotency_key: idempotencyKey,
+        run_id: runId,
+        revision: revisionId,
+        activity: 'greet',
+        status: 'RUNNING',
+        invocation_status: 'RUNNABLE',
+        attempt_generation: 0,
+        attempt_status: '',
+        reused: false,
+      },
+    ]);
+    expect(success).toHaveBeenCalledWith(
+      `Accepted durable activity run ${runId}.`,
+    );
+  });
+
+  it('rejects a mismatched compact identity before emitting JSON', async () => {
+    const execution = makeEmbeddedExecution();
+    const appId = execution.embeddedRevision.runtime.appId;
+    const idempotencyKey = 'resident-submit-mismatch';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
+    const json = jest.fn();
+    const failure = jest.fn();
+    /** @type {import('../../src/core/runtime/operator/durable-submit-command.js').DurableSubmitProcess} */
+    const processRef = { exitCode: undefined };
+    const command = createDurableSubmitCommand({
+      loadExecution: async () => ({ execution }),
+      submit: async () => ({
+        accepted: true,
+        reused: false,
+        runId,
+        appId,
+        revisionId: 'wrv1_wrong-revision',
+        invocationId: 'manual',
+        activityId: 'greet',
+        runStatus: 'RUNNING',
+        invocationStatus: 'RUNNABLE',
+        idempotencyKey,
+      }),
+      output: { json, failure },
+      processRef,
+    });
+
+    await command.parseAsync([
+      'node',
+      'artifact',
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      idempotencyKey,
+      '--json',
+    ]);
+
+    expect(json).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('does not echo malformed submit JSON', async () => {
+    const execution = makeEmbeddedExecution();
+    const secret = 'private-submit-secret{';
+    const json = jest.fn();
+    const failure = jest.fn();
+    const loadExecution = jest.fn(async () => ({ execution }));
+    /** @type {import('../../src/core/runtime/operator/durable-submit-command.js').DurableSubmitProcess} */
+    const processRef = { exitCode: undefined };
+    const command = createDurableSubmitCommand({
+      loadExecution,
+      output: { json, failure },
+      processRef,
+    });
+
+    await command.parseAsync([
+      'node',
+      'artifact',
+      '--activity',
+      'greet',
+      '--idempotency-key',
+      'malformed-submit',
+      '--input',
+      secret,
+      '--json',
+    ]);
+
+    expect(loadExecution).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledTimes(1);
+    const reported = failure.mock.calls[0][0];
+    expect(reported).toBeInstanceOf(Error);
+    expect(/** @type {Error} */ (reported).message).toBe('Invalid input JSON.');
+    expect(String(reported)).not.toContain(secret);
+    expect(processRef.exitCode).toBe(1);
   });
 
   it('drains the resident worker on SIGTERM before execution cleanup', async () => {

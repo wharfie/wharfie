@@ -2125,10 +2125,28 @@ async function prepare(repoRoot) {
     ],
     'offline workflow start before service install',
   );
-  assert.equal(started.workflow, WORKFLOW_ID);
-  assert.equal(started.cursor_disposition, 'ACTIVITY_RUNNABLE');
-  assert.match(started.run_id, /^wfr_[A-Za-z0-9_-]{43}$/);
-  const runId = started.run_id;
+  assert.match(started.runId, /^wfr_[A-Za-z0-9_-]{43}$/);
+  const runId = started.runId;
+  assert.deepEqual(started, {
+    schemaVersion: 1,
+    kind: 'wharfie.execution-ledger.workflow-start',
+    appId: APP_ID,
+    runId,
+    revisionId: packaged.revision.revisionId,
+    workflowId: WORKFLOW_ID,
+    idempotencyKey,
+    reused: false,
+    runStatus: 'RUNNING',
+    cursor: {
+      disposition: 'ACTIVITY_RUNNABLE',
+      stepId: 'before-reboot',
+      stepIndex: 0,
+    },
+    nextActivation: {
+      kind: 'activity',
+      status: 'RUNNABLE',
+    },
+  });
   const pendingBeforeInstall = inspectRun(packaged.artifactPath, runId);
   announce('persisted-work-before-install');
   assert.equal(pendingBeforeInstall.run?.status, 'RUNNING');

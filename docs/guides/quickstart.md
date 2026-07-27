@@ -265,6 +265,33 @@ run, signal, delivery ID, and payload after response loss to receive the
 retained accepted or rejected decision. Reusing the delivery ID with changed
 contents conflicts. An unknown run is refused without creating durable state.
 
+Add `--json` to `run`, `submit`, `start`, or `signal` when another program or
+agent will retain the decision. Source and packaged forms emit byte-equivalent
+schema-v1 receipts for the same immutable result. Their kinds are:
+
+- `wharfie.execution-ledger.activity-run`;
+- `wharfie.execution-ledger.activity-submit`;
+- `wharfie.execution-ledger.workflow-start`; and
+- `wharfie.execution-ledger.signal`.
+
+The activity and start receipts use camelCase and bind `appId`, `revisionId`,
+`runId`, and the public idempotency/activity/workflow identity. Run additionally
+reports `disposition`, `reused`, lifecycle statuses, and an attempt summary or
+`null`; submit reports accepted lifecycle and replay state without inventing an
+attempt. Start reports the current cursor and either the next activation
+kind/status or `null` after terminalization. Signal returns its retained
+accepted/rejected delivery receipt or an explicit unpersisted unknown-run
+refusal. None of these documents includes inputs, metadata, signal payloads,
+results, errors, actors, private activation IDs, payload references, evidence,
+or fences.
+
+The JSON receipt reports durable truth rather than process success. A
+failed/blocked/in-progress run, rejected signal, or unknown-run refusal writes
+its valid receipt and then exits nonzero. Loading, validation, or service
+failure before a durable decision or explicit absence writes no JSON. Human
+output is derived separately and its snake_case table columns are not a
+machine contract.
+
 Run the matching source revision as a foreground resident in another terminal:
 
 ```bash

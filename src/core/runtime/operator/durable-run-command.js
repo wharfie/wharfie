@@ -5,10 +5,14 @@ import { Command } from 'commander';
 import { resolveManifestActivityExecutionIdentity } from '../app-runs.js';
 import { runLocalDurableManifestActivity } from '../durable-activity-host.js';
 import { createManualLedgerRunId } from '../manual-ledger-run.js';
+import {
+  createDurableActivityRunReceipt,
+  formatDurableActivityRunHumanRow,
+} from './durable-operation-receipt.js';
 
 /**
  * @typedef DurableRunCommandOutput
- * @property {(value: Record<string, any>) => void} json - Write one redacted JSON row.
+ * @property {(value: Record<string, any>) => void} json - Write one redacted JSON receipt.
  * @property {(rows: Record<string, any>[]) => void} table - Write redacted table rows.
  * @property {(message: string) => void} info - Write pre-dispatch identity text.
  * @property {(message: string) => void} success - Write terminal success text.
@@ -68,9 +72,8 @@ function parseJsonInput(input, label, defaultValue) {
   if (!trimmed) return defaultValue;
   try {
     return JSON.parse(trimmed);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid ${label} JSON: ${message}`);
+  } catch {
+    throw new Error(`Invalid ${label} JSON.`);
   }
 }
 
@@ -86,24 +89,6 @@ function resolveIdempotencyKey(value) {
     );
   }
   return value;
-}
-
-/**
- * @param {Record<string, any>} result - Ledger-run result.
- * @param {string} idempotencyKey - User-visible idempotency identity.
- * @returns {Record<string, any>} - Compact redacted operator row.
- */
-function formatRunRow(result, idempotencyKey) {
-  return {
-    idempotency_key: idempotencyKey,
-    run_id: result.run.runId,
-    revision: result.run.revisionId,
-    activity: result.invocation.activityId,
-    status: result.run.status,
-    invocation_status: result.invocation.status,
-    attempt_generation: result.attempt?.generation ?? 0,
-    attempt_status: result.attempt?.status || '',
-  };
 }
 
 /**
@@ -217,7 +202,7 @@ export function createDurableRunCommand(options) {
       '--idempotency-key <idempotencyKey>',
       'Stable manual idempotency key',
     )
-    .option('--json', 'Write one redacted machine-readable durable run row')
+    .option('--json', 'Write one stable redacted durable run receipt')
     .action(async (commandOptions) => {
       /** @type {DurableRunExecutionHandle | undefined} */
       let loaded;
@@ -307,10 +292,16 @@ export function createDurableRunCommand(options) {
           cancellation.close();
         }
 
-        const row = formatRunRow(result.outcome, result.idempotencyKey);
-        if (commandOptions.json === true) output.json(row);
-        else output.table([row]);
-        if (result.outcome.disposition !== 'completed') {
+        const receipt = createDurableActivityRunReceipt(result, {
+          appId: identity.appId,
+          revisionId: identity.revisionId,
+          runId,
+          activityId: activityName,
+          idempotencyKey,
+        });
+        if (commandOptions.json === true) output.json(receipt);
+        else output.table([formatDurableActivityRunHumanRow(receipt)]);
+        if (receipt.disposition !== 'completed') {
           throw outcomeError(
             result.outcome,
             result.appId,
@@ -320,7 +311,7 @@ export function createDurableRunCommand(options) {
         }
         if (commandOptions.json !== true) {
           output.success(
-            `Executed durable activity through attempt ${result.outcome.attempt?.generation || 0}.`,
+            `Executed durable activity through attempt ${receipt.attempt?.generation || 0}.`,
           );
         }
       } catch (error) {
