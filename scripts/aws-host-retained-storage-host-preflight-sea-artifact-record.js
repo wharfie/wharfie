@@ -16,6 +16,7 @@ import { cloneBoundedJsonObject } from '../src/core/runtime/json-value.js';
 import { assertManifestIsSecretFree } from '../src/core/runtime/manifest-security.js';
 import {
   AWS_RETAINED_STORAGE_HOST_PREFLIGHT_SEA_DELIVERY_ASSET_NAME,
+  AWS_RETAINED_STORAGE_HOST_PREFLIGHT_SEA_DELIVERY_MAX_BYTES,
   stringifyAwsRetainedStorageHostPreflightSeaDeliveryManifest,
   validateAwsRetainedStorageHostPreflightSeaDeliveryManifest,
 } from './aws-host-retained-storage-host-preflight-sea-delivery.js';
@@ -257,8 +258,8 @@ function validateSourceArchive(value) {
   });
 }
 
-/** @param {unknown} value @param {string} expectedFormat @param {string} path @returns {Readonly<Record<string, any>>} */
-function validateFormattedByteEvidence(value, expectedFormat, path) {
+/** @param {unknown} value @param {string} expectedFormat @param {number} maximum @param {string} path @returns {Readonly<Record<string, any>>} */
+function validateFormattedByteEvidence(value, expectedFormat, maximum, path) {
   const input = exactObject(value, path);
   assertExactKeys(input, FORMATTED_BYTE_EVIDENCE_KEYS, path);
   if (input.format !== expectedFormat) {
@@ -268,6 +269,9 @@ function validateFormattedByteEvidence(value, expectedFormat, path) {
     { byteDigest: input.byteDigest, size: input.size },
     path,
   );
+  if (evidence.size > maximum) {
+    throw new TypeError(`${path} exceeds its byte limit.`);
+  }
   return deepFreeze({
     format: expectedFormat,
     ...evidence,
@@ -294,10 +298,24 @@ function validateManifestAsset(value, delivery) {
     'utf8',
   );
   const expected = observeBytes(expectedBytes);
+  if (
+    expected.size > AWS_RETAINED_STORAGE_HOST_PREFLIGHT_SEA_DELIVERY_MAX_BYTES
+  ) {
+    throw new TypeError(
+      'AWS retained-storage host preflight SEA manifest asset exceeds its byte limit.',
+    );
+  }
   const actual = validateByteEvidence(
     { byteDigest: input.byteDigest, size: input.size },
     path,
   );
+  if (
+    actual.size > AWS_RETAINED_STORAGE_HOST_PREFLIGHT_SEA_DELIVERY_MAX_BYTES
+  ) {
+    throw new TypeError(
+      'AWS retained-storage host preflight SEA manifest asset exceeds its byte limit.',
+    );
+  }
   if (
     input.name !==
       AWS_RETAINED_STORAGE_HOST_PREFLIGHT_SEA_DELIVERY_ASSET_NAME ||
@@ -355,6 +373,11 @@ function validateNodeEvidence(value, target) {
     input.sourceBinary,
     `${path}.sourceBinary`,
   );
+  if (sourceBinary.size > MAX_ARTIFACT_BYTES) {
+    throw new TypeError(
+      'AWS retained-storage host preflight Node source binary exceeds its byte limit.',
+    );
+  }
   return deepFreeze({
     version: target.nodeVersion,
     archive: {
@@ -549,16 +572,19 @@ function validatePayload(value) {
   const entryBundle = validateFormattedByteEvidence(
     input.entryBundle,
     AWS_RETAINED_STORAGE_HOST_PREFLIGHT_ENTRY_BUNDLE_FORMAT,
+    MAX_BUNDLE_BYTES,
     `${path}.entryBundle`,
   );
   const runtimeBundle = validateFormattedByteEvidence(
     input.runtimeBundle,
     AWS_RETAINED_STORAGE_HOST_PREFLIGHT_RUNTIME_BUNDLE_FORMAT,
+    MAX_BUNDLE_BYTES,
     `${path}.runtimeBundle`,
   );
   const seaBlob = validateFormattedByteEvidence(
     input.seaBlob,
     AWS_RETAINED_STORAGE_HOST_PREFLIGHT_SEA_BLOB_FORMAT,
+    MAX_BUNDLE_BYTES,
     `${path}.seaBlob`,
   );
   const manifestAsset = validateManifestAsset(input.manifestAsset, delivery);
@@ -577,6 +603,11 @@ function validatePayload(value) {
     );
   }
   const size = validateSize(input.size, `${path}.size`);
+  if (size > MAX_ARTIFACT_BYTES) {
+    throw new TypeError(
+      'AWS retained-storage host preflight SEA artifact exceeds its byte limit.',
+    );
+  }
   const format = validateArtifactFormat(input.format);
   const target = deepFreeze(
     validateBuildTarget(input.target, `${path}.target`),
@@ -708,16 +739,16 @@ export function createAwsRetainedStorageHostPreflightSeaArtifactRecord(value) {
 }
 
 /**
- * Validate one bounded record against the exact snapshot entry bundle, final
- * SEA bytes, and the same successful SeaBuild generation that produced the
- * runtime bundle and SEA blob.
+ * Validate one bounded transported artifact record without pretending its
+ * self-reported byte evidence was independently observed. This proves only
+ * exact schema, semantic consistency, secret absence, and content identity.
+ * A caller must separately compare held or reproduced bytes before promoting
+ * any record field beyond a trusted-builder claim.
  * @param {unknown} value
- * @param {unknown} contextValue
  * @returns {Readonly<Record<string, any>>}
  */
-export function validateAwsRetainedStorageHostPreflightSeaArtifactRecord(
+export function validateAwsRetainedStorageHostPreflightSeaArtifactRecordClaims(
   value,
-  contextValue,
 ) {
   const document = cloneBoundedJsonObject(
     value,
@@ -749,14 +780,35 @@ export function validateAwsRetainedStorageHostPreflightSeaArtifactRecord(
       'AWS retained-storage host preflight SEA artifact record ID does not match its exact content.',
     );
   }
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      ...payload,
+      recordId,
+    }),
+  );
+}
 
+/**
+ * Validate one bounded record against the exact snapshot entry bundle, final
+ * SEA bytes, and the same successful SeaBuild generation that produced the
+ * runtime bundle and SEA blob.
+ * @param {unknown} value
+ * @param {unknown} contextValue
+ * @returns {Readonly<Record<string, any>>}
+ */
+export function validateAwsRetainedStorageHostPreflightSeaArtifactRecord(
+  value,
+  contextValue,
+) {
+  const document =
+    validateAwsRetainedStorageHostPreflightSeaArtifactRecordClaims(value);
   const contextPath =
     'AWS retained-storage host preflight SEA artifact validation context';
   const context = exactObject(contextValue, contextPath);
   assertExactKeys(context, VALIDATOR_CONTEXT_KEYS, contextPath);
   const expected = createAwsRetainedStorageHostPreflightSeaArtifactRecord({
-    delivery: payload.delivery,
-    sourceArchive: payload.sourceArchive,
+    delivery: document.delivery,
+    sourceArchive: document.sourceArchive,
     bundleBytes: ownData(context, 'bundleBytes', contextPath),
     artifactBytes: ownData(context, 'artifactBytes', contextPath),
     generation: ownData(context, 'generation', contextPath),

@@ -6,6 +6,7 @@
     "skipLibCheck": true
   },
   "files": [
+    "scripts/verify-aws-host-retained-storage-host-preflight-sea-linux.js",
     "scripts/verify-package-sea.js",
     "scripts/verify-systemd-user-service-linux.js",
     "test/systemd/boot-check.js"

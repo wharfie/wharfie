@@ -8,6 +8,7 @@ import {
   AWS_RETAINED_STORAGE_HOST_PREFLIGHT_RUNTIME_BUNDLE_FORMAT,
   AWS_RETAINED_STORAGE_HOST_PREFLIGHT_SOURCE_ARCHIVE_FORMAT,
   createAwsRetainedStorageHostPreflightSeaArtifactRecord,
+  validateAwsRetainedStorageHostPreflightSeaArtifactRecordClaims,
   validateAwsRetainedStorageHostPreflightSeaArtifactRecord,
 } from '../../scripts/aws-host-retained-storage-host-preflight-sea-artifact-record.js';
 import {
@@ -245,6 +246,97 @@ describe('AWS retained-storage host preflight SEA artifact record', () => {
     expect(validated.delivery).not.toBe(record.delivery);
     expectDeepFrozen(validated);
   });
+
+  it('keeps transported schema validation separate from exact-byte verification', () => {
+    const value = fixture();
+    const record = createRecord(value);
+    const transported = clone(record);
+
+    const validated =
+      validateAwsRetainedStorageHostPreflightSeaArtifactRecordClaims(
+        transported,
+      );
+
+    expect(validated).toEqual(record);
+    expect(validated).not.toBe(record);
+    expectDeepFrozen(validated);
+
+    const reidentifiedBuilderClaim = clone(record);
+    reidentifiedBuilderClaim.runtimeBundle.byteDigest = digest(
+      'different builder-claimed runtime bundle',
+    );
+    const structurallyValid = reidentify(reidentifiedBuilderClaim);
+    expect(
+      validateAwsRetainedStorageHostPreflightSeaArtifactRecordClaims(
+        structurallyValid,
+      ),
+    ).toEqual(structurallyValid);
+    expect(() =>
+      validateAwsRetainedStorageHostPreflightSeaArtifactRecord(
+        structurallyValid,
+        validationContext(value),
+      ),
+    ).toThrow(/does not match its exact build evidence/iu);
+  });
+
+  /** @type {Array<[string, (record: Record<string, any>) => void]>} */
+  const oversizedClaimCases = [
+    [
+      'source archive',
+      (record) => {
+        record.sourceArchive.size = 32 * 1024 * 1024 + 1;
+      },
+    ],
+    [
+      'entry bundle',
+      (record) => {
+        record.entryBundle.size = 8 * 1024 * 1024 + 1;
+      },
+    ],
+    [
+      'runtime bundle',
+      (record) => {
+        record.runtimeBundle.size = 8 * 1024 * 1024 + 1;
+      },
+    ],
+    [
+      'SEA blob',
+      (record) => {
+        record.seaBlob.size = 8 * 1024 * 1024 + 1;
+      },
+    ],
+    [
+      'delivery manifest asset',
+      (record) => {
+        record.manifestAsset.size = 32 * 1024 + 1;
+      },
+    ],
+    [
+      'final artifact',
+      (record) => {
+        record.size = 512 * 1024 * 1024 + 1;
+      },
+    ],
+    [
+      'Node source binary',
+      (record) => {
+        record.node.sourceBinary.size = 512 * 1024 * 1024 + 1;
+      },
+    ],
+  ];
+
+  it.each(oversizedClaimCases)(
+    'rejects transported %s claims outside creator byte limits',
+    (_name, mutate) => {
+      const candidate = clone(createRecord());
+      mutate(candidate);
+      expect(() =>
+        validateAwsRetainedStorageHostPreflightSeaArtifactRecordClaims(
+          reidentify(candidate),
+        ),
+      ).toThrow(/exceeds its byte limit/iu);
+    },
+  );
 
   it('cross-checks every reidentified byte stage against the exact successful generation', () => {
     const value = fixture();

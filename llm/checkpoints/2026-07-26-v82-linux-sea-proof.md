@@ -231,9 +231,9 @@ After container exit:
 The temporary host proof root was only 7 MiB before final removal: one Git
 bundle, the ephemeral runner/verifier, and the copied 8 KiB receipt. All large
 build, Node, dependency, SEA, and sidecar bytes lived only in the auto-removed
-container layer. The receipt records removal of its artifact/work subtree; the
+container layer. The runner removed its artifact/work subtree before exit; the
 later container exit and host-root removal were separately observed by the
-operator and are not receipt-bound.
+operator. None of those cleanup claims are receipt-bound.
 
 ## Honest boundaries
 
