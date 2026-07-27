@@ -111,9 +111,14 @@ verified app-wide run directory through shared source `wharfie ops list` and
 packaged `<app> wharfie list` commands. Pages are newest-created-first,
 bounded, cursor-continued, explicitly redacted, integrity-marked, and
 non-authoritative; a missing read-only store is honest empty history. Public
-logs remain deliberately absent. The committed V83 driver still has not
-produced a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle
-proof exists.
+logs remain deliberately absent. V86 makes ordinary Jest runs coverage-free,
+keeps configured coverage explicit in `test:coverage` and the CI gate, and
+confines runner-owned cache and coverage paths to one OS-temporary root removed
+after normal success, failure, spawn error, thrown spawn, or child signal.
+Caller-selected output remains caller-owned, and uncatchable wrapper death can
+still leave temporary residue. The committed V83 driver still has not produced
+a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle proof
+exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -238,6 +243,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Expand CI to validate the package tarball, build a real generated-app SEA, invoke its activity and embedded operator manifest from a clean directory, and prove Node is unavailable on `PATH`.
 - [x] Remove misleading lint exclusions and split source, application,
       repository-tool, and test type-check boundaries explicitly.
+- [x] Make ordinary Jest validation coverage-free and disposable by default.
+      The shared runner directs its cache and any default coverage output into
+      one owned OS-temporary root, removes it after every synchronous child
+      outcome, preserves caller-owned directory overrides, and keeps coverage
+      explicit in `test:coverage` and mandatory in `test:ci`.
 
 **Exit:** the README, shipped package, package gate, validation commands, and
 current source describe the same v2 product; no Athena/v1 surface remains.
@@ -1425,9 +1435,11 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V85 verified durable run-history
-checkpoint](llm/checkpoints/2026-07-27-v85-verified-run-history.md). Its parent
-is the separate [V84 read-only Docker proof readiness
+The latest recorded restart point is the [V86 disposable test-harness
+checkpoint](llm/checkpoints/2026-07-27-v86-disposable-test-harness.md). Its
+parent is the [V85 verified durable run-history
+checkpoint](llm/checkpoints/2026-07-27-v85-verified-run-history.md), whose
+parent is the separate [V84 read-only Docker proof readiness
 checkpoint](llm/checkpoints/2026-07-27-v84-read-only-docker-proof-readiness.md),
 whose parent is the [V83 bounded Linux SEA proof tooling
 checkpoint](llm/checkpoints/2026-07-27-v83-bounded-linux-sea-proof-tooling.md),
