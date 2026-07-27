@@ -186,15 +186,20 @@ describe('durable activity log sink', () => {
   ])(
     'reconciles an ambiguous provider rejection named like cancellation: %s',
     async (rejection) => {
-      const appendActivityAttemptLog = jest
-        .fn()
-        .mockRejectedValueOnce(rejection)
-        .mockResolvedValueOnce({
-          applied: false,
-          attemptId: 'attempt-1',
-          acknowledgedComponentSequence: 1,
-          entryId: 'replayed-entry',
-        });
+      /** @type {Record<string, any>[]} */
+      const requests = [];
+      const appendActivityAttemptLog = jest.fn(
+        async (/** @type {Record<string, any>} */ input) => {
+          requests.push(input);
+          if (requests.length === 1) throw rejection;
+          return {
+            applied: false,
+            attemptId: 'attempt-1',
+            acknowledgedComponentSequence: 1,
+            entryId: 'replayed-entry',
+          };
+        },
+      );
       const sink = createDurableActivityLogSink({
         ledger: /** @type {any} */ ({ appendActivityAttemptLog }),
         attempt: attempt(),
@@ -202,9 +207,7 @@ describe('durable activity log sink', () => {
 
       await expect(sink(logFrame())).resolves.toBeUndefined();
       expect(appendActivityAttemptLog).toHaveBeenCalledTimes(2);
-      expect(appendActivityAttemptLog.mock.calls[1][0]).toBe(
-        appendActivityAttemptLog.mock.calls[0][0],
-      );
+      expect(requests[1]).toBe(requests[0]);
     },
   );
 
