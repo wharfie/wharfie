@@ -1,8 +1,12 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, jest, test } from '@jest/globals';
 
+import {
+  ExecutionLedgerConflictError,
+  ExecutionLedgerProjectionError,
+} from '../../src/core/lib/ledger/execution-ledger-contract.js';
 import { createDurableActivityLogSink } from '../../src/core/runtime/activity-log-sink.js';
 
 function attempt(overrides = {}) {
@@ -125,17 +129,69 @@ describe('durable activity log sink', () => {
     expect(calls).toHaveLength(1);
   });
 
-  test('propagates append rejection without converting it to acknowledgement', async () => {
-    const rejection = new Error('durable append unavailable');
+  test('retries one exact request after opaque response loss', async () => {
+    const responseLoss = new Error('durable append response unavailable');
+    /** @type {Record<string, any>[]} */
+    const calls = [];
     const sink = createDurableActivityLogSink({
       ledger: /** @type {any} */ ({
-        appendActivityAttemptLog: async () => {
-          throw rejection;
+        appendActivityAttemptLog: async (
+          /** @type {Record<string, any>} */ input,
+        ) => {
+          calls.push(input);
+          if (calls.length === 1) throw responseLoss;
+          return {
+            applied: false,
+            attemptId: input.attemptId,
+            acknowledgedComponentSequence: input.frame.sequence,
+            entryId: 'response-loss-replay',
+          };
         },
       }),
       attempt: attempt(),
     });
 
+    await expect(sink(logFrame())).resolves.toBeUndefined();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBe(calls[0]);
+  });
+
+  test.each([
+    new TypeError('invalid append request'),
+    new RangeError('attempt log budget exhausted'),
+    new ExecutionLedgerConflictError('run-1', 'stale append fence'),
+    new ExecutionLedgerProjectionError('run-1', 'corrupt retained chain'),
+    Object.assign(new Error('append aborted'), { name: 'AbortError' }),
+    Object.assign(new Error('append aborted'), { code: 'ABORT_ERR' }),
+  ])('does not retry definitive append rejection %s', async (rejection) => {
+    const appendActivityAttemptLog = jest.fn(async () => {
+      throw rejection;
+    });
+    const sink = createDurableActivityLogSink({
+      ledger: /** @type {any} */ ({
+        appendActivityAttemptLog,
+      }),
+      attempt: attempt(),
+    });
+
     await expect(sink(logFrame())).rejects.toBe(rejection);
+    expect(appendActivityAttemptLog).toHaveBeenCalledTimes(1);
+  });
+
+  test('propagates the second opaque rejection without a third append', async () => {
+    const first = new Error('first durable append response unavailable');
+    const second = new Error('second durable append response unavailable');
+    let callCount = 0;
+    const appendActivityAttemptLog = jest.fn(async () => {
+      callCount += 1;
+      throw callCount === 1 ? first : second;
+    });
+    const sink = createDurableActivityLogSink({
+      ledger: /** @type {any} */ ({ appendActivityAttemptLog }),
+      attempt: attempt(),
+    });
+
+    await expect(sink(logFrame())).rejects.toBe(second);
+    expect(appendActivityAttemptLog).toHaveBeenCalledTimes(2);
   });
 });

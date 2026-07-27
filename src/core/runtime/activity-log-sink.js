@@ -1,3 +1,27 @@
+import {
+  ExecutionLedgerConflictError,
+  ExecutionLedgerProjectionError,
+} from '../lib/ledger/execution-ledger-contract.js';
+
+/**
+ * Retry only an opaque operational rejection that may represent response
+ * loss. Contract, budget, fence, corruption, and cancellation failures are
+ * already definitive.
+ * @param {unknown} error - First append rejection.
+ * @returns {boolean} - Whether one exact immediate retry is allowed.
+ */
+function isRetryableActivityLogAppendError(error) {
+  return (
+    error instanceof Error &&
+    !(error instanceof TypeError) &&
+    !(error instanceof RangeError) &&
+    !(error instanceof ExecutionLedgerConflictError) &&
+    !(error instanceof ExecutionLedgerProjectionError) &&
+    error.name !== 'AbortError' &&
+    /** @type {{code?: unknown}} */ (error).code !== 'ABORT_ERR'
+  );
+}
+
 /**
  * Build the host-owned component sink for one durably STARTED physical
  * attempt. Non-log frames remain ordering barriers but are not duplicated
@@ -27,7 +51,13 @@ export function createDurableActivityLogSink(options) {
         'Durable activity logging requires ledger.appendActivityAttemptLog.',
       );
     }
-    await ledger.appendActivityAttemptLog({ ...scope, frame });
+    const request = Object.freeze({ ...scope, frame });
+    try {
+      await ledger.appendActivityAttemptLog(request);
+    } catch (error) {
+      if (!isRetryableActivityLogAppendError(error)) throw error;
+      await ledger.appendActivityAttemptLog(request);
+    }
   };
 }
 
