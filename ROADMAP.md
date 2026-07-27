@@ -119,10 +119,17 @@ Caller-selected output remains caller-owned, and uncatchable wrapper death can
 still leave temporary residue. V87 aligns `jest`, `@jest/globals`, and
 `@types/jest` on major 30, removes stale Jest 29 runtime/type packages from the
 lock, and pins direct-plus-locked major agreement in the safe runner suite.
-Five focused safe suites pass; one separately attempted operations-error suite
+V88 makes selected component sinks settle before positive acknowledgement and
+gives durable manual/workflow runners a log-only sink. One exact `STARTED`
+attempt scope and fence owns a bounded auxiliary hash-linked sparse sequence;
+stable full-chain and payload verification plus exact replay cover response
+loss, including after terminalization. The 256-entry/8 MiB store does not
+mutate normal run history. Raw logs remain sensitive and have no public reader,
+and retained append idempotency is not exactly-once execution or display. Five
+focused V87 safe suites pass; one separately attempted operations-error suite
 exits 134 locally for an unresolved reason and is not part of that passing
-matrix or a full-suite claim. The committed V83 driver still has not produced a
-`whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle proof
+matrix or a full-suite claim. The committed V83 driver still has not produced
+a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle proof
 exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
@@ -183,11 +190,12 @@ persistence boundary, and authenticated current-head controller authority are
 defined; fixed-user desired convergence and authorized non-destructive
 application-storage preparation are now concrete. The read/digest-only V78
 host fingerprint is also concrete. The local durable ledger now has verified
-bounded application-wide run discovery from both source and packaged CLIs,
-while durable public logs remain open. Live disposable-host format evidence,
-destructive formatting, exact profile verification, mounting, control storage,
-health effects, privileged packaging and selector delivery, clean-account
-proof, and a deployed-service readiness claim still follow ·
+bounded application-wide run discovery from both source and packaged CLIs and
+fenced durable activity-log append before transport acknowledgement, while
+public log disclosure and retrieval remain open. Live disposable-host format
+evidence, destructive formatting, exact profile verification, mounting,
+control storage, health effects, privileged packaging and selector delivery,
+clean-account proof, and a deployed-service readiness claim still follow ·
 **Last updated:** 2026-07-27
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
@@ -667,6 +675,14 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       `wharfie.execution-ledger.run-page` explicitly grants no authority,
       identifies the data as non-authoritative discovery with verified
       integrity, and omits payloads, evidence, fences, and paths.
+- [x] Retain acknowledged Activity Protocol log frames under the exact
+      durably `STARTED` physical attempt and fence. Selected component sinks
+      settle before positive acknowledgement; the auxiliary sparse sequence
+      verifies its complete hash-linked entry and payload chain, replays exact
+      response-loss retries after terminalization, caps each attempt at 256
+      entries/8 MiB, and does not mutate normal run history. This foundation
+      deliberately exposes no public reader, redaction, retention/GC, or
+      exactly-once execution/display claim.
 - [ ] Add public logs and any remaining operator surfaces that are still
       deliberately absent.
 - [x] Build one shared source/packaged foreground durable-run host. Source
@@ -1444,9 +1460,11 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V87 Jest 30 alignment
-checkpoint](llm/checkpoints/2026-07-27-v87-jest-30-alignment.md). Its parent is
-the [V86 disposable test-harness
+The latest recorded restart point is the [V88 durable attempt logs
+checkpoint](llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md). Its parent
+is the [V87 Jest 30 alignment
+checkpoint](llm/checkpoints/2026-07-27-v87-jest-30-alignment.md), whose parent
+is the [V86 disposable test-harness
 checkpoint](llm/checkpoints/2026-07-27-v86-disposable-test-harness.md), whose
 parent is the [V85 verified durable run-history
 checkpoint](llm/checkpoints/2026-07-27-v85-verified-run-history.md), whose
