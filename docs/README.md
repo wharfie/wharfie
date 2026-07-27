@@ -193,8 +193,10 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [durable attempt logs
-checkpoint](../llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md). Its
+The latest recorded restart handoff is the [sensitive activity-log inspection
+checkpoint](../llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md).
+Its parent is the [durable attempt logs
+checkpoint](../llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md), whose
 parent is the [Jest 30 alignment
 checkpoint](../llm/checkpoints/2026-07-27-v87-jest-30-alignment.md), whose
 parent is the [disposable test-harness

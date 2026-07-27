@@ -1476,9 +1476,12 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V88 durable attempt logs
-checkpoint](llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md). Its parent
-is the [V87 Jest 30 alignment
+The latest recorded restart point is the [V89 sensitive activity-log
+inspection
+checkpoint](llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md).
+Its parent is the [V88 durable attempt logs
+checkpoint](llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md), whose
+parent is the [V87 Jest 30 alignment
 checkpoint](llm/checkpoints/2026-07-27-v87-jest-30-alignment.md), whose parent
 is the [V86 disposable test-harness
 checkpoint](llm/checkpoints/2026-07-27-v86-disposable-test-harness.md), whose
