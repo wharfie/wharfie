@@ -156,10 +156,15 @@ child home, platform-data, configuration, cache, npm-cache, and temporary
 paths. Revision-producing tests now operate on owned copies of authored
 applications, exclude generated trees, and fingerprint the checkout sources
 before cleanup. Its final safe matrix passes 48 tests across five suites plus
-seven targeted package and operations-command cases; this is not a full-suite,
-native, or relocated-Linux proof. The committed V83 driver still has not
-produced a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle
-proof exists.
+seven targeted package and operations-command cases. V95 freezes schema-version
+1 JSON receipts for durable activity `run` and `submit` plus workflow `start`
+and `signal`. Shared constructors validate manifest and ledger linkage, emit
+camel-case machine documents separately from snake-case human rows, freeze the
+result, and preserve durable negative decisions before nonzero exit. Source and
+packaged consumers now share those documents. Neither V94 nor V95 is a
+full-suite, native, or relocated-Linux proof. The committed V83 driver still
+has not produced a `whlp2` receipt, and no successful AL2023 or live AWS/EBS
+lifecycle proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -1235,7 +1240,7 @@ surface remains.
 - [ ] Make builds reproducible where the selected packaging toolchain supports it, while always content-addressing the produced artifacts.
 - [ ] Support staged rollout, health gates, rollback, and garbage collection of unreferenced revisions.
 - [ ] Add schema/version migration contracts for durable application and control state.
-- [ ] Expose a stable JSON protocol suitable for coding-agent operation and verification.
+- [x] Expose a stable JSON protocol suitable for coding-agent operation and verification.
 - [ ] Evaluate peer-quorum control state only after provider-backed failover is proven.
 
 **Exit:** a later coding session can inspect why the service is in its current state, publish a new immutable revision, observe its rollout, and safely return to the prior revision.
@@ -1284,6 +1289,15 @@ that can prepare revisions no longer point those writes at checkout-owned
 application directories. The previous 2.5 GiB of generated local Node, actor,
 and VM artifacts was removed while the small durable database files were
 preserved. No V94 temporary root or checkout-local `.wharfie` tree remains.
+
+V95 closes the first stable coding-agent protocol slice. Durable activity
+`run` and `submit` plus workflow `start` and `signal` emit strict
+schema-version 1 JSON receipts from one shared source/packaged implementation.
+The constructors cross-check caller-known identities against the manifest and
+ledger, model current replay and terminal workflow state, recursively freeze
+their allowlisted output, and keep human rendering separate. Refused durable
+signal decisions are still emitted before the command exits nonzero. This is a
+local command protocol, not a hosted API or an exactly-once execution claim.
 
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
@@ -1544,10 +1558,10 @@ or joined it to host evidence. No formatter or mount mutation exists.
    environment. After that evidence,
    expose only the source/packaged schedule `list`, `inspect`, `pause`, and
    `resume` surface; do not add manual fire, tail, or search.
-2. While that native proof remains externally gated, define stable versioned
-   JSON documents for source and packaged `run`, `submit`, `start`, and
-   `signal`, with shared schemas and parity tests. Keep human rendering
-   separate and do not turn the documents into a hosted API.
+2. [x] V95 defines stable schema-version 1 JSON documents for source and
+       packaged `run`, `submit`, `start`, and `signal`, with shared constructors
+       and parity coverage. Human rendering remains separate, and no hosted API or
+       exactly-once execution claim was added.
 3. Run V84 against one already-present immutable local Linux/amd64 image. If
    the read-only report is attemptable, run the committed V83 Docker proof only
    with explicit approval, retain only its checksummed `whlp2` receipt, and
@@ -1572,9 +1586,12 @@ or joined it to host evidence. No formatter or mount mutation exists.
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V94 owned test-workspace
-checkpoint](llm/checkpoints/2026-07-27-v94-owned-test-workspace.md). Its parent
-is the [V93 relocated SEA schedule/restart proof
+The latest recorded restart point is the [V95 versioned durable-operation
+receipts
+checkpoint](llm/checkpoints/2026-07-27-v95-versioned-durable-operation-receipts.md).
+Its parent is the [V94 owned test-workspace
+checkpoint](llm/checkpoints/2026-07-27-v94-owned-test-workspace.md), whose
+parent is the [V93 relocated SEA schedule/restart proof
 checkpoint](llm/checkpoints/2026-07-27-v93-relocated-sea-schedule-restart-proof.md),
 whose parent is the [V92 resident workflow-schedules
 checkpoint](llm/checkpoints/2026-07-27-v92-resident-workflow-schedules.md),
