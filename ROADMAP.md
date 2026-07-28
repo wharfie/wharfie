@@ -167,10 +167,17 @@ release directories outside settled selected/rollback authority. One
 app-scoped lock, 128-entry/64-GiB logical-byte limits enforced before staging
 and pruning, deterministic rename-first recovery tombstones, and authenticated
 interrupted-staging cleanup make interruption safe to retry in coherent
-installed and intentionally uninstalled states. Neither V94, V95, nor V96 is a
-full-suite, native, relocated-Linux, or real-systemd prune proof. The committed
-V83 driver still has not produced a `whlp2` receipt, and no successful AL2023
-or live AWS/EBS lifecycle proof exists.
+installed and intentionally uninstalled states. V97 replaces the rich public
+package result with one strict versioned local receipt. V98 makes every
+in-repository native verifier consume that receipt through a complete-document
+parser and independently rejoin it to exact bytes, sidecar, embedded metadata,
+and manifest behavior. V98 also removes shared Commander command instances
+from source and packaged program composition and makes the disposable Jest
+runner remove owned read-only directories without altering stable symlink or
+hard-link targets. None of V94 through V98 is a full-suite, native,
+relocated-Linux, or real-systemd proof. The committed V83 driver still has not
+produced a `whlp2` receipt, and no successful AL2023 or live AWS/EBS lifecycle
+proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -1349,6 +1356,29 @@ output to stderr; trusted authored code that deliberately bypasses streams
 or leaves stdout-producing work unawaited remains outside that non-sandboxed
 contract.
 
+V98 closes three local integrity gaps found while auditing V97. The two native
+SEA package-verifier call sites now parse the complete successful stdout
+document as the strict public receipt; diagnostics, multiple documents, rich
+private result fields, malformed ordering, and inconsistent paths fail the
+handoff. Receipt discovery is then joined to independently read relocated
+bytes, the complete canonical sidecar, embedded revision/runtime metadata, and
+the embedded manifest. The join recomputes byte authority through the sidecar
+and rejects every app, revision, artifact, digest, size, target, metadata
+observation, or manifest-behavior disagreement. This repairs the verifier
+consumer contract without granting authority to the receipt itself.
+
+Every `createProgram()` now owns a recursively fresh Commander tree in both
+source and packaged CLIs. Source application and operations groups plus their
+leaves are factories; packaged manifest and metadata leaves are factories; and
+the remaining unused eager singleton exports are removed. Recursive parity,
+identity, parent, hook/config/action, and mutation-isolation tests cover the
+original reparenting failure. The Jest wrapper now retries owned cleanup after
+restoring directory-only owner access, handles cross-realm filesystem errors,
+does not chmod file or stable link targets, and preserves primary child,
+spawn, signal, or nonzero-status failures together with cleanup failures. Its
+permission repair assumes the synchronous child has exited and the trusted
+test tree is quiescent.
+
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
 responses, resident generation takeover, persisted timer firing, current-wait
@@ -1602,52 +1632,68 @@ controller-side read-only provider-evidence contract for an expiring selected
 experiment-tagged instance and evidence volume, but has not run it against AWS
 or joined it to host evidence. No formatter or mount mutation exists.
 
-1. Execute the committed V93 relocated Linux SEA due-occurrence and
-   cursor-restart proof with Node absent from `PATH`, using the bounded
-   disposable proof tooling and explicit authority required by that
-   environment. After that evidence,
-   expose only the source/packaged schedule `list`, `inspect`, `pause`, and
-   `resume` surface; do not add manual fire, tail, or search.
-2. [x] V95 defines stable schema-version 1 JSON documents for source and
+1. [x] V95 defines stable schema-version 1 JSON documents for source and
        packaged `run`, `submit`, `start`, and `signal`, with shared constructors
        and parity coverage. Human rendering remains separate, and no hosted API or
        exactly-once execution claim was added.
-3. [x] V96 adds bounded explicit `service prune` for verified unreferenced
+2. [x] V96 adds bounded explicit `service prune` for verified unreferenced
        local packaged systemd release directories. Selected and rollback
        authority remain protected, retryable rename-first tombstones contain
        deletion interruption, authenticated stage-temp cleanup contains
        publication interruption, and uninstall remains state preserving.
-4. [x] V97 replaces `app package`'s internal-object JSON leak with one strict
+3. [x] V97 replaces `app package`'s internal-object JSON leak with one strict
        schema-version 1 local handoff receipt. The target-sorted receipt keeps
        byte/target identity and local discovery paths, while full revision and
        provenance data plus fresh selected-SEA authority remain private.
-5. Run V84 against one already-present immutable local Linux/amd64 image. If
+4. [x] V98 repairs the native receipt consumers, gives every source and
+       packaged program one fully owned Commander tree, removes the remaining
+       eager command singletons, and makes runner-owned read-only test cleanup
+       bounded, link-safe under its quiescent-tree assumption, and
+       failure-preserving.
+5. Add V99 verified sensitive durable run-output snapshots. Source
+   `wharfie ops output --app-id ... --run-id ...` and packaged
+   `<app> wharfie output --run-id ...` must require
+   `--confirm-sensitive-output` before identity resolution or storage access.
+   One strict schema-version 1 `wharfie.execution-ledger.run-output` document
+   should expose verified partial workflow step values plus nullable terminal
+   result or structured error, retain polling version/sequence state, claim no
+   authority, and leak no payload references, evidence, fences, actors, or
+   storage paths. Keep redacted `inspect` unchanged.
+6. Execute the committed V93 relocated Linux SEA due-occurrence and
+   cursor-restart proof with Node absent from `PATH`, using the bounded
+   disposable proof tooling and explicit authority required by that
+   environment. After that evidence, expose only the source/packaged schedule
+   `list`, `inspect`, `pause`, and `resume` surface; do not add manual fire,
+   tail, or search.
+7. Run V84 against one already-present immutable local Linux/amd64 image. If
    the read-only report is attemptable, run the committed V83 Docker proof only
    with explicit approval, retain only its checksummed `whlp2` receipt, and
    audit cleanup and disk deltas.
-6. After that bounded proof, run an explicitly authorized disposable
+8. After that bounded proof, run an explicitly authorized disposable
    AL2023/real-EBS proof that joins V79 provider evidence to exact e2fsprogs
    tools and output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id
    identity and path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
-7. Only after that proof, implement the destructive formatter boundary with a
+9. Only after that proof, implement the destructive formatter boundary with a
    fresh controller authorization and current local fence immediately before
    mutation, a prepared-journal reread, immediate exact-media reobservation,
    path-retarget-safe device access, complete profile verification, and
    interruption recovery.
-8. Then implement persistent mount/systemd projection and runtime-manager
-   recovery, control storage, the V3 health publisher and V65 receipt, and the
-   deactivation producer/executor. Expose the root framework host command and
-   SEA only after that lifecycle is proven.
-9. Add SSM as wakeup/delivery rather than durable authority and run a complete
-   clean-account proof through the user's ordinary credential chain. Begin
-   provider-backed coordinator recovery only after the single-node service
-   lifecycle and control-store fencing are proven outside a developer session.
+10. Then implement persistent mount/systemd projection and runtime-manager
+    recovery, control storage, the V3 health publisher and V65 receipt, and the
+    deactivation producer/executor. Expose the root framework host command and
+    SEA only after that lifecycle is proven.
+11. Add SSM as wakeup/delivery rather than durable authority and run a complete
+    clean-account proof through the user's ordinary credential chain. Begin
+    provider-backed coordinator recovery only after the single-node service
+    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V97 versioned application-package
-receipt checkpoint](llm/checkpoints/2026-07-27-v97-versioned-application-package-receipt.md).
-Its parent is the [V96 bounded local release-pruning
+The latest recorded restart point is the [V98 local-contract integrity
+checkpoint](llm/checkpoints/2026-07-27-v98-local-contract-integrity.md). Its
+parent is the [V97 versioned application-package receipt
+checkpoint](llm/checkpoints/2026-07-27-v97-versioned-application-package-receipt.md),
+whose parent is the [V96 bounded local release-pruning
 checkpoint](llm/checkpoints/2026-07-27-v96-bounded-local-release-pruning.md),
 whose parent is the [V95 versioned durable-operation receipts
 checkpoint](llm/checkpoints/2026-07-27-v95-versioned-durable-operation-receipts.md),
