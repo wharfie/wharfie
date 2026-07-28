@@ -18,6 +18,19 @@ CREATED=0
 RECEIPT_STAGING=""
 COMMIT=""
 
+delete_disposable_instance() {
+  if ! limactl delete --force "${INSTANCE}"; then
+    echo "Failed to delete Lima instance ${INSTANCE}." >&2
+    return 1
+  fi
+  if limactl list --quiet "${INSTANCE}" >/dev/null 2>&1; then
+    echo "Lima instance ${INSTANCE} still exists after deletion." >&2
+    return 1
+  fi
+  CREATED=0
+  echo "Deleted disposable Lima instance ${INSTANCE}."
+}
+
 cleanup() {
   status=$?
   trap - EXIT INT TERM
@@ -63,7 +76,7 @@ cleanup() {
     fi
   fi
   if [[ "${CREATED}" -eq 1 && "${KEEP_VM}" != "1" ]]; then
-    limactl delete --force "${INSTANCE}" || true
+    delete_disposable_instance || status=1
   elif [[ "${CREATED}" -eq 1 ]]; then
     echo "Retained Lima instance ${INSTANCE} for inspection." >&2
   fi
@@ -85,6 +98,10 @@ if ! command -v limactl >/dev/null 2>&1; then
 fi
 if [[ ! "${INSTANCE}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
   echo "WHARFIE_SYSTEMD_PROOF_INSTANCE is not a safe Lima instance name." >&2
+  exit 1
+fi
+if [[ "${KEEP_VM}" != "0" && "${KEEP_VM}" != "1" ]]; then
+  echo "WHARFIE_SYSTEMD_PROOF_KEEP_VM must be 0 or 1." >&2
   exit 1
 fi
 if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=all)" ]]; then
@@ -118,7 +135,7 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   scripts/verify-systemd-user-service-linux.js \
   prepare \
   "${GUEST_REPO}" > "${PREPARE_LOG}"
-echo "Prepared three SEA revisions, installed the source service, and verified process replacement."
+echo "Prepared three SEA revisions, exercised default durable argv, installed and converged the source service, and verified process replacement."
 limactl copy --backend=scp \
   "${INSTANCE}:${GUEST_PROOF_ROOT}/prepare.json" \
   "${PREPARE_CAPTURE}"
@@ -133,7 +150,7 @@ limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   scripts/verify-systemd-user-service-linux.js \
   verify \
   "${GUEST_REPO}" > "${VERIFY_LOG}"
-echo "Verified boot recovery, two-release activation crash recovery, source restoration, and uninstall preservation."
+echo "Verified boot recovery, history and output reads, two-release activation crash recovery, source restoration, and uninstall preservation."
 
 RECEIPT_DIRECTORY="${OUTPUT_ROOT}/${COMMIT}"
 if [[ -e "${RECEIPT_DIRECTORY}" ]]; then
@@ -151,8 +168,26 @@ limactl copy --backend=scp \
   "${INSTANCE}:${GUEST_PROOF_ROOT}/final.json" \
   "${RECEIPT_STAGING}/final.json"
 
+if [[ "${KEEP_VM}" == "1" ]]; then
+  instance_absent=false
+  instance_retained=true
+else
+  delete_disposable_instance
+  instance_absent=true
+  instance_retained=false
+fi
+cleanup_observed_at="$(($(date +%s) * 1000))"
+/usr/bin/printf \
+  '%s\n' \
+  "{\"schemaVersion\":1,\"kind\":\"wharfie.systemd-proof.host-cleanup\",\"authority\":\"none\",\"authoritative\":false,\"commit\":\"${COMMIT}\",\"instance\":\"${INSTANCE}\",\"observedAt\":${cleanup_observed_at},\"instanceAbsent\":${instance_absent},\"instanceRetained\":${instance_retained}}" \
+  > "${RECEIPT_STAGING}/cleanup.json"
+
 pushd "${RECEIPT_STAGING}" >/dev/null
-/usr/bin/shasum -a 256 prepare.json boot-receipt.json final.json > SHA256SUMS
+/usr/bin/shasum -a 256 \
+  prepare.json \
+  boot-receipt.json \
+  final.json \
+  cleanup.json > SHA256SUMS
 popd >/dev/null
 mv "${RECEIPT_STAGING}" "${RECEIPT_DIRECTORY}"
 RECEIPT_STAGING=""

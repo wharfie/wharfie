@@ -50,6 +50,10 @@ const PREPARE_PATH = path.join(PROOF_ROOT, 'prepare.json');
 const FINAL_PATH = path.join(PROOF_ROOT, 'final.json');
 const FAILURE_PATH = path.join(PROOF_ROOT, 'failure.json');
 const MARKER_PATH = path.join(PROOF_ROOT, 'activity-entries.jsonl');
+const ORDINARY_MARKER_PATH = path.join(
+  PROOF_ROOT,
+  'ordinary-cli-activity-entry.jsonl',
+);
 const BOOT_RECEIPT_PATH = '/var/lib/wharfie-systemd-proof/boot-receipt.json';
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 const STATUS_TIMEOUT_MS = 180_000;
@@ -424,12 +428,73 @@ function inspectRun(artifactPath, runId) {
 }
 
 /**
+ * Read the packaged application's verified run directory.
+ * @param {string} artifactPath - SEA path.
+ * @returns {Record<string, any>} - Redacted app-scoped history page.
+ */
+function listRuns(artifactPath) {
+  return runArtifactJson(
+    artifactPath,
+    ['wharfie', 'list', '--limit', '10', '--json'],
+    'workflow history',
+  );
+}
+
+/**
+ * Read one packaged run's explicitly confirmed logical output.
+ * @param {string} artifactPath - SEA path.
+ * @param {string} runId - Durable run ID.
+ * @returns {Record<string, any>} - Verified sensitive logical output.
+ */
+function readRunOutput(artifactPath, runId) {
+  return runArtifactJson(
+    artifactPath,
+    [
+      'wharfie',
+      'output',
+      '--run-id',
+      runId,
+      '--confirm-sensitive-output',
+      '--json',
+    ],
+    'workflow logical output',
+  );
+}
+
+/**
+ * Require one exact run in a verified app-scoped history page.
+ * @param {Record<string, any>} page - Candidate history page.
+ * @param {{runId: string, revisionId: string, status: string}} expected - Expected run identity and status.
+ * @returns {Record<string, any>} - Matching public history row.
+ */
+function assertHistoryRun(page, expected) {
+  assert.equal(page.schemaVersion, 1);
+  assert.equal(page.kind, 'wharfie.execution-ledger.run-page');
+  assert.equal(page.authority, 'none');
+  assert.equal(page.authoritative, false);
+  assert.deepEqual(page.integrity, { verified: true });
+  assert.deepEqual(page.scope, { appId: APP_ID });
+  assert.equal(page.nextCursor, null);
+  assert.ok(Array.isArray(page.items));
+  assert.equal(page.items.length, 1);
+  const item = page.items.find(
+    (candidate) => candidate.runId === expected.runId,
+  );
+  assert.ok(item, `history omitted run ${expected.runId}`);
+  assert.equal(item.revisionId, expected.revisionId);
+  assert.equal(item.kind, 'workflow');
+  assert.equal(item.status, expected.status);
+  return item;
+}
+
+/**
  * Read synchronized physical activity entries.
+ * @param {string} [markerPath] - Exact synchronized marker file.
  * @returns {Record<string, any>[]} - Marker rows.
  */
-function readMarkers() {
-  if (!existsSync(MARKER_PATH)) return [];
-  return readFileSync(MARKER_PATH, 'utf8')
+function readMarkers(markerPath = MARKER_PATH) {
+  if (!existsSync(markerPath)) return [];
+  return readFileSync(markerPath, 'utf8')
     .trim()
     .split('\n')
     .filter(Boolean)
@@ -2094,6 +2159,32 @@ async function prepare(repoRoot) {
     packagedSet.installedPackageRoot,
   );
   announce('packaged-consumer-seas');
+  const ordinaryCliResult = runArtifactJson(
+    packaged.artifactPath,
+    [ORDINARY_MARKER_PATH],
+    'ordinary packaged application CLI',
+  );
+  const ordinaryCliMarkers = readMarkers(ORDINARY_MARKER_PATH);
+  assert.equal(ordinaryCliMarkers.length, 1);
+  assert.deepEqual(ordinaryCliResult, {
+    markerPath: ORDINARY_MARKER_PATH,
+    stepIndex: 1,
+    bootId: ordinaryCliMarkers[0].bootId,
+  });
+  assert.deepEqual(ordinaryCliMarkers[0], {
+    schemaVersion: 1,
+    kind: 'wharfie.systemd-proof.activity-entry',
+    stepIndex: 0,
+    bootId: readBootId(),
+    processId: ordinaryCliMarkers[0].processId,
+  });
+  assert.ok(
+    Number.isSafeInteger(ordinaryCliMarkers[0].processId) &&
+      ordinaryCliMarkers[0].processId > 0,
+  );
+  rmSync(ORDINARY_MARKER_PATH, { force: true });
+  assert.equal(existsSync(ORDINARY_MARKER_PATH), false);
+  announce('ordinary-packaged-cli');
   const storage = proofStorageLayout();
   const absent = readServiceStatus(packaged.artifactPath);
   if (absent.health !== 'absent') {
@@ -2109,24 +2200,18 @@ async function prepare(repoRoot) {
     `fresh service status: ${JSON.stringify(absent)}`,
   );
   assertDesiredConvergence(absent, sourceArtifact, 'physical-absence');
-  const idempotencyKey = 'systemd-real-reboot-proof';
   const started = runArtifactJson(
     packaged.artifactPath,
-    [
-      'wharfie',
-      'start',
-      '--workflow',
-      WORKFLOW_ID,
-      '--idempotency-key',
-      idempotencyKey,
-      '--input',
-      JSON.stringify({ markerPath: MARKER_PATH, stepIndex: 0 }),
-      '--json',
-    ],
-    'offline workflow start before service install',
+    ['wharfie', 'start', '--json', '--', MARKER_PATH],
+    'default durable CLI start before service install',
   );
   assert.match(started.runId, /^wfr_[A-Za-z0-9_-]{43}$/);
   const runId = started.runId;
+  const idempotencyKey = started.idempotencyKey;
+  assert.match(
+    idempotencyKey,
+    /^manual-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
   assert.deepEqual(started, {
     schemaVersion: 1,
     kind: 'wharfie.execution-ledger.workflow-start',
@@ -2154,6 +2239,12 @@ async function prepare(repoRoot) {
     pendingBeforeInstall.workflowCursor?.disposition,
     'ACTIVITY_RUNNABLE',
   );
+  const pendingHistory = listRuns(packaged.artifactPath);
+  assertHistoryRun(pendingHistory, {
+    runId,
+    revisionId: packaged.revision.revisionId,
+    status: 'RUNNING',
+  });
   assert.deepEqual(readMarkers(), []);
   assert.equal(existsSync(storage.appRoot), true);
   assert.equal(existsSync(storage.controlPath), true);
@@ -2194,6 +2285,22 @@ async function prepare(repoRoot) {
     installed.installation.activeRevisionId,
     packaged.artifact.revisionId,
   );
+  const converge = runArtifactJson(
+    packaged.artifactPath,
+    ['wharfie', 'service', 'converge', '--json'],
+    'healthy desired service converge',
+  );
+  assert.equal(converge.action, 'converge');
+  assert.equal(converge.requestStatus, 'fulfilled');
+  assert.equal(converge.outcome, 'target-active');
+  assert.equal(converge.health, 'healthy');
+  assert.equal(converge.activeArtifactId, packaged.artifact.artifactId);
+  assert.equal(converge.activeRevisionId, packaged.artifact.revisionId);
+  const converged = readServiceStatus(packaged.artifactPath);
+  assertHealthy(converged, sourceArtifact);
+  assert.equal(converged.systemd.mainPid, installed.systemd.mainPid);
+  assert.equal(converged.runtime.generation, installed.runtime.generation);
+  announce('healthy-service-convergence');
   for (const expectedPath of [
     storage.stateRoot,
     storage.controlPath,
@@ -2269,7 +2376,7 @@ async function prepare(repoRoot) {
   );
   announce('boot-observer-installed');
   const receipt = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'wharfie.systemd-proof.prepare',
     commit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
     preparedAt: Date.now(),
@@ -2303,6 +2410,11 @@ async function prepare(repoRoot) {
         '--version',
       ]).stdout.trim(),
     },
+    ordinaryCli: {
+      result: ordinaryCliResult,
+      marker: ordinaryCliMarkers[0],
+      cleaned: true,
+    },
     storage,
     release: {
       artifactPath: releasePath,
@@ -2314,6 +2426,9 @@ async function prepare(repoRoot) {
     idempotencyKey,
     bootId,
     timer: timerWaiting.timers[0],
+    start: started,
+    pendingHistory,
+    converge,
     pendingBeforeInstall,
     crashReplacement: {
       before: {
@@ -2350,7 +2465,7 @@ async function verify() {
     'proof must use the declared abrupt VM power cycle',
   );
   const prepared = JSON.parse(readFileSync(PREPARE_PATH, 'utf8'));
-  assert.equal(prepared.schemaVersion, 2);
+  assert.equal(prepared.schemaVersion, 3);
   assert.equal(prepared.kind, 'wharfie.systemd-proof.prepare');
   assert.match(prepared.commit, /^[0-9a-f]{40}$/);
   assert.equal(process.env.WHARFIE_SYSTEMD_PROOF_COMMIT, prepared.commit);
@@ -2434,6 +2549,46 @@ async function verify() {
   );
   assert.equal(completedMarkers[0].bootId, prepared.bootId);
   assert.equal(completedMarkers[1].bootId, bootReceipt.bootId);
+  const completedHistory = listRuns(artifactPath);
+  const completedHistoryItem = assertHistoryRun(completedHistory, {
+    runId: prepared.runId,
+    revisionId: prepared.revisionId,
+    status: 'COMPLETED',
+  });
+  const completedOutput = readRunOutput(artifactPath, prepared.runId);
+  assert.equal(completedOutput.schemaVersion, 1);
+  assert.equal(completedOutput.kind, 'wharfie.execution-ledger.run-output');
+  assert.equal(completedOutput.authority, 'none');
+  assert.equal(completedOutput.authoritative, false);
+  assert.equal(completedOutput.disclosure, 'application-sensitive-unredacted');
+  assert.deepEqual(completedOutput.integrity, { verified: true });
+  assert.deepEqual(completedOutput.scope, {
+    appId: APP_ID,
+    revisionId: prepared.revisionId,
+    runId: prepared.runId,
+  });
+  assert.equal(completedOutput.snapshot?.runKind, 'workflow');
+  assert.equal(completedOutput.snapshot?.status, 'COMPLETED');
+  assert.ok(Array.isArray(completedOutput.outputs));
+  assert.deepEqual(
+    completedOutput.outputs.map((entry) => entry.stepId),
+    [
+      'before-reboot',
+      'cross-reboot-delay',
+      'resume-after-reboot',
+      'after-reboot',
+    ],
+  );
+  assert.deepEqual(completedOutput.outputs.at(-1)?.value, {
+    markerPath: MARKER_PATH,
+    stepIndex: 2,
+    bootId: bootReceipt.bootId,
+  });
+  assert.deepEqual(completedOutput.terminal, {
+    type: 'completed',
+    result: completedOutput.outputs.at(-1).value,
+  });
+  announce('history-and-output-verified');
 
   let activation;
   try {
@@ -2457,6 +2612,11 @@ async function verify() {
     prepared.activationInspector.sourceSha256,
   );
   assert.deepEqual(inspectRun(artifactPath, prepared.runId), completed);
+  assert.deepEqual(listRuns(artifactPath), completedHistory);
+  assert.deepEqual(
+    readRunOutput(artifactPath, prepared.runId),
+    completedOutput,
+  );
   assert.deepEqual(readMarkers(), completedMarkers);
 
   const beforeRestart = readServiceStatus(artifactPath);
@@ -2525,9 +2685,13 @@ async function verify() {
   assert.equal(absent.installation?.state, 'uninstalled');
   const independentSystemd = readIndependentUninstallState();
   const afterUninstall = inspectRun(artifactPath, prepared.runId);
+  const historyAfterUninstall = listRuns(artifactPath);
+  const outputAfterUninstall = readRunOutput(artifactPath, prepared.runId);
   assert.equal(afterUninstall.run?.status, 'COMPLETED');
   assert.equal(afterUninstall.workflowCursor?.disposition, 'COMPLETED');
   assert.deepEqual(afterUninstall, beforeUninstall);
+  assert.deepEqual(historyAfterUninstall, completedHistory);
+  assert.deepEqual(outputAfterUninstall, completedOutput);
   assert.deepEqual(
     {
       artifactSha256: sha256File(prepared.release.artifactPath),
@@ -2539,6 +2703,81 @@ async function verify() {
     artifactSha256: prepared.release.artifactSha256,
     recordSha256: prepared.release.recordSha256,
   });
+  const rollbackReleasePath = path.join(
+    prepared.storage.releasesRoot,
+    prepared.activationArtifacts.target.artifactId,
+    'app',
+  );
+  const failedReleasePath = path.join(
+    prepared.storage.releasesRoot,
+    prepared.activationArtifacts.failingTarget.artifactId,
+    'app',
+  );
+  assert.equal(
+    sha256File(rollbackReleasePath),
+    prepared.activationArtifacts.target.sha256,
+  );
+  assert.equal(
+    sha256File(failedReleasePath),
+    prepared.activationArtifacts.failingTarget.sha256,
+  );
+  const prune = runArtifactJson(
+    artifactPath,
+    ['wharfie', 'service', 'prune', '--json'],
+    'uninstalled service release prune',
+  );
+  assert.equal(prune.schemaVersion, 1);
+  assert.equal(prune.kind, 'wharfie.service.release-prune');
+  assert.equal(prune.action, 'prune');
+  assert.equal(prune.requestStatus, 'fulfilled');
+  assert.equal(prune.outcome, 'pruned');
+  assert.equal(prune.installationState, 'uninstalled');
+  assert.deepEqual(prune.selected, {
+    artifactId: prepared.activationArtifacts.source.artifactId,
+    revisionId: prepared.activationArtifacts.source.revisionId,
+  });
+  assert.deepEqual(prune.rollback, {
+    artifactId: prepared.activationArtifacts.target.artifactId,
+    revisionId: prepared.activationArtifacts.target.revisionId,
+  });
+  assert.equal(prune.scannedReleaseCount, 3);
+  assert.equal(prune.retainedReleaseCount, 2);
+  assert.equal(prune.remainingReleaseCount, 2);
+  assert.deepEqual(prune.removed, [
+    {
+      artifactId: prepared.activationArtifacts.failingTarget.artifactId,
+      revisionId: prepared.activationArtifacts.failingTarget.revisionId,
+      artifactBytes: prepared.activationArtifacts.failingTarget.size,
+    },
+  ]);
+  assert.equal(prune.removedCount, 1);
+  assert.equal(
+    prune.removedArtifactBytes,
+    prepared.activationArtifacts.failingTarget.size,
+  );
+  assert.equal(prune.resumedPruneCount, 0);
+  assert.equal(prune.recoveredStagingCount, 0);
+  assert.equal(existsSync(failedReleasePath), false);
+  assert.equal(
+    sha256File(prepared.release.artifactPath),
+    prepared.release.artifactSha256,
+  );
+  assert.equal(
+    sha256File(rollbackReleasePath),
+    prepared.activationArtifacts.target.sha256,
+  );
+  const independentSystemdAfterPrune = readIndependentUninstallState();
+  assert.deepEqual(independentSystemdAfterPrune, independentSystemd);
+  assert.equal(
+    existsSync(path.join(path.dirname(uninstall.preserved.state), 'current')),
+    false,
+  );
+  assert.deepEqual(listRuns(artifactPath), completedHistory);
+  assert.deepEqual(
+    readRunOutput(artifactPath, prepared.runId),
+    completedOutput,
+  );
+  announce('uninstalled-release-prune-complete');
   for (const expectedPath of [
     prepared.storage.stateRoot,
     prepared.storage.controlPath,
@@ -2556,7 +2795,7 @@ async function verify() {
 
   removeBootObserver();
   const receipt = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'wharfie.systemd-proof.complete',
     commit: prepared.commit,
     completedAt: Date.now(),
@@ -2600,12 +2839,23 @@ async function verify() {
       signalStatus: afterUninstall.signalWaits[0].status,
       markerEntries: completedMarkers,
     },
+    reads: {
+      history: completedHistory,
+      historyItem: completedHistoryItem,
+      output: completedOutput,
+      preservedAcrossActivation: true,
+      preservedAfterUninstall: true,
+    },
     uninstall: {
       status: absent.installation.state,
       preserved: uninstall.preserved,
       inspectableAfterUninstall: true,
       release: releaseBeforeUninstall,
       systemd: independentSystemd,
+    },
+    prune: {
+      receipt: prune,
+      systemd: independentSystemdAfterPrune,
     },
   };
   writeJsonAtomic(FINAL_PATH, receipt);

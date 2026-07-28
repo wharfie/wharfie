@@ -9,6 +9,10 @@ export default defineApp({
       path: './activity.js',
       export: 'main',
     },
+    durable: {
+      workflow: 'reboot-chain',
+      export: 'toDurableInput',
+    },
   },
   targets: [
     {

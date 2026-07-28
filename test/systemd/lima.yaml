@@ -4,7 +4,7 @@ vmType: vz
 arch: default
 cpus: 4
 memory: 6GiB
-disk: 30GiB
+disk: 12GiB
 plain: true
 
 images:
@@ -36,6 +36,7 @@ provision:
         rsync \
         util-linux \
         xz-utils
+      rm -rf /var/lib/apt/lists/*
 
       node_version=24.13.1
       case "$(uname -m)" in

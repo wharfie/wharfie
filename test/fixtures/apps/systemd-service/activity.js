@@ -5,10 +5,44 @@ import {
   readFileSync,
   writeSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
-/** @returns {void} - Minimal fixture CLI entrypoint. */
-export function main() {}
+const USAGE = 'Usage: systemd-service-proof <marker-file>';
+
+/**
+ * Parse the one application-owned marker argument shared by immediate and
+ * durable execution.
+ * @param {ReadonlyArray<string>} args - Application arguments without Node argv.
+ * @returns {{markerPath: string, stepIndex: number}} - First workflow input.
+ */
+function parseMarkerInput(args) {
+  if (!Object.isFrozen(args)) {
+    throw new TypeError('systemd proof CLI arguments must be frozen.');
+  }
+  if (args.length !== 1 || !args[0]) throw new TypeError(USAGE);
+  return { markerPath: resolve(args[0]), stepIndex: 0 };
+}
+
+/**
+ * Project ordinary application arguments into the default durable workflow.
+ * @param {ReadonlyArray<string>} args - Application arguments after `--`.
+ * @returns {{markerPath: string, stepIndex: number}} - Workflow input.
+ */
+export function toDurableInput(args) {
+  return parseMarkerInput(args);
+}
+
+/**
+ * Run the same first marker operation as an ordinary application CLI.
+ * @param {string[]} [argv] - Node-style process arguments.
+ * @returns {Promise<void>} - Resolves after synchronized marker output.
+ */
+export async function main(argv = process.argv) {
+  const result = await recordStep(
+    parseMarkerInput(Object.freeze(argv.slice(2))),
+  );
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
 
 /**
  * Read the Linux boot identity that lets the proof bind physical activity
