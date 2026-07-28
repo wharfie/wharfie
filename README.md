@@ -31,7 +31,10 @@ The first product-level walkthrough is the
 comparison CLI, the same logic carried through two observations separated by a
 durable timer and a portable control-store reopen, and a verified retained
 result. Its hermetic proof stops before native LMDB, SEA construction, systemd,
-and cloud execution.
+and cloud execution. A separate
+[checksummed Darwin observation](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
+runs the source LMDB resident and generated SEA; clean-host service lifecycle
+evidence on a supported Linux/systemd host remains open.
 
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service
@@ -662,7 +665,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
-- [Verified sensitive run-output checkpoint](llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md) — the latest restart point for exact app-scoped logical outputs, explicit disclosure gating, bounded terminal-safe transport, source/packaged parity, and next work.
+- [Steady-file native and SEA proof checkpoint](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md) — the latest restart point for the real Darwin source LMDB resident, generated relocated SEA, corrected sandbox diagnosis, complete cleanup, and next work.
+- [Verified sensitive run-output checkpoint](llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md) — the preceding implementation restart point for exact app-scoped logical outputs, explicit disclosure gating, bounded terminal-safe transport, source/packaged parity, and next work.
 - [Local-contract integrity checkpoint](llm/checkpoints/2026-07-27-v98-local-contract-integrity.md) — the preceding restart point for receipt consumers, Commander ownership, focused verification, and test cleanup.
 - [Versioned application-package receipt checkpoint](llm/checkpoints/2026-07-27-v97-versioned-application-package-receipt.md) — the preceding restart point for the strict public source-packaging receipt and artifact handoff.
 - [Bounded local release-pruning checkpoint](llm/checkpoints/2026-07-27-v96-bounded-local-release-pruning.md) — the preceding restart point for explicit packaged-release collection and crash-safe staging cleanup.

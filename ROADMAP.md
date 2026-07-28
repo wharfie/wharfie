@@ -37,16 +37,22 @@ The repository has substantial foundations:
   redacted inspection, confirmed logs, and confirmed logical output;
 - the `steady-file` golden-path application and a hermetic proof of ordinary
   CLI execution, sealed source preparation, durable activity/timer/activity
-  continuation across a control-store reopen, and verified retained output;
+  continuation across a control-store reopen, and verified retained output,
+  plus a
+  [checksummed Darwin observation](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
+  of the real source LMDB resident and generated relocated SEA with Node absent
+  from runtime `PATH`;
 - a recoverable single-machine service lifecycle; and
 - extensive AWS-shaped deployment contracts, resource drivers, and mock-based
   proofs.
 
 That is useful machinery, but it is not yet the complete product proof. The
-golden path still needs an explicitly gated real LMDB resident run, generated
-SEA execution, and service lifecycle proof. Automatic replacement of a failed
-coordinator is not proved. The cloud deployment work has not produced a
-successful clean-account end-to-end receipt.
+golden path still needs a clean supported Linux host and systemd user-manager
+proof covering install, converge, deliberate service replacement, host
+restart, history and output reads, update, rollback, uninstall, and cleanup.
+Automatic replacement of a failed coordinator is not proved. The cloud
+deployment work has not produced a successful clean-account end-to-end
+receipt.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -73,14 +79,14 @@ second application architecture.
 
 ### Work next
 
-1. Run `steady-file` through the real source LMDB resident, then a generated
-   SEA, without changing its application logic.
-2. Use its recorded friction inventory to simplify only demonstrated blockers.
+1. Use the recorded `steady-file` friction inventory to simplify only
+   demonstrated blockers.
    Prefer strong defaults and one obvious command sequence.
-3. Prove the packaged artifact can be moved to a clean supported host, run
-   without Node in `PATH`, survive process and host restart, expose its durable
-   history, and complete an explicit update and rollback.
-4. Add schedule, application state, or broader workflow behavior only when the
+2. On a clean supported Linux host with a systemd user manager, prove install
+   and converge, deliberate service replacement, host restart, history and
+   output reads, update, rollback, uninstall, and cleanup. Same-host execution
+   without Node in `PATH` is already observed; clean-host independence is not.
+3. Add schedule, application state, or broader workflow behavior only when the
    golden application has a real need for it.
 
 ### Exit evidence
@@ -190,17 +196,19 @@ ends with independently checked receipts.
 ## Immediate slice status
 
 Do not add another numbered roadmap tranche. The portable half of the bounded
-local golden path and its classified findings are now concrete, but the slice
-is not complete until its native source and packaged paths are proved:
+local golden path and one real Darwin native/SEA observation are concrete, but
+the slice is not complete until its demonstrated friction is reduced and its
+clean Linux/systemd persistent-service lifecycle is proved:
 
 1. `steady-file` compares two file observations for a useful local shell
    decision;
 2. its durable workflow exposes a retained result after a delayed continuation;
 3. its hermetic proof closes and reopens portable control storage at the timer
    boundary;
-4. the exact source and packaged operator sequences are documented but are not
-   executed by that hermetic proof;
-5. the remaining native resident and SEA steps stay explicit evidence gates;
+4. the exact source and packaged operator sequences completed through native
+   LMDB and a relocated SEA in the separate checksummed Darwin observation;
+5. deliberate service replacement and the clean Linux/systemd lifecycle remain
+   explicit evidence gates;
    and
 6. exposed findings are classified as proof gaps, interface friction, expected
    design, or deliberate boundaries before more coordinator or provider

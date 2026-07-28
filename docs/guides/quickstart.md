@@ -22,7 +22,10 @@ For the smallest product walkthrough, start with the
 [steady-file golden path](./golden-path.md). It runs as an ordinary CLI, then
 uses the same logic in a durable activity/timer/activity workflow and exposes
 the retained comparison through confirmed `output`. Its hermetic proof stops
-before the native source resident and packaged SEA execution.
+before the native source resident and packaged SEA execution. A separate
+[checksummed Darwin observation](../../llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
+executes both; clean-host persistent-service proof on a supported Linux/systemd
+host remains open.
 
 ## Create an app
 

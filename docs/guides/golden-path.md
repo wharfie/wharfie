@@ -149,11 +149,13 @@ create a container, touch a block device, or call a cloud provider.
 
 The walkthrough produced a short, prioritized list:
 
-1. **P0 — proof gap:** the shared command/runtime integration passes over the
-   portable store, but the displayed source commands, a real LMDB resident,
-   `app package`, and the generated SEA have not been executed here. The next
-   useful proof is this exact application through those paths without changing
-   its logic.
+1. **Closed evidence gate:** a
+   [checksummed Darwin arm64 observation](../../llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
+   ran the displayed source commands through a real LMDB resident, packaged
+   this exact application, ran a relocated generated SEA with Node absent from
+   runtime `PATH`, and returned matching verified output without changing
+   application logic. This is one same-host observation, not clean-host or
+   service-lifecycle proof.
 2. **P1 — interface friction:** the ordinary CLI accepts one path, while the
    durable form asks the user to choose a workflow ID, invent an idempotency
    key, and translate the path into JSON. The framework has not yet earned a
@@ -172,6 +174,8 @@ The walkthrough produced a short, prioritized list:
    data. Two observations do not justify dynamic delays, general scheduling,
    filesystem watching, or a new workflow language.
 
-The P0 native/SEA evidence gate comes next. The P1 handoffs should be reduced
-only after that real command sequence shows which context Wharfie can safely
-infer.
+The native/SEA evidence gate is closed for one Darwin run. Reduce the
+demonstrated P1 handoffs next; the remaining evidence gate is a clean supported
+Linux/systemd service lifecycle with install, converge, deliberate replacement,
+host restart, history and output reads, update, rollback, uninstall, and
+cleanup.
