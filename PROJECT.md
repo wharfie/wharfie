@@ -1,6 +1,6 @@
 # Wharfie project charter
 
-**Status:** active project reset · **Last updated:** 2026-07-17
+**Status:** active project reset · **Last updated:** 2026-07-28
 
 ## One sentence
 
@@ -33,7 +33,7 @@ A developer should be able to:
 6. Return later with the same executable to inspect revisions, runs, attempts, effects, logs, and node health; intervene when necessary; and upgrade or roll back explicitly.
 7. Add trusted nodes when placement, capacity, or recovery requires them.
 
-Local and single-node operation require no external Wharfie control plane. Automatic coordinator replacement in the initial mesh design does require a linearizable durable store. A later mesh milestone—not the initial product proof—will validate worker and coordinator recovery across two nodes.
+Local and single-node operation require no external Wharfie control plane. The distributed design fences explicit coordinator replacement with a linearizable durable authority record. Automatic replacement additionally requires a provider-certified semantic lease with store-authoritative expiry. A later mesh milestone—not the initial product proof—will validate worker and coordinator recovery across two nodes.
 
 ## Product model
 
@@ -47,7 +47,7 @@ Local and single-node operation require no external Wharfie control plane. Autom
 - **Attempt:** one physical execution of an invocation under a lease and fencing token.
 - **Effect:** an operation routed through Wharfie's managed effect API, recorded under a stable identity with declared and substantiated replay properties. It can be pure or externally visible.
 - **Node:** a trusted machine enrolled in a deployment and authorized to run its permitted application revisions.
-- **Coordinator:** the authoritative lease holder that schedules and reconciles work for the current epoch.
+- **Coordinator:** the holder of the application's current durable epoch authority that schedules and reconciles work. Automatic replacement will additionally require a renewable semantic lease.
 - **Capability:** a portable resource, property, or semantic guarantee that a node or deployment can provide and an application or activity can require, such as application state, fenced control state, artifact storage, ingress, identity, or a hardware feature. Placement constraints are predicates over advertised capabilities.
 - **Deployment:** the binding between an application revision, a deployment profile, fulfilled capabilities, and enrolled nodes.
 
@@ -64,7 +64,7 @@ Wharfie should provide:
 - durable single-node execution with an inspectable run, invocation, attempt, and effect ledger;
 - schedules, workflows, retries, cancellation, intervention, and recovery;
 - a trusted-node mesh with explicit enrollment, capability-aware placement, and fenced leases;
-- one authoritative, fenced coordinator initially, with durable state outside its process and a robust replacement path;
+- one authoritative, epoch-fenced coordinator initially, with durable state outside its process, deliberate confirmed replacement, and a path to automatic recovery;
 - capability fulfillment for the finite substrate required to run Wharfie applications;
 - standard plan, deploy, inspect, upgrade, rollback, and destroy operations under an explicit reserved operator namespace that cannot silently take over developer CLI commands; and
 - machine-readable CLI output so humans, scripts, and coding agents can operate the same system.
@@ -93,9 +93,11 @@ Breaking changes are expected during the reset. There are no current downstream 
 
 ### Trusted mesh and coordinator recovery
 
-All enrolled nodes are trusted. The first distributed design has one coordinator that is authoritative at the durable-store boundary, not one irreplaceable coordinator machine. A partitioned process can continue believing it is leader and issuing messages, so correctness cannot depend on stopping stale processes. Coordination state lives outside the coordinator process. Lease acquisition, renewal, and epoch increment are linearizable conditional operations using store-authoritative expiry. Every scheduling decision and commit carries the coordinator epoch, and each attempt additionally carries a per-invocation generation; storage rejects stale fencing values. A replacement coordinator reconstructs state from the durable ledger and safely reschedules unfinished work.
+All enrolled nodes are trusted. The first distributed design has one coordinator that is authoritative at the durable-store boundary, not one irreplaceable coordinator machine. A partitioned process can continue believing it is leader and issuing messages, so correctness cannot depend on stopping stale processes. One durable authority record per application is co-located with its execution ledger. Initial acquisition and deliberate, caller-confirmed takeover are linearizable conditional transitions; takeover increments a monotonic epoch. The future operator path must own that confirmation, and the finished coordinator path must bind every authoritative writer to the current tuple. New physical assignments carry its epoch, while each attempt additionally carries a per-invocation generation; storage rejects stale fencing values.
 
-Automatic failover initially depends on a provider-backed linearizable store. Local development may use SQLite or LMDB, but a local-only store cannot provide automatic failover after loss of its host. A later peer-quorum store can remove that provider dependency without changing the public model.
+The repository currently contains the explicit authority state machine and an opt-in execution-ledger transaction fence. Production operator/resident assembly does not yet acquire or bind that authority, and schedule-control and application-state writes remain outside its guarantee. Those adoption steps are required before Wharfie can claim runtime-wide coordinator replacement.
+
+Heartbeats are diagnostic evidence, not leases, and their age never authorizes takeover. The generic database contract has no store-authoritative clock or expiry predicate, so Wharfie does not infer expiry from coordinator timestamps or claim automatic failover from that contract. Automatic replacement requires a provider-certified semantic lease whose acquisition, renewal, expiry, and epoch transition are linearizable at the store. Local development may exercise explicit authority through LMDB, but a local-only store cannot provide automatic failover after loss of its host. A later peer-quorum store can remove the provider dependency without changing the public model.
 
 ### Committed outcomes and effects
 
@@ -118,7 +120,7 @@ TypeScript/Node is the only initial authoring and orchestration model. Activity 
 1. **Continuity over machinery.** The product is the smooth path from local CLI to durable service; SEA, cloud resources, and mesh coordination support that path.
 2. **Local first, progressively durable.** A user should gain value before creating an account or deployment.
 3. **One artifact, one operator surface.** The application executable should remain the primary way to run, deploy, inspect, and evolve itself.
-4. **Explicit durable truth.** Revisions, leases, attempts, effects, ownership, and operator actions are data, not inference from logs.
+4. **Explicit durable truth.** Revisions, authority epochs, leases, attempts, effects, ownership, and operator actions are data, not inference from logs or heartbeat age.
 5. **Honest failure semantics.** Prefer `uncertain` and reconciliation to a false exactly-once claim.
 6. **Narrow portable abstractions.** Keep provider and language details behind finite contracts.
 7. **Delete migration scaffolding.** Reuse good v2 code, but do not preserve obsolete concepts merely because they already exist.

@@ -31,6 +31,10 @@ The repository has substantial foundations:
   operator namespace;
 - a durable run, invocation, attempt, effect, workflow, timer, signal, and
   schedule ledger;
+- an opt-in per-application coordinator-authority kernel co-located with that
+  ledger, including monotonic epochs, stable-request receipts, deliberate
+  confirmed takeover, diagnostic-only heartbeats, and a transaction-fence seam;
+  production operator/resident assembly does not bind it yet;
 - conservative cancellation, recovery, reconciliation, fencing, and managed
   effect semantics;
 - source and packaged commands for durable submission, workers, history,
@@ -57,10 +61,11 @@ The repository has substantial foundations:
 
 That closes Outcome 1's bounded single-machine product proof. The focused
 `steady-file` run did not repeat crash or reboot recovery; the separate
-purpose-built service proof covers those substrate boundaries. Neither run
-proves automatic replacement of a failed coordinator by another machine. The
-cloud deployment work has not produced a successful clean-account end-to-end
-receipt.
+purpose-built service proof covers those substrate boundaries. The explicit
+epoch-authority kernel proves that a bound ledger can reject stale writers, but
+the production runtime does not bind it yet and neither run proves replacement
+of a failed coordinator by another machine. The cloud deployment work has not
+produced a successful clean-account end-to-end receipt.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -123,6 +128,16 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   activity process.
 - Local ownership, generations, fences, conservative restart recovery, durable
   cancellation, and reconciliation already protect single-machine execution.
+- One current coordinator-authority record per application is co-located with
+  the execution ledger. Exact conditional transitions protect initial
+  acquisition, heartbeat, release, and deliberate confirmed takeover;
+  takeover increments the epoch and stale authority tokens cannot commit
+  mutations through an authority-bound ledger.
+- The execution-ledger integration is opt-in. Existing production operator and
+  resident construction remains unbound, schedule-control has only its local
+  owner fence, and application-state writes have no coordinator fence.
+- Heartbeats are diagnostic only. No code infers authority expiry from process
+  reachability, message silence, or a caller clock.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -130,20 +145,27 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
 
 ### Work next
 
-1. Define the smallest coordinator state machine: identity, renewable lease,
-   monotonic epoch, admission decision, assignment, and settlement.
-2. Put coordinator authority in one linearizable durable-store adapter. Do not
-   infer authority from process liveness or messages.
-3. Carry epoch and invocation generation through every coordinator-issued
-   assignment and authoritative commit; reject stale values at storage.
-4. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
+1. Bind the resident coordinator assembly to a freshly generated authority
+   session, require its token for every authoritative execution-ledger writer,
+   and expose deliberate takeover through an explicit operator path.
+2. Close the same-table scheduling gaps: compose the authority fence into
+   schedule-control mutations and carry the bound epoch in durable admission
+   and scheduling history where that history claims coordinator provenance.
+   Keep application-state writes outside the guarantee until they have a
+   destination-local fence.
+3. Define and implement a provider-certified semantic lease primitive with
+   store-authoritative time and an atomic expiry predicate. Do not build
+   automatic takeover from caller timestamps or diagnostic heartbeat age.
+4. Use that primitive to add renewable authority and automatic epoch takeover
+   without weakening the explicit same-table fence.
+5. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
    replacement. Reassign only work whose replay contract permits it.
-5. Add deterministic crash tests at lease acquisition, assignment, activity
+6. Add deterministic crash tests at lease acquisition, assignment, activity
    start, managed-effect settlement, and terminal commit.
-6. Keep the mesh trusted and explicit: enroll nodes, authorize the application
+7. Keep the mesh trusted and explicit: enroll nodes, authorize the application
    revisions each may run, advertise finite capabilities, place work only on a
    matching node, and fence every node lease.
-7. After the local model is small and proved, run one two-node trusted recovery
+8. After the local model is small and proved, run one two-node trusted recovery
    proof. Multi-active scheduling is not required.
 
 ### Exit evidence
@@ -227,10 +249,20 @@ single-machine evidence slice are complete:
    rediscovery, a meaningful A-to-B update, B-to-A rollback, retained reads,
    uninstall, prune, and VM cleanup.
 
-The immediate slice is now Outcome 2: define and prove the smallest
-single-active coordinator replacement state machine and its linearizable
-authority. Do not broaden the cloud layer or add more single-host framework
-surface first.
+The first bounded Outcome 2 kernel slice is now complete:
+[ADR 0033](docs/architecture/decisions/0033-explicit-coordinator-epoch-authority.md)
+records one per-application authority row, monotonic epoch fencing, deliberate
+confirmed takeover, and diagnostic-only heartbeats. Its
+[checkpoint](llm/checkpoints/2026-07-28-explicit-coordinator-epoch-authority.md)
+records the implementation boundary.
+
+The immediate next slice is runtime adoption: bind one resident coordinator to
+a fresh authority session, require that token at authoritative writer
+construction, and extend the fence through same-table schedule control. After
+that, automatic recovery requires a provider-certified semantic lease with
+store-authoritative time and an atomic expiry predicate; generic database
+transactions plus caller timestamps are not enough. Do not broaden the cloud
+layer or add more single-host framework surface first.
 
 ## Explicitly not now
 

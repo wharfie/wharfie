@@ -3645,7 +3645,7 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
-    test('rejects coordinator ownership on manual creation until it is durable', async () => {
+    test('keeps the V10 manual admission event epoch at zero', async () => {
       const { db, cleanup } = await adapter.create();
       try {
         const ledger = createExecutionLedger({

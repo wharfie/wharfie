@@ -158,6 +158,11 @@ import {
 } from '../../ledger/workflow-execution-contract.js';
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 import { comparePortablePageKeys } from '../utils.js';
+import {
+  assertCoordinatorAuthorityCurrent,
+  assertCoordinatorAuthorityToken,
+  createCoordinatorAuthorityFence,
+} from './coordinator-authority.js';
 import { getLocalApplicationRunCreationFence } from './local-application-activation.js';
 import {
   reconcilePreparedScheduleWorkflowAdmission,
@@ -10831,13 +10836,14 @@ function createAttemptId(runId, invocationId, generation) {
  * Create a provider-neutral append-only execution ledger over one transactional
  * DB table. It intentionally does not provide leases or a general workflow
  * interpreter; it atomically advances a finite activity/timer/signal plan.
- * @param {{db: DBClient, tableName: string, payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}, effectEvidenceVerifiers?: {kind: string, version: number, verify: (input: Record<string, any>) => boolean}[], now?: () => number}} options - Store dependencies.
+ * @param {{db: DBClient, tableName: string, payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot, effectEvidenceVerifiers?: {kind: string, version: number, verify: (input: Record<string, any>) => boolean}[], now?: () => number}} options - Store dependencies.
  * @returns {ExecutionLedgerStore} - Durable ledger API.
  */
 export function createExecutionLedger({
   db,
   tableName,
   payloadStore,
+  coordinatorAuthority,
   effectEvidenceVerifiers,
   now = () => Date.now(),
 }) {
@@ -10862,9 +10868,81 @@ export function createExecutionLedger({
     throw new TypeError('createExecutionLedger now must be a function.');
   }
   const resolvedTableName = tableName.trim();
+  const resolvedCoordinatorAuthority =
+    coordinatorAuthority === undefined
+      ? undefined
+      : assertCoordinatorAuthorityToken(
+          coordinatorAuthority,
+          'createExecutionLedger.coordinatorAuthority',
+        );
   const effectVerifierRegistry = normalizeEffectEvidenceVerifiers(
     effectEvidenceVerifiers,
   );
+
+  /**
+   * Execute one coordinator-authoritative transaction. The stable active
+   * authority tuple is condition-checked in the same table transaction as the
+   * ledger mutation, so a takeover that advances the epoch fences a delayed
+   * writer.
+   * Attempt `coordinatorEpoch` remains a separate assignment coordinate: a
+   * successor may need to close an older attempt while holding newer current
+   * authority.
+   * @param {import('../base.js').TransactionWriteParams} params - Ledger transaction.
+   * @param {string} appId - Application scope mutated by the transaction.
+   * @returns {Promise<void>} - Resolves only after the guarded transaction commits.
+   */
+  async function transactionWrite(params, appId) {
+    const conditionChecks = [...(params.conditionChecks || [])];
+    if (resolvedCoordinatorAuthority) {
+      if (resolvedCoordinatorAuthority.appId !== appId) {
+        throw new TypeError(
+          'Execution ledger coordinator authority must bind the mutated appId.',
+        );
+      }
+      conditionChecks.push(
+        createCoordinatorAuthorityFence(resolvedCoordinatorAuthority),
+      );
+    }
+    await db.transactionWrite({
+      ...params,
+      ...(conditionChecks.length === 0 ? {} : { conditionChecks }),
+    });
+  }
+
+  /**
+   * Reclassify a failed guarded transaction only when takeover actually made
+   * this ledger's token stale. Callers first preserve any exact immutable
+   * receipt replay; this strong read is for a transaction that made no known
+   * commit.
+   * @returns {Promise<void>} - Resolves when the stable authority remains current.
+   */
+  async function assertCurrentCoordinatorAuthority() {
+    if (!resolvedCoordinatorAuthority) return;
+    await assertCoordinatorAuthorityCurrent({
+      db,
+      tableName: resolvedTableName,
+      authority: resolvedCoordinatorAuthority,
+    });
+  }
+
+  /**
+   * New physical assignments must be stamped by the authority that issues
+   * them. Recovery and settlement deliberately do not use this assertion:
+   * their attempt coordinates may belong to a predecessor epoch.
+   * @param {number} coordinatorEpoch - Proposed assignment epoch.
+   * @param {string} operation - Assignment operation.
+   * @returns {void} - Returns when the assignment epoch is current.
+   */
+  function assertCurrentAssignmentEpoch(coordinatorEpoch, operation) {
+    if (
+      resolvedCoordinatorAuthority &&
+      coordinatorEpoch !== resolvedCoordinatorAuthority.epoch
+    ) {
+      throw new TypeError(
+        `${operation}.coordinatorEpoch must match the current coordinator authority epoch.`,
+      );
+    }
+  }
 
   /**
    * @param {string} runId - Run identity.
@@ -12312,20 +12390,23 @@ export function createExecutionLedger({
       });
     }
 
-    await db.transactionWrite({
-      tableName: resolvedTableName,
-      ...(input.conditionChecks?.length ||
-      input.scheduleMutation?.conditionChecks.length
-        ? {
-            conditionChecks: [
-              ...(input.conditionChecks || []),
-              ...(input.scheduleMutation?.conditionChecks || []),
-            ],
-          }
-        : {}),
-      putRequests,
-      ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
-    });
+    await transactionWrite(
+      {
+        tableName: resolvedTableName,
+        ...(input.conditionChecks?.length ||
+        input.scheduleMutation?.conditionChecks.length
+          ? {
+              conditionChecks: [
+                ...(input.conditionChecks || []),
+                ...(input.scheduleMutation?.conditionChecks || []),
+              ],
+            }
+          : {}),
+        putRequests,
+        ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
+      },
+      input.nextRun.appId,
+    );
   }
 
   /**
@@ -12522,7 +12603,7 @@ export function createExecutionLedger({
     );
     if (coordinatorEpoch !== 0) {
       throw new TypeError(
-        'createManualRun.coordinatorEpoch must be 0 until durable coordinator ownership is implemented.',
+        'createManualRun.coordinatorEpoch must be 0 in the V10 admission event; bound coordinator authority is enforced by the transaction fence.',
       );
     }
     const observedAt = normalizeObservedAt(
@@ -12579,10 +12660,12 @@ export function createExecutionLedger({
       if (receipt && receipt.request_digest !== requestDigest) {
         throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
       }
-      try {
-        await repairReadyWork({ appId, revisionId, runId });
-      } catch (error) {
-        if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+      if (!resolvedCoordinatorAuthority) {
+        try {
+          await repairReadyWork({ appId, revisionId, runId });
+        } catch (error) {
+          if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+        }
       }
       return {
         applied: false,
@@ -12709,11 +12792,13 @@ export function createExecutionLedger({
               transitionId,
             );
           }
-          try {
-            await repairReadyWork({ appId, revisionId, runId });
-          } catch (repairError) {
-            if (!(repairError instanceof ExecutionLedgerConflictError)) {
-              throw repairError;
+          if (!resolvedCoordinatorAuthority) {
+            try {
+              await repairReadyWork({ appId, revisionId, runId });
+            } catch (repairError) {
+              if (!(repairError instanceof ExecutionLedgerConflictError)) {
+                throw repairError;
+              }
             }
           }
           return {
@@ -12729,6 +12814,7 @@ export function createExecutionLedger({
           };
         }
       }
+      await assertCurrentCoordinatorAuthority();
       if (raced) throw new ExecutionLedgerRunConflictError(runId);
       await getLocalApplicationRunCreationFence({
         db,
@@ -13092,10 +13178,12 @@ export function createExecutionLedger({
       if (receipt && receipt.request_digest !== requestDigest) {
         throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
       }
-      try {
-        await repairReadyWork({ appId, revisionId, runId });
-      } catch (error) {
-        if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+      if (!resolvedCoordinatorAuthority) {
+        try {
+          await repairReadyWork({ appId, revisionId, runId });
+        } catch (error) {
+          if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+        }
       }
       return workflowCreationResult(existing, receipt, false);
     }
@@ -13360,11 +13448,13 @@ export function createExecutionLedger({
               transitionId,
             );
           }
-          try {
-            await repairReadyWork({ appId, revisionId, runId });
-          } catch (repairError) {
-            if (!(repairError instanceof ExecutionLedgerConflictError)) {
-              throw repairError;
+          if (!resolvedCoordinatorAuthority) {
+            try {
+              await repairReadyWork({ appId, revisionId, runId });
+            } catch (repairError) {
+              if (!(repairError instanceof ExecutionLedgerConflictError)) {
+                throw repairError;
+              }
             }
           }
           return workflowCreationResult(raced, receipt, false);
@@ -13385,6 +13475,9 @@ export function createExecutionLedger({
           runId,
           'scheduled workflow occurrence exists without its workflow run',
         );
+      }
+      if (isConditionalCheckFailed(error)) {
+        await assertCurrentCoordinatorAuthority();
       }
       if (raced) throw new ExecutionLedgerRunConflictError(runId);
       if (scheduleReconciliation?.status === 'conflict') {
@@ -14560,11 +14653,14 @@ export function createExecutionLedger({
     ];
 
     try {
-      await db.transactionWrite({
-        tableName: resolvedTableName,
-        conditionChecks: [admissionFence],
-        putRequests,
-      });
+      await transactionWrite(
+        {
+          tableName: resolvedTableName,
+          conditionChecks: [admissionFence],
+          putRequests,
+        },
+        state.run.appId,
+      );
     } catch (error) {
       if (!isConditionalCheckFailed(error)) throw error;
       const raced = await readVerifiedRun(sourceRunId);
@@ -14572,6 +14668,7 @@ export function createExecutionLedger({
         const winner = await readExisting(raced);
         if (winner) return winner;
       }
+      await assertCurrentCoordinatorAuthority();
       await getLocalApplicationRunCreationFence({
         db,
         tableName: resolvedTableName,
@@ -14656,6 +14753,10 @@ export function createExecutionLedger({
       ],
       'startManagedEffectSuccessor',
       now,
+    );
+    assertCurrentAssignmentEpoch(
+      common.coordinatorEpoch,
+      'startManagedEffectSuccessor',
     );
     const fencingToken = assertOpaqueId(
       value.fencingToken,
@@ -15755,7 +15856,10 @@ export function createExecutionLedger({
     } catch (error) {
       if (!isConditionalCheckFailed(error)) throw error;
       const raced = await readVerifiedRun(input.runId);
-      if (!raced) throw new ExecutionLedgerConflictError(input.runId);
+      if (!raced) {
+        await assertCurrentCoordinatorAuthority();
+        throw new ExecutionLedgerConflictError(input.runId);
+      }
       const receipt = await getTransitionReceipt(
         db,
         resolvedTableName,
@@ -15770,6 +15874,7 @@ export function createExecutionLedger({
           input.resultEffectIds,
         );
       }
+      await assertCurrentCoordinatorAuthority();
       throw new ExecutionLedgerConflictError(input.runId);
     }
 
@@ -16747,6 +16852,10 @@ export function createExecutionLedger({
       ],
       'claimWorkflowActivity',
       now,
+    );
+    assertCurrentAssignmentEpoch(
+      common.coordinatorEpoch,
+      'claimWorkflowActivity',
     );
     const invocationId = assertOpaqueId(
       value.invocationId,
@@ -18725,8 +18834,8 @@ export function createExecutionLedger({
 
   /**
    * Claim the next physical generation of the manual invocation. The caller
-   * supplies its future-facing fence now, even though this local slice has no
-   * provider-backed coordinator lease yet.
+   * supplies its assignment epoch; an authority-bound ledger requires that
+   * epoch to match its current token.
    * @param {{runId: string, invocationId: string, fencingToken: string, expectedGeneration: number, expectedVersion: number, transitionId: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Claim request.
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Claim outcome.
    */
@@ -18752,6 +18861,7 @@ export function createExecutionLedger({
       'claimInvocation',
       now,
     );
+    assertCurrentAssignmentEpoch(common.coordinatorEpoch, 'claimInvocation');
     const invocationId = assertOpaqueId(
       value.invocationId,
       'claimInvocation.invocationId',
@@ -21938,14 +22048,18 @@ export function createExecutionLedger({
     }
 
     try {
-      await db.transactionWrite({
-        tableName: resolvedTableName,
-        conditionChecks,
-        ...(putRequests.length === 0 ? {} : { putRequests }),
-        ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
-      });
+      await transactionWrite(
+        {
+          tableName: resolvedTableName,
+          conditionChecks,
+          ...(putRequests.length === 0 ? {} : { putRequests }),
+          ...(deleteRequests.length === 0 ? {} : { deleteRequests }),
+        },
+        value.appId,
+      );
     } catch (error) {
       if (isConditionalCheckFailed(error)) {
+        await assertCurrentCoordinatorAuthority();
         throw new ExecutionLedgerConflictError(
           runId,
           'ready-work repair raced another transition',
@@ -23029,45 +23143,48 @@ export function createExecutionLedger({
     const attemptRecord = createAttemptProjectionRecord(runId, attempt);
 
     try {
-      await db.transactionWrite({
-        tableName: resolvedTableName,
-        conditionChecks: [
-          {
-            keyName: KEY_NAME,
-            keyValue: runId,
-            sortKeyName: SORT_KEY_NAME,
-            sortKeyValue: getAttemptProjectionSortKey(attemptId),
-            conditions: [
-              eq('record_type', attemptRecord.record_type),
-              eq('schema_version', attemptRecord.schema_version),
-              eq('invocation_id', attemptRecord.invocation_id),
-              eq('attempt_id', attemptRecord.attempt_id),
-              eq('status', AttemptStatus.STARTED),
-              eq('generation', attemptRecord.generation),
-              eq('version', attemptRecord.version),
-              eq('fencing_token', attemptRecord.fencing_token),
-              eq('coordinator_epoch', attemptRecord.coordinator_epoch),
-              eq('revision_id', attemptRecord.revision_id),
-            ],
-          },
-        ],
-        putRequests: [
-          {
-            keyName: KEY_NAME,
-            sortKeyName: SORT_KEY_NAME,
-            record: entry,
-            conditions: [notExists(SORT_KEY_NAME)],
-          },
-          {
-            keyName: KEY_NAME,
-            sortKeyName: SORT_KEY_NAME,
-            record: nextHead,
-            conditions: currentHead
-              ? activityAttemptLogHeadReplacementConditions(currentHead)
-              : [notExists(SORT_KEY_NAME)],
-          },
-        ],
-      });
+      await transactionWrite(
+        {
+          tableName: resolvedTableName,
+          conditionChecks: [
+            {
+              keyName: KEY_NAME,
+              keyValue: runId,
+              sortKeyName: SORT_KEY_NAME,
+              sortKeyValue: getAttemptProjectionSortKey(attemptId),
+              conditions: [
+                eq('record_type', attemptRecord.record_type),
+                eq('schema_version', attemptRecord.schema_version),
+                eq('invocation_id', attemptRecord.invocation_id),
+                eq('attempt_id', attemptRecord.attempt_id),
+                eq('status', AttemptStatus.STARTED),
+                eq('generation', attemptRecord.generation),
+                eq('version', attemptRecord.version),
+                eq('fencing_token', attemptRecord.fencing_token),
+                eq('coordinator_epoch', attemptRecord.coordinator_epoch),
+                eq('revision_id', attemptRecord.revision_id),
+              ],
+            },
+          ],
+          putRequests: [
+            {
+              keyName: KEY_NAME,
+              sortKeyName: SORT_KEY_NAME,
+              record: entry,
+              conditions: [notExists(SORT_KEY_NAME)],
+            },
+            {
+              keyName: KEY_NAME,
+              sortKeyName: SORT_KEY_NAME,
+              record: nextHead,
+              conditions: currentHead
+                ? activityAttemptLogHeadReplacementConditions(currentHead)
+                : [notExists(SORT_KEY_NAME)],
+            },
+          ],
+        },
+        scope.appId,
+      );
     } catch (error) {
       if (!isConditionalCheckFailed(error)) throw error;
       const racedReplay = await readExactActivityAttemptLogReplay(scope, frame);
@@ -23079,6 +23196,7 @@ export function createExecutionLedger({
           entryId: racedReplay.entry.entry_id,
         };
       }
+      await assertCurrentCoordinatorAuthority();
       throw new ExecutionLedgerConflictError(
         runId,
         'activity attempt-log append lost its fence or ordering race',
