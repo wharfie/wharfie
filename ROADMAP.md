@@ -43,7 +43,10 @@ The repository has substantial foundations:
   plus a
   [checksummed Darwin observation](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
   of the real source LMDB resident and generated relocated SEA with Node absent
-  from runtime `PATH`;
+  from runtime `PATH`, and a
+  [checksummed disposable-Ubuntu walkthrough](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md)
+  of the literal packaged start, systemd install, later-process rediscovery,
+  meaningful update, rollback, retained reads, uninstall, and host cleanup;
 - a recoverable single-machine service lifecycle, now exercised by a
   [checksummed disposable-Ubuntu proof](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
   through install, automatic replacement, forced host restart, retained work,
@@ -52,12 +55,12 @@ The repository has substantial foundations:
 - extensive AWS-shaped deployment contracts, resource drivers, and mock-based
   proofs.
 
-That closes the single-host service-substrate gate, but it is not yet the
-complete product proof. The purpose-built systemd fixture must now give way to
-one literal `steady-file` walkthrough through the default durable handoff and
-the proven service lifecycle. Automatic replacement of a failed coordinator
-by another machine is not proved. The cloud deployment work has not produced a
-successful clean-account end-to-end receipt.
+That closes Outcome 1's bounded single-machine product proof. The focused
+`steady-file` run did not repeat crash or reboot recovery; the separate
+purpose-built service proof covers those substrate boundaries. Neither run
+proves automatic replacement of a failed coordinator by another machine. The
+cloud deployment work has not produced a successful clean-account end-to-end
+receipt.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -87,23 +90,23 @@ second application architecture.
 
 ### Work next
 
-1. Run one literal `steady-file` walkthrough through the proven service
-   substrate: ordinary CLI, default durable start, package, install, close the
-   initiating shell, return for history and output, update, rollback,
-   uninstall, and cleanup. Add no abstraction unless this sequence exposes a
-   real blocker.
-2. Reduce the remaining returned-run and app-scope friction only when the
-   walkthrough demonstrates that it blocks the obvious command sequence.
-3. Add schedule, application state, or broader workflow behavior only when the
-   golden application has a real need for it.
+1. Keep the literal `steady-file` walkthrough as the regression gate for this
+   outcome.
+2. Carrying a returned run ID was visible friction but did not block the
+   sequence. Change discovery or app-scope ergonomics only when real use
+   demands it.
+3. Add schedule, application state, broader workflow behavior, or more
+   single-host service surface only when a concrete application needs it.
 
 ### Exit evidence
 
-From a fresh checkout, a developer can author or copy the example, run it
-locally, package it, start it durably, close the initiating shell, return later
-to inspect its exact history and logical result, then update and roll it back.
-The documented happy path is short enough to understand without reading the
-ledger or deployment internals.
+A checksummed clean Linux arm64 run now shows a developer can copy the example,
+run it locally, package it, start it durably, install it, end the initiating
+process, return in a different process to inspect exact history and logical
+output, then update, roll back, uninstall, and clean up. The workflow happened
+to complete before the initiating verifier ended, so this focused receipt does
+not claim unfinished continuation across caller death; the installed service,
+retained state, and later rediscovery did cross that process boundary.
 
 ## Outcome 2: a failed coordinator can be safely replaced
 
@@ -203,10 +206,8 @@ ends with independently checked receipts.
 
 ## Immediate slice status
 
-Do not add another numbered roadmap tranche. The portable golden path, one real
-Darwin native/SEA observation, and the disposable Linux/systemd service
-substrate are concrete. The remaining slice is to join them into one literal
-user-facing `steady-file` walkthrough:
+Do not add another numbered roadmap tranche. The portable golden path and its
+single-machine evidence slice are complete:
 
 1. `steady-file` compares two file observations for a useful local shell
    decision;
@@ -221,11 +222,15 @@ user-facing `steady-file` walkthrough:
 6. a checksummed disposable Ubuntu run now proves deliberate replacement,
    forced reboot, automatic pre-login startup, durable continuation, update,
    rollback, failed-target restoration, uninstall, prune, and cleanup; and
-7. the literal golden application must traverse that substrate before more
-   coordinator or provider machinery is added.
+7. a separate checksummed Ubuntu arm64 run drives the literal golden
+   application through packaged default start, install, later-process
+   rediscovery, a meaningful A-to-B update, B-to-A rollback, retained reads,
+   uninstall, prune, and VM cleanup.
 
-The preferred result is less framework surface and one compelling
-demonstration, not another broad layer of abstractions.
+The immediate slice is now Outcome 2: define and prove the smallest
+single-active coordinator replacement state machine and its linearizable
+authority. Do not broaden the cloud layer or add more single-host framework
+surface first.
 
 ## Explicitly not now
 

@@ -50,6 +50,7 @@ const staleClaims = [
   'schema-v5 redacted run view',
   'schema-v6 redacted run view',
   'Wharfie does not yet install it as an OS service',
+  'The remaining evidence gate is a clean supported Linux/systemd service lifecycle',
 ];
 
 /**
@@ -413,6 +414,7 @@ describe('docs command surface', () => {
       'node ./bin/wharfie app package ./scratch/examples/apps/steady-file --target node24.13.1-darwin-arm64 --json',
     );
     expect(document).toContain('--target node24.13.1-linux-x64-glibc');
+    expect(document).toContain('--target node24.13.1-linux-arm64-glibc');
     expect(normalized).toContain(
       '<steady-file-artifact> /absolute/path/to/artifact.tar',
     );
@@ -422,6 +424,33 @@ describe('docs command surface', () => {
     expect(normalized).toContain('<steady-file-artifact> wharfie worker');
     expect(normalized).toContain(
       '<steady-file-artifact> wharfie output --run-id <run-id> --confirm-sensitive-output --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie start --json -- /absolute/path/to/artifact.tar',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie list --limit 10 --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie inspect --run-id <run-id> --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie service status --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie service install --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-b> wharfie service update --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-b> wharfie service rollback --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie service uninstall --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie service prune --json',
     );
 
     await expect(
@@ -510,10 +539,36 @@ describe('docs command surface', () => {
       name: 'worker',
       options: [],
     });
+    expectCommandShape(findCommand(packagedOperator, 'list'), {
+      name: 'list',
+      options: ['--limit', '--cursor', '--json'],
+    });
+    expectCommandShape(findCommand(packagedOperator, 'inspect'), {
+      name: 'inspect',
+      options: ['--run-id', '--json'],
+    });
     expectCommandShape(findCommand(packagedOperator, 'output'), {
       name: 'output',
       options: ['--run-id', '--confirm-sensitive-output', '--json'],
     });
+    const packagedService = findCommand(packagedOperator, 'service');
+    expectCommandShape(packagedService, {
+      name: 'service',
+      options: [],
+    });
+    for (const action of [
+      'install',
+      'status',
+      'update',
+      'rollback',
+      'uninstall',
+      'prune',
+    ]) {
+      expectCommandShape(findCommand(packagedService, action), {
+        name: action,
+        options: ['--json'],
+      });
+    }
   });
 
   it('documents the explicit sensitive activity-log disclosure boundary', async () => {
