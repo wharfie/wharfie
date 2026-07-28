@@ -6,6 +6,7 @@ import {
   validateSha256Digest,
 } from '../../core/runtime/application-revision.js';
 import {
+  ARTIFACT_ID_PREFIX,
   assertArtifactId,
   validateArtifactRecordObservation,
 } from '../../core/runtime/artifact-record.js';
@@ -39,6 +40,24 @@ const PACKAGE_ARTIFACT_KEYS = Object.freeze([
   'byteDigest',
   'size',
   'record',
+]);
+const PACKAGE_RECEIPT_KEYS = Object.freeze([
+  'schemaVersion',
+  'kind',
+  'appId',
+  'revisionId',
+  'outputDir',
+  'artifactCount',
+  'artifacts',
+]);
+const PACKAGE_RECEIPT_ARTIFACT_KEYS = Object.freeze([
+  'artifactId',
+  'target',
+  'fileName',
+  'path',
+  'recordPath',
+  'byteDigest',
+  'size',
 ]);
 
 /**
@@ -80,14 +99,13 @@ function validateUsablePathString(value, valuePath) {
 
 /**
  * @param {unknown} value - Candidate output directory.
+ * @param {string} [valuePath] - Human-readable schema path.
  * @returns {string} - Exact normalized absolute directory.
  */
-function validateOutputDirectory(value) {
-  const outputDir = validateUsablePathString(value, 'packageResult.outputDir');
+function validateOutputDirectory(value, valuePath = 'packageResult.outputDir') {
+  const outputDir = validateUsablePathString(value, valuePath);
   if (!path.isAbsolute(outputDir) || path.resolve(outputDir) !== outputDir) {
-    throw new TypeError(
-      'packageResult.outputDir must be one normalized absolute path.',
-    );
+    throw new TypeError(`${valuePath} must be one normalized absolute path.`);
   }
   return outputDir;
 }
@@ -103,6 +121,195 @@ function freezeJsonDocument(value) {
   }
   for (const child of Object.values(value)) freezeJsonDocument(child);
   return Object.freeze(value);
+}
+
+/**
+ * Validate one public application-package handoff document received across a
+ * JSON boundary. The receipt is discovery data rather than artifact authority:
+ * this function checks its complete internal identity, target ordering, and
+ * local path shape but does not read executable or sidecar bytes.
+ * @param {unknown} raw - Candidate schema-v1 public package receipt.
+ * @param {string} [valuePath] - Human-readable schema path.
+ * @returns {Readonly<{
+ *   schemaVersion: 1,
+ *   kind: 'wharfie.application.package',
+ *   appId: string,
+ *   revisionId: string,
+ *   outputDir: string,
+ *   artifactCount: number,
+ *   artifacts: Array<{
+ *     artifactId: string,
+ *     target: import('../../core/runtime/build-target.js').BuildTarget,
+ *     fileName: string,
+ *     path: string,
+ *     recordPath: string,
+ *     byteDigest: import('../../core/runtime/application-revision.js').Sha256Digest,
+ *     size: number
+ *   }>
+ * }>} - Exact recursively frozen independent receipt.
+ */
+export function validateApplicationPackageReceipt(
+  raw,
+  valuePath = 'application package receipt',
+) {
+  const receipt = cloneJsonObject(raw, valuePath);
+  assertExactKeys(receipt, PACKAGE_RECEIPT_KEYS, valuePath);
+  if (receipt.schemaVersion !== APPLICATION_PACKAGE_RECEIPT_SCHEMA_VERSION) {
+    throw new TypeError(
+      `${valuePath}.schemaVersion must be the integer ${APPLICATION_PACKAGE_RECEIPT_SCHEMA_VERSION}.`,
+    );
+  }
+  if (receipt.kind !== APPLICATION_PACKAGE_RECEIPT_KIND) {
+    throw new TypeError(
+      `${valuePath}.kind must be '${APPLICATION_PACKAGE_RECEIPT_KIND}'.`,
+    );
+  }
+  assertLogicalId(receipt.appId, `${valuePath}.appId`);
+  assertApplicationRevisionId(receipt.revisionId, `${valuePath}.revisionId`);
+  const outputDir = validateOutputDirectory(
+    receipt.outputDir,
+    `${valuePath}.outputDir`,
+  );
+  if (
+    !Number.isSafeInteger(receipt.artifactCount) ||
+    receipt.artifactCount < 1
+  ) {
+    throw new TypeError(
+      `${valuePath}.artifactCount must be a positive safe integer.`,
+    );
+  }
+  if (
+    !Array.isArray(receipt.artifacts) ||
+    receipt.artifacts.length !== receipt.artifactCount
+  ) {
+    throw new TypeError(
+      `${valuePath}.artifacts must contain exactly artifactCount entries.`,
+    );
+  }
+
+  const artifactIds = new Set();
+  const fileNames = new Set();
+  const targetIds = new Set();
+  let previousTargetId = '';
+  const artifacts = receipt.artifacts.map((value, index) => {
+    const artifactPath = `${valuePath}.artifacts[${index}]`;
+    const artifact = cloneJsonObject(value, artifactPath);
+    assertExactKeys(artifact, PACKAGE_RECEIPT_ARTIFACT_KEYS, artifactPath);
+
+    assertArtifactId(artifact.artifactId, `${artifactPath}.artifactId`);
+    const byteDigest = validateSha256Digest(
+      artifact.byteDigest,
+      `${artifactPath}.byteDigest`,
+    );
+    if (artifact.artifactId !== `${ARTIFACT_ID_PREFIX}_${byteDigest.value}`) {
+      throw new Error(
+        `${artifactPath}.artifactId must name its exact byteDigest.`,
+      );
+    }
+    if (!Number.isSafeInteger(artifact.size) || artifact.size < 0) {
+      throw new TypeError(
+        `${artifactPath}.size must be a nonnegative safe integer.`,
+      );
+    }
+    if (artifactIds.has(artifact.artifactId)) {
+      throw new TypeError(
+        `${valuePath}.artifacts must contain unique artifact identities.`,
+      );
+    }
+    artifactIds.add(artifact.artifactId);
+
+    const target = validateBuildTarget(
+      artifact.target,
+      `${artifactPath}.target`,
+    );
+    const targetId = getBuildTargetId(target, `${artifactPath}.target`);
+    if (targetIds.has(targetId)) {
+      throw new TypeError(
+        `${valuePath}.artifacts must contain one artifact per exact target.`,
+      );
+    }
+    if (previousTargetId && targetId <= previousTargetId) {
+      throw new TypeError(
+        `${valuePath}.artifacts must be sorted by canonical target identity.`,
+      );
+    }
+    targetIds.add(targetId);
+    previousTargetId = targetId;
+
+    validateUsablePathString(artifact.fileName, `${artifactPath}.fileName`);
+    const expectedFileName = getPackageArtifactFileName({
+      appId: receipt.appId,
+      target,
+      byteDigest,
+    });
+    if (artifact.fileName !== expectedFileName) {
+      throw new Error(
+        `${artifactPath}.fileName must be the canonical content-addressed file name.`,
+      );
+    }
+    if (fileNames.has(artifact.fileName)) {
+      throw new TypeError(
+        `${valuePath}.artifacts must contain unique artifact file names.`,
+      );
+    }
+    fileNames.add(artifact.fileName);
+
+    validateUsablePathString(artifact.path, `${artifactPath}.path`);
+    validateUsablePathString(artifact.recordPath, `${artifactPath}.recordPath`);
+    const expectedPath = path.join(outputDir, artifact.fileName);
+    if (
+      artifact.path !== expectedPath ||
+      artifact.recordPath !== `${expectedPath}.artifact.json`
+    ) {
+      throw new Error(
+        `${artifactPath}.path and recordPath must be direct children of ${valuePath}.outputDir.`,
+      );
+    }
+
+    return {
+      artifactId: artifact.artifactId,
+      target,
+      fileName: artifact.fileName,
+      path: artifact.path,
+      recordPath: artifact.recordPath,
+      byteDigest,
+      size: artifact.size,
+    };
+  });
+
+  return freezeJsonDocument({
+    schemaVersion: APPLICATION_PACKAGE_RECEIPT_SCHEMA_VERSION,
+    kind: APPLICATION_PACKAGE_RECEIPT_KIND,
+    appId: receipt.appId,
+    revisionId: receipt.revisionId,
+    outputDir,
+    artifactCount: receipt.artifactCount,
+    artifacts,
+  });
+}
+
+/**
+ * Parse the complete successful stdout document from `wharfie app package`.
+ * JSON.parse intentionally receives the whole string so leading/trailing
+ * whitespace is allowed while diagnostics or a second JSON document fail.
+ * @param {unknown} value - Captured package-command stdout.
+ * @param {string} [valuePath] - Human-readable boundary label.
+ * @returns {ReturnType<typeof validateApplicationPackageReceipt>} - Validated frozen receipt.
+ */
+export function parseApplicationPackageReceiptOutput(
+  value,
+  valuePath = 'wharfie app package stdout',
+) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError(`${valuePath} must contain one JSON document.`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TypeError(`${valuePath} must contain exactly one JSON document.`);
+  }
+  return validateApplicationPackageReceipt(parsed, valuePath);
 }
 
 /**
@@ -306,7 +513,7 @@ export function createApplicationPackageReceipt(raw) {
         : 0,
   );
 
-  return freezeJsonDocument({
+  return validateApplicationPackageReceipt({
     schemaVersion: APPLICATION_PACKAGE_RECEIPT_SCHEMA_VERSION,
     kind: APPLICATION_PACKAGE_RECEIPT_KIND,
     appId: app.id,
@@ -321,4 +528,6 @@ export default {
   APPLICATION_PACKAGE_RECEIPT_KIND,
   APPLICATION_PACKAGE_RECEIPT_SCHEMA_VERSION,
   createApplicationPackageReceipt,
+  parseApplicationPackageReceiptOutput,
+  validateApplicationPackageReceipt,
 };

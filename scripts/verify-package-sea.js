@@ -26,6 +26,10 @@ import {
   REPO_ROOT,
   runCommand,
 } from './package-verification.js';
+import {
+  parsePackageSeaReceipt,
+  verifyPackageSeaArtifactHandoff,
+} from './package-sea-verification.js';
 import { createPackageSeaScheduleRestartProof } from './package-sea-schedule-restart-proof.js';
 import {
   attachSeaInspector,
@@ -8431,7 +8435,7 @@ async function packageAndVerifyRelocatedSeaScheduleRestart(options) {
   rmSync(proofRoot, { recursive: true, force: true });
   mkdirSync(publicationRoot, { recursive: true, mode: 0o700 });
   try {
-    const packageResult = parseFinalJsonLine(
+    const packageReceipt = parsePackageSeaReceipt(
       runCommand(
         options.wharfieBin,
         [
@@ -8452,22 +8456,10 @@ async function packageAndVerifyRelocatedSeaScheduleRestart(options) {
         },
       ).stdout,
     );
-    assert.equal(packageResult.artifacts.length, 1);
-    assert.notEqual(packageResult.revision.revisionId, options.baseRevisionId);
-    assert.deepEqual(
-      packageResult.revision.contract.schedules[SEA_SCHEDULE_ID],
-      {
-        cron: SEA_SCHEDULE_PROOF_CRON,
-        workflow: SEA_SCHEDULE_WORKFLOW_ID,
-        input: {
-          ordinal: 1,
-          markerDirectory: SEA_SCHEDULE_MARKER_DIRECTORY,
-        },
-        missed: 'latest',
-        overlap: 'allow',
-      },
-    );
-    const packagedArtifact = packageResult.artifacts[0];
+    assert.equal(packageReceipt.artifacts.length, 1);
+    assert.notEqual(packageReceipt.revisionId, options.baseRevisionId);
+    const packagedArtifact = packageReceipt.artifacts[0];
+    const artifactRecord = readJson(packagedArtifact.recordPath);
     const movedArtifactPath = path.join(
       publicationRoot,
       'wharfie-schedule-proof',
@@ -8492,10 +8484,16 @@ async function packageAndVerifyRelocatedSeaScheduleRestart(options) {
         env: options.cleanEnvironment,
       }).stdout,
     );
-    assert.deepEqual(
-      manifest.schedules[SEA_SCHEDULE_ID],
-      packageResult.revision.contract.schedules[SEA_SCHEDULE_ID],
-    );
+    assert.deepEqual(manifest.schedules[SEA_SCHEDULE_ID], {
+      cron: SEA_SCHEDULE_PROOF_CRON,
+      workflow: SEA_SCHEDULE_WORKFLOW_ID,
+      input: {
+        ordinal: 1,
+        markerDirectory: SEA_SCHEDULE_MARKER_DIRECTORY,
+      },
+      missed: 'latest',
+      overlap: 'allow',
+    });
     const metadata = JSON.parse(
       runCommand(movedArtifactPath, ['wharfie', 'metadata', '--no-pretty'], {
         cwd: publicationRoot,
@@ -8503,17 +8501,21 @@ async function packageAndVerifyRelocatedSeaScheduleRestart(options) {
         env: options.cleanEnvironment,
       }).stdout,
     );
-    assert.equal(
-      metadata.revision.revisionId,
-      packageResult.revision.revisionId,
-    );
+    const authority = verifyPackageSeaArtifactHandoff({
+      receipt: packageReceipt,
+      artifactBytes: readFileSync(movedArtifactPath),
+      artifactRecord,
+      embeddedManifest: manifest,
+      embeddedMetadata: metadata,
+    });
+    assert.equal(authority.revision.revisionId, packageReceipt.revisionId);
     const proof = await verifyRelocatedSeaScheduleRestartProof({
       artifactPath: movedArtifactPath,
       appId: manifest.app.id,
       cleanEnvironment: options.cleanEnvironment,
       installedPackageRoot: options.installedPackageRoot,
       manifest,
-      revisionId: packageResult.revision.revisionId,
+      revisionId: authority.revision.revisionId,
       root: proofRoot,
     });
     assert.deepEqual(proof.cleanup, { workRootRemoved: true });
@@ -9783,12 +9785,11 @@ export default defineApp({
     ],
     { cwd: appDirectory, capture: true },
   ).stdout;
-  const packageResult = JSON.parse(
-    packageOutput.trim().split('\n').filter(Boolean).at(-1),
-  );
-  assert.match(packageResult.revision.revisionId, /^wrv1_[A-Za-z0-9_-]{43}$/);
-  assert.equal(packageResult.artifacts.length, 1);
-  const packagedArtifact = packageResult.artifacts[0];
+  const packageReceipt = parsePackageSeaReceipt(packageOutput);
+  assert.match(packageReceipt.revisionId, /^wrv1_[A-Za-z0-9_-]{43}$/);
+  assert.equal(packageReceipt.artifacts.length, 1);
+  const packagedArtifact = packageReceipt.artifacts[0];
+  const packagedRevisionId = packageReceipt.revisionId;
   const artifactName = packagedArtifact.fileName;
   const artifactPath = path.join(outputDirectory, artifactName);
   assert.ok(
@@ -9800,10 +9801,7 @@ export default defineApp({
     existsSync(packagedArtifact.recordPath),
     `Missing generated artifact record: ${packagedArtifact.recordPath}`,
   );
-  assert.deepEqual(
-    readJson(packagedArtifact.recordPath),
-    packagedArtifact.record,
-  );
+  const packagedArtifactRecord = readJson(packagedArtifact.recordPath);
 
   const cleanArtifactPath = path.join(cleanRunDirectory, artifactName);
   copyFileSync(artifactPath, cleanArtifactPath);
@@ -9914,10 +9912,7 @@ export default defineApp({
       desiredConvergence.desired.artifactId,
       packagedArtifact.artifactId,
     );
-    assert.equal(
-      desiredConvergence.desired.revisionId,
-      packagedArtifact.revisionId,
-    );
+    assert.equal(desiredConvergence.desired.revisionId, packagedRevisionId);
     assert.equal(desiredConvergence.disposition, 'authorized');
     assert.equal(desiredConvergence.basis, 'physical-absence');
   } else {
@@ -10139,11 +10134,6 @@ export default defineApp({
       overlap: 'allow',
     },
   });
-  assert.deepEqual(
-    embeddedManifest.schedules,
-    packageResult.revision.contract.schedules,
-  );
-
   const embeddedMetadata = JSON.parse(
     runCommand(cleanArtifactPath, ['wharfie', 'metadata', '--no-pretty'], {
       cwd: cleanRunDirectory,
@@ -10151,25 +10141,18 @@ export default defineApp({
       env: cleanEnvironment,
     }).stdout,
   );
-  assert.equal(
-    embeddedMetadata.revision.revisionId,
-    packageResult.revision.revisionId,
-  );
-  assert.deepEqual(embeddedMetadata.revision, packageResult.revision);
-  assert.deepEqual(embeddedMetadata.runtime.target, packagedArtifact.target);
-  assert.equal(
-    embeddedMetadata.runtime.revisionId,
-    packagedArtifact.revisionId,
-  );
-  assert.equal(
-    embeddedMetadata.artifact.artifactId,
-    packagedArtifact.artifactId,
-  );
+  const packagedAuthority = verifyPackageSeaArtifactHandoff({
+    receipt: packageReceipt,
+    artifactBytes: readFileSync(cleanArtifactPath),
+    artifactRecord: packagedArtifactRecord,
+    embeddedManifest,
+    embeddedMetadata,
+  });
+  assert.equal(packagedAuthority.revision.revisionId, packagedRevisionId);
   assert.deepEqual(
-    embeddedMetadata.artifact.byteDigest,
-    packagedArtifact.byteDigest,
+    embeddedManifest.schedules,
+    packagedAuthority.revision.contract.schedules,
   );
-  assert.equal(embeddedMetadata.artifact.size, packagedArtifact.size);
 
   const controlPath = path.join(cleanRunDirectory, 'resident-control');
   const sessionPath = path.join(cleanRunDirectory, 'resident-sessions');
@@ -10215,15 +10198,15 @@ export default defineApp({
     tableName: ledgerTableName,
     payloadPath,
     applicationStatePath,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
   });
   const historicalOperatorRevisionId = `wrv1_${createHash('sha256')
     .update(
-      `wharfie:sea-verifier:historical-operator-revision:v1\0${packagedArtifact.revisionId}`,
+      `wharfie:sea-verifier:historical-operator-revision:v1\0${packagedRevisionId}`,
       'utf8',
     )
     .digest('base64url')}`;
-  assert.notEqual(historicalOperatorRevisionId, packagedArtifact.revisionId);
+  assert.notEqual(historicalOperatorRevisionId, packagedRevisionId);
   const operatorLedgerFixture = await createInstalledExecutionLedgerFixture({
     installedPackageRoot,
     controlPath,
@@ -10269,7 +10252,7 @@ export default defineApp({
     kind: 'wharfie.execution-ledger.activity-run',
     appId: embeddedManifest.app.id,
     runId: durableRunId,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
     activityId: 'persist-once',
     idempotencyKey: durableIdempotencyKey,
     disposition: 'completed',
@@ -10308,7 +10291,7 @@ export default defineApp({
     {
       runId: durableRunId,
       appId: embeddedManifest.app.id,
-      revisionId: packagedArtifact.revisionId,
+      revisionId: packagedRevisionId,
       status: ledgerFixture.RunStatus.COMPLETED,
       version: 7,
     },
@@ -10373,7 +10356,7 @@ export default defineApp({
   ]);
   const packagedActor = {
     kind: 'packaged-operator',
-    id: packagedArtifact.revisionId,
+    id: packagedRevisionId,
   };
   const managedEffectActor = { kind: 'runtime', id: 'managed-effect' };
   assert.deepEqual(
@@ -10470,7 +10453,7 @@ export default defineApp({
     appId: embeddedManifest.app.id,
     cleanEnvironment,
     installedPackageRoot,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'managed-effect-crash-matrix'),
   });
   await verifyRelocatedSeaMixedSettlementCrashMatrix({
@@ -10478,7 +10461,7 @@ export default defineApp({
     appId: embeddedManifest.app.id,
     cleanEnvironment,
     installedPackageRoot,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'mixed-settlement-crash-matrix'),
   });
   await verifyRelocatedSeaEffectReconciliationCrashMatrix({
@@ -10486,7 +10469,7 @@ export default defineApp({
     appId: embeddedManifest.app.id,
     cleanEnvironment,
     installedPackageRoot,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'effect-reconciliation-crash-matrix'),
   });
   await verifyRelocatedSeaManagedEffectSuccessorCrashMatrix({
@@ -10494,7 +10477,7 @@ export default defineApp({
     appId: embeddedManifest.app.id,
     cleanEnvironment,
     installedPackageRoot,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'managed-effect-successor-crash-matrix'),
   });
   await verifyRelocatedSeaWorkflowCrashMatrix({
@@ -10502,7 +10485,7 @@ export default defineApp({
     appId: embeddedManifest.app.id,
     cleanEnvironment,
     installedPackageRoot,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'workflow-crash-matrix'),
     wharfieBin,
     appDirectory,
@@ -10512,7 +10495,7 @@ export default defineApp({
     appId: embeddedManifest.app.id,
     cleanEnvironment,
     installedPackageRoot,
-    revisionId: packagedArtifact.revisionId,
+    revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'timer-signal-workflow'),
   });
 
@@ -10563,7 +10546,7 @@ export default defineApp({
     );
     assert.equal(firstReady.serviceId, lifecycleObserver.serviceId);
     assert.equal(firstReady.appId, embeddedManifest.app.id);
-    assert.equal(firstReady.revisionId, packagedArtifact.revisionId);
+    assert.equal(firstReady.revisionId, packagedRevisionId);
     const firstSessionId = firstReady.sessionId;
     abruptlyTerminatedSessionEndpoint = lifecycleObserver.getSessionEndpoint(
       firstSessionId,
@@ -10641,7 +10624,7 @@ export default defineApp({
       kind: 'wharfie.execution-ledger.activity-submit',
       appId: embeddedManifest.app.id,
       runId: postRecoveryRunId,
-      revisionId: packagedArtifact.revisionId,
+      revisionId: packagedRevisionId,
       activityId: 'persist-once',
       idempotencyKey: postRecoveryIdempotencyKey,
       reused: false,
@@ -10770,7 +10753,7 @@ export default defineApp({
         operatorPrefix: ['wharfie'],
         actor: {
           kind: 'packaged-operator',
-          id: packagedArtifact.revisionId,
+          id: packagedRevisionId,
         },
       },
     ];
@@ -11205,7 +11188,7 @@ export default defineApp({
     );
     assert.deepEqual(crashRunAfterKill.events.at(-1)?.actor, {
       kind: 'packaged-operator',
-      id: packagedArtifact.revisionId,
+      id: packagedRevisionId,
     });
     const crashEffectsBeforeById = new Map(
       crashRunBeforeRecovery.effects.map((effect) => [effect.effectId, effect]),
@@ -11447,7 +11430,7 @@ export default defineApp({
       'READY generation 2 after recovery',
     );
     assert.notEqual(secondReady.sessionId, firstSessionId);
-    assert.equal(secondReady.revisionId, packagedArtifact.revisionId);
+    assert.equal(secondReady.revisionId, packagedRevisionId);
 
     const secondExit = await signalResidentService(
       secondResidentService,
@@ -11493,7 +11476,7 @@ export default defineApp({
           cleanEnvironment,
           cleanRunDirectory,
           installedPackageRoot,
-          baseRevisionId: packagedArtifact.revisionId,
+          baseRevisionId: packagedRevisionId,
         })
       : null;
 

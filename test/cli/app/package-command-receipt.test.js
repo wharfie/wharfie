@@ -11,6 +11,8 @@ import {
   APPLICATION_PACKAGE_RECEIPT_KIND,
   APPLICATION_PACKAGE_RECEIPT_SCHEMA_VERSION,
   createApplicationPackageReceipt,
+  parseApplicationPackageReceiptOutput,
+  validateApplicationPackageReceipt,
 } from '../../../src/cli/app/package-command-receipt.js';
 import { createApplicationRevision } from '../../../src/core/runtime/application-revision.js';
 import { createArtifactRecord } from '../../../src/core/runtime/artifact-record.js';
@@ -216,6 +218,112 @@ describe('application package command receipt', () => {
     expect(createApplicationPackageReceipt(makePackageResult())).toEqual(
       createApplicationPackageReceipt(makePackageResult()),
     );
+  });
+
+  it('validates an independent recursively frozen public receipt', () => {
+    const input = clone(createApplicationPackageReceipt(makePackageResult()));
+    const receipt = validateApplicationPackageReceipt(input);
+    const originalPath = receipt.artifacts[0].path;
+
+    expect(receipt).toEqual(input);
+    expect(receipt).not.toBe(input);
+    expectDeeplyFrozen(receipt);
+    input.artifacts[0].path = '/changed-after-validation';
+    expect(receipt.artifacts[0].path).toBe(originalPath);
+  });
+
+  it('parses the complete one-document stdout contract', () => {
+    const receipt = createApplicationPackageReceipt(makePackageResult());
+    expect(
+      parseApplicationPackageReceiptOutput(`\n${JSON.stringify(receipt)}\n`),
+    ).toEqual(receipt);
+    expect(() =>
+      parseApplicationPackageReceiptOutput(
+        `diagnostic\n${JSON.stringify(receipt)}\n`,
+      ),
+    ).toThrow(/exactly one JSON document/i);
+    expect(() =>
+      parseApplicationPackageReceiptOutput(
+        `${JSON.stringify(receipt)}\n${JSON.stringify(receipt)}\n`,
+      ),
+    ).toThrow(/exactly one JSON document/i);
+  });
+
+  it.each([
+    [
+      'extra top-level fields',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.revision = makeRevision();
+      },
+      /must contain exactly/i,
+    ],
+    [
+      'extra artifact fields',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.artifacts[0].record = makePackageResult().artifacts[0].record;
+      },
+      /must contain exactly/i,
+    ],
+    [
+      'wrong document kind',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.kind = 'wharfie.application.package.other';
+      },
+      /kind must be/i,
+    ],
+    [
+      'wrong schema version',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.schemaVersion = 2;
+      },
+      /schemaVersion must be the integer 1/i,
+    ],
+    [
+      'count disagreement',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.artifactCount -= 1;
+      },
+      /exactly artifactCount entries/i,
+    ],
+    [
+      'artifact identity and digest disagreement',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.artifacts[0].artifactId = receipt.artifacts[1].artifactId;
+      },
+      /must name its exact byteDigest/i,
+    ],
+    [
+      'noncanonical target order',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.artifacts.reverse();
+      },
+      /sorted by canonical target identity/i,
+    ],
+    [
+      'duplicate target',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.artifacts[1].target = clone(receipt.artifacts[0].target);
+      },
+      /one artifact per exact target/i,
+    ],
+    [
+      'noncanonical file name',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.artifacts[0].fileName = 'latest';
+      },
+      /canonical content-addressed file name/i,
+    ],
+    [
+      'noncanonical artifact path',
+      (/** @type {Record<string, any>} */ receipt) => {
+        receipt.artifacts[0].path = path.join(OUTPUT_DIR, 'latest');
+      },
+      /direct children/i,
+    ],
+  ])('public validator rejects %s', (_label, mutate, expected) => {
+    const receipt = clone(createApplicationPackageReceipt(makePackageResult()));
+    mutate(receipt);
+    expect(() => validateApplicationPackageReceipt(receipt)).toThrow(expected);
   });
 
   it.each([
