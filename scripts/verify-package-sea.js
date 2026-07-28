@@ -9582,6 +9582,7 @@ export async function main(argv: string[] = process.argv) {
     process.stdout.write(JSON.stringify({
       argvTail: argv.slice(2),
       applicationArgs,
+      execArgv: process.execArgv,
       stdin,
     }) + '\\n');
     process.stderr.write('portable-stderr\\n');
@@ -9749,6 +9750,7 @@ export default defineApp({
   const expectedCliProbe = {
     argvTail: cliProbeArgs,
     applicationArgs: cliProbeArgs.slice(2),
+    execArgv: [],
     stdin: cliProbeInput,
   };
   const sourceCliProbe = spawnSync(
@@ -10028,6 +10030,53 @@ export default defineApp({
   assert.equal(generatedCliProbe.status, 23);
   assert.deepEqual(JSON.parse(generatedCliProbe.stdout), expectedCliProbe);
   assert.equal(generatedCliProbe.stderr, 'portable-stderr\n');
+
+  const explicitRuntimeOptionsProbe = spawnSync(
+    cleanArtifactPath,
+    ['--node-options=--no-warnings', ...cliProbeArgs],
+    {
+      cwd: cleanRunDirectory,
+      encoding: 'utf8',
+      env: cleanEnvironment,
+      input: cliProbeInput,
+      maxBuffer: 20 * 1024 * 1024,
+    },
+  );
+  if (explicitRuntimeOptionsProbe.error) {
+    throw explicitRuntimeOptionsProbe.error;
+  }
+  assert.equal(explicitRuntimeOptionsProbe.signal, null);
+  assert.equal(explicitRuntimeOptionsProbe.status, 23);
+  assert.deepEqual(JSON.parse(explicitRuntimeOptionsProbe.stdout), {
+    ...expectedCliProbe,
+    execArgv: ['--no-warnings'],
+  });
+  assert.equal(explicitRuntimeOptionsProbe.stderr, 'portable-stderr\n');
+
+  const inheritedRuntimeOptionsProbe = spawnSync(
+    cleanArtifactPath,
+    cliProbeArgs,
+    {
+      cwd: cleanRunDirectory,
+      encoding: 'utf8',
+      env: {
+        ...cleanEnvironment,
+        NODE_OPTIONS: '--require=wharfie-deliberately-missing-preload',
+      },
+      input: cliProbeInput,
+      maxBuffer: 20 * 1024 * 1024,
+    },
+  );
+  if (inheritedRuntimeOptionsProbe.error) {
+    throw inheritedRuntimeOptionsProbe.error;
+  }
+  assert.equal(inheritedRuntimeOptionsProbe.signal, null);
+  assert.equal(inheritedRuntimeOptionsProbe.status, 23);
+  assert.deepEqual(
+    JSON.parse(inheritedRuntimeOptionsProbe.stdout),
+    expectedCliProbe,
+  );
+  assert.equal(inheritedRuntimeOptionsProbe.stderr, 'portable-stderr\n');
 
   const embeddedManifest = JSON.parse(
     runCommand(cleanArtifactPath, ['wharfie', 'manifest', '--no-pretty'], {

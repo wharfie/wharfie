@@ -1123,7 +1123,7 @@ class SeaBuild extends BaseResource {
       useSnapshot: false,
       useCodeCache: false,
       execArgv: [],
-      execArgvExtension: 'none',
+      execArgvExtension: 'cli',
       assets,
     };
 

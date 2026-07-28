@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const INSPECTOR_URL_PATTERN = /Debugger listening on (ws:\/\/[^\s]+)/;
+const INSPECTOR_NODE_OPTIONS_ARGUMENT =
+  '--node-options=--inspect-brk=127.0.0.1:0 --inspect-publish-uid=stderr';
 const BASE64_VLQ_ALPHABET =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const BASE64_VLQ_VALUES = new Map(
@@ -49,9 +51,9 @@ function appendDiagnostic(retained, chunk) {
 
 /**
  * Launch an executable under Node's loopback inspector and stop before its
- * first application statement. This uses the Node runtime already embedded in
- * a SEA; PATH is not consulted. The inspector changes no artifact bytes and
- * exposes no Wharfie runtime hook.
+ * first application statement. This uses the explicit runtime-options channel
+ * embedded in a Wharfie SEA; PATH and NODE_OPTIONS are not consulted. The
+ * inspector changes no artifact bytes and exposes no Wharfie runtime hook.
  * @param {string} command - Executable path.
  * @param {string[]} args - Application argv.
  * @param {{cwd: string, env: Record<string, string>, timeoutMs?: number}} options - Process inputs.
@@ -64,6 +66,11 @@ export function spawnInspectorPausedProcess(command, args, options) {
   if (!Array.isArray(args) || args.some((value) => typeof value !== 'string')) {
     throw new TypeError('Inspector process args must be strings.');
   }
+  if (args.some((value) => value.startsWith('--node-options='))) {
+    throw new TypeError(
+      'Inspector process args must not contain the reserved --node-options carrier.',
+    );
+  }
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('Inspector process options must be an object.');
   }
@@ -72,21 +79,19 @@ export function spawnInspectorPausedProcess(command, args, options) {
     options.env.NODE_OPTIONS
   ) {
     throw new Error(
-      'Inspector process refuses to replace an existing NODE_OPTIONS value.',
+      'SEA inspector refuses inherited NODE_OPTIONS; use the explicit SEA runtime-options channel.',
     );
   }
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const child = spawn(command, args, {
+  const child = spawn(command, [INSPECTOR_NODE_OPTIONS_ARGUMENT, ...args], {
     cwd: options.cwd,
-    env: {
-      ...options.env,
-      NODE_OPTIONS: '--inspect-brk=127.0.0.1:0 --inspect-publish-uid=stderr',
-    },
+    env: options.env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
   let exitResult = /** @type {InspectedProcessExit | null} */ (null);
+  let processFailed = false;
   let inspectorUrl = '';
   let settleInspectorUrl = /** @type {(value: string) => void} */ (() => {});
   let rejectInspectorUrl = /** @type {(error: Error) => void} */ (() => {});
@@ -109,7 +114,7 @@ export function spawnInspectorPausedProcess(command, args, options) {
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk) => {
     stderr = appendDiagnostic(stderr, chunk);
-    if (inspectorUrl) return;
+    if (inspectorUrl || exitResult) return;
     const match = stderr.match(INSPECTOR_URL_PATTERN);
     if (!match) return;
     inspectorUrl = match[1];
@@ -118,31 +123,30 @@ export function spawnInspectorPausedProcess(command, args, options) {
   });
   const exited = new Promise((resolve) => {
     child.once('error', (error) => {
+      processFailed = true;
       stderr = appendDiagnostic(
         stderr,
         error instanceof Error ? error.stack || error.message : String(error),
       );
       exitResult = { code: null, signal: null };
-      if (!inspectorUrl) {
-        clearTimeout(inspectorTimer);
-        rejectInspectorUrl(
-          new Error(`SEA inspector process failed before attach: ${stderr}`),
-        );
-      }
+      if (!inspectorUrl) clearTimeout(inspectorTimer);
     });
     child.once('exit', (code, signal) => {
+      exitResult = { code, signal: signal || null };
+      if (!inspectorUrl) clearTimeout(inspectorTimer);
+    });
+    child.once('close', (code, signal) => {
       exitResult = { code, signal: signal || null };
       if (!inspectorUrl) {
         clearTimeout(inspectorTimer);
         rejectInspectorUrl(
           new Error(
-            `SEA inspector process exited before attach (${JSON.stringify(exitResult)}). stderr:\n${stderr}`,
+            processFailed
+              ? `SEA inspector process failed before attach: ${stderr}`
+              : `SEA inspector process exited before attach (${JSON.stringify(exitResult)}). stderr:\n${stderr}`,
           ),
         );
       }
-    });
-    child.once('close', (code, signal) => {
-      exitResult = { code, signal: signal || null };
       resolve(exitResult);
     });
   });

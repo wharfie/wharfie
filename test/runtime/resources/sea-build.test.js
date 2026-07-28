@@ -109,7 +109,7 @@ describe('SeaBuild', () => {
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
-  it('disables environment and inherited execution arguments in the SEA configuration', async () => {
+  it('disables inherited execution arguments while allowing explicit runtime options', async () => {
     const generatedBlob = Buffer.from('generated-sea-blob', 'utf8');
     /** @type {Record<string, any> | undefined} */
     let observedConfig;
@@ -183,7 +183,7 @@ describe('SeaBuild', () => {
         main: path.join(buildDir, 'esbundle.js'),
         output: path.join(buildDir, 'sea.blob'),
         execArgv: [],
-        execArgvExtension: 'none',
+        execArgvExtension: 'cli',
         assets: {},
       });
       expect(execFile).toHaveBeenCalledWith(
