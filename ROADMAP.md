@@ -281,6 +281,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       repository wrapper; retain only the repository-native v2 guides and ADRs.
 - [x] Remove release automation while the package is private rather than imply
       that publishing is supported.
+- [x] Give successful local SEA packaging one strict schema-versioned,
+      target-sorted public receipt without leaking the rich internal revision
+      and artifact records or granting path-based authority.
 - [ ] Make the eventual npm package and Wharfie SEA release one validated
       artifact flow.
 
@@ -1328,6 +1331,24 @@ directs the exact selected SEA to install or converge. Broader revision,
 payload, history, remote-artifact, and provider garbage collection remains
 open.
 
+V97 closes the public local-package handoff. `wharfie app package` no longer
+serializes its rich internal `packageLocalApp()` value. It emits one strict,
+recursively frozen schema-version 1 `wharfie.application.package` receipt with
+the application, revision, normalized output directory, and target-sorted
+content-addressed artifact summaries. Exact result keys, application/revision
+linkage, target-set equality, canonical artifact records, unique identities,
+the shared filename derivation, and direct-child executable/sidecar paths are
+checked before projection. The receipt relies on packaging's prior final-byte
+and canonical sidecar/owning-revision record association; it does not inspect
+embedded executable metadata, grants no artifact or deployment authority, and
+makes no `created` or `reused` claim. The rich internal result remains unchanged
+for selected-SEA deployment authority; later consumer boundaries separately
+verify embedded revision/runtime metadata. The command reserves stdout for the
+receipt by routing ordinary in-process writes and Wharfie-owned build-tool
+output to stderr; trusted authored code that deliberately bypasses streams
+or leaves stdout-producing work unawaited remains outside that non-sandboxed
+contract.
+
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
 responses, resident generation takeover, persisted timer firing, current-wait
@@ -1596,33 +1617,39 @@ or joined it to host evidence. No formatter or mount mutation exists.
        authority remain protected, retryable rename-first tombstones contain
        deletion interruption, authenticated stage-temp cleanup contains
        publication interruption, and uninstall remains state preserving.
-4. Run V84 against one already-present immutable local Linux/amd64 image. If
+4. [x] V97 replaces `app package`'s internal-object JSON leak with one strict
+       schema-version 1 local handoff receipt. The target-sorted receipt keeps
+       byte/target identity and local discovery paths, while full revision and
+       provenance data plus fresh selected-SEA authority remain private.
+5. Run V84 against one already-present immutable local Linux/amd64 image. If
    the read-only report is attemptable, run the committed V83 Docker proof only
    with explicit approval, retain only its checksummed `whlp2` receipt, and
    audit cleanup and disk deltas.
-5. After that bounded proof, run an explicitly authorized disposable
+6. After that bounded proof, run an explicitly authorized disposable
    AL2023/real-EBS proof that joins V79 provider evidence to exact e2fsprogs
    tools and output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id
    identity and path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
-6. Only after that proof, implement the destructive formatter boundary with a
+7. Only after that proof, implement the destructive formatter boundary with a
    fresh controller authorization and current local fence immediately before
    mutation, a prepared-journal reread, immediate exact-media reobservation,
    path-retarget-safe device access, complete profile verification, and
    interruption recovery.
-7. Then implement persistent mount/systemd projection and runtime-manager
+8. Then implement persistent mount/systemd projection and runtime-manager
    recovery, control storage, the V3 health publisher and V65 receipt, and the
    deactivation producer/executor. Expose the root framework host command and
    SEA only after that lifecycle is proven.
-8. Add SSM as wakeup/delivery rather than durable authority and run a complete
+9. Add SSM as wakeup/delivery rather than durable authority and run a complete
    clean-account proof through the user's ordinary credential chain. Begin
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V96 bounded local release-pruning
-checkpoint](llm/checkpoints/2026-07-27-v96-bounded-local-release-pruning.md).
-Its parent is the [V95 versioned durable-operation receipts
+The latest recorded restart point is the [V97 versioned application-package
+receipt checkpoint](llm/checkpoints/2026-07-27-v97-versioned-application-package-receipt.md).
+Its parent is the [V96 bounded local release-pruning
+checkpoint](llm/checkpoints/2026-07-27-v96-bounded-local-release-pruning.md),
+whose parent is the [V95 versioned durable-operation receipts
 checkpoint](llm/checkpoints/2026-07-27-v95-versioned-durable-operation-receipts.md),
 whose parent is the [V94 owned test-workspace
 checkpoint](llm/checkpoints/2026-07-27-v94-owned-test-workspace.md), whose

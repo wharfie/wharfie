@@ -31,6 +31,14 @@ reserves only `<app> wharfie <command>` for operator commands; internal service
 startup uses a private environment-selected runtime command instead of
 consuming public commands.
 
+Successful `wharfie app package` now emits one strict schema-version 1
+`wharfie.application.package` receipt. It binds the application and revision
+to a target-sorted list of content-addressed SEA identities, byte digests,
+sizes, and immediate local artifact/sidecar paths without exposing the full
+internal revision or provenance records. The receipt and its paths are
+discovery data, not artifact authority; verification still depends on the SEA
+bytes, canonical sidecar, and embedded revision association.
+
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v3

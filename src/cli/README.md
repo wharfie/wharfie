@@ -32,6 +32,24 @@ Failed/blocked/in-progress runs, rejected signals, and unknown-run refusals
 still emit their receipt before exiting nonzero; failures before a durable
 decision or explicit absence emit no JSON document.
 
+Source `wharfie app package` also has a stable machine boundary. Success emits
+exactly one schema-version 1 `wharfie.application.package` JSON receipt, pretty
+by default or compact with `--no-pretty`. It binds the application and revision
+to a canonical target-sorted artifact list containing content identity,
+target, digest, size, and immediate local executable/sidecar paths. It does not
+serialize the complete internal revision or artifact records and does not
+grant deployment authority. The receipt is a projection of the package
+operation's prior final-byte and canonical sidecar/owning-revision record
+association; it is not independent verification, and its paths are local
+discovery conveniences. Packaged and selected-artifact consumer boundaries
+separately verify the executable's embedded revision/runtime metadata.
+
+During packaging, ordinary manifest/build writes and Wharfie-owned build-tool
+output are routed to stderr so stdout remains the receipt. Authored code is
+trusted rather than sandboxed; deliberately writing directly to file
+descriptor 1 or leaving stdout-producing work unawaited violates this command
+contract.
+
 Discover retained durable runs with
 `wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]`
 or packaged

@@ -101,6 +101,14 @@ wharfie ops signal --run-id <run-id> --signal <signal-step-id> \
 wharfie app package ./path/to/app
 ```
 
+The package command writes one schema-version 1
+`wharfie.application.package` JSON receipt. Its target-sorted `artifacts`
+contain the content-addressed identity, exact target, digest, size, and
+immediate local executable and sidecar paths. It omits the full internal
+revision and artifact records. Those paths and the receipt provide local
+discovery, not authority: the executable bytes, canonical sidecar, and embedded
+revision association must still verify together.
+
 The packaged equivalents are `<app> wharfie submit ...`, `<app> wharfie start
 ...`, `<app> wharfie worker`, and `<app> wharfie signal ...`; they are bound to
 the manifest and revision embedded in that artifact and do not accept `--dir`.

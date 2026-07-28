@@ -286,6 +286,38 @@ describe('docs command surface', () => {
     expect(quickstart).not.toContain('<app> wharfie ops start');
   });
 
+  it('documents the versioned local application-package handoff', async () => {
+    const documents = await Promise.all(
+      [
+        'README.md',
+        'docs/README.md',
+        'docs/guides/quickstart.md',
+        'src/cli/README.md',
+        'docs/architecture/decisions/0030-versioned-application-package-receipt.md',
+      ].map((relativePath) =>
+        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ),
+    );
+
+    for (const document of documents) {
+      expect(document).toContain('wharfie.application.package');
+      expect(document).toMatch(/schema-version\s+1/i);
+      expect(document).toMatch(/local\s+discovery|discovery data/i);
+      expect(document).toMatch(
+        /not[\s\S]{0,80}authority|grant no .*authority/i,
+      );
+    }
+
+    const quickstart = documents[2];
+    expect(quickstart).toContain(
+      'wharfie app package ./path/to/app --target linux-x64',
+    );
+    expect(quickstart).toContain('package-receipt.json');
+    expect(quickstart).toContain('receipt.artifactCount');
+    expect(quickstart).toContain('receipt.artifacts[0].path');
+    expect(quickstart).toContain('"$artifact_path" wharfie service converge');
+  });
+
   it('documents the explicit sensitive activity-log disclosure boundary', async () => {
     const documents = await Promise.all(
       [

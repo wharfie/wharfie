@@ -730,11 +730,47 @@ targets: [
 ```
 
 ```bash
-wharfie app package ./path/to/app
+wharfie app package ./path/to/app --target linux-x64 \
+  --no-pretty > package-receipt.json
 ```
 
 Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
+
+Success writes exactly one schema-version 1
+`wharfie.application.package` JSON receipt. Its `artifacts` are sorted by exact
+target and include each content-addressed artifact ID, target, SHA-256 digest,
+byte size, local executable path, and adjacent artifact-record path. The full
+application revision and artifact provenance records remain out of command
+output.
+
+Ordinary manifest/build diagnostics and Wharfie-owned build-tool output go to
+stderr, leaving redirected stdout as only the receipt. App code is trusted and
+not sandboxed; authored code that deliberately writes directly to file
+descriptor 1 or leaves stdout-producing work unawaited violates this command
+contract.
+
+For an immediate handoff on the matching Linux/systemd host where packaging
+ran, select the exact path from the receipt and run the packaged operator:
+
+```bash
+artifact_path="$(
+  node -e "
+    const fs = require('node:fs');
+    const receipt = JSON.parse(fs.readFileSync('package-receipt.json', 'utf8'));
+    if (receipt.artifactCount !== 1) throw new Error('expected one artifact');
+    process.stdout.write(receipt.artifacts[0].path);
+  "
+)"
+"$artifact_path" wharfie service converge
+```
+
+The receipt and absolute paths are local discovery conveniences. They do not
+grant artifact or deployment authority and are not portable between machines.
+Wharfie still verifies the executable bytes, canonical `.artifact.json`
+sidecar, and embedded revision association at the boundaries that consume
+them. Repeating an exact package operation may create or reuse the immutable
+destination; the receipt deliberately makes no `created` or `reused` claim.
 
 ## Try the experimental deployment lifecycle
 

@@ -42,6 +42,10 @@ import {
 import { prepareApplicationRevision } from './compile-application-revision.js';
 import { createArtifactProvenance } from './artifact-provenance.js';
 import { loadApp } from './load-app.js';
+import {
+  getPackageArtifactFileName,
+  getPackageArtifactSafeAppName,
+} from './package-artifact-file-name.js';
 
 /**
  * @typedef JsonPrintOptions
@@ -421,32 +425,6 @@ function toPackageableActorSystem(loaded) {
 }
 
 /**
- * @param {import('../../core/runtime/artifact-record.js').ArtifactRecord} record - Exact artifact record.
- * @param {string} appName - appName.
- * @returns {string} - Result.
- */
-function getArtifactFileName(record, appName) {
-  const safeAppName = getSafeArtifactAppName(appName);
-  const digestHex = Buffer.from(record.byteDigest.value, 'base64url').toString(
-    'hex',
-  );
-  const extension = record.target.platform === 'win32' ? '.exe' : '';
-  return `${safeAppName}-sha256-${digestHex}${extension}`;
-}
-
-/**
- * @param {unknown} appName - Application name.
- * @returns {string} - File-system-safe application name.
- */
-function getSafeArtifactAppName(appName) {
-  return String(appName)
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .toLowerCase();
-}
-
-/**
  * @param {ActorSystem} actorSystem - actorSystem.
  * @returns {SeaBuild[]} - Result.
  */
@@ -517,7 +495,7 @@ function isFileAlreadyExistsError(error) {
 async function acquirePackagePublicationLock(appName, outputDir) {
   const lockPath = path.join(
     outputDir,
-    `.wharfie-${getSafeArtifactAppName(appName)}.publish.lock`,
+    `.wharfie-${getPackageArtifactSafeAppName(appName)}.publish.lock`,
   );
 
   try {
@@ -725,7 +703,11 @@ async function stagePackageArtifacts(options) {
         target,
         provenance,
       });
-      const fileName = getArtifactFileName(record, appName);
+      const fileName = getPackageArtifactFileName({
+        appId: appName,
+        target: record.target,
+        byteDigest: record.byteDigest,
+      });
       if (fileNames.has(fileName)) {
         throw new Error(
           `Multiple builds resolved to artifact file name '${fileName}'.`,

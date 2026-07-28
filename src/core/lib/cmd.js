@@ -34,7 +34,11 @@ async function runCmd(cmd, args, options = {}) {
     /** @type {import('node:child_process').ChildProcess} */
     let proc;
     try {
-      proc = spawn(cmd, args, { stdio: 'inherit' });
+      proc = spawn(cmd, args, {
+        // Build tools are diagnostics. Keep their stdout away from the parent
+        // command's machine-readable stdout protocol.
+        stdio: ['inherit', process.stderr, process.stderr],
+      });
     } catch (err) {
       const errorCode =
         err && typeof err === 'object' && 'code' in err ? ` (${err.code})` : '';

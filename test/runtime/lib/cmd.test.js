@@ -33,6 +33,19 @@ afterEach(() => {
 });
 
 describe('runCmd sensitive argument redaction', () => {
+  it('routes child stdout and stderr to parent stderr', async () => {
+    const { spawn } = await import(CHILD_PROCESS_IMPORT);
+    const { runCmd } = await import(CMD_IMPORT);
+    const result = runCmd('build-tool', ['--diagnostic']);
+
+    child.emit('exit', 0, null);
+
+    await expect(result).resolves.toBeUndefined();
+    expect(spawn).toHaveBeenCalledWith('build-tool', ['--diagnostic'], {
+      stdio: ['inherit', process.stderr, process.stderr],
+    });
+  });
+
   it('redacts marked arguments from nonzero-exit diagnostics', async () => {
     const { runCmd } = await import(CMD_IMPORT);
     const secret = 'credential-password-sentinel';

@@ -10,6 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { packageLocalApp } from '../../../src/cli/app/local-app.js';
+import { createApplicationPackageReceipt } from '../../../src/cli/app/package-command-receipt.js';
+import { createPackageCommand } from '../../../src/cli/cmds/app_cmds/package.js';
 import {
   APP_MANIFEST_ASSET_NAME,
   APP_MANIFEST_ASSET_PREFIX,
@@ -93,8 +95,14 @@ function getTargetSelector(target) {
  * @param {string} dir - App directory.
  * @param {string} appName - App name.
  * @param {{ nodeVersion: string, platform: string, architecture: string, libc?: string }[]} targets - Build targets.
+ * @param {string} [modulePreamble] - Optional authored module preamble.
  */
-async function writeTransactionalPackageApp(dir, appName, targets) {
+async function writeTransactionalPackageApp(
+  dir,
+  appName,
+  targets,
+  modulePreamble = '',
+) {
   const canonicalTargets = targets.map((target) =>
     target.platform === 'linux' && !target.libc
       ? { ...target, libc: 'glibc' }
@@ -114,7 +122,7 @@ async function writeTransactionalPackageApp(dir, appName, targets) {
     ),
     fsp.writeFile(
       path.join(dir, 'wharfie.app.js'),
-      `export default {
+      `${modulePreamble}export default {
   schemaVersion: 3,
   app: { id: ${JSON.stringify(appName)} },
   cli: {
@@ -126,6 +134,30 @@ async function writeTransactionalPackageApp(dir, appName, targets) {
       'utf8',
     ),
   ]);
+}
+
+/**
+ * @param {string[]} chunks - Captured UTF-8 output.
+ * @returns {typeof process.stdout.write} - Stream write replacement.
+ */
+function captureStreamWrites(chunks) {
+  return /** @type {typeof process.stdout.write} */ (
+    function write(chunk, encoding, callback) {
+      const resolvedEncoding =
+        typeof encoding === 'string' && Buffer.isEncoding(encoding)
+          ? encoding
+          : undefined;
+      chunks.push(
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.from(chunk).toString(resolvedEncoding),
+      );
+      const resolvedCallback =
+        typeof encoding === 'function' ? encoding : callback;
+      if (typeof resolvedCallback === 'function') resolvedCallback();
+      return true;
+    }
+  );
 }
 
 /**
@@ -330,6 +362,88 @@ afterEach(() => {
 });
 
 describe('packageLocalApp', () => {
+  it('reserves command stdout for one receipt while authored setup writes diagnostics', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-package-command-stdout-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+    const sentinel = 'authored-package-stdout-sentinel';
+    /** @type {string[]} */
+    const stdoutChunks = [];
+    /** @type {string[]} */
+    const stderrChunks = [];
+    const previousExitCode = process.exitCode;
+
+    try {
+      await writeTransactionalPackageApp(
+        dir,
+        'package-stdout-demo',
+        [currentTarget],
+        `process.stdout.write(${JSON.stringify(`${sentinel}\n`)});\n`,
+      );
+      jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+        /** @this {ActorSystem} */ async function () {
+          const buildDir = path.join(dir, '.fake-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
+
+          for (const resource of this.getResources()) {
+            if (!(resource instanceof SeaBuild)) continue;
+            const target = {
+              nodeVersion: String(resource.get('nodeVersion')),
+              platform: String(resource.get('platform')),
+              architecture: String(resource.get('architecture')),
+              ...(resource.has('libc')
+                ? { libc: String(resource.get('libc')) }
+                : {}),
+            };
+            const binaryPath = path.join(
+              buildDir,
+              `stdout-${getTargetSelector(target)}`,
+            );
+            await fsp.writeFile(binaryPath, 'package command bytes', 'utf8');
+            resource._setUNSAFE('binaryPath', binaryPath);
+          }
+        },
+      );
+      const stdoutWrite = jest
+        .spyOn(process.stdout, 'write')
+        .mockImplementation(captureStreamWrites(stdoutChunks));
+      const stderrWrite = jest
+        .spyOn(process.stderr, 'write')
+        .mockImplementation(
+          /** @type {typeof process.stderr.write} */ (
+            captureStreamWrites(stderrChunks)
+          ),
+        );
+      process.exitCode = undefined;
+
+      try {
+        await createPackageCommand().parseAsync(
+          [dir, '--output-dir', outputDir, '--no-pretty'],
+          { from: 'user' },
+        );
+      } finally {
+        stdoutWrite.mockRestore();
+        stderrWrite.mockRestore();
+      }
+
+      expect(process.exitCode).toBeUndefined();
+      expect(stdoutChunks).toHaveLength(1);
+      expect(stdoutChunks[0]).not.toContain(sentinel);
+      expect(JSON.parse(stdoutChunks[0])).toMatchObject({
+        schemaVersion: 1,
+        kind: 'wharfie.application.package',
+        appId: 'package-stdout-demo',
+        outputDir,
+        artifactCount: 1,
+      });
+      expect(stderrChunks.join('')).toContain(sentinel);
+    } finally {
+      process.exitCode = previousExitCode;
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects computed transitive module specifiers before packaging', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-computed-module-package-'),
@@ -672,6 +786,25 @@ describe('packageLocalApp', () => {
           size: result.artifacts[0].size,
         }),
       );
+      expect(createApplicationPackageReceipt(result)).toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.application.package',
+        appId: 'plain-object-package-demo',
+        revisionId: result.revision.revisionId,
+        outputDir,
+        artifactCount: 1,
+        artifacts: [
+          {
+            artifactId: result.artifacts[0].artifactId,
+            target: currentTarget,
+            fileName: result.artifacts[0].fileName,
+            path: result.artifacts[0].path,
+            recordPath: result.artifacts[0].recordPath,
+            byteDigest: result.artifacts[0].byteDigest,
+            size: result.artifacts[0].size,
+          },
+        ],
+      });
       expect(existsSync(result.artifacts[0].path)).toBe(true);
       expect(existsSync(result.artifacts[0].recordPath)).toBe(true);
       await expect(
