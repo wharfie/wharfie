@@ -4,8 +4,10 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { createProgram } from '../../src/core/resources/builds/actor-system-cli/index.js';
-import sourceOpsCommand from '../../src/cli/cmds/ops.js';
+import { createSourceOpsCommand } from '../../src/cli/cmds/ops.js';
 import { createSystemdUserServiceCommand } from '../../src/core/runtime/operator/systemd-user-service-command.js';
+
+const sourceOpsCommand = createSourceOpsCommand();
 
 /** @typedef {'install'|'converge'|'update'|'rollback'|'recover'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
 

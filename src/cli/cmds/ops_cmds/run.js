@@ -11,14 +11,18 @@ import {
 
 export { createForegroundCancellation };
 
-const runCommand = createDurableRunCommand({
-  includeDirOption: true,
-  output: {
-    info: displayInfo,
-    success: displaySuccess,
-    failure: displayFailure,
-  },
-  loadExecution: loadPreparedDurableExecution,
-});
-
-export default runCommand;
+/**
+ * Build one source durable-run command with source preparation and CLI output.
+ * @returns {import('commander').Command} - Fresh source durable-run command.
+ */
+export function createSourceDurableRunCommand() {
+  return createDurableRunCommand({
+    includeDirOption: true,
+    output: {
+      info: displayInfo,
+      success: displaySuccess,
+      failure: displayFailure,
+    },
+    loadExecution: loadPreparedDurableExecution,
+  });
+}

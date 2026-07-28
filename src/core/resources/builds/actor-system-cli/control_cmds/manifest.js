@@ -31,26 +31,31 @@ export async function printEmbeddedManifest(options, io = {}) {
   write(`${output}\n`);
 }
 
-const manifestCmd = new Command('manifest')
-  .description('Print the packaged Wharfie app manifest for this artifact')
-  .option(
-    '--manifest-file <path>',
-    'JSON file containing the packaged app manifest',
-  )
-  .option('--manifest <json>', 'Inline JSON packaged app manifest')
-  .option('--json', 'Output JSON (default)')
-  .option('--no-pretty', 'Disable pretty JSON output')
-  .action(async (options) => {
-    try {
-      await printEmbeddedManifest(options);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : String(error || 'Unknown error');
-      process.stderr.write(`${message}\n`);
-      process.exitCode = 1;
-    }
-  });
-
-export default manifestCmd;
+/**
+ * Build one packaged manifest command. A fresh command is required for each
+ * packaged operator program because Commander mutates a leaf's parent.
+ * @returns {Command} - Fresh packaged manifest command.
+ */
+export function createPackagedManifestCommand() {
+  return new Command('manifest')
+    .description('Print the packaged Wharfie app manifest for this artifact')
+    .option(
+      '--manifest-file <path>',
+      'JSON file containing the packaged app manifest',
+    )
+    .option('--manifest <json>', 'Inline JSON packaged app manifest')
+    .option('--json', 'Output JSON (default)')
+    .option('--no-pretty', 'Disable pretty JSON output')
+    .action(async (options) => {
+      try {
+        await printEmbeddedManifest(options);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error || 'Unknown error');
+        process.stderr.write(`${message}\n`);
+        process.exitCode = 1;
+      }
+    });
+}

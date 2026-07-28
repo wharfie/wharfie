@@ -8,5 +8,3 @@ import { createExecutionLedgerActivityLogCommand } from '../../../core/runtime/o
 export function createSourceExecutionLedgerActivityLogCommand() {
   return createExecutionLedgerActivityLogCommand({ allowAppId: true });
 }
-
-export default createSourceExecutionLedgerActivityLogCommand();

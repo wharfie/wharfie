@@ -4,8 +4,8 @@ import { createExecutionLedgerActivityLogCommand } from '../../../runtime/operat
 import { createExecutionLedgerHistoryCommand } from '../../../runtime/operator/execution-ledger-history-command.js';
 import { createExecutionLedgerOperatorCommands } from '../../../runtime/operator/execution-ledger-operator.js';
 import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.js';
-import manifestCommand from './control_cmds/manifest.js';
-import metadataCommand from './control_cmds/metadata.js';
+import { createPackagedManifestCommand } from './control_cmds/manifest.js';
+import { createPackagedMetadataCommand } from './control_cmds/metadata.js';
 import { createPackagedDeploymentCommand } from './control_cmds/deployment.js';
 import { createPackagedDurableRunCommand } from './control_cmds/run.js';
 import { createPackagedSystemdUserServiceCommand } from './control_cmds/service.js';
@@ -140,8 +140,8 @@ export function createProgram(options = {}) {
   const program = new Command()
     .name('wharfie')
     .description('Wharfie operator commands for this packaged application')
-    .addCommand(manifestCommand)
-    .addCommand(metadataCommand)
+    .addCommand(createPackagedManifestCommand())
+    .addCommand(createPackagedMetadataCommand())
     .addCommand(runCommand)
     .addCommand(startCommand)
     .addCommand(submitCommand)

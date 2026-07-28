@@ -1,37 +1,42 @@
 import { Command } from 'commander';
 
 import { createExecutionLedgerOperatorCommands } from '../../core/runtime/operator/execution-ledger-operator.js';
-import listCommand from './ops_cmds/list.js';
-import logsCommand from './ops_cmds/logs.js';
-import runCommand from './ops_cmds/run.js';
-import signalCommand from './ops_cmds/signal.js';
-import startCommand from './ops_cmds/start.js';
-import submitCommand from './ops_cmds/submit.js';
-import workerCommand from './ops_cmds/worker.js';
+import { createSourceExecutionLedgerHistoryCommand } from './ops_cmds/list.js';
+import { createSourceExecutionLedgerActivityLogCommand } from './ops_cmds/logs.js';
+import { createSourceDurableRunCommand } from './ops_cmds/run.js';
+import { createSourceDurableWorkflowSignalCommand } from './ops_cmds/signal.js';
+import { createSourceDurableWorkflowStartCommand } from './ops_cmds/start.js';
+import { createSourceDurableSubmitCommand } from './ops_cmds/submit.js';
+import { createSourceDurableWorkerCommand } from './ops_cmds/worker.js';
 
-const {
-  inspectCommand,
-  recoverCommand,
-  reconcileCommand,
-  reconcileEffectCommand,
-  retryEffectCommand,
-  cancelCommand,
-} = createExecutionLedgerOperatorCommands();
+/**
+ * Build one source durable-operations command group. Every invocation creates
+ * new leaves because Commander reparents mutable command instances.
+ * @returns {Command} - Fresh source operations command tree.
+ */
+export function createSourceOpsCommand() {
+  const {
+    inspectCommand,
+    recoverCommand,
+    reconcileCommand,
+    reconcileEffectCommand,
+    retryEffectCommand,
+    cancelCommand,
+  } = createExecutionLedgerOperatorCommands();
 
-const opsCommand = new Command('ops')
-  .description('Durable execution-ledger operator commands')
-  .addCommand(listCommand)
-  .addCommand(logsCommand)
-  .addCommand(inspectCommand)
-  .addCommand(recoverCommand)
-  .addCommand(reconcileCommand)
-  .addCommand(reconcileEffectCommand)
-  .addCommand(retryEffectCommand)
-  .addCommand(cancelCommand)
-  .addCommand(signalCommand)
-  .addCommand(runCommand)
-  .addCommand(startCommand)
-  .addCommand(submitCommand)
-  .addCommand(workerCommand);
-
-export default opsCommand;
+  return new Command('ops')
+    .description('Durable execution-ledger operator commands')
+    .addCommand(createSourceExecutionLedgerHistoryCommand())
+    .addCommand(createSourceExecutionLedgerActivityLogCommand())
+    .addCommand(inspectCommand)
+    .addCommand(recoverCommand)
+    .addCommand(reconcileCommand)
+    .addCommand(reconcileEffectCommand)
+    .addCommand(retryEffectCommand)
+    .addCommand(cancelCommand)
+    .addCommand(createSourceDurableWorkflowSignalCommand())
+    .addCommand(createSourceDurableRunCommand())
+    .addCommand(createSourceDurableWorkflowStartCommand())
+    .addCommand(createSourceDurableSubmitCommand())
+    .addCommand(createSourceDurableWorkerCommand());
+}

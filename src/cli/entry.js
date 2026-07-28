@@ -3,8 +3,8 @@ import { Command } from 'commander';
 import paths from '../core/lib/paths.js';
 import { WHARFIE_VERSION } from '../core/lib/version.js';
 
-import opsCommand from './cmds/ops.js';
-import appCommand from './cmds/app.js';
+import { createSourceOpsCommand } from './cmds/ops.js';
+import { createSourceAppCommand } from './cmds/app.js';
 import { createSourceDeploymentCommand } from './cmds/deployment.js';
 
 /**
@@ -27,8 +27,8 @@ export function createProgram(options = {}) {
     .description('CLI tool for Wharfie')
     .version(WHARFIE_VERSION);
 
-  program.addCommand(appCommand);
-  program.addCommand(opsCommand);
+  program.addCommand(createSourceAppCommand());
+  program.addCommand(createSourceOpsCommand());
   program.addCommand(createSourceDeploymentCommand());
 
   program.hook('preAction', async () => {

@@ -42,23 +42,28 @@ export async function printEmbeddedMetadata(options, io = {}) {
   write(`${output}\n`);
 }
 
-const metadataCmd = new Command('metadata')
-  .description(
-    'Print the packaged revision, runtime target, and exact artifact-byte identity',
-  )
-  .option('--json', 'Output JSON (default)')
-  .option('--no-pretty', 'Disable pretty JSON output')
-  .action(async (options) => {
-    try {
-      await printEmbeddedMetadata(options);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : String(error || 'Unknown error');
-      process.stderr.write(`${message}\n`);
-      process.exitCode = 1;
-    }
-  });
-
-export default metadataCmd;
+/**
+ * Build one packaged metadata command. The returned Commander leaf is owned by
+ * exactly one packaged program.
+ * @returns {Command} - Fresh packaged metadata command.
+ */
+export function createPackagedMetadataCommand() {
+  return new Command('metadata')
+    .description(
+      'Print the packaged revision, runtime target, and exact artifact-byte identity',
+    )
+    .option('--json', 'Output JSON (default)')
+    .option('--no-pretty', 'Disable pretty JSON output')
+    .action(async (options) => {
+      try {
+        await printEmbeddedMetadata(options);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error || 'Unknown error');
+        process.stderr.write(`${message}\n`);
+        process.exitCode = 1;
+      }
+    });
+}

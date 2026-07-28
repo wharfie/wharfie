@@ -5,7 +5,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
-import sourceOps from '../../src/cli/cmds/ops.js';
+import { createSourceOpsCommand } from '../../src/cli/cmds/ops.js';
 import { createProgram as createPackagedOperatorProgram } from '../../src/core/resources/builds/actor-system-cli/index.js';
 import { createPackagedDurableSubmitCommand } from '../../src/core/resources/builds/actor-system-cli/control_cmds/submit.js';
 import { createPackagedDurableWorkerCommand } from '../../src/core/resources/builds/actor-system-cli/control_cmds/worker.js';
@@ -22,6 +22,8 @@ import {
   createApplicationRevision,
 } from '../../src/core/runtime/application-revision.js';
 import { createManualLedgerRunId } from '../../src/core/runtime/manual-ledger-run.js';
+
+const sourceOps = createSourceOpsCommand();
 
 const TARGET = Object.freeze({
   nodeVersion: '24.13.1',

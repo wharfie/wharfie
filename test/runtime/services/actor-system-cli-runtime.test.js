@@ -22,6 +22,28 @@ function clearRuntimeEnvironment() {
   delete process.env.WHARFIE_RUNTIME_ARGS;
 }
 
+/**
+ * @param {import('commander').Command} root - Command-tree root.
+ * @returns {import('commander').Command[]} - Root and every descendant.
+ */
+function collectCommandTree(root) {
+  return [
+    root,
+    ...root.commands.flatMap((command) => collectCommandTree(command)),
+  ];
+}
+
+/**
+ * @param {import('commander').Command} root - Command-tree root.
+ * @returns {void}
+ */
+function expectExactCommandParents(root) {
+  for (const child of root.commands) {
+    expect(child.parent).toBe(root);
+    expectExactCommandParents(child);
+  }
+}
+
 afterEach(() => {
   process.argv = originalArgv;
   process.env = { ...originalEnvironment };
@@ -116,6 +138,53 @@ describe('packaged application dispatch', () => {
     ).toHaveLength(1);
   });
 
+  it('owns one fresh complete command tree in every packaged program', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const first = createProgram();
+    const second = createProgram();
+    const firstTree = collectCommandTree(first);
+    const firstCommands = new Set(firstTree);
+    const secondTree = collectCommandTree(second);
+    const firstManifest = first.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'manifest',
+    );
+    const secondManifest = second.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'manifest',
+    );
+    const firstMetadata = first.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'metadata',
+    );
+    const secondMetadata = second.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'metadata',
+    );
+
+    expect(firstManifest).toBeDefined();
+    expect(firstMetadata).toBeDefined();
+    expect(secondTree.map((command) => command.name())).toEqual(
+      firstTree.map((command) => command.name()),
+    );
+    expect(secondTree.every((command) => !firstCommands.has(command))).toBe(
+      true,
+    );
+    expectExactCommandParents(first);
+    expectExactCommandParents(second);
+    expect(secondManifest).not.toBe(firstManifest);
+    expect(secondMetadata).not.toBe(firstMetadata);
+    expect(firstManifest?.parent).toBe(first);
+    expect(firstMetadata?.parent).toBe(first);
+    expect(secondManifest?.parent).toBe(second);
+    expect(secondMetadata?.parent).toBe(second);
+
+    firstManifest?.description('first-program-only manifest');
+    expect(secondManifest?.description()).toBe(
+      'Print the packaged Wharfie app manifest for this artifact',
+    );
+  });
+
   it('forwards the packaged process seam to deployment command failures', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
     const processRef = { exitCode: undefined };
@@ -143,7 +212,8 @@ describe('packaged application dispatch', () => {
 
   it('mounts the same public retry-effect command in source and packaged parents', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
     const packaged = createProgram();
     const sourceRetry = sourceOps.commands.find(
       /** @param {import('commander').Command} command */
@@ -174,7 +244,8 @@ describe('packaged application dispatch', () => {
 
   it('mounts app-scoped run history with only the source directory option', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
     const packaged = createProgram();
     const sourceList = sourceOps.commands.find(
       /** @param {import('commander').Command} command */
@@ -214,7 +285,8 @@ describe('packaged application dispatch', () => {
 
   it('mounts the shared sensitive-log command with only the source application override', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
     const packaged = createProgram();
     const sourceLogs = sourceOps.commands.find(
       /** @param {import('commander').Command} command */
@@ -300,7 +372,8 @@ describe('packaged application dispatch', () => {
 
   it('mounts the flat public workflow-start command with the expected source-only directory option', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
     const packaged = createProgram();
     const sourceStart = sourceOps.commands.find(
       /** @param {import('commander').Command} command */

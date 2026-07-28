@@ -106,5 +106,3 @@ export function createPackageCommand(dependencies = {}) {
       }
     });
 }
-
-export default createPackageCommand();

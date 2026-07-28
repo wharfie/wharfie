@@ -21,20 +21,25 @@ async function printManifest(dir, options) {
   process.stdout.write(`${output}\n`);
 }
 
-const manifestCommand = new Command('manifest')
-  .description(
-    'Print the public manifest from wharfie.app.js or this SEA artifact',
-  )
-  .argument('[dir]', 'Directory containing wharfie.app.js (default: cwd)')
-  .option('--json', 'Output JSON (default)')
-  .option('--no-pretty', 'Disable pretty JSON output')
-  .action(async (dir, options) => {
-    try {
-      await printManifest(dir, options);
-    } catch (err) {
-      displayFailure(err);
-      process.exitCode = 1;
-    }
-  });
-
-export default manifestCommand;
+/**
+ * Build one source application-manifest command. Commander commands retain
+ * mutable parent and parse state, so every program tree must own a fresh leaf.
+ * @returns {Command} - Fresh manifest command.
+ */
+export function createSourceAppManifestCommand() {
+  return new Command('manifest')
+    .description(
+      'Print the public manifest from wharfie.app.js or this SEA artifact',
+    )
+    .argument('[dir]', 'Directory containing wharfie.app.js (default: cwd)')
+    .option('--json', 'Output JSON (default)')
+    .option('--no-pretty', 'Disable pretty JSON output')
+    .action(async (dir, options) => {
+      try {
+        await printManifest(dir, options);
+      } catch (err) {
+        displayFailure(err);
+        process.exitCode = 1;
+      }
+    });
+}

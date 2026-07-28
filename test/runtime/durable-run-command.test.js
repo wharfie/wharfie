@@ -5,8 +5,9 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
-import sourceRunCommand, {
+import {
   createForegroundCancellation as createSourceForegroundCancellation,
+  createSourceDurableRunCommand,
 } from '../../src/cli/cmds/ops_cmds/run.js';
 import {
   ARTIFACT_RUNTIME_KIND,
@@ -25,6 +26,8 @@ import {
   createForegroundCancellation,
 } from '../../src/core/runtime/operator/durable-run-command.js';
 import { createManualLedgerRunId } from '../../src/core/runtime/manual-ledger-run.js';
+
+const sourceRunCommand = createSourceDurableRunCommand();
 
 const TARGET = Object.freeze({
   nodeVersion: '24.13.1',

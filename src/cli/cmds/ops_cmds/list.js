@@ -20,5 +20,3 @@ export function createSourceExecutionLedgerHistoryCommand(options = {}) {
     },
   });
 }
-
-export default createSourceExecutionLedgerHistoryCommand();

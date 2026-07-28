@@ -3,7 +3,7 @@
 
 import { describe, expect, it, jest } from '@jest/globals';
 
-import sourceOpsCommand from '../../src/cli/cmds/ops.js';
+import { createSourceOpsCommand } from '../../src/cli/cmds/ops.js';
 import { createWorkflowRunId } from '../../src/core/lib/ledger/workflow-execution-contract.js';
 import { createProgram as createPackagedOperatorProgram } from '../../src/core/resources/builds/actor-system-cli/index.js';
 import {
@@ -22,6 +22,7 @@ const RUN_ID = createWorkflowRunId({
 });
 const SIGNAL_ID = 'approval';
 const DELIVERY_ID = 'delivery-1';
+const sourceOpsCommand = createSourceOpsCommand();
 
 function outputHarness() {
   return {

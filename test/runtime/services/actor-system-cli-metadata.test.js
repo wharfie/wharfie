@@ -20,7 +20,8 @@ import {
   APPLICATION_REVISION_ASSET_NAME,
   ARTIFACT_RUNTIME_ASSET_NAME,
 } from '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
-import metadataCommand, {
+import {
+  createPackagedMetadataCommand,
   printEmbeddedMetadata,
 } from '../../../src/core/resources/builds/actor-system-cli/control_cmds/metadata.js';
 
@@ -259,6 +260,7 @@ describe('embedded operator metadata command', () => {
 
     expect(pretty).toContain('\n  "artifact"');
     expect(compact.slice(0, -1)).not.toContain('\n');
+    const metadataCommand = createPackagedMetadataCommand();
     expect(metadataCommand.options.map((option) => option.long)).toEqual([
       '--json',
       '--no-pretty',

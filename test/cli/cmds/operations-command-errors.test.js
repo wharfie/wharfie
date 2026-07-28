@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createExecutionLedgerOperatorCommands } from '../../../src/core/runtime/operator/execution-ledger-operator.js';
-import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
+import { createSourceDurableRunCommand } from '../../../src/cli/cmds/ops_cmds/run.js';
 import {
   cleanupIsolatedAuthoredAppFixtures,
   createIsolatedAuthoredAppFixture,
@@ -16,6 +16,7 @@ import {
 
 const { inspectCommand, recoverCommand, reconcileCommand, cancelCommand } =
   createExecutionLedgerOperatorCommands();
+const runCommand = createSourceDurableRunCommand();
 
 const ORIGINAL_ENV = process.env;
 /** @type {string[]} */

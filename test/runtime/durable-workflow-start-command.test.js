@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import sourceOpsCommand from '../../src/cli/cmds/ops.js';
+import { createSourceOpsCommand } from '../../src/cli/cmds/ops.js';
 import { createProgram as createPackagedOperatorProgram } from '../../src/core/resources/builds/actor-system-cli/index.js';
 import { createPackagedDurableWorkflowStartCommand } from '../../src/core/resources/builds/actor-system-cli/control_cmds/start.js';
 import {
@@ -27,6 +27,8 @@ import {
   createApplicationRevision,
 } from '../../src/core/runtime/application-revision.js';
 import { createDurableWorkflowStartCommand } from '../../src/core/runtime/operator/durable-workflow-start-command.js';
+
+const sourceOpsCommand = createSourceOpsCommand();
 
 /** @typedef {import('../../src/core/runtime/durable-activity-host.js').ManifestActivityExecution} ManifestActivityExecution */
 /** @typedef {Extract<ManifestActivityExecution, {kind: 'embedded'}>} EmbeddedExecution */
