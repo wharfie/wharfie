@@ -12,6 +12,7 @@ import { createExecutionLedger } from '../../../src/core/lib/db/tables/execution
 import {
   LocalApplicationActivationAction,
   LocalApplicationActivationDestination,
+  LocalApplicationActivationPhase,
   LocalApplicationAdmissionClosedError,
   createLocalApplicationActivation,
 } from '../../../src/core/lib/db/tables/local-application-activation.js';
@@ -161,6 +162,22 @@ async function releaseResident(ownershipStore, ownership) {
  * @param {string} revisionId
  */
 async function activateManagedRevision(activation, revisionId) {
+  const transitionId = await prepareManagedRevisionActivation(
+    activation,
+    revisionId,
+  );
+  await activation.completeActivation({
+    appId: APP_ID,
+    transitionId,
+    observedAt: 5,
+  });
+}
+
+/**
+ * @param {ReturnType<typeof createLocalApplicationActivation>} activation
+ * @param {string} revisionId
+ */
+async function prepareManagedRevisionActivation(activation, revisionId) {
   const begun = await activation.beginInstall({
     appId: APP_ID,
     target: { artifactId: ARTIFACT_A, revisionId },
@@ -183,11 +200,7 @@ async function activateManagedRevision(activation, revisionId) {
     transitionId,
     observedAt: 4,
   });
-  await activation.completeActivation({
-    appId: APP_ID,
-    transitionId,
-    observedAt: 5,
-  });
+  return transitionId;
 }
 
 /** @param {string} value */
@@ -687,6 +700,7 @@ describe('resident schedule observer', () => {
     const observer = createResidentScheduleObserver({
       ledger: harness.ledger,
       execution,
+      artifactId: ARTIFACT_A,
       controlContext: harness.controlContext,
       ownership,
     });
@@ -783,6 +797,213 @@ describe('resident schedule observer', () => {
       advanced: 0,
     });
     expect(readyCount).toBe(1);
+  });
+
+  test('becomes ready while managed activation safely defers schedule work', async () => {
+    const harness = createHarness();
+    const ownership = await claimResident(harness.ownershipStore);
+    const { execution } = createExecutionContext();
+    const revisionId = execution.embeddedRevision.revision.revisionId;
+    const transitionId = await prepareManagedRevisionActivation(
+      harness.activation,
+      revisionId,
+    );
+    const controller = new AbortController();
+    let readyCount = 0;
+    let waitCount = 0;
+
+    await expect(
+      runResidentScheduleObserver({
+        ledger: harness.ledger,
+        execution,
+        artifactId: ARTIFACT_A,
+        controlContext: harness.controlContext,
+        ownership,
+        signal: controller.signal,
+        now: () => ACTIVATION_AT,
+        wait: async () => {
+          waitCount += 1;
+          if (waitCount === 1) {
+            await harness.activation.completeActivation({
+              appId: APP_ID,
+              transitionId,
+              observedAt: ACTIVATION_AT + 1,
+            });
+          } else {
+            controller.abort();
+          }
+        },
+        onReady: async () => {
+          readyCount += 1;
+          await expect(
+            harness.activation.get({ appId: APP_ID }),
+          ).resolves.toMatchObject({
+            phase: LocalApplicationActivationPhase.ACTIVATING,
+          });
+          await expect(
+            harness.scheduleControl.getCursor({
+              appId: APP_ID,
+              scheduleId: SCHEDULE_ID,
+            }),
+          ).resolves.toBeNull();
+        },
+      }),
+    ).resolves.toEqual({
+      observations: 2,
+      admitted: 0,
+      replayed: 0,
+      advanced: 0,
+    });
+    expect(readyCount).toBe(1);
+    await expect(
+      harness.scheduleControl.getCursor({
+        appId: APP_ID,
+        scheduleId: SCHEDULE_ID,
+      }),
+    ).resolves.toMatchObject({
+      revisionId,
+      horizon: 2 * MINUTE,
+      version: 1,
+    });
+  });
+
+  test('recovers a draining source while schedule work remains deferred', async () => {
+    const harness = createHarness();
+    const ownership = await claimResident(harness.ownershipStore);
+    const { execution } = createExecutionContext();
+    const revisionId = execution.embeddedRevision.revision.revisionId;
+    await activateManagedRevision(harness.activation, revisionId);
+    const begun = await harness.activation.beginChange({
+      appId: APP_ID,
+      action: LocalApplicationActivationAction.UPDATE,
+      source: { artifactId: ARTIFACT_A, revisionId },
+      target: { artifactId: ARTIFACT_B, revisionId: REVISION_B },
+      observedAt: ACTIVATION_AT,
+    });
+    const transitionId = begun.activation.transition.transitionId;
+    const controller = new AbortController();
+    let readyCount = 0;
+    let waitCount = 0;
+
+    await expect(
+      runResidentScheduleObserver({
+        ledger: harness.ledger,
+        execution,
+        artifactId: ARTIFACT_A,
+        controlContext: harness.controlContext,
+        ownership,
+        signal: controller.signal,
+        now: () => ACTIVATION_AT,
+        wait: async () => {
+          waitCount += 1;
+          if (waitCount === 1) {
+            await harness.activation.abortChange({
+              appId: APP_ID,
+              transitionId,
+              observedAt: ACTIVATION_AT + 1,
+            });
+          } else {
+            controller.abort();
+          }
+        },
+        onReady: async () => {
+          readyCount += 1;
+          await expect(
+            harness.activation.get({ appId: APP_ID }),
+          ).resolves.toMatchObject({
+            phase: LocalApplicationActivationPhase.QUIESCING,
+          });
+          await expect(
+            harness.scheduleControl.getCursor({
+              appId: APP_ID,
+              scheduleId: SCHEDULE_ID,
+            }),
+          ).resolves.toBeNull();
+        },
+      }),
+    ).resolves.toEqual({
+      observations: 2,
+      admitted: 0,
+      replayed: 0,
+      advanced: 0,
+    });
+    expect(readyCount).toBe(1);
+    await expect(
+      harness.scheduleControl.getCursor({
+        appId: APP_ID,
+        scheduleId: SCHEDULE_ID,
+      }),
+    ).resolves.toMatchObject({
+      revisionId,
+      horizon: 2 * MINUTE,
+      version: 1,
+    });
+  });
+
+  test('refuses readiness for the wrong artifact at the same managed revision', async () => {
+    const harness = createHarness();
+    const ownership = await claimResident(harness.ownershipStore);
+    const { execution } = createExecutionContext();
+    const revisionId = execution.embeddedRevision.revision.revisionId;
+    await prepareManagedRevisionActivation(harness.activation, revisionId);
+    const controller = new AbortController();
+    let readyCount = 0;
+
+    await expect(
+      runResidentScheduleObserver({
+        ledger: harness.ledger,
+        execution,
+        artifactId: ARTIFACT_B,
+        controlContext: harness.controlContext,
+        ownership,
+        signal: controller.signal,
+        now: () => ACTIVATION_AT,
+        wait: () => controller.abort(),
+        onReady: () => {
+          readyCount += 1;
+        },
+      }),
+    ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+    expect(readyCount).toBe(0);
+    await expect(
+      harness.scheduleControl.getCursor({
+        appId: APP_ID,
+        scheduleId: SCHEDULE_ID,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  test('verifies prepared source before deferred managed readiness', async () => {
+    const harness = createHarness();
+    const ownership = await claimResident(harness.ownershipStore);
+    const { execution } = createExecutionContext();
+    const revisionId = execution.embeddedRevision.revision.revisionId;
+    await prepareManagedRevisionActivation(harness.activation, revisionId);
+    const controller = new AbortController();
+    const sourceChanged = new Error('prepared source changed before readiness');
+    let readyCount = 0;
+    let verificationCount = 0;
+
+    await expect(
+      runResidentScheduleObserver({
+        ledger: harness.ledger,
+        execution: createPreparedExecution(execution, async () => {
+          verificationCount += 1;
+          throw sourceChanged;
+        }),
+        artifactId: ARTIFACT_A,
+        controlContext: harness.controlContext,
+        ownership,
+        signal: controller.signal,
+        now: () => ACTIVATION_AT,
+        wait: () => controller.abort(),
+        onReady: () => {
+          readyCount += 1;
+        },
+      }),
+    ).rejects.toBe(sourceChanged);
+    expect(verificationCount).toBe(1);
+    expect(readyCount).toBe(0);
   });
 
   test('verifies a prepared source before activation and every changing minute', async () => {

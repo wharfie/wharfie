@@ -82,6 +82,7 @@ const WORKFLOW_STEP_ID = 'greet-step';
 const WORKFLOW_ACTIVITY_ID = 'greet';
 const WORKFLOW_INVOCATION_ID = 'workflow-invocation-1';
 const WORKFLOW_CONTINUATION_ID = 'workflow-continuation-1';
+const ARTIFACT_ID = `waf1_${'A'.repeat(43)}`;
 const TEST_SCHEDULE_OBSERVER_SUMMARY = Object.freeze({
   observations: 0,
   admitted: 0,
@@ -2487,6 +2488,7 @@ describe('resident activity worker', () => {
     const running = runResidentActivityWorker({
       ledger: asExecutionLedger(ledger),
       execution,
+      artifactId: ARTIFACT_ID,
       controlContext: harness.controlContext,
       owner: harness.owner,
       signal: controller.signal,
@@ -2526,6 +2528,9 @@ describe('resident activity worker', () => {
 
     await expect(running).resolves.toEqual({ processed: 0 });
     expect(runScheduleObserver).toHaveBeenCalledTimes(1);
+    expect(runScheduleObserver).toHaveBeenCalledWith(
+      expect.objectContaining({ artifactId: ARTIFACT_ID }),
+    );
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(harness.close).toHaveBeenCalledTimes(1);
   });

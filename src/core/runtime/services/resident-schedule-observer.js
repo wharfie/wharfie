@@ -8,7 +8,11 @@ import {
   createLedgerServiceId,
   createLedgerServiceOwnership,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
-import { getLocalApplicationRunCreationFence } from '../../lib/db/tables/local-application-activation.js';
+import {
+  LocalApplicationAdmissionClosedError,
+  getLocalApplicationRunCreationFence,
+  getLocalApplicationServiceStartFence,
+} from '../../lib/db/tables/local-application-activation.js';
 import { createScheduleControl } from '../../lib/db/tables/schedule-control.js';
 import {
   createScheduleDefinitionId,
@@ -21,6 +25,7 @@ import {
 } from '../../lib/ledger/workflow-execution-contract.js';
 import { resolveManifestActivityExecutionBinding } from '../app-runs.js';
 import { assertApplicationRevisionId } from '../application-revision.js';
+import { assertArtifactId } from '../artifact-record.js';
 import { compareCanonicalStrings } from '../canonical-order.js';
 import { assertLogicalId } from '../logical-id.js';
 import { resolveManifestScheduleBindings } from '../manifest-schedule-binding.js';
@@ -301,7 +306,7 @@ function normalizeScheduleBindings(value) {
 /**
  * Build one stateful observer over schedules derived from an exact sealed
  * source or packaged execution.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, tableName: string}, ownership: Readonly<Record<string, any>>, signal?: AbortSignal, onWorkflowReady?: () => void | Promise<void>}} options
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, controlContext: {db: import('../../lib/db/base.js').DBClient, tableName: string}, ownership: Readonly<Record<string, any>>, signal?: AbortSignal, onWorkflowReady?: () => void | Promise<void>}} options
  */
 export function createResidentScheduleObserver(options) {
   if (
@@ -333,6 +338,13 @@ export function createResidentScheduleObserver(options) {
   const executionBinding = resolveManifestActivityExecutionBinding(
     options.execution,
   );
+  if (options.artifactId !== undefined) {
+    assertArtifactId(
+      options.artifactId,
+      'resident schedule observer artifactId',
+    );
+  }
+  const artifactId = options.artifactId;
   const scheduleBindings = normalizeScheduleBindings(
     resolveManifestScheduleBindings(executionBinding.execution),
   );
@@ -374,12 +386,31 @@ export function createResidentScheduleObserver(options) {
       });
     }
     if (signal?.aborted) return false;
-    await getLocalApplicationRunCreationFence({
-      db: options.controlContext.db,
-      tableName,
-      appId: executionBinding.identity.appId,
-      revisionId: executionBinding.identity.revisionId,
-    });
+    try {
+      await getLocalApplicationRunCreationFence({
+        db: options.controlContext.db,
+        tableName,
+        appId: executionBinding.identity.appId,
+        revisionId: executionBinding.identity.revisionId,
+      });
+    } catch (error) {
+      if (
+        !initialized &&
+        error instanceof LocalApplicationAdmissionClosedError &&
+        artifactId !== undefined
+      ) {
+        await getLocalApplicationServiceStartFence({
+          db: options.controlContext.db,
+          tableName,
+          appId: executionBinding.identity.appId,
+          revisionId: executionBinding.identity.revisionId,
+          artifactId,
+        });
+        await verifyExecutionRuntime();
+        return false;
+      }
+      throw error;
+    }
     return !signal?.aborted;
   }
 
@@ -629,7 +660,7 @@ async function waitForPoll(signal, pollIntervalMs) {
 
 /**
  * Observe schedules independently from serial physical activity execution.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, tableName: string}, ownership: Readonly<Record<string, any>>, signal: AbortSignal, pollIntervalMs?: number, now?: () => number, wait?: (signal: AbortSignal, pollIntervalMs: number) => void | Promise<void>, onWorkflowReady?: () => void | Promise<void>, onReady?: () => void | Promise<void>}} options
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, controlContext: {db: import('../../lib/db/base.js').DBClient, tableName: string}, ownership: Readonly<Record<string, any>>, signal: AbortSignal, pollIntervalMs?: number, now?: () => number, wait?: (signal: AbortSignal, pollIntervalMs: number) => void | Promise<void>, onWorkflowReady?: () => void | Promise<void>, onReady?: () => void | Promise<void>}} options
  */
 export async function runResidentScheduleObserver(options) {
   const signal = /** @type {AbortSignal} */ (
@@ -664,8 +695,8 @@ export async function runResidentScheduleObserver(options) {
     replayed += result.replayed;
     advanced += result.advanced;
     if (!ready && !signal.aborted) {
-      // Readiness means every exact definition has been activated and caught
-      // up through the first observed minute.
+      // Readiness means ownership was verified and the first reconciliation
+      // either completed or was safely deferred behind managed activation.
       // eslint-disable-next-line no-await-in-loop
       await options.onReady?.();
       ready = true;

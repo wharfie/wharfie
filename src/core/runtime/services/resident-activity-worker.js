@@ -982,7 +982,7 @@ async function findRunnableWork(options) {
  * resident owner. It hosts the authenticated submission/cancellation endpoint,
  * consumes exact ready work serially, and drains an active attempt during
  * graceful shutdown.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, fireTimer?: typeof fireWorkflowLedgerTimer, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, deliverSignal?: typeof deliverWorkflowLedgerSignal, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, runScheduleObserver?: typeof runResidentScheduleObserver, onReady?: () => void | Promise<void>, onStopping?: () => void | Promise<void>}} options - Held service dependencies.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, fireTimer?: typeof fireWorkflowLedgerTimer, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, deliverSignal?: typeof deliverWorkflowLedgerSignal, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, runScheduleObserver?: typeof runResidentScheduleObserver, onReady?: () => void | Promise<void>, onStopping?: () => void | Promise<void>}} options - Held service dependencies.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
 export async function runResidentActivityWorker(options) {
@@ -1010,6 +1010,10 @@ export async function runResidentActivityWorker(options) {
     );
   }
   const binding = resolveManifestActivityExecutionBinding(options.execution);
+  if (options.artifactId !== undefined) {
+    assertArtifactId(options.artifactId, 'resident activity worker artifactId');
+  }
+  const artifactId = options.artifactId;
   if (
     options.owner.ownership.appId !== binding.identity.appId ||
     options.owner.ownership.serviceId !== options.owner.serviceId
@@ -1122,6 +1126,7 @@ export async function runResidentActivityWorker(options) {
         await runScheduleObserver({
           ledger: options.ledger,
           execution: binding.execution,
+          ...(artifactId === undefined ? {} : { artifactId }),
           controlContext: options.controlContext,
           ownership: options.owner.ownership,
           signal,
@@ -1663,6 +1668,7 @@ export async function runLocalResidentActivityService(options) {
         result = await runResidentActivityWorker({
           ledger,
           execution: binding.execution,
+          ...(artifactId === undefined ? {} : { artifactId }),
           controlContext,
           owner,
           ...(signal === undefined ? {} : { signal }),
