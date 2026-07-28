@@ -3,16 +3,21 @@
 
 import { describe, expect, it, jest } from '@jest/globals';
 import {
+  chmodSync,
   existsSync,
+  linkSync,
+  mkdirSync,
   mkdtempSync,
   promises as fsp,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { runJest } from './run-jest.js';
+import { removeOwnedTempRoot, runJest } from './run-jest.js';
 
 const ownedRoot = path.join('/tmp', 'wharfie-jest-owned');
 
@@ -79,6 +84,30 @@ function spawnedArgs(harness) {
   const call = harness.spawn.mock.calls[0];
   expect(call).toBeDefined();
   return call?.[1] ?? [];
+}
+
+/**
+ * @param {ReturnType<typeof createHarness>} harness
+ * @param {Error} failure
+ */
+function failCleanup(harness, failure) {
+  harness.removeTempRoot.mockImplementation(
+    /** @param {string} root */
+    (root) => {
+      harness.events.push(`remove:${root}`);
+      throw failure;
+    },
+  );
+}
+
+/** @param {() => unknown} operation @returns {unknown} */
+function captureFailure(operation) {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('Expected operation to fail.');
 }
 
 describe('disposable Jest runner', () => {
@@ -277,9 +306,110 @@ describe('disposable Jest runner', () => {
         NPM_CONFIG_CACHE: '/caller/uppercase-npm-cache',
       });
     } finally {
-      rmSync(outerRoot, { recursive: true, force: true });
+      removeOwnedTempRoot(outerRoot, {
+        recursive: true,
+        force: true,
+      });
     }
   });
+
+  it('removes runner-owned read-only directories and files', () => {
+    const outerRoot = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-jest-read-only-test-'),
+    );
+    /** @type {string | undefined} */
+    let actualOwnedRoot;
+
+    try {
+      expect(
+        runJest([], {
+          createTempRoot: (prefix) => {
+            actualOwnedRoot = mkdtempSync(prefix);
+            return actualOwnedRoot;
+          },
+          getTempDirectory: () => outerRoot,
+          execPath: '/node',
+          spawn: () => {
+            const snapshotRoot = path.join(
+              String(actualOwnedRoot),
+              'revision-snapshots',
+              'revision-1',
+            );
+            mkdirSync(snapshotRoot, { recursive: true });
+            const snapshotPath = path.join(snapshotRoot, 'manifest.json');
+            writeFileSync(snapshotPath, '{}\n');
+            chmodSync(snapshotPath, 0o400);
+            chmodSync(snapshotRoot, 0o500);
+            return { status: 0, signal: null };
+          },
+        }),
+      ).toBe(0);
+
+      expect(actualOwnedRoot).toBeDefined();
+      expect(existsSync(String(actualOwnedRoot))).toBe(false);
+    } finally {
+      removeOwnedTempRoot(outerRoot, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
+
+  const itOnUnix = process.platform === 'win32' ? it.skip : it;
+  itOnUnix(
+    'does not alter stable symlink or hard-link targets during fallback',
+    () => {
+      const outerRoot = mkdtempSync(
+        path.join(os.tmpdir(), 'wharfie-jest-symlink-test-'),
+      );
+      const actualOwnedRoot = mkdtempSync(
+        path.join(outerRoot, 'wharfie-jest-'),
+      );
+      const externalPath = path.join(outerRoot, 'external-sentinel');
+      let removeAttempts = 0;
+
+      try {
+        writeFileSync(externalPath, 'external\n');
+        chmodSync(externalPath, 0o400);
+        symlinkSync(externalPath, path.join(actualOwnedRoot, 'external-link'));
+        linkSync(
+          externalPath,
+          path.join(actualOwnedRoot, 'external-hard-link'),
+        );
+        chmodSync(actualOwnedRoot, 0o500);
+
+        removeOwnedTempRoot(
+          actualOwnedRoot,
+          {
+            recursive: true,
+            force: true,
+          },
+          {
+            remove(root, options) {
+              removeAttempts += 1;
+              if (removeAttempts === 1) {
+                throw Object.assign(new Error('scripted permission failure'), {
+                  code: 'EACCES',
+                });
+              }
+              rmSync(root, options);
+            },
+          },
+        );
+
+        expect(removeAttempts).toBe(2);
+        expect(existsSync(actualOwnedRoot)).toBe(false);
+        expect(existsSync(externalPath)).toBe(true);
+        expect(statSync(externalPath).mode & 0o777).toBe(0o400);
+      } finally {
+        chmodSync(externalPath, 0o600);
+        removeOwnedTempRoot(outerRoot, {
+          recursive: true,
+          force: true,
+        });
+      }
+    },
+  );
 
   it('contains the actual default Wharfie data and build paths', async () => {
     const workspace = process.env.WHARFIE_TEST_WORKSPACE;
@@ -340,6 +470,29 @@ describe('disposable Jest runner', () => {
     ]);
   });
 
+  it('retains reported spawn and cleanup failures together', () => {
+    const spawnError = new Error('spawn failed');
+    const cleanupError = new Error('cleanup failed');
+    const harness = createHarness({
+      status: null,
+      signal: null,
+      error: spawnError,
+    });
+    failCleanup(harness, cleanupError);
+
+    const failure = captureFailure(() => runJest([], harness.dependencies));
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = /** @type {AggregateError} */ (failure);
+    expect(aggregate.errors).toEqual([spawnError, cleanupError]);
+    expect(aggregate.cause).toBe(spawnError);
+    expect(harness.events).toEqual([
+      `create:${path.join('/tmp', 'wharfie-jest-')}`,
+      'spawn',
+      `remove:${ownedRoot}`,
+    ]);
+  });
+
   it('cleans up when the synchronous spawn function throws', () => {
     const harness = createHarness();
     const spawnError = new Error('spawn threw');
@@ -349,6 +502,29 @@ describe('disposable Jest runner', () => {
     });
 
     expect(() => runJest([], harness.dependencies)).toThrow(spawnError);
+    expect(harness.events).toEqual([
+      `create:${path.join('/tmp', 'wharfie-jest-')}`,
+      'spawn-threw',
+      `remove:${ownedRoot}`,
+    ]);
+  });
+
+  it('retains thrown spawn and cleanup failures together', () => {
+    const harness = createHarness();
+    const spawnError = new Error('spawn threw');
+    const cleanupError = new Error('cleanup failed');
+    harness.spawn.mockImplementation(() => {
+      harness.events.push('spawn-threw');
+      throw spawnError;
+    });
+    failCleanup(harness, cleanupError);
+
+    const failure = captureFailure(() => runJest([], harness.dependencies));
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = /** @type {AggregateError} */ (failure);
+    expect(aggregate.errors).toEqual([spawnError, cleanupError]);
+    expect(aggregate.cause).toBe(spawnError);
     expect(harness.events).toEqual([
       `create:${path.join('/tmp', 'wharfie-jest-')}`,
       'spawn-threw',
@@ -367,6 +543,48 @@ describe('disposable Jest runner', () => {
       `remove:${ownedRoot}`,
       'kill:321:SIGTERM',
     ]);
+  });
+
+  it('retains child signal and cleanup failures without re-signalling', () => {
+    const harness = createHarness({ status: null, signal: 'SIGTERM' });
+    const cleanupError = new Error('cleanup failed');
+    failCleanup(harness, cleanupError);
+
+    const failure = captureFailure(() => runJest([], harness.dependencies));
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = /** @type {AggregateError} */ (failure);
+    expect(aggregate.errors).toHaveLength(2);
+    expect(aggregate.errors[0]).toEqual(
+      expect.objectContaining({
+        message: 'Jest child terminated with signal SIGTERM.',
+      }),
+    );
+    expect(aggregate.errors[1]).toBe(cleanupError);
+    expect(harness.kill).not.toHaveBeenCalled();
+    expect(harness.events).toEqual([
+      `create:${path.join('/tmp', 'wharfie-jest-')}`,
+      'spawn',
+      `remove:${ownedRoot}`,
+    ]);
+  });
+
+  it('retains a nonzero child status with cleanup failure', () => {
+    const harness = createHarness({ status: 23, signal: null });
+    const cleanupError = new Error('cleanup failed');
+    failCleanup(harness, cleanupError);
+
+    const failure = captureFailure(() => runJest([], harness.dependencies));
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = /** @type {AggregateError} */ (failure);
+    expect(aggregate.errors).toHaveLength(2);
+    expect(aggregate.errors[0]).toEqual(
+      expect.objectContaining({
+        message: 'Jest child exited with status 23.',
+      }),
+    );
+    expect(aggregate.errors[1]).toBe(cleanupError);
   });
 
   it.each([

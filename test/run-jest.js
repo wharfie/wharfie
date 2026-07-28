@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +19,96 @@ import { pathToFileURL } from 'node:url';
 
 /** @typedef {(executable: string, args: string[], options: {env: NodeJS.ProcessEnv, stdio: 'inherit'}) => JestChildResult} JestChildRunner */
 /** @typedef {(root: string, options: {recursive: true, force: true}) => void} JestTempRootRemover */
+
+/**
+ * @param {unknown} error - Possible filesystem error.
+ * @returns {string | undefined} Filesystem error code.
+ */
+function getErrorCode(error) {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return undefined;
+  }
+  const code = /** @type {{code?: unknown}} */ (error).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+/**
+ * @param {unknown} error - Possible filesystem error.
+ * @returns {boolean} Whether cleanup may succeed after restoring owner
+ *   permissions.
+ */
+function isRetryableRemovalError(error) {
+  return ['EACCES', 'ENOTEMPTY', 'EPERM'].includes(getErrorCode(error) ?? '');
+}
+
+/**
+ * Restore owner directory access within a quiescent runner-owned tree.
+ *
+ * The synchronous child has exited before this runs. Stable symlink entries
+ * are not traversed, and files are never chmodded because only their parent
+ * directory permissions govern unlinking. Tests must not leave another
+ * process concurrently replacing entries in this owned tree.
+ *
+ * @param {string} entryPath - Owned entry to make removable.
+ * @returns {void}
+ */
+function makeOwnedDirectoriesWritable(entryPath) {
+  try {
+    const stats = lstatSync(entryPath);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) return;
+
+    chmodSync(entryPath, stats.mode | 0o700);
+    for (const child of readdirSync(entryPath)) {
+      makeOwnedDirectoriesWritable(path.join(entryPath, child));
+    }
+  } catch (error) {
+    if (getErrorCode(error) === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Remove a temporary root created and exclusively owned by this runner.
+ *
+ * A test may legitimately make snapshot data read-only. Retry after restoring
+ * owner access to real entries, while leaving symlink targets untouched.
+ *
+ * @param {string} root - Runner-owned temporary root.
+ * @param {{recursive: true, force: true}} options - Removal options.
+ * @param {{
+ *   remove?: (root: string, options: {recursive: true, force: true, maxRetries: number, retryDelay: number}) => void
+ * }} [dependencies] - Deterministic removal seam.
+ * @returns {void}
+ */
+export function removeOwnedTempRoot(root, options, dependencies = {}) {
+  const remove = dependencies.remove || rmSync;
+  const retryOptions = {
+    ...options,
+    maxRetries: 3,
+    retryDelay: 20,
+  };
+  try {
+    remove(root, retryOptions);
+  } catch (error) {
+    if (!isRetryableRemovalError(error)) throw error;
+    makeOwnedDirectoriesWritable(root);
+    remove(root, retryOptions);
+  }
+}
+
+/**
+ * Preserve one primary failure plus a cleanup failure without discarding
+ * either diagnostic.
+ * @param {unknown} primary - Child/spawn failure.
+ * @param {unknown} cleanup - Cleanup failure.
+ * @param {string} message - Aggregate failure context.
+ * @returns {never}
+ */
+function throwAggregateFailure(primary, cleanup, message) {
+  throw new AggregateError([primary, cleanup], message, { cause: primary });
+}
 
 /**
  * @typedef {object} JestRunnerDependencies
@@ -77,7 +173,7 @@ export function runJest(argv, dependencies = {}) {
   const {
     spawn = spawnSync,
     createTempRoot = mkdtempSync,
-    removeTempRoot = rmSync,
+    removeTempRoot = removeOwnedTempRoot,
     getTempDirectory = os.tmpdir,
     kill = process.kill.bind(process),
     execPath = process.execPath,
@@ -149,8 +245,10 @@ export function runJest(argv, dependencies = {}) {
     ...ownedArguments,
   );
 
-  /** @type {JestChildResult} */
+  /** @type {JestChildResult | undefined} */
   let result;
+  let spawnFailed = false;
+  let spawnFailure;
   try {
     result = spawn(
       execPath,
@@ -164,20 +262,93 @@ export function runJest(argv, dependencies = {}) {
         stdio: 'inherit',
       },
     );
-  } finally {
+  } catch (error) {
+    spawnFailed = true;
+    spawnFailure = error;
+  }
+
+  let cleanupFailed = false;
+  let cleanupFailure;
+  try {
     removeTempRoot(ownedRoot, { recursive: true, force: true });
+  } catch (error) {
+    cleanupFailed = true;
+    cleanupFailure = error;
+  }
+
+  if (spawnFailed) {
+    if (cleanupFailed) {
+      throwAggregateFailure(
+        spawnFailure,
+        cleanupFailure,
+        'Jest child spawn and temporary cleanup both failed.',
+      );
+    }
+    throw spawnFailure;
+  }
+
+  if (!result) {
+    const missingResult = new Error('Jest child runner returned no result.');
+    if (cleanupFailed) {
+      throwAggregateFailure(
+        missingResult,
+        cleanupFailure,
+        'Jest child result and temporary cleanup both failed.',
+      );
+    }
+    throw missingResult;
   }
 
   if (result.error) {
+    if (cleanupFailed) {
+      throwAggregateFailure(
+        result.error,
+        cleanupFailure,
+        'Jest child spawn and temporary cleanup both failed.',
+      );
+    }
     throw result.error;
   }
 
   if (result.signal) {
-    kill(pid, result.signal);
+    const signalError = new Error(
+      `Jest child terminated with signal ${result.signal}.`,
+    );
+    if (cleanupFailed) {
+      // A successful self-signal terminates before an aggregate can surface.
+      // Retain both diagnostics instead of re-signalling in this rare case.
+      throwAggregateFailure(
+        signalError,
+        cleanupFailure,
+        'Jest child termination and temporary cleanup both failed.',
+      );
+    }
+    try {
+      kill(pid, result.signal);
+    } catch (signalFailure) {
+      const forwardingFailure = new AggregateError(
+        [signalError, signalFailure],
+        'Jest child signal forwarding failed.',
+        { cause: signalError },
+      );
+      throw forwardingFailure;
+    }
     return 1;
   }
 
-  return result.status ?? 1;
+  const status = result.status ?? 1;
+  if (cleanupFailed) {
+    if (status !== 0) {
+      throwAggregateFailure(
+        new Error(`Jest child exited with status ${status}.`),
+        cleanupFailure,
+        'Jest child execution and temporary cleanup both failed.',
+      );
+    }
+    throw cleanupFailure;
+  }
+
+  return status;
 }
 
 const invokedPath = process.argv[1]
