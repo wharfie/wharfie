@@ -654,8 +654,12 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
-- [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Versioned durable-operation receipts checkpoint](llm/checkpoints/2026-07-27-v95-versioned-durable-operation-receipts.md) — the latest restart point for schema-version 1 `run`, `submit`, `start`, and `signal` documents, source/packaged parity, validation, proof limits, and next work.
+- [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
+- [Verified sensitive run-output checkpoint](llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md) — the latest restart point for exact app-scoped logical outputs, explicit disclosure gating, bounded terminal-safe transport, source/packaged parity, and next work.
+- [Local-contract integrity checkpoint](llm/checkpoints/2026-07-27-v98-local-contract-integrity.md) — the preceding restart point for receipt consumers, Commander ownership, focused verification, and test cleanup.
+- [Versioned application-package receipt checkpoint](llm/checkpoints/2026-07-27-v97-versioned-application-package-receipt.md) — the preceding restart point for the strict public source-packaging receipt and artifact handoff.
+- [Bounded local release-pruning checkpoint](llm/checkpoints/2026-07-27-v96-bounded-local-release-pruning.md) — the preceding restart point for explicit packaged-release collection and crash-safe staging cleanup.
+- [Versioned durable-operation receipts checkpoint](llm/checkpoints/2026-07-27-v95-versioned-durable-operation-receipts.md) — the earlier restart point for schema-version 1 `run`, `submit`, `start`, and `signal` documents, source/packaged parity, validation, proof limits, and next work.
 - [Owned test-workspace checkpoint](llm/checkpoints/2026-07-27-v94-owned-test-workspace.md) — the parent restart point for child-environment containment, revision-fixture isolation, disk cleanup, verification, and the retained native-proof boundary.
 - [Relocated SEA schedule/restart proof checkpoint](llm/checkpoints/2026-07-27-v93-relocated-sea-schedule-restart-proof.md) — the parent restart point for the bounded Linux-only proof path and its still-unrun native execution.
 - [Resident workflow-schedules checkpoint](llm/checkpoints/2026-07-27-v92-resident-workflow-schedules.md) — the parent restart point for strict manifest V3, exact revision-bound observation, readiness and STOPPING integration, source/embedded composition, proof limits, and next work.

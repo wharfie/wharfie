@@ -221,59 +221,10 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [workflow-schedule contract
-checkpoint](../llm/checkpoints/2026-07-27-v90-workflow-schedule-contract.md).
-Its parent is the [sensitive activity-log inspection
-checkpoint](../llm/checkpoints/2026-07-27-v89-sensitive-activity-log-inspection.md),
-whose parent is the [durable attempt logs
-checkpoint](../llm/checkpoints/2026-07-27-v88-durable-attempt-logs.md), whose
-parent is the [Jest 30 alignment
-checkpoint](../llm/checkpoints/2026-07-27-v87-jest-30-alignment.md), whose
-parent is the [disposable test-harness
-checkpoint](../llm/checkpoints/2026-07-27-v86-disposable-test-harness.md),
-whose parent is the [verified durable run-history
-checkpoint](../llm/checkpoints/2026-07-27-v85-verified-run-history.md), whose
-parent is the separate [read-only Docker proof readiness
-checkpoint](../llm/checkpoints/2026-07-27-v84-read-only-docker-proof-readiness.md),
-whose parent is the [bounded Linux SEA proof tooling
-checkpoint](../llm/checkpoints/2026-07-27-v83-bounded-linux-sea-proof-tooling.md),
-whose parent is the [real Linux SEA proof
-checkpoint](../llm/checkpoints/2026-07-26-v82-linux-sea-proof.md), whose parent
-is the [exact-source SEA publication
-checkpoint](../llm/checkpoints/2026-07-26-v81-exact-source-sea-publication.md).
-That checkpoint also records the V80 zero-argument delivery, and its parent is
-the [read-only retained-storage provider evidence
-checkpoint](../llm/checkpoints/2026-07-26-v79-read-only-provider-evidence.md),
-whose parent is the [read-only host toolchain fingerprint
-checkpoint](../llm/checkpoints/2026-07-25-v78-read-only-host-toolchain-fingerprint.md),
-whose parent is the [authorized storage preparation
-checkpoint](../llm/checkpoints/2026-07-25-v77-authorized-storage-preparation-command.md),
-whose parent is the [closed blank-format preparation
-checkpoint](../llm/checkpoints/2026-07-25-v76-closed-blank-format-preparation.md),
-whose parent is the [retained-storage format journal
-checkpoint](../llm/checkpoints/2026-07-25-v75-retained-storage-format-journal.md),
-whose parent is the [retained host storage
-checkpoint](../llm/checkpoints/2026-07-25-v74-retained-host-storage-boundary.md),
-whose parent is the [desired service convergence
-checkpoint](../llm/checkpoints/2026-07-25-v73-desired-service-convergence-proof.md),
-whose parent is the [fixed-user service convergence
-checkpoint](../llm/checkpoints/2026-07-25-v72-fixed-user-service-convergence.md),
-whose parent is the [exact host artifact projection
-checkpoint](../llm/checkpoints/2026-07-25-v71-exact-host-artifact-projection.md),
-whose parent is the [authenticated current-head authority
-checkpoint](../llm/checkpoints/2026-07-25-v70-authenticated-current-head-authority.md),
-whose parent is the [root host activation persistence
-checkpoint](../llm/checkpoints/2026-07-25-v69-root-host-activation-persistence.md),
-whose parent is the [owned host AWS lifetime
-checkpoint](../llm/checkpoints/2026-07-25-v68-owned-host-aws-lifetime.md),
-whose parent is the [live host runtime identity
-checkpoint](../llm/checkpoints/2026-07-25-v67-live-host-runtime-identity.md),
-whose parent is the [durable host activation kernel
-checkpoint](../llm/checkpoints/2026-07-25-v66-durable-host-activation-kernel.md),
-whose parent is the [host activation contract
-checkpoint](../llm/checkpoints/2026-07-25-v65-host-activation-contract.md),
-whose parent is the [target service convergence
-checkpoint](../llm/checkpoints/2026-07-25-v64-target-service-convergence.md).
+The latest recorded restart handoff is the [V99 verified sensitive run-output
+checkpoint](../llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md).
+Its prior checkpoint lineage is recorded there.
+
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only
 control inspection and require-active, existing-only reconciliation that can
