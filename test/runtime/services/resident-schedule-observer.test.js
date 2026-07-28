@@ -211,7 +211,7 @@ function createExecutionContext(cron = '* * * * *') {
     overlap: 'allow',
   });
   const contract = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: APP_ID },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
@@ -264,7 +264,7 @@ function createExecutionContext(cron = '* * * * *') {
 /** @returns {EmbeddedExecution} */
 function createUnscheduledExecution() {
   const contract = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: APP_ID },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

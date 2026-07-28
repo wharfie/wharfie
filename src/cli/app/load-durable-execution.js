@@ -1,6 +1,10 @@
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 import { prepareApplicationRevision } from './compile-application-revision.js';
 import { loadApp } from './load-app.js';
 import {
+  assertSourceRuntimeResolution,
   getManifestActivityNames,
   getManifestWorkflowNames,
 } from '../../core/runtime/app-runs.js';
@@ -59,6 +63,64 @@ export async function loadPreparedDurableExecution(options = {}) {
     }
     throw error;
   }
+}
+
+/**
+ * Import the developer CLI module from the sealed prepared-source snapshot.
+ * The runtime lock is checked around the import so the adapter and eventual
+ * durable work are both bound to the same immutable revision.
+ * @param {import('../../core/runtime/durable-activity-host.js').ManifestActivityExecution} execution - Prepared source execution.
+ * @returns {Promise<Record<string, any>>} - Developer CLI module namespace.
+ */
+export async function loadPreparedDurableCliModule(execution) {
+  if (
+    !execution ||
+    execution.kind !== 'prepared-source' ||
+    !execution.prepared
+  ) {
+    throw new TypeError(
+      'Source durable CLI mapping requires a prepared-source execution.',
+    );
+  }
+  const prepared = execution.prepared;
+  const cliEntrypoint = prepared.manifest?.cli?.entrypoint;
+  if (
+    !cliEntrypoint ||
+    typeof cliEntrypoint.path !== 'string' ||
+    !cliEntrypoint.path
+  ) {
+    throw new TypeError(
+      'Source durable CLI mapping requires cli.entrypoint.path.',
+    );
+  }
+
+  await prepared.verifyRuntime();
+  const entrypointPath = path.resolve(prepared.appDir, cliEntrypoint.path);
+  assertSourceRuntimeResolution(entrypointPath, 'Source CLI entrypoint');
+  /** @type {Record<string, any> | undefined} */
+  let moduleLike;
+  let importFailed = false;
+  /** @type {unknown} */
+  let importError;
+  try {
+    moduleLike = await import(pathToFileURL(entrypointPath).href);
+  } catch (error) {
+    importFailed = true;
+    importError = error;
+  }
+  try {
+    await prepared.verifyRuntime();
+  } catch (verificationError) {
+    if (importFailed) {
+      throw new AggregateError(
+        [importError, verificationError],
+        'The sealed CLI module import and runtime verification both failed.',
+      );
+    }
+    throw verificationError;
+  }
+  if (importFailed) throw importError;
+  return /** @type {Record<string, any>} */ (moduleLike);
 }
 
 export default loadPreparedDurableExecution;

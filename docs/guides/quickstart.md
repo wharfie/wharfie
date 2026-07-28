@@ -50,7 +50,7 @@ Every Node entrypoint declares its export explicitly:
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'my-app' },
   cli: {
     entrypoint: {
@@ -92,9 +92,17 @@ export default defineApp({
 });
 ```
 
-The v3 manifest keeps `workflows` and `schedules` optional so an ordinary CLI
+The v4 manifest keeps `workflows` and `schedules` optional so an ordinary CLI
 can become durable progressively; either map must be nonempty when declared. A
-workflow contains one to 64 ordered `activity`, `timer`, or `signal` steps.
+CLI may also declare exact `durable: { workflow, export }` fields beside its
+entrypoint. That named CLI-module export receives frozen application arguments
+and purely projects them into JSON input for the declared default workflow;
+`wharfie ops start --dir <app> -- <application-args>` uses it without requiring
+a workflow ID or handwritten JSON. Explicit `--workflow` and `--input` remain
+available as an expert bypass and cannot be combined with application
+arguments.
+
+A workflow contains one to 64 ordered `activity`, `timer`, or `signal` steps.
 Activity input is exactly the workflow input, a JSON literal, or one named
 earlier step's output. A schedule names one workflow in the same immutable
 revision, carries static JSON input, and uses a canonical five-field UTC cron
@@ -917,7 +925,7 @@ prior coordinator is known unable to continue. A valid returned head that
 still carries an active operation is reported as an incomplete nonzero result;
 inspect it before deciding whether confirmed recovery is safe.
 
-The v3 manifest exposes the bounded plain-data workflow and UTC schedule
+The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,
 persisted timer, and current-wait signal continuations, while the exact-revision
 resident admits due scheduled workflow runs. Branches, an early-signal inbox,

@@ -220,10 +220,14 @@ function decodeExternalArchive(value) {
  * than the runtime whose bytes are locked by the prepared revision. A missing
  * resolution is allowed here because activities need not import Wharfie; an
  * actual unresolved import still fails in the normal module/bundle boundary.
- * @param {string} entrypointPath - Absolute sealed activity entrypoint.
+ * @param {string} entrypointPath - Absolute sealed source entrypoint.
+ * @param {string} [entrypointLabel] - Human-readable entrypoint kind.
  * @returns {void}
  */
-function assertSourceRuntimeResolution(entrypointPath) {
+export function assertSourceRuntimeResolution(
+  entrypointPath,
+  entrypointLabel = 'Source activity',
+) {
   const runningWharfiePackagePath = realpathSync(
     createRequire(import.meta.url).resolve('@wharfie/wharfie/package.json'),
   );
@@ -237,7 +241,7 @@ function assertSourceRuntimeResolution(entrypointPath) {
   }
   if (resolvedPackagePath !== runningWharfiePackagePath) {
     throw new Error(
-      'Source activity resolves a different @wharfie/wharfie runtime than the runtime locked by its prepared application revision.',
+      `${entrypointLabel} resolves a different @wharfie/wharfie runtime than the runtime locked by its prepared application revision.`,
     );
   }
 }

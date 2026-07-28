@@ -7,6 +7,8 @@ import {
 } from '../../src/core/runtime/app-manifest.js';
 import { SCHEDULE_MAX_DEFINITIONS } from '../../src/core/runtime/schedule-definition.js';
 
+/** @typedef {[string, (manifest: Record<string, any>) => void, RegExp]} InvalidDurableCliCase */
+
 /** @returns {Record<string, any>} */
 function makeManifest(schemaVersion = APP_MANIFEST_SCHEMA_VERSION) {
   return {
@@ -55,7 +57,7 @@ function makeManifest(schemaVersion = APP_MANIFEST_SCHEMA_VERSION) {
   };
 }
 
-describe('strict manifest V3 schedules', () => {
+describe('strict manifest V4 workflows, schedules, and durable CLI handoff', () => {
   it('accepts only canonical workflow schedules and orders independent definitions', () => {
     const authored = makeManifest();
     const manifest = validateAppManifest(authored);
@@ -76,11 +78,11 @@ describe('strict manifest V3 schedules', () => {
     });
   });
 
-  it('rejects schemaVersion 2 entirely', () => {
-    const manifest = makeManifest(2);
+  it('rejects schemaVersion 3 entirely', () => {
+    const manifest = makeManifest(3);
 
     expect(() => validateAppManifest(manifest)).toThrow(
-      /manifest\.schemaVersion must be the integer 3/i,
+      /manifest\.schemaVersion must be the integer 4/i,
     );
   });
 
@@ -90,13 +92,101 @@ describe('strict manifest V3 schedules', () => {
     delete missing.schedules;
 
     expect(validateAppManifest(missing)).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       app: { id: 'scheduled-app' },
       cli: {
         entrypoint: { kind: 'node', path: 'src/cli.js', export: 'main' },
       },
       activities: missing.activities,
     });
+  });
+
+  it('accepts an exact durable CLI handoff to a declared workflow', () => {
+    const authored = makeManifest();
+    authored.cli.durable = {
+      workflow: 'refresh',
+      export: 'toDurableInput',
+    };
+
+    const manifest = validateAppManifest(authored);
+
+    expect(manifest.cli.durable).toEqual({
+      workflow: 'refresh',
+      export: 'toDurableInput',
+    });
+    authored.cli.durable.export = 'mutated';
+    expect(manifest.cli.durable.export).toBe('toDurableInput');
+  });
+
+  /** @type {InvalidDurableCliCase[]} */
+  const invalidDurableCliCases = [
+    [
+      'a non-object handoff',
+      (manifest) => {
+        manifest.cli.durable = 'refresh';
+      },
+      /manifest\.cli\.durable must be a plain object/i,
+    ],
+    [
+      'an extra handoff field',
+      (manifest) => {
+        manifest.cli.durable = {
+          workflow: 'refresh',
+          export: 'toDurableInput',
+          input: {},
+        };
+      },
+      /manifest\.cli\.durable\.input is not supported by schemaVersion 4/i,
+    ],
+    [
+      'a non-canonical workflow ID',
+      (manifest) => {
+        manifest.cli.durable = {
+          workflow: ' refresh ',
+          export: 'toDurableInput',
+        };
+      },
+      /manifest\.cli\.durable\.workflow must be a canonical logical ID/i,
+    ],
+    [
+      'a non-canonical export',
+      (manifest) => {
+        manifest.cli.durable = {
+          workflow: 'refresh',
+          export: '',
+        };
+      },
+      /manifest\.cli\.durable\.export must be a nonempty canonical string/i,
+    ],
+    [
+      'a workflow absent from this manifest',
+      (manifest) => {
+        manifest.cli.durable = {
+          workflow: 'missing',
+          export: 'toDurableInput',
+        };
+      },
+      /manifest\.cli\.durable\.workflow must reference a workflow declared by this manifest/i,
+    ],
+    [
+      'a workflow when no workflows are declared',
+      (manifest) => {
+        manifest.cli.durable = {
+          workflow: 'refresh',
+          export: 'toDurableInput',
+        };
+        delete manifest.workflows;
+        delete manifest.schedules;
+      },
+      /manifest\.cli\.durable\.workflow must reference a workflow declared by this manifest/i,
+    ],
+  ];
+
+  it.each(invalidDurableCliCases)('rejects %s', (_name, mutate, pattern) => {
+    const manifest = makeManifest();
+    mutate(manifest);
+
+    expect(() => validateAppManifest(manifest)).toThrow(pattern);
   });
 
   it('requires workflow and schedule maps to be nonempty when declared', () => {

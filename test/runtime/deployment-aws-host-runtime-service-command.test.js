@@ -66,7 +66,7 @@ const TRANSIENT_LOADER_ENVIRONMENT_NAMES = [
 function createEmbeddedRevision(appId) {
   return createApplicationRevision({
     contract: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       app: { id: appId },
       cli: {
         entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

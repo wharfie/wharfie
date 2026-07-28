@@ -31,7 +31,7 @@ Hard requirements
 - Prefer the smallest coherent near-term app wedge.
 - Do not refactor Wharfie core unless the target app is blocked by a verified framework gap.
 - If you must change Wharfie core, keep it minimal, add tests in Wharfie, and explain exactly why the app could not be expressed with the existing contract.
-- Author only the default-exported plain-object v3 manifest. `ActorSystem` is internal implementation material, not a public app-authoring API.
+- Author only the default-exported plain-object v4 manifest. `ActorSystem` is internal implementation material, not a public app-authoring API.
 - Preserve the developer-owned CLI surface. Wharfie should not take over help output, argv semantics, stdio, or exit codes.
 - Model machine-invoked work as named `activities`.
 - Do not declare application or activity `resources`; use only the finite host-mediated `runtime.effects` catalog where its documented semantics fit.
@@ -46,7 +46,7 @@ App-model rules you must obey
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'my-app' },
   cli: {
     entrypoint: {
@@ -99,8 +99,9 @@ export default defineApp({
 });
 ```
 
-- `schemaVersion: 3`, `app.id`, and `cli` are required. `activities`, `workflows`, and `schedules` are optional so a normal CLI can become durable progressively; each declared map must be nonempty.
+- `schemaVersion: 4`, `app.id`, and `cli` are required. `activities`, `workflows`, and `schedules` are optional so a normal CLI can become durable progressively; each declared map must be nonempty.
 - `cli` is the human surface and its entrypoint must contain exact `kind`, `path`, and `export` fields.
+- When ordinary CLI arguments should start one default workflow, add exact `cli.durable: { workflow, export }`. The named export lives on the CLI entrypoint module, receives a frozen `readonly string[]` without Node argv, and must purely validate/project those arguments into bounded JSON workflow input. Share its parser with the ordinary CLI and do not perform work or external mutations in the adapter.
 - `activities` are the optional machine surface used by `wharfie app run` and durable ledger invocations.
 - `workflows` contain one to 64 ordered `activity`, `timer`, or `signal` steps with explicit revision-bound inputs.
 - `schedules` target workflows only. Each carries static JSON input, a canonical five-field UTC cron expression, `missed: 'latest'`, and `overlap: 'allow'`. Each cron field is only `*` or a strictly ascending comma-separated numeric set; do not use ranges, steps, names, macros, seconds, timezones, or Sunday alias `7`.
@@ -109,7 +110,7 @@ export default defineApp({
 - External services like Datadog, OpenAI, GitHub, Slack, etc. are normal modules and environment-backed clients inside your app, not new Wharfie capability kinds.
 - Activity `externalPackages` entries must be unique lowercase npm registry `{ name, version }` objects, sorted by name and pinned to exact published semantic versions. Do not use ranges, tags, URLs, bare strings, or ambient resolution.
 - App and activity IDs must match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and contain at most 63 ASCII bytes. Never trim, case-fold, or rewrite an ID.
-- The compiler rejects unknown fields and compatibility aliases. Do not author `name`, `ActorSystem`, `properties`, `functions`, `capabilities`, `resources`, direct activity schedules, packaging assets, signing credentials, or build secrets in the v3 manifest.
+- The compiler rejects unknown fields and compatibility aliases. Do not author `name`, `ActorSystem`, `properties`, `functions`, `capabilities`, `resources`, direct activity schedules, packaging assets, signing credentials, or build secrets in the v4 manifest.
 - Keep the developer-owned CLI useful, then express durable work as finite workflows and add workflow-only schedules only for meaningful recurrence.
 
 Design heuristics
@@ -231,14 +232,15 @@ For the task I give you:
    - CLI + activities + scheduled workflow
    - packaged CLI + activities + scheduled workflow
 3. Identify the smallest correct set of files to modify.
-4. Create or update the default-exported plain-object `wharfie.app.js` v3 manifest. Do not expose `ActorSystem` as an alternative.
+4. Create or update the default-exported plain-object `wharfie.app.js` v4 manifest. Do not expose `ActorSystem` as an alternative.
 5. Implement the developer-owned CLI entrypoint.
 6. Implement shared domain modules for the actual business logic.
 7. Implement named activities that call those same domain modules.
 8. Wire the app manifest:
-   - `schemaVersion: 3`
+   - `schemaVersion: 4`
    - `app.id`
    - `cli`
+   - `cli.durable` only when ordinary application arguments should project into one declared workflow
    - `activities` only if needed
    - a nonempty finite `workflows` map only if needed
    - a nonempty workflow-only `schedules` map only for meaningful recurrence

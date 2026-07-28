@@ -2,7 +2,7 @@
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'workflow-crash-source' },
   cli: {
     entrypoint: {

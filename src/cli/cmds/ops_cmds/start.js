@@ -1,4 +1,7 @@
-import { loadPreparedDurableExecution } from '../../app/load-durable-execution.js';
+import {
+  loadPreparedDurableCliModule,
+  loadPreparedDurableExecution,
+} from '../../app/load-durable-execution.js';
 import { displayFailure, displaySuccess } from '../../output/basic.js';
 import { createDurableWorkflowStartCommand } from '../../../core/runtime/operator/durable-workflow-start-command.js';
 
@@ -14,5 +17,6 @@ export function createSourceDurableWorkflowStartCommand() {
       failure: displayFailure,
     },
     loadExecution: loadPreparedDurableExecution,
+    loadCliModule: loadPreparedDurableCliModule,
   });
 }

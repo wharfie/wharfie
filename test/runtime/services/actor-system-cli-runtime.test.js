@@ -551,6 +551,26 @@ describe('packaged application dispatch', () => {
         (option) => option.long,
       ),
     ).not.toContain('--dir');
+    expect(
+      sourceStart?.registeredArguments.map(
+        /** @param {import('commander').Argument} argument */
+        (argument) => ({
+          name: argument.name(),
+          required: argument.required,
+          variadic: argument.variadic,
+        }),
+      ),
+    ).toEqual([{ name: 'appArgs', required: false, variadic: true }]);
+    expect(
+      packagedStart?.registeredArguments.map(
+        /** @param {import('commander').Argument} argument */
+        (argument) => ({
+          name: argument.name(),
+          required: argument.required,
+          variadic: argument.variadic,
+        }),
+      ),
+    ).toEqual([{ name: 'appArgs', required: false, variadic: true }]);
     expect(sourceOps.helpInformation()).toContain('start');
     expect(packaged.helpInformation()).toContain('start');
   });
@@ -681,29 +701,34 @@ describe('packaged application dispatch', () => {
     },
   );
 
-  it('routes the reserved namespace to the bundled operator CLI', async () => {
-    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
-    const developerCli = jest.fn(async (_argv) => undefined);
-    const loadDeveloperCliModule = jest.fn(async () => ({
-      default: developerCli,
-    }));
-    const operatorCli = jest.fn(async (_argv) => undefined);
-    clearRuntimeEnvironment();
+  it.each([
+    ['manifest', ['manifest']],
+    ['help', []],
+  ])(
+    'passes the lazy developer loader to packaged operator %s without loading it',
+    async (_label, operatorArgv) => {
+      const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+      const developerCli = jest.fn(async (_argv) => undefined);
+      const loadDeveloperCliModule = jest.fn(async () => ({
+        default: developerCli,
+      }));
+      const operatorCli = jest.fn(async (_argv, _context) => undefined);
+      clearRuntimeEnvironment();
 
-    await runPackagedApp({
-      loadDeveloperCliModule,
-      runtimeModules: { operatorCli },
-      argv: ['node', 'wharfie-artifact', 'wharfie', 'manifest'],
-    });
+      await runPackagedApp({
+        loadDeveloperCliModule,
+        runtimeModules: { operatorCli },
+        argv: ['node', 'wharfie-artifact', 'wharfie', ...operatorArgv],
+      });
 
-    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
-    expect(developerCli).not.toHaveBeenCalled();
-    expect(operatorCli).toHaveBeenCalledWith([
-      'node',
-      'wharfie-artifact',
-      'manifest',
-    ]);
-  });
+      expect(loadDeveloperCliModule).not.toHaveBeenCalled();
+      expect(developerCli).not.toHaveBeenCalled();
+      expect(operatorCli).toHaveBeenCalledWith(
+        ['node', 'wharfie-artifact', ...operatorArgv],
+        { loadDeveloperCliModule },
+      );
+    },
+  );
 
   it('loads the developer CLI once only when developer argv is dispatched', async () => {
     const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);

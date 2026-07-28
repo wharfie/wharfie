@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, spawnSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,7 +17,10 @@ import {
   startDurableManifestWorkflow,
 } from '../../../src/core/runtime/durable-workflow-host.js';
 import { fireWorkflowLedgerTimer } from '../../../src/core/runtime/workflow-ledger-continuation.js';
-import { loadPreparedDurableExecution } from '../../../src/cli/app/load-durable-execution.js';
+import {
+  loadPreparedDurableCliModule,
+  loadPreparedDurableExecution,
+} from '../../../src/cli/app/load-durable-execution.js';
 import {
   cleanupIsolatedAuthoredAppFixtures,
   createIsolatedAuthoredAppFixture,
@@ -232,6 +235,52 @@ async function runCurrentActivity(options) {
 }
 
 describe('steady-file golden path', () => {
+  it('rejects an app-local Wharfie runtime before importing the sealed CLI adapter', async () => {
+    const fixture = createFixture();
+    const appLocalWharfie = path.join(
+      fixture.appDir,
+      'node_modules',
+      '@wharfie',
+      'wharfie',
+    );
+    rmSync(appLocalWharfie, { force: true });
+    mkdirSync(appLocalWharfie, { recursive: true });
+    writeFileSync(
+      path.join(appLocalWharfie, 'package.json'),
+      JSON.stringify({
+        name: '@wharfie/wharfie',
+        version: '0.0.0-conflicting',
+        type: 'module',
+        exports: {
+          './app': './app.js',
+          './package.json': './package.json',
+        },
+      }),
+    );
+    writeFileSync(
+      path.join(appLocalWharfie, 'app.js'),
+      'export function defineApp(definition) { return definition; }\n',
+    );
+    const loaded = await loadPreparedDurableExecution({
+      dir: fixture.appDir,
+      workflow: WORKFLOW_ID,
+    });
+    const cleanup = loaded.cleanup;
+    if (typeof cleanup !== 'function') {
+      throw new Error('Prepared source did not expose snapshot cleanup.');
+    }
+
+    try {
+      await expect(
+        loadPreparedDurableCliModule(loaded.execution),
+      ).rejects.toThrow(
+        'Source CLI entrypoint resolves a different @wharfie/wharfie runtime',
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('maps changed and failed local observations to their documented exits', async () => {
     const fixture = createFixture();
     const changingPath = path.join(fixture.root, 'changing-artifact.bin');
@@ -284,7 +333,7 @@ describe('steady-file golden path', () => {
     }
   });
 
-  it('runs locally, reopens at a durable timer, and discloses the retained changed result', async () => {
+  it('maps ordinary CLI args, reopens at a durable timer, and discloses the retained changed result', async () => {
     const fixture = createFixture();
     const artifactPath = path.join(fixture.root, 'artifact.bin');
     writeFileSync(artifactPath, 'first artifact bytes\n');
@@ -339,6 +388,7 @@ describe('steady-file golden path', () => {
           exitCode: undefined,
         },
         loadExecution: async () => ({ execution: prepared.execution }),
+        loadCliModule: loadPreparedDurableCliModule,
         startWorkflow: async (options) =>
           await startDurableManifestWorkflow({
             ledger: initialContext.ledger,
@@ -365,13 +415,11 @@ describe('steady-file golden path', () => {
           'start',
           '--dir',
           fixture.appDir,
-          '--workflow',
-          WORKFLOW_ID,
           '--idempotency-key',
           'artifact-build-42',
-          '--input',
-          JSON.stringify({ path: artifactPath }),
           '--json',
+          '--',
+          artifactPath,
         ],
         { from: 'node' },
       );

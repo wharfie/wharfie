@@ -7,7 +7,7 @@ import {
 } from '@wharfie/wharfie/app';
 
 const cliOnlyApp = defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'cli-only-app' },
   cli: {
     entrypoint: {
@@ -17,11 +17,11 @@ const cliOnlyApp = defineApp({
     },
   },
 });
-const cliOnlySchemaVersion: 3 = cliOnlyApp.schemaVersion;
+const cliOnlySchemaVersion: 4 = cliOnlyApp.schemaVersion;
 void cliOnlySchemaVersion;
 
 const emptyWorkflowMapApp = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'empty-workflow-map' },
   cli: {
     entrypoint: {
@@ -36,7 +36,7 @@ const emptyWorkflowMapApp = {
 defineApp(emptyWorkflowMapApp);
 
 const emptyScheduleMapApp = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'empty-schedule-map' },
   cli: {
     entrypoint: {
@@ -51,7 +51,7 @@ const emptyScheduleMapApp = {
 defineApp(emptyScheduleMapApp);
 
 const scheduleWithoutDeclaredWorkflow = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'missing-schedule-workflow' },
   cli: {
     entrypoint: {
@@ -78,14 +78,59 @@ const scheduleWithoutDeclaredWorkflow = {
 // @ts-expect-error Every schedule must reference a workflow in the same manifest.
 defineApp(scheduleWithoutDeclaredWorkflow);
 
+const durableCliWithoutDeclaredWorkflow = {
+  schemaVersion: 4,
+  app: { id: 'missing-durable-cli-workflow' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+    durable: {
+      workflow: 'missing',
+      export: 'toDurableInput',
+    },
+  },
+  workflows: {
+    present: {
+      steps: [{ id: 'wait', kind: 'signal' }],
+    },
+  },
+} as const;
+// @ts-expect-error A durable CLI handoff must reference a workflow in the same manifest.
+defineApp(durableCliWithoutDeclaredWorkflow);
+
+const durableCliWithoutWorkflows = {
+  schemaVersion: 4,
+  app: { id: 'durable-cli-without-workflows' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
+    durable: {
+      workflow: 'missing',
+      export: 'toDurableInput',
+    },
+  },
+} as const;
+// @ts-expect-error A durable CLI handoff requires a declared workflow map.
+defineApp(durableCliWithoutWorkflows);
+
 const app = defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'typed-app' },
   cli: {
     entrypoint: {
       kind: 'node',
       path: './src/cli.ts',
       export: 'main',
+    },
+    durable: {
+      workflow: 'greet-later',
+      export: 'toDurableInput',
     },
   },
   targets: [
@@ -143,10 +188,12 @@ const app = defineApp({
   },
 });
 
-const schemaVersion: 3 = app.schemaVersion;
+const schemaVersion: 4 = app.schemaVersion;
 const appId: 'typed-app' = app.app.id;
 const entrypointKind: 'node' = app.cli.entrypoint.kind;
 const cliPath: './src/cli.ts' = app.cli.entrypoint.path;
+const durableWorkflow: 'greet-later' = app.cli.durable.workflow;
+const durableExport: 'toDurableInput' = app.cli.durable.export;
 const activityExport: 'greet' = app.activities.greet.entrypoint.export;
 const externalPackageName: 'example-package' =
   app.activities.greet.externalPackages[0].name;
@@ -157,13 +204,15 @@ void schemaVersion;
 void appId;
 void entrypointKind;
 void cliPath;
+void durableWorkflow;
+void durableExport;
 void activityExport;
 void externalPackageName;
 void workflowStepKind;
 void workflowLiteral;
 
 const scheduledApp = defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'scheduled-app' },
   cli: {
     entrypoint: {
@@ -188,16 +237,16 @@ const scheduledApp = defineApp({
   },
 });
 
-const scheduleSchemaVersion: 3 = scheduledApp.schemaVersion;
+const scheduleSchemaVersion: 4 = scheduledApp.schemaVersion;
 const scheduleCron: '0 0 * * *' = scheduledApp.schedules.nightly.cron;
 const scheduleInput: 'schedule' = scheduledApp.schedules.nightly.input.source;
 void scheduleSchemaVersion;
 void scheduleCron;
 void scheduleInput;
 
-const v2WithSchedule = {
-  schemaVersion: 2,
-  app: { id: 'invalid-v2-schedule' },
+const v3WithSchedule = {
+  schemaVersion: 3,
+  app: { id: 'invalid-v3-schedule' },
   cli: {
     entrypoint: {
       kind: 'node',
@@ -215,11 +264,11 @@ const v2WithSchedule = {
     },
   },
 } as const;
-// @ts-expect-error Schedules require the exact schemaVersion 3 manifest shape.
-defineApp(v2WithSchedule);
+// @ts-expect-error Schedules require the exact schemaVersion 4 manifest shape.
+defineApp(v3WithSchedule);
 
 const legacyApp = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'legacy-app' },
   cli: {
     entrypoint: {
@@ -247,7 +296,7 @@ const legacyApp = {
 defineApp(legacyApp);
 
 const minimalApp = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'minimal-app' },
   cli: {
     entrypoint: {
@@ -283,8 +332,22 @@ const appWithExtraCliKey = {
   ...minimalApp,
   cli: { ...minimalApp.cli, description: 'unsupported' },
 } as const;
-// @ts-expect-error The CLI definition accepts only its entrypoint.
+// @ts-expect-error The CLI definition accepts only its exact supported fields.
 defineApp(appWithExtraCliKey);
+
+const appWithExtraDurableCliKey = {
+  ...minimalApp,
+  cli: {
+    ...minimalApp.cli,
+    durable: {
+      workflow: 'wait',
+      export: 'toDurableInput',
+      input: {},
+    },
+  },
+} as const;
+// @ts-expect-error Durable CLI handoffs accept only workflow and export.
+defineApp(appWithExtraDurableCliKey);
 
 const appWithExtraCliEntrypointKey = {
   ...minimalApp,
@@ -316,7 +379,7 @@ const appWithRemovedTopLevelResources = {
     db: { adapter: 'vanilla' },
   },
 } as const;
-// @ts-expect-error Resources are not part of the v3 manifest authoring boundary.
+// @ts-expect-error Resources are not part of the v4 manifest authoring boundary.
 defineApp(appWithRemovedTopLevelResources);
 
 const appWithRemovedActivityResources = {
@@ -332,7 +395,7 @@ const appWithRemovedActivityResources = {
     },
   },
 } as const;
-// @ts-expect-error Activity resources are not part of the v3 authoring boundary.
+// @ts-expect-error Activity resources are not part of the v4 authoring boundary.
 defineApp(appWithRemovedActivityResources);
 
 const appWithExtraActivityKey = {

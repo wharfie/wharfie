@@ -38,6 +38,8 @@ The repository has substantial foundations:
 - the `steady-file` golden-path application and a hermetic proof of ordinary
   CLI execution, sealed source preparation, durable activity/timer/activity
   continuation across a control-store reopen, and verified retained output,
+  with a schema-v4 default that maps the ordinary file argument into durable
+  workflow input,
   plus a
   [checksummed Darwin observation](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
   of the real source LMDB resident and generated relocated SEA with Node absent
@@ -71,6 +73,9 @@ second application architecture.
 - Manual activities, linear workflows, timers, signals, schedules, durable
   submission, cancellation, recovery, and selected managed effects exist.
 - Source and packaged commands share durable receipts and read models.
+- A manifest can name one default durable workflow and a pure CLI-argument
+  adapter, so the happy path does not require a workflow ID or handwritten
+  JSON input.
 - Packaged artifacts can run without Node on the target command path.
 - The local service lifecycle supports install, converge, restart, update,
   rollback, recover, status, prune, and uninstall.
@@ -79,13 +84,12 @@ second application architecture.
 
 ### Work next
 
-1. Use the recorded `steady-file` friction inventory to simplify only
-   demonstrated blockers.
-   Prefer strong defaults and one obvious command sequence.
-2. On a clean supported Linux host with a systemd user manager, prove install
+1. On a clean supported Linux host with a systemd user manager, prove install
    and converge, deliberate service replacement, host restart, history and
    output reads, update, rollback, uninstall, and cleanup. Same-host execution
    without Node in `PATH` is already observed; clean-host independence is not.
+2. Reduce the remaining returned-run and app-scope friction only when the
+   walkthrough demonstrates that it blocks the obvious command sequence.
 3. Add schedule, application state, or broader workflow behavior only when the
    golden application has a real need for it.
 
@@ -197,8 +201,8 @@ ends with independently checked receipts.
 
 Do not add another numbered roadmap tranche. The portable half of the bounded
 local golden path and one real Darwin native/SEA observation are concrete, but
-the slice is not complete until its demonstrated friction is reduced and its
-clean Linux/systemd persistent-service lifecycle is proved:
+the slice is not complete until its clean Linux/systemd persistent-service
+lifecycle is proved:
 
 1. `steady-file` compares two file observations for a useful local shell
    decision;
@@ -207,10 +211,13 @@ clean Linux/systemd persistent-service lifecycle is proved:
    boundary;
 4. the exact source and packaged operator sequences completed through native
    LMDB and a relocated SEA in the separate checksummed Darwin observation;
-5. deliberate service replacement and the clean Linux/systemd lifecycle remain
+5. schema v4 now maps its ordinary file argument through a pure declared
+   adapter, selects the durable workflow, and generates a unique start identity
+   by default;
+6. deliberate service replacement and the clean Linux/systemd lifecycle remain
    explicit evidence gates;
    and
-6. exposed findings are classified as proof gaps, interface friction, expected
+7. exposed findings are classified as proof gaps, interface friction, expected
    design, or deliberate boundaries before more coordinator or provider
    machinery is added.
 

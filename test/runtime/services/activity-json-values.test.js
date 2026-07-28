@@ -104,7 +104,7 @@ jest.unstable_mockModule(FUNCTION_IMPORT, () => ({
 }));
 
 const activityManifest = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'json-boundary-test' },
   cli: {
     entrypoint: {

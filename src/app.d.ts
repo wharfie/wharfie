@@ -106,8 +106,15 @@ export interface NodeEntrypoint {
   export: string;
 }
 
+/** Map ordinary CLI arguments into input for one default durable workflow. */
+export interface DurableCliDefinition {
+  workflow: LogicalId;
+  export: string;
+}
+
 export interface AppCliDefinition {
   entrypoint: NodeEntrypoint;
+  durable?: DurableCliDefinition;
 }
 
 export interface ExternalPackage {
@@ -218,7 +225,7 @@ interface WharfieAppDefinitionBase {
 }
 
 export type WharfieAppDefinition = WharfieAppDefinitionBase & {
-  schemaVersion: 3;
+  schemaVersion: 4;
 };
 
 type StrictShape<Actual, Shape> = Shape extends unknown
@@ -265,13 +272,26 @@ type ScheduleReferencesDeclaredWorkflow<Actual> = Actual extends {
     : never
   : unknown;
 
+type DurableCliReferencesDeclaredWorkflow<Actual> = Actual extends {
+  readonly cli: { readonly durable: infer Durable };
+}
+  ? Actual extends { readonly workflows: infer Workflows }
+    ? Durable extends { readonly workflow: string }
+      ? Durable['workflow'] extends keyof Workflows
+        ? unknown
+        : never
+      : never
+    : never
+  : unknown;
+
 export declare function defineApp<const App>(
   definition: App &
     WharfieAppDefinition &
     StrictShape<App, WharfieAppDefinition> &
     NonEmptyWhenDeclared<App, 'workflows'> &
     NonEmptyWhenDeclared<App, 'schedules'> &
-    ScheduleReferencesDeclaredWorkflow<App>,
+    ScheduleReferencesDeclaredWorkflow<App> &
+    DurableCliReferencesDeclaredWorkflow<App>,
 ): App;
 
 export declare function invokeActivity<

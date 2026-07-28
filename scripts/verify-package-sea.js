@@ -9614,7 +9614,7 @@ await main(process.argv);
     `import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'portable-app' },
   cli: {
     entrypoint: {
@@ -10036,7 +10036,7 @@ export default defineApp({
       env: cleanEnvironment,
     }).stdout,
   );
-  assert.equal(embeddedManifest.schemaVersion, 3);
+  assert.equal(embeddedManifest.schemaVersion, 4);
   assert.deepEqual(embeddedManifest.app, { id: 'portable-app' });
   assert.deepEqual(embeddedManifest.targets, [
     {

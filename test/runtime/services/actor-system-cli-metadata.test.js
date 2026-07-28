@@ -55,7 +55,7 @@ function digest(character) {
 function makeRevision(sourceDigest = 'A') {
   return createApplicationRevision({
     contract: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       app: { id: 'metadata-demo' },
       cli: {
         entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

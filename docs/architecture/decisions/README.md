@@ -29,11 +29,12 @@ These records capture product-level decisions that should survive implementation
 | [0023 — Verified sensitive activity-log disclosure](0023-sensitive-activity-log-disclosure.md)                             | Accepted                                               |
 | [0024 — Revision-bound workflow schedules](0024-revision-bound-workflow-schedules.md)                                      | Accepted; pending admission superseded by 0025         |
 | [0025 — Atomic scheduled-workflow admission](0025-atomic-scheduled-workflow-admission.md)                                  | Accepted; internal kernel carried forward by 0026      |
-| [0026 — Resident revision-bound workflow schedules](0026-resident-workflow-schedules.md)                                   | Accepted; replaces strict V2 with executable V3        |
+| [0026 — Resident revision-bound workflow schedules](0026-resident-workflow-schedules.md)                                   | Accepted; manifest V3 superseded by 0032               |
 | [0027 — Relocated SEA schedule/restart proof](0027-relocated-sea-schedule-restart-proof.md)                                | Accepted; Linux execution evidence remains pending     |
 | [0028 — Versioned durable-operation receipts](0028-versioned-durable-operation-receipts.md)                                | Accepted                                               |
 | [0029 — Explicit bounded local release pruning](0029-local-release-pruning.md)                                             | Accepted                                               |
 | [0030 — Versioned application-package receipt](0030-versioned-application-package-receipt.md)                              | Accepted                                               |
 | [0031 — Verified sensitive durable run-output disclosure](0031-verified-sensitive-run-output.md)                           | Accepted                                               |
+| [0032 — Default durable CLI handoff](0032-default-durable-cli-handoff.md)                                                   | Accepted; replaces strict V3 with executable V4        |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

@@ -48,7 +48,7 @@ function digest(value) {
  */
 function makeEmbeddedExecution() {
   const contract = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'resident-command-demo' },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

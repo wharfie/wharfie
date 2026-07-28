@@ -87,7 +87,7 @@ function makeApplicationRevision(
 ) {
   return createApplicationRevision({
     contract: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       app: { id: appId },
       cli: {
         entrypoint: {

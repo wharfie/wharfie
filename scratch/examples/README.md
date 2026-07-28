@@ -1,6 +1,6 @@
 # Wharfie application demos
 
-These small applications exercise the strict schemaVersion 3 authoring model:
+These small applications exercise the strict schemaVersion 4 authoring model:
 a developer-owned CLI, named activities, finite workflows, revision-bound UTC
 schedules, strict JSON input, and exact package targets. They intentionally do
 not expose Wharfie's internal `ActorSystem` or legacy resource-injection
@@ -21,6 +21,8 @@ The product golden path. Its normal CLI checks whether one regular file has
 identical contents at two observations 250 milliseconds apart. Its durable
 workflow captures the same fingerprint, waits through a framework-owned timer,
 then compares fresh bytes and retains the logical matching/different result.
+Its `cli.durable` adapter maps the ordinary file argument into workflow input
+without performing the check.
 See the
 [golden-path guide](../../docs/guides/golden-path.md).
 
@@ -47,10 +49,11 @@ node ./bin/wharfie app manifest ./scratch/examples/apps/steady-file
 
 node ./bin/wharfie ops start \
   --dir ./scratch/examples/apps/steady-file \
-  --workflow verify-stable \
-  --idempotency-key artifact-build-42 \
-  --input '{"path":"/absolute/path/to/artifact"}' \
-  --json
+  --json \
+  -- /absolute/path/to/artifact
+
+node ./bin/wharfie ops worker \
+  --dir ./scratch/examples/apps/steady-file
 
 node ./bin/wharfie app manifest ./scratch/examples/apps/hello-world
 
@@ -66,6 +69,13 @@ node ./bin/wharfie app run start \
   --dir ./scratch/examples/apps/kitchen-sink \
   --input '{"who":"wharfie","iterations":32}'
 ```
+
+The `--` separator marks the arguments owned by the application. `start`
+generates a fresh idempotency key when it is omitted and returns that key in
+the receipt; supply `--idempotency-key <stable-key>` when admission must be
+safe to retry after a lost response. The expert
+`--workflow <workflow-id> --input <json>` form bypasses the adapter. Starting
+work and running the resident worker remain separate operations.
 
 `app package` writes artifacts to `<app dir>/dist` by default. A packaged
 artifact exposes its embedded canonical manifest through:

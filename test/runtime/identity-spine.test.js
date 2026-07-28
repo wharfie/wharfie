@@ -65,7 +65,7 @@ function digest(value) {
 
 function makeContract() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'identity-demo' },
     cli: {
       entrypoint: {
@@ -292,7 +292,7 @@ describe('ApplicationRevisionV1', () => {
       activities: clone(first.contract.activities),
       cli: clone(first.contract.cli),
       app: clone(first.contract.app),
-      schemaVersion: 3,
+      schemaVersion: 4,
     };
     const second = createApplicationRevision({
       contract: reorderedContract,
@@ -367,7 +367,7 @@ describe('ApplicationRevisionV1', () => {
         },
         inputs: makeInputs(),
       }),
-    ).toThrow(/resources is not supported by schemaVersion 3/i);
+    ).toThrow(/resources is not supported by schemaVersion 4/i);
 
     const unsortedInputs = makeInputs();
     unsortedInputs.assets.reverse();

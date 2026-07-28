@@ -118,7 +118,7 @@ function resolveCliHandler(moduleLike, cliExportName) {
 
 /**
  * @param {Record<string, any> | null | undefined} moduleLike - moduleLike.
- * @param {{ cliExportName?: string, argv?: string[] }} [options] - options.
+ * @param {{ cliExportName?: string, argv?: string[], context?: unknown }} [options] - options.
  * @returns {Promise<void>} - Result.
  */
 export async function runDeveloperCli(moduleLike, options = {}) {
@@ -136,6 +136,10 @@ export async function runDeveloperCli(moduleLike, options = {}) {
     return;
   }
 
+  if (Object.prototype.hasOwnProperty.call(options, 'context')) {
+    await handler.value(argv, options.context);
+    return;
+  }
   await handler.value(argv);
 }
 
@@ -208,7 +212,12 @@ export async function runPackagedApp(options = {}) {
 
     await runDeveloperCli(
       { default: runtimeModules.operatorCli },
-      { argv: getOperatorArgv(argv) },
+      {
+        argv: getOperatorArgv(argv),
+        context: {
+          loadDeveloperCliModule: options.loadDeveloperCliModule,
+        },
+      },
     );
     return;
   }

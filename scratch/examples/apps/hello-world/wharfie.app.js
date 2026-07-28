@@ -1,7 +1,7 @@
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'hello-world-demo' },
   cli: {
     entrypoint: {

@@ -53,7 +53,7 @@ describe('src/cli/entry main', () => {
         events.push('action:end');
         resolve({
           manifest: {
-            schemaVersion: 3,
+            schemaVersion: 4,
             app: { id: 'test-app' },
             cli: {
               entrypoint: {

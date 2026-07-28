@@ -111,7 +111,7 @@ describe('wharfie app commands', () => {
     expect(result.stderr).toBe('');
 
     const payload = JSON.parse(result.stdout);
-    expect(payload.schemaVersion).toBe(3);
+    expect(payload.schemaVersion).toBe(4);
     expect(payload.app).toEqual({ id: 'kitchen-sink-demo' });
     expect(payload.activities).toEqual({
       start: expect.objectContaining({
@@ -145,7 +145,7 @@ describe('wharfie app commands', () => {
       writeFileSync(
         path.join(dir, 'wharfie.app.js'),
         `export default {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'secret-manifest-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './cli.js', export: 'default' },
@@ -162,7 +162,7 @@ describe('wharfie app commands', () => {
       expect(result.status).toBe(1);
       expect(result.stdout).not.toContain(secret);
       expect(result.stderr).toMatch(
-        /app\.resources is not supported by schemaVersion 3/i,
+        /app\.resources is not supported by schemaVersion 4/i,
       );
       expect(result.stderr).not.toContain(secret);
     } finally {
@@ -187,7 +187,7 @@ describe('wharfie app commands', () => {
       writeFileSync(
         path.join(dir, 'wharfie.app.js'),
         `export default {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'target-command-demo' },
   cli: {
     entrypoint: { kind: 'node', path: './cli.js', export: 'default' },

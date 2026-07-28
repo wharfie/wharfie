@@ -51,7 +51,7 @@ bytes, canonical sidecar, and embedded revision association.
 
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
-The abandoned v1 source and dependency graph have been deleted. The strict v3
+The abandoned v1 source and dependency graph have been deleted. The strict v4
 manifest and the append-only V10 run → invocation → attempt → effect ledger
 are now defined; the superseded mutable Operation/Action snapshot store is
 gone. The manifest can declare bounded plain-data linear workflows and
@@ -785,19 +785,23 @@ public command surface. Older material under `llm/design/` can be stale.
 ## Current application contract
 
 A source application is a default-exported plain object in `wharfie.app.js`.
-The v3 boundary is deliberately small and strict:
+The v4 boundary is deliberately small and strict:
 
 ```js
 import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'my-app' },
   cli: {
     entrypoint: {
       kind: 'node',
       path: './src/cli.js',
       export: 'main',
+    },
+    durable: {
+      workflow: 'greet',
+      export: 'toDurableInput',
     },
   },
   activities: {
@@ -837,9 +841,13 @@ Application and activity IDs are lowercase kebab identifiers matching
 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with a maximum of 63 ASCII bytes. Wharfie
 does not trim or rewrite them. The CLI is required; activities, workflows,
 schedules, and package targets are optional, and every declared map must be
-nonempty. A workflow is one to 64 ordered plain-data activity, timer, or signal
-steps; activity inputs explicitly select the workflow input, a JSON literal,
-or one earlier step's persisted output. A schedule names one workflow, carries
+nonempty. Optional `cli.durable` names one declared workflow and one pure
+export from the CLI entrypoint module. That adapter receives frozen ordinary
+application arguments and returns bounded JSON workflow input; sharing its
+parser with the normal CLI keeps both paths aligned. A workflow is one to 64
+ordered plain-data activity, timer, or signal steps; activity inputs explicitly
+select the workflow input, a JSON literal, or one earlier step's persisted
+output. A schedule names one workflow, carries
 static JSON input, and uses a canonical five-field UTC cron expression. The
 first policy surface is deliberately fixed to latest-only missed-run catch-up
 and overlap-allowing workflow runs. The manifest compiler and packager bind
@@ -886,6 +894,7 @@ existing run:
 ```bash
 wharfie ops submit --dir ./path/to/app --activity greet \
   --idempotency-key <stable-key> --input '{"name":"Ada"}'
+wharfie ops start --dir ./path/to/app -- <application-args>
 wharfie ops start --workflow greet --dir ./path/to/app \
   --idempotency-key <stable-workflow-key> --input '{"name":"Ada"}'
 wharfie ops worker --dir ./path/to/app
@@ -899,6 +908,7 @@ override:
 ```bash
 <app> wharfie submit --activity greet \
   --idempotency-key <stable-key> --input '{"name":"Ada"}'
+<app> wharfie start -- <application-args>
 <app> wharfie start --workflow greet \
   --idempotency-key <stable-workflow-key> --input '{"name":"Ada"}'
 <app> wharfie worker
@@ -906,15 +916,24 @@ override:
   --delivery-id <stable-delivery-id> --payload '{"approved":true}'
 ```
 
-`submit` and `start` are durable and do not require a live worker. Reusing the
-same idempotency key with the identical activity or workflow request returns
-the retained run; changing the request conflicts. A matching resident wakes
-immediately when it accepts the authenticated request, while offline work
-remains `RUNNABLE` until that exact app/revision worker starts. The workflow
-start output includes the derived run ID, immutable revision, workflow,
-current cursor position, and activation kind without exposing inputs or
-payload references. `signal` requires a caller-stable delivery ID and a JSON
-payload. It accepts only the signal named by the current wait: an early,
+`submit` and `start` are durable and do not require a live worker; the worker
+remains a separate resident process. For an application with `cli.durable`,
+`--` separates application arguments from operator options, selects its
+declared default workflow, and invokes its adapter. Omitting a start
+idempotency key creates a new `manual-<uuid>` identity and returns it in the
+receipt. Supply a stable key when the same logical admission may be retried
+after a lost response. The explicit `--workflow` and `--input` form bypasses
+the adapter and cannot be combined with application arguments.
+
+Reusing the same idempotency key with the identical activity or workflow
+request returns the retained run; changing the request conflicts. A matching
+resident wakes immediately when it accepts the authenticated request, while
+offline work remains `RUNNABLE` until that exact app/revision worker starts.
+The workflow start output includes the derived run ID, immutable revision,
+workflow, current cursor position, activation kind, and idempotency key without
+exposing inputs or payload references. `signal` requires a caller-stable
+delivery ID and a JSON payload. It accepts only the signal named by the current
+wait: an early,
 unexpected, or late delivery is durably rejected as `early-signal`,
 `unexpected-signal`, or `late-signal`, with no early-signal inbox. Repeating
 the exact delivery returns the retained accepted or rejected decision;

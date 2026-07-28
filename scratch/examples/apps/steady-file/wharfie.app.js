@@ -3,13 +3,17 @@ import { defineApp } from '@wharfie/wharfie/app';
 import { STABILITY_WINDOW_MS } from './file-stability.js';
 
 export default defineApp({
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'steady-file-demo' },
   cli: {
     entrypoint: {
       kind: 'node',
       path: './cli.js',
       export: 'main',
+    },
+    durable: {
+      workflow: 'verify-stable',
+      export: 'toDurableInput',
     },
   },
   targets: [

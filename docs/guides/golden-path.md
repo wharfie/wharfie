@@ -46,14 +46,42 @@ machine's filesystem, not the shell that submitted the request:
 ```bash
 node ./bin/wharfie ops start \
   --dir ./scratch/examples/apps/steady-file \
-  --workflow verify-stable \
+  --json \
+  -- /absolute/path/to/artifact.tar
+```
+
+The manifest's `cli.durable` declaration selects `verify-stable` and names the
+pure `toDurableInput(args)` export. Wharfie passes only the arguments after
+`--` to that adapter, which produces the same `{ path }` input used by the
+ordinary CLI. The separator keeps application arguments distinct from
+Wharfie operator options.
+
+Omitting `--idempotency-key` creates a new `manual-<uuid>` identity and returns
+it in the receipt. Supply a stable key when a caller needs to retry the same
+admission after a lost response:
+
+```bash
+node ./bin/wharfie ops start \
+  --dir ./scratch/examples/apps/steady-file \
   --idempotency-key artifact-build-42 \
+  --json \
+  -- /absolute/path/to/artifact.tar
+```
+
+The workflow and JSON controls remain available as an expert path that
+bypasses the CLI adapter. They cannot be combined with application arguments:
+
+```bash
+node ./bin/wharfie ops start \
+  --dir ./scratch/examples/apps/steady-file \
+  --workflow verify-stable \
   --input '{"path":"/absolute/path/to/artifact.tar"}' \
+  --idempotency-key artifact-build-42 \
   --json
 ```
 
-Keep the returned `runId`. In another terminal, run the matching source
-resident:
+Keep the returned `runId`. Starting durable work does not daemonize the
+application. In another terminal, run the matching source resident:
 
 ```bash
 node ./bin/wharfie ops worker \
@@ -108,10 +136,8 @@ The reserved operator namespace carries the durable form without `--dir` or
 
 ```bash
 <steady-file-artifact> wharfie start \
-  --workflow verify-stable \
-  --idempotency-key artifact-build-42 \
-  --input '{"path":"/absolute/path/to/artifact.tar"}' \
-  --json
+  --json \
+  -- /absolute/path/to/artifact.tar
 
 <steady-file-artifact> wharfie worker
 
@@ -156,10 +182,10 @@ The walkthrough produced a short, prioritized list:
    runtime `PATH`, and returned matching verified output without changing
    application logic. This is one same-host observation, not clean-host or
    service-lifecycle proof.
-2. **P1 — interface friction:** the ordinary CLI accepts one path, while the
-   durable form asks the user to choose a workflow ID, invent an idempotency
-   key, and translate the path into JSON. The framework has not yet earned a
-   new abstraction, but this handoff should become markedly smaller.
+2. **Closed interface friction:** schema v4 lets this application declare one
+   default durable workflow and a pure argv-to-input adapter. The happy path
+   now accepts the ordinary file argument, while explicit workflow, JSON, and
+   stable idempotency controls remain available when needed.
 3. **P1 — interface friction:** the user must carry the returned `runId` into
    inspection and output, then repeat `steady-file-demo` for source `output`.
    Explicit app scope preserves read isolation, but the happy path has enough
@@ -167,15 +193,16 @@ The walkthrough produced a short, prioritized list:
 4. **P2 — interface friction:** `ops worker` is resident and has no
    development-only `--once` or `--until-idle` mode. A shell walkthrough must
    own a background process and graceful shutdown.
-5. **Expected design:** source development runs the developer-owned CLI
-   directly through `local.js`; Wharfie does not consume ordinary argv. The
-   packaged executable invokes the manifest CLI entrypoint.
+5. **Expected design:** source development still runs the developer-owned CLI
+   directly through `local.js`. Durable start loads the sealed CLI module only
+   to call the declared pure adapter; the packaged executable invokes the same
+   manifest CLI entrypoint for ordinary execution.
 6. **Deliberate boundary:** workflow timer durations are immutable revision
    data. Two observations do not justify dynamic delays, general scheduling,
    filesystem watching, or a new workflow language.
 
-The native/SEA evidence gate is closed for one Darwin run. Reduce the
-demonstrated P1 handoffs next; the remaining evidence gate is a clean supported
-Linux/systemd service lifecycle with install, converge, deliberate replacement,
-host restart, history and output reads, update, rollback, uninstall, and
-cleanup.
+The native/SEA evidence gate is closed for one Darwin run, and the demonstrated
+CLI-to-durable input handoff is now small. The remaining evidence gate is a
+clean supported Linux/systemd service lifecycle with install, converge,
+deliberate replacement, host restart, history and output reads, update,
+rollback, uninstall, and cleanup.

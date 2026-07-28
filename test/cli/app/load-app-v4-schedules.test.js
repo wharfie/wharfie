@@ -21,7 +21,7 @@ afterEach(async () => {
 /** @returns {Record<string, any>} */
 function makeSource() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'source-schedule-app' },
     cli: {
       entrypoint: {
@@ -66,7 +66,7 @@ function makeSource() {
 /** @param {Record<string, any>} source */
 async function makeApp(source) {
   const appDir = await fsp.mkdtemp(
-    path.join(os.tmpdir(), 'wharfie-app-v3-schedules-'),
+    path.join(os.tmpdir(), 'wharfie-app-v4-schedules-'),
   );
   temporaryDirectories.push(appDir);
   await fsp.mkdir(path.join(appDir, 'src'));
@@ -91,7 +91,7 @@ async function makeApp(source) {
   return appDir;
 }
 
-describe('Wharfie app V3 schedule compiler', () => {
+describe('Wharfie app V4 schedule compiler', () => {
   it('keeps a normal CLI valid before workflows or schedules are declared', async () => {
     const source = makeSource();
     delete source.workflows;
@@ -101,7 +101,7 @@ describe('Wharfie app V3 schedule compiler', () => {
     await expect(loadApp({ dir: appDir })).resolves.toEqual({
       appDir,
       manifest: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         app: source.app,
         cli: {
           entrypoint: {
@@ -123,7 +123,7 @@ describe('Wharfie app V3 schedule compiler', () => {
     });
   });
 
-  it('compiles exact V3 schedules into the canonical portable manifest', async () => {
+  it('compiles exact V4 schedules into the canonical portable manifest', async () => {
     const source = makeSource();
     const appDir = await makeApp(source);
 
@@ -151,13 +151,13 @@ describe('Wharfie app V3 schedule compiler', () => {
     });
   });
 
-  it('rejects schemaVersion 2 instead of preserving a compatibility path', async () => {
+  it('rejects schemaVersion 3 instead of preserving a compatibility path', async () => {
     const source = makeSource();
-    source.schemaVersion = 2;
+    source.schemaVersion = 3;
     const appDir = await makeApp(source);
 
     await expect(loadApp({ dir: appDir })).rejects.toThrow(
-      /app\.schemaVersion must be the integer 3/i,
+      /app\.schemaVersion must be the integer 4/i,
     );
   });
 });

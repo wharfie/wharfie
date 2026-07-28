@@ -4,12 +4,15 @@ import { loadEmbeddedDurableExecution } from '../lib/durable-execution.js';
 /**
  * Build a fresh workflow-start command bound only to this artifact's embedded
  * application revision.
- * @param {{loadExecution?: () => Promise<import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, output?: Partial<import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, processRef?: import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartProcess}} [options] - Test or packaged host seams.
+ * @param {{loadExecution?: () => Promise<import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, loadCliModule?: import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowCliModuleLoader, output?: Partial<import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, processRef?: import('../../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartProcess}} [options] - Test or packaged host seams.
  * @returns {import('commander').Command} - Fresh packaged workflow-start command.
  */
 export function createPackagedDurableWorkflowStartCommand(options = {}) {
   return createDurableWorkflowStartCommand({
     loadExecution: options.loadExecution || loadEmbeddedDurableExecution,
+    ...(options.loadCliModule === undefined
+      ? {}
+      : { loadCliModule: options.loadCliModule }),
     ...(options.output === undefined ? {} : { output: options.output }),
     ...(options.startWorkflow === undefined
       ? {}

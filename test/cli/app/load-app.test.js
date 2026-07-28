@@ -15,13 +15,17 @@ import { loadApp } from '../../../src/cli/app/load-app.js';
 /** @returns {any} */
 function makeValidSource() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'portable-app' },
     cli: {
       entrypoint: {
         kind: 'node',
         path: './src/cli.js',
         export: 'main',
+      },
+      durable: {
+        workflow: 'greet-later',
+        export: 'toDurableInput',
       },
     },
     targets: [
@@ -75,7 +79,7 @@ describe('Wharfie app loader', () => {
   let cleanupDirs;
 
   beforeEach(async () => {
-    appDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-v3-'));
+    appDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-v4-'));
     cleanupDirs = [appDir];
     await fsp.mkdir(path.join(appDir, 'src'));
     await Promise.all([
@@ -85,7 +89,7 @@ describe('Wharfie app loader', () => {
       ),
       fsp.writeFile(
         path.join(appDir, 'src', 'cli.js'),
-        'export function main() {}\n',
+        'export function main() {}\nexport function toDurableInput() { return {}; }\n',
       ),
       fsp.writeFile(
         path.join(appDir, 'src', 'greet.js'),
@@ -113,17 +117,21 @@ describe('Wharfie app loader', () => {
     return loadApp({ dir: appDir });
   }
 
-  it('compiles a strict source definition into one canonical v3 manifest', async () => {
+  it('compiles a strict source definition into one canonical v4 manifest', async () => {
     await expect(loadSource(makeValidSource())).resolves.toEqual({
       appDir,
       manifest: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         app: { id: 'portable-app' },
         cli: {
           entrypoint: {
             kind: 'node',
             path: 'src/cli.js',
             export: 'main',
+          },
+          durable: {
+            workflow: 'greet-later',
+            export: 'toDurableInput',
           },
         },
         targets: [
@@ -171,6 +179,21 @@ describe('Wharfie app loader', () => {
     });
   });
 
+  it('keeps the durable CLI handoff optional', async () => {
+    const source = makeValidSource();
+    delete source.cli.durable;
+
+    const loaded = await loadSource(source);
+
+    expect(loaded.manifest.cli).toEqual({
+      entrypoint: {
+        kind: 'node',
+        path: 'src/cli.js',
+        export: 'main',
+      },
+    });
+  });
+
   it('orders external packages deterministically without using the host locale', async () => {
     const source = makeValidSource();
     source.activities.greet.externalPackages = [
@@ -197,14 +220,14 @@ describe('Wharfie app loader', () => {
       (source) => {
         delete source.schemaVersion;
       },
-      /schemaVersion must be the integer 3/i,
+      /schemaVersion must be the integer 4/i,
     ],
     [
       'a wrong schemaVersion',
       (source) => {
-        source.schemaVersion = 2;
+        source.schemaVersion = 3;
       },
-      /schemaVersion must be the integer 3/i,
+      /schemaVersion must be the integer 4/i,
     ],
     [
       'an unknown top-level key',
@@ -354,6 +377,55 @@ describe('Wharfie app loader', () => {
       /entrypoint\.export must be a nonempty canonical string/i,
     ],
     [
+      'a non-object durable CLI handoff',
+      (source) => {
+        source.cli.durable = 'greet-later';
+      },
+      /app\.cli\.durable must be a plain object/i,
+    ],
+    [
+      'an unknown durable CLI handoff field',
+      (source) => {
+        source.cli.durable.input = {};
+      },
+      /app\.cli\.durable\.input is not supported by schemaVersion 4/i,
+    ],
+    [
+      'a missing durable CLI workflow',
+      (source) => {
+        delete source.cli.durable.workflow;
+      },
+      /app\.cli\.durable\.workflow must be a canonical logical ID/i,
+    ],
+    [
+      'a non-canonical durable CLI workflow',
+      (source) => {
+        source.cli.durable.workflow = ' greet-later ';
+      },
+      /app\.cli\.durable\.workflow must be a canonical logical ID/i,
+    ],
+    [
+      'a non-canonical durable CLI export',
+      (source) => {
+        source.cli.durable.export = ' toDurableInput ';
+      },
+      /app\.cli\.durable\.export must be a nonempty canonical string/i,
+    ],
+    [
+      'a missing durable CLI export',
+      (source) => {
+        delete source.cli.durable.export;
+      },
+      /app\.cli\.durable\.export must be a nonempty canonical string/i,
+    ],
+    [
+      'a durable CLI workflow that is not declared',
+      (source) => {
+        source.cli.durable.workflow = 'missing';
+      },
+      /manifest\.cli\.durable\.workflow must reference a workflow declared by this manifest/i,
+    ],
+    [
       'a target with a non-exact Node version',
       (source) => {
         source.targets[0].nodeVersion = '24';
@@ -454,7 +526,7 @@ describe('Wharfie app loader', () => {
     [
       'a named export without a default export',
       'export const app = ' + JSON.stringify(makeValidSource()) + ';\n',
-      /must default-export one schemaVersion 3 app definition/i,
+      /must default-export one schemaVersion 4 app definition/i,
     ],
     [
       'a non-JSON value',

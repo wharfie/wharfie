@@ -118,7 +118,7 @@ function digest(value) {
 /** @returns {Record<string, any>} */
 function makeManifest() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'source-external-test' },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

@@ -37,7 +37,7 @@ function digest(value) {
 /** @returns {Record<string, any>} */
 function makeManifest() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'bound-schedule-app' },
     cli: {
       entrypoint: { kind: 'node', path: 'src/cli.js', export: 'main' },
@@ -234,12 +234,12 @@ describe('manifest schedule bindings', () => {
 
   it('rejects a schemaVersion 2 manifest before exposing bindings', () => {
     const manifest = makeManifest();
-    const { execution } = createExecution(manifest, 'v3-authority');
+    const { execution } = createExecution(manifest, 'v4-authority');
     execution.manifest.schemaVersion = 2;
     delete execution.manifest.schedules;
 
     expect(() => resolveManifestScheduleBindings(execution)).toThrow(
-      /schemaVersion must be the integer 3/i,
+      /schemaVersion must be the integer 4/i,
     );
   });
 

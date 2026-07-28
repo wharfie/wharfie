@@ -66,7 +66,7 @@ function makeManifest(
   ],
 ) {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'revision-demo' },
     cli: {
       entrypoint: { kind: 'node', path: 'src/cli.js', export: 'main' },
@@ -451,6 +451,44 @@ export function greet(input) {
 
     expect(changed.revisionId).not.toBe(first.revisionId);
     expect(changed.contract.workflows).toEqual(workflowManifest.workflows);
+  });
+
+  it('binds the durable CLI projection into immutable revision identity', async () => {
+    const appDir = await makeAppFixture();
+    const runtimeRoot = await makeRuntimeFixture();
+    const manifest = makeManifest();
+    manifest.workflows = {
+      greet: {
+        steps: [
+          {
+            id: 'greet',
+            kind: 'activity',
+            activity: 'greet',
+            input: { kind: 'workflow-input' },
+          },
+        ],
+      },
+    };
+    manifest.cli.durable = {
+      workflow: 'greet',
+      export: 'toDurableInput',
+    };
+    const first = await compileApplicationRevision({
+      appDir,
+      manifest,
+      runtimeRoot,
+    });
+
+    const changedManifest = structuredClone(manifest);
+    changedManifest.cli.durable.export = 'toOtherDurableInput';
+    const changed = await compileApplicationRevision({
+      appDir,
+      manifest: changedManifest,
+      runtimeRoot,
+    });
+
+    expect(first.contract.cli.durable).toEqual(manifest.cli.durable);
+    expect(changed.revisionId).not.toBe(first.revisionId);
   });
 
   it('locks dependency, runtime, and named behavior-asset bytes', async () => {

@@ -100,7 +100,7 @@ function digest(value) {
 /** @param {Record<string, any>[]} [steps] @returns {EmbeddedExecution} */
 function makeEmbeddedExecution(steps) {
   const contract = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: 'resident-worker-demo' },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },

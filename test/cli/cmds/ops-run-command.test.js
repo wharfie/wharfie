@@ -558,7 +558,7 @@ describe('wharfie ops run', () => {
           path.join(appDir, 'wharfie.app.js'),
           `import { defineApp } from ${JSON.stringify(appApiUrl)};
            export default defineApp({
-             schemaVersion: 3,
+             schemaVersion: 4,
              app: { id: ${JSON.stringify(appId)} },
              cli: {
                entrypoint: {
@@ -817,7 +817,7 @@ describe('wharfie ops run', () => {
         path.join(appDir, 'wharfie.app.js'),
         `import { defineApp } from ${JSON.stringify(appApiUrl)};
          export default defineApp({
-           schemaVersion: 3,
+           schemaVersion: 4,
            app: { id: ${JSON.stringify(appId)} },
            cli: {
              entrypoint: {
@@ -987,7 +987,7 @@ describe('wharfie ops run', () => {
         path.join(appDir, 'wharfie.app.js'),
         `import { defineApp } from ${JSON.stringify(appApiUrl)};
          export default defineApp({
-           schemaVersion: 3,
+           schemaVersion: 4,
            app: { id: ${JSON.stringify(appId)} },
            cli: {
              entrypoint: {

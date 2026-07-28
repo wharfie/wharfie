@@ -8,6 +8,7 @@ import {
 } from '../../core/runtime/app-manifest.js';
 import { compareCanonicalStrings } from '../../core/runtime/canonical-order.js';
 import { cloneJsonObject } from '../../core/runtime/json-value.js';
+import { assertLogicalId } from '../../core/runtime/logical-id.js';
 
 const SOURCE_TOP_LEVEL_KEYS = new Set([
   'schemaVersion',
@@ -19,8 +20,9 @@ const SOURCE_TOP_LEVEL_KEYS = new Set([
   'schedules',
 ]);
 const SOURCE_APP_KEYS = new Set(['id']);
-const SOURCE_CLI_KEYS = new Set(['entrypoint']);
+const SOURCE_CLI_KEYS = new Set(['entrypoint', 'durable']);
 const SOURCE_ENTRYPOINT_KEYS = new Set(['kind', 'path', 'export']);
+const SOURCE_DURABLE_CLI_KEYS = new Set(['workflow', 'export']);
 const SOURCE_ACTIVITY_KEYS = new Set(['entrypoint', 'externalPackages']);
 const SOURCE_EXTERNAL_PACKAGE_KEYS = new Set(['name', 'version']);
 
@@ -58,7 +60,7 @@ function assertPlainObject(value, valuePath) {
  * @param {Record<string, any>} value - Object to inspect.
  * @param {Set<string>} allowedKeys - Exact supported property names.
  * @param {string} valuePath - Human-readable source path.
- * @param {3} schemaVersion - Manifest schema version governing the shape.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
 function assertExactKeys(value, allowedKeys, valuePath, schemaVersion) {
@@ -97,7 +99,7 @@ function isWithin(parentPath, candidatePath) {
  * Resolve and validate an authored entrypoint without exposing build-host paths
  * in the canonical manifest.
  * @param {unknown} value - Source entrypoint.
- * @param {{ appDir: string, realAppDir: string, valuePath: string, schemaVersion: 3 }} options - Compilation context.
+ * @param {{ appDir: string, realAppDir: string, valuePath: string, schemaVersion: 4 }} options - Compilation context.
  * @returns {Promise<{ kind: 'node', path: string, export: string }>} - Canonical entrypoint.
  */
 async function compileEntrypoint(value, options) {
@@ -173,9 +175,34 @@ async function compileEntrypoint(value, options) {
 }
 
 /**
+ * @param {unknown} value - Source durable CLI handoff definition.
+ * @param {string} valuePath - Human-readable source path.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
+ * @returns {{ workflow: string, export: string }} - Canonical durable CLI handoff.
+ */
+function compileDurableCli(value, valuePath, schemaVersion) {
+  assertPlainObject(value, valuePath);
+  assertExactKeys(value, SOURCE_DURABLE_CLI_KEYS, valuePath, schemaVersion);
+  assertLogicalId(value.workflow, `${valuePath}.workflow`);
+  if (
+    typeof value.export !== 'string' ||
+    value.export.length === 0 ||
+    value.export.trim() !== value.export
+  ) {
+    throw new TypeError(
+      `${valuePath}.export must be a nonempty canonical string.`,
+    );
+  }
+  return {
+    workflow: value.workflow,
+    export: value.export,
+  };
+}
+
+/**
  * @param {unknown} value - Source external package list.
  * @param {string} valuePath - Human-readable source path.
- * @param {3} schemaVersion - Manifest schema version governing the shape.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
  * @returns {unknown} - Canonically ordered package list.
  */
 function compileExternalPackages(value, valuePath, schemaVersion) {
@@ -205,7 +232,7 @@ function compileExternalPackages(value, valuePath, schemaVersion) {
  * Compile the authored module value into the one serialized runtime manifest.
  * @param {unknown} sourceValue - Default export from `wharfie.app.js`.
  * @param {{ appDir: string }} options - Compilation context.
- * @returns {Promise<Record<string, any>>} - Canonical v3 manifest.
+ * @returns {Promise<Record<string, any>>} - Canonical v4 manifest.
  */
 export async function compileAppManifest(sourceValue, options) {
   const source = cloneJsonObject(sourceValue, 'wharfie.app.js default export');
@@ -215,7 +242,7 @@ export async function compileAppManifest(sourceValue, options) {
       `app.schemaVersion must be the integer ${APP_MANIFEST_SCHEMA_VERSION}.`,
     );
   }
-  const schemaVersion = /** @type {3} */ (source.schemaVersion);
+  const schemaVersion = /** @type {4} */ (source.schemaVersion);
   assertExactKeys(source, SOURCE_TOP_LEVEL_KEYS, 'app', schemaVersion);
   assertPlainObject(source.app, 'app.app');
   assertExactKeys(source.app, SOURCE_APP_KEYS, 'app.app', schemaVersion);
@@ -224,17 +251,26 @@ export async function compileAppManifest(sourceValue, options) {
 
   const appDir = path.resolve(options.appDir);
   const realAppDir = await fsp.realpath(appDir);
+  const cli = /** @type {Record<string, any>} */ ({
+    entrypoint: await compileEntrypoint(source.cli.entrypoint, {
+      appDir,
+      realAppDir,
+      valuePath: 'app.cli.entrypoint',
+      schemaVersion,
+    }),
+  });
+  if (Object.prototype.hasOwnProperty.call(source.cli, 'durable')) {
+    cli.durable = compileDurableCli(
+      source.cli.durable,
+      'app.cli.durable',
+      schemaVersion,
+    );
+  }
+
   const manifest = /** @type {Record<string, any>} */ ({
     schemaVersion,
     app: { ...source.app },
-    cli: {
-      entrypoint: await compileEntrypoint(source.cli.entrypoint, {
-        appDir,
-        realAppDir,
-        valuePath: 'app.cli.entrypoint',
-        schemaVersion,
-      }),
-    },
+    cli,
   });
 
   if (Object.prototype.hasOwnProperty.call(source, 'targets')) {
@@ -315,7 +351,7 @@ export async function loadApp(options = {}) {
   const mod = await import(createFreshImportUrl(appPath));
   if (!Object.prototype.hasOwnProperty.call(mod, 'default')) {
     throw new Error(
-      'wharfie.app.js must default-export one schemaVersion 3 app definition.',
+      'wharfie.app.js must default-export one schemaVersion 4 app definition.',
     );
   }
 

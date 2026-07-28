@@ -53,13 +53,26 @@ function digest(value) {
   };
 }
 
-/** @param {Record<string, any>[]} [steps] @returns {EmbeddedExecution} - Valid packaged execution fixture. */
-function makeEmbeddedExecution(steps) {
+/**
+ * @param {Record<string, any>[]} [steps] - Optional workflow steps.
+ * @param {{durable?: boolean}} [options] - Optional durable CLI declaration.
+ * @returns {EmbeddedExecution} - Valid packaged execution fixture.
+ */
+function makeEmbeddedExecution(steps, options = {}) {
+  const includeDurable = options.durable !== false;
   const contract = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     app: { id: APP_ID },
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
+      ...(includeDurable
+        ? {
+            durable: {
+              workflow: WORKFLOW_ID,
+              export: 'toDurableInput',
+            },
+          }
+        : {}),
     },
     activities: {
       greet: {
@@ -316,6 +329,35 @@ describe('durable workflow start command', () => {
       '--json',
     ]);
     expect(packagedFlags).toEqual(sourceFlags?.slice(1));
+    expect(
+      source?.registeredArguments.map((argument) => ({
+        name: argument.name(),
+        required: argument.required,
+        variadic: argument.variadic,
+      })),
+    ).toEqual([{ name: 'appArgs', required: false, variadic: true }]);
+    expect(
+      packaged.registeredArguments.map((argument) => ({
+        name: argument.name(),
+        required: argument.required,
+        variadic: argument.variadic,
+      })),
+    ).toEqual([{ name: 'appArgs', required: false, variadic: true }]);
+    expect(
+      source?.options.find((option) => option.long === '--workflow')?.mandatory,
+    ).toBe(false);
+    expect(
+      source?.options.find((option) => option.long === '--idempotency-key')
+        ?.mandatory,
+    ).toBe(false);
+    expect(
+      packaged.options.find((option) => option.long === '--workflow')
+        ?.mandatory,
+    ).toBe(false);
+    expect(
+      packaged.options.find((option) => option.long === '--idempotency-key')
+        ?.mandatory,
+    ).toBe(false);
 
     const program = createPackagedOperatorProgram({
       loadDurableWorkflowStartExecution: async () => ({
@@ -328,6 +370,7 @@ describe('durable workflow start command', () => {
     expect(sourceOpsCommand.helpInformation()).toMatch(/\bstart\b/);
     expect(program.helpInformation()).toMatch(/\bstart\b/);
     expect(mounted?.helpInformation()).toContain('--workflow <workflowName>');
+    expect(mounted?.helpInformation()).toContain('[appArgs...]');
     expect(mounted?.helpInformation()).not.toContain('--dir');
   });
 
@@ -407,10 +450,14 @@ describe('durable workflow start command', () => {
     const startWorkflow = jest.fn(
       async (/** @type {Record<string, any>} */ _request = {}) => result,
     );
+    const loadCliModule = jest.fn(async () => ({
+      toDurableInput: jest.fn(),
+    }));
     const output = makeOutput();
     const processRef = { exitCode: undefined };
     const command = createPackagedDurableWorkflowStartCommand({
       loadExecution,
+      loadCliModule,
       startWorkflow,
       output,
       processRef,
@@ -467,7 +514,161 @@ describe('durable workflow start command', () => {
     expect(output.success).not.toHaveBeenCalled();
     expect(output.failure).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(loadCliModule).not.toHaveBeenCalled();
     expect(processRef.exitCode).toBeUndefined();
+  });
+
+  it('maps frozen application argv after -- and generates a visible manual key', async () => {
+    const execution = makeEmbeddedExecution();
+    const projectedInput = {
+      path: '/tmp/input file.txt',
+      mode: '--literal',
+    };
+    const mapper = jest.fn(
+      async (/** @type {ReadonlyArray<string>} */ appArgs) => {
+        expect(appArgs).toEqual(['/tmp/input file.txt', '--literal']);
+        expect(Object.isFrozen(appArgs)).toBe(true);
+        expect(() => /** @type {string[]} */ (appArgs).push('mutate')).toThrow(
+          TypeError,
+        );
+        process.stdout.write('mapper diagnostic\n');
+        return projectedInput;
+      },
+    );
+    const loadCliModule = jest.fn(
+      async (/** @type {unknown} */ loadedExecution) => {
+        expect(loadedExecution).toBe(execution);
+        process.stdout.write('loader diagnostic\n');
+        return { toDurableInput: mapper };
+      },
+    );
+    const loadExecution = jest.fn(
+      async (/** @type {Record<string, any>} */ _options = {}) => ({
+        execution,
+      }),
+    );
+    const startWorkflow = jest.fn(
+      async (/** @type {Record<string, any>} */ request) =>
+        makeStartResult(execution, request.idempotencyKey),
+    );
+    const output = makeOutput();
+    const processRef = { exitCode: undefined };
+    /** @type {string[]} */
+    const stdoutWrites = [];
+    /** @type {string[]} */
+    const stderrWrites = [];
+    const stdoutWrite = jest
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk) => {
+        stdoutWrites.push(String(chunk));
+        return true;
+      });
+    const stderrWrite = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      });
+    const command = createPackagedDurableWorkflowStartCommand({
+      loadExecution,
+      loadCliModule,
+      startWorkflow,
+      output,
+      processRef,
+    });
+
+    try {
+      await command.parseAsync(
+        nodeArgv([
+          '--caller-metadata',
+          '{"requestId":"adapter-request"}',
+          '--json',
+          '--',
+          '/tmp/input file.txt',
+          '--literal',
+        ]),
+      );
+    } finally {
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
+
+    expect(loadExecution).toHaveBeenCalledWith({
+      callerMetadata: '{"requestId":"adapter-request"}',
+      json: true,
+    });
+    expect(loadCliModule).toHaveBeenCalledWith(execution);
+    expect(mapper).toHaveBeenCalledTimes(1);
+    expect(startWorkflow).toHaveBeenCalledTimes(1);
+    const request = /** @type {Record<string, any>} */ (
+      startWorkflow.mock.calls[0][0]
+    );
+    expect(request).toEqual({
+      execution,
+      workflowId: WORKFLOW_ID,
+      idempotencyKey: expect.stringMatching(
+        /^manual-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+      input: projectedInput,
+      callerMetadata: { requestId: 'adapter-request' },
+      actor: {
+        kind: 'workflow-operator',
+        id: execution.embeddedRevision.revision.revisionId,
+      },
+    });
+    expect(request.input).not.toBe(projectedInput);
+    expect(output.json).toHaveBeenCalledWith(
+      expectedReceipt(execution, request.idempotencyKey),
+    );
+    expect(
+      /** @type {Record<string, any>} */ (output.json.mock.calls[0][0])
+        .idempotencyKey,
+    ).toBe(request.idempotencyKey);
+    expect(stdoutWrites).toEqual([]);
+    expect(stderrWrites.join('')).toContain('loader diagnostic');
+    expect(stderrWrites.join('')).toContain('mapper diagnostic');
+    expect(JSON.stringify(output.json.mock.calls)).not.toContain('diagnostic');
+    expect(output.failure).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBeUndefined();
+  });
+
+  it('rechecks a prepared runtime after the async adapter before admitting work', async () => {
+    const execution = makePreparedExecution(makeEmbeddedExecution());
+    const driftError = new Error(
+      'Wharfie runtime changed during CLI projection.',
+    );
+    execution.prepared.verifyRuntime = jest.fn(async () => {
+      throw driftError;
+    });
+    const mapper = jest.fn(
+      async (/** @type {ReadonlyArray<string>} */ _appArgs) => ({
+        path: '/tmp/projected',
+      }),
+    );
+    const startWorkflow = jest.fn(
+      async (/** @type {Record<string, any>} */ _request = {}) => ({}),
+    );
+    const output = makeOutput();
+    const processRef = { cwd: () => SOURCE_DIR, exitCode: undefined };
+    const command = createDurableWorkflowStartCommand({
+      includeDirOption: true,
+      loadExecution: async () => ({ execution }),
+      loadCliModule: async () => ({ toDurableInput: mapper }),
+      startWorkflow,
+      output,
+      processRef,
+    });
+
+    await command.parseAsync(nodeArgv(['--', '/tmp/projected']));
+
+    expect(mapper).toHaveBeenCalledWith(['/tmp/projected']);
+    expect(execution.prepared.verifyRuntime).toHaveBeenCalledTimes(1);
+    expect(startWorkflow).not.toHaveBeenCalled();
+    expect(output.failure).toHaveBeenCalledWith(driftError);
+    expect(output.json).not.toHaveBeenCalled();
+    expect(output.table).not.toHaveBeenCalled();
+    expect(output.success).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
   });
 
   it('emits the exact same versioned JSON receipt from source and packaged surfaces', async () => {
@@ -727,7 +928,7 @@ describe('durable workflow start command', () => {
     [
       'empty idempotency key',
       ['--workflow', WORKFLOW_ID, '--idempotency-key', ''],
-      '--idempotency-key must be a nonempty string.',
+      '--idempotency-key must be a nonempty string when provided.',
     ],
   ])(
     'rejects %s before loading an execution',
@@ -764,32 +965,128 @@ describe('durable workflow start command', () => {
 
   it.each([
     [
-      'workflow',
-      ['--idempotency-key', 'missing-workflow'],
-      "required option '--workflow <workflowName>' not specified",
+      'workflow override',
+      ['--workflow', WORKFLOW_ID, '--', 'application-argument'],
     ],
     [
-      'idempotency key',
-      ['--workflow', WORKFLOW_ID],
-      "required option '--idempotency-key <idempotencyKey>' not specified",
+      'input override',
+      ['--input', '{"path":"/tmp/input"}', '--', 'application-argument'],
     ],
   ])(
-    'lets Commander reject a missing required %s flag',
-    async (_label, argv, message) => {
-      const loadExecution = jest.fn(
-        async (/** @type {Record<string, any>} */ _options = {}) => ({
-          execution: makeEmbeddedExecution(),
+    'rejects application arguments combined with a %s before loading',
+    async (_label, argv) => {
+      const execution = makeEmbeddedExecution();
+      const loadExecution = jest.fn(async () => ({ execution }));
+      const loadCliModule = jest.fn(async () => ({
+        toDurableInput: jest.fn(),
+      }));
+      const startWorkflow = jest.fn(async () =>
+        makeStartResult(execution, 'unreachable-start'),
+      );
+      const output = makeOutput();
+      const processRef = { exitCode: undefined };
+      const command = createDurableWorkflowStartCommand({
+        loadExecution,
+        loadCliModule,
+        startWorkflow,
+        output,
+        processRef,
+      });
+
+      await command.parseAsync(nodeArgv(argv));
+
+      expect(loadExecution).not.toHaveBeenCalled();
+      expect(loadCliModule).not.toHaveBeenCalled();
+      expect(startWorkflow).not.toHaveBeenCalled();
+      expect(output.failure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message:
+            'Application arguments cannot be combined with --workflow or --input.',
         }),
       );
-      const command = createDurableWorkflowStartCommand({ loadExecution });
-      command.exitOverride();
-      command.configureOutput({ writeErr: jest.fn() });
+      expect(output.json).not.toHaveBeenCalled();
+      expect(output.table).not.toHaveBeenCalled();
+      expect(output.success).not.toHaveBeenCalled();
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
 
-      await expect(command.parseAsync(nodeArgv(argv))).rejects.toMatchObject({
-        code: 'commander.missingMandatoryOptionValue',
-        message: expect.stringContaining(message),
+  it.each([
+    {
+      label: 'does not declare cli.durable',
+      execution: () => makeEmbeddedExecution(undefined, { durable: false }),
+      loadCliModule: async () => ({
+        toDurableInput: jest.fn(),
+      }),
+      message: 'This application does not declare cli.durable',
+      expectLoaderCalled: false,
+    },
+    {
+      label: 'has no durable CLI module loader',
+      execution: () => makeEmbeddedExecution(),
+      loadCliModule: undefined,
+      message: 'The durable CLI adapter module loader is unavailable.',
+      expectLoaderCalled: false,
+    },
+    {
+      label: 'does not export the declared adapter',
+      execution: () => makeEmbeddedExecution(),
+      loadCliModule: async () => ({}),
+      message:
+        "cli.durable.export 'toDurableInput' is not a callable export of cli.entrypoint.path.",
+      expectLoaderCalled: true,
+    },
+    {
+      label: 'returns a non-JSON adapter value',
+      execution: () => makeEmbeddedExecution(),
+      loadCliModule: async () => ({
+        toDurableInput: () => ({ unsupported: 1n }),
+      }),
+      message:
+        'cli.durable adapter output at $.unsupported contains an unsupported bigint value.',
+      expectLoaderCalled: true,
+    },
+  ])(
+    'fails without starting when the application $label',
+    async ({
+      execution: makeExecution,
+      loadCliModule: providedLoader,
+      message,
+      expectLoaderCalled,
+    }) => {
+      const execution = makeExecution();
+      const loadExecution = jest.fn(async () => ({ execution }));
+      const loadCliModule =
+        providedLoader === undefined ? undefined : jest.fn(providedLoader);
+      const startWorkflow = jest.fn(async () =>
+        makeStartResult(execution, 'unreachable-start'),
+      );
+      const output = makeOutput();
+      const processRef = { exitCode: undefined };
+      const command = createDurableWorkflowStartCommand({
+        loadExecution,
+        ...(loadCliModule === undefined ? {} : { loadCliModule }),
+        startWorkflow,
+        output,
+        processRef,
       });
-      expect(loadExecution).not.toHaveBeenCalled();
+
+      await command.parseAsync(nodeArgv([]));
+
+      expect(loadExecution).toHaveBeenCalledTimes(1);
+      if (loadCliModule) {
+        expect(loadCliModule).toHaveBeenCalledTimes(expectLoaderCalled ? 1 : 0);
+      }
+      expect(startWorkflow).not.toHaveBeenCalled();
+      expect(output.failure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining(message),
+        }),
+      );
+      expect(output.json).not.toHaveBeenCalled();
+      expect(output.table).not.toHaveBeenCalled();
+      expect(output.success).not.toHaveBeenCalled();
+      expect(processRef.exitCode).toBe(1);
     },
   );
 
@@ -958,11 +1255,13 @@ describe('durable workflow start command', () => {
       ]),
     );
 
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(output.failure).toHaveBeenCalledWith(cleanupError);
     expect(output.json).toHaveBeenCalledWith(
       expectedReceipt(execution, idempotencyKey),
     );
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(output.failure).toHaveBeenCalledWith(cleanupError);
+    expect(output.table).not.toHaveBeenCalled();
+    expect(output.success).not.toHaveBeenCalled();
     expect(processRef.exitCode).toBe(1);
   });
 

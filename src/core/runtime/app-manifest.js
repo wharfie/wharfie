@@ -14,7 +14,7 @@ import { assertManifestIsSecretFree } from './manifest-security.js';
 import { validateScheduleDefinitions } from './schedule-definition.js';
 import { validateWorkflowDefinitions } from './workflow-definition.js';
 
-export const APP_MANIFEST_SCHEMA_VERSION = 3;
+export const APP_MANIFEST_SCHEMA_VERSION = 4;
 
 const TOP_LEVEL_KEYS = new Set([
   'schemaVersion',
@@ -26,8 +26,9 @@ const TOP_LEVEL_KEYS = new Set([
   'schedules',
 ]);
 const APP_KEYS = new Set(['id']);
-const CLI_KEYS = new Set(['entrypoint']);
+const CLI_KEYS = new Set(['entrypoint', 'durable']);
 const ENTRYPOINT_KEYS = new Set(['kind', 'path', 'export']);
+const DURABLE_CLI_KEYS = new Set(['workflow', 'export']);
 const TARGET_KEYS = new Set([
   'nodeVersion',
   'platform',
@@ -68,7 +69,7 @@ function assertPlainObject(value, valuePath) {
  * @param {Record<string, any>} value - Object to inspect.
  * @param {Set<string>} allowed - Exact allowed property names.
  * @param {string} valuePath - Human-readable schema path.
- * @param {3} schemaVersion - Manifest schema version governing the shape.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
 function assertExactKeys(value, allowed, valuePath, schemaVersion) {
@@ -133,7 +134,7 @@ function assertCanonicalEntrypointPath(value, valuePath) {
 /**
  * @param {unknown} value - Entrypoint definition.
  * @param {string} valuePath - Human-readable schema path.
- * @param {3} schemaVersion - Manifest schema version governing the shape.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
 function assertEntrypoint(value, valuePath, schemaVersion) {
@@ -147,9 +148,22 @@ function assertEntrypoint(value, valuePath, schemaVersion) {
 }
 
 /**
+ * @param {unknown} value - Durable CLI handoff definition.
+ * @param {string} valuePath - Human-readable schema path.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
+ * @returns {void}
+ */
+function assertDurableCli(value, valuePath, schemaVersion) {
+  assertPlainObject(value, valuePath);
+  assertExactKeys(value, DURABLE_CLI_KEYS, valuePath, schemaVersion);
+  assertLogicalId(value.workflow, `${valuePath}.workflow`);
+  assertNonemptyCanonicalString(value.export, `${valuePath}.export`);
+}
+
+/**
  * @param {unknown} value - Target definitions.
  * @param {string} valuePath - Human-readable schema path.
- * @param {3} schemaVersion - Manifest schema version governing the shape.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
 function assertTargets(value, valuePath, schemaVersion) {
@@ -210,7 +224,7 @@ function assertTargets(value, valuePath, schemaVersion) {
 /**
  * @param {unknown} value - Canonical external package list.
  * @param {string} valuePath - Human-readable schema path.
- * @param {3} schemaVersion - Manifest schema version governing the shape.
+ * @param {4} schemaVersion - Manifest schema version governing the shape.
  * @returns {void}
  */
 function assertExternalPackages(value, valuePath, schemaVersion) {
@@ -256,7 +270,7 @@ function assertExternalPackages(value, valuePath, schemaVersion) {
 }
 
 /**
- * Validate the one serialized Wharfie v3 runtime manifest shape. Workflow and
+ * Validate the one serialized Wharfie v4 runtime manifest shape. Workflow and
  * schedule maps are optional and nonempty when declared. The returned value is
  * an independent JSON clone, so callers never retain mutable input.
  * @param {unknown} value - Candidate canonical manifest.
@@ -270,7 +284,7 @@ export function validateAppManifest(value, valuePath = 'manifest') {
       `${valuePath}.schemaVersion must be the integer ${APP_MANIFEST_SCHEMA_VERSION}.`,
     );
   }
-  const schemaVersion = /** @type {3} */ (manifest.schemaVersion);
+  const schemaVersion = /** @type {4} */ (manifest.schemaVersion);
   assertExactKeys(manifest, TOP_LEVEL_KEYS, valuePath, schemaVersion);
 
   assertPlainObject(manifest.app, `${valuePath}.app`);
@@ -284,6 +298,13 @@ export function validateAppManifest(value, valuePath = 'manifest') {
     `${valuePath}.cli.entrypoint`,
     schemaVersion,
   );
+  if (Object.prototype.hasOwnProperty.call(manifest.cli, 'durable')) {
+    assertDurableCli(
+      manifest.cli.durable,
+      `${valuePath}.cli.durable`,
+      schemaVersion,
+    );
+  }
 
   if (Object.prototype.hasOwnProperty.call(manifest, 'targets')) {
     assertTargets(manifest.targets, `${valuePath}.targets`, schemaVersion);
@@ -330,6 +351,14 @@ export function validateAppManifest(value, valuePath = 'manifest') {
           );
         }
       }
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(manifest.cli, 'durable')) {
+    const workflowIds = new Set(Object.keys(manifest.workflows || {}));
+    if (!workflowIds.has(manifest.cli.durable.workflow)) {
+      throw new TypeError(
+        `${valuePath}.cli.durable.workflow must reference a workflow declared by this manifest.`,
+      );
     }
   }
   if (Object.prototype.hasOwnProperty.call(manifest, 'schedules')) {

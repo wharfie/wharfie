@@ -122,7 +122,7 @@ function makeRevision(functionResources = [], assets = []) {
   );
   return createApplicationRevision({
     contract: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       app: { id: 'provenance-test' },
       cli: {
         entrypoint: {

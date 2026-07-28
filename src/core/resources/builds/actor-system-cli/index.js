@@ -18,7 +18,7 @@ import { createPackagedDurableWorkerCommand } from './control_cmds/worker.js';
 /**
  * Build a fresh packaged operator program. Identity is read lazily so help and
  * immutable metadata commands do not open application control state.
- * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, readRunOutput?: (request: {appId: string, runId: string}) => unknown | Promise<unknown>, runOutputOutput?: Partial<import('../../../runtime/operator/execution-ledger-run-output-command.js').ExecutionLedgerRunOutputPort>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, loadDurableWorkflowStartExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, durableWorkflowStartOutput?: Partial<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, durableWorkflowSignalOutput?: Partial<import('../../../runtime/operator/durable-workflow-signal-command.js').DurableWorkflowSignalCommandOutput>, deliverWorkflowSignal?: typeof import('../../../runtime/operator/durable-workflow-signal-command.js').deliverLocalDurableWorkflowSignal, loadDurableSubmitExecution?: () => Promise<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitExecutionHandle>, durableSubmitOutput?: Partial<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitCommandOutput>, submitActivity?: import('../../../runtime/operator/durable-submit-command.js').ResidentActivitySubmit, loadDurableWorkerExecution?: () => Promise<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerExecutionHandle>, durableWorkerOutput?: Partial<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerCommandOutput>, runResidentWorker?: import('../../../runtime/operator/durable-worker-command.js').ResidentActivityWorkerRunner, loadSystemdUserServiceOperator?: () => any | Promise<any>, systemdUserServiceOutput?: Partial<import('../../../runtime/operator/systemd-user-service-command.js').SystemdUserServiceCommandOutput>, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable command providers.
+ * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, readRunOutput?: (request: {appId: string, runId: string}) => unknown | Promise<unknown>, runOutputOutput?: Partial<import('../../../runtime/operator/execution-ledger-run-output-command.js').ExecutionLedgerRunOutputPort>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, loadDurableWorkflowStartExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, loadDeveloperCliModule?: () => Promise<Record<string, any> | null> | Record<string, any> | null, durableWorkflowStartOutput?: Partial<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, durableWorkflowSignalOutput?: Partial<import('../../../runtime/operator/durable-workflow-signal-command.js').DurableWorkflowSignalCommandOutput>, deliverWorkflowSignal?: typeof import('../../../runtime/operator/durable-workflow-signal-command.js').deliverLocalDurableWorkflowSignal, loadDurableSubmitExecution?: () => Promise<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitExecutionHandle>, durableSubmitOutput?: Partial<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitCommandOutput>, submitActivity?: import('../../../runtime/operator/durable-submit-command.js').ResidentActivitySubmit, loadDurableWorkerExecution?: () => Promise<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerExecutionHandle>, durableWorkerOutput?: Partial<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerCommandOutput>, runResidentWorker?: import('../../../runtime/operator/durable-worker-command.js').ResidentActivityWorkerRunner, loadSystemdUserServiceOperator?: () => any | Promise<any>, systemdUserServiceOutput?: Partial<import('../../../runtime/operator/systemd-user-service-command.js').SystemdUserServiceCommandOutput>, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable command providers.
  * @returns {Command} - Packaged operator program.
  */
 export function createProgram(options = {}) {
@@ -99,6 +99,9 @@ export function createProgram(options = {}) {
     ...(options.durableWorkflowStartOutput === undefined
       ? {}
       : { output: options.durableWorkflowStartOutput }),
+    ...(options.loadDeveloperCliModule === undefined
+      ? {}
+      : { loadCliModule: options.loadDeveloperCliModule }),
     ...(options.startWorkflow === undefined
       ? {}
       : { startWorkflow: options.startWorkflow }),
@@ -179,10 +182,15 @@ export function createProgram(options = {}) {
  * Runtime service bootstrap is selected through hidden environment state and
  * does not share this public argv namespace.
  * @param {string[]} [argv] - Node-style argv.
+ * @param {{loadDeveloperCliModule?: () => Promise<Record<string, any> | null> | Record<string, any> | null}} [options] - Packaged application seams.
  * @returns {Promise<void>} - Resolves when the command completes.
  */
-async function entrypoint(argv = process.argv) {
-  const program = createProgram();
+async function entrypoint(argv = process.argv, options = {}) {
+  const program = createProgram({
+    ...(options.loadDeveloperCliModule === undefined
+      ? {}
+      : { loadDeveloperCliModule: options.loadDeveloperCliModule }),
+  });
 
   if (!argv.slice(2).length) {
     program.outputHelp();

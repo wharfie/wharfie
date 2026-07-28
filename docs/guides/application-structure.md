@@ -19,13 +19,17 @@ be available as a durable activity:
 
 ```js
 export default {
-  schemaVersion: 3,
+  schemaVersion: 4,
   app: { id: 'my-app' },
   cli: {
     entrypoint: {
       kind: 'node',
       path: './src/cli.js',
       export: 'main',
+    },
+    durable: {
+      workflow: 'scheduled-sync',
+      export: 'toDurableInput',
     },
   },
   activities: {
@@ -75,9 +79,38 @@ packaging target list must be nonempty. All entrypoints currently use
 `{ kind: 'node', path, export }`; both `path` and the named `export` are
 required.
 
+`cli.durable` is optional. When present, it names one workflow from the same
+manifest and one adapter export from the CLI entrypoint module. The adapter
+receives a frozen, application-owned argument list—not Node argv—and returns
+the JSON value used as workflow input:
+
+```js
+import path from 'node:path';
+
+function parseInput(args) {
+  if (args.length !== 1 || !args[0]) {
+    throw new TypeError('Usage: my-app <source>');
+  }
+  return { source: path.resolve(args[0]) };
+}
+
+export function toDurableInput(args) {
+  return parseInput(args);
+}
+
+export async function main(argv = process.argv) {
+  const input = parseInput(argv.slice(2));
+  // Run the ordinary local behavior with input.
+}
+```
+
+Keep this projection pure: validate and translate arguments, but do not perform
+the work or mutate external state. Sharing its parser with the ordinary CLI
+keeps local and durable input semantics aligned.
+
 Logical IDs match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and contain at most 63
 ASCII bytes. The compiler rejects aliases and unknown fields instead of
-normalizing them. The v3 schema has no `ActorSystem`, `functions`,
+normalizing them. The v4 schema has no `ActorSystem`, `functions`,
 `capabilities`, application `resources`, or public packaging/signing section.
 
 A workflow is plain revision-bound data: one to 64 uniquely named ordered
@@ -88,12 +121,22 @@ integer milliseconds; a signal's name is its step ID. Branches, executable
 deciders, loops, parallel steps, and early-signal buffering are not part of
 this contract. The complete `workflows` map is limited to 1 MiB of exact UTF-8
 JSON. The compiler and packager preserve these definitions now. The public
-source `wharfie ops start --workflow <workflow-id>` and packaged
-`<app> wharfie start --workflow <workflow-id>` commands persist the complete
-finite activity/timer/signal plan and atomically materialize its first
-activation. The exact-revision resident executes activity steps and fires due
-timers as framework work; there is no public timer-fire command. Deliver a
-signal with source
+source `wharfie ops start --dir ./path/to/app -- <application-args>` and
+packaged `<app> wharfie start -- <application-args>` commands use
+`cli.durable` to select the workflow and project ordinary arguments into its
+input. `--` ends operator option parsing. A new idempotency key is generated
+when none is supplied and is included in the start receipt; provide
+`--idempotency-key <stable-key>` when the same logical admission must be
+retried after a lost response. Experts can bypass the adapter with
+`--workflow <workflow-id> --input <json>`; those controls cannot be combined
+with application arguments.
+
+Both forms persist the complete finite activity/timer/signal plan and
+atomically materialize its first activation. Starting work does not start or
+daemonize the resident: run `wharfie ops worker --dir ./path/to/app` or
+`<app> wharfie worker` separately. The exact-revision resident executes
+activity steps and fires due timers as framework work; there is no public
+timer-fire command. Deliver a signal with source
 `wharfie ops signal --run-id <run-id> --signal <signal-step-id> --delivery-id <stable-delivery-id> --payload <json>`
 or packaged `<app> wharfie signal ...`. A signal is accepted only for the
 current declared wait. Exact accepted and rejected deliveries replay under the
