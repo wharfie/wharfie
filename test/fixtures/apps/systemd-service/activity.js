@@ -8,25 +8,30 @@ import {
 import { dirname, resolve } from 'node:path';
 
 const USAGE = 'Usage: systemd-service-proof <marker-file>';
+const SYSTEMD_PROOF_RELEASE = '__WHARFIE_SYSTEMD_PROOF_RELEASE__';
 
 /**
  * Parse the one application-owned marker argument shared by immediate and
  * durable execution.
  * @param {ReadonlyArray<string>} args - Application arguments without Node argv.
- * @returns {{markerPath: string, stepIndex: number}} - First workflow input.
+ * @returns {{markerPath: string, stepIndex: number, release: string}} - First workflow input.
  */
 function parseMarkerInput(args) {
   if (!Object.isFrozen(args)) {
     throw new TypeError('systemd proof CLI arguments must be frozen.');
   }
   if (args.length !== 1 || !args[0]) throw new TypeError(USAGE);
-  return { markerPath: resolve(args[0]), stepIndex: 0 };
+  return {
+    markerPath: resolve(args[0]),
+    stepIndex: 0,
+    release: SYSTEMD_PROOF_RELEASE,
+  };
 }
 
 /**
  * Project ordinary application arguments into the default durable workflow.
  * @param {ReadonlyArray<string>} args - Application arguments after `--`.
- * @returns {{markerPath: string, stepIndex: number}} - Workflow input.
+ * @returns {{markerPath: string, stepIndex: number, release: string}} - Workflow input.
  */
 export function toDurableInput(args) {
   return parseMarkerInput(args);

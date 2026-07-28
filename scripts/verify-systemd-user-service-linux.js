@@ -93,6 +93,7 @@ const FAILING_RESIDENT_INJECTION = [
   FAILING_RESIDENT_CODE,
   '',
 ].join('\n');
+const RELEASE_PLACEHOLDER = '__WHARFIE_SYSTEMD_PROOF_RELEASE__';
 
 /**
  * @typedef CommandResult
@@ -564,9 +565,15 @@ function packageProofArtifacts(repoRoot) {
     assert.notEqual(installedFixtureManifest, fixtureManifest);
     writeFileSync(fixtureManifestPath, installedFixtureManifest);
     const activityPath = path.join(fixture, 'activity.js');
+    const activitySource = readFileSync(activityPath, 'utf8');
+    assert.equal(
+      activitySource.split(RELEASE_PLACEHOLDER).length,
+      2,
+      'systemd proof release placeholder must occur exactly once',
+    );
     writeFileSync(
       activityPath,
-      `${readFileSync(activityPath, 'utf8').trimEnd()}\n\nexport const systemdProofRelease = ${JSON.stringify(label)};\n`,
+      activitySource.replace(RELEASE_PLACEHOLDER, label),
     );
     const wharfieBin = path.join(
       consumerRoot,

@@ -18,14 +18,35 @@ CREATED=0
 RECEIPT_STAGING=""
 COMMIT=""
 
+instance_is_listed() {
+  local instances
+  local candidate
+  if ! instances="$(limactl list --quiet)"; then
+    echo "Failed to inspect Lima instances." >&2
+    return 2
+  fi
+  while IFS= read -r candidate; do
+    if [[ "${candidate}" == "${INSTANCE}" ]]; then
+      return 0
+    fi
+  done <<< "${instances}"
+  return 1
+}
+
 delete_disposable_instance() {
+  local presence_status
   if ! limactl delete --force "${INSTANCE}"; then
     echo "Failed to delete Lima instance ${INSTANCE}." >&2
     return 1
   fi
-  if limactl list --quiet "${INSTANCE}" >/dev/null 2>&1; then
+  if instance_is_listed; then
     echo "Lima instance ${INSTANCE} still exists after deletion." >&2
     return 1
+  else
+    presence_status=$?
+    if [[ "${presence_status}" -ne 1 ]]; then
+      return 1
+    fi
   fi
   CREATED=0
   echo "Deleted disposable Lima instance ${INSTANCE}."
@@ -38,18 +59,24 @@ cleanup() {
     failure_directory=""
     if [[ -n "${COMMIT}" ]]; then
       failure_directory="${OUTPUT_ROOT}/failures/${COMMIT}"
-      mkdir -p "${failure_directory}"
-      if [[ -f "${PREPARE_CAPTURE}" ]]; then
-        cp "${PREPARE_CAPTURE}" "${failure_directory}/prepare.json"
+      if ! mkdir -p "${failure_directory}"; then
+        echo "Could not create failure receipt directory." >&2
+        failure_directory=""
       fi
-      if [[ -f "${PREPARE_LOG}" ]]; then
-        cp "${PREPARE_LOG}" "${failure_directory}/prepare.log"
+      if [[ -n "${failure_directory}" && -f "${PREPARE_CAPTURE}" ]]; then
+        cp "${PREPARE_CAPTURE}" "${failure_directory}/prepare.json" ||
+          echo "Could not retain prepare receipt." >&2
       fi
-      if [[ -f "${VERIFY_LOG}" ]]; then
-        cp "${VERIFY_LOG}" "${failure_directory}/verify.log"
+      if [[ -n "${failure_directory}" && -f "${PREPARE_LOG}" ]]; then
+        cp "${PREPARE_LOG}" "${failure_directory}/prepare.log" ||
+          echo "Could not retain prepare log." >&2
+      fi
+      if [[ -n "${failure_directory}" && -f "${VERIFY_LOG}" ]]; then
+        cp "${VERIFY_LOG}" "${failure_directory}/verify.log" ||
+          echo "Could not retain verify log." >&2
       fi
     fi
-    if limactl list --quiet "${INSTANCE}" >/dev/null 2>&1; then
+    if instance_is_listed; then
       if [[ -n "${failure_directory}" ]] && limactl shell --tty=false "${INSTANCE}" \
         /usr/bin/test -f "${GUEST_PROOF_ROOT}/failure.json"; then
         limactl copy --backend=scp \
@@ -81,9 +108,9 @@ cleanup() {
     echo "Retained Lima instance ${INSTANCE} for inspection." >&2
   fi
   if [[ -n "${RECEIPT_STAGING}" ]]; then
-    rm -rf "${RECEIPT_STAGING}"
+    rm -rf "${RECEIPT_STAGING}" || status=1
   fi
-  rm -rf "${TEMP_ROOT}"
+  rm -rf "${TEMP_ROOT}" || status=1
   exit "${status}"
 }
 trap cleanup EXIT INT TERM
@@ -104,13 +131,19 @@ if [[ "${KEEP_VM}" != "0" && "${KEEP_VM}" != "1" ]]; then
   echo "WHARFIE_SYSTEMD_PROOF_KEEP_VM must be 0 or 1." >&2
   exit 1
 fi
-if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=all)" ]]; then
+WORKTREE_STATUS="$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=all)"
+if [[ -n "${WORKTREE_STATUS}" ]]; then
   echo "Commit or remove worktree changes before creating a proof receipt." >&2
   exit 1
 fi
-if limactl list --quiet "${INSTANCE}" >/dev/null 2>&1; then
+if instance_is_listed; then
   echo "Lima instance ${INSTANCE} already exists; choose a fresh WHARFIE_SYSTEMD_PROOF_INSTANCE." >&2
   exit 1
+else
+  presence_status=$?
+  if [[ "${presence_status}" -ne 1 ]]; then
+    exit 1
+  fi
 fi
 
 COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
