@@ -33,8 +33,11 @@ durable timer and a portable control-store reopen, and a verified retained
 result. Its hermetic proof stops before native LMDB, SEA construction, systemd,
 and cloud execution. A separate
 [checksummed Darwin observation](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
-runs the source LMDB resident and generated SEA; clean-host service lifecycle
-evidence on a supported Linux/systemd host remains open.
+runs the source LMDB resident and generated SEA. A
+[checksummed disposable-Ubuntu proof](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
+now closes the Linux/systemd service-substrate gate with Node absent from the
+packaged command `PATH`; it uses a purpose-built service fixture, so the next
+product proof is the literal `steady-file` walkthrough through that substrate.
 
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service
@@ -665,7 +668,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
-- [Steady-file native and SEA proof checkpoint](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md) — the latest restart point for the real Darwin source LMDB resident, generated relocated SEA, corrected sandbox diagnosis, complete cleanup, and next work.
+- [Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md) — the latest restart point for the checksummed disposable-Ubuntu package, crash/reboot continuation, activation-recovery matrix, retained reads, uninstall/prune, cleanup, and next work.
+- [Steady-file native and SEA proof checkpoint](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md) — the preceding restart point for the real Darwin source LMDB resident, generated relocated SEA, corrected sandbox diagnosis, complete cleanup, and next work.
 - [Verified sensitive run-output checkpoint](llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md) — the preceding implementation restart point for exact app-scoped logical outputs, explicit disclosure gating, bounded terminal-safe transport, source/packaged parity, and next work.
 - [Local-contract integrity checkpoint](llm/checkpoints/2026-07-27-v98-local-contract-integrity.md) — the preceding restart point for receipt consumers, Commander ownership, focused verification, and test cleanup.
 - [Versioned application-package receipt checkpoint](llm/checkpoints/2026-07-27-v97-versioned-application-package-receipt.md) — the preceding restart point for the strict public source-packaging receipt and artifact handoff.
@@ -1101,7 +1105,10 @@ require public recovery plus independent selector, receipt, process, systemd,
 and immutable-byte evidence. Run it with
 `npm run verify:service:systemd:lima`. A due timer remains persisted until the
 exact-revision resident observes and fires it; there is deliberately no public
-timer-fire command. Wharfie does not yet provide schedule
+timer-fire command. The successful commit-bound run and its receipts are
+recorded in the
+[Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md).
+Wharfie does not yet provide schedule
 inspection/pause/resume, managed-effect workflow successors, multi-host
 reassignment, or live log tail, search, and redaction.
 

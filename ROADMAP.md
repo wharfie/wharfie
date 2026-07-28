@@ -44,17 +44,20 @@ The repository has substantial foundations:
   [checksummed Darwin observation](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
   of the real source LMDB resident and generated relocated SEA with Node absent
   from runtime `PATH`;
-- a recoverable single-machine service lifecycle; and
+- a recoverable single-machine service lifecycle, now exercised by a
+  [checksummed disposable-Ubuntu proof](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
+  through install, automatic replacement, forced host restart, retained work,
+  update, rollback, failed-target restoration, history/output reads,
+  uninstall, prune, and host cleanup; and
 - extensive AWS-shaped deployment contracts, resource drivers, and mock-based
   proofs.
 
-That is useful machinery, but it is not yet the complete product proof. The
-golden path still needs a clean supported Linux host and systemd user-manager
-proof covering install, converge, deliberate service replacement, host
-restart, history and output reads, update, rollback, uninstall, and cleanup.
-Automatic replacement of a failed coordinator is not proved. The cloud
-deployment work has not produced a successful clean-account end-to-end
-receipt.
+That closes the single-host service-substrate gate, but it is not yet the
+complete product proof. The purpose-built systemd fixture must now give way to
+one literal `steady-file` walkthrough through the default durable handoff and
+the proven service lifecycle. Automatic replacement of a failed coordinator
+by another machine is not proved. The cloud deployment work has not produced a
+successful clean-account end-to-end receipt.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -84,10 +87,11 @@ second application architecture.
 
 ### Work next
 
-1. On a clean supported Linux host with a systemd user manager, prove install
-   and converge, deliberate service replacement, host restart, history and
-   output reads, update, rollback, uninstall, and cleanup. Same-host execution
-   without Node in `PATH` is already observed; clean-host independence is not.
+1. Run one literal `steady-file` walkthrough through the proven service
+   substrate: ordinary CLI, default durable start, package, install, close the
+   initiating shell, return for history and output, update, rollback,
+   uninstall, and cleanup. Add no abstraction unless this sequence exposes a
+   real blocker.
 2. Reduce the remaining returned-run and app-scope friction only when the
    walkthrough demonstrates that it blocks the obvious command sequence.
 3. Add schedule, application state, or broader workflow behavior only when the
@@ -199,10 +203,10 @@ ends with independently checked receipts.
 
 ## Immediate slice status
 
-Do not add another numbered roadmap tranche. The portable half of the bounded
-local golden path and one real Darwin native/SEA observation are concrete, but
-the slice is not complete until its clean Linux/systemd persistent-service
-lifecycle is proved:
+Do not add another numbered roadmap tranche. The portable golden path, one real
+Darwin native/SEA observation, and the disposable Linux/systemd service
+substrate are concrete. The remaining slice is to join them into one literal
+user-facing `steady-file` walkthrough:
 
 1. `steady-file` compares two file observations for a useful local shell
    decision;
@@ -214,12 +218,11 @@ lifecycle is proved:
 5. schema v4 now maps its ordinary file argument through a pure declared
    adapter, selects the durable workflow, and generates a unique start identity
    by default;
-6. deliberate service replacement and the clean Linux/systemd lifecycle remain
-   explicit evidence gates;
-   and
-7. exposed findings are classified as proof gaps, interface friction, expected
-   design, or deliberate boundaries before more coordinator or provider
-   machinery is added.
+6. a checksummed disposable Ubuntu run now proves deliberate replacement,
+   forced reboot, automatic pre-login startup, durable continuation, update,
+   rollback, failed-target restoration, uninstall, prune, and cleanup; and
+7. the literal golden application must traverse that substrate before more
+   coordinator or provider machinery is added.
 
 The preferred result is less framework surface and one compelling
 demonstration, not another broad layer of abstractions.

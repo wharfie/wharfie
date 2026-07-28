@@ -516,10 +516,13 @@ VM or equivalent ephemeral systemd environment where enabling linger, writing
 the user unit, and rebooting cannot affect a contributor's host. The pinned
 Lima proof is available through `npm run verify:service:systemd:lima`; it is an
 explicit heavyweight validation and is not part of the default local test
-suite. Its proof contract and checksummed receipts are recorded in the
-[systemd reboot-proof checkpoint](../../../llm/checkpoints/2026-07-20-v16-systemd-reboot-proof.md).
-Focused coordinator and packaged-manager tests cover update, rollback, source
-restoration, first-install compatibility, durable phase recovery, and
-uninstall/reinstall retention. A disposable-host two-release activation matrix
-is still required; the current handoff is the [recoverable activation
-checkpoint](../../../llm/checkpoints/2026-07-20-v17-recoverable-systemd-activation.md).
+suite. The current checksummed disposable-Ubuntu run covers automatic
+pre-login startup after a forced host cycle, resident crash replacement,
+persisted workflow continuation, history and output reads, all five durable
+writes for update, rollback, and failed-target source restoration, ambiguous
+rollback recovery, graceful restart, stop/start, uninstall, release pruning,
+and VM deletion. Its exact commit, receipts, checksums, and proof limits are
+recorded in the
+[Linux/systemd lifecycle proof checkpoint](../../../llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md).
+Focused coordinator and packaged-manager tests remain the faster regression
+coverage for those boundaries.
