@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { createExecutionLedgerOperatorCommands } from '../../core/runtime/operator/execution-ledger-operator.js';
 import { createSourceExecutionLedgerHistoryCommand } from './ops_cmds/list.js';
 import { createSourceExecutionLedgerActivityLogCommand } from './ops_cmds/logs.js';
+import { createSourceExecutionLedgerRunOutputCommand } from './ops_cmds/output.js';
 import { createSourceDurableRunCommand } from './ops_cmds/run.js';
 import { createSourceDurableWorkflowSignalCommand } from './ops_cmds/signal.js';
 import { createSourceDurableWorkflowStartCommand } from './ops_cmds/start.js';
@@ -28,6 +29,7 @@ export function createSourceOpsCommand() {
     .description('Durable execution-ledger operator commands')
     .addCommand(createSourceExecutionLedgerHistoryCommand())
     .addCommand(createSourceExecutionLedgerActivityLogCommand())
+    .addCommand(createSourceExecutionLedgerRunOutputCommand())
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
     .addCommand(reconcileCommand)

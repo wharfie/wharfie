@@ -26,6 +26,7 @@ import {
 } from '../../lib/ledger/execution-ledger-contract.js';
 import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
 import { withExecutionLedger } from './execution-ledger-store.js';
+import { renderTerminalSafeJson } from './terminal-safe-json.js';
 
 export const EXECUTION_LEDGER_ACTIVITY_LOG_PAGE_SCHEMA_VERSION = 1;
 export const EXECUTION_LEDGER_ACTIVITY_LOG_PAGE_KIND =
@@ -42,7 +43,6 @@ const SAFE_FAILURE =
 const CONFIRMATION_REQUIRED =
   'logs requires --confirm-sensitive-output because application logs are unredacted and may contain secrets.';
 const LOG_LEVELS = new Set(ACTIVITY_PROTOCOL_LOG_LEVELS);
-const UNSAFE_TERMINAL_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/gu;
 
 /**
  * @typedef {object} ExecutionLedgerActivityLogPageScope
@@ -416,35 +416,6 @@ function projectPage(value, request) {
     items,
     nextCursor,
   };
-}
-
-/**
- * Encode one Unicode code point as terminal-inert JSON escape units.
- * @param {string} character - One matched code point.
- * @returns {string} - One or two UTF-16 JSON escape units.
- */
-function escapeUnicodeCodePoint(character) {
-  const codePoint = /** @type {number} */ (character.codePointAt(0));
-  if (codePoint <= 0xffff) {
-    return `\\u${codePoint.toString(16).padStart(4, '0')}`;
-  }
-  const scalar = codePoint - 0x10000;
-  const high = 0xd800 + (scalar >> 10);
-  const low = 0xdc00 + (scalar & 0x3ff);
-  return `\\u${high.toString(16).padStart(4, '0')}\\u${low
-    .toString(16)
-    .padStart(4, '0')}`;
-}
-
-/**
- * JSON-render one value without leaving terminal controls active.
- * @param {unknown} value - Raw page or application-controlled value.
- * @returns {string} - Terminal-inert JSON text.
- */
-function renderTerminalSafeJson(value) {
-  const json = JSON.stringify(value);
-  if (typeof json !== 'string') throw new TypeError(INVALID_PAGE);
-  return json.replace(UNSAFE_TERMINAL_CHARACTER, escapeUnicodeCodePoint);
 }
 
 /**

@@ -607,6 +607,34 @@ describe('managed-effect successor dedicated lifecycle', () => {
       attempt: { status: 'ABANDONED' },
       effect: { status: 'NOT_APPLIED' },
     });
+    await expect(
+      harness.ledger.readRunOutput({
+        appId: APP_ID,
+        runId: handoff1.authorization.target.runId,
+      }),
+    ).resolves.toEqual({
+      scope: {
+        appId: APP_ID,
+        revisionId: REVISION_ID,
+        runId: handoff1.authorization.target.runId,
+      },
+      snapshot: {
+        runKind: 'effect-successor',
+        status: 'FAILED',
+        version: reconciled1.run.version,
+        lastSequence: reconciled1.run.lastSequence,
+      },
+      outputs: [],
+      terminal: {
+        type: 'failed',
+        error: {
+          code: 'managed-effect-not-applied',
+          name: 'ManagedEffectNotAppliedError',
+          message: 'The managed effect was verified as not applied.',
+          details: {},
+        },
+      },
+    });
     const beforeSecondAuthorization = await harness.ledger.rebuildRun(
       handoff1.authorization.target.runId,
     );
@@ -690,6 +718,26 @@ describe('managed-effect successor dedicated lifecycle', () => {
       invocation: { status: 'COMPLETED', terminal: { type: 'completed' } },
       attempt: { status: 'COMPLETED' },
       effect: { status: 'COMPLETED' },
+    });
+    await expect(
+      harness.ledger.readRunOutput({
+        appId: APP_ID,
+        runId: handoff2.authorization.target.runId,
+      }),
+    ).resolves.toEqual({
+      scope: {
+        appId: APP_ID,
+        revisionId: REVISION_ID,
+        runId: handoff2.authorization.target.runId,
+      },
+      snapshot: {
+        runKind: 'effect-successor',
+        status: 'COMPLETED',
+        version: terminal2.run.version,
+        lastSequence: terminal2.run.lastSequence,
+      },
+      outputs: [],
+      terminal: { type: 'completed', result: outcome2.result },
     });
     expect(
       (await harness.ledger.getEvents(handoff2.authorization.target.runId)).map(

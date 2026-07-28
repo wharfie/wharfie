@@ -185,6 +185,9 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id>',
     );
+    expect(quickstart).toContain(
+      'wharfie ops output --app-id <app-id> --run-id <run-id>',
+    );
     expect(quickstart).toContain('wharfie ops worker --dir ./path/to/app');
     expect(quickstart).toContain(
       '<app> wharfie submit --activity <activity-id>',
@@ -199,6 +202,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       '<app> wharfie logs --run-id <run-id> --attempt-id <attempt-id>',
     );
+    expect(quickstart).toContain('<app> wharfie output --run-id <run-id>');
     expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('<app> wharfie service install');
     expect(quickstart).toContain('<app> wharfie service status --json');
@@ -282,6 +286,8 @@ describe('docs command surface', () => {
     );
     expect(quickstart).not.toMatch(/^wharfie list(?:\s|$)/m);
     expect(quickstart).not.toContain('<app> wharfie logs --app-id');
+    expect(quickstart).not.toContain('<app> wharfie output --app-id');
+    expect(quickstart).not.toContain('wharfie ops output --dir');
     expect(quickstart).not.toContain('<app> wharfie ops cancel');
     expect(quickstart).not.toContain('<app> wharfie ops start');
   });
@@ -337,6 +343,45 @@ describe('docs command surface', () => {
       expect(document).toContain('application-sensitive-unredacted');
       expect(document).toMatch(/non-authoritative/i);
       expect(document).toMatch(/tail|tailing/);
+    }
+  });
+
+  it('documents the explicit sensitive logical run-output boundary', async () => {
+    const documents = await Promise.all(
+      [
+        'README.md',
+        'docs/guides/quickstart.md',
+        'src/cli/README.md',
+        'docs/architecture/decisions/0031-verified-sensitive-run-output.md',
+      ].map((relativePath) =>
+        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ),
+    );
+
+    for (const document of documents) {
+      const normalized = document
+        .replace(/\\\s*\n\s*/g, ' ')
+        .replace(/\s+/g, ' ');
+
+      expect(normalized).toContain(
+        'wharfie ops output --app-id <app-id> --run-id <run-id> --confirm-sensitive-output',
+      );
+      expect(normalized).toContain(
+        '<app> wharfie output --run-id <run-id> --confirm-sensitive-output',
+      );
+      expect(document).toContain('wharfie.execution-ledger.run-output');
+      expect(document).toContain('application-sensitive-unredacted');
+      expect(document).toMatch(
+        /non-authoritative|grants? no authority|authority `none`/i,
+      );
+      expect(normalized).toMatch(
+        /raw application-controlled values.{0,160}(secret|internal-looking)/i,
+      );
+      expect(document).toMatch(/polling/i);
+      expect(document).toMatch(/terminal/i);
+      expect(document).toMatch(
+        /inspect[\s\S]{0,100}redacted|redacted[\s\S]{0,100}inspect/i,
+      );
     }
   });
 

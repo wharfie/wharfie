@@ -90,6 +90,31 @@ without changing parsed raw values. Outside raw messages and fields—which may
 themselves contain any secret or internal-looking value—the page adds no
 Wharfie-owned fences, storage IDs, hashes, or payload references.
 
+Read one run's verified logical output snapshot with
+`wharfie ops output --app-id <app-id> --run-id <run-id> --confirm-sensitive-output [--json]`
+or packaged
+`<app> wharfie output --run-id <run-id> --confirm-sensitive-output [--json]`.
+Source mode takes the exact app ID without loading current authored source;
+packaged mode binds the embedded app ID and can inspect older revisions of
+that app. The confirmation is disclosure consent, not authentication or
+execution authority. The read-only default does not create a missing local
+control store.
+
+Schema-version 1 kind `wharfie.execution-ledger.run-output` is explicitly
+`application-sensitive-unredacted`, declares authority `none`, and contains
+the exact app/revision/run scope, polling status/version/last-sequence state,
+the complete verified workflow output prefix, and a nullable aggregate
+terminal. Running and blocked runs have no terminal; terminal runs disclose a
+completed result or structured error. The whole document is reverified,
+bounded to 64 MiB, recursively frozen, and rendered terminal-safely before
+output. Failure emits one fixed diagnostic and no partial snapshot. Outside
+raw application-controlled values—which may themselves contain any secret or
+internal-looking value—Wharfie adds no private framework metadata such as
+payload references, evidence, fences, actors, physical attempt identities, or
+storage paths. Poll by rerunning the command. There is no paging, watch,
+export, redaction, atomic-display, or exactly-once-display claim, and ordinary
+`inspect` remains redacted.
+
 Generic exact-run `inspect`, confirmed `recover`, evidence-backed `reconcile`,
 and run-level `cancel` are workflow-aware. JSON inspection uses the schema-v8
 redacted view with safe timer, signal-wait, and signal-delivery lifecycle state,

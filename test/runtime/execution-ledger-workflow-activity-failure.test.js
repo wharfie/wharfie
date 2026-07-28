@@ -526,6 +526,32 @@ async function expectTerminalFailureState({
   expect(rebuilt.workflowCursor.outputs).toEqual(
     workflow.firstSucceeded.workflowCursor.outputs,
   );
+  await expect(ledger.readRunOutput({ appId: APP_ID, runId })).resolves.toEqual(
+    {
+      scope: {
+        appId: APP_ID,
+        revisionId: REVISION_ID,
+        runId,
+      },
+      snapshot: {
+        runKind: 'workflow',
+        status: RunStatus.FAILED,
+        version: result.run.version,
+        lastSequence: result.run.lastSequence,
+      },
+      outputs: [
+        {
+          stepId: FIRST_STEP_ID,
+          stepIndex: 0,
+          value: workflow.firstOutput,
+        },
+      ],
+      terminal: {
+        type,
+        error: scenario.request.evidence.terminal.error,
+      },
+    },
+  );
   const rebuiltInvocation = rebuilt.invocations.find(
     (/** @type {Record<string, any>} */ invocation) =>
       invocation.invocationId ===

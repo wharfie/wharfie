@@ -34,5 +34,6 @@ These records capture product-level decisions that should survive implementation
 | [0028 — Versioned durable-operation receipts](0028-versioned-durable-operation-receipts.md)                                | Accepted                                               |
 | [0029 — Explicit bounded local release pruning](0029-local-release-pruning.md)                                             | Accepted                                               |
 | [0030 — Versioned application-package receipt](0030-versioned-application-package-receipt.md)                              | Accepted                                               |
+| [0031 — Verified sensitive durable run-output disclosure](0031-verified-sensitive-run-output.md)                           | Accepted                                               |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

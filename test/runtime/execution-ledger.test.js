@@ -64,19 +64,23 @@ function createExecutionLedger(options) {
 }
 
 /**
- * @returns {{writes: {value: unknown, payloadSchema: string}[], payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}}} - Store wrapper that exposes durable publication attempts.
+ * @returns {{writes: {value: unknown, payloadSchema: string}[], reads: unknown[], payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}}} - Store wrapper that exposes durable publication and read attempts.
  */
 function createCountingPayloadStore() {
   /** @type {{value: unknown, payloadSchema: string}[]} */
   const writes = [];
+  /** @type {unknown[]} */
+  const reads = [];
   return {
     writes,
+    reads,
     payloadStore: {
       async putJson(input) {
         writes.push(input);
         return await PAYLOAD_STORE.putJson(input);
       },
       async readBytes(reference) {
+        reads.push(reference);
         return await PAYLOAD_STORE.readBytes(reference);
       },
     },
@@ -606,6 +610,150 @@ for (const adapter of getAdapterMatrix()) {
           ),
         ).rejects.toThrow(/reserved managed-effect successor activity/i);
         await expect(ledger.getRun(RUN_ID)).resolves.toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('reads bounded app-scoped manual outputs without exposing ledger internals', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const counted = createCountingPayloadStore();
+        const ledger = createProductionExecutionLedger({
+          db,
+          tableName: 'execution-ledger-run-output-manual',
+          payloadStore: counted.payloadStore,
+          now: createClock(),
+        });
+        await expect(
+          ledger.readRunOutput({ appId: 'demo', runId: RUN_ID }),
+        ).resolves.toBeNull();
+        const created = await ledger.createManualRun(manualRun());
+        const active = await ledger.readRunOutput({
+          appId: 'demo',
+          runId: RUN_ID,
+        });
+        expect(active).toEqual({
+          scope: {
+            appId: 'demo',
+            revisionId: REVISION_ID,
+            runId: RUN_ID,
+          },
+          snapshot: {
+            runKind: 'manual',
+            status: RunStatus.RUNNING,
+            version: created.run.version,
+            lastSequence: created.run.lastSequence,
+          },
+          outputs: [],
+          terminal: null,
+        });
+        expect(Object.isFrozen(active)).toBe(true);
+        expect(Object.isFrozen(active?.scope)).toBe(true);
+        counted.reads.length = 0;
+        await expect(
+          ledger.readRunOutput({ appId: 'other-app', runId: RUN_ID }),
+        ).resolves.toBeNull();
+        expect(counted.reads).toEqual([]);
+
+        const claimed = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'run-output-fence',
+          expectedGeneration: 0,
+          expectedVersion: created.run.version,
+          transitionId: 'run-output-claim',
+        });
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: claimed.attempt.attemptId,
+          fencingToken: claimed.attempt.fencingToken,
+          generation: claimed.attempt.generation,
+          expectedVersion: claimed.run.version,
+          transitionId: 'run-output-start',
+        });
+        const result = {
+          greeting: 'sensitive-result',
+          nested: { value: 7 },
+        };
+        const committed = await ledger.commitVerifiedAttemptTerminal({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          fencingToken: started.attempt.fencingToken,
+          generation: started.attempt.generation,
+          expectedVersion: started.run.version,
+          transitionId: 'run-output-terminal',
+          evidence: completedEvidenceForStart(started.startFrame, result),
+        });
+        const completed = await ledger.readRunOutput({
+          appId: 'demo',
+          runId: RUN_ID,
+        });
+        expect(completed).toEqual({
+          scope: active?.scope,
+          snapshot: {
+            runKind: 'manual',
+            status: RunStatus.COMPLETED,
+            version: committed.run.version,
+            lastSequence: committed.run.lastSequence,
+          },
+          outputs: [],
+          terminal: { type: 'completed', result },
+        });
+        expect(Object.isFrozen(completed?.terminal?.result)).toBe(true);
+        const serialized = JSON.stringify(completed);
+        for (const privateField of [
+          'requestRef',
+          'evidenceRef',
+          'fencingToken',
+          'coordinatorEpoch',
+          'attemptId',
+          'actor',
+          'storage',
+        ]) {
+          expect(serialized).not.toContain(privateField);
+        }
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('uses the durable cancellation reason for a terminal manual aggregate', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-run-output-cancelled',
+          now: createClock(),
+        });
+        const created = await ledger.createManualRun(manualRun());
+        const cancelled = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: created.run.version,
+          }),
+        );
+        await expect(
+          ledger.readRunOutput({ appId: 'demo', runId: RUN_ID }),
+        ).resolves.toEqual({
+          scope: {
+            appId: 'demo',
+            revisionId: REVISION_ID,
+            runId: RUN_ID,
+          },
+          snapshot: {
+            runKind: 'manual',
+            status: RunStatus.CANCELLED,
+            version: cancelled.run.version,
+            lastSequence: cancelled.run.lastSequence,
+          },
+          outputs: [],
+          terminal: {
+            type: 'cancelled',
+            error: CANCELLATION_REASON,
+          },
+        });
       } finally {
         await cleanup();
       }
@@ -1447,6 +1595,21 @@ for (const adapter of getAdapterMatrix()) {
           attempt: { status: AttemptStatus.ABANDONED },
         });
         await expect(
+          ledger.readRunOutput({ appId: 'demo', runId: RUN_ID }),
+        ).resolves.toMatchObject({
+          snapshot: {
+            runKind: 'manual',
+            status: RunStatus.CANCELLED,
+            version: reconciled.run.version,
+            lastSequence: reconciled.run.lastSequence,
+          },
+          outputs: [],
+          terminal: {
+            type: 'cancelled',
+            error: CANCELLATION_REASON,
+          },
+        });
+        await expect(
           ledger.getEffect(RUN_ID, INVOCATION_ID, 'cancelled-pending'),
         ).resolves.toMatchObject({
           status: EffectStatus.CANCELLED,
@@ -1933,6 +2096,26 @@ for (const adapter of getAdapterMatrix()) {
         expect(reconciled.invocation).not.toHaveProperty('uncertainty');
         expect(reconciled.attempt).toEqual(attemptBefore);
         expect(reconciled.attempt).not.toHaveProperty('evidenceRef');
+        await expect(
+          ledger.readRunOutput({ appId: 'demo', runId: RUN_ID }),
+        ).resolves.toEqual({
+          scope: {
+            appId: 'demo',
+            revisionId: REVISION_ID,
+            runId: RUN_ID,
+          },
+          snapshot: {
+            runKind: 'manual',
+            status: RunStatus.COMPLETED,
+            version: reconciled.run.version,
+            lastSequence: reconciled.run.lastSequence,
+          },
+          outputs: [],
+          terminal: {
+            type: 'completed',
+            result: { greeting: `reconciled-${adapter.name}` },
+          },
+        });
 
         await expect(
           ledger.reconcileUncertainManualAttempt(reconciliation),

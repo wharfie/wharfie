@@ -104,6 +104,7 @@ import {
   getExecutionLedgerRunDirectorySortKey,
   parseExecutionLedgerRunDirectorySortKey,
 } from '../../ledger/run-directory.js';
+import { EXECUTION_LEDGER_RUN_OUTPUT_MAX_BYTES } from '../../ledger/run-output.js';
 import {
   EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX,
   ExecutionLedgerReadyWorkKind,
@@ -276,6 +277,17 @@ const SUPPORTED_WORKFLOW_ACTIVITY_TERMINAL_TYPES = new Set([
   'cancelled',
   'protocol-failed',
 ]);
+const TERMINAL_RUN_STATUSES = new Set([
+  RunStatus.COMPLETED,
+  RunStatus.FAILED,
+  RunStatus.CANCELLED,
+]);
+const EFFECT_NOT_APPLIED_RUN_OUTPUT_ERROR = Object.freeze({
+  code: 'managed-effect-not-applied',
+  name: 'ManagedEffectNotAppliedError',
+  message: 'The managed effect was verified as not applied.',
+  details: {},
+});
 const ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA =
   'wharfie.execution.activity-evidence.v1';
 const UNCERTAIN_ATTEMPT_RECONCILIATION_VERIFIER = Object.freeze({
@@ -5150,6 +5162,234 @@ async function readWorkflowCursorOutputs(cursor, payloadReader) {
       payload: await payloadReader.readWorkflowOutput(binding.outputRef),
     })),
   );
+}
+
+/**
+ * Strip Activity Protocol transport correlation from one already-reverified
+ * terminal. The durable output surface retains only the logical type and
+ * application value.
+ * @param {unknown} value - Candidate persisted terminal frame.
+ * @param {Record<string, any>} summary - Exact retained terminal summary.
+ * @param {string} runId - Run identity for safe projection diagnostics.
+ * @returns {{type: string, result?: any, error?: Record<string, any>}} - Sensitive logical terminal.
+ */
+function projectRunOutputActivityTerminal(value, summary, runId) {
+  let terminal;
+  try {
+    terminal = validateActivityProtocolComponentFrame(
+      value,
+      'execution-ledger run output terminal',
+    );
+  } catch {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'terminal evidence is unavailable or invalid',
+    );
+  }
+  if (
+    !TERMINAL_TYPES.has(terminal.type) ||
+    !hasSameCanonicalJson(createTerminalSummary(terminal), summary)
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'terminal evidence does not match its retained summary',
+    );
+  }
+  return terminal.type === 'completed'
+    ? { type: terminal.type, result: terminal.result }
+    : { type: terminal.type, error: terminal.error };
+}
+
+/**
+ * Resolve the immutable Activity Protocol evidence behind one terminal
+ * invocation. Normally the terminal attempt owns the reference; an uncertain
+ * attempt reconciliation retains it only in the exact terminal event.
+ * @param {Record<string, any>} state - Fully verified folded run.
+ * @param {Record<string, any>} invocation - Exact terminal invocation.
+ * @param {ReturnType<typeof createLedgerPayloadReader>} payloadReader - Fresh immutable reader.
+ * @returns {Promise<{type: string, result?: any, error?: Record<string, any>}>} - Sensitive logical terminal.
+ */
+async function readRunOutputActivityTerminal(state, invocation, payloadReader) {
+  const summary = invocation.terminal;
+  if (!summary) {
+    throw new ExecutionLedgerProjectionError(
+      state.run.runId,
+      'terminal invocation lacks a terminal summary',
+    );
+  }
+  const attempt = state.attempts.get(
+    attemptMapKey(invocation.invocationId, summary.attemptId),
+  );
+  if (!attempt) {
+    throw new ExecutionLedgerProjectionError(
+      state.run.runId,
+      'terminal invocation attempt is unavailable',
+    );
+  }
+  let evidenceRef = attempt.evidenceRef;
+  if (!evidenceRef) {
+    const matches = state.events.filter(
+      (/** @type {Record<string, any>} */ event) => {
+        if (
+          event.type !== 'uncertain-attempt-reconciled' &&
+          event.type !== 'workflow-activity-uncertainty-reconciled'
+        ) {
+          return false;
+        }
+        const reconciliation = event.payload?.reconciliation;
+        return (
+          reconciliation?.invocationId === invocation.invocationId &&
+          reconciliation?.attemptId === summary.attemptId &&
+          hasSameCanonicalJson(reconciliation.terminal, summary)
+        );
+      },
+    );
+    if (matches.length !== 1) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'terminal reconciliation evidence is unavailable',
+      );
+    }
+    evidenceRef = matches[0].payload.reconciliation.evidenceRef;
+  }
+  const evidence = await payloadReader.readEvidence(evidenceRef);
+  return projectRunOutputActivityTerminal(
+    evidence.terminal,
+    summary,
+    state.run.runId,
+  );
+}
+
+/**
+ * Resolve one effect-successor aggregate directly from the exact verified
+ * destination outcome. Reconciled NOT_APPLIED is a framework failure without
+ * an application result, so it receives one fixed structured error.
+ * @param {Record<string, any>} state - Fully verified folded run.
+ * @param {ReturnType<typeof createLedgerPayloadReader>} payloadReader - Fresh immutable reader.
+ * @returns {Promise<{type: string, result?: any, error?: Record<string, any>}>} - Sensitive logical terminal.
+ */
+async function readRunOutputEffectTerminal(state, payloadReader) {
+  const effects = [...state.effects.values()];
+  if (effects.length !== 1) {
+    throw new ExecutionLedgerProjectionError(
+      state.run.runId,
+      'effect-successor terminal does not retain one exact effect',
+    );
+  }
+  const [effect] = effects;
+  if (
+    [EffectStatus.COMPLETED, EffectStatus.FAILED].includes(effect.status) &&
+    effect.outcomeRef
+  ) {
+    const outcome = await payloadReader.readManagedEffectOutcome(
+      effect.outcomeRef,
+    );
+    if (
+      (state.run.status === RunStatus.COMPLETED &&
+        (effect.status !== EffectStatus.COMPLETED || outcome.ok !== true)) ||
+      (state.run.status === RunStatus.FAILED &&
+        (effect.status !== EffectStatus.FAILED || outcome.ok !== false))
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'effect-successor outcome does not match aggregate status',
+      );
+    }
+    return outcome.ok
+      ? { type: 'completed', result: outcome.result }
+      : { type: 'failed', error: outcome.error };
+  }
+  if (
+    state.run.status === RunStatus.FAILED &&
+    effect.status === EffectStatus.NOT_APPLIED &&
+    !effect.outcomeRef
+  ) {
+    return {
+      type: 'failed',
+      error: EFFECT_NOT_APPLIED_RUN_OUTPUT_ERROR,
+    };
+  }
+  throw new ExecutionLedgerProjectionError(
+    state.run.runId,
+    'effect-successor terminal outcome is unavailable',
+  );
+}
+
+/**
+ * Resolve one terminal aggregate without exposing evidence references or
+ * internal reconciliation state.
+ * @param {Record<string, any>} state - Fully verified folded run.
+ * @param {Array<{binding: Record<string, any>, payload: Record<string, any>}>} outputs - Verified workflow output prefix.
+ * @param {ReturnType<typeof createLedgerPayloadReader>} payloadReader - Fresh immutable reader.
+ * @returns {Promise<{type: string, result?: any, error?: Record<string, any>} | null>} - Nullable aggregate terminal.
+ */
+async function readVerifiedRunOutputTerminal(state, outputs, payloadReader) {
+  if (!TERMINAL_RUN_STATUSES.has(state.run.status)) return null;
+  if (state.run.status === RunStatus.CANCELLED) {
+    if (!state.run.cancellationRequest?.reason) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'cancelled run lacks its structured cancellation reason',
+      );
+    }
+    return {
+      type: 'cancelled',
+      error: state.run.cancellationRequest.reason,
+    };
+  }
+  if (state.run.trigger.kind === 'workflow') {
+    if (state.run.status === RunStatus.COMPLETED) {
+      const finalOutput = outputs.at(-1);
+      if (!finalOutput) {
+        throw new ExecutionLedgerProjectionError(
+          state.run.runId,
+          'completed workflow lacks its final output',
+        );
+      }
+      return { type: 'completed', result: finalOutput.payload.value };
+    }
+    const invocationId = state.workflowCursor?.invocationId;
+    const invocation = invocationId
+      ? state.invocations.get(invocationId)
+      : undefined;
+    if (
+      !invocation ||
+      invocation.status !== InvocationStatus.FAILED ||
+      !invocation.terminal
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'failed workflow terminal invocation is unavailable',
+      );
+    }
+    return await readRunOutputActivityTerminal(
+      state,
+      invocation,
+      payloadReader,
+    );
+  }
+  if (state.run.trigger.kind === 'effect-successor') {
+    return await readRunOutputEffectTerminal(state, payloadReader);
+  }
+  const invocations = [...state.invocations.values()];
+  if (invocations.length !== 1) {
+    throw new ExecutionLedgerProjectionError(
+      state.run.runId,
+      'manual run does not retain one exact invocation',
+    );
+  }
+  const [invocation] = invocations;
+  const expectedStatus =
+    state.run.status === RunStatus.COMPLETED
+      ? InvocationStatus.COMPLETED
+      : InvocationStatus.FAILED;
+  if (invocation.status !== expectedStatus || !invocation.terminal) {
+    throw new ExecutionLedgerProjectionError(
+      state.run.runId,
+      'manual terminal invocation does not match aggregate status',
+    );
+  }
+  return await readRunOutputActivityTerminal(state, invocation, payloadReader);
 }
 
 /**
@@ -10636,6 +10876,33 @@ export function createExecutionLedger({
       runId,
       payloadStore,
       effectVerifierRegistry,
+    );
+  }
+
+  /**
+   * Use the small current projection only as a pre-fold application router.
+   * A mismatched or malformed row is indistinguishable from absence here so a
+   * cross-app request cannot force foreign event or payload verification. A
+   * matching hint grants no authority: the complete fold below must still
+   * validate this projection and every other retained record.
+   * @param {string} runId - Exact durable run identity.
+   * @param {string} appId - Requested application scope.
+   * @returns {Promise<boolean>} - Whether the run may belong to this app.
+   */
+  async function hasRunProjectionAppScope(runId, appId) {
+    const record = await db.get({
+      tableName: resolvedTableName,
+      keyName: KEY_NAME,
+      keyValue: runId,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: getRunProjectionSortKey(),
+      consistentRead: true,
+    });
+    return Boolean(
+      record &&
+      typeof record === 'object' &&
+      !Array.isArray(record) &&
+      record.app_id === appId,
     );
   }
 
@@ -22834,6 +23101,72 @@ export function createExecutionLedger({
   }
 
   /**
+   * Rebuild and rehash one exact app-scoped run, then return only its
+   * sensitive logical values and polling state. No payload reference,
+   * transcript, evidence, fence, actor, or storage identity crosses this
+   * boundary.
+   * @param {{appId: string, runId: string}} options - Exact app/run scope.
+   * @returns {Promise<Readonly<{scope: Readonly<{appId: string, revisionId: string, runId: string}>, snapshot: Readonly<{runKind: string, status: string, version: number, lastSequence: number}>, outputs: Readonly<Array<Readonly<{stepId: string, stepIndex: number, value: any}>>>, terminal: Readonly<{type: string, result?: any, error?: Record<string, any>}> | null}> | null>} - Verified bounded value snapshot or missing scope.
+   */
+  async function readRunOutput(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+      'readRunOutput',
+    );
+    assertExactKeys(value, ['appId', 'runId'], 'readRunOutput');
+    assertLogicalId(value.appId, 'readRunOutput.appId');
+    const runId = assertOpaqueId(value.runId, 'readRunOutput.runId');
+    if (!(await hasRunProjectionAppScope(runId, value.appId))) return null;
+    const state = await readVerifiedRun(runId);
+    if (!state || state.run.appId !== value.appId) return null;
+
+    const payloadReader = createLedgerPayloadReader(payloadStore, runId);
+    const resolvedOutputs = state.workflowCursor
+      ? await readWorkflowCursorOutputs(state.workflowCursor, payloadReader)
+      : [];
+    if (
+      (state.run.trigger.kind === 'workflow') !==
+      Boolean(state.workflowCursor)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'run output workflow scope is inconsistent',
+      );
+    }
+    const outputs = resolvedOutputs.map(({ binding, payload }) => ({
+      stepId: binding.stepId,
+      stepIndex: binding.stepIndex,
+      value: payload.value,
+    }));
+    const terminal = await readVerifiedRunOutputTerminal(
+      state,
+      resolvedOutputs,
+      payloadReader,
+    );
+    const snapshot = cloneBoundedJsonObject(
+      {
+        scope: {
+          appId: state.run.appId,
+          revisionId: state.run.revisionId,
+          runId: state.run.runId,
+        },
+        snapshot: {
+          runKind: state.run.trigger.kind,
+          status: state.run.status,
+          version: state.run.version,
+          lastSequence: state.run.lastSequence,
+        },
+        outputs,
+        terminal,
+      },
+      EXECUTION_LEDGER_RUN_OUTPUT_MAX_BYTES,
+      'execution-ledger run output',
+    );
+    return deepFreezeJson(snapshot);
+  }
+
+  /**
    * @param {string} runId - Run identity.
    * @returns {Promise<Record<string, any>[]>} - Immutable event stream after verification.
    */
@@ -22944,6 +23277,7 @@ export function createExecutionLedger({
     readActivityAttemptLogPage,
     readManualRunRequest,
     readManagedEffectDelivery,
+    readRunOutput,
     reconcileUncertainManagedEffect,
     reconcileUncertainManualAttempt,
     reconcileUncertainWorkflowActivityAttempt,
@@ -22999,6 +23333,7 @@ export function createExecutionLedger({
  * @property {(runId: string, invocationId: string, effectId: string) => Promise<Record<string, any> | null>} getEffect - Reads a verified effect projection.
  * @property {(runId: string, invocationId: string) => Promise<{run: Record<string, any>, invocation: Record<string, any>, request: {input: any, callerMetadata: Record<string, any>}, actor: {kind: string, id: string}} | null>} readManualRunRequest - Rehashes one manual request and returns its verified creation actor for identical durable replay.
  * @property {(runId: string, invocationId: string, effectId: string) => Promise<Record<string, any> | null>} readManagedEffectDelivery - Rehashes a logical request and re-verifies any terminal result for safe redelivery.
+ * @property {(options: {appId: string, runId: string}) => Promise<Readonly<{scope: Readonly<{appId: string, revisionId: string, runId: string}>, snapshot: Readonly<{runKind: string, status: string, version: number, lastSequence: number}>, outputs: Readonly<Array<Readonly<{stepId: string, stepIndex: number, value: any}>>>, terminal: Readonly<{type: string, result?: any, error?: Record<string, any>}> | null}> | null>} readRunOutput - Rebuilds and rehashes one app-scoped run, then returns only bounded sensitive logical values and polling state.
  * @property {(runId: string) => Promise<Record<string, any>[]>} getEvents - Reads a verified event stream.
  * @property {(options: {appId: string, revisionId: string, limit?: number, observedAt?: number, cursor?: string}) => Promise<{items: Record<string, any>[], nextCursor?: string}>} listReadyWork - Reads an exact-revision page of current-work locators; each must be rebuilt before use.
  * @property {(options: {appId: string, revisionId: string, runId: string, observed?: Record<string, any>}) => Promise<{applied: boolean, runId: string, expected?: Record<string, any>}>} repairReadyWork - Rebuilds one known run's replaceable ready-work locator under an exact head condition.

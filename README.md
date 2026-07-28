@@ -165,7 +165,9 @@ loss, pre-login recovery, durable workflow continuation, all five post-commit
 update and rollback boundaries, all five failed-target source-restoration
 boundaries, ambiguous-response recovery, and state-preserving uninstall.
 Multi-host leases and heartbeats are still later work. Exact-attempt historical
-log retrieval is available; live tail, search, and redaction remain absent.
+log retrieval and explicitly confirmed exact-run logical output snapshots are
+available; ordinary inspection remains redacted, and live tail, search,
+redaction, and exactly-once display remain absent.
 The npm package remains deliberately private. It is not ready for
 production use.
 
@@ -922,6 +924,8 @@ wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--jso
 <app> wharfie list [--limit <1..100>] [--cursor <opaque>] [--json]
 wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
 <app> wharfie logs --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
+wharfie ops output --app-id <app-id> --run-id <run-id> --confirm-sensitive-output [--json]
+<app> wharfie output --run-id <run-id> --confirm-sensitive-output [--json]
 ```
 
 Listing is read-only and app-scoped across revisions, with newest-created runs
@@ -945,6 +949,24 @@ changing its parsed raw values. Outside raw messages and fields—which may
 themselves contain any value—the page adds no Wharfie-owned private storage
 metadata. This surface provides no tail, search, redaction, or exactly-once
 display claim.
+
+The separate `output` command discloses one run's verified logical values only
+after the same explicit confirmation. Source mode takes an exact app ID and
+never loads current source; packaged mode uses the embedded app identity and
+may inspect older persisted revisions of that app. Schema-version 1 kind
+`wharfie.execution-ledger.run-output` is
+`application-sensitive-unredacted`, grants no authority, and reports app,
+revision, run, polling version/sequence, the complete retained workflow output
+prefix, and a nullable aggregate terminal. Running and blocked runs have a
+`null` terminal; terminal runs expose a completed result or structured error,
+and cancelled runs use the durable cancellation-request reason. The complete
+document is reverified, bounded to 64 MiB, and terminal-safe. Outside raw
+application-controlled values—which may themselves contain any secret or
+internal-looking value—Wharfie adds no private framework metadata such as
+payload references, evidence, fences, actors, attempt identities, or storage
+paths. Rerun the command to poll; there is no watch, paging, export,
+atomic-display, or exactly-once-display claim. Redacted `inspect` remains
+unchanged.
 
 On Linux with a usable systemd user manager and administrator-enabled user
 lingering, the packaged artifact can manage that same resident as a fixed user

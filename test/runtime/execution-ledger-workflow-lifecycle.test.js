@@ -561,6 +561,29 @@ for (const adapter of getAdapterMatrix()) {
             stepIndex: 1,
           }),
         ]);
+        await expect(
+          ledger.readRunOutput({ appId: APP_ID, runId }),
+        ).resolves.toEqual({
+          scope: {
+            appId: APP_ID,
+            revisionId: REVISION_ID,
+            runId,
+          },
+          snapshot: {
+            runKind: 'workflow',
+            status: RunStatus.RUNNING,
+            version: firstSuccess.run.version,
+            lastSequence: firstSuccess.run.lastSequence,
+          },
+          outputs: [
+            {
+              stepId: 'produce',
+              stepIndex: 0,
+              value: { produced: 'first-output' },
+            },
+          ],
+          terminal: null,
+        });
 
         const secondClaim = await ledger.claimWorkflowActivity({
           runId,
@@ -647,6 +670,37 @@ for (const adapter of getAdapterMatrix()) {
           }),
         });
         expect(finalSuccess).not.toHaveProperty('nextInvocation');
+        await expect(
+          ledger.readRunOutput({ appId: APP_ID, runId }),
+        ).resolves.toEqual({
+          scope: {
+            appId: APP_ID,
+            revisionId: REVISION_ID,
+            runId,
+          },
+          snapshot: {
+            runKind: 'workflow',
+            status: RunStatus.COMPLETED,
+            version: finalSuccess.run.version,
+            lastSequence: finalSuccess.run.lastSequence,
+          },
+          outputs: [
+            {
+              stepId: 'produce',
+              stepIndex: 0,
+              value: { produced: 'first-output' },
+            },
+            {
+              stepId: 'consume',
+              stepIndex: 1,
+              value: { consumed: true },
+            },
+          ],
+          terminal: {
+            type: 'completed',
+            result: { consumed: true },
+          },
+        });
         await expect(listReadyWork(ledger)).resolves.toEqual({ items: [] });
         await expect(ledger.getEvents(runId)).resolves.toHaveLength(7);
         const rebuilt = await ledger.rebuildRun(runId);
@@ -1110,6 +1164,51 @@ for (const adapter of getAdapterMatrix()) {
           workflowCursor: { disposition: 'COMPLETED' },
         });
         await expect(
+          ledger.readRunOutput({ appId: APP_ID, runId }),
+        ).resolves.toEqual({
+          scope: {
+            appId: APP_ID,
+            revisionId: REVISION_ID,
+            runId,
+          },
+          snapshot: {
+            runKind: 'workflow',
+            status: RunStatus.COMPLETED,
+            version: completed.run.version,
+            lastSequence: completed.run.lastSequence,
+          },
+          outputs: [
+            {
+              stepId: 'produce',
+              stepIndex: 0,
+              value: { produced: true },
+            },
+            {
+              stepId: 'pause',
+              stepIndex: 1,
+              value: {
+                scheduledAt: firstSuccess.nextTimer.scheduledAt,
+                dueAt: firstSuccess.nextTimer.dueAt,
+                firedAt: fired.timer.firedAt,
+              },
+            },
+            {
+              stepId: 'approval',
+              stepIndex: 2,
+              value: { approved: true },
+            },
+            {
+              stepId: 'finish',
+              stepIndex: 3,
+              value: { persisted: true },
+            },
+          ],
+          terminal: {
+            type: 'completed',
+            result: { persisted: true },
+          },
+        });
+        await expect(
           ledger.commitVerifiedWorkflowActivityTerminal(firstSuccessRequest),
         ).resolves.toMatchObject({
           applied: false,
@@ -1194,17 +1293,16 @@ for (const adapter of getAdapterMatrix()) {
         });
         expect(failed.run.status).toBe(RunStatus.FAILED);
 
-        await expect(
-          ledger.deliverWorkflowSignal({
-            appId: APP_ID,
-            runId,
-            signalId: 'future-signal',
-            deliveryId: 'terminal-future-signal',
-            payload: { tooLate: true },
-            actor: ACTOR,
-            observedAt: CREATED_AT + 4,
-          }),
-        ).resolves.toMatchObject({
+        const rejected = await ledger.deliverWorkflowSignal({
+          appId: APP_ID,
+          runId,
+          signalId: 'future-signal',
+          deliveryId: 'terminal-future-signal',
+          payload: { tooLate: true },
+          actor: ACTOR,
+          observedAt: CREATED_AT + 4,
+        });
+        expect(rejected).toMatchObject({
           applied: true,
           outcome: 'rejected',
           rejectionReason: 'late-signal',
@@ -1212,6 +1310,31 @@ for (const adapter of getAdapterMatrix()) {
           signalDelivery: {
             status: 'REJECTED',
             rejectionReason: 'late-signal',
+          },
+        });
+        await expect(
+          ledger.readRunOutput({ appId: APP_ID, runId }),
+        ).resolves.toEqual({
+          scope: {
+            appId: APP_ID,
+            revisionId: REVISION_ID,
+            runId,
+          },
+          snapshot: {
+            runKind: 'workflow',
+            status: RunStatus.FAILED,
+            version: rejected.run.version,
+            lastSequence: rejected.run.lastSequence,
+          },
+          outputs: [],
+          terminal: {
+            type: 'failed',
+            error: {
+              code: 'application-failed',
+              name: 'ApplicationFailure',
+              message: 'The workflow activity failed as requested by the test.',
+              details: { marker: 'terminal' },
+            },
           },
         });
       } finally {

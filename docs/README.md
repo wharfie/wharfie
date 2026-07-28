@@ -68,6 +68,17 @@ confirmation. Its raw schema is deliberately non-authoritative and
 application-sensitive; terminal-inert serialization does not redact parsed raw
 values, which may contain any secret or internal-looking data. Ordinary run
 inspection remains redacted.
+The separate source/packaged `output` command uses the same explicit
+confirmation to disclose one fully verified logical run snapshot: app,
+revision, run, polling state, the retained workflow output prefix, and nullable
+terminal result or structured error. Its schema-version 1
+`wharfie.execution-ledger.run-output` document is likewise
+`application-sensitive-unredacted` and grants no authority. It is bounded,
+terminal-safe, and preserves raw application-controlled values—which may
+themselves contain any secret or internal-looking value. Outside those raw
+values, Wharfie adds no private framework metadata such as payload references,
+evidence, fences, actors, physical attempt identities, or storage paths.
+Polling requires rerunning the command; ordinary `inspect` remains redacted.
 
 This is not yet a complete durable workflow engine. Packaged Linux artifacts
 implement a systemd user-service lifecycle with real reboot evidence,

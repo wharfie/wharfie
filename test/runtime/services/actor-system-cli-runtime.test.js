@@ -14,6 +14,7 @@ const PACKAGED_APP_ENTRY_IMPORT =
 
 const originalArgv = process.argv;
 const originalEnvironment = { ...process.env };
+const originalExitCode = process.exitCode;
 
 function clearRuntimeEnvironment() {
   delete process.env.WHARFIE_BOOTSTRAP_MODE;
@@ -47,6 +48,7 @@ function expectExactCommandParents(root) {
 afterEach(() => {
   process.argv = originalArgv;
   process.env = { ...originalEnvironment };
+  process.exitCode = originalExitCode;
   jest.restoreAllMocks();
   jest.resetModules();
 });
@@ -97,6 +99,7 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('start');
     expect(help).toContain('worker');
     expect(help).toContain('list');
+    expect(help).toContain('output');
     expect(help).toContain('inspect');
     expect(help).toContain('recover');
     expect(help).toContain('reconcile');
@@ -331,6 +334,132 @@ describe('packaged application dispatch', () => {
     expect(packagedLogs?.helpInformation()).not.toContain('--app-id');
     expect(sourceOps.helpInformation()).toContain('logs');
     expect(packaged.helpInformation()).toContain('logs');
+  });
+
+  it('mounts the shared sensitive run-output command with only the source application override', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
+    const packaged = createProgram();
+    const sourceOutput = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'output',
+    );
+    const packagedOutput = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'output',
+    );
+
+    expect(sourceOutput).toBeDefined();
+    expect(packagedOutput).toBeDefined();
+    expect(packagedOutput?.description()).toBe(sourceOutput?.description());
+    expect(
+      sourceOutput?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(['--app-id', '--run-id', '--confirm-sensitive-output', '--json']);
+    expect(
+      packagedOutput?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(['--run-id', '--confirm-sensitive-output', '--json']);
+    expect(sourceOutput?.helpInformation()).toContain('--app-id <appId>');
+    expect(packagedOutput?.helpInformation()).not.toContain('--app-id');
+    expect(sourceOps.helpInformation()).toContain('output');
+    expect(packaged.helpInformation()).toContain('output');
+  });
+
+  it('gates packaged run output before identity and reads only through embedded app scope', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const appId = 'packaged-run-output-demo';
+    const runId = 'packaged-run-output-run';
+    const persistedRevisionId = `wrv1_${'A'.repeat(43)}`;
+    const embeddedRevisionId = `wrv1_${'B'.repeat(43)}`;
+    const missingResolve = jest.fn(async () => ({
+      appId,
+      revisionId: embeddedRevisionId,
+    }));
+    const missingRead = jest.fn(
+      async (/** @type {{appId: string, runId: string}} */ _request) => null,
+    );
+    const missingOutput = {
+      json: jest.fn(),
+      table: jest.fn(),
+      failure: jest.fn(),
+    };
+    const unconfirmed = createProgram({
+      resolveExpectedIdentity: missingResolve,
+      readRunOutput: missingRead,
+      runOutputOutput: missingOutput,
+    });
+
+    await unconfirmed.parseAsync(['output', '--run-id', runId, '--json'], {
+      from: 'user',
+    });
+
+    expect(missingResolve).not.toHaveBeenCalled();
+    expect(missingRead).not.toHaveBeenCalled();
+    expect(missingOutput.json).not.toHaveBeenCalled();
+    expect(missingOutput.table).not.toHaveBeenCalled();
+    expect(missingOutput.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('--confirm-sensitive-output'),
+      }),
+    );
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+    const resolveExpectedIdentity = jest.fn(async () => ({
+      appId,
+      revisionId: embeddedRevisionId,
+    }));
+    const readRunOutput = jest.fn(
+      async (/** @type {{appId: string, runId: string}} */ request) => ({
+        scope: {
+          appId: request.appId,
+          revisionId: persistedRevisionId,
+          runId: request.runId,
+        },
+        snapshot: {
+          runKind: 'manual',
+          status: 'RUNNING',
+          version: 1,
+          lastSequence: 1,
+        },
+        outputs: [],
+        terminal: null,
+      }),
+    );
+    const output = {
+      json: jest.fn(),
+      table: jest.fn(),
+      failure: jest.fn(),
+    };
+    const confirmed = createProgram({
+      resolveExpectedIdentity,
+      readRunOutput,
+      runOutputOutput: output,
+    });
+
+    await confirmed.parseAsync(
+      ['output', '--run-id', runId, '--confirm-sensitive-output', '--json'],
+      { from: 'user' },
+    );
+
+    expect(resolveExpectedIdentity).toHaveBeenCalledTimes(1);
+    expect(readRunOutput).toHaveBeenCalledWith({ appId, runId });
+    expect(readRunOutput.mock.calls[0][0]).not.toHaveProperty('revisionId');
+    expect(output.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { appId, revisionId: persistedRevisionId, runId },
+      }),
+      expect.any(String),
+    );
+    expect(output.table).not.toHaveBeenCalled();
+    expect(output.failure).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(originalExitCode);
   });
 
   it('narrows packaged revision authority to app-scoped history at action time', async () => {

@@ -466,6 +466,8 @@ wharfie ops list --dir ./path/to/app --limit 50 --json
 wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]
 wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> \
   --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
+wharfie ops output --app-id <app-id> --run-id <run-id> \
+  --confirm-sensitive-output [--json]
 wharfie ops inspect --run-id <run-id>
 wharfie ops recover --run-id <run-id> --confirm-runner-stopped
 wharfie ops reconcile --run-id <run-id> --reconciliation-id <stable-id> \
@@ -482,6 +484,8 @@ directly under its reserved operator namespace:
 <app> wharfie list [--limit <1..100>] [--cursor <opaque>] [--json]
 <app> wharfie logs --run-id <run-id> --attempt-id <attempt-id> \
   --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]
+<app> wharfie output --run-id <run-id> \
+  --confirm-sensitive-output [--json]
 <app> wharfie inspect --run-id <run-id>
 <app> wharfie recover --run-id <run-id> --confirm-runner-stopped
 <app> wharfie reconcile --run-id <run-id> --reconciliation-id <stable-id> \
@@ -528,6 +532,35 @@ may themselves contain any secret or internal-looking value—neither form adds
 Wharfie-owned fencing tokens, auxiliary keys, hashes, or payload references.
 This is historical diagnostic inspection, not tailing, search, redaction, or
 exactly-once display.
+
+Use the separate `output` command to disclose one run's logical values.
+Source mode takes the exact app ID without loading current source; packaged
+mode binds its embedded app identity and can inspect an older revision of that
+app. Both require `--confirm-sensitive-output` before packaged identity
+resolution or storage access. The flag is disclosure consent, not
+authentication or mutation authority. The read-only default does not create a
+missing local store.
+
+Schema-version 1 kind `wharfie.execution-ledger.run-output` declares authority
+`none`, verified integrity, and disclosure
+`application-sensitive-unredacted`. It contains exact app/revision/run scope,
+polling `{runKind,status,version,lastSequence}`, the complete ordered workflow
+`{stepId,stepIndex,value}` prefix, and a nullable logical terminal. Running and
+blocked runs use `terminal: null`; a completed JSON `null` is instead
+`terminal: {type: "completed", result: null}`. A completed workflow's
+terminal result equals its final output. Terminal failures and cancellations
+contain structured errors, with cancellation reporting the durable request
+reason.
+
+The whole document is reverified, bounded to 64 MiB, frozen, and rendered
+terminal-safely before output. Missing, cross-application, corrupt, oversized,
+or inconsistent state produces one fixed failure and no partial document.
+Outside raw application-controlled values—which may themselves contain any
+secret or internal-looking value—Wharfie adds no private framework metadata
+such as payload references, evidence, fences, actors, physical attempt
+identities, or storage paths. Poll by rerunning the command; v1 has no paging,
+watch, tail, export, read receipt, atomic-display, or exactly-once display
+claim. Ordinary `inspect` remains the redacted lifecycle view.
 
 Packaged inspection, recovery, reconciliation, effect reconciliation,
 cancellation, and signal delivery are also scoped to the embedded app identity.
@@ -678,11 +711,12 @@ serially and consumes exact manifest-bound workflow activity and timer
 continuations created through public `start`; public `signal` consumes only the
 current declared signal wait. Public `inspect`, confirmed `recover`, and
 evidence-backed `reconcile` understand those workflow runs. Exact-attempt
-historical log retrieval is available through `logs`; the same resident
-observes exact-revision schedules and performs latest-only catch-up after a
-restart. Managed-effect workflow successors and schedule pause/resume
-inspection remain unsupported. Live log tail, search, and redaction remain
-absent. The manual bounded
+historical log retrieval is available through `logs`, and explicitly confirmed
+exact-run logical output retrieval is available through `output` while
+`inspect` stays redacted. The same resident observes exact-revision schedules
+and performs latest-only catch-up after a restart. Managed-effect workflow
+successors and schedule pause/resume inspection remain unsupported. Live log
+tail, search, and redaction remain absent. The manual bounded
 recovery and reconciliation paths have prior real subprocess and relocated-SEA
 crash coverage across request, start, destination commit, payload publication,
 ledger settlement, and response-delivery boundaries. The manual resident
