@@ -84,7 +84,7 @@ function appendMarker(markerPath, marker) {
  * Record one observable physical workflow step. The first step runs before
  * reboot; a signal payload supplies the second step's input after reboot.
  * @param {{markerPath: string, stepIndex?: number}} input - Step input.
- * @returns {Promise<{markerPath: string, stepIndex: number, bootId: string}>} - Next input and physical boot evidence.
+ * @returns {Promise<{markerPath: string, stepIndex: number, bootId: string, release: string}>} - Next input and physical boot evidence.
  */
 export async function recordStep(input) {
   if (!input || typeof input.markerPath !== 'string' || !input.markerPath) {
@@ -101,6 +101,12 @@ export async function recordStep(input) {
     stepIndex,
     bootId,
     processId: process.pid,
+    release: SYSTEMD_PROOF_RELEASE,
   });
-  return { markerPath: input.markerPath, stepIndex: stepIndex + 1, bootId };
+  return {
+    markerPath: input.markerPath,
+    stepIndex: stepIndex + 1,
+    bootId,
+    release: SYSTEMD_PROOF_RELEASE,
+  };
 }

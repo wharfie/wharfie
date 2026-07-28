@@ -2177,6 +2177,7 @@ async function prepare(repoRoot) {
     markerPath: ORDINARY_MARKER_PATH,
     stepIndex: 1,
     bootId: ordinaryCliMarkers[0].bootId,
+    release: 'source',
   });
   assert.deepEqual(ordinaryCliMarkers[0], {
     schemaVersion: 1,
@@ -2184,6 +2185,7 @@ async function prepare(repoRoot) {
     stepIndex: 0,
     bootId: readBootId(),
     processId: ordinaryCliMarkers[0].processId,
+    release: 'source',
   });
   assert.ok(
     Number.isSafeInteger(ordinaryCliMarkers[0].processId) &&
@@ -2590,6 +2592,7 @@ async function verify() {
     markerPath: MARKER_PATH,
     stepIndex: 2,
     bootId: bootReceipt.bootId,
+    release: 'source',
   });
   assert.deepEqual(completedOutput.terminal, {
     type: 'completed',
