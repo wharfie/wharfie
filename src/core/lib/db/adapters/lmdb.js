@@ -162,7 +162,12 @@ export default function createLMDB(options = {}) {
       );
     }
   } else {
-    mkdirSync(dbRoot, { recursive: true });
+    // A writable local store is durable application state, not a shared cache.
+    // Pin every newly created path component private even when the caller's
+    // login shell uses a group-writable umask. Packaged work admitted before
+    // service installation must remain acceptable to the service manager's
+    // ownership and permission checks.
+    mkdirSync(dbRoot, { recursive: true, mode: 0o700 });
   }
 
   const shared = acquireSharedLmdbEnvironment(dbRoot, readOnly);

@@ -230,10 +230,18 @@ function sha256File(filePath) {
  */
 function storageLayout() {
   const dataRoot = path.join(homedir(), '.local', 'share', 'wharfie-nodejs');
+  const applicationsRoot = path.join(dataRoot, 'applications');
   const appRoot = path.join(dataRoot, 'applications', APP_ID);
+  const stateRoot = path.join(appRoot, 'state');
+  const controlPath = path.join(stateRoot, 'control');
   return Object.freeze({
+    dataRoot,
+    applicationsRoot,
     appRoot,
-    stateRoot: path.join(appRoot, 'state'),
+    stateRoot,
+    controlPath,
+    payloadPath: path.join(controlPath, 'execution-payloads'),
+    applicationStatePath: path.join(stateRoot, 'application-state'),
     releasesRoot: path.join(appRoot, 'releases'),
     unitPath: path.join(homedir(), '.config', 'systemd', 'user', UNIT_NAME),
   });
@@ -810,6 +818,22 @@ async function prepare(repoRoot) {
   assert.equal(pending.workflowCursor?.disposition, 'ACTIVITY_RUNNABLE');
   const pendingHistory = listRuns(packaged.source.artifactPath);
   assertHistory(pendingHistory, started.runId, source.revisionId, 'RUNNING');
+  const storage = storageLayout();
+  /** @type {Record<string, string>} */
+  const privateStartStorage = {};
+  for (const [label, directory] of Object.entries({
+    dataRoot: storage.dataRoot,
+    applicationsRoot: storage.applicationsRoot,
+    appRoot: storage.appRoot,
+    stateRoot: storage.stateRoot,
+    controlPath: storage.controlPath,
+    lmdbRoot: path.join(storage.controlPath, 'lmdb'),
+    payloadPath: storage.payloadPath,
+  })) {
+    const mode = statSync(directory).mode & 0o777;
+    assert.equal(mode, 0o700, `${label} is not private`);
+    privateStartStorage[label] = mode.toString(8).padStart(4, '0');
+  }
   const absentAfterStart = readServiceStatus(packaged.source.artifactPath);
   assert.equal(absentAfterStart.health, 'absent');
   const install = runArtifactJson(
@@ -863,6 +887,7 @@ async function prepare(repoRoot) {
     service: {
       beforeStart: absentBeforeStart,
       afterStart: absentAfterStart,
+      privateStartStorage,
       install,
       installed,
     },

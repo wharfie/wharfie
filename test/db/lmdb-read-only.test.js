@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,6 +19,31 @@ afterEach(() => {
 });
 
 describe('LMDB read-only observer mode', () => {
+  it('creates every missing writable path privately under a group-writable umask', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wharfie-lmdb-private-'));
+    temporaryDirectories.push(root);
+    const controlPath = join(root, 'nested', 'control');
+    const previousUmask = process.umask(0o002);
+    let writer;
+    try {
+      writer = createLMDB({ path: controlPath });
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    try {
+      for (const directory of [
+        join(root, 'nested'),
+        controlPath,
+        join(controlPath, 'lmdb'),
+      ]) {
+        expect(statSync(directory).mode & 0o777).toBe(0o700);
+      }
+    } finally {
+      await writer?.close();
+    }
+  });
+
   it('does not create a missing durable local volume', () => {
     const controlPath = mkdtempSync(join(tmpdir(), 'wharfie-lmdb-read-only-'));
     temporaryDirectories.push(controlPath);
