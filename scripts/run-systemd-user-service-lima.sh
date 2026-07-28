@@ -2,13 +2,35 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEFAULT_INSTANCE="wharfie-systemd-proof-$$"
+SCENARIO="${WHARFIE_SYSTEMD_PROOF_SCENARIO:-lifecycle}"
+case "${SCENARIO}" in
+  lifecycle)
+    DEFAULT_INSTANCE="wharfie-systemd-proof-$$"
+    DEFAULT_OUTPUT_ROOT="${REPO_ROOT}/llm_artifacts/systemd-proof"
+    PROOF_UNIT_NAME="wharfie-systemd-service-proof.service"
+    GUEST_PREPARE_NAME="prepare.json"
+    GUEST_FINAL_NAME="final.json"
+    ;;
+  steady-file)
+    DEFAULT_INSTANCE="wharfie-steady-file-proof-$$"
+    DEFAULT_OUTPUT_ROOT="${REPO_ROOT}/llm_artifacts/steady-file-systemd-proof"
+    PROOF_UNIT_NAME="wharfie-steady-file-demo.service"
+    GUEST_PREPARE_NAME="steady-file-prepare.json"
+    GUEST_FINAL_NAME="steady-file-final.json"
+    ;;
+  *)
+    echo "WHARFIE_SYSTEMD_PROOF_SCENARIO must be lifecycle or steady-file." >&2
+    exit 1
+    ;;
+esac
 INSTANCE="${WHARFIE_SYSTEMD_PROOF_INSTANCE:-${DEFAULT_INSTANCE}}"
 KEEP_VM="${WHARFIE_SYSTEMD_PROOF_KEEP_VM:-0}"
-OUTPUT_ROOT="${WHARFIE_SYSTEMD_PROOF_OUTPUT_DIR:-${REPO_ROOT}/llm_artifacts/systemd-proof}"
+OUTPUT_ROOT="${WHARFIE_SYSTEMD_PROOF_OUTPUT_DIR:-${DEFAULT_OUTPUT_ROOT}}"
 CONFIG_PATH="${REPO_ROOT}/test/systemd/lima.yaml"
 GUEST_REPO="/var/tmp/wharfie-systemd-proof-repo"
 GUEST_PROOF_ROOT="/var/tmp/wharfie-systemd-proof"
+GUEST_PREPARE_PATH="${GUEST_PROOF_ROOT}/${GUEST_PREPARE_NAME}"
+GUEST_FINAL_PATH="${GUEST_PROOF_ROOT}/${GUEST_FINAL_NAME}"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wharfie-systemd-proof.XXXXXX")"
 ARCHIVE_PATH="${TEMP_ROOT}/repo.tar"
 PREPARE_CAPTURE="${TEMP_ROOT}/prepare.json"
@@ -85,18 +107,20 @@ cleanup() {
       fi
       limactl shell --tty=false "${INSTANCE}" \
         /usr/bin/systemctl --user status \
-        wharfie-systemd-service-proof.service \
+        "${PROOF_UNIT_NAME}" \
         --no-pager --full || true
       limactl shell --tty=false "${INSTANCE}" \
         /usr/bin/journalctl --user \
         --boot=0 \
-        --unit=wharfie-systemd-service-proof.service \
+        --unit="${PROOF_UNIT_NAME}" \
         --no-pager || true
-      limactl shell --tty=false "${INSTANCE}" \
-        /usr/bin/sudo /usr/bin/journalctl \
-        --boot=0 \
-        --unit=wharfie-systemd-proof-boot-check.service \
-        --no-pager || true
+      if [[ "${SCENARIO}" == "lifecycle" ]]; then
+        limactl shell --tty=false "${INSTANCE}" \
+          /usr/bin/sudo /usr/bin/journalctl \
+          --boot=0 \
+          --unit=wharfie-systemd-proof-boot-check.service \
+          --no-pager || true
+      fi
     fi
     if [[ -n "${failure_directory}" ]]; then
       echo "Failure receipts: ${failure_directory}" >&2
@@ -161,29 +185,52 @@ limactl shell --tty=false "${INSTANCE}" /bin/bash -lc \
   "set -euo pipefail; sudo rm -rf '${GUEST_REPO}'; sudo mkdir -p '${GUEST_REPO}'; sudo chown \"\$(id -u):\$(id -g)\" '${GUEST_REPO}'; tar -xf /tmp/wharfie-systemd-proof-repo.tar -C '${GUEST_REPO}'"
 limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
   /usr/local/bin/npm ci --no-audit --no-fund
-limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
-  /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
-  "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
-  /usr/local/bin/node \
-  scripts/verify-systemd-user-service-linux.js \
-  prepare \
-  "${GUEST_REPO}" > "${PREPARE_LOG}"
-echo "Prepared three SEA revisions, exercised default durable argv, installed and converged the source service, and verified process replacement."
-limactl copy --backend=scp \
-  "${INSTANCE}:${GUEST_PROOF_ROOT}/prepare.json" \
-  "${PREPARE_CAPTURE}"
+if [[ "${SCENARIO}" == "lifecycle" ]]; then
+  limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
+    /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+    "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
+    /usr/local/bin/node \
+    scripts/verify-systemd-user-service-linux.js \
+    prepare \
+    "${GUEST_REPO}" > "${PREPARE_LOG}"
+  echo "Prepared three SEA revisions, exercised default durable argv, installed and converged the source service, and verified process replacement."
+  limactl copy --backend=scp \
+    "${INSTANCE}:${GUEST_PREPARE_PATH}" \
+    "${PREPARE_CAPTURE}"
 
-limactl stop --tty=false --force "${INSTANCE}"
-limactl start --tty=false "${INSTANCE}"
-limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
-  /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
-  "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
-  "WHARFIE_SYSTEMD_PROOF_POWER_CYCLE=forced-stop-start" \
-  /usr/local/bin/node \
-  scripts/verify-systemd-user-service-linux.js \
-  verify \
-  "${GUEST_REPO}" > "${VERIFY_LOG}"
-echo "Verified boot recovery, history and output reads, two-release activation crash recovery, source restoration, and uninstall preservation."
+  limactl stop --tty=false --force "${INSTANCE}"
+  limactl start --tty=false "${INSTANCE}"
+  limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
+    /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+    "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
+    "WHARFIE_SYSTEMD_PROOF_POWER_CYCLE=forced-stop-start" \
+    /usr/local/bin/node \
+    scripts/verify-systemd-user-service-linux.js \
+    verify \
+    "${GUEST_REPO}" > "${VERIFY_LOG}"
+  echo "Verified boot recovery, history and output reads, two-release activation crash recovery, source restoration, and uninstall preservation."
+else
+  limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
+    /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+    "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
+    /usr/local/bin/node \
+    scripts/verify-steady-file-systemd-linux.js \
+    prepare \
+    "${GUEST_REPO}" > "${PREPARE_LOG}"
+  echo "Ran the literal source and packaged steady-file CLIs, admitted default durable work, installed the service, and ended the initiating verifier."
+  limactl copy --backend=scp \
+    "${INSTANCE}:${GUEST_PREPARE_PATH}" \
+    "${PREPARE_CAPTURE}"
+
+  limactl shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
+    /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+    "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
+    /usr/local/bin/node \
+    scripts/verify-steady-file-systemd-linux.js \
+    verify \
+    "${GUEST_REPO}" > "${VERIFY_LOG}"
+  echo "Returned in a new verifier, rediscovered the service, read the result, updated, rolled back, and uninstalled."
+fi
 
 RECEIPT_DIRECTORY="${OUTPUT_ROOT}/${COMMIT}"
 if [[ -e "${RECEIPT_DIRECTORY}" ]]; then
@@ -192,13 +239,15 @@ if [[ -e "${RECEIPT_DIRECTORY}" ]]; then
 fi
 RECEIPT_STAGING="$(mktemp -d "${OUTPUT_ROOT}/.${COMMIT}.XXXXXX")"
 limactl copy --backend=scp \
-  "${INSTANCE}:${GUEST_PROOF_ROOT}/prepare.json" \
+  "${INSTANCE}:${GUEST_PREPARE_PATH}" \
   "${RECEIPT_STAGING}/prepare.json"
+if [[ "${SCENARIO}" == "lifecycle" ]]; then
+  limactl copy --backend=scp \
+    "${INSTANCE}:/var/lib/wharfie-systemd-proof/boot-receipt.json" \
+    "${RECEIPT_STAGING}/boot-receipt.json"
+fi
 limactl copy --backend=scp \
-  "${INSTANCE}:/var/lib/wharfie-systemd-proof/boot-receipt.json" \
-  "${RECEIPT_STAGING}/boot-receipt.json"
-limactl copy --backend=scp \
-  "${INSTANCE}:${GUEST_PROOF_ROOT}/final.json" \
+  "${INSTANCE}:${GUEST_FINAL_PATH}" \
   "${RECEIPT_STAGING}/final.json"
 
 if [[ "${KEEP_VM}" == "1" ]]; then
@@ -210,20 +259,36 @@ else
   instance_retained=false
 fi
 cleanup_observed_at="$(($(date +%s) * 1000))"
+if [[ "${SCENARIO}" == "lifecycle" ]]; then
+  cleanup_kind="wharfie.systemd-proof.host-cleanup"
+else
+  cleanup_kind="wharfie.steady-file-systemd-proof.host-cleanup"
+fi
 /usr/bin/printf \
   '%s\n' \
-  "{\"schemaVersion\":1,\"kind\":\"wharfie.systemd-proof.host-cleanup\",\"authority\":\"none\",\"authoritative\":false,\"commit\":\"${COMMIT}\",\"instance\":\"${INSTANCE}\",\"observedAt\":${cleanup_observed_at},\"instanceAbsent\":${instance_absent},\"instanceRetained\":${instance_retained}}" \
+  "{\"schemaVersion\":1,\"kind\":\"${cleanup_kind}\",\"authority\":\"none\",\"authoritative\":false,\"commit\":\"${COMMIT}\",\"instance\":\"${INSTANCE}\",\"observedAt\":${cleanup_observed_at},\"instanceAbsent\":${instance_absent},\"instanceRetained\":${instance_retained}}" \
   > "${RECEIPT_STAGING}/cleanup.json"
 
 pushd "${RECEIPT_STAGING}" >/dev/null
-/usr/bin/shasum -a 256 \
-  prepare.json \
-  boot-receipt.json \
-  final.json \
-  cleanup.json > SHA256SUMS
+if [[ "${SCENARIO}" == "lifecycle" ]]; then
+  /usr/bin/shasum -a 256 \
+    prepare.json \
+    boot-receipt.json \
+    final.json \
+    cleanup.json > SHA256SUMS
+else
+  /usr/bin/shasum -a 256 \
+    prepare.json \
+    final.json \
+    cleanup.json > SHA256SUMS
+fi
 popd >/dev/null
 mv "${RECEIPT_STAGING}" "${RECEIPT_DIRECTORY}"
 RECEIPT_STAGING=""
 
-echo "Verified Wharfie systemd reboot and two-release activation proof for ${COMMIT}."
+if [[ "${SCENARIO}" == "lifecycle" ]]; then
+  echo "Verified Wharfie systemd reboot and two-release activation proof for ${COMMIT}."
+else
+  echo "Verified the literal steady-file systemd lifecycle for ${COMMIT}."
+fi
 echo "Receipts: ${RECEIPT_DIRECTORY}"

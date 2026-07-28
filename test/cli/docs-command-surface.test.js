@@ -395,7 +395,10 @@ describe('docs command surface', () => {
       'node ./bin/wharfie app manifest ./scratch/examples/apps/steady-file',
     );
     expect(normalized).toContain(
-      `node ./bin/wharfie ops start --dir ./scratch/examples/apps/steady-file --workflow verify-stable --idempotency-key artifact-build-42 --input '{"path":"/absolute/path/to/artifact.tar"}' --json`,
+      'node ./bin/wharfie ops start --dir ./scratch/examples/apps/steady-file --json -- /absolute/path/to/artifact.tar',
+    );
+    expect(normalized).toContain(
+      `node ./bin/wharfie ops start --dir ./scratch/examples/apps/steady-file --workflow verify-stable --input '{"path":"/absolute/path/to/artifact.tar"}' --idempotency-key artifact-build-42 --json`,
     );
     expect(normalized).toContain(
       'node ./bin/wharfie ops worker --dir ./scratch/examples/apps/steady-file',
@@ -414,7 +417,7 @@ describe('docs command surface', () => {
       '<steady-file-artifact> /absolute/path/to/artifact.tar',
     );
     expect(normalized).toContain(
-      `<steady-file-artifact> wharfie start --workflow verify-stable --idempotency-key artifact-build-42 --input '{"path":"/absolute/path/to/artifact.tar"}' --json`,
+      '<steady-file-artifact> wharfie start --json -- /absolute/path/to/artifact.tar',
     );
     expect(normalized).toContain('<steady-file-artifact> wharfie worker');
     expect(normalized).toContain(
@@ -467,6 +470,7 @@ describe('docs command surface', () => {
     expect(sourceOps.name()).toBe('ops');
     expectCommandShape(findCommand(sourceOps, 'start'), {
       name: 'start',
+      arguments: [{ name: 'appArgs', required: false, variadic: true }],
       options: [
         '--dir',
         '--workflow',
@@ -475,7 +479,6 @@ describe('docs command surface', () => {
         '--caller-metadata',
         '--json',
       ],
-      requiredOptions: ['--workflow', '--idempotency-key'],
     });
     expectCommandShape(findCommand(sourceOps, 'worker'), {
       name: 'worker',
@@ -494,6 +497,7 @@ describe('docs command surface', () => {
     expect(packagedOperator.name()).toBe('wharfie');
     expectCommandShape(findCommand(packagedOperator, 'start'), {
       name: 'start',
+      arguments: [{ name: 'appArgs', required: false, variadic: true }],
       options: [
         '--workflow',
         '--idempotency-key',
@@ -501,7 +505,6 @@ describe('docs command surface', () => {
         '--caller-metadata',
         '--json',
       ],
-      requiredOptions: ['--workflow', '--idempotency-key'],
     });
     expectCommandShape(findCommand(packagedOperator, 'worker'), {
       name: 'worker',

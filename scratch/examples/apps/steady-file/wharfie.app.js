@@ -25,6 +25,12 @@ export default defineApp({
     {
       nodeVersion: '24.13.1',
       platform: 'linux',
+      architecture: 'arm64',
+      libc: 'glibc',
+    },
+    {
+      nodeVersion: '24.13.1',
+      platform: 'linux',
       architecture: 'x64',
       libc: 'glibc',
     },
