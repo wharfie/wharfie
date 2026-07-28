@@ -949,6 +949,7 @@ service:
 <next-app> wharfie service update
 <next-app> wharfie service rollback
 <next-app> wharfie service recover
+<selected-app> wharfie service prune --json
 <app> wharfie service stop
 <app> wharfie service start
 <app> wharfie service restart
@@ -1004,6 +1005,28 @@ location is fixed to the service account's
 `~/.config/systemd/user`; custom `XDG_CONFIG_HOME` topology is rejected, and
 unit-name mutations require an exact, non-stale effective fragment without
 drop-ins.
+
+Immutable release cleanup is separate and explicit. `service prune` must run
+from the exact selected SEA while activation is settled `ACTIVE`. Under the
+same app-scoped operation lock it verifies the complete bounded release
+namespace, installation receipt, selector or intentional-uninstall absence,
+manager/runtime identity, and every release's receipt and bytes before removing
+anything. It preserves the selected release and one rollback candidate in both
+installed and intentionally uninstalled states. The 128-entry and 64-GiB
+logical-artifact-byte limits are enforced both by prune preflight and before a
+new release is staged. Prune authenticates interrupted private staging
+directories and removes them in the crash-safe `release.json`, `app`, directory
+order; unreferenced canonical directories are renamed first to deterministic
+recovery tombstones and removed through their own fixed recovery order. A later
+invocation safely finishes either recovery path. Schema-v1 JSON kind
+`wharfie.service.release-prune` reports logical artifact bytes,
+`resumedPruneCount`, and `recoveredStagingCount`, not reclaimed filesystem
+blocks. Retry converges after interruption, but Wharfie does not claim
+exactly-once display or broader revision, payload, run-history, or provider
+garbage collection. An in-flight activation requires `service recover`; a
+missing activation instead requires `service install` or `service converge`
+from the exact selected SEA because there is no transition to recover.
+
 The repository's disposable Ubuntu proof builds the app from the installed npm
 tarball, removes Node from the packaged command `PATH`, force-cycles the VM,
 requires automatic healthy startup before a login session, and completes the

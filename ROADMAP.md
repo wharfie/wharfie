@@ -161,10 +161,16 @@ seven targeted package and operations-command cases. V95 freezes schema-version
 and `signal`. Shared constructors validate manifest and ledger linkage, emit
 camel-case machine documents separately from snake-case human rows, freeze the
 result, and preserve durable negative decisions before nonzero exit. Source and
-packaged consumers now share those documents. Neither V94 nor V95 is a
-full-suite, native, or relocated-Linux proof. The committed V83 driver still
-has not produced a `whlp2` receipt, and no successful AL2023 or live AWS/EBS
-lifecycle proof exists.
+packaged consumers now share those documents. V96 adds explicit packaged
+`service prune`: the exact selected SEA can remove only fully verified local
+release directories outside settled selected/rollback authority. One
+app-scoped lock, 128-entry/64-GiB logical-byte limits enforced before staging
+and pruning, deterministic rename-first recovery tombstones, and authenticated
+interrupted-staging cleanup make interruption safe to retry in coherent
+installed and intentionally uninstalled states. Neither V94, V95, nor V96 is a
+full-suite, native, relocated-Linux, or real-systemd prune proof. The committed
+V83 driver still has not produced a `whlp2` receipt, and no successful AL2023
+or live AWS/EBS lifecycle proof exists.
 
 The recoverable node launches with a stable token and atomic instance/root tags,
 settles from exact instance/attribute/credit/volume evidence, proves an
@@ -1238,7 +1244,14 @@ surface remains.
       while any run is nonterminal; in-flight evolution remains future work.
 - [x] Make build-input and dependency-lock digests, target matrices, embedded revision/runtime metadata, and exact artifact provenance inspectable through package results, the operator metadata command, and canonical sidecars.
 - [ ] Make builds reproducible where the selected packaging toolchain supports it, while always content-addressing the produced artifacts.
-- [ ] Support staged rollout, health gates, rollback, and garbage collection of unreferenced revisions.
+- [ ] Support staged rollout and health gates beyond the current serialized
+      selected-plus-one-rollback activation.
+- [x] Explicitly prune verified unreferenced local packaged systemd release
+      directories and authenticated interrupted staging residue through
+      bounded crash recovery while preserving settled selected and rollback
+      authority.
+- [ ] Define broader revision, payload, run-history, remote-artifact, and
+      provider-resource garbage collection.
 - [ ] Add schema/version migration contracts for durable application and control state.
 - [x] Expose a stable JSON protocol suitable for coding-agent operation and verification.
 - [ ] Evaluate peer-quorum control state only after provider-backed failover is proven.
@@ -1298,6 +1311,22 @@ ledger, model current replay and terminal workflow state, recursively freeze
 their allowlisted output, and keep human rendering separate. Refused durable
 signal decisions are still emitted before the command exits nonzero. This is a
 local command protocol, not a hosted API or an exactly-once execution claim.
+
+V96 closes the first local packaged-release collector. `service prune` is an
+explicit operation of the exact selected SEA, not an automatic activation
+side effect. It admits only a settled `ACTIVE` record and an exact installed or
+intentionally uninstalled physical projection, protects selected plus rollback
+authority, verifies the complete bounded namespace before deletion, and
+removes unreferenced copies through deterministic rename-first recovery
+tombstones. Release staging enforces the same 128-entry and 64-GiB logical-byte
+bounds. Prune also authenticates and completes interrupted private staging
+directories in a fixed crash-safe order. Its strict schema-v1 receipt reports
+logical artifact bytes, `resumedPruneCount`, and `recoveredStagingCount`
+without claiming filesystem blocks or exactly-once stdout. In-flight
+activation directs the operator to recovery; missing activation instead
+directs the exact selected SEA to install or converge. Broader revision,
+payload, history, remote-artifact, and provider garbage collection remains
+open.
 
 Real source-process and relocated-SEA crash matrices now prove that the public
 workflow path preserves those rules across process death, lost command
@@ -1562,34 +1591,40 @@ or joined it to host evidence. No formatter or mount mutation exists.
        packaged `run`, `submit`, `start`, and `signal`, with shared constructors
        and parity coverage. Human rendering remains separate, and no hosted API or
        exactly-once execution claim was added.
-3. Run V84 against one already-present immutable local Linux/amd64 image. If
+3. [x] V96 adds bounded explicit `service prune` for verified unreferenced
+       local packaged systemd release directories. Selected and rollback
+       authority remain protected, retryable rename-first tombstones contain
+       deletion interruption, authenticated stage-temp cleanup contains
+       publication interruption, and uninstall remains state preserving.
+4. Run V84 against one already-present immutable local Linux/amd64 image. If
    the read-only report is attemptable, run the committed V83 Docker proof only
    with explicit approval, retain only its checksummed `whlp2` receipt, and
    audit cleanup and disk deltas.
-4. After that bounded proof, run an explicitly authorized disposable
+5. After that bounded proof, run an explicitly authorized disposable
    AL2023/real-EBS proof that joins V79 provider evidence to exact e2fsprogs
    tools and output, `wharfie-ext4-v1` format/readback arguments, NVMe/by-id
    identity and path-retarget containment, flush and udev behavior,
    interruption/partial-format/power-loss classification, reboot, and
    detach/reattach recovery. Preserve deterministic evidence and fixtures.
-5. Only after that proof, implement the destructive formatter boundary with a
+6. Only after that proof, implement the destructive formatter boundary with a
    fresh controller authorization and current local fence immediately before
    mutation, a prepared-journal reread, immediate exact-media reobservation,
    path-retarget-safe device access, complete profile verification, and
    interruption recovery.
-6. Then implement persistent mount/systemd projection and runtime-manager
+7. Then implement persistent mount/systemd projection and runtime-manager
    recovery, control storage, the V3 health publisher and V65 receipt, and the
    deactivation producer/executor. Expose the root framework host command and
    SEA only after that lifecycle is proven.
-7. Add SSM as wakeup/delivery rather than durable authority and run a complete
+8. Add SSM as wakeup/delivery rather than durable authority and run a complete
    clean-account proof through the user's ordinary credential chain. Begin
    provider-backed coordinator recovery only after the single-node service
    lifecycle and control-store fencing are proven outside a developer session.
 
-The latest recorded restart point is the [V95 versioned durable-operation
-receipts
-checkpoint](llm/checkpoints/2026-07-27-v95-versioned-durable-operation-receipts.md).
-Its parent is the [V94 owned test-workspace
+The latest recorded restart point is the [V96 bounded local release-pruning
+checkpoint](llm/checkpoints/2026-07-27-v96-bounded-local-release-pruning.md).
+Its parent is the [V95 versioned durable-operation receipts
+checkpoint](llm/checkpoints/2026-07-27-v95-versioned-durable-operation-receipts.md),
+whose parent is the [V94 owned test-workspace
 checkpoint](llm/checkpoints/2026-07-27-v94-owned-test-workspace.md), whose
 parent is the [V93 relocated SEA schedule/restart proof
 checkpoint](llm/checkpoints/2026-07-27-v93-relocated-sea-schedule-restart-proof.md),

@@ -32,6 +32,15 @@ attempt toward an exact desired SEA. Update runs from the new target SEA and a
 fresh rollback runs from the currently selected SEA. After an ambiguous
 rollback response, only explicit recovery verifies or finishes the durable
 transition without toggling releases.
+The selected packaged SEA can also run an explicit bounded `service prune`.
+Only settled, coherent `ACTIVE` state is admitted; selected and rollback
+releases remain protected, while verified unreferenced local copies are
+removed through a rename-first crash-recovery tombstone. The same 128-entry and
+64-GiB logical-byte limits are enforced before staging; prune authenticates and
+finishes interrupted private staging directories and reports
+`recoveredStagingCount`. Uninstall still preserves releases, and this narrow
+collector does not imply broader revision, payload, history, or provider
+garbage collection.
 These activation semantics have focused unit and packaged-manager evidence;
 the earlier disposable-host proof did not exercise update or rollback. A
 source or packaged command can durably submit one

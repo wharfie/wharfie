@@ -62,6 +62,7 @@ The initial packaged operator surface is:
 <next-app> wharfie service update
 <next-app> wharfie service rollback
 <next-app> wharfie service recover
+<selected-app> wharfie service prune
 <app> wharfie service start
 <app> wharfie service stop
 <app> wharfie service restart
@@ -430,6 +431,23 @@ explicit backup or deletion decision. Reinstallation of the same application
 identity reattaches to that state and must fail closed if its durable schemas
 or revision rules are incompatible.
 
+### Explicit local release pruning
+
+Uninstall remains state preserving. The later
+[local release-pruning decision](0029-local-release-pruning.md) adds a separate
+packaged `service prune` operation for fully verified local release directories
+outside settled selected/rollback authority. It is never an implicit
+activation or uninstall side effect. Rename-first tombstones contain hard-kill
+interruption, and the same 128-entry/64-GiB logical-byte bounds are enforced
+before staging and pruning. Prune authenticates interrupted private staging
+directories and removes them in the crash-safe `release.json`, `app`, directory
+order; its receipt distinguishes recovered staging from resumed prune
+tombstones. A bounded retry completes only authenticated partial states. That
+narrow collector does not authorize deletion of ledger, payload, application,
+remote-artifact, deployment, or provider state. In-flight activation still
+uses `service recover`; missing activation instead requires the exact selected
+SEA to retry install or converge because no transition exists to recover.
+
 ## Consequences
 
 - A packaged application can be configured as a boot-persistent resident
@@ -454,9 +472,11 @@ or revision rules are incompatible.
   turns ambiguous begun activity into safe replay.
 - Journald owns process stdout/stderr retention for this slice. A stable public
   logs protocol remains future work.
-- Uninstall is intentionally not destroy. Durable data survives until an
-  explicit future data-destruction contract or direct operator action removes
-  it.
+- Uninstall is intentionally not destroy. Durable control and application data
+  plus the selected/rollback release pair survive. Explicit `service prune`
+  may remove only verified unreferenced local release copies; every other
+  destructive data lifecycle still requires a future contract or direct
+  operator action.
 - Install verifies the live manager's exact unit search path before staging
   service state and verifies the loaded effective fragment, empty drop-ins,
   and a non-stale manager cache before enablement. Stop and uninstall enforce
@@ -484,7 +504,8 @@ and systemd observation behind injected boundaries so tests can use:
 - pure contract, manager, and packaged-command tests for convergence, identity
   mismatch, disabled lingering, adversarial filesystem entries, redacted JSON,
   preservation of `state/` on uninstall, admission fencing, quiescence races,
-  target failure restoration, and recovery at every durable activation phase;
+  target failure restoration, recovery at every durable activation phase, and
+  bounded rename-first release-prune plus interrupted-stage recovery;
   and
 - a real child-process resident using temporary explicit LMDB paths to prove
   `SIGTERM` drain, systemd-like failure restart, generation takeover, and

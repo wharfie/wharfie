@@ -9,13 +9,14 @@ import { createSystemdUserServiceCommand } from '../../src/core/runtime/operator
 
 /** @typedef {'install'|'converge'|'update'|'rollback'|'recover'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
 
-/** @type {ReadonlyArray<ServiceResultAction|'status'>} */
+/** @type {ReadonlyArray<ServiceResultAction|'prune'|'status'>} */
 const ACTIONS = Object.freeze([
   'install',
   'converge',
   'update',
   'rollback',
   'recover',
+  'prune',
   'start',
   'stop',
   'restart',
@@ -36,6 +37,7 @@ const OUTCOMES = Object.freeze({
 });
 const STATUS_ARTIFACT_ID = `waf1_${Buffer.alloc(32, 4).toString('base64url')}`;
 const STATUS_REVISION_ID = `wrv1_${Buffer.alloc(32, 5).toString('base64url')}`;
+const REMOVED_ARTIFACT_ID = `waf1_${Buffer.alloc(32, 6).toString('base64url')}`;
 const STATUS_UNIT = 'wharfie-service-demo.service';
 
 /** @type {Array<[ServiceResultAction, string, string, string]>} */
@@ -172,13 +174,46 @@ function makeStatus(overrides = {}) {
   };
 }
 
+function makePrune(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.release-prune',
+    action: 'prune',
+    requestStatus: 'fulfilled',
+    appId: 'service-demo',
+    outcome: 'pruned',
+    installationState: 'installed',
+    selected: {
+      artifactId: STATUS_ARTIFACT_ID,
+      revisionId: STATUS_REVISION_ID,
+    },
+    rollback: null,
+    scannedReleaseCount: 2,
+    retainedReleaseCount: 1,
+    remainingReleaseCount: 1,
+    removed: [
+      {
+        artifactId: REMOVED_ARTIFACT_ID,
+        revisionId: STATUS_REVISION_ID,
+        artifactBytes: 123,
+      },
+    ],
+    removedCount: 1,
+    removedArtifactBytes: 123,
+    resumedPruneCount: 0,
+    recoveredStagingCount: 0,
+    ...overrides,
+  };
+}
+
 function makeOperator() {
   return Object.fromEntries(
     ACTIONS.map((action) => [
       action,
       jest.fn(async () => {
-        if (action !== 'status') return makeResult(action);
-        return makeStatus();
+        if (action === 'status') return makeStatus();
+        if (action === 'prune') return makePrune();
+        return makeResult(action);
       }),
     ]),
   );
@@ -210,6 +245,7 @@ describe('packaged systemd user service command', () => {
     expect(service?.helpInformation()).toContain('update');
     expect(service?.helpInformation()).toContain('rollback');
     expect(service?.helpInformation()).toContain('recover');
+    expect(service?.helpInformation()).toContain('prune');
     expect(service?.helpInformation()).toContain('uninstall');
     expect(loadOperator).not.toHaveBeenCalled();
   });
@@ -247,7 +283,15 @@ describe('packaged systemd user service command', () => {
                 health: 'healthy',
                 desiredConvergence: makeDesiredConvergence(),
               }
-            : { action, appId: 'service-demo' },
+            : action === 'prune'
+              ? {
+                  schemaVersion: 1,
+                  kind: 'wharfie.service.release-prune',
+                  action: 'prune',
+                  appId: 'service-demo',
+                  removedCount: 1,
+                }
+              : { action, appId: 'service-demo' },
         ),
       );
       expect(line).not.toHaveBeenCalled();
@@ -271,6 +315,70 @@ describe('packaged systemd user service command', () => {
     expect(line).toHaveBeenCalledWith(
       'status: healthy; wiring: managed (service-demo)',
     );
+  });
+
+  it('writes concise human release-prune summaries', async () => {
+    const operator = makeOperator();
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'prune']);
+    expect(line).toHaveBeenLastCalledWith(
+      'prune: removed 1 unreferenced release (123 logical artifact bytes) (service-demo)',
+    );
+
+    operator.prune.mockResolvedValue(
+      makePrune({
+        resumedPruneCount: 1,
+        recoveredStagingCount: 2,
+      }),
+    );
+    await command.parseAsync(['node', 'service', 'prune']);
+    expect(line).toHaveBeenLastCalledWith(
+      'prune: removed 1 unreferenced release (123 logical artifact bytes); resumed 1 interrupted release deletion; recovered 2 interrupted staging directories (service-demo)',
+    );
+
+    operator.prune.mockResolvedValue(
+      makePrune({
+        outcome: 'nothing-to-prune',
+        scannedReleaseCount: 1,
+        removed: [],
+        removedCount: 0,
+        removedArtifactBytes: 0,
+      }),
+    );
+    await command.parseAsync(['node', 'service', 'prune']);
+    expect(line).toHaveBeenLastCalledWith(
+      'prune: nothing to prune (service-demo)',
+    );
+  });
+
+  it('fails closed on malformed release-prune results', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => makePrune({ removedArtifactBytes: 122 }),
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schemaVersion: 1,
+        kind: 'wharfie.service.error',
+        action: 'prune',
+      }),
+    );
+    expect(processRef.exitCode).toBe(1);
   });
 
   it('makes orphan cleanup actionable in human status output', async () => {
@@ -840,6 +948,106 @@ describe('packaged systemd user service command', () => {
     );
     expect(failure).not.toHaveBeenCalled();
     expect(line).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves only exact retry guidance for interrupted release pruning', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => {
+          throw Object.assign(
+            new Error("prune interrupted at '/private/release'\nafter rename"),
+            {
+              code: 'systemd-user-service-prune-incomplete',
+              remediation: 'Retry service prune from the exact selected SEA.',
+              secretPath: '/private/release',
+            },
+          );
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'prune',
+      code: 'systemd-user-service-prune-incomplete',
+      message:
+        'Systemd user-service release pruning was interrupted and is safe to retry.',
+      remediation: 'Retry service prune from the exact selected SEA.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(
+      '/private/release',
+    );
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves exact install-or-converge guidance for missing prune authority', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const remediation =
+      'Run service install or service converge from the exact selected SEA before retrying service prune.';
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => {
+          throw Object.assign(new Error('activation record absent'), {
+            code: 'systemd-user-service-prune-state-conflict',
+            remediation,
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'prune',
+      code: 'systemd-user-service-prune-state-conflict',
+      message:
+        'Service prune requires the exact selected SEA and coherent service state.',
+      remediation,
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('replaces untagged prune failures with a path-free public message', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => {
+          throw new Error(
+            "ENOENT: no such file or directory, open '/private/release/app'",
+          );
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'prune',
+      code: 'systemd-user-service-operation-failed',
+      message: 'Systemd user service prune failed.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('/private');
     expect(processRef.exitCode).toBe(1);
   });
 

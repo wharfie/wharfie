@@ -28,6 +28,10 @@ import {
   readSystemdUserServiceRuntimeState,
 } from '../../../src/core/runtime/services/systemd-user-service-manager.js';
 import {
+  SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_ARTIFACT_BYTES,
+  createSystemdUserServiceReleasePruneTombstoneName,
+} from '../../../src/core/runtime/services/systemd-user-service-release-prune.js';
+import {
   createSystemdUserServiceLayout,
   createSystemdUserServiceUnit,
 } from '../../../src/core/runtime/services/systemd-user-service.js';
@@ -70,7 +74,7 @@ async function createTestControlDBClient(adapterName, options) {
 }
 
 /**
- * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'null'|'stopped'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, useProductionControlDB?: boolean, fsOps?: typeof fsp, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'null'|'stopped'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, useProductionControlDB?: boolean, fsOps?: typeof fsp, inspectArtifactBytes?: typeof inspectArtifactBytes, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -411,6 +415,9 @@ async function createHarness(options = {}) {
       getFilesystemUid: () =>
         options.filesystemUid ?? process.getuid?.() ?? options.uid ?? 1000,
       fsOps: options.fsOps || fsp,
+      ...(options.inspectArtifactBytes
+        ? { inspectArtifactBytes: options.inspectArtifactBytes }
+        : {}),
       acquireOperationLock,
       ...(options.useProductionControlDB
         ? {}
@@ -1304,6 +1311,500 @@ describe('systemd user service manager', () => {
         },
       },
     });
+  });
+
+  it('prunes only verified releases outside selected and rollback authority', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const rollback = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.update();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v3');
+    const selected = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.update();
+    harness.calls.length = 0;
+    harness.acquireOperationLock.mockClear();
+    harness.releaseOperationLock.mockClear();
+
+    await expect(harness.operator.prune()).resolves.toEqual({
+      schemaVersion: 1,
+      kind: 'wharfie.service.release-prune',
+      action: 'prune',
+      requestStatus: 'fulfilled',
+      appId: APP_ID,
+      outcome: 'pruned',
+      installationState: 'installed',
+      selected: {
+        artifactId: selected.artifactId,
+        revisionId: REVISION_ID,
+      },
+      rollback: {
+        artifactId: rollback.artifactId,
+        revisionId: REVISION_ID,
+      },
+      scannedReleaseCount: 3,
+      retainedReleaseCount: 2,
+      remainingReleaseCount: 2,
+      removed: [
+        {
+          artifactId: source.artifactId,
+          revisionId: REVISION_ID,
+          artifactBytes: Buffer.byteLength('packaged-artifact-v1'),
+        },
+      ],
+      removedCount: 1,
+      removedArtifactBytes: Buffer.byteLength('packaged-artifact-v1'),
+      resumedPruneCount: 0,
+      recoveredStagingCount: 0,
+    });
+    await expect(
+      fsp.stat(path.join(harness.layout.releasesRoot, source.artifactId)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      fsp.readFile(
+        path.join(harness.layout.releasesRoot, rollback.artifactId, 'app'),
+        'utf8',
+      ),
+    ).resolves.toBe('packaged-artifact-v2');
+    await expect(
+      fsp.readFile(
+        path.join(harness.layout.releasesRoot, selected.artifactId, 'app'),
+        'utf8',
+      ),
+    ).resolves.toBe('packaged-artifact-v3');
+    expect(harness.acquireOperationLock).toHaveBeenCalledTimes(1);
+    expect(harness.releaseOperationLock).toHaveBeenCalledTimes(1);
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' && !['show'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
+
+    await expect(harness.operator.rollback()).resolves.toMatchObject({
+      activeArtifactId: rollback.artifactId,
+      rollbackArtifactId: selected.artifactId,
+    });
+  });
+
+  it('makes release pruning idempotent after the protected pair remains', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    await harness.operator.update();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v3');
+    await harness.operator.update();
+    await harness.operator.prune();
+
+    await expect(harness.operator.prune()).resolves.toMatchObject({
+      kind: 'wharfie.service.release-prune',
+      outcome: 'nothing-to-prune',
+      scannedReleaseCount: 2,
+      retainedReleaseCount: 2,
+      remainingReleaseCount: 2,
+      removed: [],
+      removedCount: 0,
+      removedArtifactBytes: 0,
+      resumedPruneCount: 0,
+      recoveredStagingCount: 0,
+    });
+  });
+
+  it('refuses prune from a rollback SEA before touching an old candidate', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    await harness.operator.update();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v3');
+    await harness.operator.update();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+
+    await expect(harness.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-state-conflict',
+    });
+    await expect(
+      fsp.readFile(
+        path.join(harness.layout.releasesRoot, source.artifactId, 'app'),
+        'utf8',
+      ),
+    ).resolves.toBe('packaged-artifact-v1');
+  });
+
+  it('prunes an inert uninstalled projection without recreating service wiring', async () => {
+    const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    await harness.operator.update();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v3');
+    await harness.operator.update();
+    await harness.operator.uninstall();
+    harness.state.runtimeMode = 'null';
+    harness.calls.length = 0;
+
+    await expect(harness.operator.prune()).resolves.toMatchObject({
+      outcome: 'pruned',
+      installationState: 'uninstalled',
+      scannedReleaseCount: 3,
+      retainedReleaseCount: 2,
+      remainingReleaseCount: 2,
+      removed: [{ artifactId: source.artifactId }],
+    });
+    await expect(fsp.stat(harness.layout.currentLink)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.stat(harness.layout.unitPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(
+      harness.calls.filter(
+        (/** @type {{command: string, args: string[]}} */ call) =>
+          call.command === 'systemctl' && !['show'].includes(call.args[1]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('refuses in-flight activation and unknown release entries before deletion', async () => {
+    const interrupted = await createHarness();
+    await interrupted.operator.install();
+    await fsp.writeFile(interrupted.artifactPath, 'packaged-artifact-v2');
+    interrupted.state.failDaemonReloadOnce = true;
+    await expect(interrupted.operator.update()).rejects.toBeDefined();
+
+    await expect(interrupted.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-recovery-required',
+    });
+
+    const corrupt = await createHarness();
+    const source = await inspectArtifactBytes(corrupt.artifactPath);
+    await corrupt.operator.install();
+    await fsp.writeFile(corrupt.artifactPath, 'packaged-artifact-v2');
+    await corrupt.operator.update();
+    await fsp.writeFile(corrupt.artifactPath, 'packaged-artifact-v3');
+    await corrupt.operator.update();
+    await fsp.mkdir(path.join(corrupt.layout.releasesRoot, 'unknown-entry'));
+
+    await expect(corrupt.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-release-invalid',
+    });
+    await expect(
+      fsp.readFile(
+        path.join(corrupt.layout.releasesRoot, source.artifactId, 'app'),
+        'utf8',
+      ),
+    ).resolves.toBe('packaged-artifact-v1');
+  });
+
+  it('resumes an authenticated rename-first prune tombstone after interruption', async () => {
+    let interruptTombstoneRemoval = false;
+    const fsOps = /** @type {typeof fsp} */ (
+      Object.assign(Object.create(fsp), {
+        async unlink(/** @type {import('node:fs').PathLike} */ filePath) {
+          if (
+            interruptTombstoneRemoval &&
+            String(filePath).includes('.wharfie-release-prune-v1.') &&
+            path.basename(String(filePath)) === 'app'
+          ) {
+            interruptTombstoneRemoval = false;
+            throw new Error('injected prune interruption');
+          }
+          return await fsp.unlink(filePath);
+        },
+      })
+    );
+    const harness = await createHarness({ fsOps });
+    const source = await inspectArtifactBytes(harness.artifactPath);
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    await harness.operator.update();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v3');
+    await harness.operator.update();
+    interruptTombstoneRemoval = true;
+
+    await expect(harness.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-incomplete',
+      remediation: 'Retry service prune from the exact selected SEA.',
+    });
+    const interruptedNames = await fsp.readdir(harness.layout.releasesRoot);
+    expect(
+      interruptedNames.some((name) =>
+        name.startsWith('.wharfie-release-prune-v1.'),
+      ),
+    ).toBe(true);
+    expect(interruptedNames).not.toContain(source.artifactId);
+
+    await expect(harness.operator.prune()).resolves.toMatchObject({
+      outcome: 'pruned',
+      scannedReleaseCount: 2,
+      retainedReleaseCount: 2,
+      remainingReleaseCount: 2,
+      removed: [],
+      removedCount: 0,
+      removedArtifactBytes: 0,
+      resumedPruneCount: 1,
+      recoveredStagingCount: 0,
+    });
+    expect(await fsp.readdir(harness.layout.releasesRoot)).toHaveLength(2);
+  });
+
+  it('removes authenticated interrupted staging before publishing a release', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    const target = await inspectArtifactBytes(harness.artifactPath);
+    const temporaryDirectory = path.join(
+      harness.layout.releasesRoot,
+      `.${target.artifactId}.interrupted-stage.tmp`,
+    );
+    await fsp.mkdir(temporaryDirectory, { mode: 0o700 });
+    await fsp.copyFile(
+      harness.artifactPath,
+      path.join(temporaryDirectory, 'app'),
+    );
+    // copyFile inherits source mode. A kill before stageRelease's chmod can
+    // therefore leave a group-writable child inside the still-private temp.
+    await fsp.chmod(path.join(temporaryDirectory, 'app'), 0o770);
+    await fsp.writeFile(
+      path.join(temporaryDirectory, 'release.json'),
+      'incomplete unpublished receipt',
+      { mode: 0o400 },
+    );
+    await fsp.chmod(path.join(temporaryDirectory, 'release.json'), 0o400);
+
+    await expect(harness.operator.update()).resolves.toMatchObject({
+      activeArtifactId: target.artifactId,
+    });
+    await expect(fsp.stat(temporaryDirectory)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(
+      fsp.readFile(
+        path.join(harness.layout.releasesRoot, target.artifactId, 'app'),
+        'utf8',
+      ),
+    ).resolves.toBe('packaged-artifact-v2');
+  });
+
+  it('recovers staging cleanup after release.json was removed but app remains', async () => {
+    let interruptStageCleanup = false;
+    const fsOps = /** @type {typeof fsp} */ (
+      Object.assign(Object.create(fsp), {
+        async unlink(/** @type {import('node:fs').PathLike} */ filePath) {
+          if (interruptStageCleanup && String(filePath).endsWith('.tmp/app')) {
+            interruptStageCleanup = false;
+            throw new Error('injected stage cleanup interruption');
+          }
+          return await fsp.unlink(filePath);
+        },
+      })
+    );
+    const harness = await createHarness({ fsOps });
+    await harness.operator.install();
+    const stagedArtifactId = `waf1_${Buffer.alloc(32, 9).toString(
+      'base64url',
+    )}`;
+    const temporaryDirectory = path.join(
+      harness.layout.releasesRoot,
+      `.${stagedArtifactId}.interrupted-prune.tmp`,
+    );
+    await fsp.mkdir(temporaryDirectory, { mode: 0o700 });
+    await fsp.writeFile(path.join(temporaryDirectory, 'app'), 'partial', {
+      mode: 0o500,
+    });
+    await fsp.chmod(path.join(temporaryDirectory, 'app'), 0o500);
+    await fsp.writeFile(
+      path.join(temporaryDirectory, 'release.json'),
+      'partial',
+      { mode: 0o400 },
+    );
+    await fsp.chmod(path.join(temporaryDirectory, 'release.json'), 0o400);
+    interruptStageCleanup = true;
+
+    await expect(harness.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-incomplete',
+      remediation: 'Retry service prune from the exact selected SEA.',
+    });
+    await expect(fsp.readdir(temporaryDirectory)).resolves.toEqual(['app']);
+
+    await expect(harness.operator.prune()).resolves.toMatchObject({
+      outcome: 'pruned',
+      scannedReleaseCount: 1,
+      retainedReleaseCount: 1,
+      remainingReleaseCount: 1,
+      removed: [],
+      removedCount: 0,
+      resumedPruneCount: 0,
+      recoveredStagingCount: 1,
+    });
+    await expect(fsp.stat(temporaryDirectory)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('refuses receipt-only staging residue and duplicate physical artifact IDs', async () => {
+    const receiptOnly = await createHarness();
+    await receiptOnly.operator.install();
+    const stagedArtifactId = `waf1_${Buffer.alloc(32, 10).toString(
+      'base64url',
+    )}`;
+    const temporaryDirectory = path.join(
+      receiptOnly.layout.releasesRoot,
+      `.${stagedArtifactId}.receipt-only.tmp`,
+    );
+    await fsp.mkdir(temporaryDirectory, { mode: 0o700 });
+    await fsp.writeFile(
+      path.join(temporaryDirectory, 'release.json'),
+      'unpublished',
+      { mode: 0o400 },
+    );
+    await fsp.chmod(path.join(temporaryDirectory, 'release.json'), 0o400);
+
+    await expect(receiptOnly.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-release-invalid',
+    });
+    await expect(fsp.stat(temporaryDirectory)).resolves.toBeDefined();
+
+    const duplicate = await createHarness();
+    const selected = await inspectArtifactBytes(duplicate.artifactPath);
+    await duplicate.operator.install();
+    const duplicateTombstone =
+      createSystemdUserServiceReleasePruneTombstoneName({
+        artifactId: selected.artifactId,
+        revisionId: REVISION_ID,
+        size: selected.size,
+      });
+    await fsp.mkdir(
+      path.join(duplicate.layout.releasesRoot, duplicateTombstone),
+      { mode: 0o700 },
+    );
+
+    await expect(duplicate.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-release-invalid',
+    });
+    await expect(
+      fsp.readFile(
+        path.join(duplicate.layout.releasesRoot, selected.artifactId, 'app'),
+        'utf8',
+      ),
+    ).resolves.toBe('packaged-artifact-v1');
+  });
+
+  it('enforces release entry and logical-byte bounds before publication', async () => {
+    const entryBound = await createHarness();
+    const selected = await inspectArtifactBytes(entryBound.artifactPath);
+    await entryBound.operator.install();
+    let created = 0;
+    let candidate = 0;
+    while (created < 127) {
+      const bytes = Buffer.alloc(32);
+      bytes.writeUInt32BE(candidate, 28);
+      candidate += 1;
+      const artifactId = `waf1_${bytes.toString('base64url')}`;
+      if (artifactId === selected.artifactId) continue;
+      const tombstone = createSystemdUserServiceReleasePruneTombstoneName({
+        artifactId,
+        revisionId: REVISION_ID,
+        size: 0,
+      });
+      await fsp.mkdir(path.join(entryBound.layout.releasesRoot, tombstone), {
+        mode: 0o700,
+      });
+      created += 1;
+    }
+    await fsp.writeFile(entryBound.artifactPath, 'packaged-artifact-v2');
+    const entryTarget = await inspectArtifactBytes(entryBound.artifactPath);
+
+    await expect(entryBound.operator.update()).rejects.toThrow(
+      /release namespace is full/u,
+    );
+    await expect(
+      fsp.stat(
+        path.join(entryBound.layout.releasesRoot, entryTarget.artifactId),
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const firstBytes = Buffer.from('packaged-artifact-v1');
+    const inflatedInspector = async (/** @type {string} */ artifactPath) => {
+      const observed = await inspectArtifactBytes(artifactPath);
+      const bytes = await fsp.readFile(artifactPath);
+      return Object.freeze({
+        ...observed,
+        size: bytes.equals(firstBytes)
+          ? SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_ARTIFACT_BYTES
+          : observed.size,
+      });
+    };
+    const byteBound = await createHarness({
+      artifactBytes: firstBytes,
+      inspectArtifactBytes: inflatedInspector,
+    });
+    await byteBound.operator.install();
+    await fsp.writeFile(byteBound.artifactPath, 'packaged-artifact-v2');
+    const byteTarget = await inspectArtifactBytes(byteBound.artifactPath);
+
+    await expect(byteBound.operator.update()).rejects.toThrow(
+      /logical artifact-byte limit/u,
+    );
+    await expect(
+      fsp.stat(path.join(byteBound.layout.releasesRoot, byteTarget.artifactId)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('classifies missing activation without futile transition-recovery guidance', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await eraseActivationRecord(harness);
+
+    await expect(harness.operator.prune()).rejects.toMatchObject({
+      code: 'systemd-user-service-prune-state-conflict',
+      message: expect.stringMatching(/service install or service converge/u),
+      remediation:
+        'Run service install or service converge from the exact selected SEA before retrying service prune.',
+    });
+    try {
+      await harness.operator.prune();
+      throw new Error('expected prune to reject');
+    } catch (error) {
+      expect(/** @type {any} */ (error).remediation).not.toContain(
+        'service recover',
+      );
+    }
+  });
+
+  it('wraps native prune failures without exposing their paths', async () => {
+    let failInspection = false;
+    const secretPath = '/private/secret-release/app';
+    const injectedInspector = async (/** @type {string} */ artifactPath) => {
+      if (failInspection) {
+        throw Object.assign(new Error(`failed to inspect ${secretPath}`), {
+          name: 'SystemdUserServiceReleasePruneError',
+          code: 'systemd-user-service-prune-incomplete',
+        });
+      }
+      return await inspectArtifactBytes(artifactPath);
+    };
+    const harness = await createHarness({
+      inspectArtifactBytes: injectedInspector,
+    });
+    await harness.operator.install();
+    failInspection = true;
+
+    try {
+      await harness.operator.prune();
+      throw new Error('expected prune to reject');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'systemd-user-service-prune-operation-failed',
+        message:
+          'Systemd user-service release pruning failed before a safe result was available.',
+      });
+      expect(/** @type {Error} */ (error).message).not.toContain(secretPath);
+      expect(
+        /** @type {Error & {cause?: Error}} */ (error).cause?.message,
+      ).toContain(secretPath);
+    }
   });
 
   it.each(['current', 'previous'])(
@@ -3289,6 +3790,7 @@ describe('systemd user service manager', () => {
 
   it('installs over an activation-less uninstalled tombstone', async () => {
     const harness = await createHarness();
+    const source = await inspectArtifactBytes(harness.artifactPath);
     await harness.operator.install();
     await eraseActivationRecord(harness);
     await harness.operator.uninstall();
@@ -3313,6 +3815,20 @@ describe('systemd user service manager', () => {
       await fsp.readFile(harness.layout.installationPath, 'utf8'),
     );
     expect(installation.current.target).toEqual(replacementTarget);
+    await expect(replacementOperator.prune()).resolves.toMatchObject({
+      outcome: 'pruned',
+      selected: {
+        artifactId: target.artifactId,
+        revisionId: REVISION_ID,
+      },
+      rollback: null,
+      removed: [
+        {
+          artifactId: source.artifactId,
+          revisionId: REVISION_ID,
+        },
+      ],
+    });
   });
 
   it('reinstalls the same release across wall-clock rollback', async () => {

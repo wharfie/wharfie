@@ -2,6 +2,7 @@ import { Command } from 'commander';
 
 import { assertApplicationRevisionId } from '../application-revision.js';
 import { assertArtifactId } from '../artifact-record.js';
+import { validateSystemdUserServiceReleasePruneReceipt } from '../services/systemd-user-service-release-prune.js';
 
 const SERVICE_ACTIONS = Object.freeze([
   Object.freeze({
@@ -23,6 +24,10 @@ const SERVICE_ACTIONS = Object.freeze([
   Object.freeze({
     name: 'recover',
     description: 'Resume an interrupted service activation',
+  }),
+  Object.freeze({
+    name: 'prune',
+    description: 'Remove verified local releases outside rollback authority',
   }),
   Object.freeze({
     name: 'start',
@@ -61,6 +66,30 @@ const CONVERGE_ROLLBACK_RECOVERY_REMEDIATION =
   'Run service recover before retrying desired-target convergence.';
 const ACTIVE_REINSTALL_RECOVERY_REMEDIATION =
   'Run service install again from the exact selected SEA to resume repair.';
+const PRUNE_RECOVERY_REMEDIATION =
+  'Run service recover before retrying service prune.';
+const PRUNE_RETRY_REMEDIATION =
+  'Retry service prune from the exact selected SEA.';
+const PRUNE_UNINSTALL_REMEDIATION =
+  'Rerun service uninstall before retrying service prune.';
+const PRUNE_MISSING_ACTIVATION_REMEDIATION =
+  'Run service install or service converge from the exact selected SEA before retrying service prune.';
+/** @type {Readonly<Record<string, string>>} */
+const PRUNE_ERROR_MESSAGES = Object.freeze({
+  'systemd-user-service-operation-failed': 'Systemd user service prune failed.',
+  'systemd-user-service-prune-recovery-required':
+    'Systemd user-service release pruning requires service recovery.',
+  'systemd-user-service-prune-state-conflict':
+    'Service prune requires the exact selected SEA and coherent service state.',
+  'systemd-user-service-prune-uninstall-recovery-required':
+    'Systemd user-service uninstall recovery must finish before release pruning.',
+  'systemd-user-service-prune-release-invalid':
+    'Systemd user-service release namespace failed bounded integrity verification.',
+  'systemd-user-service-prune-incomplete':
+    'Systemd user-service release pruning was interrupted and is safe to retry.',
+  'systemd-user-service-prune-operation-failed':
+    'Systemd user-service release pruning failed before a safe result was available.',
+});
 const SERVICE_REQUEST_STATUSES = new Set([
   'fulfilled',
   'refused',
@@ -326,6 +355,11 @@ function normalizeResult(value, action) {
       `Systemd user service ${action} returned no result object.`,
     );
   }
+  if (action === 'prune') {
+    return /** @type {Record<string, any>} */ (
+      validateSystemdUserServiceReleasePruneReceipt(normalized)
+    );
+  }
   const expectedKind =
     action === 'status' ? 'wharfie.service.status' : 'wharfie.service.result';
   const expectedSchemaVersion = action === 'status' ? 3 : 1;
@@ -402,6 +436,27 @@ function getExpectedErrorRemediation(code, action) {
   ) {
     return CONVERGE_RECOVERY_REMEDIATION;
   }
+  if (
+    action === 'prune' &&
+    code === 'systemd-user-service-prune-recovery-required'
+  ) {
+    return PRUNE_RECOVERY_REMEDIATION;
+  }
+  if (action === 'prune' && code === 'systemd-user-service-prune-incomplete') {
+    return PRUNE_RETRY_REMEDIATION;
+  }
+  if (
+    action === 'prune' &&
+    code === 'systemd-user-service-prune-uninstall-recovery-required'
+  ) {
+    return PRUNE_UNINSTALL_REMEDIATION;
+  }
+  if (
+    action === 'prune' &&
+    code === 'systemd-user-service-prune-state-conflict'
+  ) {
+    return PRUNE_MISSING_ACTIVATION_REMEDIATION;
+  }
   return null;
 }
 
@@ -411,7 +466,24 @@ function getExpectedErrorRemediation(code, action) {
  * @returns {Readonly<Record<string, any>>} - One safe JSON failure receipt.
  */
 function createJsonError(error, action) {
-  const rawMessage = error instanceof Error ? error.message : String(error);
+  const rawCode =
+    error && typeof error === 'object' && 'code' in error
+      ? String(error.code)
+      : '';
+  const normalizedCode = /^[a-z0-9][a-z0-9-]{0,127}$/.test(rawCode)
+    ? rawCode
+    : 'systemd-user-service-operation-failed';
+  const code =
+    action === 'prune' &&
+    !Object.prototype.hasOwnProperty.call(PRUNE_ERROR_MESSAGES, normalizedCode)
+      ? 'systemd-user-service-operation-failed'
+      : normalizedCode;
+  const rawMessage =
+    action === 'prune'
+      ? PRUNE_ERROR_MESSAGES[code] || 'Systemd user service prune failed.'
+      : error instanceof Error
+        ? error.message
+        : String(error);
   const message = Array.from(rawMessage, (character) => {
     const codePoint = character.codePointAt(0) || 0;
     return codePoint < 32 || codePoint === 127 ? ' ' : character;
@@ -419,13 +491,6 @@ function createJsonError(error, action) {
     .join('')
     .trim()
     .slice(0, 1024);
-  const rawCode =
-    error && typeof error === 'object' && 'code' in error
-      ? String(error.code)
-      : '';
-  const code = /^[a-z0-9][a-z0-9-]{0,127}$/.test(rawCode)
-    ? rawCode
-    : 'systemd-user-service-operation-failed';
   const expectedRemediation = getExpectedErrorRemediation(code, action);
   const remediation =
     expectedRemediation !== null &&
@@ -490,6 +555,21 @@ function formatHumanResult(action, result) {
         ? '; run service uninstall'
         : '';
     return `${action.name}: ${outcome}; wiring: ${wiring}${wiringRemediation}${activationRemediation}${app}`;
+  }
+  if (action.name === 'prune') {
+    if (result.outcome === 'nothing-to-prune') {
+      return `${action.name}: nothing to prune${app}`;
+    }
+    const releaseLabel = result.removedCount === 1 ? 'release' : 'releases';
+    const resumed =
+      result.resumedPruneCount === 0
+        ? ''
+        : `; resumed ${result.resumedPruneCount} interrupted release ${result.resumedPruneCount === 1 ? 'deletion' : 'deletions'}`;
+    const recoveredStaging =
+      result.recoveredStagingCount === 0
+        ? ''
+        : `; recovered ${result.recoveredStagingCount} interrupted staging ${result.recoveredStagingCount === 1 ? 'directory' : 'directories'}`;
+    return `${action.name}: removed ${result.removedCount} unreferenced ${releaseLabel} (${result.removedArtifactBytes} logical artifact bytes)${resumed}${recoveredStaging}${app}`;
   }
   if (result.requestStatus === 'pending') {
     if (action.name === 'converge') {

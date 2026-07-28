@@ -46,6 +46,13 @@ import {
   validateSystemdUserServiceInstallation,
   validateSystemdUserServiceRelease,
 } from './systemd-user-service.js';
+import {
+  SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_ARTIFACT_BYTES,
+  SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_DIRECTORY_ENTRIES,
+  createSystemdUserServiceReleasePruneReceipt,
+  createSystemdUserServiceReleasePruneTombstoneName,
+  parseSystemdUserServiceReleasePruneTombstoneName,
+} from './systemd-user-service-release-prune.js';
 import { createLocalApplicationSystemdActivation } from './local-application-systemd-activation.js';
 
 const SERVICE_RESULT_SCHEMA_VERSION = 1;
@@ -71,6 +78,14 @@ const CONVERGE_ROLLBACK_RECOVERY_REMEDIATION =
   'Run service recover before retrying desired-target convergence.';
 const ACTIVE_REINSTALL_RECOVERY_REMEDIATION =
   'Run service install again from the exact selected SEA to resume repair.';
+const PRUNE_RECOVERY_REMEDIATION =
+  'Run service recover before retrying service prune.';
+const PRUNE_RETRY_REMEDIATION =
+  'Retry service prune from the exact selected SEA.';
+const PRUNE_UNINSTALL_REMEDIATION =
+  'Rerun service uninstall before retrying service prune.';
+const PRUNE_MISSING_ACTIVATION_REMEDIATION =
+  'Run service install or service converge from the exact selected SEA before retrying service prune.';
 const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
   'appId',
   'dataRoot',
@@ -103,6 +118,33 @@ const TRANSIENT_OBSERVATION_ERROR_CODES = new Set([
   'ENOMEM',
   'ETIMEDOUT',
 ]);
+const RELEASE_PRUNE_ERRORS = new WeakSet();
+
+/**
+ * @param {string} code - Stable local prune failure code.
+ * @param {string} message - Secret-free failure text.
+ * @param {unknown} [cause] - Internal cause.
+ * @param {string} [remediation] - Exact static retry guidance.
+ * @returns {Error} - Tagged operation error.
+ */
+function createReleasePruneError(code, message, cause, remediation) {
+  const error = new Error(message, cause === undefined ? {} : { cause });
+  error.name = 'SystemdUserServiceReleasePruneError';
+  Object.assign(error, {
+    code,
+    ...(remediation ? { remediation } : {}),
+  });
+  RELEASE_PRUNE_ERRORS.add(error);
+  return error;
+}
+
+/**
+ * @param {unknown} error - Candidate already-sanitized prune failure.
+ * @returns {boolean} - Whether the failure was created by this module.
+ */
+function isReleasePruneError(error) {
+  return error instanceof Error && RELEASE_PRUNE_ERRORS.has(error);
+}
 
 /**
  * @typedef SystemdUserServiceProcessResult
@@ -448,6 +490,36 @@ async function syncDirectory(fsOps, directory) {
 }
 
 /**
+ * Read at most one fixed number of directory entries without materializing an
+ * unbounded namespace in memory.
+ * @param {typeof fsp} fsOps - Filesystem implementation.
+ * @param {string} directory - Exact directory to enumerate.
+ * @param {number} maximum - Inclusive entry limit.
+ * @param {string} label - Safe boundary label.
+ * @returns {Promise<string[]>} - Canonically sorted basenames.
+ */
+async function readBoundedDirectoryNames(fsOps, directory, maximum, label) {
+  const opened = await fsOps.opendir(directory);
+  /** @type {string[]} */
+  const names = [];
+  try {
+    while (true) {
+      const entry = await opened.read();
+      if (entry === null) break;
+      names.push(entry.name);
+      if (names.length > maximum) {
+        throw new Error(`${label} exceeds its entry limit.`);
+      }
+    }
+  } finally {
+    await opened.close().catch((error) => {
+      if (!hasCode(error, 'ERR_DIR_CLOSED')) throw error;
+    });
+  }
+  return names.sort();
+}
+
+/**
  * @param {import('node:fs').Stats} stats - Opened or lstat filesystem state.
  * @param {'file'|'directory'} kind - Required concrete type.
  * @param {string} label - Safe boundary label.
@@ -776,13 +848,65 @@ function hasSameReleaseReference(release, reference) {
 }
 
 /**
- * Read and verify one immutable release directory by content identity. The
- * optional revision fence lets the selected-link reader discover its own
- * revision while activation recovery requires an exact stored reference.
- * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes: typeof inspectArtifactBytes, uid: number, target: unknown, artifactId: string, revisionId?: string}} options - Immutable release boundary.
- * @returns {Promise<Readonly<Record<string, any>>>} - Verified release.
+ * @param {string} releasesRoot - Exact release namespace root.
+ * @param {string} releaseDirectory - Candidate direct child.
+ * @returns {void} - Returns only for one canonical direct child path.
  */
-async function readImmutableRelease(options) {
+function assertReleaseDirectoryPath(releasesRoot, releaseDirectory) {
+  if (
+    !path.isAbsolute(releaseDirectory) ||
+    path.normalize(releaseDirectory) !== releaseDirectory ||
+    path.dirname(releaseDirectory) !== releasesRoot ||
+    path.basename(releaseDirectory) === '.' ||
+    path.basename(releaseDirectory) === '..'
+  ) {
+    throw new Error(
+      'Systemd user-service release directory is outside its fixed namespace.',
+    );
+  }
+}
+
+/**
+ * Require the complete immutable two-file release shape before reading or
+ * deleting it.
+ * @param {{fsOps: typeof fsp, releaseDirectory: string, uid: number}} options - Exact directory boundary.
+ * @returns {Promise<void>} - Resolves only for `app` plus `release.json`.
+ */
+async function assertExactImmutableReleaseContents(options) {
+  const names = await readBoundedDirectoryNames(
+    options.fsOps,
+    options.releaseDirectory,
+    2,
+    'Systemd user-service release directory',
+  );
+  if (names.length !== 2 || names[0] !== 'app' || names[1] !== 'release.json') {
+    throw new Error(
+      'Systemd user-service release directory must contain exactly app and release.json.',
+    );
+  }
+  for (const name of names) {
+    const stats = await assertRealPath(
+      options.fsOps,
+      path.join(options.releaseDirectory, name),
+      'file',
+      `Systemd user-service release ${name}`,
+      options.uid,
+    );
+    if (typeof stats.nlink === 'number' && stats.nlink !== 1) {
+      throw new Error(
+        `Systemd user-service release ${name} must have one filesystem link.`,
+      );
+    }
+  }
+}
+
+/**
+ * Read and validate one immutable release receipt from a canonical directory
+ * or an authenticated same-root prune tombstone.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, uid: number, target?: unknown, artifactId: string, revisionId?: string, releaseDirectory?: string, maximumArtifactBytes?: number}} options - Receipt boundary.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Validated release record.
+ */
+async function readImmutableReleaseRecord(options) {
   assertArtifactId(options.artifactId, 'systemd release artifactId');
   if (options.revisionId !== undefined) {
     assertApplicationRevisionId(
@@ -790,12 +914,15 @@ async function readImmutableRelease(options) {
       'systemd release revisionId',
     );
   }
-  const releaseDirectory = path.join(
+  const canonicalReleaseDirectory = path.join(
     options.layout.releasesRoot,
     options.artifactId,
   );
+  const releaseDirectory =
+    options.releaseDirectory || canonicalReleaseDirectory;
+  assertReleaseDirectoryPath(options.layout.releasesRoot, releaseDirectory);
   const releasePath = path.join(releaseDirectory, 'release.json');
-  const releaseArtifactPath = path.join(releaseDirectory, 'app');
+  const canonicalArtifactPath = path.join(canonicalReleaseDirectory, 'app');
   await assertRealPath(
     options.fsOps,
     options.layout.releasesRoot,
@@ -810,6 +937,18 @@ async function readImmutableRelease(options) {
     'Systemd user-service release directory',
     options.uid,
   );
+  const releaseStats = await assertRealPath(
+    options.fsOps,
+    releasePath,
+    'file',
+    'Systemd user-service release receipt',
+    options.uid,
+  );
+  if (typeof releaseStats.nlink === 'number' && releaseStats.nlink !== 1) {
+    throw new Error(
+      'Systemd user-service release receipt must have one filesystem link.',
+    );
+  }
   const release = validateSystemdUserServiceRelease(
     JSON.parse(
       await readManagedTextFile({
@@ -825,13 +964,48 @@ async function readImmutableRelease(options) {
     release.artifactId !== options.artifactId ||
     (options.revisionId !== undefined &&
       release.revisionId !== options.revisionId) ||
-    release.artifactPath !== releaseArtifactPath ||
-    getBuildTargetId(release.target) !== getBuildTargetId(options.target)
+    release.artifactPath !== canonicalArtifactPath ||
+    (options.target !== undefined &&
+      getBuildTargetId(release.target) !== getBuildTargetId(options.target))
   ) {
     throw new Error(
       'Systemd user-service immutable release disagrees with its reference.',
     );
   }
+  const maximumArtifactBytes =
+    options.maximumArtifactBytes ?? Number.MAX_SAFE_INTEGER;
+  if (
+    !Number.isSafeInteger(maximumArtifactBytes) ||
+    maximumArtifactBytes < 0 ||
+    release.size > maximumArtifactBytes
+  ) {
+    throw new Error(
+      'Systemd user-service immutable release exceeds the artifact-byte limit.',
+    );
+  }
+  return release;
+}
+
+/**
+ * Read and verify one immutable release directory by content identity. The
+ * optional revision fence lets the selected-link reader discover its own
+ * revision while activation recovery requires an exact stored reference. A
+ * physical directory override is accepted only for an authenticated
+ * same-root prune tombstone; the receipt must still name its canonical path.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes: typeof inspectArtifactBytes, uid: number, target?: unknown, artifactId: string, revisionId?: string, releaseDirectory?: string, maximumArtifactBytes?: number}} options - Immutable release boundary.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Verified release.
+ */
+async function readImmutableRelease(options) {
+  const releaseDirectory =
+    options.releaseDirectory ||
+    path.join(options.layout.releasesRoot, options.artifactId);
+  const releaseArtifactPath = path.join(releaseDirectory, 'app');
+  const release = await readImmutableReleaseRecord(options);
+  await assertExactImmutableReleaseContents({
+    fsOps: options.fsOps,
+    releaseDirectory,
+    uid: options.uid,
+  });
   await assertRealPath(
     options.fsOps,
     releaseArtifactPath,
@@ -937,6 +1111,327 @@ async function readSelectedRelease(options) {
     ...options,
     artifactId,
   });
+}
+
+/**
+ * @param {string} name - Candidate canonical release-directory basename.
+ * @returns {string | null} - Exact artifact ID or null.
+ */
+function parseReleaseDirectoryArtifactId(name) {
+  try {
+    assertArtifactId(name, 'systemd release directory artifactId');
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse only Wharfie's private unpublished release-stage namespace.
+ * @param {string} name - Candidate direct-child basename.
+ * @returns {Readonly<{artifactId: string, token: string}> | null} - Exact identity or null.
+ */
+function parseReleaseStageTemporaryName(name) {
+  if (typeof name !== 'string') return null;
+  const parts = name.split('.');
+  if (
+    parts.length !== 4 ||
+    parts[0] !== '' ||
+    parts[3] !== 'tmp' ||
+    !ATOMIC_PUBLICATION_TOKEN_PATTERN.test(parts[2])
+  ) {
+    return null;
+  }
+  try {
+    assertArtifactId(parts[1], 'systemd user-service release-stage artifactId');
+  } catch {
+    return null;
+  }
+  return Object.freeze({ artifactId: parts[1], token: parts[2] });
+}
+
+/**
+ * Authenticate one unpublished stage directory left by interrupted
+ * publication. Publication creates app before release.json. Recovery removes
+ * release.json before app, so complete, app-only, and empty are the only
+ * reachable states; receipt-only state fails closed.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, uid: number, name: string}} options - Stage-temp boundary.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Authenticated temp state.
+ */
+async function inspectReleaseStageTemporary(options) {
+  const identity = parseReleaseStageTemporaryName(options.name);
+  if (!identity) {
+    throw new Error(
+      'Systemd user-service release-stage temporary name is malformed.',
+    );
+  }
+  const directory = path.join(options.layout.releasesRoot, options.name);
+  assertReleaseDirectoryPath(options.layout.releasesRoot, directory);
+  const directoryStats = await assertRealPath(
+    options.fsOps,
+    directory,
+    'directory',
+    'Systemd user-service release-stage temporary directory',
+    options.uid,
+  );
+  if ((directoryStats.mode & 0o077) !== 0) {
+    throw new Error(
+      'Systemd user-service release-stage temporary directory must be private.',
+    );
+  }
+  const names = await readBoundedDirectoryNames(
+    options.fsOps,
+    directory,
+    2,
+    'Systemd user-service release-stage temporary directory',
+  );
+  const hasArtifact = names.includes('app');
+  const hasReceipt = names.includes('release.json');
+  if (
+    names.some((name) => name !== 'app' && name !== 'release.json') ||
+    (hasReceipt && !hasArtifact)
+  ) {
+    throw new Error(
+      'Systemd user-service release-stage temporary directory has an unsupported partial state.',
+    );
+  }
+  for (const name of names) {
+    const stats = await options.fsOps.lstat(path.join(directory, name));
+    if (
+      !stats.isFile() ||
+      stats.isSymbolicLink() ||
+      (typeof stats.uid === 'number' && stats.uid !== options.uid)
+    ) {
+      throw new Error(
+        `Systemd user-service release-stage ${name} must be an owned real file.`,
+      );
+    }
+    if (typeof stats.nlink === 'number' && stats.nlink !== 1) {
+      throw new Error(
+        `Systemd user-service release-stage ${name} must have one filesystem link.`,
+      );
+    }
+  }
+  return Object.freeze({
+    ...identity,
+    directory,
+    hasArtifact,
+    hasReceipt,
+  });
+}
+
+/**
+ * Validate one complete or partially removed deterministic prune tombstone.
+ * The deletion order is fixed as app, release.json, then the empty directory,
+ * so `release.json` alone and an empty directory are the only recoverable
+ * partial states.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes: typeof inspectArtifactBytes, uid: number, target?: unknown, name: string, maximumArtifactBytes: number}} options - Tombstone boundary.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Authenticated tombstone state.
+ */
+async function inspectReleasePruneTombstone(options) {
+  const identity = parseSystemdUserServiceReleasePruneTombstoneName(
+    options.name,
+  );
+  if (!identity || identity.artifactBytes > options.maximumArtifactBytes) {
+    throw new Error(
+      'Systemd user-service release-prune tombstone is malformed or exceeds the artifact-byte limit.',
+    );
+  }
+  const directory = path.join(options.layout.releasesRoot, options.name);
+  assertReleaseDirectoryPath(options.layout.releasesRoot, directory);
+  await assertRealPath(
+    options.fsOps,
+    directory,
+    'directory',
+    'Systemd user-service release-prune tombstone',
+    options.uid,
+  );
+  const names = await readBoundedDirectoryNames(
+    options.fsOps,
+    directory,
+    2,
+    'Systemd user-service release-prune tombstone',
+  );
+  const hasArtifact = names.includes('app');
+  const hasReceipt = names.includes('release.json');
+  if (
+    names.some((name) => name !== 'app' && name !== 'release.json') ||
+    (hasArtifact && !hasReceipt)
+  ) {
+    throw new Error(
+      'Systemd user-service release-prune tombstone has an unsupported partial state.',
+    );
+  }
+  let release = null;
+  if (hasReceipt) {
+    release = await readImmutableReleaseRecord({
+      fsOps: options.fsOps,
+      layout: options.layout,
+      uid: options.uid,
+      target: options.target,
+      artifactId: identity.artifactId,
+      revisionId: identity.revisionId,
+      releaseDirectory: directory,
+      maximumArtifactBytes: options.maximumArtifactBytes,
+    });
+    if (release.size !== identity.artifactBytes) {
+      throw new Error(
+        'Systemd user-service release-prune tombstone disagrees with its encoded artifact size.',
+      );
+    }
+  }
+  if (hasArtifact) {
+    release = await readImmutableRelease({
+      fsOps: options.fsOps,
+      layout: options.layout,
+      inspectBytes: options.inspectBytes,
+      uid: options.uid,
+      target: options.target,
+      artifactId: identity.artifactId,
+      revisionId: identity.revisionId,
+      releaseDirectory: directory,
+      maximumArtifactBytes: options.maximumArtifactBytes,
+    });
+  }
+  return Object.freeze({
+    ...identity,
+    directory,
+    hasArtifact,
+    hasReceipt,
+    release,
+  });
+}
+
+/**
+ * Preflight the complete bounded release namespace before any deletion.
+ * Unknown entries and every malformed canonical or recovery directory abort
+ * the whole operation.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes: typeof inspectArtifactBytes, uid: number}} options - Namespace boundary.
+ * @returns {Promise<Readonly<{releases: Readonly<Array<Readonly<Record<string, any>>>>, tombstones: Readonly<Array<Readonly<Record<string, any>>>>, stagingTemps: Readonly<Array<Readonly<Record<string, any>>>>, artifactBytes: number}>>} - Verified census.
+ */
+async function inspectReleasePruneNamespace(options) {
+  await assertRealPath(
+    options.fsOps,
+    options.layout.releasesRoot,
+    'directory',
+    'Systemd user-service releases root',
+    options.uid,
+  );
+  const names = await readBoundedDirectoryNames(
+    options.fsOps,
+    options.layout.releasesRoot,
+    SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_DIRECTORY_ENTRIES,
+    'Systemd user-service releases root',
+  );
+  /** @type {Readonly<Record<string, any>>[]} */
+  const releases = [];
+  /** @type {Readonly<Record<string, any>>[]} */
+  const tombstones = [];
+  /** @type {Readonly<Record<string, any>>[]} */
+  const stagingTemps = [];
+  const claimedArtifactIds = new Set();
+  let artifactBytes = 0;
+  for (const name of names) {
+    const remaining =
+      SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_ARTIFACT_BYTES - artifactBytes;
+    const stageTemporary = parseReleaseStageTemporaryName(name);
+    if (stageTemporary) {
+      stagingTemps.push(
+        await inspectReleaseStageTemporary({
+          fsOps: options.fsOps,
+          layout: options.layout,
+          uid: options.uid,
+          name,
+        }),
+      );
+      continue;
+    }
+    const tombstone = parseSystemdUserServiceReleasePruneTombstoneName(name);
+    if (tombstone) {
+      if (claimedArtifactIds.has(tombstone.artifactId)) {
+        throw new Error(
+          'Systemd user-service release namespace contains a duplicate artifact ID.',
+        );
+      }
+      const inspected = await inspectReleasePruneTombstone({
+        ...options,
+        name,
+        maximumArtifactBytes: remaining,
+      });
+      artifactBytes += inspected.artifactBytes;
+      tombstones.push(inspected);
+      claimedArtifactIds.add(inspected.artifactId);
+      continue;
+    }
+    const artifactId = parseReleaseDirectoryArtifactId(name);
+    if (!artifactId) {
+      throw new Error(
+        'Systemd user-service releases root contains an unrecognized entry.',
+      );
+    }
+    if (claimedArtifactIds.has(artifactId)) {
+      throw new Error(
+        'Systemd user-service release namespace contains a duplicate artifact ID.',
+      );
+    }
+    const release = await readImmutableRelease({
+      ...options,
+      artifactId,
+      maximumArtifactBytes: remaining,
+    });
+    artifactBytes += release.size;
+    releases.push(release);
+    claimedArtifactIds.add(release.artifactId);
+  }
+  return Object.freeze({
+    releases: Object.freeze(releases),
+    tombstones: Object.freeze(tombstones),
+    stagingTemps: Object.freeze(stagingTemps),
+    artifactBytes,
+  });
+}
+
+/**
+ * Remove one authenticated unpublished stage directory in the sole
+ * crash-recoverable order: receipt -> app -> directory.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, uid: number, name: string}} options - Exact stage-temp boundary.
+ * @returns {Promise<void>} - Resolves after namespace removal is durable.
+ */
+async function removeReleaseStageTemporary(options) {
+  const inspected = await inspectReleaseStageTemporary(options);
+  if (inspected.hasReceipt) {
+    await options.fsOps.unlink(path.join(inspected.directory, 'release.json'));
+    await syncDirectory(options.fsOps, inspected.directory);
+  }
+  if (inspected.hasArtifact) {
+    await options.fsOps.unlink(path.join(inspected.directory, 'app'));
+    await syncDirectory(options.fsOps, inspected.directory);
+  }
+  await options.fsOps.rmdir(inspected.directory);
+  await syncDirectory(options.fsOps, options.layout.releasesRoot);
+}
+
+/**
+ * Finish one already authenticated tombstone using the sole supported
+ * app -> receipt -> directory deletion order.
+ * @param {{fsOps: typeof fsp, layout: Readonly<Record<string, string>>, inspectBytes: typeof inspectArtifactBytes, uid: number, target?: unknown, name: string}} options - Exact tombstone boundary.
+ * @returns {Promise<void>} - Resolves after the namespace removal is durable.
+ */
+async function removeReleasePruneTombstone(options) {
+  const inspected = await inspectReleasePruneTombstone({
+    ...options,
+    maximumArtifactBytes: SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_ARTIFACT_BYTES,
+  });
+  if (inspected.hasArtifact) {
+    await options.fsOps.unlink(path.join(inspected.directory, 'app'));
+    await syncDirectory(options.fsOps, inspected.directory);
+  }
+  if (inspected.hasReceipt) {
+    await options.fsOps.unlink(path.join(inspected.directory, 'release.json'));
+    await syncDirectory(options.fsOps, inspected.directory);
+  }
+  await options.fsOps.rmdir(inspected.directory);
+  await syncDirectory(options.fsOps, options.layout.releasesRoot);
 }
 
 /**
@@ -1059,79 +1554,14 @@ function validateUninstallMarker(value, expected) {
  * @returns {Promise<Readonly<Record<string, any>>>} - Verified release record.
  */
 async function stageRelease(options) {
-  const releaseDirectory = path.join(
-    options.layout.releasesRoot,
-    options.artifact.artifactId,
-  );
-  const releaseArtifactPath = path.join(releaseDirectory, 'app');
-  const releaseRecordPath = path.join(releaseDirectory, 'release.json');
-
-  /** @returns {Promise<Readonly<Record<string, any>>>} - Existing verified release. */
-  const readExisting = async () => {
-    await assertRealPath(
-      options.fsOps,
-      options.layout.releasesRoot,
-      'directory',
-      'Systemd user-service releases root',
-      options.uid,
+  if (
+    typeof options.token !== 'string' ||
+    !ATOMIC_PUBLICATION_TOKEN_PATTERN.test(options.token)
+  ) {
+    throw new Error(
+      'Systemd user-service release-stage publication token is invalid.',
     );
-    await assertRealPath(
-      options.fsOps,
-      releaseDirectory,
-      'directory',
-      'Systemd user-service release directory',
-      options.uid,
-    );
-    await assertRealPath(
-      options.fsOps,
-      releaseRecordPath,
-      'file',
-      'Systemd user-service release receipt',
-      options.uid,
-    );
-    await assertRealPath(
-      options.fsOps,
-      releaseArtifactPath,
-      'file',
-      'Systemd user-service release artifact',
-      options.uid,
-    );
-    const parsed = JSON.parse(
-      await readManagedTextFile({
-        fsOps: options.fsOps,
-        filePath: releaseRecordPath,
-        label: 'Systemd user-service release receipt',
-        uid: options.uid,
-      }),
-    );
-    const release = validateSystemdUserServiceRelease(parsed);
-    if (
-      release.appId !== options.pair.runtime.appId ||
-      release.revisionId !== options.pair.runtime.revisionId ||
-      getBuildTargetId(release.target) !==
-        getBuildTargetId(options.pair.runtime.target) ||
-      release.artifactPath !== releaseArtifactPath ||
-      !hasSameArtifactBytes(release, options.artifact)
-    ) {
-      throw new Error(
-        'Existing systemd user-service release does not match the packaged artifact.',
-      );
-    }
-    const observed = await options.inspectBytes(releaseArtifactPath);
-    if (!hasSameArtifactBytes(observed, options.artifact)) {
-      throw new Error(
-        'Existing systemd user-service release bytes failed verification.',
-      );
-    }
-    return release;
-  };
-
-  try {
-    return await readExisting();
-  } catch (error) {
-    if (!hasCode(error, 'ENOENT')) throw error;
   }
-
   await options.fsOps.mkdir(options.layout.releasesRoot, {
     recursive: true,
     mode: 0o700,
@@ -1143,12 +1573,81 @@ async function stageRelease(options) {
     'Systemd user-service releases root',
     options.uid,
   );
+
+  const namespace = await inspectReleasePruneNamespace({
+    fsOps: options.fsOps,
+    layout: options.layout,
+    inspectBytes: options.inspectBytes,
+    uid: options.uid,
+  });
+  for (const stagingTemporary of namespace.stagingTemps) {
+    await removeReleaseStageTemporary({
+      fsOps: options.fsOps,
+      layout: options.layout,
+      uid: options.uid,
+      name: path.basename(stagingTemporary.directory),
+    });
+  }
+
+  const releaseDirectory = path.join(
+    options.layout.releasesRoot,
+    options.artifact.artifactId,
+  );
+  const releaseArtifactPath = path.join(releaseDirectory, 'app');
+  const existing = namespace.releases.find(
+    (release) => release.artifactId === options.artifact.artifactId,
+  );
+  if (existing) {
+    if (
+      existing.appId !== options.pair.runtime.appId ||
+      existing.revisionId !== options.pair.runtime.revisionId ||
+      existing.artifactPath !== releaseArtifactPath ||
+      getBuildTargetId(existing.target) !==
+        getBuildTargetId(options.pair.runtime.target) ||
+      !hasSameArtifactBytes(existing, options.artifact)
+    ) {
+      throw new Error(
+        'Existing systemd user-service release does not match the packaged artifact.',
+      );
+    }
+    return existing;
+  }
+  if (
+    namespace.tombstones.some(
+      (tombstone) => tombstone.artifactId === options.artifact.artifactId,
+    )
+  ) {
+    throw new Error(
+      'Systemd user-service release artifact has an interrupted prune tombstone; run service prune before staging it again.',
+    );
+  }
+  if (
+    namespace.releases.length + namespace.tombstones.length >=
+    SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_DIRECTORY_ENTRIES
+  ) {
+    throw new Error(
+      'Systemd user-service release namespace is full; run service prune before staging another release.',
+    );
+  }
+  if (
+    !Number.isSafeInteger(options.artifact.size) ||
+    options.artifact.size < 0 ||
+    options.artifact.size >
+      SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_ARTIFACT_BYTES -
+        namespace.artifactBytes
+  ) {
+    throw new Error(
+      'Systemd user-service release namespace would exceed its logical artifact-byte limit; run service prune before staging another release.',
+    );
+  }
   const temporaryDirectory = path.join(
     options.layout.releasesRoot,
     `.${options.artifact.artifactId}.${options.token}.tmp`,
   );
+  let temporaryCreated = false;
   try {
     await options.fsOps.mkdir(temporaryDirectory, { mode: 0o700 });
+    temporaryCreated = true;
     const temporaryArtifact = path.join(temporaryDirectory, 'app');
     await options.fsOps.copyFile(
       options.artifactPath,
@@ -1200,26 +1699,19 @@ async function stageRelease(options) {
     // Commit the staged directory entries before publishing the directory
     // itself into the content-addressed release namespace.
     await syncDirectory(options.fsOps, temporaryDirectory);
-    try {
-      await options.fsOps.rename(temporaryDirectory, releaseDirectory);
-    } catch (error) {
-      if (!hasCode(error, 'EEXIST') && !hasCode(error, 'ENOTEMPTY')) {
-        throw error;
-      }
-      await options.fsOps.chmod(temporaryDirectory, 0o700);
-      await options.fsOps.rm(temporaryDirectory, {
-        recursive: true,
-        force: true,
-      });
-      return await readExisting();
-    }
+    await options.fsOps.rename(temporaryDirectory, releaseDirectory);
+    temporaryCreated = false;
     await syncDirectory(options.fsOps, options.layout.releasesRoot);
     return release;
   } catch (error) {
-    await options.fsOps.chmod(temporaryDirectory, 0o700).catch(() => undefined);
-    await options.fsOps
-      .rm(temporaryDirectory, { recursive: true, force: true })
-      .catch(() => undefined);
+    if (temporaryCreated) {
+      await removeReleaseStageTemporary({
+        fsOps: options.fsOps,
+        layout: options.layout,
+        uid: options.uid,
+        name: path.basename(temporaryDirectory),
+      }).catch(() => undefined);
+    }
     throw error;
   }
 }
@@ -1576,7 +2068,7 @@ function assertSharedPackagedStorage(layout, packagedStorage, environment) {
  * Create the packaged Linux systemd user-service operator. Construction is
  * side-effect free; every method resolves embedded identity lazily.
  * @param {Record<string, any>} [options] - Testable host adapters and roots.
- * @returns {Readonly<{install: () => Promise<Record<string, any>>, converge: () => Promise<Record<string, any>>, update: () => Promise<Record<string, any>>, rollback: () => Promise<Record<string, any>>, recover: () => Promise<Record<string, any>>, start: () => Promise<Record<string, any>>, stop: () => Promise<Record<string, any>>, restart: () => Promise<Record<string, any>>, status: () => Promise<Record<string, any>>, uninstall: () => Promise<Record<string, any>>}>} - Service operations.
+ * @returns {Readonly<{install: () => Promise<Record<string, any>>, converge: () => Promise<Record<string, any>>, update: () => Promise<Record<string, any>>, rollback: () => Promise<Record<string, any>>, recover: () => Promise<Record<string, any>>, prune: () => Promise<Record<string, any>>, start: () => Promise<Record<string, any>>, stop: () => Promise<Record<string, any>>, restart: () => Promise<Record<string, any>>, status: () => Promise<Record<string, any>>, uninstall: () => Promise<Record<string, any>>}>} - Service operations.
  */
 export function createSystemdUserServiceOperator(options = {}) {
   const platform = options.platform || process.platform;
@@ -4748,6 +5240,325 @@ export function createSystemdUserServiceOperator(options = {}) {
     });
   }
 
+  /**
+   * Remove only fully verified local release copies outside the settled ACTIVE
+   * selected/rollback authority. The app-scoped kernel lock spans the durable
+   * snapshot, complete bounded namespace preflight, rename-first deletion, and
+   * final verification.
+   * @returns {Promise<Record<string, any>>} - Stable release-prune receipt.
+   */
+  async function prune() {
+    try {
+      const context = await resolveContext();
+      const releaseLock = await acquireLock({
+        serviceRoot: context.layout.serviceRoot,
+        uid: context.uid,
+      });
+      try {
+        const artifact = await inspectBytes(artifactPath);
+        const invoking = Object.freeze({
+          artifactId: artifact.artifactId,
+          revisionId: context.pair.runtime.revisionId,
+        });
+        const activation = await readActivationSnapshot(context);
+        if (!activation) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-state-conflict',
+            'Systemd user-service release pruning requires an existing activation; run service install or service converge from the exact selected SEA.',
+            undefined,
+            PRUNE_MISSING_ACTIVATION_REMEDIATION,
+          );
+        }
+        if (
+          activation.phase !== LocalApplicationActivationPhase.ACTIVE ||
+          !activation.selected
+        ) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-recovery-required',
+            'Systemd user-service release pruning requires one settled ACTIVE activation.',
+            undefined,
+            PRUNE_RECOVERY_REMEDIATION,
+          );
+        }
+        if (!hasSameReleaseReference(activation.selected, invoking)) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-state-conflict',
+            'Service prune must be invoked by the exact currently selected SEA.',
+          );
+        }
+        const installation = await readInstallation(
+          context.layout,
+          context.uid,
+          context.filesystemUid,
+          context.pair.runtime.target,
+        );
+        if (!installation) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-state-conflict',
+            'Systemd user-service release pruning requires an exact installation receipt.',
+          );
+        }
+        const marker = await readUninstallMarker(context, installation);
+        if (marker) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-uninstall-recovery-required',
+            'Systemd user-service uninstall is incomplete; rerun service uninstall before pruning releases.',
+            undefined,
+            PRUNE_UNINSTALL_REMEDIATION,
+          );
+        }
+        const projection = Object.freeze({
+          appId: context.pair.runtime.appId,
+          current: activation.selected,
+          previous: activation.rollbackCandidate,
+        });
+        const releases = await readProjectionReleases(context, projection);
+        if (
+          !hasSameReleaseReference(installation.current, projection.current) ||
+          !hasSameReleaseReference(
+            installation.previous,
+            projection.previous,
+          ) ||
+          JSON.stringify(installation.current) !==
+            JSON.stringify(releases.current) ||
+          (releases.previous
+            ? JSON.stringify(installation.previous) !==
+              JSON.stringify(releases.previous)
+            : installation.previous !== null)
+        ) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-state-conflict',
+            'Systemd user-service installation receipt disagrees with settled release authority.',
+          );
+        }
+        const snapshot = await readStatusObservationSnapshot(
+          context,
+          activation,
+          installation,
+          marker,
+          invoking,
+        );
+        const blocker = classifyStatusSnapshotBlocker(
+          snapshot,
+          getActivationAuthority(activation),
+        );
+        if (blocker !== null || !snapshot.manager.includesFixedPath) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-state-conflict',
+            'Systemd user-service physical state is not coherent enough to prune releases.',
+          );
+        }
+        if (installation.state === 'installed') {
+          if (
+            !hasExactPhysicalProjection(
+              snapshot,
+              projection.current,
+              projection.previous,
+            )
+          ) {
+            throw createReleasePruneError(
+              'systemd-user-service-prune-state-conflict',
+              'Installed systemd user-service projection is not exact enough to prune releases.',
+            );
+          }
+        } else if (
+          snapshot.stateRoots.state !== 'managed' ||
+          snapshot.selected.state !== 'absent' ||
+          snapshot.unitFile.state !== 'absent' ||
+          snapshot.systemd.loadState !== 'not-found' ||
+          snapshot.systemd.activeState !== 'inactive' ||
+          snapshot.systemd.mainPid !== 0 ||
+          snapshot.systemd.needDaemonReload !== false
+        ) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-state-conflict',
+            'Uninstalled systemd user-service projection is not inert enough to prune releases.',
+          );
+        }
+
+        let namespace;
+        try {
+          namespace = await inspectReleasePruneNamespace({
+            fsOps,
+            layout: context.layout,
+            inspectBytes,
+            uid: context.filesystemUid,
+          });
+        } catch (error) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-release-invalid',
+            'Systemd user-service release namespace failed bounded integrity verification.',
+            error,
+          );
+        }
+        const protectedReferences = [
+          projection.current,
+          projection.previous,
+        ].filter(Boolean);
+        const retained = namespace.releases.filter((release) =>
+          protectedReferences.some((reference) =>
+            hasSameReleaseReference(release, reference),
+          ),
+        );
+        if (retained.length !== protectedReferences.length) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-state-conflict',
+            'Systemd user-service release namespace is missing settled authority.',
+          );
+        }
+        const candidates = namespace.releases.filter(
+          (release) =>
+            !protectedReferences.some((reference) =>
+              hasSameReleaseReference(release, reference),
+            ),
+        );
+
+        let resumedPruneCount = 0;
+        let recoveredStagingCount = 0;
+        /** @type {Array<Readonly<{artifactId: string, revisionId: string, artifactBytes: number}>>} */
+        const removed = [];
+        try {
+          for (const stagingTemporary of namespace.stagingTemps) {
+            await removeReleaseStageTemporary({
+              fsOps,
+              layout: context.layout,
+              uid: context.filesystemUid,
+              name: path.basename(stagingTemporary.directory),
+            });
+            recoveredStagingCount += 1;
+          }
+          for (const tombstone of namespace.tombstones) {
+            await removeReleasePruneTombstone({
+              fsOps,
+              layout: context.layout,
+              inspectBytes,
+              uid: context.filesystemUid,
+              name: path.basename(tombstone.directory),
+            });
+            resumedPruneCount += 1;
+          }
+          for (const candidate of candidates) {
+            const reverified = await readImmutableRelease({
+              fsOps,
+              layout: context.layout,
+              inspectBytes,
+              uid: context.filesystemUid,
+              artifactId: candidate.artifactId,
+              revisionId: candidate.revisionId,
+              maximumArtifactBytes:
+                SYSTEMD_USER_SERVICE_RELEASE_PRUNE_MAX_ARTIFACT_BYTES,
+            });
+            if (JSON.stringify(reverified) !== JSON.stringify(candidate)) {
+              throw new Error(
+                'Systemd user-service release changed after prune preflight.',
+              );
+            }
+            const releaseDirectory = path.join(
+              context.layout.releasesRoot,
+              candidate.artifactId,
+            );
+            const tombstoneName =
+              createSystemdUserServiceReleasePruneTombstoneName(candidate);
+            await fsOps.rename(
+              releaseDirectory,
+              path.join(context.layout.releasesRoot, tombstoneName),
+            );
+            await syncDirectory(fsOps, context.layout.releasesRoot);
+            await removeReleasePruneTombstone({
+              fsOps,
+              layout: context.layout,
+              inspectBytes,
+              uid: context.filesystemUid,
+              name: tombstoneName,
+            });
+            removed.push(
+              Object.freeze({
+                artifactId: candidate.artifactId,
+                revisionId: candidate.revisionId,
+                artifactBytes: candidate.size,
+              }),
+            );
+          }
+        } catch (error) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-incomplete',
+            'Systemd user-service release pruning was interrupted and is safe to retry.',
+            error,
+            PRUNE_RETRY_REMEDIATION,
+          );
+        }
+
+        let finalNamespace;
+        try {
+          finalNamespace = await inspectReleasePruneNamespace({
+            fsOps,
+            layout: context.layout,
+            inspectBytes,
+            uid: context.filesystemUid,
+          });
+        } catch (error) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-incomplete',
+            'Systemd user-service release pruning completed mutations but final verification failed.',
+            error,
+            PRUNE_RETRY_REMEDIATION,
+          );
+        }
+        if (
+          finalNamespace.tombstones.length !== 0 ||
+          finalNamespace.stagingTemps.length !== 0 ||
+          finalNamespace.releases.length !== protectedReferences.length ||
+          finalNamespace.releases.some(
+            (release) =>
+              !protectedReferences.some((reference) =>
+                hasSameReleaseReference(release, reference),
+              ),
+          )
+        ) {
+          throw createReleasePruneError(
+            'systemd-user-service-prune-incomplete',
+            'Systemd user-service release pruning did not converge on the protected release set.',
+            undefined,
+            PRUNE_RETRY_REMEDIATION,
+          );
+        }
+        const removedArtifactBytes = removed.reduce(
+          (total, release) => total + release.artifactBytes,
+          0,
+        );
+        return createSystemdUserServiceReleasePruneReceipt({
+          appId: context.pair.runtime.appId,
+          outcome:
+            removed.length === 0 &&
+            resumedPruneCount === 0 &&
+            recoveredStagingCount === 0
+              ? 'nothing-to-prune'
+              : 'pruned',
+          installationState: installation.state,
+          selected: projection.current,
+          rollback: projection.previous,
+          scannedReleaseCount: namespace.releases.length,
+          retainedReleaseCount: retained.length,
+          remainingReleaseCount: finalNamespace.releases.length,
+          removed,
+          removedCount: removed.length,
+          removedArtifactBytes,
+          resumedPruneCount,
+          recoveredStagingCount,
+        });
+      } finally {
+        await releaseLock();
+      }
+    } catch (error) {
+      if (isReleasePruneError(error)) throw error;
+      throw createReleasePruneError(
+        'systemd-user-service-prune-operation-failed',
+        'Systemd user-service release pruning failed before a safe result was available.',
+        error,
+      );
+    }
+  }
+
   /** @returns {Promise<Record<string, any>>} - Current service status. */
   async function status() {
     const context = await resolveContext();
@@ -5221,6 +6032,7 @@ export function createSystemdUserServiceOperator(options = {}) {
     update,
     rollback,
     recover,
+    prune,
     start,
     stop,
     restart,

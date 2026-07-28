@@ -337,6 +337,7 @@ lingering:
 <next-app> wharfie service update
 <next-app> wharfie service rollback
 <next-app> wharfie service recover
+<selected-app> wharfie service prune --json
 <app> wharfie service stop
 <app> wharfie service start
 <app> wharfie service restart
@@ -373,6 +374,25 @@ When the tombstone proves an intentional uninstall, `service install` or
 exact retained source before entering the ordinary durable update. If the
 receipt disappears without that tombstone, the operation fails closed and the
 exact selected SEA must run `service install` to repair it.
+
+Use `service prune` separately when accumulated local release copies should be
+removed. It is accepted only from the exact selected SEA with settled `ACTIVE`
+activation and a coherent installed or intentionally uninstalled projection.
+The command verifies the entire namespace before mutation, retains the selected
+and rollback releases, and removes only verified unreferenced content-addressed
+directories. Both prune and release staging enforce at most 128 namespace
+entries and 64 GiB of logical artifact bytes. Rename-first recovery tombstones
+make a killed prune safe to retry. Prune also authenticates interrupted private
+staging directories and removes them in the crash-safe `release.json`, `app`,
+directory order; a receipt without its staged app is refused. JSON kind
+`wharfie.service.release-prune` reports the removed releases, logical artifact
+byte lengths, `resumedPruneCount`, and `recoveredStagingCount`; it does not
+claim filesystem blocks reclaimed or garbage-collect run history, payloads,
+remote artifacts, or provider resources.
+
+If activation is in flight, run `service recover` before pruning. If activation
+is missing, there is no transition for recovery to resume: retry
+`service install` or `service converge` from the exact selected SEA instead.
 
 Status schema V3 reports `wiring.state` as `managed`, `absent`, `orphaned`,
 `conflicting`, or `unknown`; `wiring.selection` separately reports the redacted
