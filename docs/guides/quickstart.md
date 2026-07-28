@@ -18,6 +18,12 @@ Use the exact Node version in `package.json#engines` and the npm version in
 the project reset. The examples below use `wharfie` as shorthand for
 `node ./bin/wharfie` from the repository root.
 
+For the smallest product walkthrough, start with the
+[steady-file golden path](./golden-path.md). It runs as an ordinary CLI, then
+uses the same logic in a durable activity/timer/activity workflow and exposes
+the retained comparison through confirmed `output`. Its hermetic proof stops
+before the native source resident and packaged SEA execution.
+
 ## Create an app
 
 Create a `wharfie.app.js` beside your TypeScript or JavaScript sources. The

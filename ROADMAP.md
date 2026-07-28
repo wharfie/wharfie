@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-07-27
+**Last updated:** 2026-07-28
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -35,15 +35,18 @@ The repository has substantial foundations:
   effect semantics;
 - source and packaged commands for durable submission, workers, history,
   redacted inspection, confirmed logs, and confirmed logical output;
+- the `steady-file` golden-path application and a hermetic proof of ordinary
+  CLI execution, sealed source preparation, durable activity/timer/activity
+  continuation across a control-store reopen, and verified retained output;
 - a recoverable single-machine service lifecycle; and
 - extensive AWS-shaped deployment contracts, resource drivers, and mock-based
   proofs.
 
-That is useful machinery, but it is not yet the product proof. The repository
-still lacks one small, polished application that demonstrates the complete
-local-to-durable path. Automatic replacement of a failed coordinator is not
-proved. The cloud deployment work has not produced a successful clean-account
-end-to-end receipt.
+That is useful machinery, but it is not yet the complete product proof. The
+golden path still needs an explicitly gated real LMDB resident run, generated
+SEA execution, and service lifecycle proof. Automatic replacement of a failed
+coordinator is not proved. The cloud deployment work has not produced a
+successful clean-account end-to-end receipt.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -70,18 +73,15 @@ second application architecture.
 
 ### Work next
 
-1. Build one tiny golden-path application that is genuinely useful as a normal
-   local CLI and also exercises a durable activity, workflow, schedule, state,
-   restart, inspection, and update.
-2. Run that example through source and packaged modes. Record every extra
-   concept, flag, file, or command the user must understand.
-3. Collapse or delete APIs and configuration that do not serve the golden
-   path. Prefer strong defaults and one obvious command sequence.
-4. Make the example and its hermetic test the primary quickstart. Keep
-   privileged Linux/service proof separate and explicitly gated.
-5. Prove the packaged artifact can be moved to a clean supported host, run
+1. Run `steady-file` through the real source LMDB resident, then a generated
+   SEA, without changing its application logic.
+2. Use its recorded friction inventory to simplify only demonstrated blockers.
+   Prefer strong defaults and one obvious command sequence.
+3. Prove the packaged artifact can be moved to a clean supported host, run
    without Node in `PATH`, survive process and host restart, expose its durable
    history, and complete an explicit update and rollback.
+4. Add schedule, application state, or broader workflow behavior only when the
+   golden application has a real need for it.
 
 ### Exit evidence
 
@@ -187,21 +187,24 @@ there, inspect and update it through the executable, and destroy its owned
 substrate without unexplained residue. The proof begins in a clean account and
 ends with independently checked receipts.
 
-## Immediate slice
+## Immediate slice status
 
-Do not add another numbered roadmap tranche. The next bounded piece of work is
-the golden-path application and gap inventory:
+Do not add another numbered roadmap tranche. The portable half of the bounded
+local golden path and its classified findings are now concrete, but the slice
+is not complete until its native source and packaged paths are proved:
 
-1. choose a tiny intent-carrying CLI whose local behavior is useful on its own;
-2. express one durable workflow with a visible retained result and one schedule
-   or delayed continuation;
-3. exercise it through existing source commands using only hermetic,
-   non-privileged tests;
-4. package it and document the exact operator sequence;
-5. classify every failure as a missing product capability, needless interface
-   friction, or proof-only gap; and
-6. fix only what blocks the path before expanding coordinator or provider
-   machinery.
+1. `steady-file` compares two file observations for a useful local shell
+   decision;
+2. its durable workflow exposes a retained result after a delayed continuation;
+3. its hermetic proof closes and reopens portable control storage at the timer
+   boundary;
+4. the exact source and packaged operator sequences are documented but are not
+   executed by that hermetic proof;
+5. the remaining native resident and SEA steps stay explicit evidence gates;
+   and
+6. exposed findings are classified as proof gaps, interface friction, expected
+   design, or deliberate boundaries before more coordinator or provider
+   machinery is added.
 
 The preferred result is less framework surface and one compelling
 demonstration, not another broad layer of abstractions.

@@ -7,12 +7,20 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import appApi, { defineApp, invokeActivity } from '../../src/app.js';
+import { createSourceAppCommand } from '../../src/cli/cmds/app.js';
+import { createSourceOpsCommand } from '../../src/cli/cmds/ops.js';
+import { createProgram as createPackagedOperatorProgram } from '../../src/core/resources/builds/actor-system-cli/index.js';
+import {
+  isOperatorInvocation,
+  OPERATOR_NAMESPACE,
+} from '../../src/core/resources/builds/packaged-app-entry.js';
 import * as deploymentProfileApi from '../../src/deployment-profile.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 const docsToCheck = [
   'docs/README.md',
+  'docs/guides/golden-path.md',
   'docs/guides/quickstart.md',
   'docs/guides/installation.md',
   'docs/guides/application-structure.md',
@@ -43,6 +51,53 @@ const staleClaims = [
   'schema-v6 redacted run view',
   'Wharfie does not yet install it as an OS service',
 ];
+
+/**
+ * @param {import('commander').Command} parent
+ * @param {string} name
+ * @returns {import('commander').Command}
+ */
+function findCommand(parent, name) {
+  const command = parent.commands.find(
+    (candidate) => candidate.name() === name,
+  );
+  if (!command) {
+    throw new Error(`Expected '${parent.name()} ${name}' command.`);
+  }
+  return command;
+}
+
+/**
+ * @param {import('commander').Command} command
+ * @param {{
+ *   name: string,
+ *   arguments?: Array<{name: string, required: boolean, variadic: boolean}>,
+ *   options: string[],
+ *   requiredOptions?: string[]
+ * }} expected
+ */
+function expectCommandShape(
+  command,
+  { name, arguments: expectedArguments = [], options, requiredOptions = [] },
+) {
+  expect(command.name()).toBe(name);
+  expect(
+    command.registeredArguments.map((argument) => ({
+      name: argument.name(),
+      required: argument.required,
+      variadic: argument.variadic,
+    })),
+  ).toEqual(expectedArguments);
+  expect(command.options.map((option) => option.long).sort()).toEqual(
+    [...options].sort(),
+  );
+  expect(
+    command.options
+      .filter((option) => option.mandatory)
+      .map((option) => option.long)
+      .sort(),
+  ).toEqual([...requiredOptions].sort());
+}
 
 describe('docs command surface', () => {
   it('keeps the runtime app API aligned with its declared public exports', async () => {
@@ -322,6 +377,140 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('receipt.artifactCount');
     expect(quickstart).toContain('receipt.artifacts[0].path');
     expect(quickstart).toContain('"$artifact_path" wharfie service converge');
+  });
+
+  it('keeps every steady-file golden-path invocation on the mounted command surface', async () => {
+    const document = await fsp.readFile(
+      path.join(repoRoot, 'docs/guides/golden-path.md'),
+      'utf8',
+    );
+    const normalized = document
+      .replace(/\\\s*\n\s*/g, ' ')
+      .replace(/\s+/g, ' ');
+
+    expect(normalized).toContain(
+      'node ./scratch/examples/apps/steady-file/local.js /absolute/path/to/artifact.tar',
+    );
+    expect(normalized).toContain(
+      'node ./bin/wharfie app manifest ./scratch/examples/apps/steady-file',
+    );
+    expect(normalized).toContain(
+      `node ./bin/wharfie ops start --dir ./scratch/examples/apps/steady-file --workflow verify-stable --idempotency-key artifact-build-42 --input '{"path":"/absolute/path/to/artifact.tar"}' --json`,
+    );
+    expect(normalized).toContain(
+      'node ./bin/wharfie ops worker --dir ./scratch/examples/apps/steady-file',
+    );
+    expect(normalized).toContain(
+      'node ./bin/wharfie ops inspect --run-id <run-id> --json',
+    );
+    expect(normalized).toContain(
+      'node ./bin/wharfie ops output --app-id steady-file-demo --run-id <run-id> --confirm-sensitive-output --json',
+    );
+    expect(normalized).toContain(
+      'node ./bin/wharfie app package ./scratch/examples/apps/steady-file --target node24.13.1-darwin-arm64 --json',
+    );
+    expect(document).toContain('--target node24.13.1-linux-x64-glibc');
+    expect(normalized).toContain(
+      '<steady-file-artifact> /absolute/path/to/artifact.tar',
+    );
+    expect(normalized).toContain(
+      `<steady-file-artifact> wharfie start --workflow verify-stable --idempotency-key artifact-build-42 --input '{"path":"/absolute/path/to/artifact.tar"}' --json`,
+    );
+    expect(normalized).toContain('<steady-file-artifact> wharfie worker');
+    expect(normalized).toContain(
+      '<steady-file-artifact> wharfie output --run-id <run-id> --confirm-sensitive-output --json',
+    );
+
+    await expect(
+      fsp.access(
+        path.join(
+          repoRoot,
+          'scratch',
+          'examples',
+          'apps',
+          'steady-file',
+          'local.js',
+        ),
+      ),
+    ).resolves.toBeUndefined();
+    expect(OPERATOR_NAMESPACE).toBe('wharfie');
+    expect(
+      isOperatorInvocation([
+        'node',
+        '<steady-file-artifact>',
+        '/absolute/path/to/artifact.tar',
+      ]),
+    ).toBe(false);
+    expect(
+      isOperatorInvocation([
+        'node',
+        '<steady-file-artifact>',
+        'wharfie',
+        'start',
+      ]),
+    ).toBe(true);
+
+    const sourceApp = createSourceAppCommand();
+    expect(sourceApp.name()).toBe('app');
+    expectCommandShape(findCommand(sourceApp, 'manifest'), {
+      name: 'manifest',
+      arguments: [{ name: 'dir', required: false, variadic: false }],
+      options: ['--json', '--no-pretty'],
+    });
+    expectCommandShape(findCommand(sourceApp, 'package'), {
+      name: 'package',
+      arguments: [{ name: 'dir', required: false, variadic: false }],
+      options: ['--output-dir', '--target', '--json', '--no-pretty'],
+    });
+
+    const sourceOps = createSourceOpsCommand();
+    expect(sourceOps.name()).toBe('ops');
+    expectCommandShape(findCommand(sourceOps, 'start'), {
+      name: 'start',
+      options: [
+        '--dir',
+        '--workflow',
+        '--idempotency-key',
+        '--input',
+        '--caller-metadata',
+        '--json',
+      ],
+      requiredOptions: ['--workflow', '--idempotency-key'],
+    });
+    expectCommandShape(findCommand(sourceOps, 'worker'), {
+      name: 'worker',
+      options: ['--dir'],
+    });
+    expectCommandShape(findCommand(sourceOps, 'inspect'), {
+      name: 'inspect',
+      options: ['--run-id', '--json'],
+    });
+    expectCommandShape(findCommand(sourceOps, 'output'), {
+      name: 'output',
+      options: ['--app-id', '--run-id', '--confirm-sensitive-output', '--json'],
+    });
+
+    const packagedOperator = createPackagedOperatorProgram();
+    expect(packagedOperator.name()).toBe('wharfie');
+    expectCommandShape(findCommand(packagedOperator, 'start'), {
+      name: 'start',
+      options: [
+        '--workflow',
+        '--idempotency-key',
+        '--input',
+        '--caller-metadata',
+        '--json',
+      ],
+      requiredOptions: ['--workflow', '--idempotency-key'],
+    });
+    expectCommandShape(findCommand(packagedOperator, 'worker'), {
+      name: 'worker',
+      options: [],
+    });
+    expectCommandShape(findCommand(packagedOperator, 'output'), {
+      name: 'output',
+      options: ['--run-id', '--confirm-sensitive-output', '--json'],
+    });
   });
 
   it('documents the explicit sensitive activity-log disclosure boundary', async () => {

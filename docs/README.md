@@ -12,6 +12,11 @@ without an architectural rewrite.
 The project is being reset around that goal. Wharfie v1's Athena and table
 framework is no longer part of the product, and breaking changes are expected.
 
+The shortest concrete walkthrough is the
+[steady-file golden path](./guides/golden-path.md): one useful local CLI, the
+same logic in a durable activity/timer/activity workflow, a control-store
+reopen, and verified retained output.
+
 ## The intended path
 
 1. Write and run a normal TypeScript or JavaScript CLI locally.

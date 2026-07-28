@@ -15,10 +15,20 @@ metadata from `runtime.caller.metadata`, and returns a JSON result.
 
 ## Included applications
 
+### `apps/steady-file/wharfie.app.js`
+
+The product golden path. Its normal CLI checks whether one regular file has
+identical contents at two observations 250 milliseconds apart. Its durable
+workflow captures the same fingerprint, waits through a framework-owned timer,
+then compares fresh bytes and retains the logical matching/different result.
+See the
+[golden-path guide](../../docs/guides/golden-path.md).
+
 ### `apps/hello-world/wharfie.app.js`
 
-The primary approachable example. It defines a normal CLI, one named activity,
-one finite workflow, an hourly workflow schedule, and exact SEA targets.
+The smallest manifest-syntax example. It defines a normal CLI, one named
+activity, one finite workflow, an hourly workflow schedule, and exact SEA
+targets.
 
 ### `apps/kitchen-sink/wharfie.app.js`
 
@@ -31,6 +41,17 @@ dependency; use `hello-world` for the normal quick path.
 From the repository root:
 
 ```bash
+node ./scratch/examples/apps/steady-file/local.js /absolute/path/to/artifact
+
+node ./bin/wharfie app manifest ./scratch/examples/apps/steady-file
+
+node ./bin/wharfie ops start \
+  --dir ./scratch/examples/apps/steady-file \
+  --workflow verify-stable \
+  --idempotency-key artifact-build-42 \
+  --input '{"path":"/absolute/path/to/artifact"}' \
+  --json
+
 node ./bin/wharfie app manifest ./scratch/examples/apps/hello-world
 
 node ./bin/wharfie app run echo-event \

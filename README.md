@@ -26,6 +26,13 @@ The product goal is continuity:
 
 No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes cluster, or hosted orchestration service should be required on the target machine.
 
+The first product-level walkthrough is the
+[steady-file golden path](docs/guides/golden-path.md): a useful local file
+comparison CLI, the same logic carried through two observations separated by a
+durable timer and a portable control-store reopen, and a verified retained
+result. Its hermetic proof stops before native LMDB, SEA construction, systemd,
+and cloud execution.
+
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service
 startup uses a private environment-selected runtime command instead of
