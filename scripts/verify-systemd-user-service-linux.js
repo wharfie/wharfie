@@ -19,11 +19,13 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { createPackageTarball, readJson } from './package-verification.js';
+import { verifyPackageSeaArtifactHandoff } from './package-sea-verification.js';
 import {
   attachSeaInspector,
   spawnInspectorPausedProcess,
 } from './sea-inspector.js';
 import { createControlDBClient } from '../src/core/lib/config/db.js';
+import { parseApplicationPackageReceiptOutput } from '../src/cli/app/package-command-receipt.js';
 import {
   LocalApplicationActivationPhase,
   createLocalApplicationActivation,
@@ -31,6 +33,7 @@ import {
 import { LOCAL_APP_EXECUTION_LEDGER_TABLE } from '../src/core/runtime/local-app-storage.js';
 
 /** @typedef {ReturnType<typeof spawnInspectorPausedProcess>} InspectedCommand */
+/** @typedef {ReturnType<typeof parseApplicationPackageReceiptOutput>['artifacts'][number]} PackageArtifactReceipt */
 /**
  * @typedef SeaInspector
  * @property {(name: string, target: {sourceSuffix: string, anchor: string, occurrence?: number, expectedSourceContent?: string}) => Promise<Record<string, any>>} setSourceBreakpoint - Install an exact source-mapped breakpoint.
@@ -105,8 +108,8 @@ const RELEASE_PLACEHOLDER = '__WHARFIE_SYSTEMD_PROOF_RELEASE__';
 /**
  * @typedef ProofPackageArtifact
  * @property {string} artifactPath - Packaged SEA path.
- * @property {Record<string, any>} artifact - Package artifact receipt.
- * @property {Record<string, any>} revision - Embedded revision receipt.
+ * @property {PackageArtifactReceipt} artifact - Package artifact receipt.
+ * @property {string} revisionId - Owning logical application revision.
  */
 
 /**
@@ -581,24 +584,32 @@ function packageProofArtifacts(repoRoot) {
       '.bin',
       'wharfie',
     );
-    const result = parseJsonResult(
-      run(
-        process.execPath,
-        [
-          wharfieBin,
-          'app',
-          'package',
-          fixture,
-          '--output-dir',
-          outputDirectory,
-          '--target',
-          target,
-          '--no-pretty',
-        ],
-        { cwd: consumerRoot, env: process.env, timeoutMs: 600_000 },
-      ),
-      `installed-package ${label} proof artifact package`,
+    const packageLabel = `installed-package ${label} proof artifact package`;
+    const packageCommand = run(
+      process.execPath,
+      [
+        wharfieBin,
+        'app',
+        'package',
+        fixture,
+        '--output-dir',
+        outputDirectory,
+        '--target',
+        target,
+        '--no-pretty',
+      ],
+      { cwd: consumerRoot, env: process.env, timeoutMs: 600_000 },
     );
+    assert.equal(
+      packageCommand.status,
+      0,
+      `${packageLabel} exited unsuccessfully`,
+    );
+    const result = parseApplicationPackageReceiptOutput(
+      packageCommand.stdout,
+      packageLabel,
+    );
+    assert.equal(result.appId, APP_ID);
     assert.equal(result.artifacts?.length, 1);
     const artifact = result.artifacts[0];
     assert.equal(artifact.target?.platform, 'linux');
@@ -607,11 +618,26 @@ function packageProofArtifacts(repoRoot) {
     assert.equal(artifact.target?.libc, 'glibc');
     assert.equal(existsSync(artifact.path), true);
     assert.equal((statSync(artifact.path).mode & 0o111) !== 0, true);
-    assert.equal(artifact.revisionId, result.revision?.revisionId);
+    const authority = verifyPackageSeaArtifactHandoff({
+      receipt: result,
+      artifactBytes: readFileSync(artifact.path),
+      artifactRecord: readJson(artifact.recordPath),
+      embeddedManifest: runArtifactJson(
+        artifact.path,
+        ['wharfie', 'manifest', '--no-pretty'],
+        `${label} embedded manifest`,
+      ),
+      embeddedMetadata: runArtifactJson(
+        artifact.path,
+        ['wharfie', 'metadata', '--no-pretty'],
+        `${label} embedded metadata`,
+      ),
+    });
+    assert.equal(authority.revision.revisionId, result.revisionId);
     return {
       artifactPath: artifact.path,
       artifact,
-      revision: result.revision,
+      revisionId: authority.revision.revisionId,
     };
   }
 
@@ -698,9 +724,9 @@ function packageProofArtifacts(repoRoot) {
   );
   assert.equal(
     new Set([
-      source.artifact.revisionId,
-      healthyTarget.artifact.revisionId,
-      failingTarget.artifact.revisionId,
+      source.revisionId,
+      healthyTarget.revisionId,
+      failingTarget.revisionId,
     ]).size,
     3,
   );
@@ -716,14 +742,14 @@ function packageProofArtifacts(repoRoot) {
 
 /**
  * Reduce one package result to durable, non-secret proof evidence.
- * @param {{artifactPath: string, artifact: Record<string, any>}} packaged - Package result.
+ * @param {ProofPackageArtifact} packaged - Package result.
  * @returns {Readonly<Record<string, any>>} - Exact artifact evidence.
  */
 function createArtifactEvidence(packaged) {
   return Object.freeze({
     artifactPath: packaged.artifactPath,
     artifactId: packaged.artifact.artifactId,
-    revisionId: packaged.artifact.revisionId,
+    revisionId: packaged.revisionId,
     byteDigest: packaged.artifact.byteDigest,
     size: packaged.artifact.size,
     target: packaged.artifact.target,
@@ -1351,7 +1377,7 @@ function sudo(args) {
  * Install the root boot observer that proves automatic service readiness
  * before the proof user's first post-reboot login.
  * @param {string} repoRoot - Extracted repository root.
- * @param {{artifactPath: string, artifact: Record<string, any>}} packaged - Proof SEA evidence.
+ * @param {ProofPackageArtifact} packaged - Proof SEA evidence.
  * @param {Record<string, any>} serviceStatus - Last pre-reboot status.
  * @param {string} bootId - Pre-reboot kernel identity.
  * @param {string} runId - Workflow crossing the reboot.
@@ -1389,7 +1415,7 @@ function installBootObserver(
     xdgDataHome: path.join(homedir(), '.local', 'share'),
     appId: APP_ID,
     artifactId: packaged.artifact.artifactId,
-    revisionId: packaged.artifact.revisionId,
+    revisionId: packaged.revisionId,
     runId,
     timer: {
       timerId: timer.timerId,
@@ -2226,7 +2252,7 @@ async function prepare(repoRoot) {
     kind: 'wharfie.execution-ledger.workflow-start',
     appId: APP_ID,
     runId,
-    revisionId: packaged.revision.revisionId,
+    revisionId: packaged.revisionId,
     workflowId: WORKFLOW_ID,
     idempotencyKey,
     reused: false,
@@ -2251,7 +2277,7 @@ async function prepare(repoRoot) {
   const pendingHistory = listRuns(packaged.artifactPath);
   assertHistoryRun(pendingHistory, {
     runId,
-    revisionId: packaged.revision.revisionId,
+    revisionId: packaged.revisionId,
     status: 'RUNNING',
   });
   assert.deepEqual(readMarkers(), []);
@@ -2290,10 +2316,7 @@ async function prepare(repoRoot) {
     installed.installation.activeArtifactId,
     packaged.artifact.artifactId,
   );
-  assert.equal(
-    installed.installation.activeRevisionId,
-    packaged.artifact.revisionId,
-  );
+  assert.equal(installed.installation.activeRevisionId, packaged.revisionId);
   const converge = runArtifactJson(
     packaged.artifactPath,
     ['wharfie', 'service', 'converge', '--json'],
@@ -2304,7 +2327,7 @@ async function prepare(repoRoot) {
   assert.equal(converge.outcome, 'target-active');
   assert.equal(converge.health, 'healthy');
   assert.equal(converge.activeArtifactId, packaged.artifact.artifactId);
-  assert.equal(converge.activeRevisionId, packaged.artifact.revisionId);
+  assert.equal(converge.activeRevisionId, packaged.revisionId);
   const converged = readServiceStatus(packaged.artifactPath);
   assertHealthy(converged, sourceArtifact);
   assert.equal(converged.systemd.mainPid, installed.systemd.mainPid);
@@ -2392,7 +2415,7 @@ async function prepare(repoRoot) {
     appId: APP_ID,
     artifactPath: packaged.artifactPath,
     artifactId: packaged.artifact.artifactId,
-    revisionId: packaged.artifact.revisionId,
+    revisionId: packaged.revisionId,
     artifact: {
       byteDigest: packaged.artifact.byteDigest,
       size: packaged.artifact.size,
