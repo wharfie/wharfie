@@ -2,11 +2,11 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-07-29
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
-[checkpoints](llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md)
+[checkpoints](llm/checkpoints/2026-07-29-single-host-developer-preview.md)
 and [architecture decisions](docs/architecture/decisions/README.md), not in an
 ever-growing sequence of numbered tranches.
 
@@ -50,7 +50,11 @@ The repository has substantial foundations:
   from runtime `PATH`, and a
   [checksummed disposable-Ubuntu walkthrough](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md)
   of the literal packaged start, systemd install, later-process rediscovery,
-  meaningful update, rollback, retained reads, uninstall, and host cleanup;
+  meaningful update, rollback, retained reads, uninstall, and host cleanup,
+  now superseded as the acceptance gate by the
+  [split builder/clean-target developer preview](llm/checkpoints/2026-07-29-single-host-developer-preview.md),
+  which proves unfinished work across controller exit, explicit app-data
+  purge, and complete proof-owned cleanup;
 - a recoverable single-machine service lifecycle, now exercised by a
   [checksummed disposable-Ubuntu proof](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
   through install, automatic replacement, forced host restart, retained work,
@@ -59,13 +63,14 @@ The repository has substantial foundations:
 - extensive AWS-shaped deployment contracts, resource drivers, and mock-based
   proofs.
 
-That closes Outcome 1's bounded single-machine product proof. The focused
-`steady-file` run did not repeat crash or reboot recovery; the separate
-purpose-built service proof covers those substrate boundaries. The explicit
-epoch-authority kernel proves that a bound ledger can reject stale writers, but
-the production runtime does not bind it yet and neither run proves replacement
-of a failed coordinator by another machine. The cloud deployment work has not
-produced a successful clean-account end-to-end receipt.
+That closes Outcome 1's bounded single-machine product proof. The split
+`steady-file` run carried the same waiting durable timer across two controller
+processes; it did not repeat crash or reboot recovery, which remains covered by
+the separate purpose-built service proof. The explicit epoch-authority kernel
+proves that a bound ledger can reject stale writers, but the production runtime
+does not bind it yet and neither run proves replacement of a failed coordinator
+by another machine. The cloud deployment work has not produced a successful
+clean-account end-to-end receipt.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -95,8 +100,8 @@ second application architecture.
 
 ### Work next
 
-1. Keep the literal `steady-file` walkthrough as the regression gate for this
-   outcome.
+1. Keep the split builder/clean-target `steady-file` acceptance proof as the
+   regression gate for this outcome.
 2. Carrying a returned run ID was visible friction but did not block the
    sequence. Change discovery or app-scope ergonomics only when real use
    demands it.
@@ -105,13 +110,14 @@ second application architecture.
 
 ### Exit evidence
 
-A checksummed clean Linux arm64 run now shows a developer can copy the example,
-run it locally, package it, start it durably, install it, end the initiating
-process, return in a different process to inspect exact history and logical
-output, then update, roll back, uninstall, and clean up. The workflow happened
-to complete before the initiating verifier ended, so this focused receipt does
-not claim unfinished continuation across caller death; the installed service,
-retained state, and later rediscovery did cross that process boundary.
+A checksummed clean Linux arm64 run now shows a developer can install the
+starter from a tarball on one builder, run it locally, package it, transfer
+only the SEA handoff to a clean no-Node target, start it durably, and install
+it. The initiating controller exits while the workflow timer is still waiting;
+a different controller observes that same timer, then inspects exact history
+and logical output after service completion. The same run updates, rolls back,
+uninstalls, purges app data, preserves the external SEAs, and removes all
+proof-owned VMs and caches.
 
 ## Outcome 2: a failed coordinator can be safely replaced
 
@@ -228,18 +234,19 @@ ends with independently checked receipts.
 
 ## Immediate milestone: single-host developer preview
 
-**Status:** in progress
+**Status:** complete — 2026-07-29, proof commit `39be8d6`
 
 This milestone productizes the already proved single-machine runtime. It does
 not add another orchestration abstraction. An unfamiliar developer should be
 able to start from a supported example, install a verified Wharfie package
-tarball on a builder machine, produce one SEA, move only that application
-artifact to a clean Linux host, and use the artifact itself to carry unfinished
-work beyond the initiating shell.
+tarball on a builder machine, produce one SEA per application revision, move
+only the packaged application handoff to a clean Linux host, and use the
+artifacts themselves to carry unfinished work beyond the initiating shell.
 
-### Exit evidence
+### Accepted exit evidence
 
-One checksummed acceptance run must prove all of the following:
+The [checksummed acceptance run](llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+proves all of the following:
 
 1. the Wharfie npm tarball contains a supported starter application and is
    installed into a clean builder workspace without using a repository
@@ -259,27 +266,29 @@ One checksummed acceptance run must prove all of the following:
 8. the proof removes its builder, target, caches, package tarballs, and SEA
    build output while retaining only small checksummed receipts.
 
-### Work
+### Completed work
 
-1. Promote `steady-file` from repository scratch space into the supported
-   package, add the minimal starter metadata, and make package verification
+1. Promoted `steady-file` from repository scratch space into the supported
+   package, added the minimal starter metadata, and made package verification
    require it.
-2. Replace contradictory reset-era onboarding with one short tarball → starter
-   → SEA → service guide whose commands are checked against the mounted CLI.
+2. Replaced contradictory reset-era onboarding with one short tarball →
+   starter → SEA → service guide whose commands are checked against the
+   mounted CLI.
 3. Split the existing Linux walkthrough into builder and target boundaries and
-   make unfinished work at initiating-process exit a required assertion.
-4. Fix only friction or cleanup defects exposed by that literal journey, then
-   cut the developer-preview artifact and receipt.
+   made unfinished work at initiating-process exit a required assertion.
+4. Fixed the friction and cleanup defects exposed by that literal journey and
+   cut the developer-preview receipt.
 
 The supported starter, verified tarball handoff, canonical guide, unfinished
 timer assertion, explicit app-data purge, and clean builder/target acceptance
-harness are implemented. The remaining milestone gate is one successful
-checksummed acceptance receipt with complete proof-owned cleanup.
+harness are implemented and accepted at commit `39be8d6`. The retained
+builder, prepare, final, cleanup, and checksum receipts prove the complete
+sequence and proof-owned cleanup.
 
-The coordinator-authority kernel remains complete but intentionally unbound
-while this milestone is active. Runtime-wide coordinator replacement,
-provider-certified leases, multi-node placement, and cloud fulfillment resume
-only after the single-host preview closes.
+The single-host preview is closed. The coordinator-authority kernel remains
+complete but intentionally unbound; production authority binding and
+coordinator replacement are now the active Outcome 2 work. Provider-certified
+leases, multi-node placement, and cloud fulfillment remain later slices.
 
 ## Explicitly not now
 

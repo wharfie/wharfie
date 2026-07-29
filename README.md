@@ -27,7 +27,12 @@ The product goal is continuity:
 No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes cluster, or hosted orchestration service should be required on the target machine.
 
 The shortest product-level walkthrough is the
-[single-host developer preview](docs/guides/developer-preview.md). The full
+[single-host developer preview](docs/guides/developer-preview.md). Its
+[accepted split builder/clean-target checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+is the strongest current product evidence: unfinished durable work crosses an
+initiating-controller exit on a clean no-Node target. Its result remains
+inspectable through update, rollback, and uninstall; explicit purge then removes
+the application root and completes proof-owned cleanup. The full
 [steady-file golden path](docs/guides/golden-path.md) covers a useful local file
 comparison CLI, the same logic carried through two observations separated by a
 durable timer and a portable control-store reopen, and a verified retained
@@ -181,13 +186,13 @@ covers exact-unit startup, resident `SIGKILL` replacement, abrupt VM power
 loss, pre-login recovery, durable workflow continuation, all five post-commit
 update and rollback boundaries, all five failed-target source-restoration
 boundaries, ambiguous-response recovery, and state-preserving uninstall.
-The focused product walkthrough separately builds two meaningful `steady-file`
-revisions and proves packaged admission, install, later-process rediscovery,
-update through B, rollback through B to A, retained reads, uninstall, prune,
-and VM cleanup. The current developer-preview verifier strengthens that path
-with unfinished work across the initiating-process boundary and an explicit
-application-data purge; a fresh split builder/target receipt is still pending.
-It does not repeat the crash/reboot matrix.
+The accepted developer-preview proof separately builds two meaningful
+`steady-file` revisions, deletes its builder, and gives a clean no-Node target
+only the checksummed handoff. It proves packaged admission, install, unfinished
+work across the initiating-process boundary, later-process rediscovery, update
+through B, rollback through B to A, retained reads, uninstall, prune, explicit
+application-data purge, and complete VM/cache cleanup. It does not repeat the
+crash/reboot matrix.
 Multi-host leases and heartbeats are still later work. Exact-attempt historical
 log retrieval and explicitly confirmed exact-run logical output snapshots are
 available; ordinary inspection remains redacted, and live tail, search,
@@ -679,7 +684,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
-- [Steady-file systemd walkthrough checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md) — the latest restart point for the checksummed literal Linux arm64 product journey, the private-storage defect it exposed, complete cleanup, honest boundaries, and coordinator-replacement next work.
+- [Single-host developer preview checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md) — the accepted split builder/clean-target product journey, unfinished timer across controller exit, update/rollback, purge, checksums, complete cleanup, and Outcome 2 handoff.
+- [Steady-file systemd walkthrough checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md) — the preceding same-host Linux arm64 product journey and the private-storage defect it exposed.
 - [Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md) — the preceding restart point for the checksummed disposable-Ubuntu package, crash/reboot continuation, activation-recovery matrix, retained reads, uninstall/prune, cleanup, and next work.
 - [Steady-file native and SEA proof checkpoint](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md) — the preceding restart point for the real Darwin source LMDB resident, generated relocated SEA, corrected sandbox diagnosis, complete cleanup, and next work.
 - [Verified sensitive run-output checkpoint](llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md) — the preceding implementation restart point for exact app-scoped logical outputs, explicit disclosure gating, bounded terminal-safe transport, source/packaged parity, and next work.
@@ -1139,9 +1145,11 @@ The driver builds an exact checksummed A/B handoff, deletes the builder, then
 gives a clean no-Node target only that handoff and a literal input. It ends one
 host controller while the installed service has a waiting durable timer and
 requires a second controller process to observe that same unfinished run
-before completion, update, rollback, uninstall, prune, and purge. A successful
-receipt from this stronger split harness remains the final developer-preview
-gate. The older same-host successful receipts are recorded in the
+before completion, update, rollback, uninstall, prune, and purge. The successful
+commit-bound run is recorded in the
+[single-host developer preview
+checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md).
+The older same-host successful receipts are recorded in the
 [steady-file systemd walkthrough
 checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md).
 Wharfie does not yet provide schedule

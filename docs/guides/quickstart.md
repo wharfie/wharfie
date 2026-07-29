@@ -24,9 +24,10 @@ runs as an ordinary CLI, packages as an SEA, and uses the same fingerprinting
 logic in a durable activity/timer/activity workflow. The longer
 [golden-path guide](./golden-path.md) records the current command and evidence
 boundaries. A clean Ubuntu walkthrough already proves the same-host packaged
-service lifecycle; the active preview milestone is tightening that proof
-across separate builder and target boundaries with unfinished work at caller
-exit.
+service lifecycle, and the
+[accepted split builder/clean-target proof](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+closes the preview milestone with unfinished work at caller exit, explicit
+purge, and complete cleanup.
 
 ## Create an app
 

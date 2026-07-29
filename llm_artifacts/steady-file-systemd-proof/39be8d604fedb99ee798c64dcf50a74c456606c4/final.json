@@ -1,0 +1,968 @@
+{
+  "schemaVersion": 1,
+  "kind": "wharfie.steady-file-preview.target-complete",
+  "commit": "39be8d604fedb99ee798c64dcf50a74c456606c4",
+  "completedAt": 1785338112999,
+  "controllerProcessId": 29277,
+  "target": {
+    "uid": 1001,
+    "gid": 1001,
+    "home": "/home/wharfie",
+    "machineId": "ad9ccd0b8b644a2eb936210c0f496012",
+    "nodeAbsent": true,
+    "npmAbsent": true,
+    "linger": true
+  },
+  "processBoundary": {
+    "prepareControllerProcessId": 29059,
+    "verifyControllerProcessId": 29277,
+    "distinct": true,
+    "unfinishedAtPrepare": {
+      "observedAt": 1785337995026,
+      "timerId": "wft_xfjpd-a5MpLf48Z2FbrX6dmU6wda_i01otsUJANAVfU",
+      "scheduledAt": 1785337988800,
+      "dueAt": 1785338048800,
+      "remainingMs": 53774,
+      "view": {
+        "schemaVersion": 8,
+        "kind": "wharfie.execution-ledger.run",
+        "integrity": {
+          "verified": true
+        },
+        "run": {
+          "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+          "appId": "steady-file-demo",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "trigger": {
+            "kind": "workflow",
+            "workflowId": "verify-stable",
+            "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg"
+          },
+          "status": "RUNNING",
+          "version": 4,
+          "lastSequence": 4,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785337988800
+        },
+        "invocations": [
+          {
+            "invocationId": "wfi_55F-HvSCmnFhM3xUwzTrppcaDnZQVIvNQtHyoK_NOOY",
+            "activityId": "capture",
+            "status": "COMPLETED",
+            "generation": 1,
+            "version": 4,
+            "lastSequence": 4,
+            "createdAt": 1785337975929,
+            "updatedAt": 1785337988800,
+            "workflow": {
+              "workflowId": "verify-stable",
+              "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+              "continuationId": "wfc_rx9_duyX9g1P8FZhx5fKx9m0tk-Wyv_AczkbplfqwyY",
+              "stepId": "baseline",
+              "stepIndex": 0
+            }
+          }
+        ],
+        "attempts": [
+          {
+            "invocationId": "wfi_55F-HvSCmnFhM3xUwzTrppcaDnZQVIvNQtHyoK_NOOY",
+            "attemptId": "wla_OTkRD-12vDgWK8Ti9pcF-aGj_DG1yOV7BYU2T3XlS7o",
+            "status": "COMPLETED",
+            "generation": 1,
+            "version": 3,
+            "claimedAt": 1785337988719,
+            "startedAt": 1785337988734,
+            "updatedAt": 1785337988800,
+            "lastSequence": 4
+          }
+        ],
+        "effects": [],
+        "timers": [
+          {
+            "timerId": "wft_xfjpd-a5MpLf48Z2FbrX6dmU6wda_i01otsUJANAVfU",
+            "workflowId": "verify-stable",
+            "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+            "continuationId": "wfc_wsEbi-Ac6zkLlYCoQPoFCkpCo1NDprlEvFnzyXBFqgo",
+            "stepId": "stability-window",
+            "stepIndex": 1,
+            "status": "WAITING",
+            "scheduledAt": 1785337988800,
+            "dueAt": 1785338048800,
+            "version": 1,
+            "lastSequence": 4,
+            "createdAt": 1785337988800,
+            "updatedAt": 1785337988800
+          }
+        ],
+        "signalWaits": [],
+        "signalDeliveries": [],
+        "history": [
+          {
+            "sequence": 1,
+            "type": "workflow-run-created",
+            "observedAt": 1785337975929,
+            "actor": {
+              "kind": "workflow-operator",
+              "id": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+            }
+          },
+          {
+            "sequence": 2,
+            "type": "workflow-activity-claimed",
+            "observedAt": 1785337988719,
+            "actor": {
+              "kind": "resident-workflow",
+              "id": "steady-file-demo"
+            }
+          },
+          {
+            "sequence": 3,
+            "type": "workflow-activity-started",
+            "observedAt": 1785337988734,
+            "actor": {
+              "kind": "resident-workflow",
+              "id": "steady-file-demo"
+            }
+          },
+          {
+            "sequence": 4,
+            "type": "workflow-activity-succeeded",
+            "observedAt": 1785337988800,
+            "actor": {
+              "kind": "resident-workflow",
+              "id": "steady-file-demo"
+            }
+          }
+        ],
+        "workflowCursor": {
+          "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+          "appId": "steady-file-demo",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "workflowId": "verify-stable",
+          "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+          "stepId": "stability-window",
+          "stepIndex": 1,
+          "continuationId": "wfc_wsEbi-Ac6zkLlYCoQPoFCkpCo1NDprlEvFnzyXBFqgo",
+          "timerId": "wft_xfjpd-a5MpLf48Z2FbrX6dmU6wda_i01otsUJANAVfU",
+          "disposition": "TIMER_WAITING",
+          "outputs": [
+            {
+              "stepId": "baseline",
+              "stepIndex": 0
+            }
+          ],
+          "version": 4,
+          "lastSequence": 4,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785337988800
+        }
+      }
+    },
+    "unfinishedObservedAfterPrepareExit": {
+      "observedAt": 1785337996559,
+      "timerId": "wft_xfjpd-a5MpLf48Z2FbrX6dmU6wda_i01otsUJANAVfU",
+      "scheduledAt": 1785337988800,
+      "dueAt": 1785338048800,
+      "remainingMs": 52241,
+      "view": {
+        "schemaVersion": 8,
+        "kind": "wharfie.execution-ledger.run",
+        "integrity": {
+          "verified": true
+        },
+        "run": {
+          "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+          "appId": "steady-file-demo",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "trigger": {
+            "kind": "workflow",
+            "workflowId": "verify-stable",
+            "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg"
+          },
+          "status": "RUNNING",
+          "version": 4,
+          "lastSequence": 4,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785337988800
+        },
+        "invocations": [
+          {
+            "invocationId": "wfi_55F-HvSCmnFhM3xUwzTrppcaDnZQVIvNQtHyoK_NOOY",
+            "activityId": "capture",
+            "status": "COMPLETED",
+            "generation": 1,
+            "version": 4,
+            "lastSequence": 4,
+            "createdAt": 1785337975929,
+            "updatedAt": 1785337988800,
+            "workflow": {
+              "workflowId": "verify-stable",
+              "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+              "continuationId": "wfc_rx9_duyX9g1P8FZhx5fKx9m0tk-Wyv_AczkbplfqwyY",
+              "stepId": "baseline",
+              "stepIndex": 0
+            }
+          }
+        ],
+        "attempts": [
+          {
+            "invocationId": "wfi_55F-HvSCmnFhM3xUwzTrppcaDnZQVIvNQtHyoK_NOOY",
+            "attemptId": "wla_OTkRD-12vDgWK8Ti9pcF-aGj_DG1yOV7BYU2T3XlS7o",
+            "status": "COMPLETED",
+            "generation": 1,
+            "version": 3,
+            "claimedAt": 1785337988719,
+            "startedAt": 1785337988734,
+            "updatedAt": 1785337988800,
+            "lastSequence": 4
+          }
+        ],
+        "effects": [],
+        "timers": [
+          {
+            "timerId": "wft_xfjpd-a5MpLf48Z2FbrX6dmU6wda_i01otsUJANAVfU",
+            "workflowId": "verify-stable",
+            "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+            "continuationId": "wfc_wsEbi-Ac6zkLlYCoQPoFCkpCo1NDprlEvFnzyXBFqgo",
+            "stepId": "stability-window",
+            "stepIndex": 1,
+            "status": "WAITING",
+            "scheduledAt": 1785337988800,
+            "dueAt": 1785338048800,
+            "version": 1,
+            "lastSequence": 4,
+            "createdAt": 1785337988800,
+            "updatedAt": 1785337988800
+          }
+        ],
+        "signalWaits": [],
+        "signalDeliveries": [],
+        "history": [
+          {
+            "sequence": 1,
+            "type": "workflow-run-created",
+            "observedAt": 1785337975929,
+            "actor": {
+              "kind": "workflow-operator",
+              "id": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+            }
+          },
+          {
+            "sequence": 2,
+            "type": "workflow-activity-claimed",
+            "observedAt": 1785337988719,
+            "actor": {
+              "kind": "resident-workflow",
+              "id": "steady-file-demo"
+            }
+          },
+          {
+            "sequence": 3,
+            "type": "workflow-activity-started",
+            "observedAt": 1785337988734,
+            "actor": {
+              "kind": "resident-workflow",
+              "id": "steady-file-demo"
+            }
+          },
+          {
+            "sequence": 4,
+            "type": "workflow-activity-succeeded",
+            "observedAt": 1785337988800,
+            "actor": {
+              "kind": "resident-workflow",
+              "id": "steady-file-demo"
+            }
+          }
+        ],
+        "workflowCursor": {
+          "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+          "appId": "steady-file-demo",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "workflowId": "verify-stable",
+          "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+          "stepId": "stability-window",
+          "stepIndex": 1,
+          "continuationId": "wfc_wsEbi-Ac6zkLlYCoQPoFCkpCo1NDprlEvFnzyXBFqgo",
+          "timerId": "wft_xfjpd-a5MpLf48Z2FbrX6dmU6wda_i01otsUJANAVfU",
+          "disposition": "TIMER_WAITING",
+          "outputs": [
+            {
+              "stepId": "baseline",
+              "stepIndex": 0
+            }
+          ],
+          "version": 4,
+          "lastSequence": 4,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785337988800
+        }
+      }
+    }
+  },
+  "handoff": {
+    "sha256": "df84b5bdf46703d33a26d0a58cf9ed4e6c7a715f493071bbaee37ab17916d2cd",
+    "builderMachineId": "c68b1b4800e642d68ecc86f0a13b04c8"
+  },
+  "input": {
+    "path": "/home/wharfie/preview/artifact.tar",
+    "bytes": 43,
+    "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e"
+  },
+  "ordinary": {
+    "source": {
+      "path": "/home/wharfie/preview/artifact.tar",
+      "stable": true,
+      "baseline": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      },
+      "current": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      }
+    },
+    "target": {
+      "path": "/home/wharfie/preview/artifact.tar",
+      "stable": true,
+      "baseline": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      },
+      "current": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      }
+    }
+  },
+  "start": {
+    "schemaVersion": 1,
+    "kind": "wharfie.execution-ledger.workflow-start",
+    "appId": "steady-file-demo",
+    "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+    "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+    "workflowId": "verify-stable",
+    "idempotencyKey": "manual-ba8ab220-6912-41bf-b550-26afc035d130",
+    "reused": false,
+    "runStatus": "RUNNING",
+    "cursor": {
+      "disposition": "ACTIVITY_RUNNABLE",
+      "stepId": "baseline",
+      "stepIndex": 0
+    },
+    "nextActivation": {
+      "kind": "activity",
+      "status": "RUNNABLE"
+    }
+  },
+  "service": {
+    "install": {
+      "schemaVersion": 1,
+      "kind": "wharfie.service.result",
+      "action": "install",
+      "requestStatus": "fulfilled",
+      "appId": "steady-file-demo",
+      "outcome": "target-active",
+      "unit": "wharfie-steady-file-demo.service",
+      "health": "healthy",
+      "activeArtifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+      "activeRevisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+      "rollbackArtifactId": null,
+      "rollbackRevisionId": null,
+      "reason": null,
+      "blockingWork": null
+    },
+    "installed": {
+      "artifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+      "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+      "processId": 1543,
+      "generation": 1,
+      "releasePath": "/home/wharfie/.local/share/wharfie-nodejs/applications/steady-file-demo/releases/waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g/app",
+      "releaseSha256": "d19d7a50b391ba6c0782cda40606a370e93109a7666d3f487bb5b10591d26388"
+    },
+    "update": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "wharfie.service.result",
+        "action": "update",
+        "requestStatus": "fulfilled",
+        "appId": "steady-file-demo",
+        "outcome": "target-active",
+        "unit": "wharfie-steady-file-demo.service",
+        "health": "healthy",
+        "activeArtifactId": "waf1_7iSt25CVCt3UwA1WZJeFGCgt_WfGBPu_3hkCp6Lu36A",
+        "activeRevisionId": "wrv1_DWbJbUdjkUkLeQB--Uuc_SLaSYUSumkKcQaec2lsefU",
+        "rollbackArtifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+        "rollbackRevisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+        "reason": null,
+        "blockingWork": null
+      },
+      "active": {
+        "artifactId": "waf1_7iSt25CVCt3UwA1WZJeFGCgt_WfGBPu_3hkCp6Lu36A",
+        "revisionId": "wrv1_DWbJbUdjkUkLeQB--Uuc_SLaSYUSumkKcQaec2lsefU",
+        "processId": 2555,
+        "generation": 2,
+        "releasePath": "/home/wharfie/.local/share/wharfie-nodejs/applications/steady-file-demo/releases/waf1_7iSt25CVCt3UwA1WZJeFGCgt_WfGBPu_3hkCp6Lu36A/app",
+        "releaseSha256": "ee24addb90950addd4c00d5664978518282dfd67c604fbbfde1902a7a2eedfa0"
+      }
+    },
+    "rollback": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "wharfie.service.result",
+        "action": "rollback",
+        "requestStatus": "fulfilled",
+        "appId": "steady-file-demo",
+        "outcome": "target-active",
+        "unit": "wharfie-steady-file-demo.service",
+        "health": "healthy",
+        "activeArtifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+        "activeRevisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+        "rollbackArtifactId": "waf1_7iSt25CVCt3UwA1WZJeFGCgt_WfGBPu_3hkCp6Lu36A",
+        "rollbackRevisionId": "wrv1_DWbJbUdjkUkLeQB--Uuc_SLaSYUSumkKcQaec2lsefU",
+        "reason": null,
+        "blockingWork": null
+      },
+      "active": {
+        "artifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+        "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+        "processId": 2723,
+        "generation": 3,
+        "releasePath": "/home/wharfie/.local/share/wharfie-nodejs/applications/steady-file-demo/releases/waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g/app",
+        "releaseSha256": "d19d7a50b391ba6c0782cda40606a370e93109a7666d3f487bb5b10591d26388"
+      }
+    },
+    "uninstall": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "wharfie.service.result",
+        "action": "uninstall",
+        "requestStatus": "fulfilled",
+        "appId": "steady-file-demo",
+        "outcome": "uninstalled",
+        "unit": "wharfie-steady-file-demo.service",
+        "health": "absent",
+        "activeArtifactId": null,
+        "activeRevisionId": null,
+        "rollbackArtifactId": null,
+        "rollbackRevisionId": null,
+        "preserved": {
+          "releases": "/home/wharfie/.local/share/wharfie-nodejs/applications/steady-file-demo/releases",
+          "state": "/home/wharfie/.local/share/wharfie-nodejs/applications/steady-file-demo/state"
+        }
+      },
+      "status": {
+        "schemaVersion": 3,
+        "kind": "wharfie.service.status",
+        "appId": "steady-file-demo",
+        "unit": "wharfie-steady-file-demo.service",
+        "installation": {
+          "state": "uninstalled",
+          "lastArtifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+          "lastRevisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+        },
+        "systemd": {
+          "mainPid": 0,
+          "result": "success",
+          "execMainStatus": 0,
+          "loadState": "not-found",
+          "activeState": "inactive",
+          "subState": "dead",
+          "fragmentPath": "",
+          "dropInPaths": "",
+          "unitFileState": "",
+          "needDaemonReload": false
+        },
+        "runtime": {
+          "status": "STOPPED",
+          "artifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "generation": 3,
+          "session": "absent",
+          "currentOwner": false
+        },
+        "wiring": {
+          "state": "absent",
+          "unitFile": "absent",
+          "selection": "absent",
+          "effectiveUnit": "absent",
+          "cleanupPending": false
+        },
+        "health": "absent",
+        "activation": {
+          "phase": "ACTIVE",
+          "action": null,
+          "desired": {
+            "artifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+            "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+          },
+          "selected": {
+            "artifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+            "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+          },
+          "rollback": {
+            "artifactId": "waf1_7iSt25CVCt3UwA1WZJeFGCgt_WfGBPu_3hkCp6Lu36A",
+            "revisionId": "wrv1_DWbJbUdjkUkLeQB--Uuc_SLaSYUSumkKcQaec2lsefU"
+          },
+          "lastOutcome": "target-active"
+        },
+        "desiredConvergence": {
+          "schemaVersion": 1,
+          "kind": "wharfie.service.desired-convergence",
+          "appId": "steady-file-demo",
+          "unit": "wharfie-steady-file-demo.service",
+          "desired": {
+            "artifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+            "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+          },
+          "disposition": "authorized",
+          "basis": "durable-active"
+        }
+      },
+      "systemd": {
+        "show": {
+          "MainPID": "0",
+          "LoadState": "not-found",
+          "ActiveState": "inactive",
+          "SubState": "dead",
+          "FragmentPath": "",
+          "DropInPaths": "",
+          "UnitFileState": "",
+          "NeedDaemonReload": "no"
+        },
+        "isActive": {
+          "status": 4,
+          "output": "inactive"
+        },
+        "isEnabled": {
+          "status": 4,
+          "output": "not-found"
+        }
+      },
+      "stateRetainedUntilPurge": true
+    },
+    "prune": {
+      "schemaVersion": 1,
+      "kind": "wharfie.service.release-prune",
+      "action": "prune",
+      "requestStatus": "fulfilled",
+      "appId": "steady-file-demo",
+      "outcome": "nothing-to-prune",
+      "installationState": "uninstalled",
+      "selected": {
+        "artifactId": "waf1_0Z16ULORumwHgs2kBgajcOkxCadmbT9Ie7WxBZHSY4g",
+        "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+      },
+      "rollback": {
+        "artifactId": "waf1_7iSt25CVCt3UwA1WZJeFGCgt_WfGBPu_3hkCp6Lu36A",
+        "revisionId": "wrv1_DWbJbUdjkUkLeQB--Uuc_SLaSYUSumkKcQaec2lsefU"
+      },
+      "scannedReleaseCount": 2,
+      "retainedReleaseCount": 2,
+      "remainingReleaseCount": 2,
+      "removed": [],
+      "removedCount": 0,
+      "removedArtifactBytes": 0,
+      "resumedPruneCount": 0,
+      "recoveredStagingCount": 0
+    },
+    "purge": {
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "wharfie.service.result",
+        "action": "purge",
+        "requestStatus": "fulfilled",
+        "appId": "steady-file-demo",
+        "outcome": "purged",
+        "unit": "wharfie-steady-file-demo.service",
+        "health": "absent",
+        "activeArtifactId": null,
+        "activeRevisionId": null,
+        "rollbackArtifactId": null,
+        "rollbackRevisionId": null
+      },
+      "recovery": null,
+      "applicationRootAbsent": true,
+      "externalArtifactsPreserved": true
+    }
+  },
+  "run": {
+    "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+    "unfinishedHistoryAtPrepare": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.run-page",
+      "authority": "none",
+      "authoritative": false,
+      "integrity": {
+        "verified": true
+      },
+      "scope": {
+        "appId": "steady-file-demo"
+      },
+      "items": [
+        {
+          "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "kind": "workflow",
+          "status": "RUNNING",
+          "version": 4,
+          "lastSequence": 4,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785337988800
+        }
+      ],
+      "nextCursor": null
+    },
+    "unfinishedHistoryAfterPrepareExit": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.run-page",
+      "authority": "none",
+      "authoritative": false,
+      "integrity": {
+        "verified": true
+      },
+      "scope": {
+        "appId": "steady-file-demo"
+      },
+      "items": [
+        {
+          "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "kind": "workflow",
+          "status": "RUNNING",
+          "version": 4,
+          "lastSequence": 4,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785337988800
+        }
+      ],
+      "nextCursor": null
+    },
+    "completed": {
+      "schemaVersion": 8,
+      "kind": "wharfie.execution-ledger.run",
+      "integrity": {
+        "verified": true
+      },
+      "run": {
+        "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+        "appId": "steady-file-demo",
+        "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+        "trigger": {
+          "kind": "workflow",
+          "workflowId": "verify-stable",
+          "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg"
+        },
+        "status": "COMPLETED",
+        "version": 8,
+        "lastSequence": 8,
+        "createdAt": 1785337975929,
+        "updatedAt": 1785338049683
+      },
+      "invocations": [
+        {
+          "invocationId": "wfi_55F-HvSCmnFhM3xUwzTrppcaDnZQVIvNQtHyoK_NOOY",
+          "activityId": "capture",
+          "status": "COMPLETED",
+          "generation": 1,
+          "version": 4,
+          "lastSequence": 4,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785337988800,
+          "workflow": {
+            "workflowId": "verify-stable",
+            "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+            "continuationId": "wfc_rx9_duyX9g1P8FZhx5fKx9m0tk-Wyv_AczkbplfqwyY",
+            "stepId": "baseline",
+            "stepIndex": 0
+          }
+        },
+        {
+          "invocationId": "wfi_OA_W1xmdnqVVRJPRsz_sU5IZ4sm0xtRZ091szXTi-RI",
+          "activityId": "verify",
+          "status": "COMPLETED",
+          "generation": 1,
+          "version": 4,
+          "lastSequence": 8,
+          "createdAt": 1785338049457,
+          "updatedAt": 1785338049683,
+          "workflow": {
+            "workflowId": "verify-stable",
+            "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+            "continuationId": "wfc_9PpM_nDwcNq0Lu--4jh7Cn3hWH43n4bLVdGNgs5ZElU",
+            "stepId": "comparison",
+            "stepIndex": 2
+          }
+        }
+      ],
+      "attempts": [
+        {
+          "invocationId": "wfi_OA_W1xmdnqVVRJPRsz_sU5IZ4sm0xtRZ091szXTi-RI",
+          "attemptId": "wla_6YlomOvoXOcoiHakEyYeXp5FGWoXugr2jiJl-FjaOE0",
+          "status": "COMPLETED",
+          "generation": 1,
+          "version": 3,
+          "claimedAt": 1785338049563,
+          "startedAt": 1785338049598,
+          "updatedAt": 1785338049683,
+          "lastSequence": 8
+        },
+        {
+          "invocationId": "wfi_55F-HvSCmnFhM3xUwzTrppcaDnZQVIvNQtHyoK_NOOY",
+          "attemptId": "wla_OTkRD-12vDgWK8Ti9pcF-aGj_DG1yOV7BYU2T3XlS7o",
+          "status": "COMPLETED",
+          "generation": 1,
+          "version": 3,
+          "claimedAt": 1785337988719,
+          "startedAt": 1785337988734,
+          "updatedAt": 1785337988800,
+          "lastSequence": 4
+        }
+      ],
+      "effects": [],
+      "timers": [
+        {
+          "timerId": "wft_xfjpd-a5MpLf48Z2FbrX6dmU6wda_i01otsUJANAVfU",
+          "workflowId": "verify-stable",
+          "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+          "continuationId": "wfc_wsEbi-Ac6zkLlYCoQPoFCkpCo1NDprlEvFnzyXBFqgo",
+          "stepId": "stability-window",
+          "stepIndex": 1,
+          "status": "FIRED",
+          "scheduledAt": 1785337988800,
+          "dueAt": 1785338048800,
+          "firedAt": 1785338049457,
+          "version": 2,
+          "lastSequence": 5,
+          "createdAt": 1785337988800,
+          "updatedAt": 1785338049457
+        }
+      ],
+      "signalWaits": [],
+      "signalDeliveries": [],
+      "history": [
+        {
+          "sequence": 1,
+          "type": "workflow-run-created",
+          "observedAt": 1785337975929,
+          "actor": {
+            "kind": "workflow-operator",
+            "id": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58"
+          }
+        },
+        {
+          "sequence": 2,
+          "type": "workflow-activity-claimed",
+          "observedAt": 1785337988719,
+          "actor": {
+            "kind": "resident-workflow",
+            "id": "steady-file-demo"
+          }
+        },
+        {
+          "sequence": 3,
+          "type": "workflow-activity-started",
+          "observedAt": 1785337988734,
+          "actor": {
+            "kind": "resident-workflow",
+            "id": "steady-file-demo"
+          }
+        },
+        {
+          "sequence": 4,
+          "type": "workflow-activity-succeeded",
+          "observedAt": 1785337988800,
+          "actor": {
+            "kind": "resident-workflow",
+            "id": "steady-file-demo"
+          }
+        },
+        {
+          "sequence": 5,
+          "type": "workflow-timer-fired",
+          "observedAt": 1785338049457,
+          "actor": {
+            "kind": "resident-workflow-timer",
+            "id": "steady-file-demo"
+          }
+        },
+        {
+          "sequence": 6,
+          "type": "workflow-activity-claimed",
+          "observedAt": 1785338049563,
+          "actor": {
+            "kind": "resident-workflow",
+            "id": "steady-file-demo"
+          }
+        },
+        {
+          "sequence": 7,
+          "type": "workflow-activity-started",
+          "observedAt": 1785338049598,
+          "actor": {
+            "kind": "resident-workflow",
+            "id": "steady-file-demo"
+          }
+        },
+        {
+          "sequence": 8,
+          "type": "workflow-activity-succeeded",
+          "observedAt": 1785338049683,
+          "actor": {
+            "kind": "resident-workflow",
+            "id": "steady-file-demo"
+          }
+        }
+      ],
+      "workflowCursor": {
+        "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+        "appId": "steady-file-demo",
+        "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+        "workflowId": "verify-stable",
+        "planId": "wfp_SVldhmon68snGBVj4gUF2njjgilLRKCZb9MUVxx8Reg",
+        "stepId": "comparison",
+        "stepIndex": 2,
+        "continuationId": "wfc_9PpM_nDwcNq0Lu--4jh7Cn3hWH43n4bLVdGNgs5ZElU",
+        "invocationId": "wfi_OA_W1xmdnqVVRJPRsz_sU5IZ4sm0xtRZ091szXTi-RI",
+        "disposition": "COMPLETED",
+        "outputs": [
+          {
+            "stepId": "baseline",
+            "stepIndex": 0
+          },
+          {
+            "stepId": "stability-window",
+            "stepIndex": 1
+          },
+          {
+            "stepId": "comparison",
+            "stepIndex": 2
+          }
+        ],
+        "version": 8,
+        "lastSequence": 8,
+        "createdAt": 1785337975929,
+        "updatedAt": 1785338049683
+      }
+    },
+    "history": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.run-page",
+      "authority": "none",
+      "authoritative": false,
+      "integrity": {
+        "verified": true
+      },
+      "scope": {
+        "appId": "steady-file-demo"
+      },
+      "items": [
+        {
+          "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+          "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+          "kind": "workflow",
+          "status": "COMPLETED",
+          "version": 8,
+          "lastSequence": 8,
+          "createdAt": 1785337975929,
+          "updatedAt": 1785338049683
+        }
+      ],
+      "nextCursor": null
+    },
+    "historyItem": {
+      "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM",
+      "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+      "kind": "workflow",
+      "status": "COMPLETED",
+      "version": 8,
+      "lastSequence": 8,
+      "createdAt": 1785337975929,
+      "updatedAt": 1785338049683
+    },
+    "output": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.run-output",
+      "authority": "none",
+      "authoritative": false,
+      "disclosure": "application-sensitive-unredacted",
+      "integrity": {
+        "verified": true
+      },
+      "scope": {
+        "appId": "steady-file-demo",
+        "revisionId": "wrv1_2kepUZ9I6ebjHiQPdno9--UCNepX47xvjxIdN6rV-58",
+        "runId": "wfr_IfJDBvVAaHkGyl-M1ZhPxt7_mQwFTTaNYBrMjyI64MM"
+      },
+      "snapshot": {
+        "runKind": "workflow",
+        "status": "COMPLETED",
+        "version": 8,
+        "lastSequence": 8
+      },
+      "outputs": [
+        {
+          "stepId": "baseline",
+          "stepIndex": 0,
+          "value": {
+            "bytes": 43,
+            "path": "/home/wharfie/preview/artifact.tar",
+            "readStable": true,
+            "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e"
+          }
+        },
+        {
+          "stepId": "stability-window",
+          "stepIndex": 1,
+          "value": {
+            "dueAt": 1785338048800,
+            "firedAt": 1785338049457,
+            "scheduledAt": 1785337988800
+          }
+        },
+        {
+          "stepId": "comparison",
+          "stepIndex": 2,
+          "value": {
+            "baseline": {
+              "bytes": 43,
+              "readStable": true,
+              "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e"
+            },
+            "current": {
+              "bytes": 43,
+              "readStable": true,
+              "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e"
+            },
+            "path": "/home/wharfie/preview/artifact.tar",
+            "stable": true
+          }
+        }
+      ],
+      "terminal": {
+        "type": "completed",
+        "result": {
+          "baseline": {
+            "bytes": 43,
+            "readStable": true,
+            "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e"
+          },
+          "current": {
+            "bytes": 43,
+            "readStable": true,
+            "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e"
+          },
+          "path": "/home/wharfie/preview/artifact.tar",
+          "stable": true
+        }
+      }
+    },
+    "readsPreservedAcrossUpdate": true,
+    "readsPreservedAcrossRollback": true,
+    "readsPreservedAfterUninstall": true
+  }
+}

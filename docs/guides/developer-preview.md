@@ -6,9 +6,10 @@ build one application SEA, and let that executable install and operate its own
 Linux service.
 
 The tarball handoff, clean builder/target acceptance harness, and Linux
-lifecycle are implemented. The current milestone is not closed until that
-harness produces one checksummed receipt proving that a later process observes
-unfinished work before systemd completes it.
+lifecycle are implemented and accepted. The
+[checksummed checkpoint](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+proves that a later process observes the same unfinished work before systemd
+completes it.
 
 ## Run the acceptance proof
 
@@ -34,6 +35,12 @@ retains only bounded `builder.json`, `prepare.json`, `final.json`,
 `cleanup.json`, and `SHA256SUMS` under
 `llm_artifacts/steady-file-systemd-proof/<commit>/`. The disk preflight occurs
 before Lima creates a VM or downloads an image.
+
+The accepted commit is `39be8d604fedb99ee798c64dcf50a74c456606c4`;
+its [receipt directory](../../llm_artifacts/steady-file-systemd-proof/39be8d604fedb99ee798c64dcf50a74c456606c4/)
+and [checkpoint](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+are retained. The command remains a reusable regression gate for later
+commits.
 
 ## Create the Wharfie handoff
 

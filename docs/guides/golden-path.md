@@ -307,21 +307,24 @@ commit-bound acceptance run:
 The older checksummed walkthrough completed its workflow before the initiating
 verifier ended. The current verifier instead requires a still-waiting durable
 timer with at least 30 seconds remaining, exits that process, and requires a
-later process to observe the same timer before completion. A fresh acceptance
-receipt from the split harness remains the final developer-preview gate. The
-separate service-substrate proof covers crash and reboot recovery. Neither
-proof establishes replacement by another coordinator machine.
+later process to observe the same timer before completion. The
+[accepted split builder/clean-target checkpoint](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+records the successful commit-bound run and complete cleanup. The separate
+service-substrate proof covers crash and reboot recovery. Neither proof
+establishes replacement by another coordinator machine.
 
 ## Classified findings
 
 The walkthrough produced a short, prioritized list:
 
-1. **Closed integrated evidence gate:** the
-   [checksummed Linux arm64 walkthrough](../../llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md)
-   joins ordinary source execution, two generated application revisions,
-   default durable admission, systemd installation, later-process
-   rediscovery, update, rollback, retained reads, uninstall, prune, and host
-   cleanup without adding a new framework abstraction.
+1. **Closed developer-preview gate:** the
+   [checksummed split builder/clean-target proof](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+   joins tarball installation, ordinary execution, two generated revisions,
+   unfinished durable work across controller exit on a no-Node target,
+   systemd completion, later-process rediscovery, update, rollback, retained
+   reads, uninstall, prune, purge, and complete proof-owned cleanup. The
+   [older same-host walkthrough](../../llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md)
+   remains narrower preceding evidence.
 2. **Closed native/SEA evidence gate:** a
    [checksummed Darwin arm64 observation](../../llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
    ran the displayed source commands through a real LMDB resident, packaged
@@ -353,7 +356,8 @@ The walkthrough produced a short, prioritized list:
    data. Two observations do not justify dynamic delays, general scheduling,
    filesystem watching, or a new workflow language.
 
-The current single-host product baseline is closed for one Darwin source/SEA
-observation and one clean Linux arm64 service walkthrough. The next product
-slice is replacement of a failed coordinator by another trusted machine, not
-more single-host framework surface.
+The separate-builder/clean-target single-host developer preview is closed,
+with the Darwin source/SEA observation and same-host Linux service walkthrough
+retained as narrower supporting evidence. The next product slice is Outcome 2:
+replacement of a failed coordinator by another trusted machine, not more
+single-host framework surface.
