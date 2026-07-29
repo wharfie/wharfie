@@ -1339,8 +1339,10 @@ export function advanceSingleNodeDeploymentJournal(prior, phase) {
 
 /**
  * Return the durable create fence for a role, if one has been prepared.
- * Callers must treat a prepared-but-unresolved attempt as authority to
- * reconcile inventory, never as authority to issue another create request.
+ * Callers must reconcile inventory before acting on a prepared-but-unresolved
+ * attempt. A provider boundary may replay only the same deterministic request
+ * when its name or idempotency token makes that replay collision-safe; the
+ * fence never authorizes a different create.
  * @param {unknown} journal - Current journal.
  * @param {unknown} role - Provider resource role.
  * @returns {Readonly<Record<string, any>> | null} - Attempt evidence.
