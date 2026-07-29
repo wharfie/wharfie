@@ -42,6 +42,7 @@ import FunctionResource from '../../../src/core/resources/builds/function-resour
 import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
 import SeaBuild from '../../../src/core/resources/builds/sea-build.js';
+import ambientActorStateStore from '../../../src/core/lib/db/state/store.js';
 import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import {
   cleanupIsolatedAuthoredAppFixtures,
@@ -398,6 +399,78 @@ afterEach(() => {
 });
 
 describe('packageLocalApp', () => {
+  it('isolates package reconciliation from ambient actor state', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-package-state-isolation-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+    const ambientStateAccess = new Error(
+      'package reconciliation accessed ambient actor state',
+    );
+    const ambientStateSpies = [
+      jest
+        .spyOn(ambientActorStateStore, 'putResource')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'putResourceStatus')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'getResource')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'getResourceStatus')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'getResources')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'deleteResource')
+        .mockRejectedValue(ambientStateAccess),
+    ];
+
+    try {
+      await writeTransactionalPackageApp(dir, 'package-state-isolation', [
+        currentTarget,
+      ]);
+      jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+        /** @this {ActorSystem} */ async function () {
+          const packageStateStore = this.getStateDB();
+          expect(packageStateStore).not.toBe(ambientActorStateStore);
+          await packageStateStore.putResource(this);
+          await packageStateStore.putResourceStatus(this);
+          expect(await packageStateStore.getResource(this)).toBeUndefined();
+          expect(
+            await packageStateStore.getResourceStatus(this),
+          ).toBeUndefined();
+          expect(
+            await packageStateStore.getResources(this.getName(), 'SeaBuild'),
+          ).toEqual([]);
+          await packageStateStore.deleteResource(this);
+
+          const buildDir = path.join(dir, '.fake-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
+          for (const resource of this.getResources()) {
+            expect(resource.getStateDB()).toBe(packageStateStore);
+            if (!(resource instanceof SeaBuild)) continue;
+            const binaryPath = path.join(buildDir, resource.name);
+            await fsp.writeFile(binaryPath, 'isolated package bytes', 'utf8');
+            resource._setUNSAFE('binaryPath', binaryPath);
+          }
+        },
+      );
+
+      const result = await packageLocalApp({ dir, outputDir });
+
+      expect(result.artifacts).toHaveLength(1);
+      expect(existsSync(result.artifacts[0].path)).toBe(true);
+      for (const spy of ambientStateSpies) {
+        expect(spy).not.toHaveBeenCalled();
+      }
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('infers one exact host target when a manifest omits targets', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-host-target-package-'),

@@ -59,6 +59,37 @@ import {
 } from './package-artifact-file-name.js';
 
 /**
+ * Package build graphs are fresh, process-local reconciliation plans. Their
+ * resource status is useful in memory while dependencies settle, but persisting
+ * it would couple a deterministic build to unrelated actor-runtime state.
+ * @returns {Promise<void>} - Completed non-persisting state mutation.
+ */
+async function ignorePackageBuildStateMutation() {}
+
+/**
+ * @returns {Promise<undefined>} - Package builds never restore resource state.
+ */
+async function readMissingPackageBuildState() {
+  return undefined;
+}
+
+/**
+ * @returns {Promise<never[]>} - Package builds never restore resource lists.
+ */
+async function readNoPackageBuildResources() {
+  return [];
+}
+
+const PACKAGE_BUILD_STATE_STORE = Object.freeze({
+  putResource: ignorePackageBuildStateMutation,
+  putResourceStatus: ignorePackageBuildStateMutation,
+  getResource: readMissingPackageBuildState,
+  getResourceStatus: readMissingPackageBuildState,
+  getResources: readNoPackageBuildResources,
+  deleteResource: ignorePackageBuildStateMutation,
+});
+
+/**
  * @typedef JsonPrintOptions
  * @property {boolean} [pretty] - pretty.
  */
@@ -572,6 +603,9 @@ function toPackageableActorSystem(loaded) {
     properties,
     dependencyLock: loaded.dependencyLock,
     nodeDownloadProgress: loaded.nodeDownloadProgress,
+    runtime: {
+      stateStore: PACKAGE_BUILD_STATE_STORE,
+    },
   });
 }
 
