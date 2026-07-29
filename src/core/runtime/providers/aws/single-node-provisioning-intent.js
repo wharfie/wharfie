@@ -14,6 +14,7 @@ import { validateAwsSingleNodePlan } from './single-node-plan.js';
 export const AWS_PROVISIONING_INTENT_SCHEMA_VERSION = 1;
 export const AWS_PROVISIONING_INTENT_KIND = 'awsSingleNodeProvisioningIntent';
 export const AWS_PROVISIONING_INTENT_ID_PREFIX = 'wsapi1';
+export const AWS_PROVISIONING_MUTATION_REQUEST_CONTRACT_VERSION = 1;
 
 const PROVISIONING_INTENT_ID_DOMAIN =
   'wharfie:aws-single-node-provisioning-intent:v1';
@@ -23,6 +24,7 @@ const DOCUMENT_KEYS = new Set([
   'schemaVersion',
   'kind',
   'provisioningIntentId',
+  'mutationRequestContractVersion',
   ...INPUT_KEYS,
 ]);
 
@@ -93,6 +95,8 @@ function canonicalPayload(value, valuePath) {
     sortCanonicalJsonValue({
       schemaVersion: AWS_PROVISIONING_INTENT_SCHEMA_VERSION,
       kind: AWS_PROVISIONING_INTENT_KIND,
+      mutationRequestContractVersion:
+        AWS_PROVISIONING_MUTATION_REQUEST_CONTRACT_VERSION,
       plan,
       incarnationId: input.incarnationId,
       cloudInitDigest,
@@ -143,6 +147,14 @@ export function validateAwsSingleNodeProvisioningIntent(
   ) {
     throw new TypeError(`${valuePath} has an unsupported contract.`);
   }
+  if (
+    document.mutationRequestContractVersion !==
+    AWS_PROVISIONING_MUTATION_REQUEST_CONTRACT_VERSION
+  ) {
+    throw new TypeError(
+      `${valuePath}.mutationRequestContractVersion is unsupported.`,
+    );
+  }
   assertDomainSeparatedSha256Id(
     document.provisioningIntentId,
     AWS_PROVISIONING_INTENT_ID_PREFIX,
@@ -176,6 +188,7 @@ export default {
   AWS_PROVISIONING_INTENT_ID_PREFIX,
   AWS_PROVISIONING_INTENT_KIND,
   AWS_PROVISIONING_INTENT_SCHEMA_VERSION,
+  AWS_PROVISIONING_MUTATION_REQUEST_CONTRACT_VERSION,
   createAwsSingleNodeProvisioningIntent,
   validateAwsSingleNodeProvisioningIntent,
 };
