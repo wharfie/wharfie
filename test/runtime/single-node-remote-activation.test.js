@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
@@ -751,5 +752,63 @@ describe('single-node remote activation', () => {
     expect(
       remote.calls.some((call) => call.argv[0] === '/usr/bin/install'),
     ).toBe(false);
+  });
+
+  it('streams an already-authenticated embedded source without reopening a path', async () => {
+    const fixture = await makeFixture();
+    const remote = makeRemote(fixture);
+    const close = jest.fn(async () => {});
+    const openArtifactSource = jest.fn(async () => {
+      throw new Error('artifact path must not be opened');
+    });
+    const observation = Object.freeze({
+      artifactId: fixture.desired.artifact.artifactId,
+      byteDigest: fixture.desired.artifact.byteDigest,
+      size: fixture.desired.artifact.size,
+    });
+    const artifactSource = Object.freeze({
+      observation,
+      createReadStream: () => Readable.from([fixture.artifactBytes]),
+      verifyUnchanged: async () => observation,
+      close,
+    });
+    const harness = makeActivator(fixture, remote, { openArtifactSource });
+    const input = /** @type {Record<string, any>} */ ({
+      ...harness.input,
+      artifactSource,
+    });
+    delete input.artifactPath;
+
+    const evidence = await harness.activator.activate(input);
+
+    expect(evidence.artifact.artifactId).toBe(
+      fixture.desired.artifact.artifactId,
+    );
+    expect(openArtifactSource).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(remote.files.get(evidence.artifact.remotePath)).toEqual(
+      fixture.artifactBytes,
+    );
+  });
+
+  it('requires exactly one filesystem path or held artifact source', async () => {
+    const fixture = await makeFixture();
+    const remote = makeRemote(fixture);
+    const harness = makeActivator(fixture, remote);
+
+    await expect(
+      harness.activator.activate({
+        ...harness.input,
+        artifactSource: {},
+      }),
+    ).rejects.toThrow(/exactly one artifactPath or artifactSource/iu);
+    const neither = /** @type {Record<string, any>} */ ({
+      ...harness.input,
+    });
+    delete neither.artifactPath;
+    await expect(harness.activator.activate(neither)).rejects.toThrow(
+      /exactly one artifactPath or artifactSource/iu,
+    );
+    expect(remote.calls).toHaveLength(0);
   });
 });

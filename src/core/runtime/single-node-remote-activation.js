@@ -36,12 +36,19 @@ export const SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_MAX_BYTES = 32 * 1024;
 export const SINGLE_NODE_REMOTE_ACTIVATION_MAX_READINESS_ATTEMPTS = 24;
 export const SINGLE_NODE_REMOTE_ACTIVATION_RETRY_DELAY_MILLISECONDS = 5_000;
 
-const ACTIVATION_KEYS = new Set([
+const ACTIVATION_COMMON_KEYS = [
   'desired',
   'incarnationId',
   'providerAddress',
   'sshIdentity',
+];
+const ACTIVATION_PATH_KEYS = new Set([
+  ...ACTIVATION_COMMON_KEYS,
   'artifactPath',
+]);
+const ACTIVATION_SOURCE_KEYS = new Set([
+  ...ACTIVATION_COMMON_KEYS,
+  'artifactSource',
 ]);
 const SSH_IDENTITY_KEYS = new Set([
   'privateKeyPath',
@@ -266,9 +273,20 @@ function validateSshIdentity(value) {
  * @returns {Readonly<Record<string, any>>} - Validated input.
  */
 function validateActivationInput(value) {
+  const object =
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? value
+      : {};
+  const hasArtifactPath = Object.hasOwn(object, 'artifactPath');
+  const hasArtifactSource = Object.hasOwn(object, 'artifactSource');
+  if (hasArtifactPath === hasArtifactSource) {
+    throw new TypeError(
+      'singleNodeRemoteActivation requires exactly one artifactPath or artifactSource.',
+    );
+  }
   const input = snapshotExactObject(
     value,
-    ACTIVATION_KEYS,
+    hasArtifactPath ? ACTIVATION_PATH_KEYS : ACTIVATION_SOURCE_KEYS,
     'singleNodeRemoteActivation',
   );
   const desired = validateSingleNodeDeploymentDesired(
@@ -279,15 +297,29 @@ function validateActivationInput(value) {
     input.incarnationId,
     'singleNodeRemoteActivation.incarnationId',
   );
+  if (
+    hasArtifactSource &&
+    (input.artifactSource === null ||
+      typeof input.artifactSource !== 'object' ||
+      Array.isArray(input.artifactSource))
+  ) {
+    throw new TypeError(
+      'singleNodeRemoteActivation.artifactSource must be a held source.',
+    );
+  }
   return Object.freeze({
     desired,
     incarnationId: input.incarnationId,
     providerAddress: providerAddressValue(input.providerAddress),
     sshIdentity: validateSshIdentity(input.sshIdentity),
-    artifactPath: localPathValue(
-      input.artifactPath,
-      'singleNodeRemoteActivation.artifactPath',
-    ),
+    ...(hasArtifactPath
+      ? {
+          artifactPath: localPathValue(
+            input.artifactPath,
+            'singleNodeRemoteActivation.artifactPath',
+          ),
+        }
+      : { artifactSource: input.artifactSource }),
   });
 }
 
@@ -1034,7 +1066,9 @@ export function createSingleNodeRemoteActivator(options) {
         expectedBootstrapIdentity(input),
       );
 
-      const source = await openArtifactSource(input.artifactPath);
+      const source = Object.hasOwn(input, 'artifactSource')
+        ? input.artifactSource
+        : await openArtifactSource(input.artifactPath);
       return await withClosedArtifactSource(source, async (artifactSource) => {
         if (
           typeof artifactSource.createReadStream !== 'function' ||
