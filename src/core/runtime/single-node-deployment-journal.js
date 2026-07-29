@@ -1,0 +1,2137 @@
+/* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- This strict durable-state boundary keeps its exact schemas and transition contracts together. */
+
+import { randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
+import { link, lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
+import { isIPv4 } from 'node:net';
+import path from 'node:path';
+import process from 'node:process';
+
+import { validateSha256Digest } from './application-revision.js';
+import { assertArtifactId } from './artifact-record.js';
+import { sortCanonicalJsonValue } from './canonical-order.js';
+import {
+  assertDomainSeparatedSha256Id,
+  createCanonicalJsonSha256Id,
+} from './content-id.js';
+import { cloneBoundedJsonObject } from './json-value.js';
+import {
+  createLocalAppStorageLayout,
+  resolveStableLocalAppDataRoot,
+} from './local-app-storage.js';
+import { assertLogicalId } from './logical-id.js';
+import { assertManifestIsSecretFree } from './manifest-security.js';
+import {
+  createHetznerProvisionedResourceRecord,
+  validateHetznerProvisionedResourceRecord,
+  validateHetznerProvisioningMutationAttempt,
+  validateHetznerSingleNodeProvisioningIntent,
+} from './providers/hetzner/single-node-provisioning.js';
+import { validateSingleNodeDeploymentDesired } from './single-node-deployment-desired.js';
+import {
+  assertSingleNodeDeploymentIncarnationId,
+  assertSingleNodeDeploymentInstanceId,
+} from './single-node-deployment-identity.js';
+import { validateSingleNodeRemoteActivationEvidence } from './single-node-remote-activation.js';
+
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION = 1;
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND =
+  'singleNodeDeploymentJournal';
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN =
+  'wharfie:single-node-deployment-journal:v1';
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX = 'wsnj1';
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES = 1024 * 1024;
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS = 4096;
+
+const PRIVATE_DIRECTORY_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
+const DEPLOYMENTS_DIRECTORY_NAME = 'single-node-deployments';
+const STORAGE_VERSION_DIRECTORY_NAME = 'v1';
+const JOURNAL_DIRECTORY_NAME = 'journal';
+const JOURNAL_FILE_PATTERN = /^journal-([0-9]{16})\.json$/u;
+const JOURNAL_TEMP_PATTERN =
+  /^\.journal-([0-9]{16})-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.tmp$/u;
+const SSH_FINGERPRINT_PATTERN = /^SHA256:([A-Za-z0-9+/]{43})$/u;
+const HETZNER_RESOURCE_ROLES = new Set(['firewall', 'primaryIp', 'server']);
+const PHASES = new Set([
+  'planned',
+  'provisioning',
+  'provisioned',
+  'activating',
+  'active',
+  'destroying',
+  'destroyed',
+]);
+/** @type {Readonly<Record<string, Set<string>>>} */
+const NEXT_PHASES = Object.freeze({
+  planned: new Set(['provisioning', 'destroying']),
+  provisioning: new Set(['provisioned', 'destroying']),
+  provisioned: new Set(['activating', 'destroying']),
+  activating: new Set(['active', 'destroying']),
+  active: new Set(['destroying']),
+  destroying: new Set(['destroyed']),
+  destroyed: new Set(),
+});
+const PAYLOAD_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'generation',
+  'previousJournalId',
+  'deploymentInstanceId',
+  'incarnationId',
+  'desired',
+  'providerIntent',
+  'phase',
+  'mutationAttempts',
+  'resources',
+  'sshHost',
+  'artifact',
+  'activation',
+]);
+const DOCUMENT_KEYS = new Set(['journalId', ...PAYLOAD_KEYS]);
+const INITIALIZE_KEYS = new Set(['desired', 'providerIntent']);
+const PROVIDER_INTENT_KEYS = new Set(['provider', 'intent']);
+const RESOURCE_KEYS = new Set([
+  'provider',
+  'role',
+  'providerResourceId',
+  'publicIpv4',
+  'state',
+]);
+const MUTATION_ATTEMPT_KEYS = new Set([
+  'provider',
+  'role',
+  'operation',
+  'state',
+  'providerResourceId',
+  'evidence',
+]);
+const SSH_HOST_KEYS = new Set(['address', 'algorithm', 'fingerprint']);
+const ARTIFACT_KEYS = new Set([
+  'artifactId',
+  'byteDigest',
+  'size',
+  'remotePath',
+]);
+const COMMIT_KEYS = new Set([
+  'expectedGeneration',
+  'expectedJournalId',
+  'next',
+]);
+const STORE_REQUIRED_KEYS = new Set(['appId', 'deploymentInstanceId']);
+const STORE_OPTION_KEYS = new Set([
+  ...STORE_REQUIRED_KEYS,
+  'dataRoot',
+  'platform',
+  'homeDirectory',
+  'expectedUid',
+]);
+
+/** Durable journal bytes or their filesystem envelope are invalid. */
+export class SingleNodeDeploymentJournalInvalidError extends Error {
+  constructor() {
+    super('Single-node deployment journal state is invalid.');
+    this.name = 'SingleNodeDeploymentJournalInvalidError';
+    this.code = 'WHARFIE_SINGLE_NODE_DEPLOYMENT_JOURNAL_INVALID';
+  }
+}
+
+/** A journal generation was replaced by another local writer. */
+export class SingleNodeDeploymentJournalConflictError extends Error {
+  constructor() {
+    super('Single-node deployment journal compare-and-set was rejected.');
+    this.name = 'SingleNodeDeploymentJournalConflictError';
+    this.code = 'WHARFIE_SINGLE_NODE_DEPLOYMENT_JOURNAL_CONFLICT';
+  }
+}
+
+/** The append-only preview journal reached its explicit safe bound. */
+export class SingleNodeDeploymentJournalCapacityError extends Error {
+  constructor() {
+    super('Single-node deployment journal reached its safe record bound.');
+    this.name = 'SingleNodeDeploymentJournalCapacityError';
+    this.code = 'WHARFIE_SINGLE_NODE_DEPLOYMENT_JOURNAL_CAPACITY';
+  }
+}
+
+/** @param {any} value @returns {any} */
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+/** @param {unknown} error @param {string} code @returns {boolean} */
+function hasCode(error, code) {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    /** @type {{code?: unknown}} */ (error).code === code
+  );
+}
+
+/** @param {unknown} value @returns {value is Record<string, any>} */
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Reject inherited, accessor-backed, hidden, symbol, missing, and extra input.
+ * @param {unknown} value - Candidate object.
+ * @param {Set<string>} keys - Exact required keys.
+ * @param {string} valuePath - Safe boundary label.
+ * @returns {Record<string, any>} - Original exact data object.
+ */
+function exactDataObject(value, keys, valuePath) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${valuePath} must be one exact object.`);
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (
+    ownKeys.length !== keys.size ||
+    ownKeys.some((key) => typeof key !== 'string' || !keys.has(key))
+  ) {
+    throw new TypeError(`${valuePath} must contain only its exact fields.`);
+  }
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, 'value')
+    ) {
+      throw new TypeError(`${valuePath}.${key} must be an enumerable value.`);
+    }
+  }
+  return value;
+}
+
+/**
+ * Validate an object with required and optional exact data fields.
+ * @param {unknown} value - Candidate object.
+ * @param {Set<string>} required - Required fields.
+ * @param {Set<string>} allowed - Allowed fields.
+ * @param {string} valuePath - Safe boundary label.
+ * @returns {Record<string, any>} - Original object.
+ */
+function exactOptionsObject(value, required, allowed, valuePath) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${valuePath} must be one exact object.`);
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.some((key) => typeof key !== 'string' || !allowed.has(key))) {
+    throw new TypeError(`${valuePath} must contain only supported fields.`);
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) {
+      throw new TypeError(`${valuePath}.${key} is required.`);
+    }
+  }
+  for (const key of ownKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, 'value')
+    ) {
+      throw new TypeError(`${valuePath}.${String(key)} must be data.`);
+    }
+  }
+  return value;
+}
+
+/** @param {unknown} value @param {string} label @returns {number} */
+function nonnegativeSafeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new TypeError(`${label} must be a nonnegative safe integer.`);
+  }
+  return Number(value);
+}
+
+/** @param {unknown} value @param {string} label @returns {number} */
+function positiveSafeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new TypeError(`${label} must be a positive safe integer.`);
+  }
+  return Number(value);
+}
+
+/** @param {unknown} value @param {string} label @returns {string} */
+function canonicalAbsolutePath(value, label) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    Buffer.byteLength(value, 'utf8') > 16 * 1024 ||
+    value.includes('\0') ||
+    value.includes('\n') ||
+    value.includes('\r') ||
+    !path.isAbsolute(value) ||
+    path.normalize(value) !== value
+  ) {
+    throw new TypeError(`${label} must be one canonical absolute path.`);
+  }
+  return value;
+}
+
+/** @param {unknown} value @param {string} label @returns {string} */
+function canonicalRemotePath(value, label) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    Buffer.byteLength(value, 'utf8') > 4096 ||
+    value.includes('\0') ||
+    value.includes('\n') ||
+    value.includes('\r') ||
+    !path.posix.isAbsolute(value) ||
+    path.posix.normalize(value) !== value
+  ) {
+    throw new TypeError(`${label} must be one canonical absolute POSIX path.`);
+  }
+  return value;
+}
+
+/** @param {unknown} value @param {string} label @returns {string} */
+function canonicalIpv4(value, label) {
+  if (
+    typeof value !== 'string' ||
+    !isIPv4(value) ||
+    value !== value.split('.').map(Number).join('.')
+  ) {
+    throw new TypeError(`${label} must be one canonical numeric IPv4 address.`);
+  }
+  return value;
+}
+
+/**
+ * Canonicalize the discriminated provider intent envelope. The envelope is
+ * deliberately provider-neutral; this first schema admits only the fully
+ * specified Hetzner intent until an equally strict AWS intent exists.
+ * @param {unknown} value - Candidate envelope.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Canonical provider intent.
+ */
+function validateProviderIntent(value, valuePath) {
+  const envelope = exactDataObject(value, PROVIDER_INTENT_KEYS, valuePath);
+  if (envelope.provider !== 'hetzner') {
+    throw new TypeError(`${valuePath}.provider must be 'hetzner'.`);
+  }
+  const intent = validateHetznerSingleNodeProvisioningIntent(
+    envelope.intent,
+    `${valuePath}.intent`,
+  );
+  return deepFreeze(sortCanonicalJsonValue({ provider: 'hetzner', intent }));
+}
+
+/**
+ * Canonicalize one per-role provider mutation fence.
+ * @param {unknown} value - Candidate attempt.
+ * @param {Readonly<Record<string, any>>} authority - Immutable authority.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Canonical attempt.
+ */
+function validateMutationAttempt(value, authority, valuePath) {
+  const attempt = exactDataObject(value, MUTATION_ATTEMPT_KEYS, valuePath);
+  if (
+    attempt.provider !== 'hetzner' ||
+    attempt.provider !== authority.providerIntent.provider
+  ) {
+    throw new TypeError(`${valuePath}.provider does not match its intent.`);
+  }
+  if (!HETZNER_RESOURCE_ROLES.has(attempt.role)) {
+    throw new TypeError(`${valuePath}.role is unsupported.`);
+  }
+  if (attempt.operation !== 'create') {
+    throw new TypeError(`${valuePath}.operation must be 'create'.`);
+  }
+  if (attempt.state !== 'prepared' && attempt.state !== 'succeeded') {
+    throw new TypeError(
+      `${valuePath}.state must be 'prepared' or 'succeeded'.`,
+    );
+  }
+  let providerResourceId = null;
+  if (attempt.providerResourceId !== null) {
+    providerResourceId = positiveSafeInteger(
+      attempt.providerResourceId,
+      `${valuePath}.providerResourceId`,
+    );
+  }
+  if (
+    (attempt.state === 'prepared' && providerResourceId !== null) ||
+    (attempt.state === 'succeeded' && providerResourceId === null)
+  ) {
+    throw new Error(`${valuePath} has inconsistent outcome evidence.`);
+  }
+  const evidence = validateHetznerProvisioningMutationAttempt(
+    attempt.evidence,
+    authority.providerIntent.intent,
+    attempt.role,
+    `${valuePath}.evidence`,
+  );
+  if (
+    evidence.operation !== attempt.operation ||
+    evidence.deploymentInstanceId !== authority.deploymentInstanceId ||
+    evidence.incarnationId !== authority.incarnationId
+  ) {
+    throw new Error(`${valuePath}.evidence does not match its authority.`);
+  }
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      provider: attempt.provider,
+      role: attempt.role,
+      operation: attempt.operation,
+      state: attempt.state,
+      providerResourceId,
+      evidence,
+    }),
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate attempts.
+ * @param {Readonly<Record<string, any>>} authority - Immutable authority.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>[]>} - Sorted unique attempts.
+ */
+function validateMutationAttempts(value, authority, valuePath) {
+  if (!Array.isArray(value) || value.length > HETZNER_RESOURCE_ROLES.size) {
+    throw new TypeError(`${valuePath} must be one bounded attempt array.`);
+  }
+  const attempts = value.map((entry, index) =>
+    validateMutationAttempt(entry, authority, `${valuePath}[${index}]`),
+  );
+  attempts.sort((left, right) => left.role.localeCompare(right.role));
+  if (
+    attempts.some(
+      (entry, index) => index > 0 && attempts[index - 1].role === entry.role,
+    )
+  ) {
+    throw new Error(`${valuePath} must contain one attempt per role.`);
+  }
+  return deepFreeze(attempts);
+}
+
+/**
+ * Canonicalize one provider resource observation.
+ * @param {unknown} value - Candidate resource evidence.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Canonical evidence.
+ */
+function validateResourceEvidence(value, valuePath) {
+  const evidence = exactDataObject(value, RESOURCE_KEYS, valuePath);
+  if (evidence.provider !== 'hetzner') {
+    throw new TypeError(`${valuePath}.provider must be 'hetzner'.`);
+  }
+  if (!HETZNER_RESOURCE_ROLES.has(evidence.role)) {
+    throw new TypeError(`${valuePath}.role is not supported for Hetzner.`);
+  }
+  const providerResourceId = positiveSafeInteger(
+    evidence.providerResourceId,
+    `${valuePath}.providerResourceId`,
+  );
+  if (evidence.state !== 'present' && evidence.state !== 'absent') {
+    throw new TypeError(`${valuePath}.state must be 'present' or 'absent'.`);
+  }
+  let publicIpv4 = null;
+  if (evidence.publicIpv4 !== null) {
+    publicIpv4 = canonicalIpv4(evidence.publicIpv4, `${valuePath}.publicIpv4`);
+  }
+  if (evidence.role === 'firewall' && publicIpv4 !== null) {
+    throw new TypeError(
+      `${valuePath}.publicIpv4 is unsupported for a firewall.`,
+    );
+  }
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      provider: 'hetzner',
+      role: evidence.role,
+      providerResourceId,
+      publicIpv4,
+      state: evidence.state,
+    }),
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate resources.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>[]>} - Sorted unique evidence.
+ */
+function validateResources(value, valuePath) {
+  if (!Array.isArray(value) || value.length > HETZNER_RESOURCE_ROLES.size) {
+    throw new TypeError(`${valuePath} must be one bounded resource array.`);
+  }
+  const resources = value.map((entry, index) =>
+    validateResourceEvidence(entry, `${valuePath}[${index}]`),
+  );
+  resources.sort((left, right) => left.role.localeCompare(right.role));
+  if (
+    resources.some(
+      (entry, index) => index > 0 && resources[index - 1].role === entry.role,
+    )
+  ) {
+    throw new Error(`${valuePath} must contain unique resource roles.`);
+  }
+  return deepFreeze(resources);
+}
+
+/**
+ * @param {unknown} value - Candidate host evidence.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>> | null} - Canonical host evidence.
+ */
+function validateSshHost(value, valuePath) {
+  if (value === null) return null;
+  const host = exactDataObject(value, SSH_HOST_KEYS, valuePath);
+  const address = canonicalIpv4(host.address, `${valuePath}.address`);
+  if (host.algorithm !== 'ssh-ed25519') {
+    throw new TypeError(`${valuePath}.algorithm must be 'ssh-ed25519'.`);
+  }
+  if (
+    typeof host.fingerprint !== 'string' ||
+    !SSH_FINGERPRINT_PATTERN.test(host.fingerprint)
+  ) {
+    throw new TypeError(`${valuePath}.fingerprint is invalid.`);
+  }
+  const encoded = SSH_FINGERPRINT_PATTERN.exec(host.fingerprint)?.[1];
+  if (
+    !encoded ||
+    Buffer.from(encoded, 'base64').byteLength !== 32 ||
+    Buffer.from(encoded, 'base64').toString('base64').replace(/=+$/u, '') !==
+      encoded
+  ) {
+    throw new TypeError(`${valuePath}.fingerprint is not canonical SHA-256.`);
+  }
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      address,
+      algorithm: 'ssh-ed25519',
+      fingerprint: host.fingerprint,
+    }),
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate artifact evidence.
+ * @param {Readonly<Record<string, any>>} desired - Exact desired state.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>> | null} - Canonical evidence.
+ */
+function validateArtifactEvidence(value, desired, valuePath) {
+  if (value === null) return null;
+  const artifact = exactDataObject(value, ARTIFACT_KEYS, valuePath);
+  assertArtifactId(artifact.artifactId, `${valuePath}.artifactId`);
+  const byteDigest = validateSha256Digest(
+    artifact.byteDigest,
+    `${valuePath}.byteDigest`,
+  );
+  const size = positiveSafeInteger(artifact.size, `${valuePath}.size`);
+  const remotePath = canonicalRemotePath(
+    artifact.remotePath,
+    `${valuePath}.remotePath`,
+  );
+  if (
+    artifact.artifactId !== desired.artifact.artifactId ||
+    byteDigest.value !== desired.artifact.byteDigest.value ||
+    size !== desired.artifact.size
+  ) {
+    throw new Error(
+      `${valuePath} must prove the exact desired artifact bytes.`,
+    );
+  }
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      artifactId: artifact.artifactId,
+      byteDigest,
+      size,
+      remotePath,
+    }),
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate activation evidence.
+ * @param {{desired: Readonly<Record<string, any>>, incarnationId: string, providerAddress: string|null, sshHost: Readonly<Record<string, any>>|null}} context - Exact durable authority.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>> | null} - Canonical evidence.
+ */
+function validateActivationEvidence(value, context, valuePath) {
+  if (value === null) return null;
+  if (
+    context.providerAddress === null ||
+    context.sshHost === null ||
+    context.sshHost.address !== context.providerAddress
+  ) {
+    throw new Error(
+      `${valuePath} requires pinned provider and SSH host authority.`,
+    );
+  }
+  const candidate = cloneBoundedJsonObject(value, 32 * 1024, valuePath);
+  return validateSingleNodeRemoteActivationEvidence(candidate, {
+    desired: context.desired,
+    incarnationId: context.incarnationId,
+    providerAddress: context.providerAddress,
+    sshHostKeyFingerprint: context.sshHost.fingerprint,
+    sshPublicKeyFingerprint: candidate.bootstrap?.sshPublicKeyFingerprint,
+  });
+}
+
+/**
+ * Derive the compact byte-installation projection only from full validated
+ * activation evidence.
+ * @param {Readonly<Record<string, any>>} activation - Full activation proof.
+ * @param {Readonly<Record<string, any>>} desired - Exact desired state.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Compact artifact evidence.
+ */
+function artifactFromActivation(activation, desired, valuePath) {
+  return /** @type {Readonly<Record<string, any>>} */ (
+    validateArtifactEvidence(
+      {
+        artifactId: activation.artifact.artifactId,
+        byteDigest: activation.artifact.byteDigest,
+        size: activation.artifact.size,
+        remotePath: activation.artifact.remotePath,
+      },
+      desired,
+      valuePath,
+    )
+  );
+}
+
+/** @param {Readonly<Record<string, any>[]>} resources @param {string} role */
+function resourceForRole(resources, role) {
+  return resources.find((resource) => resource.role === role) || null;
+}
+
+/**
+ * Reject semantically partial snapshots that cannot represent one recoverable
+ * deployment frontier.
+ * @param {Readonly<Record<string, any>>} payload - Canonical payload.
+ * @param {string} valuePath - Boundary label.
+ */
+function assertCoherentPayload(payload, valuePath) {
+  const primaryIp = resourceForRole(payload.resources, 'primaryIp');
+  const server = resourceForRole(payload.resources, 'server');
+  for (const resource of payload.resources) {
+    const attempt =
+      payload.mutationAttempts.find(
+        (/** @type {Record<string, any>} */ candidate) =>
+          candidate.role === resource.role,
+      ) || null;
+    if (
+      attempt?.state !== 'succeeded' ||
+      attempt.providerResourceId !== resource.providerResourceId
+    ) {
+      throw new Error(
+        `${valuePath}.resources must follow a succeeded mutation attempt.`,
+      );
+    }
+  }
+  if (
+    primaryIp !== null &&
+    server !== null &&
+    primaryIp.publicIpv4 !== null &&
+    server.publicIpv4 !== null &&
+    primaryIp.publicIpv4 !== server.publicIpv4
+  ) {
+    throw new Error(`${valuePath}.resources contain conflicting addresses.`);
+  }
+  if (payload.sshHost !== null) {
+    const addresses = new Set(
+      payload.resources
+        .map(
+          (/** @type {Record<string, any>} */ resource) => resource.publicIpv4,
+        )
+        .filter((/** @type {unknown} */ address) => address !== null),
+    );
+    if (!addresses.has(payload.sshHost.address)) {
+      throw new Error(
+        `${valuePath}.sshHost must match a provider-observed address.`,
+      );
+    }
+  }
+  if (payload.artifact !== null && payload.sshHost === null) {
+    throw new Error(`${valuePath}.artifact requires pinned SSH host evidence.`);
+  }
+  if (payload.activation !== null && payload.artifact === null) {
+    throw new Error(
+      `${valuePath}.activation requires verified artifact evidence.`,
+    );
+  }
+  if (
+    payload.activation !== null &&
+    (payload.activation.address !== payload.sshHost?.address ||
+      payload.activation.sshHostKey.fingerprint !==
+        payload.sshHost?.fingerprint ||
+      payload.activation.artifact.artifactId !== payload.artifact?.artifactId ||
+      payload.activation.artifact.byteDigest.value !==
+        payload.artifact?.byteDigest.value ||
+      payload.activation.artifact.size !== payload.artifact?.size ||
+      payload.activation.artifact.remotePath !== payload.artifact?.remotePath)
+  ) {
+    throw new Error(
+      `${valuePath}.activation does not match its compact durable projections.`,
+    );
+  }
+  if (
+    payload.phase === 'planned' &&
+    (payload.resources.length !== 0 ||
+      payload.mutationAttempts.length !== 0 ||
+      payload.sshHost !== null ||
+      payload.artifact !== null ||
+      payload.activation !== null)
+  ) {
+    throw new Error(`${valuePath}.planned state cannot contain effects.`);
+  }
+  if (
+    payload.phase === 'provisioning' &&
+    (payload.sshHost !== null ||
+      payload.artifact !== null ||
+      payload.activation !== null)
+  ) {
+    throw new Error(
+      `${valuePath}.provisioning state cannot contain activation evidence.`,
+    );
+  }
+  if (['provisioned', 'activating', 'active'].includes(payload.phase)) {
+    for (const role of HETZNER_RESOURCE_ROLES) {
+      if (resourceForRole(payload.resources, role)?.state !== 'present') {
+        throw new Error(
+          `${valuePath}.${payload.phase} state requires every provider resource.`,
+        );
+      }
+    }
+    if (primaryIp?.publicIpv4 === null) {
+      throw new Error(
+        `${valuePath}.${payload.phase} state requires a public address.`,
+      );
+    }
+  }
+  if (payload.phase === 'active' && payload.activation === null) {
+    throw new Error(`${valuePath}.active state requires activation evidence.`);
+  }
+  if (
+    payload.phase === 'destroyed' &&
+    (payload.resources.some(
+      (/** @type {Record<string, any>} */ resource) =>
+        resource.state !== 'absent',
+    ) ||
+      payload.mutationAttempts.some(
+        (/** @type {Record<string, any>} */ attempt) =>
+          attempt.state === 'prepared',
+      ))
+  ) {
+    throw new Error(
+      `${valuePath}.destroyed state requires every mutation to be resolved and every known resource to be absent.`,
+    );
+  }
+}
+
+/**
+ * @param {unknown} value - Candidate payload.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Canonical payload.
+ */
+function canonicalizePayload(value, valuePath) {
+  const payload = cloneBoundedJsonObject(
+    value,
+    SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
+    valuePath,
+  );
+  exactDataObject(payload, PAYLOAD_KEYS, valuePath);
+  if (
+    payload.schemaVersion !== SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION ||
+    payload.kind !== SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND
+  ) {
+    throw new TypeError(`${valuePath} has an unsupported schema or kind.`);
+  }
+  const generation = nonnegativeSafeInteger(
+    payload.generation,
+    `${valuePath}.generation`,
+  );
+  if (generation === 0) {
+    if (payload.previousJournalId !== null) {
+      throw new TypeError(
+        `${valuePath}.previousJournalId must be null at generation zero.`,
+      );
+    }
+  } else {
+    assertDomainSeparatedSha256Id(
+      payload.previousJournalId,
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+      `${valuePath}.previousJournalId`,
+    );
+  }
+  const desired = validateSingleNodeDeploymentDesired(
+    payload.desired,
+    `${valuePath}.desired`,
+  );
+  assertSingleNodeDeploymentInstanceId(
+    payload.deploymentInstanceId,
+    `${valuePath}.deploymentInstanceId`,
+  );
+  if (payload.deploymentInstanceId !== desired.deploymentInstanceId) {
+    throw new Error(
+      `${valuePath}.deploymentInstanceId does not match desired state.`,
+    );
+  }
+  const providerIntent = validateProviderIntent(
+    payload.providerIntent,
+    `${valuePath}.providerIntent`,
+  );
+  assertSingleNodeDeploymentIncarnationId(
+    payload.incarnationId,
+    `${valuePath}.incarnationId`,
+  );
+  if (
+    providerIntent.intent.incarnationId !== payload.incarnationId ||
+    providerIntent.intent.plan.deploymentInstanceId !==
+      desired.deploymentInstanceId ||
+    providerIntent.intent.plan.desired.desiredRevisionId !==
+      desired.desiredRevisionId ||
+    desired.intent.provider.kind !== providerIntent.provider
+  ) {
+    throw new Error(
+      `${valuePath}.providerIntent does not bind the exact deployment.`,
+    );
+  }
+  const mutationAttempts = validateMutationAttempts(
+    payload.mutationAttempts,
+    {
+      deploymentInstanceId: desired.deploymentInstanceId,
+      incarnationId: payload.incarnationId,
+      providerIntent,
+    },
+    `${valuePath}.mutationAttempts`,
+  );
+  if (!PHASES.has(payload.phase)) {
+    throw new TypeError(`${valuePath}.phase is unsupported.`);
+  }
+  const resources = validateResources(
+    payload.resources,
+    `${valuePath}.resources`,
+  );
+  const sshHost = validateSshHost(payload.sshHost, `${valuePath}.sshHost`);
+  const artifact = validateArtifactEvidence(
+    payload.artifact,
+    desired,
+    `${valuePath}.artifact`,
+  );
+  const providerAddress =
+    resourceForRole(resources, 'primaryIp')?.publicIpv4 ?? null;
+  const activation = validateActivationEvidence(
+    payload.activation,
+    {
+      desired,
+      incarnationId: payload.incarnationId,
+      providerAddress,
+      sshHost,
+    },
+    `${valuePath}.activation`,
+  );
+  const result = deepFreeze(
+    sortCanonicalJsonValue({
+      schemaVersion: SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION,
+      kind: SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND,
+      generation,
+      previousJournalId: payload.previousJournalId,
+      deploymentInstanceId: desired.deploymentInstanceId,
+      incarnationId: payload.incarnationId,
+      desired,
+      providerIntent,
+      phase: payload.phase,
+      mutationAttempts,
+      resources,
+      sshHost,
+      artifact,
+      activation,
+    }),
+  );
+  assertCoherentPayload(result, valuePath);
+  assertManifestIsSecretFree(result, valuePath);
+  return result;
+}
+
+/**
+ * Seal one canonical payload with its content ID.
+ * @param {unknown} value - Complete payload.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Journal document.
+ */
+function sealPayload(value, valuePath) {
+  const payload = canonicalizePayload(value, valuePath);
+  const journalId = createCanonicalJsonSha256Id({
+    domain: SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN,
+    prefix: SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+    value: payload,
+    valuePath,
+  });
+  return deepFreeze(sortCanonicalJsonValue({ ...payload, journalId }));
+}
+
+/**
+ * Create generation zero before the first provider mutation.
+ * @param {unknown} value - Exact desired and provider provisioning intents.
+ * @returns {Readonly<Record<string, any>>} - Initial journal.
+ */
+export function createSingleNodeDeploymentJournal(value) {
+  const input = exactDataObject(
+    value,
+    INITIALIZE_KEYS,
+    'singleNodeDeploymentJournal',
+  );
+  const desired = validateSingleNodeDeploymentDesired(
+    input.desired,
+    'singleNodeDeploymentJournal.desired',
+  );
+  const providerIntent = validateProviderIntent(
+    input.providerIntent,
+    'singleNodeDeploymentJournal.providerIntent',
+  );
+  return sealPayload(
+    {
+      schemaVersion: SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION,
+      kind: SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND,
+      generation: 0,
+      previousJournalId: null,
+      deploymentInstanceId: desired.deploymentInstanceId,
+      incarnationId: providerIntent.intent.incarnationId,
+      desired,
+      providerIntent,
+      phase: 'planned',
+      mutationAttempts: [],
+      resources: [],
+      sshHost: null,
+      artifact: null,
+      activation: null,
+    },
+    'singleNodeDeploymentJournal',
+  );
+}
+
+/**
+ * Validate and reidentify one serialized journal.
+ * @param {unknown} value - Candidate journal.
+ * @param {string} [valuePath] - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Canonical journal.
+ */
+export function validateSingleNodeDeploymentJournal(
+  value,
+  valuePath = 'singleNodeDeploymentJournal',
+) {
+  const document = cloneBoundedJsonObject(
+    value,
+    SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
+    valuePath,
+  );
+  exactDataObject(document, DOCUMENT_KEYS, valuePath);
+  assertDomainSeparatedSha256Id(
+    document.journalId,
+    SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+    `${valuePath}.journalId`,
+  );
+  /** @type {Record<string, any>} */
+  const payload = {};
+  for (const key of PAYLOAD_KEYS) payload[key] = document[key];
+  const sealed = sealPayload(payload, valuePath);
+  if (sealed.journalId !== document.journalId) {
+    throw new Error(`${valuePath}.journalId does not match its exact payload.`);
+  }
+  return sealed;
+}
+
+/**
+ * Create the common immutable successor envelope.
+ * @param {Readonly<Record<string, any>>} prior - Current record.
+ * @param {Readonly<Record<string, any>>} changes - Changed snapshot fields.
+ * @returns {Readonly<Record<string, any>>} - Sealed successor.
+ */
+function successor(prior, changes) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  return sealPayload(
+    {
+      schemaVersion: current.schemaVersion,
+      kind: current.kind,
+      generation: current.generation + 1,
+      previousJournalId: current.journalId,
+      deploymentInstanceId: current.deploymentInstanceId,
+      incarnationId: current.incarnationId,
+      desired: current.desired,
+      providerIntent: current.providerIntent,
+      phase: current.phase,
+      mutationAttempts: current.mutationAttempts,
+      resources: current.resources,
+      sshHost: current.sshHost,
+      artifact: current.artifact,
+      activation: current.activation,
+      ...changes,
+    },
+    'singleNodeDeploymentJournal.successor',
+  );
+}
+
+/**
+ * Advance one legal lifecycle edge.
+ * @param {unknown} prior - Current record.
+ * @param {unknown} phase - Next phase.
+ * @returns {Readonly<Record<string, any>>} - Successor record.
+ */
+export function advanceSingleNodeDeploymentJournal(prior, phase) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (typeof phase !== 'string' || !NEXT_PHASES[current.phase].has(phase)) {
+    throw new Error(
+      `singleNodeDeploymentJournal cannot advance from ${current.phase}.`,
+    );
+  }
+  return successor(current, { phase });
+}
+
+/**
+ * Return the durable create fence for a role, if one has been prepared.
+ * Callers must treat a prepared-but-unresolved attempt as authority to
+ * reconcile inventory, never as authority to issue another create request.
+ * @param {unknown} journal - Current journal.
+ * @param {unknown} role - Provider resource role.
+ * @returns {Readonly<Record<string, any>> | null} - Attempt evidence.
+ */
+export function getSingleNodeDeploymentMutationAttempt(journal, role) {
+  const current = validateSingleNodeDeploymentJournal(journal);
+  if (typeof role !== 'string' || !HETZNER_RESOURCE_ROLES.has(role)) {
+    throw new TypeError(
+      'singleNodeDeploymentJournal mutation role is unsupported.',
+    );
+  }
+  return (
+    current.mutationAttempts.find(
+      (/** @type {Record<string, any>} */ attempt) => attempt.role === role,
+    ) || null
+  );
+}
+
+/**
+ * Project the exact recovery inputs consumed by the current Hetzner
+ * convergence boundary. Full provider attempt evidence is returned verbatim;
+ * the journal wrapper's outcome state remains local durable metadata.
+ * @param {unknown} journal - Current journal.
+ * @returns {Readonly<{storedResourceIds: Readonly<Record<string, number|null>>, storedMutationAttempts: Readonly<Record<string, Readonly<Record<string, any>>|null>>}>} - Provider recovery inputs.
+ */
+export function getSingleNodeDeploymentProvisioningRecoveryState(journal) {
+  const current = validateSingleNodeDeploymentJournal(journal);
+  /** @type {Record<string, number|null>} */
+  const storedResourceIds = {};
+  /** @type {Record<string, Readonly<Record<string, any>>|null>} */
+  const storedMutationAttempts = {};
+  for (const role of HETZNER_RESOURCE_ROLES) {
+    const resource = resourceForRole(current.resources, role);
+    const attempt =
+      current.mutationAttempts.find(
+        (/** @type {Record<string, any>} */ entry) => entry.role === role,
+      ) || null;
+    storedResourceIds[role] = resource?.providerResourceId ?? null;
+    storedMutationAttempts[role] = attempt?.evidence ?? null;
+  }
+  return deepFreeze({ storedResourceIds, storedMutationAttempts });
+}
+
+/**
+ * Persist the per-role fence that must durably precede the provider POST.
+ * Exact retries return the existing record. One incarnation can prepare at
+ * most one create attempt per role.
+ * @param {unknown} prior - Current journal.
+ * @param {unknown} value - Exact provider-emitted mutation attempt.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function prepareSingleNodeDeploymentMutation(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (current.phase !== 'provisioning') {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot prepare mutations in this phase.',
+    );
+  }
+  const evidence = validateHetznerProvisioningMutationAttempt(
+    value,
+    current.providerIntent.intent,
+    undefined,
+    'singleNodeDeploymentJournal.prepareMutation',
+  );
+  const existing =
+    current.mutationAttempts.find(
+      (/** @type {Record<string, any>} */ attempt) =>
+        attempt.role === evidence.role,
+    ) || null;
+  if (existing !== null) {
+    if (JSON.stringify(existing.evidence) === JSON.stringify(evidence)) {
+      return current;
+    }
+    throw new Error(
+      'singleNodeDeploymentJournal mutation attempt conflicts with its durable fence.',
+    );
+  }
+  const attempt = validateMutationAttempt(
+    {
+      provider: 'hetzner',
+      role: evidence.role,
+      operation: evidence.operation,
+      state: 'prepared',
+      providerResourceId: null,
+      evidence,
+    },
+    current,
+    'singleNodeDeploymentJournal.mutationAttempt',
+  );
+  return successor(current, {
+    mutationAttempts: [...current.mutationAttempts, attempt],
+  });
+}
+
+/**
+ * Resolve one prepared mutation to an exact provider identity and atomically
+ * add its resource evidence. This is valid for a direct response or for an
+ * ownership-qualified inventory recovery after an ambiguous response.
+ * @param {unknown} prior - Current journal.
+ * @param {unknown} value - Exact provider-emitted resource record.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function completeSingleNodeDeploymentMutation(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (!['provisioning', 'destroying'].includes(current.phase)) {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot complete mutations in this phase.',
+    );
+  }
+  const providerRecord = validateHetznerProvisionedResourceRecord(
+    value,
+    current.providerIntent.intent,
+    undefined,
+    'singleNodeDeploymentJournal.completeMutation',
+  );
+  const attempt =
+    current.mutationAttempts.find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.role === providerRecord.role,
+    ) || null;
+  if (attempt === null) {
+    throw new Error(
+      'singleNodeDeploymentJournal mutation was not durably prepared.',
+    );
+  }
+  const providerResourceId = providerRecord.providerResourceId;
+  const completed = validateMutationAttempt(
+    {
+      ...attempt,
+      state: 'succeeded',
+      providerResourceId,
+    },
+    current,
+    'singleNodeDeploymentJournal.mutationAttempt',
+  );
+  const resource = validateResourceEvidence(
+    {
+      provider: attempt.provider,
+      role: attempt.role,
+      providerResourceId,
+      publicIpv4: null,
+      state: 'present',
+    },
+    'singleNodeDeploymentJournal.resource',
+  );
+  const existingResource = resourceForRole(current.resources, attempt.role);
+  if (attempt.state === 'succeeded') {
+    if (
+      attempt.providerResourceId === providerResourceId &&
+      existingResource?.providerResourceId === providerResourceId
+    ) {
+      return current;
+    }
+    throw new Error(
+      'singleNodeDeploymentJournal mutation outcome is immutable.',
+    );
+  }
+  if (existingResource !== null) {
+    throw new Error(
+      'singleNodeDeploymentJournal mutation outcome conflicts with resource evidence.',
+    );
+  }
+  return successor(current, {
+    mutationAttempts: current.mutationAttempts.map(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.role === attempt.role ? completed : candidate,
+    ),
+    resources: [...current.resources, resource],
+  });
+}
+
+/**
+ * Append, enrich, or mark absent one immutable provider resource identity.
+ * Exact retries return the current record without consuming a generation.
+ * @param {unknown} prior - Current record.
+ * @param {unknown} value - Provider resource evidence.
+ * @returns {Readonly<Record<string, any>>} - Current or successor record.
+ */
+export function recordSingleNodeDeploymentResource(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (!['provisioning', 'destroying'].includes(current.phase)) {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot record resources in this phase.',
+    );
+  }
+  const evidence = validateResourceEvidence(
+    value,
+    'singleNodeDeploymentJournal.resource',
+  );
+  if (evidence.provider !== current.providerIntent.provider) {
+    throw new Error(
+      'singleNodeDeploymentJournal resource provider does not match its intent.',
+    );
+  }
+  const existing = resourceForRole(current.resources, evidence.role);
+  if (existing === null) {
+    throw new Error(
+      'singleNodeDeploymentJournal must complete a prepared mutation before recording resource evidence.',
+    );
+  }
+  if (
+    existing.provider !== evidence.provider ||
+    existing.providerResourceId !== evidence.providerResourceId ||
+    (existing.publicIpv4 !== null &&
+      evidence.publicIpv4 !== existing.publicIpv4) ||
+    (existing.publicIpv4 !== null && evidence.publicIpv4 === null) ||
+    existing.state === 'absent'
+  ) {
+    if (JSON.stringify(existing) === JSON.stringify(evidence)) return current;
+    throw new Error(
+      'singleNodeDeploymentJournal resource evidence is not monotonic.',
+    );
+  }
+  if (JSON.stringify(existing) === JSON.stringify(evidence)) return current;
+  return successor(current, {
+    resources: current.resources.map(
+      (/** @type {Record<string, any>} */ resource) =>
+        resource.role === evidence.role ? evidence : resource,
+    ),
+  });
+}
+
+/**
+ * Pin first-use SSH host identity to a provider-observed address.
+ * @param {unknown} prior - Current record.
+ * @param {unknown} value - Exact host evidence.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function recordSingleNodeDeploymentSshHost(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (!['provisioned', 'activating'].includes(current.phase)) {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot record SSH host evidence in this phase.',
+    );
+  }
+  const sshHost = validateSshHost(value, 'singleNodeDeploymentJournal.sshHost');
+  if (sshHost === null) {
+    throw new TypeError('singleNodeDeploymentJournal.sshHost cannot be null.');
+  }
+  if (current.sshHost !== null) {
+    if (JSON.stringify(current.sshHost) === JSON.stringify(sshHost)) {
+      return current;
+    }
+    throw new Error(
+      'singleNodeDeploymentJournal SSH host identity is immutable.',
+    );
+  }
+  return successor(current, { sshHost });
+}
+
+/**
+ * Record exact remote byte verification and installation.
+ * @param {unknown} prior - Current record.
+ * @param {unknown} value - Artifact evidence.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function recordSingleNodeDeploymentArtifact(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (current.phase !== 'activating') {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot record artifact evidence in this phase.',
+    );
+  }
+  const artifact = validateArtifactEvidence(
+    value,
+    current.desired,
+    'singleNodeDeploymentJournal.artifact',
+  );
+  if (artifact === null) {
+    throw new TypeError('singleNodeDeploymentJournal.artifact cannot be null.');
+  }
+  if (current.artifact !== null) {
+    if (JSON.stringify(current.artifact) === JSON.stringify(artifact)) {
+      return current;
+    }
+    throw new Error(
+      'singleNodeDeploymentJournal artifact evidence is immutable.',
+    );
+  }
+  return successor(current, { artifact });
+}
+
+/**
+ * Record exact durable-service activation evidence.
+ * @param {unknown} prior - Current record.
+ * @param {unknown} value - Activation evidence.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function recordSingleNodeDeploymentActivation(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (current.phase !== 'activating') {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot record activation evidence in this phase.',
+    );
+  }
+  const activation = validateActivationEvidence(
+    value,
+    {
+      desired: current.desired,
+      incarnationId: current.incarnationId,
+      providerAddress:
+        resourceForRole(current.resources, 'primaryIp')?.publicIpv4 ?? null,
+      sshHost: current.sshHost,
+    },
+    'singleNodeDeploymentJournal.activation',
+  );
+  if (activation === null) {
+    throw new TypeError(
+      'singleNodeDeploymentJournal.activation cannot be null.',
+    );
+  }
+  if (current.activation !== null) {
+    if (JSON.stringify(current.activation) === JSON.stringify(activation)) {
+      return current;
+    }
+    throw new Error(
+      'singleNodeDeploymentJournal activation evidence is immutable.',
+    );
+  }
+  const artifact = artifactFromActivation(
+    activation,
+    current.desired,
+    'singleNodeDeploymentJournal.artifact',
+  );
+  if (
+    current.artifact !== null &&
+    JSON.stringify(current.artifact) !== JSON.stringify(artifact)
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal activation artifact conflicts with durable evidence.',
+    );
+  }
+  return successor(current, { activation, artifact });
+}
+
+/**
+ * Verify the only legal monotonic relationship between adjacent records.
+ * @param {unknown} prior - Prior record.
+ * @param {unknown} next - Candidate successor.
+ * @returns {Readonly<Record<string, any>>} - Canonical successor.
+ */
+export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
+  const current = validateSingleNodeDeploymentJournal(
+    prior,
+    'singleNodeDeploymentJournal.prior',
+  );
+  const candidate = validateSingleNodeDeploymentJournal(
+    next,
+    'singleNodeDeploymentJournal.next',
+  );
+  if (
+    candidate.generation !== current.generation + 1 ||
+    candidate.previousJournalId !== current.journalId ||
+    candidate.deploymentInstanceId !== current.deploymentInstanceId ||
+    candidate.incarnationId !== current.incarnationId ||
+    JSON.stringify(candidate.desired) !== JSON.stringify(current.desired) ||
+    JSON.stringify(candidate.providerIntent) !==
+      JSON.stringify(current.providerIntent)
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal successor changed immutable authority.',
+    );
+  }
+
+  let expected;
+  if (candidate.phase !== current.phase) {
+    if (
+      JSON.stringify(candidate.mutationAttempts) !==
+        JSON.stringify(current.mutationAttempts) ||
+      candidate.resources.length !== current.resources.length ||
+      JSON.stringify(candidate.resources) !==
+        JSON.stringify(current.resources) ||
+      JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost) ||
+      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
+      JSON.stringify(candidate.activation) !==
+        JSON.stringify(current.activation)
+    ) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must make one transition.',
+      );
+    }
+    expected = advanceSingleNodeDeploymentJournal(current, candidate.phase);
+  } else if (
+    JSON.stringify(candidate.mutationAttempts) !==
+    JSON.stringify(current.mutationAttempts)
+  ) {
+    if (
+      JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost) ||
+      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
+      JSON.stringify(candidate.activation) !==
+        JSON.stringify(current.activation)
+    ) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must make one transition.',
+      );
+    }
+    const changedAttempts = candidate.mutationAttempts.filter(
+      (/** @type {Record<string, any>} */ attempt) => {
+        const before =
+          current.mutationAttempts.find(
+            (/** @type {Record<string, any>} */ entry) =>
+              entry.role === attempt.role,
+          ) || null;
+        return JSON.stringify(before) !== JSON.stringify(attempt);
+      },
+    );
+    const removedAttempts = current.mutationAttempts.filter(
+      (/** @type {Record<string, any>} */ attempt) =>
+        !candidate.mutationAttempts.some(
+          (/** @type {Record<string, any>} */ entry) =>
+            entry.role === attempt.role,
+        ),
+    );
+    if (changedAttempts.length !== 1 || removedAttempts.length !== 0) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must change one mutation attempt.',
+      );
+    }
+    const changedAttempt = changedAttempts[0];
+    if (
+      JSON.stringify(candidate.resources) === JSON.stringify(current.resources)
+    ) {
+      expected = prepareSingleNodeDeploymentMutation(
+        current,
+        changedAttempt.evidence,
+      );
+    } else {
+      const changedResource = resourceForRole(
+        candidate.resources,
+        changedAttempt.role,
+      );
+      if (changedResource === null) {
+        throw new Error(
+          'singleNodeDeploymentJournal completed mutation has no resource.',
+        );
+      }
+      expected = completeSingleNodeDeploymentMutation(
+        current,
+        createHetznerProvisionedResourceRecord(
+          current.providerIntent.intent,
+          changedAttempt.role,
+          changedResource.providerResourceId,
+        ),
+      );
+    }
+  } else if (
+    JSON.stringify(candidate.resources) !== JSON.stringify(current.resources)
+  ) {
+    if (
+      JSON.stringify(candidate.mutationAttempts) !==
+        JSON.stringify(current.mutationAttempts) ||
+      JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost) ||
+      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
+      JSON.stringify(candidate.activation) !==
+        JSON.stringify(current.activation)
+    ) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must make one transition.',
+      );
+    }
+    const changed = candidate.resources.filter(
+      (/** @type {Record<string, any>} */ resource) => {
+        const before = resourceForRole(current.resources, resource.role);
+        return JSON.stringify(before) !== JSON.stringify(resource);
+      },
+    );
+    const removed = current.resources.filter(
+      (/** @type {Record<string, any>} */ resource) =>
+        resourceForRole(candidate.resources, resource.role) === null,
+    );
+    if (changed.length !== 1 || removed.length !== 0) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must change one resource.',
+      );
+    }
+    expected = recordSingleNodeDeploymentResource(current, changed[0]);
+  } else if (
+    JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost)
+  ) {
+    if (
+      JSON.stringify(candidate.mutationAttempts) !==
+        JSON.stringify(current.mutationAttempts) ||
+      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
+      JSON.stringify(candidate.activation) !==
+        JSON.stringify(current.activation)
+    ) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must make one transition.',
+      );
+    }
+    expected = recordSingleNodeDeploymentSshHost(current, candidate.sshHost);
+  } else if (
+    JSON.stringify(candidate.activation) !== JSON.stringify(current.activation)
+  ) {
+    expected = recordSingleNodeDeploymentActivation(
+      current,
+      candidate.activation,
+    );
+  } else if (
+    JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact)
+  ) {
+    if (
+      JSON.stringify(candidate.mutationAttempts) !==
+      JSON.stringify(current.mutationAttempts)
+    ) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must make one transition.',
+      );
+    }
+    expected = recordSingleNodeDeploymentArtifact(current, candidate.artifact);
+  } else {
+    throw new Error(
+      'singleNodeDeploymentJournal successor must make one transition.',
+    );
+  }
+  if (expected.journalId !== candidate.journalId) {
+    throw new Error(
+      'singleNodeDeploymentJournal successor is not one legal transition.',
+    );
+  }
+  return candidate;
+}
+
+/** @param {number} generation @returns {string} */
+function recordFileName(generation) {
+  return `journal-${String(generation).padStart(16, '0')}.json`;
+}
+
+/**
+ * Resolve the private app-scoped journal paths.
+ * @param {unknown} value - App, deployment, and stable data root.
+ * @returns {Readonly<Record<string, any>>} - Canonical paths.
+ */
+export function createSingleNodeDeploymentJournalPaths(value) {
+  const input = exactDataObject(
+    value,
+    new Set(['appId', 'deploymentInstanceId', 'dataRoot']),
+    'singleNodeDeploymentJournal.paths',
+  );
+  assertLogicalId(input.appId, 'singleNodeDeploymentJournal.paths.appId');
+  assertSingleNodeDeploymentInstanceId(
+    input.deploymentInstanceId,
+    'singleNodeDeploymentJournal.paths.deploymentInstanceId',
+  );
+  const layout = createLocalAppStorageLayout({
+    appId: input.appId,
+    dataRoot: canonicalAbsolutePath(
+      input.dataRoot,
+      'singleNodeDeploymentJournal.paths.dataRoot',
+    ),
+  });
+  const deploymentsRoot = path.join(
+    layout.controlPath,
+    DEPLOYMENTS_DIRECTORY_NAME,
+    STORAGE_VERSION_DIRECTORY_NAME,
+  );
+  const deploymentRoot = path.join(deploymentsRoot, input.deploymentInstanceId);
+  const journalRoot = path.join(deploymentRoot, JOURNAL_DIRECTORY_NAME);
+  return deepFreeze({
+    ...layout,
+    deploymentsRoot,
+    deploymentRoot,
+    journalRoot,
+    directories: [
+      layout.dataRoot,
+      path.join(layout.dataRoot, 'applications'),
+      layout.appRoot,
+      layout.stateRoot,
+      layout.controlPath,
+      path.join(layout.controlPath, DEPLOYMENTS_DIRECTORY_NAME),
+      deploymentsRoot,
+      deploymentRoot,
+      journalRoot,
+    ],
+  });
+}
+
+/**
+ * @param {import('node:fs').Stats} stats - Filesystem stats.
+ * @param {'file'|'directory'} kind - Concrete required kind.
+ * @param {number} uid - Required owner.
+ * @param {number} mode - Exact private mode.
+ * @param {number} [maximumLinks] - Accepted file link count.
+ */
+function assertPrivateStats(stats, kind, uid, mode, maximumLinks = 1) {
+  const correctKind = kind === 'file' ? stats.isFile() : stats.isDirectory();
+  const actualUid = Number(stats.uid);
+  const actualMode = Number(stats.mode) & 0o777;
+  const actualLinks = Number(stats.nlink);
+  if (
+    !correctKind ||
+    stats.isSymbolicLink() ||
+    !Number.isSafeInteger(actualUid) ||
+    actualUid !== Number(uid) ||
+    actualMode !== mode ||
+    (kind === 'file' &&
+      (!Number.isSafeInteger(actualLinks) ||
+        actualLinks < 1 ||
+        actualLinks > maximumLinks))
+  ) {
+    throw new SingleNodeDeploymentJournalInvalidError();
+  }
+}
+
+/**
+ * Sync a held, private directory.
+ * @param {string} directory - Exact directory.
+ * @param {number} uid - Required owner.
+ */
+async function syncDirectory(directory, uid) {
+  const handle = await open(
+    directory,
+    fsConstants.O_RDONLY |
+      (fsConstants.O_DIRECTORY || 0) |
+      (fsConstants.O_NOFOLLOW || 0),
+  );
+  try {
+    assertPrivateStats(
+      await handle.stat(),
+      'directory',
+      uid,
+      PRIVATE_DIRECTORY_MODE,
+    );
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Establish each private namespace component and sync every publication.
+ * @param {Readonly<Record<string, any>>} paths - Derived journal paths.
+ * @param {number} uid - Required owner.
+ */
+async function ensurePrivateTree(paths, uid) {
+  for (let index = 0; index < paths.directories.length; index += 1) {
+    const directory = paths.directories[index];
+    let created = false;
+    try {
+      await mkdir(directory, {
+        recursive: index === 0,
+        mode: PRIVATE_DIRECTORY_MODE,
+      });
+      created = true;
+    } catch (error) {
+      if (!hasCode(error, 'EEXIST')) throw error;
+    }
+    let stats;
+    try {
+      stats = await lstat(directory);
+    } catch {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    assertPrivateStats(stats, 'directory', uid, PRIVATE_DIRECTORY_MODE);
+    if (created && index > 0) {
+      await syncDirectory(path.dirname(directory), uid);
+    }
+  }
+  await syncDirectory(paths.journalRoot, uid);
+}
+
+/**
+ * Validate an already-existing private tree without creating it.
+ * @param {Readonly<Record<string, any>>} paths - Derived paths.
+ * @param {number} uid - Required owner.
+ * @returns {Promise<boolean>} - Whether the journal directory exists.
+ */
+async function inspectPrivateTree(paths, uid) {
+  try {
+    await lstat(paths.journalRoot);
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return false;
+    throw error;
+  }
+  for (const directory of paths.directories) {
+    let stats;
+    try {
+      stats = await lstat(directory);
+    } catch {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    assertPrivateStats(stats, 'directory', uid, PRIVATE_DIRECTORY_MODE);
+  }
+  return true;
+}
+
+/**
+ * Read and authenticate one immutable generation file.
+ * @param {string} filePath - Generation file.
+ * @param {number} uid - Required owner.
+ * @returns {Promise<{text: string, record: Readonly<Record<string, any>>, identity: Readonly<{dev: bigint, ino: bigint, nlink: number}>}>}
+ */
+async function readRecordFile(filePath, uid) {
+  const handle = await open(
+    filePath,
+    fsConstants.O_RDONLY |
+      (fsConstants.O_NOFOLLOW || 0) |
+      fsConstants.O_NONBLOCK,
+  );
+  try {
+    const before = await handle.stat({ bigint: true });
+    assertPrivateStats(
+      /** @type {any} */ (before),
+      'file',
+      uid,
+      PRIVATE_FILE_MODE,
+      2,
+    );
+    if (
+      before.size < 1n ||
+      before.size > BigInt(SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES)
+    ) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    const bytes = Buffer.alloc(Number(before.size));
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = await handle.read(
+        bytes,
+        offset,
+        bytes.byteLength - offset,
+        offset,
+      );
+      if (bytesRead === 0) {
+        throw new SingleNodeDeploymentJournalInvalidError();
+      }
+      offset += bytesRead;
+    }
+    const extra = Buffer.alloc(1);
+    const { bytesRead: extraBytes } = await handle.read(
+      extra,
+      0,
+      1,
+      bytes.byteLength,
+    );
+    const after = await handle.stat({ bigint: true });
+    if (
+      extraBytes !== 0 ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.mode !== after.mode ||
+      before.nlink !== after.nlink ||
+      before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs
+    ) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    let text;
+    let parsed;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      parsed = JSON.parse(text);
+    } catch {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    const record = validateSingleNodeDeploymentJournal(parsed);
+    const canonical = `${JSON.stringify(sortCanonicalJsonValue(record))}\n`;
+    if (text !== canonical) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    return {
+      text,
+      record,
+      identity: Object.freeze({
+        dev: before.dev,
+        ino: before.ino,
+        nlink: Number(before.nlink),
+      }),
+    };
+  } catch (error) {
+    if (error instanceof SingleNodeDeploymentJournalInvalidError) throw error;
+    throw new SingleNodeDeploymentJournalInvalidError();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Validate or reap bounded interrupted temporary publications.
+ * @param {Readonly<Record<string, any>>} paths - Journal paths.
+ * @param {number} uid - Required owner.
+ * @param {string[]} names - Directory entries.
+ * @param {boolean} reap - Whether safe temp names may be removed.
+ * @returns {Promise<Readonly<{dev: bigint, ino: bigint}[]>>} - Remaining authenticated temporary links.
+ */
+async function inspectTemporaryFiles(paths, uid, names, reap) {
+  const temporaryNames = names.filter((name) =>
+    JOURNAL_TEMP_PATTERN.test(name),
+  );
+  if (temporaryNames.length > 16) {
+    throw new SingleNodeDeploymentJournalInvalidError();
+  }
+  let removed = false;
+  /** @type {{dev: bigint, ino: bigint}[]} */
+  const identities = [];
+  for (const name of temporaryNames) {
+    const filePath = path.join(paths.journalRoot, name);
+    let stats;
+    try {
+      stats = await lstat(filePath);
+    } catch {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    assertPrivateStats(stats, 'file', uid, PRIVATE_FILE_MODE, 2);
+    if (stats.size > SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    if (reap) {
+      await unlink(filePath);
+      removed = true;
+    } else {
+      identities.push({
+        dev: BigInt(stats.dev),
+        ino: BigInt(stats.ino),
+      });
+    }
+  }
+  if (removed) await syncDirectory(paths.journalRoot, uid);
+  return Object.freeze(identities);
+}
+
+/**
+ * Read the complete bounded append-only chain.
+ * @param {Readonly<Record<string, any>>} paths - Journal paths.
+ * @param {number} uid - Required owner.
+ * @param {boolean} reapTemps - Whether to reap interrupted temp links.
+ * @returns {Promise<Readonly<Record<string, any>> | null>} - Latest record.
+ */
+async function loadLatest(paths, uid, reapTemps) {
+  if (!(await inspectPrivateTree(paths, uid))) return null;
+  let names;
+  try {
+    names = await readdir(paths.journalRoot);
+  } catch {
+    throw new SingleNodeDeploymentJournalInvalidError();
+  }
+  const temporaryIdentities = await inspectTemporaryFiles(
+    paths,
+    uid,
+    names,
+    reapTemps,
+  );
+  const recordNames = names
+    .filter((name) => JOURNAL_FILE_PATTERN.test(name))
+    .sort();
+  const recognized = new Set([
+    ...recordNames,
+    ...names.filter((name) => JOURNAL_TEMP_PATTERN.test(name)),
+  ]);
+  if (recognized.size !== names.length) {
+    throw new SingleNodeDeploymentJournalInvalidError();
+  }
+  if (recordNames.length === 0) return null;
+  if (recordNames.length > SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS) {
+    throw new SingleNodeDeploymentJournalCapacityError();
+  }
+  /** @type {Readonly<Record<string, any>> | null} */
+  let prior = null;
+  for (let index = 0; index < recordNames.length; index += 1) {
+    const name = recordNames[index];
+    const generation = Number(JOURNAL_FILE_PATTERN.exec(name)?.[1]);
+    if (generation !== index) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    const { record, identity } = await readRecordFile(
+      path.join(paths.journalRoot, name),
+      uid,
+    );
+    if (
+      identity.nlink === 2 &&
+      !temporaryIdentities.some(
+        (temporary) =>
+          temporary.dev === identity.dev && temporary.ino === identity.ino,
+      )
+    ) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    if (record.generation !== generation) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    if (prior === null) {
+      if (generation !== 0) {
+        throw new SingleNodeDeploymentJournalInvalidError();
+      }
+    } else {
+      try {
+        validateSingleNodeDeploymentJournalSuccessor(prior, record);
+      } catch {
+        throw new SingleNodeDeploymentJournalInvalidError();
+      }
+    }
+    prior = record;
+  }
+  return prior;
+}
+
+/**
+ * Publish one fully synced immutable generation through a hard-link CAS.
+ * @param {Readonly<Record<string, any>>} paths - Journal paths.
+ * @param {number} uid - Required owner.
+ * @param {Readonly<Record<string, any>>} record - Exact next record.
+ */
+async function publishRecord(paths, uid, record) {
+  const targetPath = path.join(
+    paths.journalRoot,
+    recordFileName(record.generation),
+  );
+  const temporaryPath = path.join(
+    paths.journalRoot,
+    `.journal-${String(record.generation).padStart(16, '0')}-${randomUUID()}.tmp`,
+  );
+  const encoded = Buffer.from(
+    `${JSON.stringify(sortCanonicalJsonValue(record))}\n`,
+    'utf8',
+  );
+  if (encoded.byteLength > SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES) {
+    throw new SingleNodeDeploymentJournalCapacityError();
+  }
+  const handle = await open(
+    temporaryPath,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      (fsConstants.O_NOFOLLOW || 0),
+    PRIVATE_FILE_MODE,
+  );
+  let linked = false;
+  /** @type {unknown} */
+  let primaryError;
+  try {
+    assertPrivateStats(await handle.stat(), 'file', uid, PRIVATE_FILE_MODE);
+    let offset = 0;
+    while (offset < encoded.byteLength) {
+      const { bytesWritten } = await handle.write(
+        encoded,
+        offset,
+        encoded.byteLength - offset,
+        offset,
+      );
+      if (bytesWritten === 0) {
+        throw new Error('journal publication made no progress');
+      }
+      offset += bytesWritten;
+    }
+    await handle.sync();
+    try {
+      await link(temporaryPath, targetPath);
+      linked = true;
+    } catch (error) {
+      if (hasCode(error, 'EEXIST')) {
+        throw new SingleNodeDeploymentJournalConflictError();
+      }
+      throw error;
+    }
+    await syncDirectory(paths.journalRoot, uid);
+  } catch (error) {
+    primaryError = error;
+  }
+  try {
+    await handle.close();
+  } catch (error) {
+    primaryError =
+      primaryError === undefined
+        ? error
+        : new AggregateError(
+            [primaryError, error],
+            'Journal publication and descriptor cleanup both failed.',
+          );
+  }
+  try {
+    await unlink(temporaryPath);
+    await syncDirectory(paths.journalRoot, uid);
+  } catch (error) {
+    if (!hasCode(error, 'ENOENT') && !linked) {
+      primaryError =
+        primaryError === undefined
+          ? error
+          : new AggregateError(
+              [primaryError, error],
+              'Journal publication and temporary cleanup both failed.',
+            );
+    }
+  }
+  if (primaryError !== undefined) throw primaryError;
+}
+
+/**
+ * Create a stable app-scoped append-only journal store. The constructor has no
+ * filesystem side effects; initialize is the mandatory pre-mutation write.
+ * @param {unknown} value - Store identity and optional testable roots.
+ * @returns {Readonly<Record<string, any>>} - Journal store capability.
+ */
+export function createSingleNodeDeploymentJournalStore(value) {
+  const input = exactOptionsObject(
+    value,
+    STORE_REQUIRED_KEYS,
+    STORE_OPTION_KEYS,
+    'singleNodeDeploymentJournal.store',
+  );
+  assertLogicalId(input.appId, 'singleNodeDeploymentJournal.store.appId');
+  assertSingleNodeDeploymentInstanceId(
+    input.deploymentInstanceId,
+    'singleNodeDeploymentJournal.store.deploymentInstanceId',
+  );
+  const expectedUid =
+    input.expectedUid === undefined
+      ? process.getuid?.()
+      : nonnegativeSafeInteger(
+          input.expectedUid,
+          'singleNodeDeploymentJournal.store.expectedUid',
+        );
+  if (!Number.isSafeInteger(expectedUid) || Number(expectedUid) < 0) {
+    throw new Error(
+      'singleNodeDeploymentJournal store requires a numeric account uid.',
+    );
+  }
+  const dataRoot =
+    input.dataRoot === undefined
+      ? resolveStableLocalAppDataRoot({
+          platform: input.platform,
+          homeDirectory: input.homeDirectory,
+        })
+      : canonicalAbsolutePath(
+          input.dataRoot,
+          'singleNodeDeploymentJournal.store.dataRoot',
+        );
+  const paths = createSingleNodeDeploymentJournalPaths({
+    appId: input.appId,
+    deploymentInstanceId: input.deploymentInstanceId,
+    dataRoot,
+  });
+  const uid = Number(expectedUid);
+
+  /** @returns {Promise<Readonly<Record<string, any>> | null>} */
+  async function read() {
+    const latest = await loadLatest(paths, uid, false);
+    if (
+      latest !== null &&
+      (latest.deploymentInstanceId !== input.deploymentInstanceId ||
+        latest.desired.intent.appId !== input.appId)
+    ) {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    return latest;
+  }
+
+  /** @param {unknown} request - Initialization authority. */
+  async function initialize(request) {
+    const initial = createSingleNodeDeploymentJournal(request);
+    if (
+      initial.deploymentInstanceId !== input.deploymentInstanceId ||
+      initial.desired.intent.appId !== input.appId
+    ) {
+      throw new Error(
+        'singleNodeDeploymentJournal initial authority does not match its store.',
+      );
+    }
+    await ensurePrivateTree(paths, uid);
+    const latest = await loadLatest(paths, uid, true);
+    if (latest !== null) {
+      if (
+        latest.deploymentInstanceId === initial.deploymentInstanceId &&
+        latest.incarnationId === initial.incarnationId &&
+        JSON.stringify(latest.desired) === JSON.stringify(initial.desired) &&
+        JSON.stringify(latest.providerIntent) ===
+          JSON.stringify(initial.providerIntent)
+      ) {
+        return latest;
+      }
+      throw new SingleNodeDeploymentJournalConflictError();
+    }
+    await publishRecord(paths, uid, initial);
+    return initial;
+  }
+
+  /** @param {unknown} request - Exact CAS publication request. */
+  async function commit(request) {
+    const inputRequest = exactDataObject(
+      request,
+      COMMIT_KEYS,
+      'singleNodeDeploymentJournal.commit',
+    );
+    const expectedGeneration = nonnegativeSafeInteger(
+      inputRequest.expectedGeneration,
+      'singleNodeDeploymentJournal.commit.expectedGeneration',
+    );
+    assertDomainSeparatedSha256Id(
+      inputRequest.expectedJournalId,
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+      'singleNodeDeploymentJournal.commit.expectedJournalId',
+    );
+    const next = validateSingleNodeDeploymentJournal(
+      inputRequest.next,
+      'singleNodeDeploymentJournal.commit.next',
+    );
+    await ensurePrivateTree(paths, uid);
+    const current = await loadLatest(paths, uid, true);
+    if (
+      current === null ||
+      current.generation !== expectedGeneration ||
+      current.journalId !== inputRequest.expectedJournalId
+    ) {
+      throw new SingleNodeDeploymentJournalConflictError();
+    }
+    if (next.journalId === current.journalId) return current;
+    validateSingleNodeDeploymentJournalSuccessor(current, next);
+    if (current.generation + 1 >= SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS) {
+      throw new SingleNodeDeploymentJournalCapacityError();
+    }
+    await publishRecord(paths, uid, next);
+    return next;
+  }
+
+  return Object.freeze({ paths, read, initialize, commit });
+}
+
+export default {
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION,
+  advanceSingleNodeDeploymentJournal,
+  completeSingleNodeDeploymentMutation,
+  createSingleNodeDeploymentJournal,
+  createSingleNodeDeploymentJournalPaths,
+  createSingleNodeDeploymentJournalStore,
+  getSingleNodeDeploymentMutationAttempt,
+  getSingleNodeDeploymentProvisioningRecoveryState,
+  prepareSingleNodeDeploymentMutation,
+  recordSingleNodeDeploymentActivation,
+  recordSingleNodeDeploymentArtifact,
+  recordSingleNodeDeploymentResource,
+  recordSingleNodeDeploymentSshHost,
+  validateSingleNodeDeploymentJournal,
+  validateSingleNodeDeploymentJournalSuccessor,
+};
