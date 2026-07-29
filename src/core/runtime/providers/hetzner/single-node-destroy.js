@@ -6,6 +6,7 @@ import process from 'node:process';
 import { assertLogicalId } from '../../logical-id.js';
 import {
   advanceSingleNodeDeploymentJournal,
+  completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournalStore,
   getSingleNodeDeploymentDestructionRecoveryState,
   prepareSingleNodeDeploymentDestruction,
@@ -16,6 +17,10 @@ import { assertSingleNodeDeploymentInstanceId } from '../../single-node-deployme
 import { acquireSingleNodeDeploymentOperationLock } from '../../single-node-deployment-operation-lock.js';
 import { createHetznerActionWaiter } from './action-waiter.js';
 import { createHetznerApiClient } from './api-client.js';
+import {
+  HETZNER_PROVISIONED_RESOURCE_KIND,
+  reconcileHetznerPreparedCreateForDestroy,
+} from './single-node-provisioning.js';
 import {
   createHetznerCredentialBindingStore,
   validateHetznerCredentialBindingEvidence,
@@ -30,9 +35,10 @@ const INPUT_KEYS = new Set(['appId', 'deploymentInstanceId', 'dataRoot']);
 const DEPENDENCY_KEYS = new Set([
   'acquireOperationLock',
   'readToken',
-  'bindCredential',
+  'requireCredentialBinding',
   'createApi',
   'createJournalStore',
+  'reconcilePreparedMutation',
   'waitForAction',
   'convergeDestruction',
 ]);
@@ -295,16 +301,6 @@ export function createHetznerSingleNodeDestroyCoordinator(dependencies) {
             'hetznerSingleNodeDestroy journal conflicts with the requested deployment.',
           );
         }
-        if (
-          journal.mutationAttempts.some(
-            (/** @type {Record<string, any>} */ attempt) =>
-              attempt.state === 'prepared',
-          )
-        ) {
-          throw new Error(
-            'hetznerSingleNodeDestroy cannot continue with an unresolved create mutation.',
-          );
-        }
         if (journal.phase === 'destroyed') {
           result = createResult(journal);
           succeeded = true;
@@ -320,7 +316,7 @@ export function createHetznerSingleNodeDestroyCoordinator(dependencies) {
             );
           }
           const binding = validateHetznerCredentialBindingEvidence(
-            await ports.bindCredential({
+            await ports.requireCredentialBinding({
               dataRoot: input.dataRoot,
               deploymentInstanceId: input.deploymentInstanceId,
               token,
@@ -361,14 +357,38 @@ export function createHetznerSingleNodeDestroyCoordinator(dependencies) {
             journal = committed;
           }
 
+          const intent = journal.providerIntent.intent;
           if (journal.phase !== 'destroying') {
             await commit(
               advanceSingleNodeDeploymentJournal(journal, 'destroying'),
             );
           }
+          for (const prepared of journal.mutationAttempts.filter(
+            (/** @type {Record<string, any>} */ attempt) =>
+              attempt.state === 'prepared',
+          )) {
+            const recovered = await ports.reconcilePreparedMutation({
+              intent,
+              mutationAttempt: prepared.evidence,
+              api,
+            });
+            if (
+              recovered !== null &&
+              typeof recovered === 'object' &&
+              !Array.isArray(recovered) &&
+              recovered.kind === HETZNER_PROVISIONED_RESOURCE_KIND
+            ) {
+              await commit(
+                completeSingleNodeDeploymentMutation(journal, recovered),
+              );
+            } else {
+              throw new Error(
+                'hetznerSingleNodeDestroy prepared mutation recovery returned invalid evidence.',
+              );
+            }
+          }
           const recovery =
             getSingleNodeDeploymentDestructionRecoveryState(journal);
-          const intent = journal.providerIntent.intent;
           const destroyed = await ports.convergeDestruction({
             intent,
             storedResourceIds: recovery.storedResourceIds,
@@ -428,15 +448,18 @@ export function createProductionHetznerSingleNodeDestroyCoordinator() {
   return createHetznerSingleNodeDestroyCoordinator({
     acquireOperationLock: acquireSingleNodeDeploymentOperationLock,
     readToken: () => process.env.HCLOUD_TOKEN,
-    bindCredential: async (/** @type {Record<string, any>} */ value) =>
+    requireCredentialBinding: async (
+      /** @type {Record<string, any>} */ value,
+    ) =>
       await createHetznerCredentialBindingStore({
         root: path.join(value.dataRoot, 'single-node-deployment-credentials'),
-      }).ensureBinding({
+      }).requireBinding({
         deploymentInstanceId: value.deploymentInstanceId,
         token: value.token,
       }),
     createApi: createHetznerApiClient,
     createJournalStore: createSingleNodeDeploymentJournalStore,
+    reconcilePreparedMutation: reconcileHetznerPreparedCreateForDestroy,
     waitForAction: async (
       /** @type {Record<string, any>} */ api,
       /** @type {number} */ actionId,

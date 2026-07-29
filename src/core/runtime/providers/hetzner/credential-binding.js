@@ -43,6 +43,7 @@ const MAX_REMOVAL_DIRECTORY_ENTRIES = 2;
 const OPTIONS_ROOT_KEYS = new Set(['root']);
 const OPTIONS_RANDOM_KEYS = new Set(['root', 'randomBytes']);
 const ENSURE_KEYS = new Set(['deploymentInstanceId', 'token']);
+const REQUIRE_KEYS = new Set(['deploymentInstanceId', 'token']);
 const EVIDENCE_KEYS = new Set([
   'schemaVersion',
   'kind',
@@ -69,6 +70,15 @@ export class HetznerCredentialBindingInvalidError extends Error {
     super('Hetzner credential binding state is invalid.');
     this.name = 'HetznerCredentialBindingInvalidError';
     this.code = 'WHARFIE_HETZNER_CREDENTIAL_BINDING_INVALID';
+  }
+}
+
+/** The requested deployment has no previously established credential binding. */
+export class HetznerCredentialBindingMissingError extends Error {
+  constructor() {
+    super('Hetzner credential binding state is missing.');
+    this.name = 'HetznerCredentialBindingMissingError';
+    this.code = 'WHARFIE_HETZNER_CREDENTIAL_BINDING_MISSING';
   }
 }
 
@@ -701,7 +711,7 @@ export function validateHetznerCredentialBindingEvidence(value) {
  * Create one private local binding store. No method reads the environment,
  * invokes a provider, or writes during construction.
  * @param {unknown} value - Exact `{root, randomBytes?}` options.
- * @returns {{ensureBinding(value: unknown): Promise<ReturnType<typeof bindingEvidence>>, removeBinding(value: unknown): Promise<void>}} - Credential-binding lifecycle.
+ * @returns {{ensureBinding(value: unknown): Promise<ReturnType<typeof bindingEvidence>>, requireBinding(value: unknown): Promise<ReturnType<typeof bindingEvidence>>, removeBinding(value: unknown): Promise<void>}} - Credential-binding lifecycle.
  */
 export function createHetznerCredentialBindingStore(value) {
   if (!isPlainObject(value)) {
@@ -817,6 +827,63 @@ export function createHetznerCredentialBindingStore(value) {
     },
 
     /**
+     * Require and verify an already-published immutable binding. This path is
+     * deliberately read-only: absence, corruption, or a mismatched token can
+     * never create directories, publish a candidate, or rebind authority.
+     * @param {unknown} value - Exact deployment identity and token.
+     * @returns {Promise<ReturnType<typeof bindingEvidence>>} - Existing secret-free evidence.
+     */
+    async requireBinding(value) {
+      const request = exactDataObject(
+        value,
+        REQUIRE_KEYS,
+        'Hetzner credential binding requirement',
+      );
+      assertSingleNodeDeploymentInstanceId(
+        request.deploymentInstanceId,
+        'Hetzner credential binding requirement deploymentInstanceId',
+      );
+      const token = validateToken(request.token);
+      await assertTrustedParent(path.dirname(root), expectedUid);
+      const rootState = await inspectPrivateDirectoryIfPresent(
+        root,
+        expectedUid,
+      );
+      if (rootState === null) {
+        throw new HetznerCredentialBindingMissingError();
+      }
+      const paths = getPaths(request.deploymentInstanceId);
+      const directoryState = await inspectPrivateDirectoryIfPresent(
+        paths.directory,
+        expectedUid,
+      );
+      if (directoryState === null) {
+        throw new HetznerCredentialBindingMissingError();
+      }
+      const names = await readBoundedDirectoryNames(paths.directory);
+      if (names.length === 0) {
+        throw new HetznerCredentialBindingMissingError();
+      }
+      if (
+        names.length !== 1 ||
+        names[0] !== HETZNER_CREDENTIAL_BINDING_FILE_NAME
+      ) {
+        throw new HetznerCredentialBindingInvalidError();
+      }
+      const existing = await readBinding({
+        filePath: paths.bindingPath,
+        deploymentInstanceId: request.deploymentInstanceId,
+        expectedUid,
+        maximumFileLinks: 1,
+      });
+      if (existing === null) {
+        throw new HetznerCredentialBindingMissingError();
+      }
+      assertMatchingToken(existing.document, token);
+      return existing.evidence;
+    },
+
+    /**
      * Remove only the exact binding named by prior verified evidence.
      * @param {unknown} value - Exact secret-free evidence.
      * @returns {Promise<void>}
@@ -910,6 +977,7 @@ export default {
   HETZNER_CREDENTIAL_BINDING_SCHEMA_VERSION,
   HETZNER_CREDENTIAL_TOKEN_MAX_BYTES,
   HetznerCredentialBindingInvalidError,
+  HetznerCredentialBindingMissingError,
   HetznerCredentialBindingMismatchError,
   createHetznerCredentialBindingStore,
   validateHetznerCredentialBindingEvidence,

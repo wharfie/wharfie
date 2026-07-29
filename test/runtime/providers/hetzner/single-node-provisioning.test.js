@@ -8,6 +8,7 @@ import {
   createHetznerProvisionedResourceRecord,
   createHetznerProvisioningMutationAttempt,
   createHetznerSingleNodeProvisioningIntent,
+  reconcileHetznerPreparedCreateForDestroy,
   validateHetznerProvisionedResourceRecord,
   validateHetznerProvisioningMutationAttempt,
   validateHetznerSingleNodeProvisioningIntent,
@@ -419,6 +420,58 @@ function attemptsByRole(records) {
 }
 
 describe('Hetzner single-node provisioning convergence', () => {
+  it('reconciles a prepared create to an exact owned resource without posting', async () => {
+    const fixture = await makeFixture();
+    const provider = makeProvider(fixture);
+    const attempt = createHetznerProvisioningMutationAttempt(
+      fixture.intent,
+      'firewall',
+    );
+    provider.state.firewalls.push({
+      id: 71,
+      name: fixture.intent.resources.firewall.ownership.name,
+      labels: fixture.intent.resources.firewall.ownership.labels,
+    });
+
+    const recovered = await reconcileHetznerPreparedCreateForDestroy({
+      intent: fixture.intent,
+      mutationAttempt: attempt,
+      api: provider.api,
+    });
+
+    expect(recovered).toEqual(
+      createHetznerProvisionedResourceRecord(fixture.intent, 'firewall', 71),
+    );
+    expect(provider.api.listFirewalls).toHaveBeenCalledTimes(2);
+    expect(provider.api.createFirewall).not.toHaveBeenCalled();
+    expect(provider.api.createPrimaryIp).not.toHaveBeenCalled();
+    expect(provider.api.createServer).not.toHaveBeenCalled();
+  });
+
+  it('keeps clean prepared-create inventory retryable without posting', async () => {
+    const fixture = await makeFixture();
+    const provider = makeProvider(fixture);
+    const attempt = createHetznerProvisioningMutationAttempt(
+      fixture.intent,
+      'primaryIp',
+    );
+
+    await expect(
+      reconcileHetznerPreparedCreateForDestroy({
+        intent: fixture.intent,
+        mutationAttempt: attempt,
+        api: provider.api,
+      }),
+    ).rejects.toMatchObject({
+      code: 'HETZNER_PROVISIONING_DESTROY_RECOVERY_PENDING',
+      role: 'primaryIp',
+    });
+    expect(provider.api.listPrimaryIps).toHaveBeenCalledTimes(2);
+    expect(provider.api.createFirewall).not.toHaveBeenCalled();
+    expect(provider.api.createPrimaryIp).not.toHaveBeenCalled();
+    expect(provider.api.createServer).not.toHaveBeenCalled();
+  });
+
   it('creates exact resources in dependency order and returns secret-free evidence', async () => {
     const fixture = await makeFixture();
     const provider = makeProvider(fixture);

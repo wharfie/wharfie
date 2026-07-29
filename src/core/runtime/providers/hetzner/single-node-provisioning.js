@@ -70,6 +70,7 @@ const CONVERGE_KEYS = new Set([
   'recordMutationAttempt',
   'recordResource',
 ]);
+const DESTROY_RECOVERY_KEYS = new Set(['intent', 'mutationAttempt', 'api']);
 const STORED_ID_KEYS = new Set(['firewall', 'primaryIp', 'server']);
 const MUTATION_ATTEMPT_KEYS = new Set([
   'schemaVersion',
@@ -940,6 +941,90 @@ function classifiedId(role, classification) {
 }
 
 /**
+ * Resolve one prepared create solely through exact ownership inventory for
+ * destruction. This boundary has no create method and therefore cannot replay
+ * the provider mutation. Clean current inventory remains retryable because a
+ * timeout cannot prove that an ambiguous non-idempotent POST did not commit.
+ * @param {unknown} value - Exact intent, durable fence, and provider API.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Exact found resource.
+ */
+export async function reconcileHetznerPreparedCreateForDestroy(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(
+      'hetznerProvisioning destroy recovery input is invalid.',
+    );
+  }
+  /** @type {Record<string, any>} */
+  const input = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string' || !DESTROY_RECOVERY_KEYS.has(key)) {
+      throw new TypeError(
+        'hetznerProvisioning destroy recovery contains an unsupported field.',
+      );
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, 'value')
+    ) {
+      throw new TypeError(
+        'hetznerProvisioning destroy recovery input is invalid.',
+      );
+    }
+    input[key] = descriptor.value;
+  }
+  for (const key of DESTROY_RECOVERY_KEYS) {
+    if (!Object.hasOwn(input, key)) {
+      throw new TypeError(
+        `hetznerProvisioning destroy recovery.${key} is required.`,
+      );
+    }
+  }
+  const intent = validateHetznerSingleNodeProvisioningIntent(input.intent);
+  const attempt = validateHetznerProvisioningMutationAttempt(
+    input.mutationAttempt,
+    intent,
+    undefined,
+    'hetznerProvisioning.destroyRecovery.mutationAttempt',
+  );
+  if (
+    input.api === null ||
+    typeof input.api !== 'object' ||
+    Array.isArray(input.api)
+  ) {
+    throw new TypeError(
+      'hetznerProvisioning destroy recovery API must be a client.',
+    );
+  }
+  const listMethod = ROLE_CONFIG[attempt.role].list;
+  const candidate = /** @type {Record<string, any>} */ (input.api)[listMethod];
+  if (typeof candidate !== 'function') {
+    throw new TypeError(
+      `hetznerProvisioning destroy recovery API.${listMethod} is required.`,
+    );
+  }
+  const api = Object.freeze({
+    [listMethod]: candidate.bind(input.api),
+  });
+  const observed = await inventory(
+    attempt.role,
+    intent.resources[attempt.role],
+    null,
+    api,
+  );
+  const id = classifiedId(attempt.role, observed.classification);
+  if (id === null) {
+    throw safeRoleError(
+      'HETZNER_PROVISIONING_DESTROY_RECOVERY_PENDING',
+      attempt.role,
+      `Hetzner ${attempt.role} prepared create is not visible in ownership inventory yet.`,
+    );
+  }
+  return createCanonicalProvisionedResourceRecord(intent, attempt.role, id);
+}
+
+/**
  * @param {string} role - Resource role.
  * @param {number} id - Exact provider ID.
  * @param {Readonly<Record<string, Function>>} api - API.
@@ -1599,6 +1684,7 @@ export default {
   createHetznerProvisionedResourceRecord,
   createHetznerProvisioningMutationAttempt,
   createHetznerSingleNodeProvisioningIntent,
+  reconcileHetznerPreparedCreateForDestroy,
   validateHetznerProvisionedResourceRecord,
   validateHetznerProvisioningMutationAttempt,
   validateHetznerSingleNodeProvisioningIntent,

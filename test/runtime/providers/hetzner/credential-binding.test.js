@@ -15,7 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import {
   HETZNER_CREDENTIAL_BINDING_EVIDENCE_KIND,
@@ -24,6 +24,7 @@ import {
   HETZNER_CREDENTIAL_BINDING_SCHEMA_VERSION,
   HETZNER_CREDENTIAL_TOKEN_MAX_BYTES,
   HetznerCredentialBindingInvalidError,
+  HetznerCredentialBindingMissingError,
   HetznerCredentialBindingMismatchError,
   createHetznerCredentialBindingStore,
   validateHetznerCredentialBindingEvidence,
@@ -103,6 +104,109 @@ describe('Hetzner credential binding store', () => {
 
     expect(Object.isFrozen(store)).toBe(true);
     await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('requires an existing binding without creating missing local state', async () => {
+    const { root, store } = await makeFixture();
+    const instanceId = deploymentInstanceId();
+
+    await expect(
+      store.requireBinding(ensureRequest(instanceId)),
+    ).rejects.toBeInstanceOf(HetznerCredentialBindingMissingError);
+    await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('treats an existing empty deployment directory as missing without writing', async () => {
+    const { root, store } = await makeFixture();
+    const instanceId = deploymentInstanceId();
+    const paths = bindingPaths(root, instanceId);
+    await mkdir(root, { mode: 0o700 });
+    await mkdir(paths.directory, { mode: 0o700 });
+
+    await expect(
+      store.requireBinding(ensureRequest(instanceId)),
+    ).rejects.toBeInstanceOf(HetznerCredentialBindingMissingError);
+    expect(await readdir(paths.directory)).toEqual([]);
+  });
+
+  it('verifies an existing binding through a read-only path', async () => {
+    const randomBytes = jest.fn(deterministicRandomBytes(9));
+    const { root, store } = await makeFixture({ randomBytes });
+    const instanceId = deploymentInstanceId();
+    const evidence = await store.ensureBinding(ensureRequest(instanceId));
+    const paths = bindingPaths(root, instanceId);
+    const beforeText = await readFile(paths.bindingPath, 'utf8');
+    const beforeNames = await readdir(paths.directory);
+    const beforeStats = await lstat(paths.bindingPath);
+
+    await expect(
+      store.requireBinding(ensureRequest(instanceId)),
+    ).resolves.toEqual(evidence);
+
+    const afterStats = await lstat(paths.bindingPath);
+    expect(randomBytes).toHaveBeenCalledTimes(1);
+    expect(await readFile(paths.bindingPath, 'utf8')).toBe(beforeText);
+    expect(await readdir(paths.directory)).toEqual(beforeNames);
+    expect({
+      dev: afterStats.dev,
+      ino: afterStats.ino,
+      mode: afterStats.mode,
+      nlink: afterStats.nlink,
+      size: afterStats.size,
+      mtimeMs: afterStats.mtimeMs,
+      ctimeMs: afterStats.ctimeMs,
+    }).toEqual({
+      dev: beforeStats.dev,
+      ino: beforeStats.ino,
+      mode: beforeStats.mode,
+      nlink: beforeStats.nlink,
+      size: beforeStats.size,
+      mtimeMs: beforeStats.mtimeMs,
+      ctimeMs: beforeStats.ctimeMs,
+    });
+  });
+
+  it('rejects a wrong token without rebinding or writing state', async () => {
+    const randomBytes = jest.fn(deterministicRandomBytes(11));
+    const { root, store } = await makeFixture({ randomBytes });
+    const instanceId = deploymentInstanceId();
+    await store.ensureBinding(ensureRequest(instanceId));
+    const paths = bindingPaths(root, instanceId);
+    const beforeText = await readFile(paths.bindingPath, 'utf8');
+    const beforeNames = await readdir(paths.directory);
+    const beforeStats = await lstat(paths.bindingPath);
+    const changed = 'hcloud-wrong-token-sentinel';
+
+    let thrown;
+    try {
+      await store.requireBinding(ensureRequest(instanceId, changed));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(HetznerCredentialBindingMismatchError);
+    expect(String(thrown)).not.toContain(changed);
+    const afterStats = await lstat(paths.bindingPath);
+    expect(randomBytes).toHaveBeenCalledTimes(1);
+    expect(await readFile(paths.bindingPath, 'utf8')).toBe(beforeText);
+    expect(await readdir(paths.directory)).toEqual(beforeNames);
+    expect({
+      dev: afterStats.dev,
+      ino: afterStats.ino,
+      mode: afterStats.mode,
+      nlink: afterStats.nlink,
+      size: afterStats.size,
+      mtimeMs: afterStats.mtimeMs,
+      ctimeMs: afterStats.ctimeMs,
+    }).toEqual({
+      dev: beforeStats.dev,
+      ino: beforeStats.ino,
+      mode: beforeStats.mode,
+      nlink: beforeStats.nlink,
+      size: beforeStats.size,
+      mtimeMs: beforeStats.mtimeMs,
+      ctimeMs: beforeStats.ctimeMs,
+    });
   });
 
   it('persists only a canonical salted HMAC verifier with private modes', async () => {
