@@ -17,7 +17,7 @@ describe('src/core/lib/node-sea.js', () => {
   it('exposes Node-owned raw SEA asset bytes without copying', async () => {
     const originalGetBuiltinModule = process.getBuiltinModule;
     const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
-    const getRawAsset = jest.fn(() => bytes);
+    const getRawAsset = jest.fn((/** @type {string} */ _name) => bytes);
 
     try {
       process.getBuiltinModule = () =>
