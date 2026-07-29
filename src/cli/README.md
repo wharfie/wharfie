@@ -156,10 +156,10 @@ metadata. Branches, loops, parallel workflow steps, an early-signal inbox,
 managed-effect workflow successors, schedule pause/resume controls, and public
 log tail/search remain unsupported.
 
-The provider-backed `deployment` group has exactly five leaves: `plan`,
-`apply`, `inspect`, `reconcile`, and `destroy`. Source plan and direct apply
-accept a canonical DeploymentProfileV2 operator document separately from the
-app manifest:
+The legacy source `deployment` group still has five AWS-oriented leaves:
+`plan`, `apply`, `inspect`, `reconcile`, and `destroy`. Source plan and direct
+apply accept a canonical DeploymentProfileV2 operator document separately
+from the app manifest:
 
 ```text
 wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
@@ -170,21 +170,33 @@ wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-
 wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
 ```
 
-The same five leaves are mounted at `<app> wharfie deployment ...`; the
-packaged parent accepts neither `--dir` nor `--output-dir`. Source plan and
-direct apply package a selected SEA and durably pre-stage it. A later source
-`apply --plan` and source reconcile validate exact durable staged evidence.
-Packaged plan/apply and non-destroy reconcile instead prove the SEA running the
-command; active destroy recovery remains durable-only.
-Both modes use the operator's ordinary AWS credential chain; neither the
-canonical profile nor the reusable plan contains credentials. This surface is
-experimental and has focused mock evidence, not a clean-account deployment or
-complete resident service-readiness proof.
+Package a cloud-capable operator SEA with `wharfie app package
+--self-deployable`. Its packaged deployment surface deliberately has only
+Hetzner apply and destroy:
+
+```text
+<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
+```
+
+The SEA reads the authenticated embedded Linux payload and application
+revision, creates the fixed small single-node systemd-user intent, and applies
+or recovers it through durable local authority. Repeat `--allow-ssh-from` for
+each operator address. `HCLOUD_TOKEN` is read only from the ambient process;
+there is no credential option and result output contains no credential data.
+Destroy authenticates only the embedded app identity, then uses the exact
+deployment instance and durable local authority without decoding the embedded
+Linux payload. Packaged `plan`, `inspect`, and `reconcile` are not exposed yet.
+
+Source plan and direct apply package a selected SEA and durably pre-stage it.
+A later source `apply --plan` and source reconcile validate exact durable
+staged evidence. The source mode uses the operator's ordinary AWS credential
+chain; neither the canonical profile nor the reusable plan contains
+credentials. Both deployment surfaces remain experimental.
 Create canonical profiles with the narrow
 `@wharfie/wharfie/deployment-profile` Node authoring API. Source plan JSON
 includes durable staged-artifact evidence and is accepted only by source
-`apply --plan`; packaged plan JSON is accepted only by an exact matching SEA.
-The two exact plan envelopes are intentionally not interchangeable.
+`apply --plan`.
 Plan requires an explicit control policy because source planning may package,
 stage, and create bootstrap control state. Direct apply defaults to `bootstrap`;
 prepared apply and the three located commands default to `require-active`.

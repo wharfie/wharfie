@@ -844,6 +844,8 @@ wharfie app package ./path/to/app --target linux-x64 \
 
 Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
+Add `--self-deployable` when the operator SEA should carry an authenticated
+Linux x64 glibc SEA for the packaged deployment command.
 
 By default, success writes a human summary. With `--json`, it writes exactly
 one schema-version 1 `wharfie.application.package` JSON receipt. Its
@@ -884,10 +886,9 @@ destination; the receipt deliberately makes no `created` or `reused` claim.
 ## Try the experimental deployment lifecycle
 
 Provider-backed deployment is now mounted, but it is still an experimental
-operator surface with focused automated evidence. It has not completed a
-clean-account lifecycle proof and does not yet establish that the deployed
-resident service is ready. The command tree has exactly five leaves: `plan`,
-`apply`, `inspect`, `reconcile`, and `destroy`.
+operator surface with focused automated evidence. The legacy source command
+tree has five AWS-oriented leaves: `plan`, `apply`, `inspect`, `reconcile`, and
+`destroy`.
 
 Plan and direct apply take a canonical DeploymentProfileV2 (`wpr2`) JSON
 document. The profile binds the app, Linux target, fixed single-node mode, AWS
@@ -948,11 +949,9 @@ package, stage, and create bootstrap control state. Direct apply defaults to
 `require-active`. Use `plan --json` to retain the complete reusable document;
 pass that document alone to `apply --plan` on the same command surface. Source
 plan JSON contains exact durable staged-artifact evidence and is accepted only
-by source `apply --plan`. Packaged plan JSON omits that evidence, is accepted
-only by an exact matching SEA's `apply --plan`, and cannot be moved to the
-source surface. The prepared-plan form cannot be combined with a positional
-deployment, `--profile`, `--dir`, or `--output-dir`. Supply scalar selectors
-such as profile, plan, region, policy, and source paths at most once.
+by source `apply --plan`. The prepared-plan form cannot be combined with a
+positional deployment, `--profile`, `--dir`, or `--output-dir`. Supply scalar
+selectors such as profile, plan, region, policy, and source paths at most once.
 
 Source plan and direct apply freshly package the selected target and durably
 pre-stage its exact SEA before returning. Source `apply --plan` later validates
@@ -961,27 +960,23 @@ that happens to run the CLI. Source reconcile likewise reloads and validates
 the exact durable stage instead of treating that Node process as artifact
 authority.
 
-The packaged executable exposes the same five leaves. Its direct grammar omits
-the source-only directory options:
+An executable built with `wharfie app package --self-deployable` instead
+exposes narrow Hetzner apply and destroy commands:
 
 ```text
-<app> wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--json]
-<app> wharfie deployment apply <deployment> --profile <canonical-profile.json> [--control-policy <policy>] [--json]
-<app> wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
-<app> wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-<app> wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
-<app> wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
 
-Packaged plan, both apply forms, and non-destroy reconcile validate the SEA that
-is actually running the command; no artifact-path override is accepted.
-Inspection and destroy use durable deployment identity and provider evidence
-instead of historical local artifact bytes, so recovery of an active destroy
-also remains executable-independent. `reconcile` does not silently take over
-ambiguous in-flight work: use `--confirm-coordinator-stopped` only when the
-prior coordinator is known unable to continue. A valid returned head that
-still carries an active operation is reported as an incomplete nonzero result;
-inspect it before deciding whether confirmed recovery is safe.
+The command authenticates its embedded revision and Linux deployment SEA,
+creates the fixed small single-node systemd-user intent, and applies or
+recovers it through durable local authority. Repeat `--allow-ssh-from` for each
+operator IPv4 `/32`. It accepts no token option: the Hetzner coordinator reads
+`HCLOUD_TOKEN` from the ambient process and output omits credentials.
+Destroy authenticates only the embedded app identity and uses the exact
+deployment instance plus durable local authority without decoding the large
+embedded Linux payload. Packaged plan, inspect, and reconcile are not exposed
+yet.
 
 The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,

@@ -112,7 +112,7 @@ describe('packaged application dispatch', () => {
     expect(help).not.toMatch(/\bctl\b/);
   });
 
-  it('mounts the exact nested deployment lifecycle without replacing flat ledger commands', async () => {
+  it('mounts only self-deployable apply and destroy without replacing flat ledger commands', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
     const program = createProgram();
     const deployment = program.commands.find(
@@ -126,7 +126,7 @@ describe('packaged application dispatch', () => {
         /** @param {import('commander').Command} command */
         (command) => command.name(),
       ),
-    ).toEqual(['plan', 'apply', 'inspect', 'reconcile', 'destroy']);
+    ).toEqual(['apply', 'destroy']);
     expect(
       program.commands.filter(
         /** @param {import('commander').Command} command */
@@ -200,10 +200,15 @@ describe('packaged application dispatch', () => {
     await program.parseAsync(
       [
         'deployment',
-        'inspect',
-        'not-a-deployment-instance',
-        '--region',
-        'us-east-1',
+        'apply',
+        '--deployment',
+        'preview',
+        '--provider',
+        'aws',
+        '--location',
+        'ash',
+        '--allow-ssh-from',
+        '192.0.2.8/32',
       ],
       { from: 'user' },
     );

@@ -2,6 +2,7 @@ import { Command } from 'commander';
 
 import { packageLocalApp, stringifyJson } from '../../app/local-app.js';
 import { createApplicationPackageReceipt } from '../../app/package-command-receipt.js';
+import { packageSingleNodeSelfDeployableApp } from '../../app/single-node-self-deployable-package.js';
 import { getHostBuildTarget } from '../../../core/runtime/host-build-target.js';
 import { renderTerminalSafeJson } from '../../../core/runtime/operator/terminal-safe-json.js';
 import { displayFailure } from '../../output/basic.js';
@@ -208,6 +209,7 @@ async function withPackageStdoutReserved(operation) {
  * independently testable without constructing a native SEA.
  * @param {{
  *   packageApplication?: typeof packageLocalApp,
+ *   packageSelfDeployableApplication?: typeof packageSingleNodeSelfDeployableApp,
  *   writeOutput?: (value: string) => unknown,
  *   writeDiagnostic?: (value: string) => unknown,
  *   readHostTarget?: typeof getHostBuildTarget
@@ -216,6 +218,9 @@ async function withPackageStdoutReserved(operation) {
  */
 export function createPackageCommand(dependencies = {}) {
   const packageApplication = dependencies.packageApplication || packageLocalApp;
+  const packageSelfDeployableApplication =
+    dependencies.packageSelfDeployableApplication ||
+    packageSingleNodeSelfDeployableApp;
   const writeOutput =
     dependencies.writeOutput ||
     ((value) => {
@@ -241,6 +246,10 @@ export function createPackageCommand(dependencies = {}) {
       collectTargetFilter,
       [],
     )
+    .option(
+      '--self-deployable',
+      'Embed an authenticated Linux SEA for single-node cloud deployment',
+    )
     .option('--json', 'Output the versioned JSON package receipt')
     .option(
       '--no-pretty',
@@ -258,14 +267,28 @@ export function createPackageCommand(dependencies = {}) {
                 if (typeof progress?.message !== 'string') return;
                 writeDiagnostic(`  ${progress.message}\n`);
               };
-          const result = await packageApplication({
+          const packageRequest = {
             dir: resolvedDir,
             outputDir: options.outputDir,
             targetFilters: Array.isArray(options.target) ? options.target : [],
             ...(onProgress ? { onProgress } : {}),
-          });
+          };
+          if (!options.selfDeployable) {
+            const result = await packageApplication(packageRequest);
+            return {
+              receipt: createApplicationPackageReceipt(result),
+              durable: !!result?.revision?.contract?.cli?.durable,
+            };
+          }
+          const result = await packageSelfDeployableApplication(packageRequest);
           return {
-            receipt: createApplicationPackageReceipt(result),
+            receipt: createApplicationPackageReceipt({
+              app: result.app,
+              revision: result.revision,
+              targets: result.targets,
+              outputDir: result.outputDir,
+              artifacts: result.artifacts,
+            }),
             durable: !!result?.revision?.contract?.cli?.durable,
           };
         });

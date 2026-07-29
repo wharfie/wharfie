@@ -38,22 +38,23 @@ packaging behavior.
 
 Local `app` and `ops` commands do not require cloud credentials or global
 Wharfie configuration. The source CLI now also mounts an experimental
-`deployment` group, and generated application SEAs mount the same group at
-`<app> wharfie deployment ...`. These commands use the operator's ordinary AWS
-credential chain. They do not accept or persist credentials in the app
-manifest, DeploymentProfileV2, plan, or artifact.
+AWS-oriented `deployment` group using the operator's ordinary AWS credential
+chain. It does not accept or persist credentials in the app manifest,
+DeploymentProfileV2, plan, or artifact.
 
 Deployment profiles are canonical `wpr2` operator-input JSON documents supplied
 with `--profile`; they remain separate from `wharfie.app.js`. Authors create
 them with the supported `@wharfie/wharfie/deployment-profile` Node subpath.
 Source plan and direct apply package and durably pre-stage a selected SEA;
 source prepared-plan apply and reconcile consume exact durable staged evidence.
-Packaged plan, direct apply, prepared-plan apply, and non-destroy reconcile
-instead validate the SEA running the command. Source and packaged plan JSON are
-not interchangeable. Active destroy recovery remains durable-only.
-Packaged commands accept neither source `--dir` nor `--output-dir`. This command
-surface has focused automated evidence but no clean-account lifecycle proof or
-complete service-readiness claim. Wharfie provisions only its fixed capability
+
+`wharfie app package --self-deployable` creates an application SEA whose
+packaged deployment surface has only Hetzner `apply` and `destroy`. Apply
+authenticates the embedded Linux SEA; destroy reads only embedded app identity
+plus exact durable local deployment authority. Both accept no credential
+option and the provider coordinator reads ambient `HCLOUD_TOKEN` when needed.
+Packaged plan, inspect, and reconcile are not exposed yet. This command surface
+has focused automated evidence. Wharfie provisions only its fixed capability
 substrate and is not a general infrastructure-as-code system.
 
 See the [Quickstart](./quickstart.md) for the working local and experimental

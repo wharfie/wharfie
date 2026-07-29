@@ -590,10 +590,9 @@ version, and receipt are durably present and revalidated. Direct
 against durable state and never opens or substitutes its running executable.
 Ordinary `converge` deliberately remains the packaged running-SEA path.
 
-The experimental deployment command tree is now mounted in both operator
-surfaces. Source uses `wharfie deployment ...`; a generated SEA uses
-`<app> wharfie deployment ...`. There are exactly five leaves: `plan`, `apply`,
-`inspect`, `reconcile`, and `destroy`. The exact source grammar is:
+The legacy experimental source deployment tree uses `wharfie deployment ...`
+and has five AWS-oriented leaves: `plan`, `apply`, `inspect`, `reconcile`, and
+`destroy`. The exact source grammar is:
 
 ```text
 wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
@@ -604,23 +603,33 @@ wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-
 wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
 ```
 
-Packaged commands have the same leaves and options except that `plan` and
-direct `apply` do not accept source `--dir` or `--output-dir`. The canonical
-DeploymentProfileV2 supplied through `--profile` is operator input outside the
-app manifest and contains no credentials. Both surfaces resolve the ordinary
-AWS credential chain. Source plan/direct apply package and durably pre-stage a
-selected SEA; source `apply --plan` and reconcile consume exact durable staged
-evidence. Packaged plan/apply and non-destroy reconcile instead prove the
-running SEA. Recovery of an active destroy remains executable-independent,
-matching destroy's durable-only authority.
+The canonical DeploymentProfileV2 supplied through `--profile` is operator
+input outside the app manifest and contains no credentials. The source surface
+resolves the ordinary AWS credential chain. Source plan/direct apply package
+and durably pre-stage a selected SEA; source `apply --plan` and reconcile
+consume exact durable staged evidence.
+
+`wharfie app package --self-deployable` creates an operator SEA carrying an
+authenticated Linux deployment SEA. That packaged executable replaces the
+legacy AWS lifecycle with narrow Hetzner apply and destroy commands:
+
+```text
+<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
+```
+
+It accepts no credential option. The coordinator reads ambient `HCLOUD_TOKEN`,
+creates, recovers, or destroys the fixed small single-node systemd-user
+deployment, and emits a compact nonsecret result. Destroy reads only the
+embedded app identity plus durable local deployment authority; it does not
+decode the embedded Linux payload. Packaged plan, inspect, and reconcile are
+not exposed yet.
 Create the canonical profile with
 `@wharfie/wharfie/deployment-profile`, whose narrow Node authoring API exports
 `DEPLOYMENT_MODE`, `createAwsSingleNodeProvider()`, and
 `createDeploymentProfile()`; the quickstart contains a complete recipe.
 Source `plan --json` output includes staged-artifact evidence and is reusable
-only by source `apply --plan`. Packaged plan output omits that evidence and is
-reusable only by an exact matching SEA; the two plan envelopes deliberately do
-not cross command surfaces.
+only by source `apply --plan`.
 Plan always requires an explicit `--control-policy`, because source planning
 may package, stage, and create bootstrap control state. Direct apply defaults to
 `bootstrap`; prepared apply, inspect, reconcile, and destroy default to
