@@ -29,15 +29,22 @@ import {
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournal,
   createSingleNodeDeploymentJournalStore,
+  getSingleNodeDeploymentDestructionRecoveryState,
   getSingleNodeDeploymentMutationAttempt,
   getSingleNodeDeploymentProvisioningRecoveryState,
+  prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
   recordSingleNodeDeploymentActivation,
+  recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
   validateSingleNodeDeploymentJournal,
   validateSingleNodeDeploymentJournalSuccessor,
 } from '../../src/core/runtime/single-node-deployment-journal.js';
+import {
+  createHetznerDeletionRecord,
+  createHetznerDestructionAttempt,
+} from '../../src/core/runtime/providers/hetzner/single-node-destruction.js';
 import {
   createHetznerProvisionedResourceRecord,
   createHetznerProvisioningMutationAttempt,
@@ -338,6 +345,41 @@ function providerResource(role, id) {
   );
 }
 
+/** @param {Readonly<Record<string, any>>} record @param {string} role */
+function destroyAttempt(record, role) {
+  const resource = record.resources.find(
+    (/** @type {Record<string, any>} */ entry) => entry.role === role,
+  );
+  if (resource === undefined) {
+    throw new Error(`test ${role} resource was not recorded`);
+  }
+  return createHetznerDestructionAttempt(
+    authority.providerIntent.intent,
+    role,
+    resource.providerResourceId,
+  );
+}
+
+/** @param {Readonly<Record<string, any>>} record @param {string} role */
+function deletionRecord(record, role) {
+  const resource = record.resources.find(
+    (/** @type {Record<string, any>} */ entry) => entry.role === role,
+  );
+  if (resource === undefined) {
+    throw new Error(`test ${role} resource was not recorded`);
+  }
+  const attempt =
+    record.destroyAttempts.find(
+      (/** @type {Record<string, any>} */ entry) => entry.role === role,
+    ) ?? null;
+  return createHetznerDeletionRecord(
+    authority.providerIntent.intent,
+    role,
+    resource.providerResourceId,
+    attempt,
+  );
+}
+
 function remoteActivationEvidence() {
   const remotePath = `${SINGLE_NODE_DEPLOYMENT_ROOT}/${authority.desired.deploymentInstanceId}/artifacts/${authority.desired.artifact.artifactId}/app-sea`;
   const payload = sortCanonicalJsonValue({
@@ -407,6 +449,8 @@ describe('single-node deployment journal contract', () => {
       phase: 'planned',
       mutationAttempts: [],
       resources: [],
+      destroyAttempts: [],
+      deletionRecords: [],
       sshHost: null,
       artifact: null,
       activation: null,
@@ -533,6 +577,12 @@ describe('single-node deployment journal contract', () => {
       ),
     ).toThrow(/not monotonic/iu);
     expect(() =>
+      recordSingleNodeDeploymentResource(
+        advanceSingleNodeDeploymentJournal(provisioned, 'destroying'),
+        { ...primaryIp, state: 'absent' },
+      ),
+    ).toThrow(/deletion record/iu);
+    expect(() =>
       advanceSingleNodeDeploymentJournal(provisioned, 'provisioning'),
     ).toThrow(/cannot advance/iu);
   });
@@ -588,7 +638,127 @@ describe('single-node deployment journal contract', () => {
     ).toThrow(/provider-observed address/iu);
   });
 
-  it('supports retryable destruction after partial provisioning', () => {
+  it('retains exact ordered destruction fences and deletion proof', () => {
+    let record = advanceSingleNodeDeploymentJournal(
+      createProvisioned(),
+      'destroying',
+    );
+    expect(() =>
+      prepareSingleNodeDeploymentDestruction(
+        record,
+        destroyAttempt(record, 'primaryIp'),
+      ),
+    ).toThrow(/server to be absent first/iu);
+    expect(() =>
+      recordSingleNodeDeploymentDeletion(
+        record,
+        deletionRecord(record, 'primaryIp'),
+      ),
+    ).toThrow(/server to be absent first/iu);
+
+    const serverAttempt = destroyAttempt(record, 'server');
+    record = prepareSingleNodeDeploymentDestruction(record, serverAttempt);
+    expect(
+      prepareSingleNodeDeploymentDestruction(record, serverAttempt),
+    ).toEqual(record);
+    expect(record.destroyAttempts[0]).toEqual({
+      ...serverAttempt,
+      attemptId: expect.stringMatching(/^wshda1_[A-Za-z0-9_-]{43}$/u),
+    });
+    expect(() =>
+      prepareSingleNodeDeploymentDestruction(
+        record,
+        createHetznerDestructionAttempt(
+          authority.providerIntent.intent,
+          'server',
+          999,
+        ),
+      ),
+    ).toThrow(/conflicts/iu);
+
+    const serverDeletion = deletionRecord(record, 'server');
+    record = recordSingleNodeDeploymentDeletion(record, serverDeletion);
+    expect(recordSingleNodeDeploymentDeletion(record, serverDeletion)).toEqual(
+      record,
+    );
+    expect(record.deletionRecords[0]).toEqual({
+      ...serverDeletion,
+      deletionId: expect.stringMatching(/^wshdd1_[A-Za-z0-9_-]{43}$/u),
+      destroyAttemptId: serverAttempt.attemptId,
+    });
+    expect(
+      record.resources.find(
+        (/** @type {Record<string, any>} */ resource) =>
+          resource.role === 'server',
+      )?.state,
+    ).toBe('absent');
+    expect(() =>
+      recordSingleNodeDeploymentDeletion(
+        record,
+        createHetznerDeletionRecord(
+          authority.providerIntent.intent,
+          'server',
+          13,
+          null,
+        ),
+      ),
+    ).toThrow(/destroy authority/iu);
+
+    record = prepareSingleNodeDeploymentDestruction(
+      record,
+      destroyAttempt(record, 'primaryIp'),
+    );
+    record = recordSingleNodeDeploymentDeletion(
+      record,
+      deletionRecord(record, 'primaryIp'),
+    );
+    record = prepareSingleNodeDeploymentDestruction(
+      record,
+      destroyAttempt(record, 'firewall'),
+    );
+    record = recordSingleNodeDeploymentDeletion(
+      record,
+      deletionRecord(record, 'firewall'),
+    );
+
+    expect(getSingleNodeDeploymentDestructionRecoveryState(record)).toEqual({
+      storedResourceIds: {
+        server: 13,
+        primaryIp: 12,
+        firewall: 11,
+      },
+      storedDestroyAttempts: {
+        server: record.destroyAttempts.find(
+          (/** @type {Record<string, any>} */ entry) => entry.role === 'server',
+        ),
+        primaryIp: record.destroyAttempts.find(
+          (/** @type {Record<string, any>} */ entry) =>
+            entry.role === 'primaryIp',
+        ),
+        firewall: record.destroyAttempts.find(
+          (/** @type {Record<string, any>} */ entry) =>
+            entry.role === 'firewall',
+        ),
+      },
+      storedDeletionRecords: {
+        server: record.deletionRecords.find(
+          (/** @type {Record<string, any>} */ entry) => entry.role === 'server',
+        ),
+        primaryIp: record.deletionRecords.find(
+          (/** @type {Record<string, any>} */ entry) =>
+            entry.role === 'primaryIp',
+        ),
+        firewall: record.deletionRecords.find(
+          (/** @type {Record<string, any>} */ entry) =>
+            entry.role === 'firewall',
+        ),
+      },
+    });
+    record = advanceSingleNodeDeploymentJournal(record, 'destroyed');
+    expect(record.phase).toBe('destroyed');
+  });
+
+  it('treats never-created roles as absent during partial destruction', () => {
     let record = advanceSingleNodeDeploymentJournal(
       createInitial(),
       'provisioning',
@@ -596,20 +766,19 @@ describe('single-node deployment journal contract', () => {
     record = completeRole(record, 'firewall', 11);
     record = completeRole(record, 'primaryIp', 12, PUBLIC_IPV4);
     record = advanceSingleNodeDeploymentJournal(record, 'destroying');
-    record = recordSingleNodeDeploymentResource(record, {
-      ...record.resources.find(
-        (/** @type {Record<string, any>} */ resource) =>
-          resource.role === 'primaryIp',
+    const primaryDeletion = deletionRecord(record, 'primaryIp');
+    expect(primaryDeletion.destroyAttemptId).toBeNull();
+    record = recordSingleNodeDeploymentDeletion(record, primaryDeletion);
+    expect(() =>
+      recordSingleNodeDeploymentDeletion(
+        record,
+        deletionRecord(record, 'firewall'),
       ),
-      state: 'absent',
-    });
-    record = recordSingleNodeDeploymentResource(record, {
-      ...record.resources.find(
-        (/** @type {Record<string, any>} */ resource) =>
-          resource.role === 'firewall',
-      ),
-      state: 'absent',
-    });
+    ).not.toThrow();
+    record = recordSingleNodeDeploymentDeletion(
+      record,
+      deletionRecord(record, 'firewall'),
+    );
     record = advanceSingleNodeDeploymentJournal(record, 'destroyed');
 
     expect(record.phase).toBe('destroyed');
@@ -619,6 +788,20 @@ describe('single-node deployment journal contract', () => {
           resource.state === 'absent',
       ),
     ).toBe(true);
+    expect(
+      getSingleNodeDeploymentDestructionRecoveryState(record),
+    ).toMatchObject({
+      storedResourceIds: {
+        server: null,
+        primaryIp: 12,
+        firewall: 11,
+      },
+      storedDestroyAttempts: {
+        server: null,
+        primaryIp: null,
+        firewall: null,
+      },
+    });
     expect(() =>
       recordSingleNodeDeploymentResource(record, {
         provider: 'hetzner',
@@ -655,6 +838,38 @@ describe('single-node deployment journal contract', () => {
 });
 
 describe('single-node deployment journal persistence', () => {
+  it('prepares private storage without publishing deployment authority', async () => {
+    const { store } = await makeStore();
+
+    await store.prepareStorage();
+    await store.prepareStorage();
+
+    expect(await store.read()).toBeNull();
+    expect(await readdir(store.paths.journalRoot)).toEqual([]);
+    for (const directory of store.paths.directories) {
+      const stats = await lstat(directory);
+      expect(stats.isDirectory()).toBe(true);
+      expect(stats.mode & 0o777).toBe(0o700);
+    }
+  });
+
+  it('accepts a non-writable 0755 shared root while keeping journal-owned paths private', async () => {
+    const { store, dataRoot } = await makeStore();
+    await mkdir(dataRoot, { mode: 0o755 });
+
+    await store.prepareStorage();
+
+    expect((await lstat(dataRoot)).mode & 0o777).toBe(0o755);
+    for (const directory of store.paths.privateDirectories) {
+      expect((await lstat(directory)).mode & 0o777).toBe(0o700);
+    }
+    expect(await readdir(store.paths.journalRoot)).toEqual([]);
+    expect(await store.initialize(authority)).toMatchObject({
+      generation: 0,
+      phase: 'planned',
+    });
+  });
+
   it('uses stable app storage, exact private modes, canonical generations, and durable readback', async () => {
     const { store } = await makeStore();
     const initial = await store.initialize(authority);
@@ -725,6 +940,70 @@ describe('single-node deployment journal persistence', () => {
         providerAttempt('primaryIp'),
       ),
     ).toEqual(recovered);
+  });
+
+  it('serializes and replays atomic destruction evidence across restart', async () => {
+    const { store, dataRoot } = await makeStore();
+    let record = await store.initialize(authority);
+    let next = advanceSingleNodeDeploymentJournal(record, 'provisioning');
+    record = await store.commit(commitRequest(record, next));
+    next = prepareSingleNodeDeploymentMutation(
+      record,
+      providerAttempt('server'),
+    );
+    record = await store.commit(commitRequest(record, next));
+    next = completeSingleNodeDeploymentMutation(
+      record,
+      providerResource('server', 13),
+    );
+    record = await store.commit(commitRequest(record, next));
+    next = advanceSingleNodeDeploymentJournal(record, 'destroying');
+    record = await store.commit(commitRequest(record, next));
+    next = prepareSingleNodeDeploymentDestruction(
+      record,
+      destroyAttempt(record, 'server'),
+    );
+    record = await store.commit(commitRequest(record, next));
+    next = recordSingleNodeDeploymentDeletion(
+      record,
+      deletionRecord(record, 'server'),
+    );
+    record = await store.commit(commitRequest(record, next));
+
+    const reopened = createSingleNodeDeploymentJournalStore({
+      appId: authority.desired.intent.appId,
+      deploymentInstanceId: authority.desired.deploymentInstanceId,
+      dataRoot,
+    });
+    const recovered = await reopened.read();
+
+    expect(recovered).toEqual(record);
+    expect(getSingleNodeDeploymentDestructionRecoveryState(recovered)).toEqual({
+      storedResourceIds: {
+        server: 13,
+        primaryIp: null,
+        firewall: null,
+      },
+      storedDestroyAttempts: {
+        server: recovered.destroyAttempts[0],
+        primaryIp: null,
+        firewall: null,
+      },
+      storedDeletionRecords: {
+        server: recovered.deletionRecords[0],
+        primaryIp: null,
+        firewall: null,
+      },
+    });
+    expect(recovered.resources).toEqual([
+      {
+        provider: 'hetzner',
+        role: 'server',
+        providerResourceId: 13,
+        publicIpv4: null,
+        state: 'absent',
+      },
+    ]);
   });
 
   it('allows exactly one competing writer to claim a generation', async () => {
@@ -801,6 +1080,7 @@ describe('single-node deployment journal persistence', () => {
   it('fails closed for unsafe directories, symlinks, and unknown entries', async () => {
     const first = await makeStore();
     await mkdir(first.dataRoot, { mode: 0o755 });
+    await chmod(first.dataRoot, 0o770);
     await expect(first.store.initialize(authority)).rejects.toBeInstanceOf(
       SingleNodeDeploymentJournalInvalidError,
     );
