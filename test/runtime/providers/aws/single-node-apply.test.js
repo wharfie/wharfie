@@ -904,6 +904,54 @@ describe('AWS single-node apply coordinator', () => {
     expect(second.close).toHaveBeenCalledTimes(1);
   });
 
+  it('closes a malformed read authority that fails exact validation', async () => {
+    const harness = await makeHarness();
+    const source = makeSourceRequest(harness.fixture);
+    const malformedClose = jest.fn(async () => undefined);
+    const coordinator = createAwsSingleNodeApplyCoordinator({
+      ...harness.dependencies,
+      createReadAuthority: async () => ({
+        close: malformedClose,
+        unexpected: true,
+      }),
+    });
+
+    await expect(coordinator.apply(source.request)).rejects.toThrow(
+      'readAuthority fields are invalid',
+    );
+
+    expect(malformedClose).toHaveBeenCalledTimes(1);
+    expect(harness.getJournal()).toBeNull();
+    expect(harness.getPlanCalls()).toBe(0);
+    expect(source.close).toHaveBeenCalledTimes(1);
+    expect(harness.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a malformed operation authority that fails exact validation', async () => {
+    const harness = await makeHarness();
+    const source = makeSourceRequest(harness.fixture);
+    const malformedClose = jest.fn(async () => undefined);
+    const coordinator = createAwsSingleNodeApplyCoordinator({
+      ...harness.dependencies,
+      createOperationAuthority: async () => ({
+        close: malformedClose,
+        unexpected: true,
+      }),
+    });
+
+    await expect(coordinator.apply(source.request)).rejects.toThrow(
+      'operationAuthority fields are invalid',
+    );
+
+    expect(malformedClose).toHaveBeenCalledTimes(1);
+    expect(harness.readCloses[0]).toHaveBeenCalledTimes(1);
+    expect(harness.getJournal()).toBeNull();
+    expect(harness.getPlanCalls()).toBe(1);
+    expect(harness.dependencies.randomBytes).not.toHaveBeenCalled();
+    expect(source.close).toHaveBeenCalledTimes(1);
+    expect(harness.release).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects fresh credential drift before durable or provider effects', async () => {
     const harness = await makeHarness({
       operationAccountId: OTHER_ACCOUNT_ID,
