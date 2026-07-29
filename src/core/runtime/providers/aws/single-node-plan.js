@@ -79,6 +79,7 @@ const SUBNET_KEYS = new Set([
   'availabilityZone',
   'availabilityZoneId',
   'mapPublicIpOnLaunch',
+  'assignIpv6AddressOnCreation',
 ]);
 const ROUTE_TABLE_KEYS = new Set([
   'routeTableId',
@@ -430,6 +431,7 @@ async function resolveDefaultSubnet(
       subnet.State !== 'available' ||
       subnet.DefaultForAz !== true ||
       typeof subnet.MapPublicIpOnLaunch !== 'boolean' ||
+      typeof subnet.AssignIpv6AddressOnCreation !== 'boolean' ||
       typeof subnet.Ipv6Native !== 'boolean' ||
       !Number.isSafeInteger(subnet.AvailableIpAddressCount) ||
       subnet.AvailableIpAddressCount < 0 ||
@@ -443,6 +445,7 @@ async function resolveDefaultSubnet(
     const subnetId = providerId(subnet.SubnetId, SUBNET_ID_PATTERN);
     if (
       subnet.MapPublicIpOnLaunch !== true ||
+      subnet.AssignIpv6AddressOnCreation === true ||
       subnet.Ipv6Native === true ||
       subnet.AvailableIpAddressCount === 0
     ) {
@@ -454,6 +457,7 @@ async function resolveDefaultSubnet(
       availabilityZone: subnet.AvailabilityZone,
       availabilityZoneId: subnet.AvailabilityZoneId,
       mapPublicIpOnLaunch: true,
+      assignIpv6AddressOnCreation: false,
     });
   }
   const offered = candidates
@@ -1215,7 +1219,8 @@ function validateProviderSpec(value, valuePath) {
     !AVAILABILITY_ZONE_PATTERN.test(subnet.availabilityZone) ||
     typeof subnet.availabilityZoneId !== 'string' ||
     !AVAILABILITY_ZONE_ID_PATTERN.test(subnet.availabilityZoneId) ||
-    subnet.mapPublicIpOnLaunch !== true
+    subnet.mapPublicIpOnLaunch !== true ||
+    subnet.assignIpv6AddressOnCreation !== false
   ) {
     throw new TypeError(`${valuePath}.subnet is invalid.`);
   }
@@ -1319,6 +1324,7 @@ function validateProviderSpec(value, valuePath) {
         availabilityZone: subnet.availabilityZone,
         availabilityZoneId: subnet.availabilityZoneId,
         mapPublicIpOnLaunch: true,
+        assignIpv6AddressOnCreation: false,
       },
       networkAcl: {
         networkAclId,

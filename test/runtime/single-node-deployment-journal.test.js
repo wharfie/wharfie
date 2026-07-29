@@ -471,6 +471,7 @@ function makeAwsReadApi() {
           State: 'available',
           DefaultForAz: true,
           MapPublicIpOnLaunch: true,
+          AssignIpv6AddressOnCreation: false,
           Ipv6Native: false,
           AvailableIpAddressCount: 4091,
           AvailabilityZone: 'us-east-2a',

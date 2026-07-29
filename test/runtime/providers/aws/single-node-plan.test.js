@@ -327,6 +327,7 @@ function makeApi(overrides = {}) {
           State: 'available',
           DefaultForAz: true,
           MapPublicIpOnLaunch: true,
+          AssignIpv6AddressOnCreation: false,
           Ipv6Native: false,
           AvailableIpAddressCount: 4091,
           AvailabilityZone: 'us-east-2a',
@@ -388,6 +389,7 @@ describe('AWS single-node read-only plan', () => {
         subnet: {
           subnetId: SUBNET_ID,
           availabilityZoneId: 'use2-az1',
+          assignIpv6AddressOnCreation: false,
         },
         networkAcl: {
           networkAclId: NETWORK_ACL_ID,
@@ -575,6 +577,7 @@ describe('AWS single-node read-only plan', () => {
             State: 'available',
             DefaultForAz: true,
             MapPublicIpOnLaunch: true,
+            AssignIpv6AddressOnCreation: false,
             Ipv6Native: false,
             AvailableIpAddressCount: 4091,
             AvailabilityZone: 'us-east-2a',
@@ -587,6 +590,7 @@ describe('AWS single-node read-only plan', () => {
             State: 'available',
             DefaultForAz: true,
             MapPublicIpOnLaunch: true,
+            AssignIpv6AddressOnCreation: false,
             Ipv6Native: false,
             AvailableIpAddressCount: 4091,
             AvailabilityZone: 'us-east-2b',
@@ -614,6 +618,41 @@ describe('AWS single-node read-only plan', () => {
     });
   });
 
+  it.each([
+    ['missing', undefined],
+    ['non-boolean', 'false'],
+  ])(
+    'rejects %s subnet IPv6 auto-assignment evidence',
+    async (_name, assignIpv6AddressOnCreation) => {
+      const subnet = {
+        SubnetId: SUBNET_ID,
+        VpcId: VPC_ID,
+        OwnerId: ACCOUNT_ID,
+        State: 'available',
+        DefaultForAz: true,
+        MapPublicIpOnLaunch: true,
+        AssignIpv6AddressOnCreation: assignIpv6AddressOnCreation,
+        Ipv6Native: false,
+        AvailableIpAddressCount: 4091,
+        AvailabilityZone: 'us-east-2a',
+        AvailabilityZoneId: 'use2-az1',
+      };
+      if (assignIpv6AddressOnCreation === undefined) {
+        Reflect.deleteProperty(subnet, 'AssignIpv6AddressOnCreation');
+      }
+
+      await expect(
+        resolveAwsSingleNodePlan({
+          desired: makeDesired(),
+          providerScope: providerScope(),
+          api: makeApi({
+            describeSubnets: jest.fn(async () => ({ Subnets: [subnet] })),
+          }),
+        }),
+      ).rejects.toBeInstanceOf(AwsSingleNodePlanEvidenceError);
+    },
+  );
+
   it('skips structurally valid unsuitable default subnets', async () => {
     const selectedSubnetId = 'subnet-44444444444444444';
     const api = makeApi({
@@ -626,6 +665,7 @@ describe('AWS single-node read-only plan', () => {
             State: 'available',
             DefaultForAz: true,
             MapPublicIpOnLaunch: false,
+            AssignIpv6AddressOnCreation: false,
             Ipv6Native: false,
             AvailableIpAddressCount: 4091,
             AvailabilityZone: 'us-east-2a',
@@ -638,6 +678,7 @@ describe('AWS single-node read-only plan', () => {
             State: 'available',
             DefaultForAz: true,
             MapPublicIpOnLaunch: true,
+            AssignIpv6AddressOnCreation: false,
             Ipv6Native: true,
             AvailableIpAddressCount: 4091,
             AvailabilityZone: 'us-east-2a',
@@ -650,8 +691,22 @@ describe('AWS single-node read-only plan', () => {
             State: 'available',
             DefaultForAz: true,
             MapPublicIpOnLaunch: true,
+            AssignIpv6AddressOnCreation: false,
             Ipv6Native: false,
             AvailableIpAddressCount: 0,
+            AvailabilityZone: 'us-east-2a',
+            AvailabilityZoneId: 'use2-az1',
+          },
+          {
+            SubnetId: 'subnet-55555555555555555',
+            VpcId: VPC_ID,
+            OwnerId: ACCOUNT_ID,
+            State: 'available',
+            DefaultForAz: true,
+            MapPublicIpOnLaunch: true,
+            AssignIpv6AddressOnCreation: true,
+            Ipv6Native: false,
+            AvailableIpAddressCount: 4091,
             AvailabilityZone: 'us-east-2a',
             AvailabilityZoneId: 'use2-az1',
           },
@@ -662,6 +717,7 @@ describe('AWS single-node read-only plan', () => {
             State: 'available',
             DefaultForAz: true,
             MapPublicIpOnLaunch: true,
+            AssignIpv6AddressOnCreation: false,
             Ipv6Native: false,
             AvailableIpAddressCount: 4091,
             AvailabilityZone: 'us-east-2a',
@@ -1098,6 +1154,7 @@ describe('AWS single-node read-only plan', () => {
               State: 'available',
               DefaultForAz: true,
               MapPublicIpOnLaunch: true,
+              AssignIpv6AddressOnCreation: false,
               Ipv6Native: false,
               AvailableIpAddressCount: 4091,
               AvailabilityZone: 'us-east-2a',
@@ -1119,6 +1176,7 @@ describe('AWS single-node read-only plan', () => {
               State: 'available',
               DefaultForAz: true,
               MapPublicIpOnLaunch: false,
+              AssignIpv6AddressOnCreation: false,
               Ipv6Native: false,
               AvailableIpAddressCount: 4091,
               AvailabilityZone: 'us-east-2a',
@@ -1174,6 +1232,11 @@ describe('AWS single-node read-only plan', () => {
     serialized.providerSpec.subnet.subnetId = 'subnet-99999999999999999';
     expect(() => validateAwsSingleNodePlan(serialized)).toThrow(
       /networkAcl references conflict|providerSpecId does not match/iu,
+    );
+    const enabledIpv6AutoAssignment = clone(plan);
+    enabledIpv6AutoAssignment.providerSpec.subnet.assignIpv6AddressOnCreation = true;
+    expect(() => validateAwsSingleNodePlan(enabledIpv6AutoAssignment)).toThrow(
+      /subnet is invalid/iu,
     );
     const changedNetworkAcl = clone(plan);
     changedNetworkAcl.providerSpec.networkAcl.ipv4Ingress.allowRuleNumber = 99;
