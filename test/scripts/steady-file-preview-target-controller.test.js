@@ -3,7 +3,10 @@
 
 import { describe, expect, it, jest } from '@jest/globals';
 
-import { createSteadyFilePreviewRemote } from '../../scripts/verify-steady-file-preview-target.js';
+import {
+  assertStableDecision,
+  createSteadyFilePreviewRemote,
+} from '../../scripts/verify-steady-file-preview-target.js';
 
 function successfulSpawn(overrides = {}) {
   return {
@@ -27,6 +30,43 @@ function createSpawnMock(resultFactory = () => successfulSpawn()) {
 }
 
 describe('steady-file preview target controller transport', () => {
+  it('compares canonical JSON values without requiring matching object prototypes', () => {
+    const fingerprint = Object.assign(Object.create(null), {
+      bytes: 43,
+      readStable: true,
+      sha256: '9d'.repeat(32),
+    });
+    const expected = Object.assign(Object.create(null), {
+      current: Object.assign(Object.create(null), fingerprint),
+      baseline: Object.assign(Object.create(null), fingerprint),
+      stable: true,
+    });
+    const actual = {
+      path: '/home/wharfie/preview/artifact.tar',
+      stable: true,
+      baseline: { ...fingerprint },
+      current: { ...fingerprint },
+    };
+
+    expect(() =>
+      assertStableDecision(
+        actual,
+        '/home/wharfie/preview/artifact.tar',
+        expected,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertStableDecision(
+        {
+          ...actual,
+          current: { ...actual.current, bytes: 44 },
+        },
+        '/home/wharfie/preview/artifact.tar',
+        expected,
+      ),
+    ).toThrow();
+  });
+
   it.each([
     'preview-target',
     'preview_target',

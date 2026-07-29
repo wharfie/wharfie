@@ -13,6 +13,7 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { sortCanonicalJsonValue } from '../src/core/runtime/canonical-order.js';
 import {
   STEADY_FILE_PREVIEW_HANDOFF_FILES,
   validateSteadyFilePreviewHandoff,
@@ -307,11 +308,14 @@ async function waitFor(observe, matches, label, options = {}) {
  * @param {Record<string, any>} expected - Path-independent builder result.
  * @returns {void}
  */
-function assertStableDecision(value, inputPath, expected) {
+export function assertStableDecision(value, inputPath, expected) {
   assert.equal(value.path, inputPath);
   const normalized = { ...value };
   delete normalized.path;
-  assert.deepEqual(normalized, expected);
+  assert.equal(
+    JSON.stringify(sortCanonicalJsonValue(normalized)),
+    JSON.stringify(sortCanonicalJsonValue(expected)),
+  );
 }
 
 /**
