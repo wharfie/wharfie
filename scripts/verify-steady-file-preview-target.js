@@ -125,13 +125,12 @@ function parseJson(result, label) {
 }
 
 /**
- * @param {RemoteResult} result - Completed command.
+ * @param {string} text - Complete stdout or stderr text.
  * @param {string} label - Stable assertion label.
  * @returns {Record<string, any>} - Final-line JSON object.
  */
-function parseFinalJson(result, label) {
-  assert.equal(result.status, 0, `${label}: ${result.stderr || result.stdout}`);
-  const finalLine = result.stdout
+function parseFinalJsonText(text, label) {
+  const finalLine = text
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
@@ -147,6 +146,16 @@ function parseFinalJson(result, label) {
   }
   assert.ok(value && typeof value === 'object' && !Array.isArray(value));
   return value;
+}
+
+/**
+ * @param {RemoteResult} result - Completed command.
+ * @param {string} label - Stable assertion label.
+ * @returns {Record<string, any>} - Final-line JSON object.
+ */
+function parseFinalJson(result, label) {
+  assert.equal(result.status, 0, `${label}: ${result.stderr || result.stdout}`);
+  return parseFinalJsonText(result.stdout, label);
 }
 
 /**
@@ -206,6 +215,60 @@ function runArtifact(remote, artifactPath, args, options = {}) {
  */
 function runArtifactJson(remote, artifactPath, args, label) {
   return parseFinalJson(runArtifact(remote, artifactPath, args), label);
+}
+
+/**
+ * Exercise the public retry contract when destructive purge starts but does
+ * not converge on its first attempt.
+ * @param {Readonly<{run: Function}>} remote - Target port.
+ * @param {string} artifactPath - Target SEA.
+ * @returns {Readonly<{receipt: Record<string, any>, recovery: null | Readonly<Record<string, any>>}>} - Purge result and bounded recovery evidence.
+ */
+export function purgeSteadyFilePreviewApplication(remote, artifactPath) {
+  const args = [
+    'wharfie',
+    'service',
+    'purge',
+    '--confirm-data-loss',
+    APP_ID,
+    '--json',
+  ];
+  const first = runArtifact(remote, artifactPath, args, {
+    allowFailure: true,
+  });
+  if (first.status === 0) {
+    return Object.freeze({
+      receipt: parseFinalJson(first, 'steady-file application-data purge'),
+      recovery: null,
+    });
+  }
+  const failure = parseFinalJsonText(
+    first.stderr.trim() || first.stdout,
+    'steady-file application-data purge failure',
+  );
+  assert.deepEqual(failure, {
+    schemaVersion: 1,
+    kind: 'wharfie.service.error',
+    action: 'purge',
+    code: 'systemd-user-service-purge-incomplete',
+    message: 'Systemd user-service purge was interrupted and is safe to retry.',
+    remediation:
+      'Retry service purge with the same --confirm-data-loss application ID.',
+  });
+  const receipt = runArtifactJson(
+    remote,
+    artifactPath,
+    args,
+    'steady-file application-data purge retry',
+  );
+  return Object.freeze({
+    receipt,
+    recovery: Object.freeze({
+      required: true,
+      firstFailure: failure,
+      attemptCount: 2,
+    }),
+  });
 }
 
 /**
@@ -1114,14 +1177,13 @@ export async function verifySteadyFilePreviewTarget(options) {
   assert.equal(prune.scannedReleaseCount, 2);
   assert.equal(prune.retainedReleaseCount, 2);
   assert.equal(prune.removedCount, 0);
-  const purge = runArtifactJson(
+  const purgeResult = purgeSteadyFilePreviewApplication(
     options.remote,
     SOURCE_ARTIFACT_PATH,
-    ['wharfie', 'service', 'purge', '--confirm-data-loss', APP_ID, '--json'],
-    'steady-file application-data purge',
   );
+  const purge = purgeResult.receipt;
   assert.equal(purge.action, 'purge');
-  assert.equal(purge.outcome, 'purged');
+  assert.ok(['purged', 'already-purged'].includes(purge.outcome));
   const appRoot = path.posix.join(
     targetIdentity.home,
     '.local',
@@ -1172,6 +1234,7 @@ export async function verifySteadyFilePreviewTarget(options) {
       prune,
       purge: {
         receipt: purge,
+        recovery: purgeResult.recovery,
         applicationRootAbsent: true,
         externalArtifactsPreserved: true,
       },

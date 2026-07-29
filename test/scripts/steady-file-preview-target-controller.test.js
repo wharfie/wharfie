@@ -6,6 +6,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import {
   assertStableDecision,
   createSteadyFilePreviewRemote,
+  purgeSteadyFilePreviewApplication,
 } from '../../scripts/verify-steady-file-preview-target.js';
 
 function successfulSpawn(overrides = {}) {
@@ -30,6 +31,71 @@ function createSpawnMock(resultFactory = () => successfulSpawn()) {
 }
 
 describe('steady-file preview target controller transport', () => {
+  it('retries only the public purge-incomplete recovery result', () => {
+    const incomplete = {
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'purge',
+      code: 'systemd-user-service-purge-incomplete',
+      message:
+        'Systemd user-service purge was interrupted and is safe to retry.',
+      remediation:
+        'Retry service purge with the same --confirm-data-loss application ID.',
+    };
+    const purged = {
+      schemaVersion: 1,
+      kind: 'wharfie.service.result',
+      action: 'purge',
+      requestStatus: 'fulfilled',
+      appId: 'steady-file-demo',
+      outcome: 'purged',
+      health: 'absent',
+    };
+    const results = [
+      successfulSpawn({
+        status: 1,
+        stderr: `${JSON.stringify(incomplete)}\n`,
+      }),
+      successfulSpawn({
+        stdout: `${JSON.stringify(purged)}\n`,
+      }),
+    ];
+    let resultIndex = 0;
+    const spawn = createSpawnMock(() => results[resultIndex++]);
+    const remote = createSteadyFilePreviewRemote('preview-target', {
+      spawn,
+    });
+
+    expect(
+      purgeSteadyFilePreviewApplication(
+        remote,
+        '/home/wharfie/preview/handoff/source/app',
+      ),
+    ).toEqual({
+      receipt: purged,
+      recovery: {
+        required: true,
+        firstFailure: incomplete,
+        attemptCount: 2,
+      },
+    });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn.mock.calls[0][1]).toEqual([
+      'shell',
+      '--tty=false',
+      'preview-target',
+      '/usr/bin/env',
+      'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      '/home/wharfie/preview/handoff/source/app',
+      'wharfie',
+      'service',
+      'purge',
+      '--confirm-data-loss',
+      'steady-file-demo',
+      '--json',
+    ]);
+  });
+
   it('compares canonical JSON values without requiring matching object prototypes', () => {
     const fingerprint = Object.assign(Object.create(null), {
       bytes: 43,
