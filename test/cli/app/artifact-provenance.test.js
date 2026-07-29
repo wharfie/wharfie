@@ -47,6 +47,10 @@ import {
 import { createApplicationRevision } from '../../../src/core/runtime/application-revision.js';
 import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import { sha256Base64Url } from '../../../src/core/runtime/content-id.js';
+import {
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME,
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME,
+} from '../../../src/core/runtime/single-node-deployment-payload.js';
 
 const BUILDER_VERSION = '0.0.15';
 /** @type {import('../../../src/core/runtime/build-target.js').BuildTarget} */
@@ -638,6 +642,77 @@ describe('package-time artifact provenance', () => {
         artifactBytes: Buffer.from('different final artifact bytes'),
       }),
     ).rejects.toThrow(/do not match the committed build generation/i);
+  });
+
+  it('accepts only the exact framework payload digests sealed into the SEA generation', async () => {
+    const directory = await makeTemporaryDirectory(
+      'wharfie-framework-provenance-',
+    );
+    const binaryPath = path.join(directory, 'local-node');
+    await fsp.writeFile(binaryPath, 'local node bytes');
+    const revision = makeRevision();
+    const build = await makeBuild(LINUX_TARGET, binaryPath, [], revision);
+    const artifactBytes = await readArtifactBytes(build);
+    const generation = successfulGenerations.get(build);
+    if (!generation) throw new Error('Missing successful generation.');
+    const frameworkAssetDigests = {
+      [SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME]: digest(
+        'deployment manifest',
+      ),
+      [SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME]:
+        digest('nested linux sea'),
+    };
+    Object.assign(generation.assets, frameworkAssetDigests);
+
+    await expect(
+      createArtifactProvenance({
+        build,
+        actorSystem: makeActorSystem(),
+        revision,
+        builderVersion: BUILDER_VERSION,
+        artifactBytes,
+        frameworkAssetDigests,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ signing: { mode: 'unsigned' } }),
+    );
+    await expect(
+      createArtifactProvenance({
+        build,
+        actorSystem: makeActorSystem(),
+        revision,
+        builderVersion: BUILDER_VERSION,
+        artifactBytes,
+        frameworkAssetDigests: {
+          ...frameworkAssetDigests,
+          [SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME]: digest(
+            'different nested sea',
+          ),
+        },
+      }),
+    ).rejects.toThrow(/does not match its immutable input/i);
+    await expect(
+      createArtifactProvenance({
+        build,
+        actorSystem: makeActorSystem(),
+        revision,
+        builderVersion: BUILDER_VERSION,
+        artifactBytes,
+      }),
+    ).rejects.toThrow(/do not exactly match/i);
+    await expect(
+      createArtifactProvenance({
+        build,
+        actorSystem: makeActorSystem(),
+        revision,
+        builderVersion: BUILDER_VERSION,
+        artifactBytes,
+        frameworkAssetDigests: {
+          ...frameworkAssetDigests,
+          arbitrary: digest('untrusted'),
+        },
+      }),
+    ).rejects.toThrow(/only the exact single-node deployment payload/i);
   });
 
   it('retains the digest of the exact external archive embedded by a function', async () => {
