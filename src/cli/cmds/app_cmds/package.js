@@ -2,6 +2,7 @@ import { Command } from 'commander';
 
 import { packageLocalApp, stringifyJson } from '../../app/local-app.js';
 import { createApplicationPackageReceipt } from '../../app/package-command-receipt.js';
+import { packageSingleNodeSelfDeployableApp } from '../../app/single-node-self-deployable-package.js';
 import { displayFailure } from '../../output/basic.js';
 
 /**
@@ -60,12 +61,16 @@ async function withPackageStdoutReserved(operation) {
  * independently testable without constructing a native SEA.
  * @param {{
  *   packageApplication?: typeof packageLocalApp,
+ *   packageSelfDeployableApplication?: typeof packageSingleNodeSelfDeployableApp,
  *   writeOutput?: (value: string) => unknown
  * }} [dependencies] - Optional command adapters.
  * @returns {Command} - Fresh package command.
  */
 export function createPackageCommand(dependencies = {}) {
   const packageApplication = dependencies.packageApplication || packageLocalApp;
+  const packageSelfDeployableApplication =
+    dependencies.packageSelfDeployableApplication ||
+    packageSingleNodeSelfDeployableApp;
   const writeOutput =
     dependencies.writeOutput ||
     ((value) => {
@@ -85,6 +90,10 @@ export function createPackageCommand(dependencies = {}) {
       collectTargetFilter,
       [],
     )
+    .option(
+      '--self-deployable',
+      'Embed an authenticated Linux SEA for single-node cloud deployment',
+    )
     .option('--json', 'Output JSON (default)')
     .option('--no-pretty', 'Disable pretty JSON output')
     .action(async (dir, options) => {
@@ -92,12 +101,24 @@ export function createPackageCommand(dependencies = {}) {
 
       try {
         const receipt = await withPackageStdoutReserved(async () => {
-          const result = await packageApplication({
+          const packageRequest = {
             dir: resolvedDir,
             outputDir: options.outputDir,
             targetFilters: Array.isArray(options.target) ? options.target : [],
+          };
+          if (!options.selfDeployable) {
+            return createApplicationPackageReceipt(
+              await packageApplication(packageRequest),
+            );
+          }
+          const result = await packageSelfDeployableApplication(packageRequest);
+          return createApplicationPackageReceipt({
+            app: result.app,
+            revision: result.revision,
+            targets: result.targets,
+            outputDir: result.outputDir,
+            artifacts: result.artifacts,
           });
-          return createApplicationPackageReceipt(result);
         });
         writeOutput(`${stringifyJson(receipt, options)}\n`);
       } catch (err) {

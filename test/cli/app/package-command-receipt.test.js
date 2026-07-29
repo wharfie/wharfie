@@ -526,4 +526,51 @@ describe('application package command receipt', () => {
       expect(output.slice(0, -1)).not.toContain('\n');
     }
   });
+
+  it('selects self-deployable packaging without changing the public receipt', async () => {
+    const result = makePackageResult();
+    const packageApplication = jest.fn(
+      async (/** @type {Record<string, any>} */ _options) => result,
+    );
+    const packageSelfDeployableApplication = jest.fn(
+      async (/** @type {Record<string, any>} */ _options) => ({
+        ...result,
+        deploymentPayload: {
+          kind: 'singleNodeDeploymentPayload',
+          payloadId: 'private-payload-authority',
+        },
+      }),
+    );
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const command = createPackageCommand({
+      packageApplication,
+      packageSelfDeployableApplication,
+      writeOutput,
+    });
+
+    await command.parseAsync(
+      [
+        'fixture-app',
+        '--self-deployable',
+        '--target',
+        'darwin-arm64',
+        '--no-pretty',
+      ],
+      { from: 'user' },
+    );
+
+    expect(packageApplication).not.toHaveBeenCalled();
+    expect(packageSelfDeployableApplication).toHaveBeenCalledTimes(1);
+    expect(packageSelfDeployableApplication).toHaveBeenCalledWith({
+      dir: 'fixture-app',
+      outputDir: undefined,
+      targetFilters: ['darwin-arm64'],
+    });
+    expect(JSON.parse(writeOutput.mock.calls[0][0])).toEqual(
+      createApplicationPackageReceipt(result),
+    );
+    expect(writeOutput.mock.calls[0][0]).not.toContain(
+      'private-payload-authority',
+    );
+  });
 });

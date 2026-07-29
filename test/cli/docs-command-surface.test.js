@@ -204,6 +204,7 @@ describe('docs command surface', () => {
       './app',
       './deployment-profile',
       './package.json',
+      './single-node-deployment',
     ]);
     expect(packageJson.files).toEqual(
       expect.arrayContaining([
@@ -292,19 +293,15 @@ describe('docs command surface', () => {
       'wharfie deployment destroy <deployment-instance> --region <region>',
     );
     expect(quickstart).toContain(
-      '<app> wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy>',
+      '<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>...',
     );
     expect(quickstart).toContain(
-      '<app> wharfie deployment apply --plan <plan.json>',
+      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner',
     );
+    expect(quickstart).toContain('wharfie app package --self-deployable');
+    expect(quickstart).toContain('`HCLOUD_TOKEN`');
     expect(quickstart).toContain(
-      '<app> wharfie deployment inspect <deployment-instance> --region <region>',
-    );
-    expect(quickstart).toContain(
-      '<app> wharfie deployment reconcile <deployment-instance> --region <region>',
-    );
-    expect(quickstart).toContain(
-      '<app> wharfie deployment destroy <deployment-instance> --region <region>',
+      'Packaged plan, inspect, and reconcile are not exposed',
     );
     expect(quickstart).toContain('--confirm-coordinator-stopped');
     expect(quickstart).toMatch(/Direct apply defaults to\s+`bootstrap`/);
@@ -312,7 +309,7 @@ describe('docs command surface', () => {
       /prepared apply, inspect, reconcile, and destroy default to\s+`require-active`/,
     );
     expect(quickstart).toMatch(
-      /Source\s+plan JSON contains exact durable staged-artifact evidence[\s\S]+Packaged\s+plan JSON omits that evidence/,
+      /Source\s+plan JSON contains exact durable staged-artifact evidence/,
     );
     expect(quickstart).not.toContain('Update and rollback remain unavailable');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
@@ -537,7 +534,13 @@ describe('docs command surface', () => {
     expectCommandShape(findCommand(sourceApp, 'package'), {
       name: 'package',
       arguments: [{ name: 'dir', required: false, variadic: false }],
-      options: ['--output-dir', '--target', '--json', '--no-pretty'],
+      options: [
+        '--output-dir',
+        '--target',
+        '--self-deployable',
+        '--json',
+        '--no-pretty',
+      ],
     });
 
     const sourceOps = createSourceOpsCommand();
