@@ -81,7 +81,7 @@ describe('single-node deployment intent', () => {
         },
         appId: 'hello-app',
         deployment: { id: 'hello-production' },
-        intentRevisionId: expect.stringMatching(/^wdi1_[A-Za-z0-9_-]{43}$/),
+        intentRevisionId: expect.stringMatching(/^wsni1_[A-Za-z0-9_-]{43}$/),
         kind: 'singleNodeDeploymentIntent',
         machine: { class: 'small' },
         mode: { kind: 'single-node-systemd-user', version: 1 },
@@ -126,14 +126,14 @@ describe('single-node deployment intent', () => {
     const payload = canonicalizeSingleNodeDeploymentIntentPayload(input);
     const expected = createCanonicalJsonSha256Id({
       domain: 'wharfie:single-node-deployment-intent:v1',
-      prefix: 'wdi1',
+      prefix: 'wsni1',
       value: payload,
     });
 
     expect(SINGLE_NODE_DEPLOYMENT_INTENT_ID_DOMAIN).toBe(
       'wharfie:single-node-deployment-intent:v1',
     );
-    expect(SINGLE_NODE_DEPLOYMENT_INTENT_ID_PREFIX).toBe('wdi1');
+    expect(SINGLE_NODE_DEPLOYMENT_INTENT_ID_PREFIX).toBe('wsni1');
     expect(getSingleNodeDeploymentIntentRevisionId(input)).toBe(expected);
     expect(createSingleNodeDeploymentIntent(input).intentRevisionId).toBe(
       expected,
@@ -269,10 +269,10 @@ describe('single-node deployment intent', () => {
       'wrong identity namespace',
       (/** @type {any} */ value) =>
         (value.intentRevisionId = value.intentRevisionId.replace(
-          /^wdi1_/,
-          'wdi2_',
+          /^wsni1_/,
+          'wsni2_',
         )),
-      /canonical wdi1_/i,
+      /canonical wsni1_/i,
     ],
     [
       'changed placement',

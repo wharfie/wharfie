@@ -19,7 +19,7 @@ export const SINGLE_NODE_DEPLOYMENT_INTENT_SCHEMA_VERSION = 1;
 export const SINGLE_NODE_DEPLOYMENT_INTENT_KIND = 'singleNodeDeploymentIntent';
 export const SINGLE_NODE_DEPLOYMENT_INTENT_ID_DOMAIN =
   'wharfie:single-node-deployment-intent:v1';
-export const SINGLE_NODE_DEPLOYMENT_INTENT_ID_PREFIX = 'wdi1';
+export const SINGLE_NODE_DEPLOYMENT_INTENT_ID_PREFIX = 'wsni1';
 export const SINGLE_NODE_DEPLOYMENT_MODE = Object.freeze({
   kind: 'single-node-systemd-user',
   version: 1,
@@ -353,7 +353,7 @@ export function canonicalizeSingleNodeDeploymentIntentPayload(
  * Compute the immutable identity of one intent payload.
  * @param {unknown} value - Candidate intent input.
  * @param {string} [valuePath] - Human-readable value path.
- * @returns {string} - `wdi1_<base64url sha256>` identity.
+ * @returns {string} - `wsni1_<base64url sha256>` identity.
  */
 export function getSingleNodeDeploymentIntentRevisionId(
   value,
