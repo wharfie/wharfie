@@ -1,6 +1,6 @@
 # 0021 — Provider-backed single-node deployment
 
-**Status:** Accepted · **Date:** 2026-07-20
+**Status:** Superseded by [0035](0035-two-provider-single-node-self-deployment.md) · **Date:** 2026-07-20
 
 ## Context
 
