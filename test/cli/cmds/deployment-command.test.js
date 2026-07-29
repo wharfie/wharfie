@@ -18,11 +18,20 @@ import {
   SINGLE_NODE_ACCESS_KIND,
   SINGLE_NODE_DEPLOYMENT_MODE,
   SINGLE_NODE_MACHINE,
+  createAwsSingleNodeDeploymentProvider,
   createHetznerSingleNodeDeploymentProvider,
   createSingleNodeDeploymentIntent,
 } from '../../../src/core/runtime/single-node-deployment-intent.js';
 import { createSingleNodeDeploymentDesired } from '../../../src/core/runtime/single-node-deployment-desired.js';
 import { getSingleNodeDeploymentInstanceId } from '../../../src/core/runtime/single-node-deployment-identity.js';
+import {
+  AWS_SINGLE_NODE_APPLY_RESULT_KIND,
+  AWS_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
+} from '../../../src/core/runtime/providers/aws/single-node-apply.js';
+import {
+  AWS_SINGLE_NODE_DESTROY_RESULT_KIND,
+  AWS_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
+} from '../../../src/core/runtime/providers/aws/single-node-destroy.js';
 import {
   HETZNER_SINGLE_NODE_APPLY_RESULT_KIND,
   HETZNER_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
@@ -276,7 +285,31 @@ function makePackagedHarness(overrides = {}) {
       credential: 'must-not-be-projected',
     };
   });
-  const createApplyCoordinator = jest.fn(() => ({ apply }));
+  const createApplyCoordinator =
+    overrides.createApplyCoordinator ?? jest.fn(() => ({ apply }));
+  const awsApply = jest.fn(
+    async (/** @type {Record<string, any>} */ request) => {
+      const desired = createSingleNodeDeploymentDesired({
+        intent: request.intent,
+        revision: request.revision,
+        artifactRecord: request.artifactRecord,
+        observation: request.observation,
+      });
+      return {
+        schemaVersion: AWS_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
+        kind: AWS_SINGLE_NODE_APPLY_RESULT_KIND,
+        provider: 'aws',
+        status: 'active',
+        deploymentInstanceId: desired.deploymentInstanceId,
+        desiredRevisionId: desired.desiredRevisionId,
+        artifactId: desired.artifact.artifactId,
+        activationEvidenceId: ACTIVATION_EVIDENCE_ID,
+        publicIpv4: '203.0.113.42',
+        credential: 'must-not-be-projected',
+      };
+    },
+  );
+  const createAwsApplyCoordinator = jest.fn(() => ({ apply: awsApply }));
   const destroy = jest.fn(
     async (/** @type {Record<string, any>} */ request) => ({
       schemaVersion: HETZNER_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
@@ -288,7 +321,22 @@ function makePackagedHarness(overrides = {}) {
       credential: 'must-not-be-projected',
     }),
   );
-  const createDestroyCoordinator = jest.fn(() => ({ destroy }));
+  const createDestroyCoordinator =
+    overrides.createDestroyCoordinator ?? jest.fn(() => ({ destroy }));
+  const awsDestroy = jest.fn(
+    async (/** @type {Record<string, any>} */ request) => ({
+      schemaVersion: AWS_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
+      kind: AWS_SINGLE_NODE_DESTROY_RESULT_KIND,
+      provider: 'aws',
+      status: 'destroyed',
+      appId: request.appId,
+      deploymentInstanceId: request.deploymentInstanceId,
+      credential: 'must-not-be-projected',
+    }),
+  );
+  const createAwsDestroyCoordinator = jest.fn(() => ({
+    destroy: awsDestroy,
+  }));
   const resolveDataRoot = jest.fn(() => '/stable/wharfie-data');
   const output = {
     json: jest.fn(),
@@ -301,6 +349,14 @@ function makePackagedHarness(overrides = {}) {
     readDeploymentPayload,
     createApplyCoordinator,
     createDestroyCoordinator,
+    createApplyCoordinatorByProvider: {
+      aws: createAwsApplyCoordinator,
+      hetzner: createApplyCoordinator,
+    },
+    createDestroyCoordinatorByProvider: {
+      aws: createAwsDestroyCoordinator,
+      hetzner: createDestroyCoordinator,
+    },
     resolveDataRoot,
     output,
     processRef,
@@ -313,8 +369,12 @@ function makePackagedHarness(overrides = {}) {
     readDeploymentPayload,
     apply,
     createApplyCoordinator,
+    awsApply,
+    createAwsApplyCoordinator,
     destroy,
     createDestroyCoordinator,
+    awsDestroy,
+    createAwsDestroyCoordinator,
     resolveDataRoot,
     output,
     processRef,
@@ -424,6 +484,7 @@ describe('deployment command adapters', () => {
       '--deployment',
       '--provider',
       '--location',
+      '--region',
       '--allow-ssh-from',
       '--data-root',
       '--json',
@@ -667,6 +728,23 @@ describe('packaged deployment command adapter', () => {
       '--location',
     ],
     [
+      'apply --region',
+      'apply',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'aws',
+        '--region',
+        'us-east-1',
+        '--region',
+        'us-east-2',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      '--region',
+    ],
+    [
       'apply --data-root',
       'apply',
       [
@@ -740,7 +818,128 @@ describe('packaged deployment command adapter', () => {
 
       expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
       expect(harness.apply).not.toHaveBeenCalled();
+      expect(harness.awsApply).not.toHaveBeenCalled();
       expect(harness.destroy).not.toHaveBeenCalled();
+      expect(harness.awsDestroy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects mutable provider selectors on journal-bound destroy', async () => {
+    const harness = makePackagedHarness();
+    const command = leaf(harness.command, 'destroy');
+    command.exitOverride();
+    command.configureOutput({ writeErr: jest.fn() });
+
+    await expect(
+      parse(harness.command, [
+        'destroy',
+        '--deployment-instance',
+        PACKAGED_DEPLOYMENT_INSTANCE_ID,
+        '--provider',
+        'aws',
+        '--region',
+        'us-east-1',
+      ]),
+    ).rejects.toThrow("unknown option '--region'");
+
+    expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
+    expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
+    expect(harness.awsDestroy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'an unsupported apply provider',
+      'apply',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'digitalocean',
+        '--location',
+        'ash',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      "Packaged deployment provider must be 'aws' or 'hetzner'.",
+    ],
+    [
+      'AWS apply without a region',
+      'apply',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'aws',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      'AWS packaged deployment apply requires --region.',
+    ],
+    [
+      'AWS apply with a Hetzner location',
+      'apply',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'aws',
+        '--region',
+        'us-east-1',
+        '--location',
+        'ash',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      'AWS packaged deployment apply does not accept --location.',
+    ],
+    [
+      'Hetzner apply without a location',
+      'apply',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'hetzner',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      'Hetzner packaged deployment apply requires --location.',
+    ],
+    [
+      'Hetzner apply with an AWS region',
+      'apply',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'hetzner',
+        '--location',
+        'ash',
+        '--region',
+        'us-east-1',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      'Hetzner packaged deployment apply does not accept --region.',
+    ],
+  ])(
+    'rejects %s before reading embedded authority',
+    async (_name, commandName, argv, message) => {
+      const harness = makePackagedHarness();
+
+      await parse(harness.command, [commandName, ...argv]);
+
+      expect(harness.output.failure).toHaveBeenCalledWith(
+        expect.objectContaining({ message }),
+      );
+      expect(harness.processRef.exitCode).toBe(1);
+      expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
+      expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+      expect(harness.createApplyCoordinator).not.toHaveBeenCalled();
+      expect(harness.createAwsApplyCoordinator).not.toHaveBeenCalled();
+      expect(harness.createDestroyCoordinator).not.toHaveBeenCalled();
+      expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
     },
   );
 
@@ -811,6 +1010,72 @@ describe('packaged deployment command adapter', () => {
       'must-not-be-projected',
     );
     expect(harness.output.line).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('maps exact embedded authority into one AWS apply request', async () => {
+    const harness = makePackagedHarness();
+
+    await parse(harness.command, [
+      'apply',
+      '--deployment',
+      'production',
+      '--provider',
+      'aws',
+      '--region',
+      'us-east-1',
+      '--allow-ssh-from',
+      '198.51.100.9/32',
+      '--allow-ssh-from',
+      '192.0.2.4/32',
+      '--json',
+    ]);
+
+    const intent = createSingleNodeDeploymentIntent({
+      deployment: { id: 'production' },
+      appId: 'adapter-app',
+      target: EMBEDDED_ARTIFACT_RECORD.target,
+      mode: SINGLE_NODE_DEPLOYMENT_MODE,
+      machine: SINGLE_NODE_MACHINE,
+      access: {
+        kind: SINGLE_NODE_ACCESS_KIND,
+        allowedIpv4: ['198.51.100.9/32', '192.0.2.4/32'],
+      },
+      provider: createAwsSingleNodeDeploymentProvider('us-east-1'),
+    });
+    const desired = createSingleNodeDeploymentDesired({
+      intent,
+      revision: EMBEDDED_REVISION,
+      artifactRecord: EMBEDDED_ARTIFACT_RECORD,
+      observation: EMBEDDED_OBSERVATION,
+    });
+    expect(harness.createAwsApplyCoordinator).toHaveBeenCalledWith();
+    expect(harness.createApplyCoordinator).not.toHaveBeenCalled();
+    expectExactCall(harness.awsApply, {
+      intent,
+      revision: EMBEDDED_REVISION,
+      artifactRecord: EMBEDDED_ARTIFACT_RECORD,
+      observation: EMBEDDED_OBSERVATION,
+      artifactSource: harness.source,
+      dataRoot: '/stable/wharfie-data',
+    });
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.output.json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.deployment.apply',
+      provider: 'aws',
+      status: 'active',
+      deploymentId: 'production',
+      appId: 'adapter-app',
+      revisionId: EMBEDDED_REVISION.revisionId,
+      artifactId: EMBEDDED_ARTIFACT_RECORD.artifactId,
+      deploymentInstanceId: desired.deploymentInstanceId,
+      publicIpv4: '203.0.113.42',
+    });
+    expect(JSON.stringify(harness.output.json.mock.calls[0][0])).not.toContain(
+      'must-not-be-projected',
+    );
     expect(harness.output.failure).not.toHaveBeenCalled();
     expect(harness.processRef.exitCode).toBeUndefined();
   });
@@ -913,7 +1178,60 @@ describe('packaged deployment command adapter', () => {
     expect(harness.output.failure).toHaveBeenCalledWith(
       expect.objectContaining({
         message:
-          'Hetzner apply result does not match the exact desired revision.',
+          'Packaged deployment apply result does not match the exact desired revision.',
+      }),
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('refuses an AWS apply result outside exact embedded authority', async () => {
+    const awsApply = jest.fn(
+      async (/** @type {Record<string, any>} */ request) => {
+        const desired = createSingleNodeDeploymentDesired({
+          intent: request.intent,
+          revision: request.revision,
+          artifactRecord: request.artifactRecord,
+          observation: request.observation,
+        });
+        return {
+          schemaVersion: AWS_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
+          kind: AWS_SINGLE_NODE_APPLY_RESULT_KIND,
+          provider: 'aws',
+          status: 'active',
+          deploymentInstanceId: desired.deploymentInstanceId,
+          desiredRevisionId: `${desired.desiredRevisionId}-wrong`,
+          artifactId: desired.artifact.artifactId,
+          activationEvidenceId: ACTIVATION_EVIDENCE_ID,
+          publicIpv4: '203.0.113.42',
+        };
+      },
+    );
+    const harness = makePackagedHarness({
+      createApplyCoordinatorByProvider: {
+        aws: jest.fn(() => ({ apply: awsApply })),
+      },
+    });
+
+    await parse(harness.command, [
+      'apply',
+      '--deployment',
+      'production',
+      '--provider',
+      'aws',
+      '--region',
+      'us-east-1',
+      '--allow-ssh-from',
+      '198.51.100.9/32',
+      '--json',
+    ]);
+
+    expect(awsApply).toHaveBeenCalledTimes(1);
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment apply result does not match the exact desired revision.',
       }),
     );
     expect(harness.output.json).not.toHaveBeenCalled();
@@ -954,6 +1272,42 @@ describe('packaged deployment command adapter', () => {
       'must-not-be-projected',
     );
     expect(harness.output.line).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('dispatches AWS destroy from journal-bound deployment authority', async () => {
+    const harness = makePackagedHarness();
+
+    await parse(harness.command, [
+      'destroy',
+      '--deployment-instance',
+      PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      '--provider',
+      'aws',
+      '--json',
+    ]);
+
+    expect(harness.readRevisionRuntimePair).toHaveBeenCalledWith();
+    expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+    expect(harness.createAwsDestroyCoordinator).toHaveBeenCalledWith();
+    expect(harness.createDestroyCoordinator).not.toHaveBeenCalled();
+    expectExactCall(harness.awsDestroy, {
+      appId: 'adapter-app',
+      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      dataRoot: '/stable/wharfie-data',
+    });
+    expect(harness.output.json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.deployment.destroy',
+      provider: 'aws',
+      status: 'destroyed',
+      appId: 'adapter-app',
+      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+    });
+    expect(JSON.stringify(harness.output.json.mock.calls[0][0])).not.toContain(
+      'must-not-be-projected',
+    );
     expect(harness.output.failure).not.toHaveBeenCalled();
     expect(harness.processRef.exitCode).toBeUndefined();
   });
@@ -1007,7 +1361,42 @@ describe('packaged deployment command adapter', () => {
     expect(harness.output.failure).toHaveBeenCalledWith(
       expect.objectContaining({
         message:
-          'Hetzner destroy result does not match the exact deployment authority.',
+          'Packaged deployment destroy result does not match the exact deployment authority.',
+      }),
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('refuses AWS destroy output outside the embedded app authority', async () => {
+    const awsDestroy = jest.fn(async () => ({
+      schemaVersion: AWS_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
+      kind: AWS_SINGLE_NODE_DESTROY_RESULT_KIND,
+      provider: 'aws',
+      status: 'destroyed',
+      appId: 'foreign-app',
+      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+    }));
+    const harness = makePackagedHarness({
+      createDestroyCoordinatorByProvider: {
+        aws: jest.fn(() => ({ destroy: awsDestroy })),
+      },
+    });
+
+    await parse(harness.command, [
+      'destroy',
+      '--deployment-instance',
+      PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      '--provider',
+      'aws',
+      '--json',
+    ]);
+
+    expect(awsDestroy).toHaveBeenCalledTimes(1);
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment destroy result does not match the exact deployment authority.',
       }),
     );
     expect(harness.output.json).not.toHaveBeenCalled();
