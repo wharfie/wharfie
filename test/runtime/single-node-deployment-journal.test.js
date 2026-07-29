@@ -22,6 +22,19 @@ import {
   createCanonicalJsonSha256Id,
   sha256Base64Url,
 } from '../../src/core/runtime/content-id.js';
+import { createAwsProviderScope } from '../../src/core/runtime/deployment-provider-scope.js';
+import {
+  createAwsDeletionRecord,
+  createAwsDestructionAttempt,
+  createAwsProvisionedResourceRecord,
+  createAwsProvisioningMutationAttempt,
+} from '../../src/core/runtime/providers/aws/single-node-journal-evidence.js';
+import { createAwsSingleNodeProvisioningIntent } from '../../src/core/runtime/providers/aws/single-node-provisioning-intent.js';
+import {
+  AWS_SINGLE_NODE_INSTANCE_TYPE,
+  AWS_SINGLE_NODE_UBUNTU_PARAMETER,
+  resolveAwsSingleNodePlan,
+} from '../../src/core/runtime/providers/aws/single-node-plan.js';
 import {
   SingleNodeDeploymentJournalConflictError,
   SingleNodeDeploymentJournalInvalidError,
@@ -34,6 +47,7 @@ import {
   getSingleNodeDeploymentProvisioningRecoveryState,
   prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
+  prepareSingleNodeDeploymentMutations,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
@@ -98,6 +112,19 @@ const IMAGE = Object.freeze({
   deprecatedAt: null,
 });
 const PUBLIC_IPV4 = '192.0.2.44';
+const AWS_REGION = 'us-east-2';
+const AWS_ACCOUNT_ID = '123456789012';
+const AWS_VPC_ID = 'vpc-0123456789abcdef0';
+const AWS_SUBNET_ID = 'subnet-0123456789abcdef0';
+const AWS_ROUTE_TABLE_ID = 'rtb-0123456789abcdef0';
+const AWS_INTERNET_GATEWAY_ID = 'igw-0123456789abcdef0';
+const AWS_NETWORK_ACL_ID = 'acl-0123456789abcdef0';
+const AWS_NETWORK_ACL_ASSOCIATION_ID = 'aclassoc-0123456789abcdef0';
+const AWS_AMI_ID = 'ami-0123456789abcdef0';
+const AWS_SNAPSHOT_ID = 'snap-0123456789abcdef0';
+const AWS_SECURITY_GROUP_ID = 'sg-0123456789abcdef0';
+const AWS_INSTANCE_ID = 'i-0123456789abcdef0';
+const AWS_ROOT_VOLUME_ID = 'vol-0123456789abcdef0';
 const SSH_FINGERPRINT = `SHA256:${Buffer.alloc(32, 17)
   .toString('base64')
   .replace(/=+$/u, '')}`;
@@ -109,9 +136,14 @@ const temporaryRoots = [];
 
 /** @type {Awaited<ReturnType<typeof makeAuthority>>} */
 let authority;
+/** @type {Awaited<ReturnType<typeof makeAwsAuthority>>} */
+let awsAuthority;
 
 beforeAll(async () => {
-  authority = await makeAuthority();
+  [authority, awsAuthority] = await Promise.all([
+    makeAuthority(),
+    makeAwsAuthority(),
+  ]);
 });
 
 afterEach(async () => {
@@ -153,7 +185,10 @@ function serverType(name) {
   };
 }
 
-function makeDesired() {
+/** @param {Readonly<Record<string, any>>} [provider] */
+function makeDesired(
+  provider = Object.freeze({ kind: 'hetzner', location: LOCATION.name }),
+) {
   const revision = createApplicationRevision({
     contract: {
       schemaVersion: 4,
@@ -222,7 +257,7 @@ function makeDesired() {
       kind: 'public-ssh',
       allowedIpv4: ['203.0.113.7/32'],
     },
-    provider: { kind: 'hetzner', location: LOCATION.name },
+    provider,
   });
   return createSingleNodeDeploymentDesired({
     intent: deploymentIntent,
@@ -272,14 +307,228 @@ async function makeAuthority() {
   });
 }
 
-async function makeStore() {
+function makeAwsReadApi() {
+  return {
+    getParameter: async () => ({
+      Parameter: {
+        Name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
+        Type: 'String',
+        Value: AWS_AMI_ID,
+        Version: 42,
+        ARN: `arn:aws:ssm:${AWS_REGION}::parameter${AWS_SINGLE_NODE_UBUNTU_PARAMETER}`,
+        DataType: 'text',
+        LastModifiedDate: new Date('2026-07-01T00:00:00.000Z'),
+      },
+    }),
+    describeImages: async () => ({
+      Images: [
+        {
+          ImageId: AWS_AMI_ID,
+          OwnerId: '099720109477',
+          Public: true,
+          State: 'available',
+          Architecture: 'x86_64',
+          ImageType: 'machine',
+          RootDeviceType: 'ebs',
+          RootDeviceName: '/dev/sda1',
+          VirtualizationType: 'hvm',
+          EnaSupport: true,
+          PlatformDetails: 'Linux/UNIX',
+          PublicSsmParameterName: AWS_SINGLE_NODE_UBUNTU_PARAMETER.slice(1),
+          BlockDeviceMappings: [
+            {
+              DeviceName: '/dev/sda1',
+              Ebs: {
+                SnapshotId: AWS_SNAPSHOT_ID,
+                VolumeType: 'gp3',
+                VolumeSize: 8,
+                Encrypted: false,
+                DeleteOnTermination: true,
+              },
+            },
+          ],
+        },
+      ],
+    }),
+    describeInstanceTypeOfferings: async () => ({
+      InstanceTypeOfferings: [
+        {
+          InstanceType: AWS_SINGLE_NODE_INSTANCE_TYPE,
+          Location: 'use2-az1',
+        },
+      ],
+    }),
+    describeInstances: async () => ({ Reservations: [] }),
+    describeInternetGateways: async () => ({
+      InternetGateways: [
+        {
+          InternetGatewayId: AWS_INTERNET_GATEWAY_ID,
+          OwnerId: AWS_ACCOUNT_ID,
+          Attachments: [{ VpcId: AWS_VPC_ID, State: 'available' }],
+        },
+      ],
+    }),
+    describeNetworkAcls: async () => ({
+      NetworkAcls: [
+        {
+          NetworkAclId: AWS_NETWORK_ACL_ID,
+          VpcId: AWS_VPC_ID,
+          OwnerId: AWS_ACCOUNT_ID,
+          IsDefault: true,
+          Associations: [
+            {
+              NetworkAclAssociationId: AWS_NETWORK_ACL_ASSOCIATION_ID,
+              NetworkAclId: AWS_NETWORK_ACL_ID,
+              SubnetId: AWS_SUBNET_ID,
+            },
+          ],
+          Entries: [
+            {
+              RuleNumber: 100,
+              Protocol: '-1',
+              RuleAction: 'allow',
+              Egress: false,
+              CidrBlock: '0.0.0.0/0',
+            },
+            {
+              RuleNumber: 101,
+              Protocol: '-1',
+              RuleAction: 'allow',
+              Egress: false,
+              Ipv6CidrBlock: '::/0',
+            },
+            {
+              RuleNumber: 32767,
+              Protocol: '-1',
+              RuleAction: 'deny',
+              Egress: false,
+              CidrBlock: '0.0.0.0/0',
+            },
+            {
+              RuleNumber: 32767,
+              Protocol: '-1',
+              RuleAction: 'deny',
+              Egress: false,
+              Ipv6CidrBlock: '::/0',
+            },
+            {
+              RuleNumber: 100,
+              Protocol: '-1',
+              RuleAction: 'allow',
+              Egress: true,
+              CidrBlock: '0.0.0.0/0',
+            },
+            {
+              RuleNumber: 101,
+              Protocol: '-1',
+              RuleAction: 'allow',
+              Egress: true,
+              Ipv6CidrBlock: '::/0',
+            },
+            {
+              RuleNumber: 32767,
+              Protocol: '-1',
+              RuleAction: 'deny',
+              Egress: true,
+              CidrBlock: '0.0.0.0/0',
+            },
+            {
+              RuleNumber: 32767,
+              Protocol: '-1',
+              RuleAction: 'deny',
+              Egress: true,
+              Ipv6CidrBlock: '::/0',
+            },
+          ],
+        },
+      ],
+    }),
+    describeRouteTables: async () => ({
+      RouteTables: [
+        {
+          RouteTableId: AWS_ROUTE_TABLE_ID,
+          VpcId: AWS_VPC_ID,
+          OwnerId: AWS_ACCOUNT_ID,
+          Associations: [{ Main: true }],
+          Routes: [
+            {
+              DestinationCidrBlock: '0.0.0.0/0',
+              GatewayId: AWS_INTERNET_GATEWAY_ID,
+              Origin: 'CreateRoute',
+              State: 'active',
+            },
+          ],
+        },
+      ],
+    }),
+    describeSecurityGroups: async () => ({ SecurityGroups: [] }),
+    describeSubnets: async () => ({
+      Subnets: [
+        {
+          SubnetId: AWS_SUBNET_ID,
+          VpcId: AWS_VPC_ID,
+          OwnerId: AWS_ACCOUNT_ID,
+          State: 'available',
+          DefaultForAz: true,
+          MapPublicIpOnLaunch: true,
+          Ipv6Native: false,
+          AvailableIpAddressCount: 4091,
+          AvailabilityZone: 'us-east-2a',
+          AvailabilityZoneId: 'use2-az1',
+        },
+      ],
+    }),
+    describeVolumes: async () => ({ Volumes: [] }),
+    describeVpcs: async () => ({
+      Vpcs: [
+        {
+          VpcId: AWS_VPC_ID,
+          OwnerId: AWS_ACCOUNT_ID,
+          IsDefault: true,
+          State: 'available',
+        },
+      ],
+    }),
+  };
+}
+
+async function makeAwsAuthority() {
+  const desired = makeDesired({ kind: 'aws', region: AWS_REGION });
+  const providerScope = createAwsProviderScope({
+    partition: 'aws',
+    accountId: AWS_ACCOUNT_ID,
+    region: AWS_REGION,
+  });
+  const plan = await resolveAwsSingleNodePlan({
+    desired,
+    providerScope,
+    api: makeAwsReadApi(),
+  });
+  const provisioningIntent = createAwsSingleNodeProvisioningIntent({
+    plan,
+    incarnationId: createSingleNodeDeploymentIncarnationId(
+      Buffer.alloc(32, 29),
+    ),
+    cloudInitDigest: digest('#cloud-config\n'),
+  });
+  return Object.freeze({
+    desired,
+    providerIntent: Object.freeze({
+      provider: 'aws',
+      intent: provisioningIntent,
+    }),
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} [selectedAuthority] */
+async function makeStore(selectedAuthority = authority) {
   const parent = await mkdtemp(join(tmpdir(), 'wharfie-single-node-journal-'));
   temporaryRoots.push(parent);
   await chmod(parent, 0o700);
   const dataRoot = join(parent, 'data');
   const store = createSingleNodeDeploymentJournalStore({
-    appId: authority.desired.intent.appId,
-    deploymentInstanceId: authority.desired.deploymentInstanceId,
+    appId: selectedAuthority.desired.intent.appId,
+    deploymentInstanceId: selectedAuthority.desired.deploymentInstanceId,
     dataRoot,
   });
   return { parent, dataRoot, store };
@@ -434,14 +683,73 @@ function createProvisioned() {
   return advanceSingleNodeDeploymentJournal(record, 'provisioned');
 }
 
+/** @param {Readonly<Record<string, any>>} record @param {string} role @param {string} id @param {string|null} publicIpv4 */
+function completeAwsRole(record, role, id, publicIpv4 = null) {
+  const prepared =
+    getSingleNodeDeploymentMutationAttempt(record, role) === null
+      ? prepareSingleNodeDeploymentMutation(
+          record,
+          createAwsProvisioningMutationAttempt(
+            awsAuthority.providerIntent.intent,
+            role,
+          ),
+        )
+      : record;
+  const completed = completeSingleNodeDeploymentMutation(
+    prepared,
+    createAwsProvisionedResourceRecord(
+      awsAuthority.providerIntent.intent,
+      role,
+      id,
+    ),
+  );
+  if (publicIpv4 === null) return completed;
+  const resource = completed.resources.find(
+    (/** @type {Record<string, any>} */ entry) => entry.role === role,
+  );
+  if (resource === undefined) {
+    throw new Error('test AWS resource was not recorded');
+  }
+  return recordSingleNodeDeploymentResource(completed, {
+    ...resource,
+    publicIpv4,
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} record */
+function prepareAwsCompute(record) {
+  return prepareSingleNodeDeploymentMutations(record, [
+    createAwsProvisioningMutationAttempt(
+      awsAuthority.providerIntent.intent,
+      'instance',
+    ),
+    createAwsProvisioningMutationAttempt(
+      awsAuthority.providerIntent.intent,
+      'rootVolume',
+    ),
+  ]);
+}
+
+function createAwsProvisioned() {
+  let record = advanceSingleNodeDeploymentJournal(
+    createSingleNodeDeploymentJournal(awsAuthority),
+    'provisioning',
+  );
+  record = completeAwsRole(record, 'securityGroup', AWS_SECURITY_GROUP_ID);
+  record = prepareAwsCompute(record);
+  record = completeAwsRole(record, 'instance', AWS_INSTANCE_ID, PUBLIC_IPV4);
+  record = completeAwsRole(record, 'rootVolume', AWS_ROOT_VOLUME_ID);
+  return advanceSingleNodeDeploymentJournal(record, 'provisioned');
+}
+
 describe('single-node deployment journal contract', () => {
   it('seals credential-free immutable authority before the first mutation', () => {
     const journal = createInitial();
 
     expect(journal).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'singleNodeDeploymentJournal',
-      journalId: expect.stringMatching(/^wsnj1_[A-Za-z0-9_-]{43}$/u),
+      journalId: expect.stringMatching(/^wsnj2_[A-Za-z0-9_-]{43}$/u),
       generation: 0,
       previousJournalId: null,
       deploymentInstanceId: authority.desired.deploymentInstanceId,
@@ -834,6 +1142,293 @@ describe('single-node deployment journal contract', () => {
     expect(() =>
       validateSingleNodeDeploymentJournalSuccessor(initial, skipped),
     ).toThrow(/generation|successor/iu);
+  });
+});
+
+describe('single-node deployment journal AWS v2 contract', () => {
+  it('round-trips exact AWS plan, scope, and incarnation authority while rejecting v1', () => {
+    const initial = createSingleNodeDeploymentJournal(awsAuthority);
+
+    expect(initial).toMatchObject({
+      schemaVersion: 2,
+      journalId: expect.stringMatching(/^wsnj2_[A-Za-z0-9_-]{43}$/u),
+      phase: 'planned',
+      providerIntent: {
+        provider: 'aws',
+        intent: {
+          provisioningIntentId: expect.stringMatching(
+            /^wsapi1_[A-Za-z0-9_-]{43}$/u,
+          ),
+          plan: {
+            planId: awsAuthority.providerIntent.intent.plan.planId,
+            providerSpec: {
+              providerScope:
+                awsAuthority.providerIntent.intent.plan.providerSpec
+                  .providerScope,
+            },
+          },
+        },
+      },
+    });
+    expect(validateSingleNodeDeploymentJournal(clone(initial))).toEqual(
+      initial,
+    );
+
+    const legacy = /** @type {any} */ (clone(initial));
+    legacy.schemaVersion = 1;
+    expect(() => validateSingleNodeDeploymentJournal(legacy)).toThrow(
+      /unsupported schema/iu,
+    );
+
+    const wrongScope = /** @type {any} */ (clone(awsAuthority));
+    wrongScope.providerIntent.intent.plan.providerSpec.providerScope.accountId =
+      '999999999999';
+    expect(() => createSingleNodeDeploymentJournal(wrongScope)).toThrow();
+  });
+
+  it('enforces AWS provider roles, canonical IDs, and instance-only address authority', () => {
+    let record = advanceSingleNodeDeploymentJournal(
+      createSingleNodeDeploymentJournal(awsAuthority),
+      'provisioning',
+    );
+
+    expect(() =>
+      completeSingleNodeDeploymentMutation(
+        record,
+        createAwsProvisionedResourceRecord(
+          awsAuthority.providerIntent.intent,
+          'securityGroup',
+          AWS_SECURITY_GROUP_ID,
+        ),
+      ),
+    ).toThrow(/not durably prepared/iu);
+    expect(() =>
+      createAwsProvisionedResourceRecord(
+        awsAuthority.providerIntent.intent,
+        'securityGroup',
+        AWS_INSTANCE_ID,
+      ),
+    ).toThrow(/canonical securityGroup/iu);
+
+    record = completeAwsRole(record, 'securityGroup', AWS_SECURITY_GROUP_ID);
+    expect(() =>
+      recordSingleNodeDeploymentResource(record, {
+        ...record.resources[0],
+        provider: 'hetzner',
+      }),
+    ).toThrow(/provider does not match/iu);
+    expect(() =>
+      recordSingleNodeDeploymentResource(record, {
+        ...record.resources[0],
+        publicIpv4: PUBLIC_IPV4,
+      }),
+    ).toThrow(/unsupported for this provider role/iu);
+
+    record = prepareAwsCompute(record);
+    record = completeAwsRole(record, 'instance', AWS_INSTANCE_ID, PUBLIC_IPV4);
+    record = completeAwsRole(record, 'rootVolume', AWS_ROOT_VOLUME_ID);
+    expect(() =>
+      recordSingleNodeDeploymentResource(record, {
+        ...record.resources.find(
+          (/** @type {Record<string, any>} */ resource) =>
+            resource.role === 'rootVolume',
+        ),
+        publicIpv4: PUBLIC_IPV4,
+      }),
+    ).toThrow(/unsupported for this provider role/iu);
+
+    record = advanceSingleNodeDeploymentJournal(record, 'provisioned');
+    record = recordSingleNodeDeploymentSshHost(record, {
+      address: PUBLIC_IPV4,
+      algorithm: 'ssh-ed25519',
+      fingerprint: SSH_FINGERPRINT,
+    });
+    expect(record.sshHost.address).toBe(PUBLIC_IPV4);
+    expect(getSingleNodeDeploymentProvisioningRecoveryState(record)).toEqual({
+      storedResourceIds: {
+        securityGroup: AWS_SECURITY_GROUP_ID,
+        instance: AWS_INSTANCE_ID,
+        rootVolume: AWS_ROOT_VOLUME_ID,
+      },
+      storedMutationAttempts: {
+        securityGroup: createAwsProvisioningMutationAttempt(
+          awsAuthority.providerIntent.intent,
+          'securityGroup',
+        ),
+        instance: createAwsProvisioningMutationAttempt(
+          awsAuthority.providerIntent.intent,
+          'instance',
+        ),
+        rootVolume: createAwsProvisioningMutationAttempt(
+          awsAuthority.providerIntent.intent,
+          'rootVolume',
+        ),
+      },
+    });
+    expect(validateSingleNodeDeploymentJournal(clone(record))).toEqual(record);
+  });
+
+  it('persists the AWS instance and root-volume fences in one CAS generation', () => {
+    const provisioning = advanceSingleNodeDeploymentJournal(
+      createSingleNodeDeploymentJournal(awsAuthority),
+      'provisioning',
+    );
+    const instance = createAwsProvisioningMutationAttempt(
+      awsAuthority.providerIntent.intent,
+      'instance',
+    );
+    const rootVolume = createAwsProvisioningMutationAttempt(
+      awsAuthority.providerIntent.intent,
+      'rootVolume',
+    );
+    expect(() =>
+      prepareSingleNodeDeploymentMutation(provisioning, instance),
+    ).toThrow(/fence the AWS instance and root volume atomically/iu);
+    expect(() =>
+      prepareSingleNodeDeploymentMutation(provisioning, rootVolume),
+    ).toThrow(/fence the AWS instance and root volume atomically/iu);
+    const prepared = prepareSingleNodeDeploymentMutations(provisioning, [
+      rootVolume,
+      instance,
+    ]);
+
+    expect(prepared.generation).toBe(provisioning.generation + 1);
+    expect(
+      prepared.mutationAttempts.map(
+        (/** @type {Record<string, any>} */ attempt) => attempt.role,
+      ),
+    ).toEqual(['instance', 'rootVolume']);
+    expect(
+      prepareSingleNodeDeploymentMutations(prepared, [instance, rootVolume]),
+    ).toEqual(prepared);
+    expect(() =>
+      prepareSingleNodeDeploymentMutations(provisioning, [instance, instance]),
+    ).toThrow(/unique roles/iu);
+    expect(() =>
+      prepareSingleNodeDeploymentMutations(provisioning, []),
+    ).toThrow(/nonempty and bounded/iu);
+
+    const conflictingIntent = createAwsSingleNodeProvisioningIntent({
+      plan: awsAuthority.providerIntent.intent.plan,
+      incarnationId: createSingleNodeDeploymentIncarnationId(
+        Buffer.alloc(32, 31),
+      ),
+      cloudInitDigest: awsAuthority.providerIntent.intent.cloudInitDigest,
+    });
+    expect(() =>
+      prepareSingleNodeDeploymentMutations(prepared, [
+        createAwsProvisioningMutationAttempt(conflictingIntent, 'instance'),
+      ]),
+    ).toThrow(/immutable authority/iu);
+    expect(
+      validateSingleNodeDeploymentJournalSuccessor(provisioning, prepared),
+    ).toEqual(prepared);
+  });
+
+  it('orders AWS destruction instance, root volume, then security group', () => {
+    let record = advanceSingleNodeDeploymentJournal(
+      createAwsProvisioned(),
+      'destroying',
+    );
+    /** @param {string} role @param {string} id */
+    const attemptFor = (role, id) =>
+      createAwsDestructionAttempt(awsAuthority.providerIntent.intent, role, id);
+    /** @param {string} role @param {string} id */
+    const deleteFor = (role, id) => {
+      const attempt =
+        record.destroyAttempts.find(
+          (/** @type {Record<string, any>} */ entry) => entry.role === role,
+        ) ?? null;
+      return createAwsDeletionRecord(
+        awsAuthority.providerIntent.intent,
+        role,
+        id,
+        attempt,
+      );
+    };
+
+    expect(() =>
+      prepareSingleNodeDeploymentDestruction(
+        record,
+        attemptFor('rootVolume', AWS_ROOT_VOLUME_ID),
+      ),
+    ).toThrow(/instance to be absent first/iu);
+    expect(() =>
+      prepareSingleNodeDeploymentDestruction(
+        record,
+        attemptFor('securityGroup', AWS_SECURITY_GROUP_ID),
+      ),
+    ).toThrow(/instance and root volume/iu);
+
+    record = prepareSingleNodeDeploymentDestruction(
+      record,
+      attemptFor('instance', AWS_INSTANCE_ID),
+    );
+    record = recordSingleNodeDeploymentDeletion(
+      record,
+      deleteFor('instance', AWS_INSTANCE_ID),
+    );
+    record = prepareSingleNodeDeploymentDestruction(
+      record,
+      attemptFor('rootVolume', AWS_ROOT_VOLUME_ID),
+    );
+    record = recordSingleNodeDeploymentDeletion(
+      record,
+      deleteFor('rootVolume', AWS_ROOT_VOLUME_ID),
+    );
+    record = prepareSingleNodeDeploymentDestruction(
+      record,
+      attemptFor('securityGroup', AWS_SECURITY_GROUP_ID),
+    );
+    record = recordSingleNodeDeploymentDeletion(
+      record,
+      deleteFor('securityGroup', AWS_SECURITY_GROUP_ID),
+    );
+
+    expect(
+      record.destroyAttempts.map(
+        (/** @type {Record<string, any>} */ attempt) => attempt.role,
+      ),
+    ).toEqual(['instance', 'rootVolume', 'securityGroup']);
+    expect(
+      record.deletionRecords.map(
+        (/** @type {Record<string, any>} */ deletion) => deletion.role,
+      ),
+    ).toEqual(['instance', 'rootVolume', 'securityGroup']);
+    expect(
+      getSingleNodeDeploymentDestructionRecoveryState(record),
+    ).toMatchObject({
+      storedResourceIds: {
+        instance: AWS_INSTANCE_ID,
+        rootVolume: AWS_ROOT_VOLUME_ID,
+        securityGroup: AWS_SECURITY_GROUP_ID,
+      },
+    });
+    record = advanceSingleNodeDeploymentJournal(record, 'destroyed');
+    expect(record.phase).toBe('destroyed');
+  });
+
+  it('retains AWS content integrity and rejects stale CAS publication', async () => {
+    const { store } = await makeStore(awsAuthority);
+    const initial = await store.initialize(awsAuthority);
+    const provisioning = advanceSingleNodeDeploymentJournal(
+      initial,
+      'provisioning',
+    );
+    await store.commit(commitRequest(initial, provisioning));
+
+    const tampered = /** @type {any} */ (clone(provisioning));
+    tampered.providerIntent.intent.incarnationId =
+      authority.providerIntent.intent.incarnationId;
+    expect(() => validateSingleNodeDeploymentJournal(tampered)).toThrow();
+    await expect(
+      store.commit(
+        commitRequest(
+          initial,
+          advanceSingleNodeDeploymentJournal(initial, 'destroying'),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(SingleNodeDeploymentJournalConflictError);
   });
 });
 

@@ -1,4 +1,4 @@
-/* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- This strict durable-state boundary keeps its exact schemas and transition contracts together. */
+/* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-param-description, jsdoc/require-returns, jsdoc/require-returns-description -- This strict durable-state boundary keeps its exact schemas and transition contracts together. */
 
 import { randomUUID } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
@@ -22,6 +22,14 @@ import {
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 import {
+  createAwsProvisionedResourceRecord,
+  validateAwsDeletionRecord,
+  validateAwsDestructionAttempt,
+  validateAwsProvisionedResourceRecord,
+  validateAwsProvisioningMutationAttempt,
+} from './providers/aws/single-node-journal-evidence.js';
+import { validateAwsSingleNodeProvisioningIntent } from './providers/aws/single-node-provisioning-intent.js';
+import {
   validateHetznerDeletionRecord,
   validateHetznerDestructionAttempt,
 } from './providers/hetzner/single-node-destruction.js';
@@ -38,19 +46,19 @@ import {
 } from './single-node-deployment-identity.js';
 import { validateSingleNodeRemoteActivationEvidence } from './single-node-remote-activation.js';
 
-export const SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION = 1;
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION = 2;
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND =
   'singleNodeDeploymentJournal';
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN =
-  'wharfie:single-node-deployment-journal:v1';
-export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX = 'wsnj1';
+  'wharfie:single-node-deployment-journal:v2';
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX = 'wsnj2';
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES = 1024 * 1024;
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS = 4096;
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const DEPLOYMENTS_DIRECTORY_NAME = 'single-node-deployments';
-const STORAGE_VERSION_DIRECTORY_NAME = 'v1';
+const STORAGE_VERSION_DIRECTORY_NAME = 'v2';
 const JOURNAL_DIRECTORY_NAME = 'journal';
 const JOURNAL_FILE_PATTERN = /^journal-([0-9]{16})\.json$/u;
 const JOURNAL_TEMP_PATTERN =
@@ -62,6 +70,17 @@ const HETZNER_DESTRUCTION_ROLES = Object.freeze([
   'primaryIp',
   'firewall',
 ]);
+const AWS_RESOURCE_ROLES = new Set(['securityGroup', 'instance', 'rootVolume']);
+const AWS_DESTRUCTION_ROLES = Object.freeze([
+  'instance',
+  'rootVolume',
+  'securityGroup',
+]);
+const AWS_RESOURCE_ID_PATTERNS = Object.freeze({
+  securityGroup: /^sg-[0-9a-f]{8,32}$/u,
+  instance: /^i-[0-9a-f]{8,32}$/u,
+  rootVolume: /^vol-[0-9a-f]{8,32}$/u,
+});
 const PHASES = new Set([
   'planned',
   'provisioning',
@@ -319,24 +338,78 @@ function canonicalIpv4(value, label) {
   return value;
 }
 
+/** @param {string} provider @returns {ReadonlySet<string>} */
+function providerResourceRoles(provider) {
+  if (provider === 'hetzner') return HETZNER_RESOURCE_ROLES;
+  if (provider === 'aws') return AWS_RESOURCE_ROLES;
+  throw new TypeError('singleNodeDeploymentJournal provider is unsupported.');
+}
+
+/** @param {string} provider @returns {readonly string[]} */
+function providerDestructionRoles(provider) {
+  if (provider === 'hetzner') return HETZNER_DESTRUCTION_ROLES;
+  if (provider === 'aws') return AWS_DESTRUCTION_ROLES;
+  throw new TypeError('singleNodeDeploymentJournal provider is unsupported.');
+}
+
+/** @param {string} provider @returns {string} */
+function providerAddressRole(provider) {
+  if (provider === 'hetzner') return 'primaryIp';
+  if (provider === 'aws') return 'instance';
+  throw new TypeError('singleNodeDeploymentJournal provider is unsupported.');
+}
+
 /**
- * Canonicalize the discriminated provider intent envelope. The envelope is
- * deliberately provider-neutral; this first schema admits only the fully
- * specified Hetzner intent until an equally strict AWS intent exists.
+ * @param {unknown} value
+ * @param {string} provider
+ * @param {string} role
+ * @param {string} valuePath
+ * @returns {number|string}
+ */
+function canonicalProviderResourceId(value, provider, role, valuePath) {
+  if (provider === 'hetzner') {
+    return positiveSafeInteger(value, valuePath);
+  }
+  if (provider === 'aws') {
+    const pattern =
+      AWS_RESOURCE_ID_PATTERNS[
+        /** @type {keyof typeof AWS_RESOURCE_ID_PATTERNS} */ (role)
+      ];
+    if (typeof value !== 'string' || !pattern?.test(value)) {
+      throw new TypeError(
+        `${valuePath} is not a canonical ${role} AWS resource ID.`,
+      );
+    }
+    return value;
+  }
+  throw new TypeError(`${valuePath} has an unsupported provider.`);
+}
+
+/**
+ * Canonicalize the discriminated provider intent envelope.
  * @param {unknown} value - Candidate envelope.
  * @param {string} valuePath - Boundary label.
  * @returns {Readonly<Record<string, any>>} - Canonical provider intent.
  */
 function validateProviderIntent(value, valuePath) {
   const envelope = exactDataObject(value, PROVIDER_INTENT_KEYS, valuePath);
-  if (envelope.provider !== 'hetzner') {
-    throw new TypeError(`${valuePath}.provider must be 'hetzner'.`);
+  let intent;
+  if (envelope.provider === 'hetzner') {
+    intent = validateHetznerSingleNodeProvisioningIntent(
+      envelope.intent,
+      `${valuePath}.intent`,
+    );
+  } else if (envelope.provider === 'aws') {
+    intent = validateAwsSingleNodeProvisioningIntent(
+      envelope.intent,
+      `${valuePath}.intent`,
+    );
+  } else {
+    throw new TypeError(`${valuePath}.provider is unsupported.`);
   }
-  const intent = validateHetznerSingleNodeProvisioningIntent(
-    envelope.intent,
-    `${valuePath}.intent`,
+  return deepFreeze(
+    sortCanonicalJsonValue({ provider: envelope.provider, intent }),
   );
-  return deepFreeze(sortCanonicalJsonValue({ provider: 'hetzner', intent }));
 }
 
 /**
@@ -349,16 +422,14 @@ function validateProviderIntent(value, valuePath) {
 function validateMutationAttempt(value, authority, valuePath) {
   const attempt = exactDataObject(value, MUTATION_ATTEMPT_KEYS, valuePath);
   if (
-    attempt.provider !== 'hetzner' ||
+    (attempt.provider !== 'hetzner' && attempt.provider !== 'aws') ||
     attempt.provider !== authority.providerIntent.provider
   ) {
     throw new TypeError(`${valuePath}.provider does not match its intent.`);
   }
-  if (!HETZNER_RESOURCE_ROLES.has(attempt.role)) {
+  const resourceRoles = providerResourceRoles(attempt.provider);
+  if (!resourceRoles.has(attempt.role)) {
     throw new TypeError(`${valuePath}.role is unsupported.`);
-  }
-  if (attempt.operation !== 'create') {
-    throw new TypeError(`${valuePath}.operation must be 'create'.`);
   }
   if (attempt.state !== 'prepared' && attempt.state !== 'succeeded') {
     throw new TypeError(
@@ -367,8 +438,10 @@ function validateMutationAttempt(value, authority, valuePath) {
   }
   let providerResourceId = null;
   if (attempt.providerResourceId !== null) {
-    providerResourceId = positiveSafeInteger(
+    providerResourceId = canonicalProviderResourceId(
       attempt.providerResourceId,
+      attempt.provider,
+      attempt.role,
       `${valuePath}.providerResourceId`,
     );
   }
@@ -378,12 +451,20 @@ function validateMutationAttempt(value, authority, valuePath) {
   ) {
     throw new Error(`${valuePath} has inconsistent outcome evidence.`);
   }
-  const evidence = validateHetznerProvisioningMutationAttempt(
-    attempt.evidence,
-    authority.providerIntent.intent,
-    attempt.role,
-    `${valuePath}.evidence`,
-  );
+  const evidence =
+    attempt.provider === 'hetzner'
+      ? validateHetznerProvisioningMutationAttempt(
+          attempt.evidence,
+          authority.providerIntent.intent,
+          attempt.role,
+          `${valuePath}.evidence`,
+        )
+      : validateAwsProvisioningMutationAttempt(
+          attempt.evidence,
+          authority.providerIntent.intent,
+          attempt.role,
+          `${valuePath}.evidence`,
+        );
   if (
     evidence.operation !== attempt.operation ||
     evidence.deploymentInstanceId !== authority.deploymentInstanceId ||
@@ -410,7 +491,10 @@ function validateMutationAttempt(value, authority, valuePath) {
  * @returns {Readonly<Record<string, any>[]>} - Sorted unique attempts.
  */
 function validateMutationAttempts(value, authority, valuePath) {
-  if (!Array.isArray(value) || value.length > HETZNER_RESOURCE_ROLES.size) {
+  const resourceRoles = providerResourceRoles(
+    authority.providerIntent.provider,
+  );
+  if (!Array.isArray(value) || value.length > resourceRoles.size) {
     throw new TypeError(`${valuePath} must be one bounded attempt array.`);
   }
   const attempts = value.map((entry, index) =>
@@ -430,19 +514,22 @@ function validateMutationAttempts(value, authority, valuePath) {
 /**
  * Canonicalize one provider resource observation.
  * @param {unknown} value - Candidate resource evidence.
+ * @param {string} provider - Immutable provider discriminator.
  * @param {string} valuePath - Boundary label.
  * @returns {Readonly<Record<string, any>>} - Canonical evidence.
  */
-function validateResourceEvidence(value, valuePath) {
+function validateResourceEvidence(value, provider, valuePath) {
   const evidence = exactDataObject(value, RESOURCE_KEYS, valuePath);
-  if (evidence.provider !== 'hetzner') {
-    throw new TypeError(`${valuePath}.provider must be 'hetzner'.`);
+  if (evidence.provider !== provider) {
+    throw new TypeError(`${valuePath}.provider does not match its intent.`);
   }
-  if (!HETZNER_RESOURCE_ROLES.has(evidence.role)) {
-    throw new TypeError(`${valuePath}.role is not supported for Hetzner.`);
+  if (!providerResourceRoles(provider).has(evidence.role)) {
+    throw new TypeError(`${valuePath}.role is not supported for ${provider}.`);
   }
-  const providerResourceId = positiveSafeInteger(
+  const canonicalResourceId = canonicalProviderResourceId(
     evidence.providerResourceId,
+    provider,
+    evidence.role,
     `${valuePath}.providerResourceId`,
   );
   if (evidence.state !== 'present' && evidence.state !== 'absent') {
@@ -452,16 +539,20 @@ function validateResourceEvidence(value, valuePath) {
   if (evidence.publicIpv4 !== null) {
     publicIpv4 = canonicalIpv4(evidence.publicIpv4, `${valuePath}.publicIpv4`);
   }
-  if (evidence.role === 'firewall' && publicIpv4 !== null) {
+  if (
+    ((provider === 'hetzner' && evidence.role === 'firewall') ||
+      (provider === 'aws' && evidence.role !== 'instance')) &&
+    publicIpv4 !== null
+  ) {
     throw new TypeError(
-      `${valuePath}.publicIpv4 is unsupported for a firewall.`,
+      `${valuePath}.publicIpv4 is unsupported for this provider role.`,
     );
   }
   return deepFreeze(
     sortCanonicalJsonValue({
-      provider: 'hetzner',
+      provider,
       role: evidence.role,
-      providerResourceId,
+      providerResourceId: canonicalResourceId,
       publicIpv4,
       state: evidence.state,
     }),
@@ -470,15 +561,17 @@ function validateResourceEvidence(value, valuePath) {
 
 /**
  * @param {unknown} value - Candidate resources.
+ * @param {string} provider - Immutable provider discriminator.
  * @param {string} valuePath - Boundary label.
  * @returns {Readonly<Record<string, any>[]>} - Sorted unique evidence.
  */
-function validateResources(value, valuePath) {
-  if (!Array.isArray(value) || value.length > HETZNER_RESOURCE_ROLES.size) {
+function validateResources(value, provider, valuePath) {
+  const resourceRoles = providerResourceRoles(provider);
+  if (!Array.isArray(value) || value.length > resourceRoles.size) {
     throw new TypeError(`${valuePath} must be one bounded resource array.`);
   }
   const resources = value.map((entry, index) =>
-    validateResourceEvidence(entry, `${valuePath}[${index}]`),
+    validateResourceEvidence(entry, provider, `${valuePath}[${index}]`),
   );
   resources.sort((left, right) => left.role.localeCompare(right.role));
   if (
@@ -491,36 +584,44 @@ function validateResources(value, valuePath) {
   return deepFreeze(resources);
 }
 
-/** @param {string} role @returns {number} */
-function destructionRoleIndex(role) {
-  return HETZNER_DESTRUCTION_ROLES.indexOf(role);
+/** @param {string} provider @param {string} role @returns {number} */
+function destructionRoleIndex(provider, role) {
+  return providerDestructionRoles(provider).indexOf(role);
 }
 
 /**
  * @param {unknown} value - Candidate full destroy attempts.
+ * @param {string} provider - Immutable provider discriminator.
  * @param {Readonly<Record<string, any>>} intent - Exact provisioning intent.
  * @param {string} valuePath - Boundary label.
  * @returns {Readonly<Record<string, any>[]>} - Canonical attempts.
  */
-function validateDestroyAttempts(value, intent, valuePath) {
-  if (
-    !Array.isArray(value) ||
-    value.length > HETZNER_DESTRUCTION_ROLES.length
-  ) {
+function validateDestroyAttempts(value, provider, intent, valuePath) {
+  const destructionRoles = providerDestructionRoles(provider);
+  if (!Array.isArray(value) || value.length > destructionRoles.length) {
     throw new TypeError(`${valuePath} must be one bounded attempt array.`);
   }
   const attempts = value.map((entry, index) =>
-    validateHetznerDestructionAttempt(
-      entry,
-      intent,
-      undefined,
-      undefined,
-      `${valuePath}[${index}]`,
-    ),
+    provider === 'hetzner'
+      ? validateHetznerDestructionAttempt(
+          entry,
+          intent,
+          undefined,
+          undefined,
+          `${valuePath}[${index}]`,
+        )
+      : validateAwsDestructionAttempt(
+          entry,
+          intent,
+          undefined,
+          undefined,
+          `${valuePath}[${index}]`,
+        ),
   );
   attempts.sort(
     (left, right) =>
-      destructionRoleIndex(left.role) - destructionRoleIndex(right.role),
+      destructionRoleIndex(provider, left.role) -
+      destructionRoleIndex(provider, right.role),
   );
   if (
     attempts.some(
@@ -534,16 +635,15 @@ function validateDestroyAttempts(value, intent, valuePath) {
 
 /**
  * @param {unknown} value - Candidate full deletion records.
+ * @param {string} provider - Immutable provider discriminator.
  * @param {Readonly<Record<string, any>>} intent - Exact provisioning intent.
  * @param {Readonly<Record<string, any>[]>} attempts - Exact prior attempts.
  * @param {string} valuePath - Boundary label.
  * @returns {Readonly<Record<string, any>[]>} - Canonical records.
  */
-function validateDeletionRecords(value, intent, attempts, valuePath) {
-  if (
-    !Array.isArray(value) ||
-    value.length > HETZNER_DESTRUCTION_ROLES.length
-  ) {
+function validateDeletionRecords(value, provider, intent, attempts, valuePath) {
+  const destructionRoles = providerDestructionRoles(provider);
+  if (!Array.isArray(value) || value.length > destructionRoles.length) {
     throw new TypeError(`${valuePath} must be one bounded deletion array.`);
   }
   const records = value.map((entry, index) => {
@@ -551,18 +651,28 @@ function validateDeletionRecords(value, intent, attempts, valuePath) {
     const candidate = cloneBoundedJsonObject(entry, 16 * 1024, entryPath);
     const attempt =
       attempts.find((stored) => stored.role === candidate.role) ?? null;
-    return validateHetznerDeletionRecord(
-      candidate,
-      intent,
-      candidate.role,
-      candidate.providerResourceId,
-      attempt,
-      entryPath,
-    );
+    return provider === 'hetzner'
+      ? validateHetznerDeletionRecord(
+          candidate,
+          intent,
+          candidate.role,
+          candidate.providerResourceId,
+          attempt,
+          entryPath,
+        )
+      : validateAwsDeletionRecord(
+          candidate,
+          intent,
+          candidate.role,
+          candidate.providerResourceId,
+          attempt,
+          entryPath,
+        );
   });
   records.sort(
     (left, right) =>
-      destructionRoleIndex(left.role) - destructionRoleIndex(right.role),
+      destructionRoleIndex(provider, left.role) -
+      destructionRoleIndex(provider, right.role),
   );
   if (
     records.some(
@@ -718,20 +828,43 @@ function resourceIsAbsent(resources, role) {
  * Enforce provider dependency order while treating never-created roles as
  * already absent.
  * @param {Readonly<Record<string, any>[]>} resources - Current resources.
+ * @param {string} provider - Immutable provider discriminator.
  * @param {string} role - Role about to be deleted.
  * @param {string} valuePath - Boundary label.
  */
-function assertDestructionOrder(resources, role, valuePath) {
-  if (role === 'primaryIp' && !resourceIsAbsent(resources, 'server')) {
+function assertDestructionOrder(resources, provider, role, valuePath) {
+  if (
+    provider === 'hetzner' &&
+    role === 'primaryIp' &&
+    !resourceIsAbsent(resources, 'server')
+  ) {
     throw new Error(`${valuePath} requires the server to be absent first.`);
   }
   if (
+    provider === 'hetzner' &&
     role === 'firewall' &&
     (!resourceIsAbsent(resources, 'server') ||
       !resourceIsAbsent(resources, 'primaryIp'))
   ) {
     throw new Error(
       `${valuePath} requires the server and primary IP to be absent first.`,
+    );
+  }
+  if (
+    provider === 'aws' &&
+    role === 'rootVolume' &&
+    !resourceIsAbsent(resources, 'instance')
+  ) {
+    throw new Error(`${valuePath} requires the instance to be absent first.`);
+  }
+  if (
+    provider === 'aws' &&
+    role === 'securityGroup' &&
+    (!resourceIsAbsent(resources, 'instance') ||
+      !resourceIsAbsent(resources, 'rootVolume'))
+  ) {
+    throw new Error(
+      `${valuePath} requires the instance and root volume to be absent first.`,
     );
   }
 }
@@ -743,8 +876,21 @@ function assertDestructionOrder(resources, role, valuePath) {
  * @param {string} valuePath - Boundary label.
  */
 function assertCoherentPayload(payload, valuePath) {
-  const primaryIp = resourceForRole(payload.resources, 'primaryIp');
-  const server = resourceForRole(payload.resources, 'server');
+  const provider = payload.providerIntent.provider;
+  const resourceRoles = providerResourceRoles(provider);
+  const addressResource = resourceForRole(
+    payload.resources,
+    providerAddressRole(provider),
+  );
+  if (
+    provider === 'aws' &&
+    (evidenceForRole(payload.mutationAttempts, 'instance') === null) !==
+      (evidenceForRole(payload.mutationAttempts, 'rootVolume') === null)
+  ) {
+    throw new Error(
+      `${valuePath}.mutationAttempts must fence the AWS instance and root volume atomically.`,
+    );
+  }
   for (const resource of payload.resources) {
     const attempt =
       payload.mutationAttempts.find(
@@ -782,6 +928,7 @@ function assertCoherentPayload(payload, valuePath) {
     }
     assertDestructionOrder(
       payload.resources,
+      provider,
       attempt.role,
       `${valuePath}.destroyAttempts.${attempt.role}`,
     );
@@ -801,6 +948,7 @@ function assertCoherentPayload(payload, valuePath) {
     }
     assertDestructionOrder(
       payload.resources,
+      provider,
       deletion.role,
       `${valuePath}.deletionRecords.${deletion.role}`,
     );
@@ -815,26 +963,18 @@ function assertCoherentPayload(payload, valuePath) {
       );
     }
   }
-  if (
-    primaryIp !== null &&
-    server !== null &&
-    primaryIp.publicIpv4 !== null &&
-    server.publicIpv4 !== null &&
-    primaryIp.publicIpv4 !== server.publicIpv4
-  ) {
+  const observedAddresses = new Set(
+    payload.resources
+      .map((/** @type {Record<string, any>} */ resource) => resource.publicIpv4)
+      .filter((/** @type {unknown} */ address) => address !== null),
+  );
+  if (provider === 'hetzner' && observedAddresses.size > 1) {
     throw new Error(`${valuePath}.resources contain conflicting addresses.`);
   }
   if (payload.sshHost !== null) {
-    const addresses = new Set(
-      payload.resources
-        .map(
-          (/** @type {Record<string, any>} */ resource) => resource.publicIpv4,
-        )
-        .filter((/** @type {unknown} */ address) => address !== null),
-    );
-    if (!addresses.has(payload.sshHost.address)) {
+    if (addressResource?.publicIpv4 !== payload.sshHost.address) {
       throw new Error(
-        `${valuePath}.sshHost must match a provider-observed address.`,
+        `${valuePath}.sshHost must match its provider-observed address resource.`,
       );
     }
   }
@@ -884,14 +1024,14 @@ function assertCoherentPayload(payload, valuePath) {
     );
   }
   if (['provisioned', 'activating', 'active'].includes(payload.phase)) {
-    for (const role of HETZNER_RESOURCE_ROLES) {
+    for (const role of resourceRoles) {
       if (resourceForRole(payload.resources, role)?.state !== 'present') {
         throw new Error(
           `${valuePath}.${payload.phase} state requires every provider resource.`,
         );
       }
     }
-    if (primaryIp?.publicIpv4 === null) {
+    if (addressResource?.publicIpv4 == null) {
       throw new Error(
         `${valuePath}.${payload.phase} state requires a public address.`,
       );
@@ -977,8 +1117,8 @@ function canonicalizePayload(value, valuePath) {
     providerIntent.intent.incarnationId !== payload.incarnationId ||
     providerIntent.intent.plan.deploymentInstanceId !==
       desired.deploymentInstanceId ||
-    providerIntent.intent.plan.desired.desiredRevisionId !==
-      desired.desiredRevisionId ||
+    JSON.stringify(providerIntent.intent.plan.desired) !==
+      JSON.stringify(desired) ||
     desired.intent.provider.kind !== providerIntent.provider
   ) {
     throw new Error(
@@ -999,15 +1139,18 @@ function canonicalizePayload(value, valuePath) {
   }
   const resources = validateResources(
     payload.resources,
+    providerIntent.provider,
     `${valuePath}.resources`,
   );
   const destroyAttempts = validateDestroyAttempts(
     payload.destroyAttempts,
+    providerIntent.provider,
     providerIntent.intent,
     `${valuePath}.destroyAttempts`,
   );
   const deletionRecords = validateDeletionRecords(
     payload.deletionRecords,
+    providerIntent.provider,
     providerIntent.intent,
     destroyAttempts,
     `${valuePath}.deletionRecords`,
@@ -1019,7 +1162,8 @@ function canonicalizePayload(value, valuePath) {
     `${valuePath}.artifact`,
   );
   const providerAddress =
-    resourceForRole(resources, 'primaryIp')?.publicIpv4 ?? null;
+    resourceForRole(resources, providerAddressRole(providerIntent.provider))
+      ?.publicIpv4 ?? null;
   const activation = validateActivationEvidence(
     payload.activation,
     {
@@ -1203,7 +1347,10 @@ export function advanceSingleNodeDeploymentJournal(prior, phase) {
  */
 export function getSingleNodeDeploymentMutationAttempt(journal, role) {
   const current = validateSingleNodeDeploymentJournal(journal);
-  if (typeof role !== 'string' || !HETZNER_RESOURCE_ROLES.has(role)) {
+  if (
+    typeof role !== 'string' ||
+    !providerResourceRoles(current.providerIntent.provider).has(role)
+  ) {
     throw new TypeError(
       'singleNodeDeploymentJournal mutation role is unsupported.',
     );
@@ -1224,11 +1371,11 @@ export function getSingleNodeDeploymentMutationAttempt(journal, role) {
  */
 export function getSingleNodeDeploymentProvisioningRecoveryState(journal) {
   const current = validateSingleNodeDeploymentJournal(journal);
-  /** @type {Record<string, number|null>} */
+  /** @type {Record<string, number|string|null>} */
   const storedResourceIds = {};
   /** @type {Record<string, Readonly<Record<string, any>>|null>} */
   const storedMutationAttempts = {};
-  for (const role of HETZNER_RESOURCE_ROLES) {
+  for (const role of providerResourceRoles(current.providerIntent.provider)) {
     const resource = resourceForRole(current.resources, role);
     const attempt =
       current.mutationAttempts.find(
@@ -1248,13 +1395,15 @@ export function getSingleNodeDeploymentProvisioningRecoveryState(journal) {
  */
 export function getSingleNodeDeploymentDestructionRecoveryState(journal) {
   const current = validateSingleNodeDeploymentJournal(journal);
-  /** @type {Record<string, number|null>} */
+  /** @type {Record<string, number|string|null>} */
   const storedResourceIds = {};
   /** @type {Record<string, Readonly<Record<string, any>>|null>} */
   const storedDestroyAttempts = {};
   /** @type {Record<string, Readonly<Record<string, any>>|null>} */
   const storedDeletionRecords = {};
-  for (const role of HETZNER_DESTRUCTION_ROLES) {
+  for (const role of providerDestructionRoles(
+    current.providerIntent.provider,
+  )) {
     storedResourceIds[role] =
       resourceForRole(current.resources, role)?.providerResourceId ?? null;
     storedDestroyAttempts[role] = evidenceForRole(
@@ -1274,54 +1423,101 @@ export function getSingleNodeDeploymentDestructionRecoveryState(journal) {
 }
 
 /**
- * Persist the per-role fence that must durably precede the provider POST.
- * Exact retries return the existing record. One incarnation can prepare at
- * most one create attempt per role.
+ * Atomically persist one bounded set of per-role fences before a provider
+ * mutation. This lets one provider request that creates multiple resources
+ * (notably AWS RunInstances) acquire every recovery fence in one CAS record.
+ * Exact batch retries return the existing journal without a new generation.
  * @param {unknown} prior - Current journal.
- * @param {unknown} value - Exact provider-emitted mutation attempt.
+ * @param {unknown} values - Exact provider-emitted mutation attempts.
  * @returns {Readonly<Record<string, any>>} - Current or successor.
  */
-export function prepareSingleNodeDeploymentMutation(prior, value) {
+export function prepareSingleNodeDeploymentMutations(prior, values) {
   const current = validateSingleNodeDeploymentJournal(prior);
   if (current.phase !== 'provisioning') {
     throw new Error(
       'singleNodeDeploymentJournal cannot prepare mutations in this phase.',
     );
   }
-  const evidence = validateHetznerProvisioningMutationAttempt(
-    value,
-    current.providerIntent.intent,
-    undefined,
-    'singleNodeDeploymentJournal.prepareMutation',
-  );
-  const existing =
-    current.mutationAttempts.find(
-      (/** @type {Record<string, any>} */ attempt) =>
-        attempt.role === evidence.role,
-    ) || null;
-  if (existing !== null) {
-    if (JSON.stringify(existing.evidence) === JSON.stringify(evidence)) {
-      return current;
-    }
-    throw new Error(
-      'singleNodeDeploymentJournal mutation attempt conflicts with its durable fence.',
+  const roles = providerResourceRoles(current.providerIntent.provider);
+  if (
+    !Array.isArray(values) ||
+    values.length === 0 ||
+    values.length > roles.size
+  ) {
+    throw new TypeError(
+      'singleNodeDeploymentJournal mutation batch must be nonempty and bounded.',
     );
   }
-  const attempt = validateMutationAttempt(
-    {
-      provider: 'hetzner',
-      role: evidence.role,
-      operation: evidence.operation,
-      state: 'prepared',
-      providerResourceId: null,
-      evidence,
-    },
-    current,
-    'singleNodeDeploymentJournal.mutationAttempt',
+  const evidenceValues = values.map((value, index) =>
+    current.providerIntent.provider === 'hetzner'
+      ? validateHetznerProvisioningMutationAttempt(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          `singleNodeDeploymentJournal.prepareMutations[${index}]`,
+        )
+      : validateAwsProvisioningMutationAttempt(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          `singleNodeDeploymentJournal.prepareMutations[${index}]`,
+        ),
   );
+  evidenceValues.sort((left, right) => left.role.localeCompare(right.role));
+  if (
+    evidenceValues.some(
+      (evidence, index) =>
+        index > 0 && evidenceValues[index - 1].role === evidence.role,
+    )
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal mutation batch must contain unique roles.',
+    );
+  }
+  const additions = [];
+  for (const evidence of evidenceValues) {
+    const existing =
+      current.mutationAttempts.find(
+        (/** @type {Record<string, any>} */ attempt) =>
+          attempt.role === evidence.role,
+      ) || null;
+    if (existing !== null) {
+      if (JSON.stringify(existing.evidence) === JSON.stringify(evidence)) {
+        continue;
+      }
+      throw new Error(
+        'singleNodeDeploymentJournal mutation attempt conflicts with its durable fence.',
+      );
+    }
+    additions.push(
+      validateMutationAttempt(
+        {
+          provider: current.providerIntent.provider,
+          role: evidence.role,
+          operation: evidence.operation,
+          state: 'prepared',
+          providerResourceId: null,
+          evidence,
+        },
+        current,
+        'singleNodeDeploymentJournal.mutationAttempt',
+      ),
+    );
+  }
+  if (additions.length === 0) return current;
   return successor(current, {
-    mutationAttempts: [...current.mutationAttempts, attempt],
+    mutationAttempts: [...current.mutationAttempts, ...additions],
   });
+}
+
+/**
+ * Persist one per-role fence before a provider mutation.
+ * @param {unknown} prior - Current journal.
+ * @param {unknown} value - Exact provider-emitted mutation attempt.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function prepareSingleNodeDeploymentMutation(prior, value) {
+  return prepareSingleNodeDeploymentMutations(prior, [value]);
 }
 
 /**
@@ -1339,12 +1535,20 @@ export function completeSingleNodeDeploymentMutation(prior, value) {
       'singleNodeDeploymentJournal cannot complete mutations in this phase.',
     );
   }
-  const providerRecord = validateHetznerProvisionedResourceRecord(
-    value,
-    current.providerIntent.intent,
-    undefined,
-    'singleNodeDeploymentJournal.completeMutation',
-  );
+  const providerRecord =
+    current.providerIntent.provider === 'hetzner'
+      ? validateHetznerProvisionedResourceRecord(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          'singleNodeDeploymentJournal.completeMutation',
+        )
+      : validateAwsProvisionedResourceRecord(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          'singleNodeDeploymentJournal.completeMutation',
+        );
   const attempt =
     current.mutationAttempts.find(
       (/** @type {Record<string, any>} */ candidate) =>
@@ -1373,6 +1577,7 @@ export function completeSingleNodeDeploymentMutation(prior, value) {
       publicIpv4: null,
       state: 'present',
     },
+    current.providerIntent.provider,
     'singleNodeDeploymentJournal.resource',
   );
   const existingResource = resourceForRole(current.resources, attempt.role);
@@ -1415,13 +1620,22 @@ export function prepareSingleNodeDeploymentDestruction(prior, value) {
       'singleNodeDeploymentJournal cannot prepare destruction in this phase.',
     );
   }
-  const attempt = validateHetznerDestructionAttempt(
-    value,
-    current.providerIntent.intent,
-    undefined,
-    undefined,
-    'singleNodeDeploymentJournal.prepareDestruction',
-  );
+  const attempt =
+    current.providerIntent.provider === 'hetzner'
+      ? validateHetznerDestructionAttempt(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          undefined,
+          'singleNodeDeploymentJournal.prepareDestruction',
+        )
+      : validateAwsDestructionAttempt(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          undefined,
+          'singleNodeDeploymentJournal.prepareDestruction',
+        );
   const existing = evidenceForRole(current.destroyAttempts, attempt.role);
   if (existing !== null) {
     if (JSON.stringify(existing) === JSON.stringify(attempt)) return current;
@@ -1450,6 +1664,7 @@ export function prepareSingleNodeDeploymentDestruction(prior, value) {
   }
   assertDestructionOrder(
     current.resources,
+    current.providerIntent.provider,
     attempt.role,
     'singleNodeDeploymentJournal.prepareDestruction',
   );
@@ -1478,14 +1693,24 @@ export function recordSingleNodeDeploymentDeletion(prior, value) {
     'singleNodeDeploymentJournal.recordDeletion',
   );
   const attempt = evidenceForRole(current.destroyAttempts, candidate.role);
-  const deletion = validateHetznerDeletionRecord(
-    candidate,
-    current.providerIntent.intent,
-    candidate.role,
-    candidate.providerResourceId,
-    attempt,
-    'singleNodeDeploymentJournal.recordDeletion',
-  );
+  const deletion =
+    current.providerIntent.provider === 'hetzner'
+      ? validateHetznerDeletionRecord(
+          candidate,
+          current.providerIntent.intent,
+          candidate.role,
+          candidate.providerResourceId,
+          attempt,
+          'singleNodeDeploymentJournal.recordDeletion',
+        )
+      : validateAwsDeletionRecord(
+          candidate,
+          current.providerIntent.intent,
+          candidate.role,
+          candidate.providerResourceId,
+          attempt,
+          'singleNodeDeploymentJournal.recordDeletion',
+        );
   const existing = evidenceForRole(current.deletionRecords, deletion.role);
   if (existing !== null) {
     if (JSON.stringify(existing) === JSON.stringify(deletion)) return current;
@@ -1509,6 +1734,7 @@ export function recordSingleNodeDeploymentDeletion(prior, value) {
   }
   assertDestructionOrder(
     current.resources,
+    current.providerIntent.provider,
     deletion.role,
     'singleNodeDeploymentJournal.recordDeletion',
   );
@@ -1539,6 +1765,7 @@ export function recordSingleNodeDeploymentResource(prior, value) {
   }
   const evidence = validateResourceEvidence(
     value,
+    current.providerIntent.provider,
     'singleNodeDeploymentJournal.resource',
   );
   if (evidence.state === 'absent') {
@@ -1658,7 +1885,10 @@ export function recordSingleNodeDeploymentActivation(prior, value) {
       desired: current.desired,
       incarnationId: current.incarnationId,
       providerAddress:
-        resourceForRole(current.resources, 'primaryIp')?.publicIpv4 ?? null,
+        resourceForRole(
+          current.resources,
+          providerAddressRole(current.providerIntent.provider),
+        )?.publicIpv4 ?? null,
       sshHost: current.sshHost,
     },
     'singleNodeDeploymentJournal.activation',
@@ -1784,18 +2014,25 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
             entry.role === attempt.role,
         ),
     );
-    if (changedAttempts.length !== 1 || removedAttempts.length !== 0) {
+    if (changedAttempts.length === 0 || removedAttempts.length !== 0) {
       throw new Error(
-        'singleNodeDeploymentJournal successor must change one mutation attempt.',
+        'singleNodeDeploymentJournal successor must change a nonempty mutation batch.',
       );
     }
-    const changedAttempt = changedAttempts[0];
     if (!resourcesChanged) {
-      expected = prepareSingleNodeDeploymentMutation(
+      expected = prepareSingleNodeDeploymentMutations(
         current,
-        changedAttempt.evidence,
+        changedAttempts.map(
+          (/** @type {Record<string, any>} */ attempt) => attempt.evidence,
+        ),
       );
     } else {
+      if (changedAttempts.length !== 1) {
+        throw new Error(
+          'singleNodeDeploymentJournal successor must complete one mutation attempt.',
+        );
+      }
+      const changedAttempt = changedAttempts[0];
       const changedResource = resourceForRole(
         candidate.resources,
         changedAttempt.role,
@@ -1807,11 +2044,17 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
       }
       expected = completeSingleNodeDeploymentMutation(
         current,
-        createHetznerProvisionedResourceRecord(
-          current.providerIntent.intent,
-          changedAttempt.role,
-          changedResource.providerResourceId,
-        ),
+        current.providerIntent.provider === 'hetzner'
+          ? createHetznerProvisionedResourceRecord(
+              current.providerIntent.intent,
+              changedAttempt.role,
+              changedResource.providerResourceId,
+            )
+          : createAwsProvisionedResourceRecord(
+              current.providerIntent.intent,
+              changedAttempt.role,
+              changedResource.providerResourceId,
+            ),
       );
     }
   } else if (destroyAttemptsChanged) {
@@ -2595,6 +2838,7 @@ export default {
   getSingleNodeDeploymentProvisioningRecoveryState,
   prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
+  prepareSingleNodeDeploymentMutations,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentArtifact,
   recordSingleNodeDeploymentDeletion,
