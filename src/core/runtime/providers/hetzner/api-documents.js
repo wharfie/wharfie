@@ -305,7 +305,7 @@ function serverFirewall(value) {
 
 /**
  * @param {unknown} value - Candidate server.
- * @returns {Readonly<{id: number, name: string, status: string, location: ReturnType<typeof decodeHetznerLocation>, publicIpv4: Readonly<{id: number, ip: string, blocked: boolean}>, firewalls: Readonly<ReturnType<typeof serverFirewall>[]>, serverType: Readonly<{id: number, name: string|null}>|null, image: Readonly<{id: number, name: string|null}>|null, labels: Readonly<Record<string, string>>, locked: boolean, deleteProtected: boolean}>} - Server.
+ * @returns {Readonly<{id: number, name: string, status: string, location: ReturnType<typeof decodeHetznerLocation>, publicIpv4: Readonly<{id: number, ip: string, blocked: boolean}>, publicIpv6: Readonly<{id: number, ip: string, blocked: boolean}>|null, firewalls: Readonly<ReturnType<typeof serverFirewall>[]>, serverType: Readonly<{id: number, name: string|null}>|null, image: Readonly<{id: number, name: string|null}>|null, labels: Readonly<Record<string, string>>, locked: boolean, deleteProtected: boolean}>} - Server.
  */
 export function decodeHetznerServer(value) {
   if (
@@ -316,6 +316,10 @@ export function decodeHetznerServer(value) {
     !isObject(value.public_net) ||
     !isObject(value.public_net.ipv4) ||
     typeof value.public_net.ipv4.blocked !== 'boolean' ||
+    (value.public_net.ipv6 !== null &&
+      value.public_net.ipv6 !== undefined &&
+      (!isObject(value.public_net.ipv6) ||
+        typeof value.public_net.ipv6.blocked !== 'boolean')) ||
     !Array.isArray(value.public_net.firewalls)
   ) {
     throw new TypeError(INVALID_DOCUMENT);
@@ -330,6 +334,14 @@ export function decodeHetznerServer(value) {
       ip: nonEmptyString(value.public_net.ipv4.ip),
       blocked: value.public_net.ipv4.blocked,
     }),
+    publicIpv6:
+      value.public_net.ipv6 === null || value.public_net.ipv6 === undefined
+        ? null
+        : Object.freeze({
+            id: identifier(value.public_net.ipv6.id),
+            ip: nonEmptyString(value.public_net.ipv6.ip),
+            blocked: value.public_net.ipv6.blocked,
+          }),
     firewalls: Object.freeze(value.public_net.firewalls.map(serverFirewall)),
     serverType: resourceReference(value.server_type),
     image: resourceReference(value.image),
