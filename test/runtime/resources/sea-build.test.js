@@ -22,6 +22,10 @@ import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-orde
 const CHILD_PROCESS_IMPORT = 'node:child_process';
 const MISMATCHED_NODE_VERSION =
   process.versions.node === '0.0.0' ? '0.0.1' : '0.0.0';
+const NODE_SEA_SENTINEL_FUSE = Buffer.from(
+  'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
+  'ascii',
+);
 
 /** @param {string} value @returns {{digest: import('../../../src/core/runtime/application-revision.js').Sha256Digest, size: number}} */
 const evidenceFor = (value) => ({
@@ -230,6 +234,207 @@ describe('SeaBuild', () => {
       await fsp.rm(tmpRoot, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    ['linux', 1, false],
+    ['linux', 3, true],
+    ['darwin', 1, false],
+    ['darwin', 3, false],
+  ])(
+    'masks and positionally restores nested Node fuses for %s injection (count %i)',
+    async (platform, nestedFuseCount, straddlesScanBoundary) => {
+      const targetPlatform = /** @type {'linux'|'darwin'} */ (platform);
+      const generatedBlob = Buffer.from(
+        [
+          'blob-prefix',
+          ...Array.from(
+            { length: nestedFuseCount },
+            (_, index) =>
+              `${NODE_SEA_SENTINEL_FUSE.toString('ascii')}:1:nested-${index}`,
+          ),
+          'blob-suffix',
+        ].join('|'),
+        'ascii',
+      );
+      const codeBundle = Buffer.from('void 0;\n', 'utf8');
+      const outerBinaryCore = Buffer.from(
+        `binary-prefix|${NODE_SEA_SENTINEL_FUSE.toString(
+          'ascii',
+        )}:0|binary-suffix`,
+        'ascii',
+      );
+      const sectionPrefix = Buffer.from('|postject-resource|', 'ascii');
+      const firstGeneratedFuseOffset = generatedBlob.indexOf(
+        NODE_SEA_SENTINEL_FUSE,
+      );
+      const boundaryPaddingLength = straddlesScanBoundary
+        ? 1024 * 1024 -
+          Math.floor(NODE_SEA_SENTINEL_FUSE.length / 2) -
+          outerBinaryCore.length -
+          sectionPrefix.length -
+          firstGeneratedFuseOffset
+        : 0;
+      const outerBinary = Buffer.concat([
+        Buffer.alloc(boundaryPaddingLength, 'x'),
+        outerBinaryCore,
+      ]);
+      /** @type {Buffer | undefined} */
+      let observedInjectionBlob;
+      const execFile = jest.fn(
+        /**
+         * @param {string} _file
+         * @param {string[]} args
+         */
+        async (_file, args) => {
+          const config = JSON.parse(await fsp.readFile(args[2], 'utf8'));
+          await fsp.writeFile(config.output, generatedBlob);
+        },
+      );
+      const runCmd = jest.fn();
+      const inject = jest.fn(
+        /**
+         * Simulate postject's relevant contract: place the resource in the
+         * executable, require one exact outer fuse name, and flip its :0.
+         * @param {string} binaryPath
+         * @param {string} _resourceName
+         * @param {Buffer} resourceData
+         * @param {Record<string, any>} _options
+         */
+        async (binaryPath, _resourceName, resourceData, _options) => {
+          observedInjectionBlob = Buffer.from(resourceData);
+          const executable = Buffer.concat([
+            await fsp.readFile(binaryPath),
+            sectionPrefix,
+            resourceData,
+          ]);
+          const firstFuse = executable.indexOf(NODE_SEA_SENTINEL_FUSE);
+          expect(firstFuse).not.toBe(-1);
+          expect(executable.lastIndexOf(NODE_SEA_SENTINEL_FUSE)).toBe(
+            firstFuse,
+          );
+          const colonOffset = firstFuse + NODE_SEA_SENTINEL_FUSE.length;
+          expect(executable[colonOffset]).toBe(':'.charCodeAt(0));
+          expect(executable[colonOffset + 1]).toBe('0'.charCodeAt(0));
+          executable[colonOffset + 1] = '1'.charCodeAt(0);
+          await fsp.writeFile(binaryPath, executable);
+        },
+      );
+      jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+        execFile: jest.fn(),
+        spawn: jest.fn(),
+        spawnSync: jest.fn(() => ({
+          stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+          stderr: '',
+          status: 0,
+        })),
+      }));
+      jest.unstable_mockModule('../../../src/core/lib/cmd.js', () => ({
+        execFile,
+        runCmd,
+      }));
+      jest.unstable_mockModule('postject', () => ({ inject }));
+
+      const { default: SeaBuild } =
+        await import('../../../src/core/resources/builds/sea-build.js');
+      const tmpRoot = await fsp.mkdtemp(
+        path.join(os.tmpdir(), `wharfie-sea-nested-fuse-${platform}-`),
+      );
+      const buildDir = path.join(tmpRoot, 'build');
+      const nodeBinaryPath = path.join(tmpRoot, 'node');
+      await fsp.mkdir(buildDir, { mode: 0o700 });
+      await Promise.all([
+        fsp.writeFile(path.join(buildDir, 'esbundle.js'), codeBundle),
+        fsp.writeFile(nodeBinaryPath, outerBinary),
+      ]);
+      const build = new SeaBuild({
+        name: `nested-fuse-${platform}-${nestedFuseCount}`,
+        properties: {
+          entryCode: codeBundle.toString('utf8'),
+          resolveDir: tmpRoot,
+          nodeBinaryPath,
+          nodeVersion: process.versions.node,
+          platform: targetPlatform,
+          architecture: 'x64',
+          ...(platform === 'linux' ? { libc: 'glibc' } : {}),
+        },
+      });
+
+      try {
+        const evidence = await build.seaBuild(buildDir, nodeBinaryPath);
+
+        if (!observedInjectionBlob) {
+          throw new Error('postject did not receive an injection blob');
+        }
+        const injectedBlob = observedInjectionBlob;
+        expect(injectedBlob).toHaveLength(generatedBlob.length);
+        expect(injectedBlob.indexOf(NODE_SEA_SENTINEL_FUSE)).toBe(-1);
+        const firstNestedOffset = generatedBlob.indexOf(NODE_SEA_SENTINEL_FUSE);
+        const marker = injectedBlob.subarray(
+          firstNestedOffset,
+          firstNestedOffset + NODE_SEA_SENTINEL_FUSE.length,
+        );
+        expect(marker.toString('ascii')).toMatch(/^WHARFIE_SEA_MASK_/);
+        const reconstructedBlob = Buffer.from(injectedBlob);
+        let nestedOffset = firstNestedOffset;
+        let observedNestedFuseCount = 0;
+        while (nestedOffset !== -1) {
+          expect(
+            injectedBlob.subarray(nestedOffset, nestedOffset + marker.length),
+          ).toEqual(marker);
+          NODE_SEA_SENTINEL_FUSE.copy(reconstructedBlob, nestedOffset);
+          observedNestedFuseCount += 1;
+          nestedOffset = generatedBlob.indexOf(
+            NODE_SEA_SENTINEL_FUSE,
+            nestedOffset + NODE_SEA_SENTINEL_FUSE.length,
+          );
+        }
+        expect(observedNestedFuseCount).toBe(nestedFuseCount);
+        expect(reconstructedBlob).toEqual(generatedBlob);
+
+        const handledOuterBinary = Buffer.from(outerBinary);
+        const outerFuseOffset = handledOuterBinary.indexOf(
+          NODE_SEA_SENTINEL_FUSE,
+        );
+        handledOuterBinary[
+          outerFuseOffset + NODE_SEA_SENTINEL_FUSE.length + 1
+        ] = '1'.charCodeAt(0);
+        await expect(fsp.readFile(nodeBinaryPath)).resolves.toEqual(
+          Buffer.concat([handledOuterBinary, sectionPrefix, generatedBlob]),
+        );
+        expect(inject).toHaveBeenCalledWith(
+          nodeBinaryPath,
+          'NODE_SEA_BLOB',
+          expect.any(Buffer),
+          {
+            sentinelFuse: NODE_SEA_SENTINEL_FUSE.toString('ascii'),
+            ...(platform === 'darwin' ? { machoSegmentName: 'NODE_SEA' } : {}),
+          },
+        );
+        if (platform === 'darwin') {
+          expect(runCmd).toHaveBeenCalledWith('codesign', [
+            '--remove-signature',
+            nodeBinaryPath,
+          ]);
+        } else {
+          expect(runCmd).not.toHaveBeenCalled();
+        }
+        expect(evidence.seaBlobEvidence).toEqual({
+          digest: {
+            algorithm: 'sha256',
+            value: createHash('sha256')
+              .update(generatedBlob)
+              .digest('base64url'),
+          },
+          size: generatedBlob.length,
+        });
+        await expect(
+          fsp.readFile(path.join(buildDir, 'sea.blob')),
+        ).resolves.toEqual(generatedBlob);
+      } finally {
+        await fsp.rm(tmpRoot, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     ['success', false],
