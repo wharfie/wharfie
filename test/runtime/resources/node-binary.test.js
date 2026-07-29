@@ -15,22 +15,24 @@ const ORIGINAL_TEMP_DIR = NodeBinary.TEMP_DIR;
 const TEST_VERSION = 'v24.13.1';
 const LINUX_ARCHIVE_FILE_NAME = 'node-v24.13.1-linux-x64.tar.gz';
 
+function makeLinuxVersionMetadata(files = ['linux-x64']) {
+  return {
+    version: TEST_VERSION,
+    date: '2026-01-01',
+    files,
+    npm: '11.10.0',
+    v8: '13.6',
+    uv: '1.50.0',
+    zlib: '1.3.0',
+    openssl: '3.4.0',
+    modules: '137',
+    lts: 'Jod',
+    security: 'false',
+  };
+}
+
 function setLinuxVersionMetadata() {
-  NodeBinary.versions = [
-    {
-      version: TEST_VERSION,
-      date: '2026-01-01',
-      files: ['linux-x64'],
-      npm: '11.10.0',
-      v8: '13.6',
-      uv: '1.50.0',
-      zlib: '1.3.0',
-      openssl: '3.4.0',
-      modules: '137',
-      lts: 'Jod',
-      security: 'false',
-    },
-  ];
+  NodeBinary.versions = [makeLinuxVersionMetadata()];
 }
 
 /**
@@ -149,6 +151,136 @@ describe('NodeBinary', () => {
     ];
 
     await expect(makeLinuxBinary().getExactVersion()).resolves.toBe('v24.13.1');
+  });
+
+  it.each([
+    ['24.13.1', 'v24.13.1'],
+    ['v24.13.1', 'v24.13.1'],
+    ['24.13.1-rc.1', 'v24.13.1-rc.1'],
+    ['24.13.1+build.7', 'v24.13.1+build.7'],
+  ])(
+    'resolves the exact literal %s locally as %s',
+    async (requestedVersion, exactVersion) => {
+      const getVersions = jest.spyOn(NodeBinary, 'getVersions');
+      const binary = new NodeBinary({
+        name: 'node-linux',
+        properties: {
+          version: requestedVersion,
+          platform: 'linux',
+          architecture: 'x64',
+        },
+      });
+
+      await expect(binary.getExactVersion()).resolves.toBe(exactVersion);
+      expect(getVersions).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses the release catalog to resolve a partial version', async () => {
+    const getVersions = jest
+      .spyOn(NodeBinary, 'getVersions')
+      .mockResolvedValue([makeLinuxVersionMetadata()]);
+    const binary = new NodeBinary({
+      name: 'node-linux',
+      properties: {
+        version: '24.13',
+        platform: 'linux',
+        architecture: 'x64',
+      },
+    });
+
+    await expect(binary.getExactVersion()).resolves.toBe(TEST_VERSION);
+    expect(getVersions).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an unsafe exact-looking suffix through the release catalog', async () => {
+    const getVersions = jest
+      .spyOn(NodeBinary, 'getVersions')
+      .mockResolvedValue([]);
+    const binary = new NodeBinary({
+      name: 'node-linux',
+      properties: {
+        version: '24.13.1-../../escape',
+        platform: 'linux',
+        architecture: 'x64',
+      },
+    });
+
+    await expect(binary.getBinaryName()).rejects.toThrow(
+      'No Node.js version found for 24.13.1-../../escape',
+    );
+    expect(getVersions).toHaveBeenCalledTimes(1);
+    expect(binary.has('binaryPath')).toBe(false);
+  });
+
+  it('reuses an exact cached binary offline without querying the release catalog', async () => {
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-node-cache-offline-'),
+    );
+    const binaryBytes = Buffer.from('cached verified node');
+    NodeBinary.BINARIES_DIR = path.join(tmpRoot, 'binaries');
+    NodeBinary.TEMP_DIR = path.join(tmpRoot, 'extracts');
+
+    const binary = makeLinuxBinary();
+    const binaryPath = await binary.getBinaryPath();
+    const receiptPath = await binary.getIntegrityReceiptPath(binaryPath);
+    await fsp.writeFile(binaryPath, binaryBytes);
+    await fsp.writeFile(
+      receiptPath,
+      `${JSON.stringify({
+        version: 1,
+        target: {
+          nodeVersion: TEST_VERSION,
+          platform: 'linux',
+          architecture: 'x64',
+        },
+        archive: {
+          fileName: LINUX_ARCHIVE_FILE_NAME,
+          sha256: 'a'.repeat(64),
+        },
+        binary: {
+          sha256: sha256(binaryBytes),
+          size: binaryBytes.length,
+        },
+      })}\n`,
+      'utf8',
+    );
+    const getVersions = jest
+      .spyOn(NodeBinary, 'getVersions')
+      .mockRejectedValue(new Error('offline'));
+    const download = jest.spyOn(binary, 'download');
+
+    try {
+      await expect(binary._reconcile()).resolves.toBeUndefined();
+      expect(getVersions).not.toHaveBeenCalled();
+      expect(download).not.toHaveBeenCalled();
+    } finally {
+      await fsp.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps catalog target validation on an exact cache miss', async () => {
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-node-cache-miss-'),
+    );
+    NodeBinary.BINARIES_DIR = path.join(tmpRoot, 'binaries');
+    NodeBinary.TEMP_DIR = path.join(tmpRoot, 'extracts');
+
+    const getVersions = jest
+      .spyOn(NodeBinary, 'getVersions')
+      .mockResolvedValue([makeLinuxVersionMetadata([])]);
+    const binary = makeLinuxBinary();
+    const downloadUrlToFile = jest.spyOn(binary, 'downloadUrlToFile');
+
+    try {
+      await expect(binary._reconcile()).rejects.toThrow(
+        'does not publish binaries for linux-x64',
+      );
+      expect(getVersions).toHaveBeenCalledTimes(1);
+      expect(downloadUrlToFile).not.toHaveBeenCalled();
+    } finally {
+      await fsp.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it('extracts a local unix node archive without downloading anything', async () => {

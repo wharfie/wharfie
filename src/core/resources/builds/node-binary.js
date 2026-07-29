@@ -20,6 +20,8 @@ import BaseResource from '../base-resource.js';
 
 const INTEGRITY_RECEIPT_VERSION = 1;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
+const EXACT_NODE_VERSION_PATTERN =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 /**
  * @typedef DownloadedArchive
@@ -127,13 +129,16 @@ class NodeBinary extends BaseResource {
    */
   async getExactVersion() {
     if (this.has('exactVersion')) return this.get('exactVersion');
-    const versions = await NodeBinary.getVersions();
     const requestedVersion = String(this.get('version')).replace(/^v/, '');
-    const isExactVersion = /^\d+\.\d+\.\d+(?:[-+].+)?$/.test(requestedVersion);
+    if (EXACT_NODE_VERSION_PATTERN.test(requestedVersion)) {
+      const exactVersion = `v${requestedVersion}`;
+      this.set('exactVersion', exactVersion);
+      return exactVersion;
+    }
+
+    const versions = await NodeBinary.getVersions();
     const matchingVersions = versions.filter((v) =>
-      isExactVersion
-        ? v.version === `v${requestedVersion}`
-        : v.version.startsWith(`v${requestedVersion}`),
+      v.version.startsWith(`v${requestedVersion}`),
     );
     if (matchingVersions.length === 0) {
       throw new Error(`No Node.js version found for ${this.get('version')}`);
@@ -263,6 +268,21 @@ class NodeBinary extends BaseResource {
   }
 
   /**
+   * Construct the official archive filename without consulting the release
+   * catalog. Cache receipts already prove that this exact target was
+   * downloaded and validated when the entry was created.
+   * @returns {Promise<string>} - Official Node.js distribution filename.
+   */
+  async getOfficialArchiveFileName() {
+    const version = await this.getExactVersion();
+    const { normPlatform, normArch, ext } = NodeBinary.resolveTargetSpec(
+      this.get('platform'),
+      this.get('architecture'),
+    );
+    return `node-${version}-${normPlatform}-${normArch}${ext}`;
+  }
+
+  /**
    * Get the URL of the Node.js binary to download.
    * Validates against index.json "files" to ensure artifact exists,
    * and maps darwin->osx properly.
@@ -276,11 +296,10 @@ class NodeBinary extends BaseResource {
       throw new Error(`No metadata found for Node.js ${version}`);
     }
 
-    const { token, normPlatform, normArch, ext, packagingKey } =
-      NodeBinary.resolveTargetSpec(
-        this.get('platform'),
-        this.get('architecture'),
-      );
+    const { token, normArch, packagingKey } = NodeBinary.resolveTargetSpec(
+      this.get('platform'),
+      this.get('architecture'),
+    );
 
     // Validate that at least one acceptable "files" key exists
     const keys = NodeBinary.candidateFilesKeys(token, normArch, packagingKey);
@@ -300,7 +319,8 @@ class NodeBinary extends BaseResource {
     //  - mac:  https://nodejs.org/dist/v23.11.1/node-v23.11.1-osx-arm64.tar.gz
     //  - win:  https://nodejs.org/dist/v24.11.0/node-v24.11.0-win-x64.zip
     //  - linux (kept as .tar.gz per your extractor): node-vX-linux-x64.tar.gz
-    return `https://nodejs.org/dist/${version}/node-${version}-${normPlatform}-${normArch}${ext}`;
+    const fileName = await this.getOfficialArchiveFileName();
+    return `https://nodejs.org/dist/${version}/${fileName}`;
   }
 
   /**
@@ -506,7 +526,7 @@ class NodeBinary extends BaseResource {
         await this.getIntegrityReceiptPath(resolvedBinaryPath);
       const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
       const exactVersion = await this.getExactVersion();
-      const officialFileName = basename(new URL(await this.getUrl()).pathname);
+      const officialFileName = await this.getOfficialArchiveFileName();
       const binaryStat = await stat(resolvedBinaryPath);
 
       if (
