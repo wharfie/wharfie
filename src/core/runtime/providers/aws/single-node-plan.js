@@ -135,6 +135,7 @@ const ROOT_BLOCK_DEVICE_KEYS = new Set([
   'snapshotId',
   'volumeType',
   'sizeGiB',
+  'sourceEncrypted',
   'encrypted',
   'deleteOnTermination',
 ]);
@@ -983,7 +984,8 @@ function decodeUbuntuImage(value, selection) {
       snapshotId: providerId(ebs.SnapshotId, SNAPSHOT_ID_PATTERN),
       volumeType: 'gp3',
       sizeGiB: ebs.VolumeSize,
-      encrypted: ebs.Encrypted,
+      sourceEncrypted: ebs.Encrypted,
+      encrypted: true,
       deleteOnTermination: true,
     },
   });
@@ -1288,7 +1290,8 @@ function validateProviderSpec(value, valuePath) {
     !Number.isSafeInteger(root.sizeGiB) ||
     root.sizeGiB < 8 ||
     root.sizeGiB > 64 ||
-    typeof root.encrypted !== 'boolean' ||
+    typeof root.sourceEncrypted !== 'boolean' ||
+    root.encrypted !== true ||
     root.deleteOnTermination !== true
   ) {
     throw new TypeError(`${valuePath}.image is invalid.`);
@@ -1348,7 +1351,8 @@ function validateProviderSpec(value, valuePath) {
           snapshotId: root.snapshotId,
           volumeType: 'gp3',
           sizeGiB: root.sizeGiB,
-          encrypted: root.encrypted,
+          sourceEncrypted: root.sourceEncrypted,
+          encrypted: true,
           deleteOnTermination: true,
         },
       },
