@@ -419,6 +419,10 @@ describe('AWS single-node read-only plan', () => {
           architecture: 'x86_64',
           rootBlockDevice: {
             snapshotId: SNAPSHOT_ID,
+            volumeType: 'gp3',
+            sizeGiB: 8,
+            sourceEncrypted: false,
+            encrypted: true,
             deleteOnTermination: true,
           },
         },
@@ -499,6 +503,27 @@ describe('AWS single-node read-only plan', () => {
       MaxResults: 100,
     });
   });
+
+  it.each([false, true])(
+    'separates observed source encryption (%s) from encrypted launch intent',
+    async (sourceEncrypted) => {
+      const image = imageResponse();
+      image.Images[0].BlockDeviceMappings[0].Ebs.Encrypted = sourceEncrypted;
+      const plan = await resolveAwsSingleNodePlan({
+        desired: makeDesired(),
+        providerScope: providerScope(),
+        api: makeApi({
+          describeImages: jest.fn(async () => image),
+        }),
+      });
+
+      expect(plan.providerSpec.image.rootBlockDevice).toMatchObject({
+        sourceEncrypted,
+        encrypted: true,
+      });
+      expect(validateAwsSingleNodePlan(clone(plan))).toEqual(plan);
+    },
+  );
 
   it('invokes projected reads without exposing the original API receiver', async () => {
     /** @type {unknown} */
@@ -1154,6 +1179,16 @@ describe('AWS single-node read-only plan', () => {
     changedNetworkAcl.providerSpec.networkAcl.ipv4Ingress.allowRuleNumber = 99;
     expect(() => validateAwsSingleNodePlan(changedNetworkAcl)).toThrow(
       /providerSpecId does not match/iu,
+    );
+    const changedSourceEncryption = clone(plan);
+    changedSourceEncryption.providerSpec.image.rootBlockDevice.sourceEncrypted = true;
+    expect(() => validateAwsSingleNodePlan(changedSourceEncryption)).toThrow(
+      /providerSpecId does not match/iu,
+    );
+    const disabledLaunchEncryption = clone(plan);
+    disabledLaunchEncryption.providerSpec.image.rootBlockDevice.encrypted = false;
+    expect(() => validateAwsSingleNodePlan(disabledLaunchEncryption)).toThrow(
+      /image is invalid/iu,
     );
   });
 
