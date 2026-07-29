@@ -34,10 +34,20 @@ import {
   validateArtifactRecord,
 } from '../../core/runtime/artifact-record.js';
 import {
+  APPLICATION_REVISION_ID_PREFIX,
+  validateSha256Digest,
+} from '../../core/runtime/application-revision.js';
+import {
   createManifestActivityFunction,
   getManifestActivityNames,
   invokeManifestActivity,
 } from '../../core/runtime/app-runs.js';
+import {
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_ASSET_PREFIX,
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME,
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME,
+} from '../../core/runtime/single-node-deployment-payload.js';
+import { assertDomainSeparatedSha256Id } from '../../core/runtime/content-id.js';
 
 import { prepareApplicationRevision } from './compile-application-revision.js';
 import { createArtifactProvenance } from './artifact-provenance.js';
@@ -97,6 +107,8 @@ import {
  * @property {string} [outputDir] - outputDir.
  * @property {string[]} [targetFilters] - targetFilters.
  * @property {LocalAppBuildConfig} [build] - Ephemeral build request; never embedded in the app manifest.
+ * @property {SingleNodeDeploymentFrameworkAssets} [frameworkAssets] - Internal, exact deployment payload assets attached after revision preparation.
+ * @property {string} [expectedRevisionId] - Internal revision fence checked before build publication.
  */
 
 /**
@@ -125,6 +137,12 @@ import {
  */
 
 /**
+ * @typedef SingleNodeDeploymentFrameworkAssets
+ * @property {Record<string, string>} assets - Exact private payload paths.
+ * @property {Record<string, import('../../core/runtime/application-revision.js').Sha256Digest>} assetDigests - Exact payload digest evidence.
+ */
+
+/**
  * @typedef PackageLocalAppResult
  * @property {{ id: string }} app - App identity.
  * @property {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Immutable target-independent application revision.
@@ -140,6 +158,13 @@ import {
 function isObjectRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
+
+const SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES = Object.freeze(
+  [
+    SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME,
+    SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME,
+  ].sort(),
+);
 
 /**
  * @param {string | undefined} input - input.
@@ -323,7 +348,8 @@ async function resolvePackagingAssets(options) {
     if (
       reservedNames.has(name) ||
       name.startsWith(APP_MANIFEST_ASSET_PREFIX) ||
-      name.startsWith(CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX)
+      name.startsWith(CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX) ||
+      name.startsWith(SINGLE_NODE_DEPLOYMENT_PAYLOAD_ASSET_PREFIX)
     ) {
       throw new Error(
         `Packaging asset name '${name}' is reserved for Wharfie runtime content.`,
@@ -346,6 +372,91 @@ async function resolvePackagingAssets(options) {
   }
 
   return validated;
+}
+
+/**
+ * Validate the one closed framework-owned asset bundle accepted by local
+ * packaging. The expected digests are later rechecked against the bytes sealed
+ * by SeaBuild, so no caller-supplied digest can stand in for observed bytes.
+ * @param {unknown} value - Candidate framework asset bundle.
+ * @returns {Promise<SingleNodeDeploymentFrameworkAssets>} - Stable exact mappings.
+ */
+async function resolveSingleNodeDeploymentFrameworkAssets(value) {
+  if (!isObjectRecord(value)) {
+    throw new TypeError(
+      'Single-node deployment framework assets must be an exact asset and digest bundle.',
+    );
+  }
+  const bundleNames = Object.keys(value).sort();
+  if (
+    bundleNames.length !== 2 ||
+    bundleNames[0] !== 'assetDigests' ||
+    bundleNames[1] !== 'assets' ||
+    !isObjectRecord(value.assets) ||
+    !isObjectRecord(value.assetDigests)
+  ) {
+    throw new TypeError(
+      'Single-node deployment framework assets must be an exact asset and digest bundle.',
+    );
+  }
+  const assetNames = Object.keys(value.assets).sort();
+  const digestNames = Object.keys(value.assetDigests).sort();
+  if (
+    assetNames.length !== SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES.length ||
+    assetNames.some(
+      (name, index) =>
+        name !== SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES[index],
+    ) ||
+    digestNames.length !==
+      SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES.length ||
+    digestNames.some(
+      (name, index) =>
+        name !== SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES[index],
+    )
+  ) {
+    throw new TypeError(
+      'Single-node deployment framework assets must contain only the exact payload manifest and SEA.',
+    );
+  }
+
+  /** @type {Record<string, string>} */
+  const assets = {};
+  /** @type {Record<string, import('../../core/runtime/application-revision.js').Sha256Digest>} */
+  const assetDigests = {};
+  for (const name of SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES) {
+    const assetPath = value.assets[name];
+    if (
+      typeof assetPath !== 'string' ||
+      !path.isAbsolute(assetPath) ||
+      path.normalize(assetPath) !== assetPath
+    ) {
+      throw new TypeError(
+        `Single-node deployment framework asset '${name}' must have a canonical absolute path.`,
+      );
+    }
+    let assetStat;
+    try {
+      assetStat = await fsp.stat(assetPath);
+    } catch {
+      throw new Error(
+        `Single-node deployment framework asset '${name}' does not exist.`,
+      );
+    }
+    if (!assetStat.isFile()) {
+      throw new Error(
+        `Single-node deployment framework asset '${name}' must reference a file.`,
+      );
+    }
+    assets[name] = assetPath;
+    assetDigests[name] = validateSha256Digest(
+      value.assetDigests[name],
+      `Single-node deployment framework asset '${name}' digest`,
+    );
+  }
+  return {
+    assets: Object.freeze(assets),
+    assetDigests: Object.freeze(assetDigests),
+  };
 }
 
 /**
@@ -659,7 +770,7 @@ async function assertMatchingArtifactRecordSidecar(
  * Copy every reconciled binary into a private directory on the destination
  * filesystem. Public output paths remain untouched until the entire artifact
  * set has been copied and verified.
- * @param {{ builds: SeaBuild[], appName: string, outputDir: string, actorSystem: ActorSystem, revision: import('../../core/runtime/application-revision.js').ApplicationRevision }} options - Staging inputs.
+ * @param {{ builds: SeaBuild[], appName: string, outputDir: string, actorSystem: ActorSystem, revision: import('../../core/runtime/application-revision.js').ApplicationRevision, frameworkAssetDigests?: Record<string, import('../../core/runtime/application-revision.js').Sha256Digest> }} options - Staging inputs.
  * @returns {Promise<PackageArtifactTransaction>} - Result.
  */
 async function stagePackageArtifacts(options) {
@@ -696,6 +807,7 @@ async function stagePackageArtifacts(options) {
         revision,
         builderVersion: WHARFIE_VERSION,
         artifactBytes,
+        frameworkAssetDigests: options.frameworkAssetDigests,
       });
       const record = createArtifactRecord({
         bytes: artifactBytes,
@@ -1131,12 +1243,14 @@ function digestAssetBytes(bytes) {
  * @param {SeaBuild[]} builds - builds.
  * @param {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Target-independent application revision.
  * @param {Record<string, string>} [additionalAssets] - additionalAssets.
+ * @param {SingleNodeDeploymentFrameworkAssets | undefined} [frameworkAssets] - Exact framework-owned deployment assets.
  * @returns {Promise<Array<{ cleanup: () => Promise<void> }>>} - Temporary asset handles.
  */
 async function attachEmbeddedManifestAssets(
   builds,
   revision,
   additionalAssets = {},
+  frameworkAssets,
 ) {
   /** @type {Array<{ cleanup: () => Promise<void> }>} */
   const temporaryAssets = [];
@@ -1196,16 +1310,60 @@ async function attachEmbeddedManifestAssets(
         [APPLICATION_REVISION_ASSET_NAME]: digestAssetBytes(revisionBytes),
         [ARTIFACT_RUNTIME_ASSET_NAME]: digestAssetBytes(runtimeBytes),
       };
-      build._setUNSAFE('assets', () => ({
-        ...resolveBuildAssets(build, originalAssets),
-        ...additionalAssets,
-        ...reservedAssets,
-      }));
-      build._setUNSAFE('assetDigests', () => ({
-        ...resolveBuildAssetDigests(build, originalAssetDigests),
-        ...revisionAssets,
-        ...reservedAssetDigests,
-      }));
+      build._setUNSAFE('assets', () => {
+        const resolvedOriginalAssets = resolveBuildAssets(
+          build,
+          originalAssets,
+        );
+        if (frameworkAssets) {
+          const occupiedNames = new Set([
+            ...Object.keys(resolvedOriginalAssets),
+            ...Object.keys(additionalAssets),
+            ...Object.keys(reservedAssets),
+          ]);
+          const collision = SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES.find(
+            (name) => occupiedNames.has(name),
+          );
+          if (collision) {
+            throw new Error(
+              `Single-node deployment framework asset '${collision}' collides with revision, function, core, or reserved SEA content.`,
+            );
+          }
+        }
+        return {
+          ...resolvedOriginalAssets,
+          ...additionalAssets,
+          ...(frameworkAssets?.assets || {}),
+          ...reservedAssets,
+        };
+      });
+      build._setUNSAFE('assetDigests', () => {
+        const resolvedOriginalAssetDigests = resolveBuildAssetDigests(
+          build,
+          originalAssetDigests,
+        );
+        if (frameworkAssets) {
+          const occupiedNames = new Set([
+            ...Object.keys(resolvedOriginalAssetDigests),
+            ...Object.keys(revisionAssets),
+            ...Object.keys(reservedAssetDigests),
+          ]);
+          const collision = SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES.find(
+            (name) => occupiedNames.has(name),
+          );
+          if (collision) {
+            throw new Error(
+              `Single-node deployment framework asset '${collision}' collides with revision, function, core, or reserved SEA digest evidence.`,
+            );
+          }
+        }
+        return {
+          ...resolvedOriginalAssetDigests,
+          ...revisionAssets,
+          ...(frameworkAssets?.assetDigests || {}),
+          ...reservedAssetDigests,
+        };
+      });
     }
   } catch (error) {
     const cleanupResults = await Promise.allSettled(
@@ -1352,7 +1510,26 @@ export async function packageLocalApp(options) {
   const { revision } = preparedRevision;
 
   let actorSystem;
+  /** @type {SingleNodeDeploymentFrameworkAssets | undefined} */
+  let frameworkAssets;
   try {
+    if (options.expectedRevisionId !== undefined) {
+      assertDomainSeparatedSha256Id(
+        options.expectedRevisionId,
+        APPLICATION_REVISION_ID_PREFIX,
+        'Expected application revision ID',
+      );
+      if (revision.revisionId !== options.expectedRevisionId) {
+        throw new Error(
+          `Application revision changed between package passes: expected '${options.expectedRevisionId}', observed '${revision.revisionId}'.`,
+        );
+      }
+    }
+    if (options.frameworkAssets !== undefined) {
+      frameworkAssets = await resolveSingleNodeDeploymentFrameworkAssets(
+        options.frameworkAssets,
+      );
+    }
     actorSystem = toPackageableActorSystem({
       appDir: preparedRevision.appDir,
       manifest: preparedRevision.manifest,
@@ -1393,6 +1570,7 @@ export async function packageLocalApp(options) {
       builds,
       revision,
       preparedRevision.assets,
+      frameworkAssets,
     );
     await actorSystem.reconcile();
     await preparedRevision.verifyRuntime();
@@ -1409,6 +1587,7 @@ export async function packageLocalApp(options) {
       outputDir,
       actorSystem,
       revision,
+      frameworkAssetDigests: frameworkAssets?.assetDigests,
     });
     await removePackageOwnedSeaBuildOutputs(builds);
     const artifacts = await publishStagedArtifacts(artifactTransaction);
