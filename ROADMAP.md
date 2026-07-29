@@ -271,6 +271,11 @@ One checksummed acceptance run must prove all of the following:
 4. Fix only friction or cleanup defects exposed by that literal journey, then
    cut the developer-preview artifact and receipt.
 
+The supported starter, verified tarball handoff, canonical guide, unfinished
+timer assertion, and explicit app-data purge are implemented. The remaining
+milestone work is the clean builder/target split and one successful
+checksummed acceptance receipt with complete proof-owned cleanup.
+
 The coordinator-authority kernel remains complete but intentionally unbound
 while this milestone is active. Runtime-wide coordinator replacement,
 provider-certified leases, multi-node placement, and cloud fulfillment resume

@@ -54,6 +54,7 @@ import {
   parseSystemdUserServiceReleasePruneTombstoneName,
 } from './systemd-user-service-release-prune.js';
 import { createLocalApplicationSystemdActivation } from './local-application-systemd-activation.js';
+import { inspectLocalApplicationQuiescence } from './local-application-quiescence.js';
 
 const SERVICE_RESULT_SCHEMA_VERSION = 1;
 const SERVICE_STATUS_SCHEMA_VERSION = 3;
@@ -86,6 +87,23 @@ const PRUNE_UNINSTALL_REMEDIATION =
   'Rerun service uninstall before retrying service prune.';
 const PRUNE_MISSING_ACTIVATION_REMEDIATION =
   'Run service install or service converge from the exact selected SEA before retrying service prune.';
+const PURGE_CONFIRMATION_REMEDIATION =
+  'Repeat the embedded application ID with --confirm-data-loss.';
+const PURGE_UNINSTALL_REMEDIATION =
+  'Run service uninstall before retrying service purge.';
+const PURGE_QUIESCENCE_REMEDIATION =
+  'Finish or cancel nonterminal durable work before retrying service purge.';
+const PURGE_RETRY_REMEDIATION =
+  'Retry service purge with the same --confirm-data-loss application ID.';
+const SERVICE_PURGE_TOMBSTONE_PREFIX = '.wharfie-service-purge-v1.';
+const SERVICE_PURGE_MARKER_NAME = '.purging.json';
+const SERVICE_PURGE_MARKER_KIND = 'wharfie.systemd-user-service.purge-marker';
+const SERVICE_PURGE_MARKER_SCHEMA_VERSION = 1;
+const SERVICE_PURGE_TOP_LEVEL_ENTRIES = new Set([
+  'installation.json',
+  'releases',
+  'state',
+]);
 const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
   'appId',
   'dataRoot',
@@ -119,6 +137,7 @@ const TRANSIENT_OBSERVATION_ERROR_CODES = new Set([
   'ETIMEDOUT',
 ]);
 const RELEASE_PRUNE_ERRORS = new WeakSet();
+const SERVICE_PURGE_ERRORS = new WeakSet();
 
 /**
  * @param {string} code - Stable local prune failure code.
@@ -144,6 +163,32 @@ function createReleasePruneError(code, message, cause, remediation) {
  */
 function isReleasePruneError(error) {
   return error instanceof Error && RELEASE_PRUNE_ERRORS.has(error);
+}
+
+/**
+ * @param {string} code - Stable local purge failure code.
+ * @param {string} message - Secret-free failure text.
+ * @param {unknown} [cause] - Internal cause.
+ * @param {string} [remediation] - Exact static retry guidance.
+ * @returns {Error} - Tagged operation error.
+ */
+function createServicePurgeError(code, message, cause, remediation) {
+  const error = new Error(message, cause === undefined ? {} : { cause });
+  error.name = 'SystemdUserServicePurgeError';
+  Object.assign(error, {
+    code,
+    ...(remediation ? { remediation } : {}),
+  });
+  SERVICE_PURGE_ERRORS.add(error);
+  return error;
+}
+
+/**
+ * @param {unknown} error - Candidate already-sanitized purge failure.
+ * @returns {boolean} - Whether the failure was created by this module.
+ */
+function isServicePurgeError(error) {
+  return error instanceof Error && SERVICE_PURGE_ERRORS.has(error);
 }
 
 /**
@@ -694,6 +739,341 @@ async function hasManagedServiceRoot(fsOps, layout, uid) {
     }
   }
   return true;
+}
+
+/**
+ * Derive the one reserved retry tombstone beside the app root. The logical app
+ * ID has already passed the layout's strict validator.
+ * @param {Readonly<Record<string, string>>} layout - Fixed service layout.
+ * @returns {string} - Canonical direct-child tombstone path.
+ */
+function createServicePurgeTombstonePath(layout) {
+  return path.join(
+    path.dirname(layout.serviceRoot),
+    `${SERVICE_PURGE_TOMBSTONE_PREFIX}${layout.appId}`,
+  );
+}
+
+/**
+ * @param {typeof fsp} fsOps - Filesystem implementation.
+ * @param {string} targetPath - Exact path to inspect.
+ * @returns {Promise<import('node:fs').Stats | null>} - lstat result or absence.
+ */
+async function lstatIfPresent(fsOps, targetPath) {
+  try {
+    return await fsOps.lstat(targetPath);
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return null;
+    throw error;
+  }
+}
+
+/**
+ * Inspect only the derived app root and its reserved purge tombstone. When
+ * either exists, every ancestor is required to remain a private, owned real
+ * directory before rename or recursive removal is possible.
+ * @param {typeof fsp} fsOps - Filesystem implementation.
+ * @param {Readonly<Record<string, string>>} layout - Fixed service layout.
+ * @param {number} uid - Required filesystem owner.
+ * @returns {Promise<Readonly<{applicationRoot: import('node:fs').Stats | null, tombstonePath: string, tombstone: import('node:fs').Stats | null}>>} - Exact purge namespace state.
+ */
+async function inspectServicePurgeRoots(fsOps, layout, uid) {
+  const tombstonePath = createServicePurgeTombstonePath(layout);
+  const [applicationRoot, tombstone] = await Promise.all([
+    lstatIfPresent(fsOps, layout.serviceRoot),
+    lstatIfPresent(fsOps, tombstonePath),
+  ]);
+  if (applicationRoot !== null && tombstone !== null) {
+    throw createServicePurgeError(
+      'systemd-user-service-purge-state-conflict',
+      'Systemd user-service purge found both the application root and its retry tombstone.',
+      undefined,
+      PURGE_RETRY_REMEDIATION,
+    );
+  }
+  if (applicationRoot !== null || tombstone !== null) {
+    const applicationsRoot = path.dirname(layout.serviceRoot);
+    await assertRealPath(
+      fsOps,
+      layout.dataRoot,
+      'directory',
+      'Wharfie data root',
+      uid,
+    );
+    await assertRealPath(
+      fsOps,
+      applicationsRoot,
+      'directory',
+      'Wharfie applications root',
+      uid,
+    );
+    if (applicationRoot !== null) {
+      assertManagedStats(
+        applicationRoot,
+        'directory',
+        'Systemd user-service root',
+        uid,
+      );
+    }
+    if (tombstone !== null) {
+      assertManagedStats(
+        tombstone,
+        'directory',
+        'Systemd user-service purge tombstone',
+        uid,
+      );
+    }
+  }
+  return Object.freeze({
+    applicationRoot,
+    tombstonePath,
+    tombstone,
+  });
+}
+
+/**
+ * Create the exact marker that authenticates an interrupted app-root purge.
+ * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number}} context - Fixed application context.
+ * @returns {Readonly<Record<string, any>>} - Persistable purge marker.
+ */
+function createServicePurgeMarker(context) {
+  return Object.freeze({
+    schemaVersion: SERVICE_PURGE_MARKER_SCHEMA_VERSION,
+    kind: SERVICE_PURGE_MARKER_KIND,
+    appId: context.pair.runtime.appId,
+    unitName: context.layout.unitName,
+    uid: context.uid,
+    serviceRoot: context.layout.serviceRoot,
+    tombstonePath: createServicePurgeTombstonePath(context.layout),
+  });
+}
+
+/**
+ * Require one exact derived purge marker before an interrupted tombstone may
+ * be removed.
+ * @param {unknown} value - Candidate marker.
+ * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number}} context - Fixed application context.
+ * @returns {Readonly<Record<string, any>>} - Validated marker.
+ */
+function validateServicePurgeMarker(value, context) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Systemd user-service purge marker is malformed.');
+  }
+  const marker = /** @type {Record<string, any>} */ (value);
+  const expected = createServicePurgeMarker(context);
+  const expectedKeys = Object.keys(expected);
+  if (
+    Object.keys(marker).length !== expectedKeys.length ||
+    expectedKeys.some(
+      (key) =>
+        !Object.prototype.hasOwnProperty.call(marker, key) ||
+        marker[key] !== expected[key],
+    )
+  ) {
+    throw new Error(
+      'Systemd user-service purge marker disagrees with the application.',
+    );
+  }
+  return expected;
+}
+
+/**
+ * @param {{fsOps: typeof fsp, root: string, context: {pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number}, filesystemUid: number}} options - Marker location and authority.
+ * @returns {Promise<Readonly<Record<string, any>> | null>} - Exact marker or absence.
+ */
+async function readServicePurgeMarker(options) {
+  try {
+    const raw = await readManagedTextFile({
+      fsOps: options.fsOps,
+      filePath: path.join(options.root, SERVICE_PURGE_MARKER_NAME),
+      label: 'Systemd user-service purge marker',
+      uid: options.filesystemUid,
+    });
+    return validateServicePurgeMarker(JSON.parse(raw), options.context);
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return null;
+    throw error;
+  }
+}
+
+/**
+ * Require the app/tombstone root to contain only the three canonical managed
+ * areas plus the authenticated marker.
+ * @param {typeof fsp} fsOps - Filesystem implementation.
+ * @param {string} root - App root or isolated tombstone.
+ * @returns {Promise<string[]>} - Sorted top-level names.
+ */
+async function inspectServicePurgeTopLevel(fsOps, root) {
+  const names = await readBoundedDirectoryNames(
+    fsOps,
+    root,
+    SERVICE_PURGE_TOP_LEVEL_ENTRIES.size + 1,
+    'Systemd user-service purge root',
+  );
+  if (
+    names.some(
+      (name) =>
+        name !== SERVICE_PURGE_MARKER_NAME &&
+        !SERVICE_PURGE_TOP_LEVEL_ENTRIES.has(name),
+    )
+  ) {
+    throw new Error(
+      'Systemd user-service purge root contains an unsupported entry.',
+    );
+  }
+  return names;
+}
+
+/**
+ * Remove private atomic-publication residue for the purge marker. The
+ * operation lock makes every matching temporary stale.
+ * @param {{fsOps: typeof fsp, root: string, uid: number}} options - Managed app root.
+ * @returns {Promise<void>} - Resolves after matching residue is absent.
+ */
+async function removeStaleServicePurgeMarkerTemps(options) {
+  const prefix = `.${SERVICE_PURGE_MARKER_NAME}.`;
+  const suffix = '.tmp';
+  let removed = false;
+  for (const entry of await options.fsOps.readdir(options.root)) {
+    if (!entry.startsWith(prefix) || !entry.endsWith(suffix)) continue;
+    const token = entry.slice(prefix.length, -suffix.length);
+    if (!ATOMIC_PUBLICATION_TOKEN_PATTERN.test(token)) continue;
+    const temporary = path.join(options.root, entry);
+    await assertRealPath(
+      options.fsOps,
+      temporary,
+      'file',
+      'Stale systemd user-service purge-marker publication',
+      options.uid,
+    );
+    await options.fsOps.unlink(temporary);
+    removed = true;
+  }
+  if (removed) await syncDirectory(options.fsOps, options.root);
+}
+
+/**
+ * Recursively remove one already-isolated, owned tree entry without following
+ * symbolic links. Every concrete descendant must remain on the tombstone
+ * filesystem and owned by the service account.
+ * @param {{fsOps: typeof fsp, entryPath: string, rootDevice: number, uid: number}} options - Isolated tree entry.
+ * @returns {Promise<void>} - Resolves after the entry is durably absent.
+ */
+async function removeOwnedPurgeTreeEntry(options) {
+  const stats = await options.fsOps.lstat(options.entryPath);
+  if (typeof stats.uid === 'number' && stats.uid !== options.uid) {
+    throw new Error(
+      'Systemd user-service purge found content owned by another user.',
+    );
+  }
+  if (typeof stats.dev === 'number' && stats.dev !== options.rootDevice) {
+    throw new Error(
+      'Systemd user-service purge refuses a cross-filesystem entry.',
+    );
+  }
+  if (stats.isSymbolicLink()) {
+    await options.fsOps.unlink(options.entryPath);
+    await syncDirectory(options.fsOps, path.dirname(options.entryPath));
+    return;
+  }
+  if (stats.isFile()) {
+    assertManagedStats(
+      stats,
+      'file',
+      'Systemd user-service purge file',
+      options.uid,
+    );
+    await options.fsOps.unlink(options.entryPath);
+    await syncDirectory(options.fsOps, path.dirname(options.entryPath));
+    return;
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(
+      'Systemd user-service purge found an unsupported filesystem entry.',
+    );
+  }
+  assertManagedStats(
+    stats,
+    'directory',
+    'Systemd user-service purge directory',
+    options.uid,
+  );
+  const opened = await options.fsOps.opendir(options.entryPath);
+  try {
+    while (true) {
+      const entry = await opened.read();
+      if (entry === null) break;
+      await removeOwnedPurgeTreeEntry({
+        ...options,
+        entryPath: path.join(options.entryPath, entry.name),
+      });
+    }
+  } finally {
+    await opened.close().catch((error) => {
+      if (!hasCode(error, 'ERR_DIR_CLOSED')) throw error;
+    });
+  }
+  await syncDirectory(options.fsOps, options.entryPath);
+  await options.fsOps.rmdir(options.entryPath);
+  await syncDirectory(options.fsOps, path.dirname(options.entryPath));
+}
+
+/**
+ * Finish removal of one authenticated isolated app root. The marker remains
+ * until every other known top-level entry is absent, making retry authority
+ * independent of partially deleted application state.
+ * @param {{fsOps: typeof fsp, tombstonePath: string, context: {pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number}, filesystemUid: number, rootDevice: number}} options - Authenticated tombstone.
+ * @returns {Promise<void>} - Resolves after the exact app tombstone is absent.
+ */
+async function removeServicePurgeTombstone(options) {
+  const marker = await readServicePurgeMarker({
+    fsOps: options.fsOps,
+    root: options.tombstonePath,
+    context: options.context,
+    filesystemUid: options.filesystemUid,
+  });
+  if (!marker) {
+    throw new Error(
+      'Systemd user-service purge tombstone lacks its authenticated marker.',
+    );
+  }
+  const names = await inspectServicePurgeTopLevel(
+    options.fsOps,
+    options.tombstonePath,
+  );
+  for (const name of names) {
+    if (name === SERVICE_PURGE_MARKER_NAME) continue;
+    await removeOwnedPurgeTreeEntry({
+      fsOps: options.fsOps,
+      entryPath: path.join(options.tombstonePath, name),
+      rootDevice: options.rootDevice,
+      uid: options.filesystemUid,
+    });
+  }
+  const finalNames = await inspectServicePurgeTopLevel(
+    options.fsOps,
+    options.tombstonePath,
+  );
+  if (finalNames.length !== 1 || finalNames[0] !== SERVICE_PURGE_MARKER_NAME) {
+    throw new Error(
+      'Systemd user-service purge tombstone did not converge to its marker.',
+    );
+  }
+  await readServicePurgeMarker({
+    fsOps: options.fsOps,
+    root: options.tombstonePath,
+    context: options.context,
+    filesystemUid: options.filesystemUid,
+  });
+  await options.fsOps.unlink(
+    path.join(options.tombstonePath, SERVICE_PURGE_MARKER_NAME),
+  );
+  await syncDirectory(options.fsOps, options.tombstonePath);
+  await options.fsOps.rmdir(options.tombstonePath);
+  await syncDirectory(
+    options.fsOps,
+    path.dirname(options.context.layout.serviceRoot),
+  );
 }
 
 /**
@@ -2068,7 +2448,7 @@ function assertSharedPackagedStorage(layout, packagedStorage, environment) {
  * Create the packaged Linux systemd user-service operator. Construction is
  * side-effect free; every method resolves embedded identity lazily.
  * @param {Record<string, any>} [options] - Testable host adapters and roots.
- * @returns {Readonly<{install: () => Promise<Record<string, any>>, converge: () => Promise<Record<string, any>>, update: () => Promise<Record<string, any>>, rollback: () => Promise<Record<string, any>>, recover: () => Promise<Record<string, any>>, prune: () => Promise<Record<string, any>>, start: () => Promise<Record<string, any>>, stop: () => Promise<Record<string, any>>, restart: () => Promise<Record<string, any>>, status: () => Promise<Record<string, any>>, uninstall: () => Promise<Record<string, any>>}>} - Service operations.
+ * @returns {Readonly<{install: () => Promise<Record<string, any>>, converge: () => Promise<Record<string, any>>, update: () => Promise<Record<string, any>>, rollback: () => Promise<Record<string, any>>, recover: () => Promise<Record<string, any>>, prune: () => Promise<Record<string, any>>, purge: (input?: {confirmation?: string}) => Promise<Record<string, any>>, start: () => Promise<Record<string, any>>, stop: () => Promise<Record<string, any>>, restart: () => Promise<Record<string, any>>, status: () => Promise<Record<string, any>>, uninstall: () => Promise<Record<string, any>>}>} - Service operations.
  */
 export function createSystemdUserServiceOperator(options = {}) {
   const platform = options.platform || process.platform;
@@ -3639,6 +4019,28 @@ export function createSystemdUserServiceOperator(options = {}) {
         releases: context.layout.releasesRoot,
         state: context.layout.stateRoot,
       },
+    };
+  }
+
+  /**
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>}} context - App context.
+   * @param {'purged'|'already-purged'} outcome - Converged result.
+   * @returns {Record<string, any>} - Destructive app-data purge receipt.
+   */
+  function createPurgeReceipt(context, outcome) {
+    return {
+      schemaVersion: SERVICE_RESULT_SCHEMA_VERSION,
+      kind: SERVICE_RESULT_KIND,
+      action: 'purge',
+      requestStatus: 'fulfilled',
+      appId: context.pair.runtime.appId,
+      outcome,
+      unit: context.layout.unitName,
+      health: 'absent',
+      activeArtifactId: null,
+      activeRevisionId: null,
+      rollbackArtifactId: null,
+      rollbackRevisionId: null,
     };
   }
 
@@ -5559,6 +5961,371 @@ export function createSystemdUserServiceOperator(options = {}) {
     }
   }
 
+  /**
+   * Require independently absent systemd wiring before destructive app-data
+   * cleanup. Purge never performs uninstall as a side effect.
+   * @param {{layout: Readonly<Record<string, string>>, filesystemUid: number}} context - Fixed application context.
+   * @returns {Promise<void>} - Resolves only for fresh physical absence.
+   */
+  async function assertPurgeWiringAbsent(context) {
+    const unitFile = await inspectFixedUnitFile({
+      fsOps,
+      layout: context.layout,
+      uid: context.filesystemUid,
+    });
+    const systemd = await readSystemd(context.layout);
+    const wantsPath = path.join(
+      path.dirname(context.layout.unitPath),
+      'default.target.wants',
+      context.layout.unitName,
+    );
+    const wantsEntry = await lstatIfPresent(fsOps, wantsPath);
+    if (
+      unitFile.state !== 'absent' ||
+      wantsEntry !== null ||
+      systemd.loadState !== 'not-found' ||
+      systemd.activeState !== 'inactive' ||
+      systemd.mainPid !== 0 ||
+      systemd.dropInPaths !== '' ||
+      systemd.needDaemonReload !== false
+    ) {
+      throw createServicePurgeError(
+        'systemd-user-service-purge-uninstall-required',
+        'Systemd user-service purge requires coherently absent service wiring.',
+        undefined,
+        PURGE_UNINSTALL_REMEDIATION,
+      );
+    }
+    try {
+      await assertNoOtherUnitClaims(
+        context.layout,
+        await readManagerUnitPaths(),
+      );
+    } catch (error) {
+      throw createServicePurgeError(
+        'systemd-user-service-purge-state-conflict',
+        'Systemd user-service purge found another claim on its unit name.',
+        error,
+      );
+    }
+  }
+
+  /**
+   * Require no live manual/resident owner before removing its durable store.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>}} context - Fixed application context.
+   * @returns {Promise<void>} - Resolves only for absent or stopped ownership.
+   */
+  async function assertPurgeRuntimeInactive(context) {
+    let runtime;
+    try {
+      runtime = await (options.readRuntimeState || readRuntimeState)({
+        layout: context.layout,
+        appId: context.pair.runtime.appId,
+        fsOps,
+        ...(options.createControlDBClient
+          ? { createDB: options.createControlDBClient }
+          : {}),
+        ...(options.probeLocalServiceSession
+          ? { probeSession: options.probeLocalServiceSession }
+          : {}),
+      });
+    } catch (error) {
+      throw createServicePurgeError(
+        'systemd-user-service-purge-runtime-active',
+        'Systemd user-service purge could not prove the local runtime inactive.',
+        error,
+      );
+    }
+    if (
+      runtime !== null &&
+      !(
+        runtime.status === LedgerServiceLifecycleStatus.STOPPED &&
+        runtime.ownerKind === undefined &&
+        runtime.session === 'absent' &&
+        runtime.currentOwner === false
+      )
+    ) {
+      throw createServicePurgeError(
+        'systemd-user-service-purge-runtime-active',
+        'Systemd user-service purge requires no live local runtime owner.',
+      );
+    }
+  }
+
+  /**
+   * Fully scan the durable run directory and reject every nonterminal run.
+   * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, filesystemUid: number}} context - Fixed application context.
+   * @returns {Promise<void>} - Resolves only for a quiescent app ledger.
+   */
+  async function assertPurgeDurableWorkQuiescent(context) {
+    try {
+      await assertRealPath(
+        fsOps,
+        context.layout.controlPath,
+        'directory',
+        'Systemd user-service control root',
+        context.filesystemUid,
+      );
+    } catch (error) {
+      if (hasCode(error, 'ENOENT')) return;
+      throw error;
+    }
+    const db = await createControlDB('lmdb', {
+      path: context.layout.controlPath,
+      readOnly: true,
+    });
+    const report = await withOpenControlDB(db, async () => {
+      const payloadStore = createPayloadStore({
+        path: context.layout.payloadPath,
+        storeId: defaultPayloadStoreId(context.layout.payloadPath),
+      });
+      const ledger = createLedgerStore({
+        db,
+        tableName: context.layout.executionLedgerTable,
+        payloadStore,
+        effectEvidenceVerifiers: [
+          ...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
+        ],
+        now,
+      });
+      return await inspectLocalApplicationQuiescence({
+        ledger,
+        appId: context.pair.runtime.appId,
+      });
+    });
+    if (!report.quiescent) {
+      throw createServicePurgeError(
+        'systemd-user-service-purge-not-quiescent',
+        `Systemd user-service purge found ${report.nonterminalRunCount} nonterminal durable run${report.nonterminalRunCount === 1 ? '' : 's'}.`,
+        undefined,
+        PURGE_QUIESCENCE_REMEDIATION,
+      );
+    }
+  }
+
+  /**
+   * Permanently remove one coherently uninstalled application's releases,
+   * ledger, payloads, and application state. This command is serialized with
+   * service operations and requires no concurrent ordinary SEA command.
+   * @param {{confirmation?: string}} [input] - Typed destructive confirmation.
+   * @returns {Promise<Record<string, any>>} - Stable app-data purge receipt.
+   */
+  async function purge(input = {}) {
+    let mutationStarted = false;
+    try {
+      const context = await resolveContext();
+      if (
+        !input ||
+        typeof input !== 'object' ||
+        Array.isArray(input) ||
+        Object.keys(input).length !== 1 ||
+        input.confirmation !== context.pair.runtime.appId
+      ) {
+        throw createServicePurgeError(
+          'systemd-user-service-purge-confirmation-required',
+          'Systemd user-service purge requires the exact embedded application ID with --confirm-data-loss.',
+          undefined,
+          PURGE_CONFIRMATION_REMEDIATION,
+        );
+      }
+      const releaseLock = await acquireLock({
+        serviceRoot: context.layout.serviceRoot,
+        uid: context.uid,
+      });
+      try {
+        await assertPurgeWiringAbsent(context);
+        let roots = await inspectServicePurgeRoots(
+          fsOps,
+          context.layout,
+          context.filesystemUid,
+        );
+        if (roots.tombstone !== null) {
+          mutationStarted = true;
+          await removeServicePurgeTombstone({
+            fsOps,
+            tombstonePath: roots.tombstonePath,
+            context,
+            filesystemUid: context.filesystemUid,
+            rootDevice: roots.tombstone.dev,
+          });
+          roots = await inspectServicePurgeRoots(
+            fsOps,
+            context.layout,
+            context.filesystemUid,
+          );
+          if (roots.applicationRoot !== null || roots.tombstone !== null) {
+            throw new Error(
+              'Systemd user-service purge retry did not establish absence.',
+            );
+          }
+          return createPurgeReceipt(context, 'purged');
+        }
+        if (roots.applicationRoot === null) {
+          return createPurgeReceipt(context, 'already-purged');
+        }
+
+        const installation = await readInstallation(
+          context.layout,
+          context.uid,
+          context.filesystemUid,
+          context.pair.runtime.target,
+          { allowUninstalledTargetMismatch: true },
+        );
+        if (!installation || installation.state !== 'uninstalled') {
+          throw createServicePurgeError(
+            'systemd-user-service-purge-uninstall-required',
+            'Systemd user-service purge requires an exact uninstalled receipt.',
+            undefined,
+            PURGE_UNINSTALL_REMEDIATION,
+          );
+        }
+        for (const [directory, label] of [
+          [context.layout.stateRoot, 'Systemd user-service state root'],
+          [context.layout.releasesRoot, 'Systemd user-service releases root'],
+        ]) {
+          await assertRealPath(
+            fsOps,
+            directory,
+            'directory',
+            label,
+            context.filesystemUid,
+          );
+        }
+        if (await readUninstallMarker(context, installation)) {
+          throw createServicePurgeError(
+            'systemd-user-service-purge-uninstall-required',
+            'Systemd user-service uninstall recovery is incomplete.',
+            undefined,
+            PURGE_UNINSTALL_REMEDIATION,
+          );
+        }
+        if (
+          (await lstatIfPresent(fsOps, context.layout.currentLink)) !== null
+        ) {
+          throw createServicePurgeError(
+            'systemd-user-service-purge-state-conflict',
+            'Systemd user-service purge found an unexpected current selector.',
+          );
+        }
+        const activation = await readActivationSnapshot(context);
+        if (
+          activation !== null &&
+          activation.phase !== LocalApplicationActivationPhase.ACTIVE
+        ) {
+          throw createServicePurgeError(
+            'systemd-user-service-purge-recovery-required',
+            'Systemd user-service activation is in flight.',
+            undefined,
+            ACTIVATION_RECOVERY_REMEDIATION,
+          );
+        }
+        await assertPurgeRuntimeInactive(context);
+        await assertPurgeDurableWorkQuiescent(context);
+        await removeStaleServicePurgeMarkerTemps({
+          fsOps,
+          root: context.layout.serviceRoot,
+          uid: context.filesystemUid,
+        });
+        let marker = await readServicePurgeMarker({
+          fsOps,
+          root: context.layout.serviceRoot,
+          context,
+          filesystemUid: context.filesystemUid,
+        });
+        await inspectServicePurgeTopLevel(fsOps, context.layout.serviceRoot);
+        if (!marker) {
+          mutationStarted = true;
+          marker = createServicePurgeMarker(context);
+          await writeFileAtomic({
+            fsOps,
+            filePath: path.join(
+              context.layout.serviceRoot,
+              SERVICE_PURGE_MARKER_NAME,
+            ),
+            contents: `${JSON.stringify(marker, null, 2)}\n`,
+            mode: 0o600,
+            token: createToken(),
+            uid: context.filesystemUid,
+          });
+        } else {
+          mutationStarted = true;
+        }
+
+        // The service-operation lock does not serialize ordinary packaged run
+        // commands. Recheck immediately before isolation and require callers
+        // not to invoke another SEA command concurrently with purge.
+        await assertPurgeRuntimeInactive(context);
+        await assertPurgeDurableWorkQuiescent(context);
+        const beforeRename = await inspectServicePurgeRoots(
+          fsOps,
+          context.layout,
+          context.filesystemUid,
+        );
+        if (
+          beforeRename.applicationRoot === null ||
+          beforeRename.tombstone !== null ||
+          beforeRename.applicationRoot.dev !== roots.applicationRoot.dev ||
+          beforeRename.applicationRoot.ino !== roots.applicationRoot.ino
+        ) {
+          throw new Error(
+            'Systemd user-service root changed before purge isolation.',
+          );
+        }
+        await fsOps.rename(
+          context.layout.serviceRoot,
+          beforeRename.tombstonePath,
+        );
+        await syncDirectory(fsOps, path.dirname(context.layout.serviceRoot));
+        const isolated = await fsOps.lstat(beforeRename.tombstonePath);
+        if (
+          !isolated.isDirectory() ||
+          isolated.isSymbolicLink() ||
+          isolated.dev !== beforeRename.applicationRoot.dev ||
+          isolated.ino !== beforeRename.applicationRoot.ino
+        ) {
+          throw new Error(
+            'Systemd user-service purge tombstone changed during isolation.',
+          );
+        }
+        await removeServicePurgeTombstone({
+          fsOps,
+          tombstonePath: beforeRename.tombstonePath,
+          context,
+          filesystemUid: context.filesystemUid,
+          rootDevice: isolated.dev,
+        });
+        const finalRoots = await inspectServicePurgeRoots(
+          fsOps,
+          context.layout,
+          context.filesystemUid,
+        );
+        if (
+          finalRoots.applicationRoot !== null ||
+          finalRoots.tombstone !== null
+        ) {
+          throw new Error(
+            'Systemd user-service purge did not establish application-root absence.',
+          );
+        }
+        return createPurgeReceipt(context, 'purged');
+      } finally {
+        await releaseLock();
+      }
+    } catch (error) {
+      if (isServicePurgeError(error)) throw error;
+      throw createServicePurgeError(
+        mutationStarted
+          ? 'systemd-user-service-purge-incomplete'
+          : 'systemd-user-service-purge-state-conflict',
+        mutationStarted
+          ? 'Systemd user-service purge was interrupted and is safe to retry.'
+          : 'Systemd user-service state is not safe to purge.',
+        error,
+        mutationStarted ? PURGE_RETRY_REMEDIATION : undefined,
+      );
+    }
+  }
+
   /** @returns {Promise<Record<string, any>>} - Current service status. */
   async function status() {
     const context = await resolveContext();
@@ -6033,6 +6800,7 @@ export function createSystemdUserServiceOperator(options = {}) {
     rollback,
     recover,
     prune,
+    purge,
     start,
     stop,
     restart,

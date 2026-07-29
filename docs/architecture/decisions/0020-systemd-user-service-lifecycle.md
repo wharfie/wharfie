@@ -448,6 +448,16 @@ remote-artifact, deployment, or provider state. In-flight activation still
 uses `service recover`; missing activation instead requires the exact selected
 SEA to retry install or converge because no transition exists to recover.
 
+### Explicit local application-data purge
+
+The later
+[application-data purge decision](0034-explicit-local-application-data-purge.md)
+adds the typed-confirmation `service purge` boundary after coherent uninstall.
+It permanently removes the exact derived app root, including releases and
+durable state, while preserving shared roots, sibling apps, systemd
+directories, and the invoking SEA. This remains separate from uninstall and
+release pruning.
+
 ## Consequences
 
 - A packaged application can be configured as a boot-persistent resident

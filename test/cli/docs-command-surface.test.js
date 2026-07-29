@@ -51,6 +51,7 @@ const staleClaims = [
   'schema-v6 redacted run view',
   'Wharfie does not yet install it as an OS service',
   'The remaining evidence gate is a clean supported Linux/systemd service lifecycle',
+  'Wharfie does not currently expose a purge command',
 ];
 
 /**
@@ -268,6 +269,9 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('<next-app> wharfie service recover');
     expect(quickstart).toContain('<app> wharfie service uninstall');
     expect(quickstart).toContain(
+      '<app> wharfie service purge --confirm-data-loss <app-id>',
+    );
+    expect(quickstart).toContain(
       "} from '@wharfie/wharfie/deployment-profile';",
     );
     expect(quickstart).toContain('createDeploymentProfile({');
@@ -419,6 +423,9 @@ describe('docs command surface', () => {
     expect(normalized).toContain(
       '<steady-file> wharfie service uninstall --json',
     );
+    expect(normalized).toContain(
+      '<steady-file> wharfie service purge --confirm-data-loss steady-file-demo --json',
+    );
     await expect(
       fsp.access(path.join(repoRoot, 'examples', 'steady-file', 'README.md')),
     ).resolves.toBeUndefined();
@@ -495,6 +502,9 @@ describe('docs command surface', () => {
     );
     expect(normalized).toContain(
       '<steady-file-a> wharfie service prune --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file-a> wharfie service purge --confirm-data-loss steady-file-demo --json',
     );
 
     await expect(
@@ -604,6 +614,10 @@ describe('docs command surface', () => {
         options: ['--json'],
       });
     }
+    expectCommandShape(findCommand(packagedService, 'purge'), {
+      name: 'purge',
+      options: ['--confirm-data-loss', '--json'],
+    });
   });
 
   it('documents the explicit sensitive activity-log disclosure boundary', async () => {

@@ -160,7 +160,7 @@ be supplied only once, and a returned active head is an incomplete nonzero
 result rather than success.
 
 Packaged Linux artifacts additionally expose
-`<app> wharfie service install|converge|update|rollback|recover|start|stop|restart|status|uninstall`.
+`<app> wharfie service install|converge|update|rollback|recover|prune|purge|start|stop|restart|status|uninstall`.
 This is a
 packaged-only systemd user-service boundary: it requires pre-enabled lingering,
 rejects root and custom `XDG_CONFIG_HOME` topology, never accepts unit or
@@ -211,4 +211,12 @@ intentional-uninstall tombstone also lets a new SEA automatically reproject and
 prove that retained source, then enter the ordinary durable update. Missing
 projection state without the tombstone fails closed and requires the exact
 selected SEA to repair it.
+
+`service purge --confirm-data-loss <app-id>` is the separate irreversible
+cleanup path after uninstall. It requires the exact embedded app ID, absent
+systemd wiring, no live local owner, settled activation, and terminal durable
+runs. It removes only the derived app root through a marker-authenticated
+rename-first tombstone; shared roots, sibling apps, and the invoking SEA remain.
+The preview contract requires no concurrent ordinary SEA invocation during
+purge because those commands do not yet share its service-operation lock.
 Source-side service management remains intentionally absent.

@@ -229,7 +229,7 @@ else
     scripts/verify-steady-file-systemd-linux.js \
     verify \
     "${GUEST_REPO}" > "${VERIFY_LOG}"
-  echo "Returned in a new verifier, rediscovered the service, read the result, updated, rolled back, and uninstalled."
+  echo "Returned in a new verifier, observed unfinished work, read its result, updated, rolled back, uninstalled, and purged app data."
 fi
 
 RECEIPT_DIRECTORY="${OUTPUT_ROOT}/${COMMIT}"

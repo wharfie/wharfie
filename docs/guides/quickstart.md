@@ -360,6 +360,7 @@ lingering:
 <app> wharfie service start
 <app> wharfie service restart
 <app> wharfie service uninstall
+<app> wharfie service purge --confirm-data-loss <app-id>
 ```
 
 Use `service converge` when automation owns one exact desired artifact and may
@@ -411,6 +412,16 @@ remote artifacts, or provider resources.
 If activation is in flight, run `service recover` before pruning. If activation
 is missing, there is no transition for recovery to resume: retry
 `service install` or `service converge` from the exact selected SEA instead.
+
+`service purge` is the irreversible cleanup boundary after uninstall. The
+confirmation must exactly repeat the embedded application ID. Purge refuses
+live ownership, nonterminal durable runs, activation transitions, residual
+systemd wiring, unexpected app-root anchors, and ambiguous retry state. It
+renames only the derived application root to an authenticated retry tombstone,
+then removes releases and durable state without following symlinks or touching
+sibling apps, shared roots, or the invoking SEA. Do not invoke another ordinary
+application command concurrently with purge; remove the external SEA handoff
+separately if it should not remain.
 
 Status schema V3 reports `wiring.state` as `managed`, `absent`, `orphaned`,
 `conflicting`, or `unknown`; `wiring.selection` separately reports the redacted

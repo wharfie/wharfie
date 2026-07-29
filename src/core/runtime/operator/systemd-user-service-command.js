@@ -30,6 +30,10 @@ const SERVICE_ACTIONS = Object.freeze([
     description: 'Remove verified local releases outside rollback authority',
   }),
   Object.freeze({
+    name: 'purge',
+    description: 'Permanently remove this uninstalled application data',
+  }),
+  Object.freeze({
     name: 'start',
     description: 'Start the installed systemd user service',
   }),
@@ -74,6 +78,14 @@ const PRUNE_UNINSTALL_REMEDIATION =
   'Rerun service uninstall before retrying service prune.';
 const PRUNE_MISSING_ACTIVATION_REMEDIATION =
   'Run service install or service converge from the exact selected SEA before retrying service prune.';
+const PURGE_CONFIRMATION_REMEDIATION =
+  'Repeat the embedded application ID with --confirm-data-loss.';
+const PURGE_UNINSTALL_REMEDIATION =
+  'Run service uninstall before retrying service purge.';
+const PURGE_QUIESCENCE_REMEDIATION =
+  'Finish or cancel nonterminal durable work before retrying service purge.';
+const PURGE_RETRY_REMEDIATION =
+  'Retry service purge with the same --confirm-data-loss application ID.';
 /** @type {Readonly<Record<string, string>>} */
 const PRUNE_ERROR_MESSAGES = Object.freeze({
   'systemd-user-service-operation-failed': 'Systemd user service prune failed.',
@@ -89,6 +101,24 @@ const PRUNE_ERROR_MESSAGES = Object.freeze({
     'Systemd user-service release pruning was interrupted and is safe to retry.',
   'systemd-user-service-prune-operation-failed':
     'Systemd user-service release pruning failed before a safe result was available.',
+});
+/** @type {Readonly<Record<string, string>>} */
+const PURGE_ERROR_MESSAGES = Object.freeze({
+  'systemd-user-service-operation-failed': 'Systemd user service purge failed.',
+  'systemd-user-service-purge-confirmation-required':
+    'Systemd user-service purge requires exact data-loss confirmation.',
+  'systemd-user-service-purge-uninstall-required':
+    'Systemd user-service purge requires a coherently uninstalled service.',
+  'systemd-user-service-purge-recovery-required':
+    'Systemd user-service activation recovery must finish before purge.',
+  'systemd-user-service-purge-runtime-active':
+    'Systemd user-service purge requires an inactive local runtime.',
+  'systemd-user-service-purge-not-quiescent':
+    'Systemd user-service purge requires terminal durable work.',
+  'systemd-user-service-purge-state-conflict':
+    'Systemd user-service state is not safe to purge.',
+  'systemd-user-service-purge-incomplete':
+    'Systemd user-service purge was interrupted and is safe to retry.',
 });
 const SERVICE_REQUEST_STATUSES = new Set([
   'fulfilled',
@@ -119,6 +149,7 @@ const LIFECYCLE_OUTCOMES = Object.freeze({
     'already-uninstalled',
     'orphan-reconciled',
   ]),
+  purge: new Set(['purged', 'already-purged']),
 });
 const SERVICE_HEALTH_STATES = new Set([
   'healthy',
@@ -167,7 +198,7 @@ const AUTHORIZED_DESIRED_CONVERGENCE_BASES = new Set([
  */
 
 /**
- * @typedef {Record<string, (() => Promise<Record<string, any>> | Record<string, any>) | undefined>} SystemdUserServiceOperator
+ * @typedef {Record<string, ((input?: Record<string, any>) => Promise<Record<string, any>> | Record<string, any>) | undefined>} SystemdUserServiceOperator
  */
 
 /**
@@ -387,7 +418,13 @@ function normalizeResult(value, action) {
       SERVICE_HEALTH_STATES.has(normalized.health) &&
       (normalized.health !== 'starting' || ACTIVATION_ACTIONS.has(action)) &&
       hasValidResultSettlement(normalized, action) &&
-      hasValidReleaseReferences(normalized));
+      hasValidReleaseReferences(normalized) &&
+      (action !== 'purge' ||
+        (normalized.health === 'absent' &&
+          normalized.activeArtifactId === null &&
+          normalized.activeRevisionId === null &&
+          normalized.rollbackArtifactId === null &&
+          normalized.rollbackRevisionId === null)));
   if (
     normalized.schemaVersion !== expectedSchemaVersion ||
     normalized.kind !== expectedKind ||
@@ -457,6 +494,33 @@ function getExpectedErrorRemediation(code, action) {
   ) {
     return PRUNE_MISSING_ACTIVATION_REMEDIATION;
   }
+  if (
+    action === 'purge' &&
+    code === 'systemd-user-service-purge-confirmation-required'
+  ) {
+    return PURGE_CONFIRMATION_REMEDIATION;
+  }
+  if (
+    action === 'purge' &&
+    code === 'systemd-user-service-purge-uninstall-required'
+  ) {
+    return PURGE_UNINSTALL_REMEDIATION;
+  }
+  if (
+    action === 'purge' &&
+    code === 'systemd-user-service-purge-recovery-required'
+  ) {
+    return ACTIVATION_RECOVERY_REMEDIATION;
+  }
+  if (
+    action === 'purge' &&
+    code === 'systemd-user-service-purge-not-quiescent'
+  ) {
+    return PURGE_QUIESCENCE_REMEDIATION;
+  }
+  if (action === 'purge' && code === 'systemd-user-service-purge-incomplete') {
+    return PURGE_RETRY_REMEDIATION;
+  }
   return null;
 }
 
@@ -473,17 +537,22 @@ function createJsonError(error, action) {
   const normalizedCode = /^[a-z0-9][a-z0-9-]{0,127}$/.test(rawCode)
     ? rawCode
     : 'systemd-user-service-operation-failed';
+  const errorMessages =
+    action === 'prune'
+      ? PRUNE_ERROR_MESSAGES
+      : action === 'purge'
+        ? PURGE_ERROR_MESSAGES
+        : null;
   const code =
-    action === 'prune' &&
-    !Object.prototype.hasOwnProperty.call(PRUNE_ERROR_MESSAGES, normalizedCode)
+    errorMessages &&
+    !Object.prototype.hasOwnProperty.call(errorMessages, normalizedCode)
       ? 'systemd-user-service-operation-failed'
       : normalizedCode;
-  const rawMessage =
-    action === 'prune'
-      ? PRUNE_ERROR_MESSAGES[code] || 'Systemd user service prune failed.'
-      : error instanceof Error
-        ? error.message
-        : String(error);
+  const rawMessage = errorMessages
+    ? errorMessages[code] || `Systemd user service ${action} failed.`
+    : error instanceof Error
+      ? error.message
+      : String(error);
   const message = Array.from(rawMessage, (character) => {
     const codePoint = character.codePointAt(0) || 0;
     return codePoint < 32 || codePoint === 127 ? ' ' : character;
@@ -571,6 +640,11 @@ function formatHumanResult(action, result) {
         : `; recovered ${result.recoveredStagingCount} interrupted staging ${result.recoveredStagingCount === 1 ? 'directory' : 'directories'}`;
     return `${action.name}: removed ${result.removedCount} unreferenced ${releaseLabel} (${result.removedArtifactBytes} logical artifact bytes)${resumed}${recoveredStaging}${app}`;
   }
+  if (action.name === 'purge') {
+    return result.outcome === 'already-purged'
+      ? `purge: application data already absent${app}`
+      : `purge: permanently removed releases and durable state${app}`;
+  }
   if (result.requestStatus === 'pending') {
     if (action.name === 'converge') {
       if (result.reason === 'incompatible-durable-work') {
@@ -626,40 +700,55 @@ export function createSystemdUserServiceCommand(options = {}) {
   );
 
   for (const action of SERVICE_ACTIONS) {
+    const actionCommand = new Command(action.name)
+      .description(action.description)
+      .option('--json', 'Write one machine-readable result object');
+    if (action.name === 'purge') {
+      actionCommand.option(
+        '--confirm-data-loss <app-id>',
+        'Confirm permanent deletion by repeating the embedded application ID',
+      );
+    }
     command.addCommand(
-      new Command(action.name)
-        .description(action.description)
-        .option('--json', 'Write one machine-readable result object')
-        .action(async (commandOptions) => {
-          try {
-            const operator = await loadOperator();
-            const operation = operator?.[action.name];
-            if (typeof operation !== 'function') {
-              throw new TypeError(
-                `Systemd user service operator does not implement ${action.name}().`,
-              );
-            }
-            const result = normalizeResult(
-              await operation.call(operator),
-              action.name,
+      actionCommand.action(async (commandOptions) => {
+        try {
+          const operator = await loadOperator();
+          const operation = operator?.[action.name];
+          if (typeof operation !== 'function') {
+            throw new TypeError(
+              `Systemd user service operator does not implement ${action.name}().`,
             );
-            if (commandOptions.json === true) output.json(result);
-            else output.line(formatHumanResult(action, result));
-            if (
-              action.name !== 'status' &&
-              result.requestStatus !== 'fulfilled'
-            ) {
-              processRef.exitCode = 1;
-            }
-          } catch (error) {
-            if (commandOptions.json === true) {
-              output.json(createJsonError(error, action.name));
-            } else {
-              output.failure(createHumanFailure(error, action.name));
-            }
+          }
+          const result = normalizeResult(
+            await operation.call(
+              operator,
+              ...(action.name === 'purge'
+                ? [
+                    {
+                      confirmation: commandOptions.confirmDataLoss,
+                    },
+                  ]
+                : []),
+            ),
+            action.name,
+          );
+          if (commandOptions.json === true) output.json(result);
+          else output.line(formatHumanResult(action, result));
+          if (
+            action.name !== 'status' &&
+            result.requestStatus !== 'fulfilled'
+          ) {
             processRef.exitCode = 1;
           }
-        }),
+        } catch (error) {
+          if (commandOptions.json === true) {
+            output.json(createJsonError(error, action.name));
+          } else {
+            output.failure(createHumanFailure(error, action.name));
+          }
+          processRef.exitCode = 1;
+        }
+      }),
     );
   }
 

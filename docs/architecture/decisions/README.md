@@ -37,5 +37,6 @@ These records capture product-level decisions that should survive implementation
 | [0031 — Verified sensitive durable run-output disclosure](0031-verified-sensitive-run-output.md)                           | Accepted                                               |
 | [0032 — Default durable CLI handoff](0032-default-durable-cli-handoff.md)                                                  | Accepted; replaces strict V3 with executable V4        |
 | [0033 — Explicit coordinator epoch authority](0033-explicit-coordinator-epoch-authority.md)                                | Accepted; bounded precursor to automatic recovery      |
+| [0034 — Explicit local application-data purge](0034-explicit-local-application-data-purge.md)                              | Accepted; bounded developer-preview cleanup            |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

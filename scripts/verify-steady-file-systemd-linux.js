@@ -1172,6 +1172,25 @@ async function verify() {
   assert.equal(prune.retainedReleaseCount, 2);
   assert.equal(prune.removedCount, 0);
 
+  const purge = runArtifactJson(
+    source.artifactPath,
+    ['wharfie', 'service', 'purge', '--confirm-data-loss', APP_ID, '--json'],
+    'steady-file application-data purge',
+  );
+  assert.equal(purge.schemaVersion, 1);
+  assert.equal(purge.kind, 'wharfie.service.result');
+  assert.equal(purge.action, 'purge');
+  assert.equal(purge.requestStatus, 'fulfilled');
+  assert.equal(purge.appId, APP_ID);
+  assert.equal(purge.outcome, 'purged');
+  assert.equal(purge.health, 'absent');
+  assert.equal(existsSync(storageLayout().unitPath), false);
+  assert.equal(existsSync(storageLayout().appRoot), false);
+  assert.equal(existsSync(storageLayout().stateRoot), false);
+  assert.equal(existsSync(storageLayout().releasesRoot), false);
+  assert.equal(existsSync(source.artifactPath), true);
+  assert.equal(existsSync(target.artifactPath), true);
+
   const receipt = {
     schemaVersion: 1,
     kind: 'wharfie.steady-file-systemd-proof.complete',
@@ -1210,9 +1229,16 @@ async function verify() {
         receipt: uninstall,
         status: absentStatus,
         systemd: independentSystemd,
-        stateRetainedUntilHostCleanup: true,
+        stateRetainedUntilPurge: true,
       },
       prune,
+      purge: {
+        receipt: purge,
+        applicationRootAbsent: true,
+        stateRootAbsent: true,
+        releasesRootAbsent: true,
+        externalArtifactsPreserved: true,
+      },
     },
     run: {
       runId,

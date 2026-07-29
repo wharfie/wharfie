@@ -94,13 +94,24 @@ discloses application values, including the file path and fingerprints.
 
 ```bash
 <steady-file> wharfie service uninstall --json
+<steady-file> wharfie service purge \
+  --confirm-data-loss steady-file-demo \
+  --json
 ```
 
 Uninstall removes systemd wiring but deliberately preserves durable state and
-immutable releases. A safe, explicitly confirmed purge operation is still an
-open exit condition for this preview milestone. Until it lands, use a
-disposable target for complete cleanup; deleting arbitrary Wharfie data paths
-by hand is not part of this guide.
+immutable releases. Purge is the separate irreversible boundary: it requires
+the exact embedded app ID, an uninstalled service, no live runtime owner, and
+only terminal durable runs. It removes that app's releases, ledger, payloads,
+and application state while preserving sibling apps, shared Wharfie/systemd
+directories, and the invoking SEA.
+
+Run no other command from the application concurrently with purge. The preview
+rechecks ownership and quiescence immediately before isolating the app root,
+but ordinary application commands do not yet share a persistent purge
+admission fence. After purge, delete the transferred `<steady-file>` handoff
+itself if the target should retain nothing; running it again may create fresh
+application state.
 
 For the full update, rollback, inspection, and evidence discussion, see the
 [golden-path guide](./golden-path.md).

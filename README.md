@@ -184,7 +184,10 @@ boundaries, ambiguous-response recovery, and state-preserving uninstall.
 The focused product walkthrough separately builds two meaningful `steady-file`
 revisions and proves packaged admission, install, later-process rediscovery,
 update through B, rollback through B to A, retained reads, uninstall, prune,
-and VM cleanup. It does not repeat the crash/reboot matrix.
+and VM cleanup. The current developer-preview verifier strengthens that path
+with unfinished work across the initiating-process boundary and an explicit
+application-data purge; a fresh split builder/target receipt is still pending.
+It does not repeat the crash/reboot matrix.
 Multi-host leases and heartbeats are still later work. Exact-attempt historical
 log retrieval and explicitly confirmed exact-run logical output snapshots are
 available; ordinary inspection remains redacted, and live tail, search,
@@ -1031,6 +1034,7 @@ service:
 <app> wharfie service start
 <app> wharfie service restart
 <app> wharfie service uninstall
+<app> wharfie service purge --confirm-data-loss <app-id>
 ```
 
 These commands reject root, never invoke `sudo`, and preserve durable state and
@@ -1103,6 +1107,14 @@ exactly-once display or broader revision, payload, run-history, or provider
 garbage collection. An in-flight activation requires `service recover`; a
 missing activation instead requires `service install` or `service converge`
 from the exact selected SEA because there is no transition to recover.
+
+Complete local data cleanup is a second explicit boundary. After uninstall,
+`service purge --confirm-data-loss <app-id>` requires the exact embedded
+application ID, absent systemd wiring, no live owner, and only terminal durable
+runs. It removes only that app's derived data root through an authenticated
+rename-first retry tombstone. Sibling apps, shared roots, and the invoking SEA
+remain. Do not run another ordinary application command concurrently with
+purge; remove the external SEA handoff separately when it should not remain.
 
 The repository's disposable Ubuntu proof builds the app from the installed npm
 tarball, removes Node from the packaged command `PATH`, force-cycles the VM,

@@ -9,7 +9,7 @@ import { createSystemdUserServiceCommand } from '../../src/core/runtime/operator
 
 const sourceOpsCommand = createSourceOpsCommand();
 
-/** @typedef {'install'|'converge'|'update'|'rollback'|'recover'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
+/** @typedef {'install'|'converge'|'update'|'rollback'|'recover'|'purge'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
 
 /** @type {ReadonlyArray<ServiceResultAction|'prune'|'status'>} */
 const ACTIONS = Object.freeze([
@@ -19,6 +19,7 @@ const ACTIONS = Object.freeze([
   'rollback',
   'recover',
   'prune',
+  'purge',
   'start',
   'stop',
   'restart',
@@ -32,6 +33,7 @@ const OUTCOMES = Object.freeze({
   update: 'target-active',
   rollback: 'target-active',
   recover: 'target-active',
+  purge: 'purged',
   start: 'started',
   stop: 'stopped',
   restart: 'restarted',
@@ -105,11 +107,13 @@ function makeResult(action, overrides = {}) {
     health:
       action === 'stop'
         ? 'stopped'
-        : action === 'uninstall'
+        : action === 'uninstall' || action === 'purge'
           ? 'absent'
           : 'healthy',
-    activeArtifactId: action === 'uninstall' ? null : 'artifact-current',
-    activeRevisionId: action === 'uninstall' ? null : 'revision-current',
+    activeArtifactId:
+      action === 'uninstall' || action === 'purge' ? null : 'artifact-current',
+    activeRevisionId:
+      action === 'uninstall' || action === 'purge' ? null : 'revision-current',
     rollbackArtifactId: ['update', 'rollback', 'recover'].includes(action)
       ? 'artifact-previous'
       : null,
@@ -212,11 +216,15 @@ function makeOperator() {
   return Object.fromEntries(
     ACTIONS.map((action) => [
       action,
-      jest.fn(async () => {
-        if (action === 'status') return makeStatus();
-        if (action === 'prune') return makePrune();
-        return makeResult(action);
-      }),
+      jest.fn(
+        async (
+          /** @type {Record<string, any> | undefined} */ _input = undefined,
+        ) => {
+          if (action === 'status') return makeStatus();
+          if (action === 'prune') return makePrune();
+          return makeResult(action);
+        },
+      ),
     ]),
   );
 }
@@ -248,7 +256,13 @@ describe('packaged systemd user service command', () => {
     expect(service?.helpInformation()).toContain('rollback');
     expect(service?.helpInformation()).toContain('recover');
     expect(service?.helpInformation()).toContain('prune');
+    expect(service?.helpInformation()).toContain('purge');
     expect(service?.helpInformation()).toContain('uninstall');
+    expect(
+      service?.commands
+        .find((command) => command.name() === 'purge')
+        ?.helpInformation(),
+    ).toContain('--confirm-data-loss <app-id>');
     expect(loadOperator).not.toHaveBeenCalled();
   });
 
@@ -267,10 +281,23 @@ describe('packaged systemd user service command', () => {
         processRef,
       });
 
-      await command.parseAsync(['node', 'service', action, '--json']);
+      await command.parseAsync([
+        'node',
+        'service',
+        action,
+        ...(action === 'purge' ? ['--confirm-data-loss', 'service-demo'] : []),
+        '--json',
+      ]);
 
       expect(loadOperator).toHaveBeenCalledTimes(1);
       expect(operator[action]).toHaveBeenCalledTimes(1);
+      if (action === 'purge') {
+        expect(operator.purge).toHaveBeenCalledWith({
+          confirmation: 'service-demo',
+        });
+      } else {
+        expect(operator[action]).toHaveBeenCalledWith();
+      }
       for (const otherAction of ACTIONS.filter((name) => name !== action)) {
         expect(operator[otherAction]).not.toHaveBeenCalled();
       }
@@ -356,6 +383,41 @@ describe('packaged systemd user service command', () => {
     await command.parseAsync(['node', 'service', 'prune']);
     expect(line).toHaveBeenLastCalledWith(
       'prune: nothing to prune (service-demo)',
+    );
+  });
+
+  it('writes explicit human data-purge summaries', async () => {
+    const operator = makeOperator();
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync([
+      'node',
+      'service',
+      'purge',
+      '--confirm-data-loss',
+      'service-demo',
+    ]);
+    expect(line).toHaveBeenLastCalledWith(
+      'purge: permanently removed releases and durable state (service-demo)',
+    );
+
+    operator.purge.mockResolvedValue(
+      makeResult('purge', { outcome: 'already-purged' }),
+    );
+    await command.parseAsync([
+      'node',
+      'service',
+      'purge',
+      '--confirm-data-loss',
+      'service-demo',
+    ]);
+    expect(line).toHaveBeenLastCalledWith(
+      'purge: application data already absent (service-demo)',
     );
   });
 
@@ -883,6 +945,8 @@ describe('packaged systemd user service command', () => {
     ],
     ['start', makeResult('start', { outcome: 'stopped' })],
     ['stop', makeResult('stop', { health: 'starting' })],
+    ['purge', makeResult('purge', { health: 'healthy' })],
+    ['purge', makeResult('purge', { activeArtifactId: 'still-present' })],
     ['update', withoutField(makeResult('update'), 'activeArtifactId')],
     ['update', makeResult('update', { activeArtifactId: null })],
     ['update', makeResult('update', { activeArtifactId: 42 })],
@@ -905,7 +969,9 @@ describe('packaged systemd user service command', () => {
 
     expect(failure).toHaveBeenCalledTimes(1);
     expect(failure.mock.calls[0][0]).toMatchObject({
-      message: expect.stringMatching(/invalid receipt/),
+      message: expect.stringMatching(
+        action === 'purge' ? /purge failed/ : /invalid receipt/,
+      ),
     });
     expect(processRef.exitCode).toBe(1);
   });
@@ -1050,6 +1116,89 @@ describe('packaged systemd user service command', () => {
       message: 'Systemd user service prune failed.',
     });
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('/private');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves only exact retry guidance for interrupted data purge', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        purge: async () => {
+          throw Object.assign(
+            new Error(
+              "purge interrupted at '/private/application'\nafter rename",
+            ),
+            {
+              code: 'systemd-user-service-purge-incomplete',
+              remediation:
+                'Retry service purge with the same --confirm-data-loss application ID.',
+              secretPath: '/private/application',
+            },
+          );
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync([
+      'node',
+      'service',
+      'purge',
+      '--confirm-data-loss',
+      'service-demo',
+      '--json',
+    ]);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'purge',
+      code: 'systemd-user-service-purge-incomplete',
+      message:
+        'Systemd user-service purge was interrupted and is safe to retry.',
+      remediation:
+        'Retry service purge with the same --confirm-data-loss application ID.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('/private');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('passes missing purge confirmation to the safe manager boundary', async () => {
+    const json = jest.fn();
+    const purge = jest.fn(
+      async (
+        /** @type {Record<string, any> | undefined} */ _input = undefined,
+      ) => {
+        throw Object.assign(new Error('embedded app ID is service-demo'), {
+          code: 'systemd-user-service-purge-confirmation-required',
+          remediation:
+            'Repeat the embedded application ID with --confirm-data-loss.',
+        });
+      },
+    );
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({ ...makeOperator(), purge }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'purge', '--json']);
+
+    expect(purge).toHaveBeenCalledWith({ confirmation: undefined });
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'purge',
+      code: 'systemd-user-service-purge-confirmation-required',
+      message:
+        'Systemd user-service purge requires exact data-loss confirmation.',
+      remediation:
+        'Repeat the embedded application ID with --confirm-data-loss.',
+    });
     expect(processRef.exitCode).toBe(1);
   });
 

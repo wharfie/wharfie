@@ -241,12 +241,18 @@ Finally, uninstall through the restored A executable:
 <steady-file-a> wharfie service uninstall --json
 <steady-file-a> wharfie inspect --run-id <run-id> --json
 <steady-file-a> wharfie service prune --json
+<steady-file-a> wharfie service purge \
+  --confirm-data-loss steady-file-demo \
+  --json
 ```
 
 Uninstall removes the systemd wiring but deliberately preserves durable state
 and immutable releases. With only selected and rollback releases present,
-`prune` retains both. Wharfie does not currently expose a purge command; the
-bounded proof obtains full cleanup by deleting its disposable VM.
+`prune` retains both. Purge then requires terminal work and the exact embedded
+app ID before permanently removing this application's releases and durable
+state. It preserves the invoking SEA and sibling applications. Do not run
+another application command concurrently with purge; delete the transferred
+SEA separately when its external handoff should also be removed.
 
 SEA construction may download or build target runtimes and can consume
 substantial temporary disk. The golden-path test does not perform that build
@@ -288,14 +294,19 @@ journey in one disposable Ubuntu VM. The checksummed commit-bound run:
 6. updates to meaningful revision B, rolls back through B to A, and proves the
    reads are byte-for-byte preserved;
 7. uninstalls through A, independently verifies the unit is absent, proves the
-   reads remain, and confirms prune retains both referenced releases; and
-8. deletes the VM and retains only small checksummed JSON receipts.
+   reads remain, confirms prune retains both referenced releases, then purges
+   the exact app root; and
+8. deletes the external SEA handoffs and VM and retains only small checksummed
+   JSON receipts.
 
-The workflow completed before the initiating verifier ended. This run proves
-separate-process rediscovery and persistence of the installed service and its
-retained state; it does not claim that unfinished work survived the caller's
-death. The separate service-substrate proof covers crash and reboot recovery.
-Neither proof establishes replacement by another coordinator machine.
+The older checksummed walkthrough completed its workflow before the initiating
+verifier ended. The current verifier instead requires a still-waiting durable
+timer with at least 30 seconds remaining, exits that process, and requires a
+later process to observe the same timer before completion. A fresh clean-host
+receipt for that stronger assertion remains part of the developer-preview
+milestone. The separate service-substrate proof covers crash and reboot
+recovery. Neither proof establishes replacement by another coordinator
+machine.
 
 ## Classified findings
 

@@ -3958,6 +3958,215 @@ describe('systemd user service manager', () => {
     });
   });
 
+  it('requires exact typed confirmation before purging any app data', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    const installationBefore = await fsp.readFile(
+      harness.layout.installationPath,
+      'utf8',
+    );
+
+    await expect(harness.operator.purge()).rejects.toMatchObject({
+      code: 'systemd-user-service-purge-confirmation-required',
+      remediation:
+        'Repeat the embedded application ID with --confirm-data-loss.',
+    });
+    await expect(
+      harness.operator.purge({ confirmation: 'other-app' }),
+    ).rejects.toMatchObject({
+      code: 'systemd-user-service-purge-confirmation-required',
+    });
+    await expect(
+      fsp.readFile(harness.layout.installationPath, 'utf8'),
+    ).resolves.toBe(installationBefore);
+    await expect(fsp.stat(harness.layout.stateRoot)).resolves.toBeDefined();
+    await expect(fsp.stat(harness.layout.releasesRoot)).resolves.toBeDefined();
+  });
+
+  it('refuses purge until the service is coherently uninstalled', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).rejects.toMatchObject({
+      code: 'systemd-user-service-purge-uninstall-required',
+      remediation: 'Run service uninstall before retrying service purge.',
+    });
+    expect(harness.state.active).toBe(true);
+    await expect(fsp.stat(harness.layout.unitPath)).resolves.toBeDefined();
+    await expect(fsp.stat(harness.layout.serviceRoot)).resolves.toBeDefined();
+  });
+
+  it('refuses purge while durable work remains nonterminal', async () => {
+    let blocked = false;
+    const harness = await createHarness({
+      listRuns: async () => ({
+        items: blocked
+          ? [
+              {
+                runId: 'running-work',
+                appId: APP_ID,
+                revisionId: REVISION_ID,
+                kind: 'workflow',
+                status: 'RUNNING',
+                version: 1,
+                lastSequence: 1,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ]
+          : [],
+      }),
+    });
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    blocked = true;
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).rejects.toMatchObject({
+      code: 'systemd-user-service-purge-not-quiescent',
+      remediation:
+        'Finish or cancel nonterminal durable work before retrying service purge.',
+    });
+    await expect(fsp.stat(harness.layout.serviceRoot)).resolves.toBeDefined();
+    blocked = false;
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).resolves.toMatchObject({
+      action: 'purge',
+      outcome: 'purged',
+    });
+  });
+
+  it('purges one uninstalled app while preserving its SEA, siblings, and symlink targets', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    const siblingRoot = path.join(
+      path.dirname(harness.layout.serviceRoot),
+      'sibling-app',
+    );
+    const siblingState = path.join(siblingRoot, 'state.txt');
+    const externalTarget = path.join(harness.root, 'external-target.txt');
+    await fsp.mkdir(siblingRoot, { mode: 0o700 });
+    await fsp.writeFile(siblingState, 'sibling', { mode: 0o600 });
+    await fsp.writeFile(externalTarget, 'external', { mode: 0o600 });
+    await fsp.symlink(
+      externalTarget,
+      path.join(harness.layout.stateRoot, 'external-link'),
+    );
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      kind: 'wharfie.service.result',
+      action: 'purge',
+      requestStatus: 'fulfilled',
+      appId: APP_ID,
+      outcome: 'purged',
+      unit: harness.layout.unitName,
+      health: 'absent',
+      activeArtifactId: null,
+      activeRevisionId: null,
+      rollbackArtifactId: null,
+      rollbackRevisionId: null,
+    });
+    await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.readFile(harness.artifactPath, 'utf8')).resolves.toBe(
+      'packaged-artifact-v1',
+    );
+    await expect(fsp.readFile(siblingState, 'utf8')).resolves.toBe('sibling');
+    await expect(fsp.readFile(externalTarget, 'utf8')).resolves.toBe(
+      'external',
+    );
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).resolves.toMatchObject({
+      outcome: 'already-purged',
+    });
+  });
+
+  it('refuses a symlinked app-owned state anchor without touching its target', async () => {
+    const harness = await createHarness();
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    const externalState = path.join(harness.root, 'external-state');
+    await fsp.mkdir(externalState, { mode: 0o700 });
+    await fsp.writeFile(path.join(externalState, 'keep.txt'), 'keep', {
+      mode: 0o600,
+    });
+    await fsp.rm(harness.layout.stateRoot, { recursive: true });
+    await fsp.symlink(externalState, harness.layout.stateRoot, 'dir');
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).rejects.toMatchObject({
+      code: 'systemd-user-service-purge-state-conflict',
+    });
+    await expect(
+      fsp.readFile(path.join(externalState, 'keep.txt'), 'utf8'),
+    ).resolves.toBe('keep');
+    expect((await fsp.lstat(harness.layout.stateRoot)).isSymbolicLink()).toBe(
+      true,
+    );
+  });
+
+  it('resumes an authenticated rename-first purge after interruption', async () => {
+    let interruptRemoval = true;
+    const fsOps = /** @type {typeof fsp} */ (
+      Object.assign(Object.create(fsp), {
+        async unlink(/** @type {import('node:fs').PathLike} */ filePath) {
+          const candidate = String(filePath);
+          if (
+            interruptRemoval &&
+            candidate.includes('.wharfie-service-purge-v1.') &&
+            path.basename(candidate) !== '.purging.json'
+          ) {
+            interruptRemoval = false;
+            throw new Error('injected app purge interruption');
+          }
+          return await fsp.unlink(filePath);
+        },
+      })
+    );
+    const harness = await createHarness({ fsOps });
+    await harness.operator.install();
+    await harness.operator.uninstall();
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).rejects.toMatchObject({
+      code: 'systemd-user-service-purge-incomplete',
+      remediation:
+        'Retry service purge with the same --confirm-data-loss application ID.',
+    });
+    const tombstonePath = path.join(
+      path.dirname(harness.layout.serviceRoot),
+      `.wharfie-service-purge-v1.${APP_ID}`,
+    );
+    await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(
+      fsp.readFile(path.join(tombstonePath, '.purging.json'), 'utf8'),
+    ).resolves.toContain('wharfie.systemd-user-service.purge-marker');
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).resolves.toMatchObject({
+      outcome: 'purged',
+    });
+    await expect(fsp.stat(tombstonePath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('preserves installed-uninstall identity after crashing past tombstone publication', async () => {
     const harness = await createHarness();
     await harness.operator.install();

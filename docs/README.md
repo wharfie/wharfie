@@ -48,6 +48,10 @@ finishes interrupted private staging directories and reports
 `recoveredStagingCount`. Uninstall still preserves releases, and this narrow
 collector does not imply broader revision, payload, history, or provider
 garbage collection.
+After coherent uninstall, the separate typed-confirmation `service purge`
+operation permanently removes one exact app's releases and durable state
+through an authenticated retry tombstone. It preserves sibling applications,
+shared roots, and the invoking SEA.
 These activation semantics have focused unit and packaged-manager evidence;
 the earlier disposable-host proof did not exercise update or rollback. A
 source or packaged command can durably submit one
