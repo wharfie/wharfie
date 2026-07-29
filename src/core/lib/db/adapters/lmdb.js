@@ -72,13 +72,23 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
 
   // Disable event-turn batching to reduce the chance of background commit
   // scheduling keeping Jest or a short-lived operator process alive.
-  const env = getLmdbModule().open({
-    path: dbRoot,
-    readOnly,
-    eventTurnBatching: false,
-    commitDelay: 0,
-    // Encoding defaults to msgpack; we store plain JSON-ish objects.
-  });
+  const previousUmask =
+    !readOnly && process.platform !== 'win32' ? process.umask(0o077) : null;
+  let env;
+  try {
+    // LMDB creates data.mdb and lock.mdb synchronously with a fixed 0664
+    // request. Narrow the process umask around only that native open so the
+    // durable files are private even under a group-writable login umask.
+    env = getLmdbModule().open({
+      path: dbRoot,
+      readOnly,
+      eventTurnBatching: false,
+      commitDelay: 0,
+      // Encoding defaults to msgpack; we store plain JSON-ish objects.
+    });
+  } finally {
+    if (previousUmask !== null) process.umask(previousUmask);
+  }
   const shared = {
     env,
     openedReadOnly: readOnly,

@@ -39,6 +39,11 @@ describe('LMDB read-only observer mode', () => {
       ]) {
         expect(statSync(directory).mode & 0o777).toBe(0o700);
       }
+      for (const file of ['data.mdb', 'lock.mdb']) {
+        expect(statSync(join(controlPath, 'lmdb', file)).mode & 0o777).toBe(
+          0o600,
+        );
+      }
     } finally {
       await writer?.close();
     }
