@@ -6,12 +6,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_ROOT="${REPO_ROOT}/llm_artifacts/steady-file-systemd-proof"
 BUILDER_CONFIG="${REPO_ROOT}/test/systemd/lima.yaml"
 TARGET_CONFIG="${REPO_ROOT}/test/systemd/steady-file-preview-target-lima.yaml"
-INSTANCE_BASE="${WHARFIE_STEADY_FILE_PREVIEW_INSTANCE_BASE:-wharfie-steady-file-preview-$$}"
-BUILDER_INSTANCE="${INSTANCE_BASE}-builder"
-TARGET_INSTANCE="${INSTANCE_BASE}-target"
+INSTANCE_BASE="${WHARFIE_STEADY_FILE_PREVIEW_INSTANCE_BASE:-wfp-$$}"
+BUILDER_INSTANCE="${INSTANCE_BASE}-b"
+TARGET_INSTANCE="${INSTANCE_BASE}-t"
 MINIMUM_FREE_KIB=$((15 * 1024 * 1024))
 TEMP_PARENT="${TMPDIR:-/tmp}"
-TEMP_ROOT="$(mktemp -d "${TEMP_PARENT%/}/wharfie-steady-file-preview.XXXXXX")"
+TEMP_ROOT="$(mktemp -d "${TEMP_PARENT%/}/wfp.XXXXXX")"
 HOST_HOME="${TEMP_ROOT}/home"
 LIMA_HOME="${TEMP_ROOT}/lima"
 ARCHIVE_PATH="${TEMP_ROOT}/repo.tar"
@@ -139,6 +139,18 @@ if [[ "${BUILDER_INSTANCE}" == "${TARGET_INSTANCE}" ]]; then
   echo "Builder and target Lima instances must be distinct." >&2
   exit 1
 fi
+for instance in "${BUILDER_INSTANCE}" "${TARGET_INSTANCE}"; do
+  socket_probe="${LIMA_HOME}/${instance}/ssh.sock.1234567890123456"
+  socket_bytes="$(
+    /usr/bin/printf '%s' "${socket_probe}" |
+      /usr/bin/wc -c |
+      /usr/bin/tr -d ' '
+  )"
+  if [[ ! "${socket_bytes}" =~ ^[0-9]+$ ]] || ((socket_bytes >= 104)); then
+    echo "The isolated Lima socket path for ${instance} must be shorter than 104 bytes." >&2
+    exit 1
+  fi
+done
 
 mkdir -p "${HOST_HOME}" "${LIMA_HOME}" "${HOST_HANDOFF_ROOT}/source" \
   "${HOST_HANDOFF_ROOT}/target"

@@ -47,15 +47,19 @@ describe('split steady-file preview Lima driver', () => {
     const script = await readDriver();
 
     expect(script).toContain(
-      'TEMP_ROOT="$(mktemp -d "${TEMP_PARENT%/}/wharfie-steady-file-preview.XXXXXX")"',
+      'TEMP_ROOT="$(mktemp -d "${TEMP_PARENT%/}/wfp.XXXXXX")"',
     );
     expect(script).toContain('HOST_HOME="${TEMP_ROOT}/home"');
     expect(script).toContain('LIMA_HOME="${TEMP_ROOT}/lima"');
     expect(script).toMatch(
       /lima\(\) \{\n[ ]{2}\/usr\/bin\/env \\\n[ ]{4}"HOME=\$\{HOST_HOME\}" \\\n[ ]{4}"LIMA_HOME=\$\{LIMA_HOME\}"/,
     );
-    expect(script).toContain('BUILDER_INSTANCE="${INSTANCE_BASE}-builder"');
-    expect(script).toContain('TARGET_INSTANCE="${INSTANCE_BASE}-target"');
+    expect(script).toContain('BUILDER_INSTANCE="${INSTANCE_BASE}-b"');
+    expect(script).toContain('TARGET_INSTANCE="${INSTANCE_BASE}-t"');
+    expect(script).toContain(
+      'socket_probe="${LIMA_HOME}/${instance}/ssh.sock.1234567890123456"',
+    );
+    expect(script).toContain('((socket_bytes >= 104))');
     expect(script).toContain(
       'BUILDER_CONFIG="${REPO_ROOT}/test/systemd/lima.yaml"',
     );
