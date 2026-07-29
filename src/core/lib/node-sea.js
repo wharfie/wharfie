@@ -55,6 +55,25 @@ export function getAsset(name, encoding) {
 }
 
 /**
+ * Read a SEA asset without copying its bytes.
+ *
+ * Node owns the returned ArrayBuffer for the lifetime of the executable. Callers
+ * must therefore treat it as immutable and keep the SEA process alive while a
+ * derived view or stream is in use.
+ * @param {string} name - SEA asset name.
+ * @returns {ArrayBuffer} - Node-owned asset bytes.
+ */
+export function getRawAsset(name) {
+  const resolvedNodeSeaModule = resolveNodeSeaModule();
+
+  if (typeof resolvedNodeSeaModule?.getRawAsset === 'function') {
+    return resolvedNodeSeaModule.getRawAsset(name);
+  }
+
+  throw new Error('node:sea raw asset access is unavailable in this runtime');
+}
+
+/**
  * @returns {boolean} - Whether the current runtime is a SEA binary.
  */
 export function isSea() {
@@ -67,5 +86,6 @@ export function isSea() {
 
 export default {
   getAsset,
+  getRawAsset,
   isSea,
 };
