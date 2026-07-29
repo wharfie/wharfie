@@ -15,16 +15,8 @@ metadata from `runtime.caller.metadata`, and returns a JSON result.
 
 ## Included applications
 
-### `apps/steady-file/wharfie.app.js`
-
-The product golden path. Its normal CLI checks whether one regular file has
-identical contents at two observations 250 milliseconds apart. Its durable
-workflow captures the same fingerprint, waits through a framework-owned timer,
-then compares fresh bytes and retains the logical matching/different result.
-Its `cli.durable` adapter maps the ordinary file argument into workflow input
-without performing the check.
-See the
-[golden-path guide](../../docs/guides/golden-path.md).
+The product golden path has moved out of scratch space to the supported
+[`examples/steady-file`](../../examples/steady-file) starter.
 
 ### `apps/hello-world/wharfie.app.js`
 
@@ -43,17 +35,17 @@ dependency; use `hello-world` for the normal quick path.
 From the repository root:
 
 ```bash
-node ./scratch/examples/apps/steady-file/local.js /absolute/path/to/artifact
+node ./examples/steady-file/local.js /absolute/path/to/artifact
 
-node ./bin/wharfie app manifest ./scratch/examples/apps/steady-file
+node ./bin/wharfie app manifest ./examples/steady-file
 
 node ./bin/wharfie ops start \
-  --dir ./scratch/examples/apps/steady-file \
+  --dir ./examples/steady-file \
   --json \
   -- /absolute/path/to/artifact
 
 node ./bin/wharfie ops worker \
-  --dir ./scratch/examples/apps/steady-file
+  --dir ./examples/steady-file
 
 node ./bin/wharfie app manifest ./scratch/examples/apps/hello-world
 

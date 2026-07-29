@@ -56,7 +56,9 @@
     "src/deployment-profile.js",
     "src/deployment-profile.d.ts",
     "src/core/**",
-    "src/cli/**"
+    "src/cli/**",
+    "examples/README.md",
+    "examples/steady-file/"
   ],
   "scripts": {
     "typecheck": "npm run typecheck:source && npm run typecheck:app && npm run typecheck:test && npm run typecheck:sea-verifier",

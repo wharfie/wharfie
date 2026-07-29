@@ -39,10 +39,12 @@ const SOURCE_FILES = Object.freeze([
   'cli.js',
   'file-stability.js',
   'local.js',
+  'package.json',
+  'README.md',
   'wharfie.app.js',
 ]);
-const TARGET_WINDOW_FROM = 'export const STABILITY_WINDOW_MS = 250;';
-const TARGET_WINDOW_TO = 'export const STABILITY_WINDOW_MS = 500;';
+const TARGET_WINDOW_FROM = 'export const DURABLE_STABILITY_WINDOW_MS = 60_000;';
+const TARGET_WINDOW_TO = 'export const DURABLE_STABILITY_WINDOW_MS = 120_000;';
 
 /**
  * @typedef CommandResult
@@ -485,6 +487,40 @@ function assertHistory(page, runId, revisionId, status) {
 }
 
 /**
+ * Require the exact nonterminal durable-window boundary.
+ * @param {Record<string, any>} view - Redacted run inspection.
+ * @param {number} observedAt - Proof-process observation time.
+ * @param {number} minimumRemainingMs - Required remaining timer margin.
+ * @returns {Readonly<{observedAt: number, timerId: string, scheduledAt: number, dueAt: number, remainingMs: number, view: Record<string, any>}>} - Stable unfinished-work evidence.
+ */
+function assertUnfinishedDurableWindow(view, observedAt, minimumRemainingMs) {
+  assert.equal(view.run?.status, 'RUNNING');
+  assert.equal(view.workflowCursor?.disposition, 'TIMER_WAITING');
+  assert.equal(view.workflowCursor?.stepId, 'stability-window');
+  assert.equal(view.workflowCursor?.stepIndex, 1);
+  assert.equal(view.timers?.length, 1);
+  const timer = view.timers[0];
+  assert.equal(timer.status, 'WAITING');
+  assert.equal(timer.stepId, 'stability-window');
+  assert.equal(timer.stepIndex, 1);
+  assert.equal(view.workflowCursor.timerId, timer.timerId);
+  assert.equal(timer.dueAt - timer.scheduledAt, 60_000);
+  const remainingMs = timer.dueAt - observedAt;
+  assert.ok(
+    remainingMs >= minimumRemainingMs,
+    `steady-file durable timer has only ${remainingMs} ms remaining`,
+  );
+  return Object.freeze({
+    observedAt,
+    timerId: timer.timerId,
+    scheduledAt: timer.scheduledAt,
+    dueAt: timer.dueAt,
+    remainingMs,
+    view,
+  });
+}
+
+/**
  * @param {Record<string, any>} output - Logical output receipt.
  * @param {string} runId - Expected run.
  * @param {string} revisionId - Expected revision.
@@ -532,19 +568,11 @@ function createArtifactEvidence(packaged) {
 }
 
 /**
- * Package the exact golden app and one proof-only 500 ms evolution from the
+ * Package the exact golden app and one proof-only two-minute evolution from the
  * installed repository tarball.
- * @param {string} repoRoot - Extracted committed repository.
- * @returns {{source: PackagedArtifact, target: PackagedArtifact, package: Readonly<Record<string, any>>, sourceTree: Readonly<Record<string, string>>, targetMutation: Readonly<Record<string, string>>}} - Package evidence.
+ * @returns {{source: PackagedArtifact, target: PackagedArtifact, package: Readonly<Record<string, any>>, ordinarySource: Readonly<Record<string, any>>, sourceTree: Readonly<Record<string, string>>, targetMutation: Readonly<Record<string, string>>}} - Package evidence.
  */
-function packageSteadyFileArtifacts(repoRoot) {
-  const authoredRoot = path.join(
-    repoRoot,
-    'scratch',
-    'examples',
-    'apps',
-    'steady-file',
-  );
+function packageSteadyFileArtifacts() {
   const consumerRoot = path.join(PROOF_ROOT, 'package-consumer');
   const sourceRoot = path.join(consumerRoot, 'app-source');
   const targetRoot = path.join(consumerRoot, 'app-target');
@@ -559,37 +587,9 @@ function packageSteadyFileArtifacts(repoRoot) {
       type: 'module',
     })}\n`,
   );
-  cpSync(authoredRoot, sourceRoot, { recursive: true });
-  cpSync(authoredRoot, targetRoot, { recursive: true });
 
   /** @type {Record<string, string>} */
   const sourceTree = {};
-  for (const relativePath of SOURCE_FILES) {
-    const authoredPath = path.join(authoredRoot, relativePath);
-    const copiedPath = path.join(sourceRoot, relativePath);
-    assert.equal(sha256File(copiedPath), sha256File(authoredPath));
-    sourceTree[relativePath] = sha256File(authoredPath);
-  }
-
-  const mutationPath = path.join(targetRoot, 'file-stability.js');
-  const beforeMutation = readFileSync(mutationPath, 'utf8');
-  assert.equal(
-    beforeMutation.split(TARGET_WINDOW_FROM).length,
-    2,
-    'steady-file window must occur exactly once',
-  );
-  const afterMutation = beforeMutation.replace(
-    TARGET_WINDOW_FROM,
-    TARGET_WINDOW_TO,
-  );
-  writeFileSync(mutationPath, afterMutation);
-  const targetMutation = Object.freeze({
-    path: 'file-stability.js',
-    from: TARGET_WINDOW_FROM,
-    to: TARGET_WINDOW_TO,
-    beforeSha256: createHash('sha256').update(beforeMutation).digest('hex'),
-    afterSha256: createHash('sha256').update(afterMutation).digest('hex'),
-  });
 
   const packaged = createPackageTarball();
   /** @type {PackagedArtifact | undefined} */
@@ -597,6 +597,8 @@ function packageSteadyFileArtifacts(repoRoot) {
   /** @type {PackagedArtifact | undefined} */
   let evolved;
   let packageEvidence;
+  let ordinarySource;
+  let targetMutation;
 
   /**
    * @param {string} fixtureRoot - App directory.
@@ -675,20 +677,63 @@ function packageSteadyFileArtifacts(repoRoot) {
         timeoutMs: 600_000,
       },
     );
-    const installedMetadata = readJson(
-      path.join(
-        consumerRoot,
-        'node_modules',
-        '@wharfie',
-        'wharfie',
-        'package.json',
-      ),
+    const installedPackageRoot = path.join(
+      consumerRoot,
+      'node_modules',
+      '@wharfie',
+      'wharfie',
     );
+    const installedMetadata = readJson(
+      path.join(installedPackageRoot, 'package.json'),
+    );
+    const authoredRoot = path.join(
+      installedPackageRoot,
+      'examples',
+      'steady-file',
+    );
+    cpSync(authoredRoot, sourceRoot, { recursive: true });
+    cpSync(authoredRoot, targetRoot, { recursive: true });
+    for (const relativePath of SOURCE_FILES) {
+      const authoredPath = path.join(authoredRoot, relativePath);
+      const copiedPath = path.join(sourceRoot, relativePath);
+      assert.equal(sha256File(copiedPath), sha256File(authoredPath));
+      sourceTree[relativePath] = sha256File(authoredPath);
+    }
+    ordinarySource = parseCompleteJson(
+      run(process.execPath, [path.join(sourceRoot, 'local.js'), INPUT_PATH], {
+        cwd: consumerRoot,
+        env: process.env,
+      }),
+      'installed starter ordinary CLI',
+    );
+    assertStableDecision(ordinarySource);
+
+    const mutationPath = path.join(targetRoot, 'file-stability.js');
+    const beforeMutation = readFileSync(mutationPath, 'utf8');
+    assert.equal(
+      beforeMutation.split(TARGET_WINDOW_FROM).length,
+      2,
+      'steady-file window must occur exactly once',
+    );
+    const afterMutation = beforeMutation.replace(
+      TARGET_WINDOW_FROM,
+      TARGET_WINDOW_TO,
+    );
+    writeFileSync(mutationPath, afterMutation);
+    targetMutation = Object.freeze({
+      path: 'file-stability.js',
+      from: TARGET_WINDOW_FROM,
+      to: TARGET_WINDOW_TO,
+      beforeSha256: createHash('sha256').update(beforeMutation).digest('hex'),
+      afterSha256: createHash('sha256').update(afterMutation).digest('hex'),
+    });
+
     packageEvidence = Object.freeze({
       name: installedMetadata.name,
       version: installedMetadata.version,
       tarballSha256: sha256File(packaged.tarballPath),
       packedFileCount: packaged.manifest.files.length,
+      installedStarter: 'examples/steady-file',
     });
     source = build(sourceRoot, 'source');
     evolved = build(targetRoot, 'target');
@@ -699,12 +744,15 @@ function packageSteadyFileArtifacts(repoRoot) {
   assert.ok(source);
   assert.ok(evolved);
   assert.ok(packageEvidence);
+  assert.ok(ordinarySource);
+  assert.ok(targetMutation);
   assert.notEqual(source.revisionId, evolved.revisionId);
   assert.notEqual(source.artifact.artifactId, evolved.artifact.artifactId);
   return {
     source,
     target: evolved,
     package: packageEvidence,
+    ordinarySource,
     sourceTree: Object.freeze(sourceTree),
     targetMutation,
   };
@@ -734,32 +782,16 @@ function assertProofEnvironment() {
  */
 async function prepare(repoRoot) {
   assertProofEnvironment();
+  assert.equal(
+    readJson(path.join(repoRoot, 'package.json')).name,
+    '@wharfie/wharfie',
+  );
   process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
     .filter(Boolean)
     .join(path.delimiter);
   rmSync(PROOF_ROOT, { recursive: true, force: true });
   mkdirSync(PROOF_ROOT, { recursive: true, mode: 0o700 });
   writeFileSync(INPUT_PATH, INPUT_BYTES, { mode: 0o600 });
-
-  const sourceLocal = parseCompleteJson(
-    run(
-      process.execPath,
-      [
-        path.join(
-          repoRoot,
-          'scratch',
-          'examples',
-          'apps',
-          'steady-file',
-          'local.js',
-        ),
-        INPUT_PATH,
-      ],
-      { cwd: repoRoot, env: process.env },
-    ),
-    'source steady-file CLI',
-  );
-  assertStableDecision(sourceLocal);
 
   const nodeProbe = run('/usr/bin/env', ['node', '--version'], {
     env: packagedEnvironment(),
@@ -771,7 +803,8 @@ async function prepare(repoRoot) {
     'packaged PATH unexpectedly exposes Node',
   );
 
-  const packaged = packageSteadyFileArtifacts(repoRoot);
+  const packaged = packageSteadyFileArtifacts();
+  const sourceLocal = packaged.ordinarySource;
   const source = createArtifactEvidence(packaged.source);
   const target = createArtifactEvidence(packaged.target);
   const sourcePackaged = parseCompleteJson(
@@ -851,6 +884,24 @@ async function prepare(repoRoot) {
   assert.equal(install.activeRevisionId, source.revisionId);
   const installedStatus = readServiceStatus(packaged.source.artifactPath);
   const installed = assertHealthy(installedStatus, source, null);
+  const unfinishedView = await waitFor(
+    () => inspectRun(packaged.source.artifactPath, started.runId),
+    (view) =>
+      view.run?.status === 'RUNNING' &&
+      view.workflowCursor?.disposition === 'TIMER_WAITING' &&
+      view.workflowCursor?.stepId === 'stability-window' &&
+      view.timers?.length === 1 &&
+      view.timers[0].status === 'WAITING' &&
+      view.timers[0].dueAt - Date.now() >= 30_000,
+    'unfinished steady-file durable window',
+  );
+  const unfinished = assertUnfinishedDurableWindow(
+    unfinishedView,
+    Date.now(),
+    30_000,
+  );
+  const unfinishedHistory = listRuns(packaged.source.artifactPath);
+  assertHistory(unfinishedHistory, started.runId, source.revisionId, 'RUNNING');
 
   const receipt = {
     schemaVersion: 1,
@@ -884,6 +935,8 @@ async function prepare(repoRoot) {
     start: started,
     pending,
     pendingHistory,
+    unfinished,
+    unfinishedHistory,
     service: {
       beforeStart: absentBeforeStart,
       afterStart: absentAfterStart,
@@ -996,6 +1049,24 @@ async function verify() {
   const installed = assertHealthy(installedStatus, source, null);
   assert.equal(installed.processId, prepared.service.installed.processId);
   assert.equal(installed.generation, prepared.service.installed.generation);
+  const unfinishedAfterPrepareExit = assertUnfinishedDurableWindow(
+    inspectRun(source.artifactPath, runId),
+    Date.now(),
+    1,
+  );
+  assert.equal(unfinishedAfterPrepareExit.timerId, prepared.unfinished.timerId);
+  assert.equal(
+    unfinishedAfterPrepareExit.scheduledAt,
+    prepared.unfinished.scheduledAt,
+  );
+  assert.equal(unfinishedAfterPrepareExit.dueAt, prepared.unfinished.dueAt);
+  const unfinishedHistoryAfterPrepareExit = listRuns(source.artifactPath);
+  assertHistory(
+    unfinishedHistoryAfterPrepareExit,
+    runId,
+    source.revisionId,
+    'RUNNING',
+  );
 
   const completed = await waitFor(
     () => inspectRun(source.artifactPath, runId),
@@ -1006,9 +1077,29 @@ async function verify() {
   );
   assert.equal(completed.timers?.length, 1);
   assert.equal(completed.timers[0].status, 'FIRED');
+  assert.equal(completed.timers[0].timerId, unfinishedAfterPrepareExit.timerId);
   assert.equal(
     completed.timers[0].dueAt - completed.timers[0].scheduledAt,
-    250,
+    60_000,
+  );
+  assert.ok(
+    completed.timers[0].firedAt >= unfinishedAfterPrepareExit.observedAt,
+  );
+  const comparisonInvocation = completed.invocations?.find(
+    (invocation) => invocation.workflow?.stepId === 'comparison',
+  );
+  assert.ok(comparisonInvocation, 'comparison invocation is missing');
+  const comparisonAttempt = completed.attempts?.find(
+    (attempt) =>
+      attempt.invocationId === comparisonInvocation.invocationId &&
+      attempt.status === 'COMPLETED',
+  );
+  assert.ok(comparisonAttempt, 'comparison attempt is missing');
+  assert.ok(
+    comparisonAttempt.claimedAt >= unfinishedAfterPrepareExit.observedAt,
+  );
+  assert.ok(
+    comparisonAttempt.startedAt >= unfinishedAfterPrepareExit.observedAt,
   );
   const history = listRuns(source.artifactPath);
   const historyItem = assertHistory(
@@ -1092,6 +1183,8 @@ async function verify() {
       prepareProcessId: prepared.verifierProcessId,
       verifyProcessId: process.pid,
       distinct: true,
+      unfinishedAtPrepare: prepared.unfinished,
+      unfinishedObservedAfterPrepareExit: unfinishedAfterPrepareExit,
     },
     input: prepared.input,
     package: prepared.package,
@@ -1123,6 +1216,8 @@ async function verify() {
     },
     run: {
       runId,
+      unfinishedHistoryAtPrepare: prepared.unfinishedHistory,
+      unfinishedHistoryAfterPrepareExit,
       completed,
       history,
       historyItem,

@@ -16,6 +16,16 @@ import { WHARFIE_VERSION } from '../src/core/lib/version.js';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 export const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const REQUIRED_PREVIEW_FILES = Object.freeze([
+  'examples/README.md',
+  'examples/steady-file/README.md',
+  'examples/steady-file/activities.js',
+  'examples/steady-file/cli.js',
+  'examples/steady-file/file-stability.js',
+  'examples/steady-file/local.js',
+  'examples/steady-file/package.json',
+  'examples/steady-file/wharfie.app.js',
+]);
 
 /**
  * @param {string} filePath - JSON file to read.
@@ -103,6 +113,7 @@ function requiredRuntimeFiles() {
     'src/deployment-profile.d.ts',
     ...coreFiles,
     ...cliFiles,
+    ...REQUIRED_PREVIEW_FILES,
   ];
 }
 
@@ -131,6 +142,12 @@ export function assertPackageContents(manifest) {
       ),
       `npm tarball includes repository-only content: ${packedPath}`,
     );
+    if (packedPath.startsWith('examples/')) {
+      assert.ok(
+        REQUIRED_PREVIEW_FILES.includes(packedPath),
+        `npm tarball includes an unsupported example file: ${packedPath}`,
+      );
+    }
   }
 
   const packageMetadata = readJson(path.join(REPO_ROOT, 'package.json'));
@@ -140,6 +157,11 @@ export function assertPackageContents(manifest) {
     'runtime version must come from package.json',
   );
   assert.equal(packageMetadata.license, 'Apache-2.0');
+  assert.equal(
+    packageMetadata.private,
+    true,
+    'the developer preview is a tarball handoff, not a registry release',
+  );
   assert.equal(packageMetadata.exports?.['./app']?.types, './src/app.d.ts');
   assert.equal(packageMetadata.exports?.['./app']?.import, './src/app.js');
   assert.deepEqual(packageMetadata.exports?.['./deployment-profile'], {
@@ -165,6 +187,15 @@ export function assertPackageContents(manifest) {
     false,
     'npm is a contributor tool pin, not a runtime engine requirement',
   );
+  const starterMetadata = readJson(
+    path.join(REPO_ROOT, 'examples', 'steady-file', 'package.json'),
+  );
+  assert.deepEqual(starterMetadata, {
+    name: 'wharfie-steady-file-example',
+    version: '0.0.0',
+    private: true,
+    type: 'module',
+  });
 
   for (const relativePath of [
     'apps/wharfie-v1',

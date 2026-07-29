@@ -380,6 +380,50 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('"$artifact_path" wharfie service converge');
   });
 
+  it('keeps the single-host developer preview on the packaged command surface', async () => {
+    const document = await fsp.readFile(
+      path.join(repoRoot, 'docs/guides/developer-preview.md'),
+      'utf8',
+    );
+    const normalized = document
+      .replace(/\\\s*\n\s*/g, ' ')
+      .replace(/\s+/g, ' ');
+
+    expect(normalized).toContain(
+      'npm pack --ignore-scripts --pack-destination /absolute/path/to/wharfie-handoff',
+    );
+    expect(normalized).toContain(
+      'cp -R node_modules/@wharfie/wharfie/examples/steady-file ./steady-file',
+    );
+    expect(normalized).toContain(
+      './node_modules/.bin/wharfie app manifest ./steady-file',
+    );
+    expect(normalized).toContain(
+      './node_modules/.bin/wharfie app package ./steady-file --target node24.13.1-linux-x64-glibc --output-dir ./dist --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file> wharfie start --json -- /absolute/path/to/artifact.tar',
+    );
+    expect(normalized).toContain(
+      '<steady-file> wharfie service install --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file> wharfie list --limit 10 --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file> wharfie inspect --run-id <run-id> --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file> wharfie output --run-id <run-id> --confirm-sensitive-output --json',
+    );
+    expect(normalized).toContain(
+      '<steady-file> wharfie service uninstall --json',
+    );
+    await expect(
+      fsp.access(path.join(repoRoot, 'examples', 'steady-file', 'README.md')),
+    ).resolves.toBeUndefined();
+  });
+
   it('keeps every steady-file golden-path invocation on the mounted command surface', async () => {
     const document = await fsp.readFile(
       path.join(repoRoot, 'docs/guides/golden-path.md'),
@@ -390,19 +434,19 @@ describe('docs command surface', () => {
       .replace(/\s+/g, ' ');
 
     expect(normalized).toContain(
-      'node ./scratch/examples/apps/steady-file/local.js /absolute/path/to/artifact.tar',
+      'node ./examples/steady-file/local.js /absolute/path/to/artifact.tar',
     );
     expect(normalized).toContain(
-      'node ./bin/wharfie app manifest ./scratch/examples/apps/steady-file',
+      'node ./bin/wharfie app manifest ./examples/steady-file',
     );
     expect(normalized).toContain(
-      'node ./bin/wharfie ops start --dir ./scratch/examples/apps/steady-file --json -- /absolute/path/to/artifact.tar',
+      'node ./bin/wharfie ops start --dir ./examples/steady-file --json -- /absolute/path/to/artifact.tar',
     );
     expect(normalized).toContain(
-      `node ./bin/wharfie ops start --dir ./scratch/examples/apps/steady-file --workflow verify-stable --input '{"path":"/absolute/path/to/artifact.tar"}' --idempotency-key artifact-build-42 --json`,
+      `node ./bin/wharfie ops start --dir ./examples/steady-file --workflow verify-stable --input '{"path":"/absolute/path/to/artifact.tar"}' --idempotency-key artifact-build-42 --json`,
     );
     expect(normalized).toContain(
-      'node ./bin/wharfie ops worker --dir ./scratch/examples/apps/steady-file',
+      'node ./bin/wharfie ops worker --dir ./examples/steady-file',
     );
     expect(normalized).toContain(
       'node ./bin/wharfie ops inspect --run-id <run-id> --json',
@@ -411,7 +455,7 @@ describe('docs command surface', () => {
       'node ./bin/wharfie ops output --app-id steady-file-demo --run-id <run-id> --confirm-sensitive-output --json',
     );
     expect(normalized).toContain(
-      'node ./bin/wharfie app package ./scratch/examples/apps/steady-file --target node24.13.1-darwin-arm64 --json',
+      'node ./bin/wharfie app package ./examples/steady-file --target node24.13.1-darwin-arm64 --json',
     );
     expect(document).toContain('--target node24.13.1-linux-x64-glibc');
     expect(document).toContain('--target node24.13.1-linux-arm64-glibc');
@@ -454,16 +498,7 @@ describe('docs command surface', () => {
     );
 
     await expect(
-      fsp.access(
-        path.join(
-          repoRoot,
-          'scratch',
-          'examples',
-          'apps',
-          'steady-file',
-          'local.js',
-        ),
-      ),
+      fsp.access(path.join(repoRoot, 'examples', 'steady-file', 'local.js')),
     ).resolves.toBeUndefined();
     expect(OPERATOR_NAMESPACE).toBe('wharfie');
     expect(

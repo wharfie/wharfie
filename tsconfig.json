@@ -20,6 +20,7 @@
     "src/deployment-profile.d.ts",
     "src/core/**/*.js",
     "src/cli/**/*.js",
+    "examples/**/*.js",
     "scripts/aws-host-retained-storage-host-preflight.js",
     "scripts/aws-host-retained-storage-host-preflight-sea-artifact-record.js",
     "scripts/aws-host-retained-storage-host-preflight-sea-build.js",

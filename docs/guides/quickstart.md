@@ -1,8 +1,8 @@
 # ⚡️ Quickstart
 
 Wharfie is in an experimental project reset. The commands below describe the
-working local v3 surface and the newly mounted experimental deployment
-lifecycle, not a production-ready service.
+working schema-version 4 local surface and experimental deployment lifecycle,
+not a production-ready service.
 
 ## Run from source
 
@@ -18,21 +18,22 @@ Use the exact Node version in `package.json#engines` and the npm version in
 the project reset. The examples below use `wharfie` as shorthand for
 `node ./bin/wharfie` from the repository root.
 
-For the smallest product walkthrough, start with the
-[steady-file golden path](./golden-path.md). It runs as an ordinary CLI, then
-uses the same logic in a durable activity/timer/activity workflow and exposes
-the retained comparison through confirmed `output`. Its hermetic proof stops
-before the native source resident and packaged SEA execution. A separate
-[checksummed Darwin observation](../../llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
-executes both; clean-host persistent-service proof on a supported Linux/systemd
-host remains open.
+For the shortest supported product walkthrough, start with the
+[single-host developer preview](./developer-preview.md). Its installed starter
+runs as an ordinary CLI, packages as an SEA, and uses the same fingerprinting
+logic in a durable activity/timer/activity workflow. The longer
+[golden-path guide](./golden-path.md) records the current command and evidence
+boundaries. A clean Ubuntu walkthrough already proves the same-host packaged
+service lifecycle; the active preview milestone is tightening that proof
+across separate builder and target boundaries with unfinished work at caller
+exit.
 
 ## Create an app
 
 Create a `wharfie.app.js` beside your TypeScript or JavaScript sources. The
 manifest identifies the developer-owned CLI, named activities, workflows,
 schedules, and package targets. Its default export must be a plain object using
-the exact v3 schema; unknown or malformed fields are errors. Wharfie does not
+the exact v4 schema; unknown or malformed fields are errors. Wharfie does not
 require a generated project tree. See [Application
 Structure](./application-structure.md) for a minimal layout. The
 `@wharfie/wharfie/app` subpath ships TypeScript declarations for the manifest

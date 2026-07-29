@@ -13,9 +13,11 @@ The project is being reset around that goal. Wharfie v1's Athena and table
 framework is no longer part of the product, and breaking changes are expected.
 
 The shortest concrete walkthrough is the
-[steady-file golden path](./guides/golden-path.md): one useful local CLI, the
-same logic in a durable activity/timer/activity workflow, a control-store
-reopen, and verified retained output.
+[single-host developer preview](./guides/developer-preview.md): install a
+verified package tarball in a clean builder workspace, copy the supported
+starter, package it as an SEA, and promote that artifact to a Linux service.
+The longer [steady-file golden path](./guides/golden-path.md) covers the full
+source and operator surface.
 
 ## The intended path
 

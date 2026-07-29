@@ -1,8 +1,6 @@
-import { defineApp } from '@wharfie/wharfie/app';
+import { DURABLE_STABILITY_WINDOW_MS } from './file-stability.js';
 
-import { STABILITY_WINDOW_MS } from './file-stability.js';
-
-export default defineApp({
+export default {
   schemaVersion: 4,
   app: { id: 'steady-file-demo' },
   cli: {
@@ -63,7 +61,7 @@ export default defineApp({
         {
           id: 'stability-window',
           kind: 'timer',
-          delayMs: STABILITY_WINDOW_MS,
+          delayMs: DURABLE_STABILITY_WINDOW_MS,
         },
         {
           id: 'comparison',
@@ -74,4 +72,4 @@ export default defineApp({
       ],
     },
   },
-});
+};

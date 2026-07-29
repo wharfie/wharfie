@@ -29,13 +29,7 @@ import {
 const repoRoot = path.resolve(
   fileURLToPath(new URL('../../..', import.meta.url)),
 );
-const authoredAppDir = path.join(
-  repoRoot,
-  'scratch',
-  'examples',
-  'apps',
-  'steady-file',
-);
+const authoredAppDir = path.join(repoRoot, 'examples', 'steady-file');
 const APP_ID = 'steady-file-demo';
 const WORKFLOW_ID = 'verify-stable';
 const TABLE_NAME = 'steady-file-golden-path';
@@ -488,6 +482,7 @@ describe('steady-file golden path', () => {
         ],
       });
       const timer = waiting.timers[0];
+      expect(timer.dueAt - timer.scheduledAt).toBe(60_000);
       observedAt = timer.dueAt;
       const fired = await fireWorkflowLedgerTimer({
         ledger: reopenedContext.ledger,

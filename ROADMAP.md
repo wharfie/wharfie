@@ -226,43 +226,55 @@ there, inspect and update it through the executable, and destroy its owned
 substrate without unexplained residue. The proof begins in a clean account and
 ends with independently checked receipts.
 
-## Immediate slice status
+## Immediate milestone: single-host developer preview
 
-Do not add another numbered roadmap tranche. The portable golden path and its
-single-machine evidence slice are complete:
+**Status:** in progress
 
-1. `steady-file` compares two file observations for a useful local shell
-   decision;
-2. its durable workflow exposes a retained result after a delayed continuation;
-3. its hermetic proof closes and reopens portable control storage at the timer
-   boundary;
-4. the exact source and packaged operator sequences completed through native
-   LMDB and a relocated SEA in the separate checksummed Darwin observation;
-5. schema v4 now maps its ordinary file argument through a pure declared
-   adapter, selects the durable workflow, and generates a unique start identity
-   by default;
-6. a checksummed disposable Ubuntu run now proves deliberate replacement,
-   forced reboot, automatic pre-login startup, durable continuation, update,
-   rollback, failed-target restoration, uninstall, prune, and cleanup; and
-7. a separate checksummed Ubuntu arm64 run drives the literal golden
-   application through packaged default start, install, later-process
-   rediscovery, a meaningful A-to-B update, B-to-A rollback, retained reads,
-   uninstall, prune, and VM cleanup.
+This milestone productizes the already proved single-machine runtime. It does
+not add another orchestration abstraction. An unfamiliar developer should be
+able to start from a supported example, install a verified Wharfie package
+tarball on a builder machine, produce one SEA, move only that application
+artifact to a clean Linux host, and use the artifact itself to carry unfinished
+work beyond the initiating shell.
 
-The first bounded Outcome 2 kernel slice is now complete:
-[ADR 0033](docs/architecture/decisions/0033-explicit-coordinator-epoch-authority.md)
-records one per-application authority row, monotonic epoch fencing, deliberate
-confirmed takeover, and diagnostic-only heartbeats. Its
-[checkpoint](llm/checkpoints/2026-07-28-explicit-coordinator-epoch-authority.md)
-records the implementation boundary.
+### Exit evidence
 
-The immediate next slice is runtime adoption: bind one resident coordinator to
-a fresh authority session, require that token at authoritative writer
-construction, and extend the fence through same-table schedule control. After
-that, automatic recovery requires a provider-certified semantic lease with
-store-authoritative time and an atomic expiry predicate; generic database
-transactions plus caller timestamps are not enough. Do not broaden the cloud
-layer or add more single-host framework surface first.
+One checksummed acceptance run must prove all of the following:
+
+1. the Wharfie npm tarball contains a supported starter application and is
+   installed into a clean builder workspace without using a repository
+   checkout as runtime authority;
+2. the starter runs as an ordinary CLI and packages as one SEA on the builder;
+3. only the packaged application handoff is copied to a separate clean Linux
+   target where its command and installed service do not depend on Node;
+4. the packaged application admits useful durable work, installs its systemd
+   user service, and the initiating process exits while that work is still
+   nonterminal;
+5. the service finishes eligible work, and a later process rediscovers the run
+   and reads its verified logical output;
+6. a meaningful second revision updates the service, rollback restores the
+   first revision, and retained reads survive both;
+7. uninstall plus an explicit documented cleanup path removes all
+   preview-owned service state and immutable artifacts; and
+8. the proof removes its builder, target, caches, package tarballs, and SEA
+   build output while retaining only small checksummed receipts.
+
+### Work
+
+1. Promote `steady-file` from repository scratch space into the supported
+   package, add the minimal starter metadata, and make package verification
+   require it.
+2. Replace contradictory reset-era onboarding with one short tarball → starter
+   → SEA → service guide whose commands are checked against the mounted CLI.
+3. Split the existing Linux walkthrough into builder and target boundaries and
+   make unfinished work at initiating-process exit a required assertion.
+4. Fix only friction or cleanup defects exposed by that literal journey, then
+   cut the developer-preview artifact and receipt.
+
+The coordinator-authority kernel remains complete but intentionally unbound
+while this milestone is active. Runtime-wide coordinator replacement,
+provider-certified leases, multi-node placement, and cloud fulfillment resume
+only after the single-host preview closes.
 
 ## Explicitly not now
 

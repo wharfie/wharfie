@@ -6,7 +6,7 @@ const USAGE = 'Usage: steady-file <file>';
 
 /**
  * Parse the application-owned CLI arguments into workflow input.
- * @param {readonly string[]} args - Application arguments without Node argv.
+ * @param {string[]} args - Application arguments without Node argv.
  * @returns {{path: string}} - Absolute file input shared by both paths.
  */
 function parseFileInput(args) {
@@ -23,7 +23,7 @@ function parseFileInput(args) {
 
 /**
  * Project ordinary application arguments into durable workflow input.
- * @param {readonly string[]} args - Application arguments after `--`.
+ * @param {string[]} args - Application arguments after `--`.
  * @returns {{path: string}} - JSON workflow input.
  */
 export function toDurableInput(args) {

@@ -4,6 +4,7 @@ import { open } from 'node:fs/promises';
 import path from 'node:path';
 
 export const STABILITY_WINDOW_MS = 250;
+export const DURABLE_STABILITY_WINDOW_MS = 60_000;
 const READ_CHUNK_BYTES = 64 * 1024;
 
 /**

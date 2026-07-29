@@ -1,5 +1,9 @@
 # Golden path: carry a file check beyond the shell
 
+This guide includes the source-checkout development path and the complete
+operator surface. For the shorter tarball-to-service path, start with the
+[single-host developer preview](./developer-preview.md).
+
 The `steady-file` example asks one useful local question:
 
 > Did this build or download artifact have identical contents at two
@@ -9,7 +13,7 @@ Its normal CLI fingerprints one regular file, waits 250 milliseconds,
 fingerprints it again, and exits with a JSON `stable` decision:
 
 ```bash
-node ./scratch/examples/apps/steady-file/local.js \
+node ./examples/steady-file/local.js \
   /absolute/path/to/artifact.tar
 ```
 
@@ -21,7 +25,10 @@ different observations or metadata that differs around a read, and `1` for
 invalid input or an observation failure. This is application behavior, not an
 operator command.
 
-The same source also declares two activities and one finite workflow:
+The same source also declares two activities and one finite workflow. The
+ordinary CLI uses a 250-millisecond convenience window; the durable workflow
+uses a one-minute timer so its work can remain unfinished after the initiating
+shell exits:
 
 ```text
 capture baseline → wait on a durable framework timer → compare fresh bytes
@@ -37,7 +44,7 @@ First inspect the exact authored manifest:
 
 ```bash
 node ./bin/wharfie app manifest \
-  ./scratch/examples/apps/steady-file
+  ./examples/steady-file
 ```
 
 Use an absolute path because durable activity code observes the worker
@@ -45,7 +52,7 @@ machine's filesystem, not the shell that submitted the request:
 
 ```bash
 node ./bin/wharfie ops start \
-  --dir ./scratch/examples/apps/steady-file \
+  --dir ./examples/steady-file \
   --json \
   -- /absolute/path/to/artifact.tar
 ```
@@ -62,7 +69,7 @@ admission after a lost response:
 
 ```bash
 node ./bin/wharfie ops start \
-  --dir ./scratch/examples/apps/steady-file \
+  --dir ./examples/steady-file \
   --idempotency-key artifact-build-42 \
   --json \
   -- /absolute/path/to/artifact.tar
@@ -73,7 +80,7 @@ bypasses the CLI adapter. They cannot be combined with application arguments:
 
 ```bash
 node ./bin/wharfie ops start \
-  --dir ./scratch/examples/apps/steady-file \
+  --dir ./examples/steady-file \
   --workflow verify-stable \
   --input '{"path":"/absolute/path/to/artifact.tar"}' \
   --idempotency-key artifact-build-42 \
@@ -85,7 +92,7 @@ application. In another terminal, run the matching source resident:
 
 ```bash
 node ./bin/wharfie ops worker \
-  --dir ./scratch/examples/apps/steady-file
+  --dir ./examples/steady-file
 ```
 
 The redacted lifecycle and explicitly confirmed logical result are separate:
@@ -123,7 +130,7 @@ Package only the target you intend to run. For Apple silicon macOS:
 
 ```bash
 node ./bin/wharfie app package \
-  ./scratch/examples/apps/steady-file \
+  ./examples/steady-file \
   --target node24.13.1-darwin-arm64 \
   --json
 ```
@@ -206,9 +213,10 @@ example has no watch command, so poll until `inspect` reports `COMPLETED` or
 `output.terminal` is non-null.
 
 To exercise evolution, make an intentional application change and package it
-as `<steady-file-b>` while retaining A. For example, changing the workflow's
-immutable stability window from 250 to 500 milliseconds creates a distinct
-revision. Run the ordinary B CLI before activation, then update through B:
+as `<steady-file-b>` while retaining A. For example, changing the durable
+workflow's immutable stability window from one to two minutes creates a
+distinct revision without slowing the ordinary CLI. Run the ordinary B CLI
+before activation, then update through B:
 
 ```bash
 <steady-file-b> /absolute/path/to/artifact.tar
@@ -306,7 +314,7 @@ The walkthrough produced a short, prioritized list:
    runtime `PATH`, and returned matching verified output without changing
    application logic. This is one same-host observation, not clean-host or
    service-lifecycle proof.
-2. **Closed interface friction:** schema v4 lets this application declare one
+3. **Closed interface friction:** schema v4 lets this application declare one
    default durable workflow and a pure argv-to-input adapter. The happy path
    now accepts the ordinary file argument, while explicit workflow, JSON, and
    stable idempotency controls remain available when needed.

@@ -20,6 +20,11 @@ deliberately disabled. No standalone builder binary is published. Generated
 application SEAs are the portable deliverable and do not require Node on the
 target machine.
 
+The bounded tarball-based workflow for the active milestone is the
+[single-host developer preview](./developer-preview.md). The tarball includes
+the supported `examples/steady-file` starter and can be installed into a clean
+builder workspace without using the checkout as application runtime authority.
+
 Ordinary `npm test` is coverage-free. The runner places its default Jest cache
 and any default coverage output in one owned OS-temporary root and removes it
 after success, failure, or a child signal. Use `npm run test:coverage` when
