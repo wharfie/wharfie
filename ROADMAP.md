@@ -272,8 +272,8 @@ One checksummed acceptance run must prove all of the following:
    cut the developer-preview artifact and receipt.
 
 The supported starter, verified tarball handoff, canonical guide, unfinished
-timer assertion, and explicit app-data purge are implemented. The remaining
-milestone work is the clean builder/target split and one successful
+timer assertion, explicit app-data purge, and clean builder/target acceptance
+harness are implemented. The remaining milestone gate is one successful
 checksummed acceptance receipt with complete proof-owned cleanup.
 
 The coordinator-authority kernel remains complete but intentionally unbound

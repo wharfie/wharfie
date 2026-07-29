@@ -5,10 +5,35 @@ tarball, install it into a clean builder workspace, copy the packaged starter,
 build one application SEA, and let that executable install and operate its own
 Linux service.
 
-The tarball handoff and same-host Linux lifecycle are implemented. The current
-milestone is not closed until one checksummed run builds on a separate machine
-and proves that a later process observes unfinished work before systemd
-completes it.
+The tarball handoff, clean builder/target acceptance harness, and Linux
+lifecycle are implemented. The current milestone is not closed until that
+harness produces one checksummed receipt proving that a later process observes
+unfinished work before systemd completes it.
+
+## Run the acceptance proof
+
+On macOS with Lima installed, an exact Node 24.13.1 executable active, at least
+15 GiB free, and a clean committed worktree:
+
+```bash
+npm run verify:steady-file:systemd:lima
+```
+
+The proof creates a builder VM, installs the repository tarball into a clean
+consumer, packages revisions A and B, and copies an exact checksummed six-file
+handoff to the host. It deletes the builder before creating a separate target
+VM with no Node, npm, repository mount, or container runtime. Two distinct host
+controller processes then prepare unfinished durable work and return to
+observe and complete it before exercising update, rollback, uninstall, prune,
+and purge.
+
+Builder and target VMs run sequentially. The proof keeps its Lima home and
+cache inside one owned temporary directory and removes the VMs, cache, package
+workspace, input, and SEA handoff on success or failure. A successful run
+retains only bounded `builder.json`, `prepare.json`, `final.json`,
+`cleanup.json`, and `SHA256SUMS` under
+`llm_artifacts/steady-file-systemd-proof/<commit>/`. The disk preflight occurs
+before Lima creates a VM or downloads an image.
 
 ## Create the Wharfie handoff
 

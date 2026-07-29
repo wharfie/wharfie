@@ -1129,20 +1129,21 @@ exact-revision resident observes and fires it; there is deliberately no public
 timer-fire command. The successful commit-bound run and its receipts are
 recorded in the
 [Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md).
-The literal golden application uses the same driver in its focused mode:
+The literal golden application uses a separate split builder/target driver:
 
 ```bash
 npm run verify:steady-file:systemd:lima
 ```
 
-That run starts packaged work before installation, installs the service, ends
-the initiating verifier, returns in a different verifier process for
-`list`/`inspect`/`output`, updates to a distinct revision, rolls back, and
-uninstalls. Its 250 millisecond workflow completed before the initiating
-verifier ended, so it proves retained rediscovery and service persistence, not
-unfinished work surviving caller death. The successful receipts are recorded
-in the
-[steady-file systemd walkthrough checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md).
+The driver builds an exact checksummed A/B handoff, deletes the builder, then
+gives a clean no-Node target only that handoff and a literal input. It ends one
+host controller while the installed service has a waiting durable timer and
+requires a second controller process to observe that same unfinished run
+before completion, update, rollback, uninstall, prune, and purge. A successful
+receipt from this stronger split harness remains the final developer-preview
+gate. The older same-host successful receipts are recorded in the
+[steady-file systemd walkthrough
+checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md).
 Wharfie does not yet provide schedule
 inspection/pause/resume, managed-effect workflow successors, multi-host
 reassignment, or live log tail, search, and redaction.
@@ -1259,9 +1260,11 @@ through `npm run test:native` and the SEA verifier.
 The destructive, disposable real-machine service gate is
 `npm run verify:service:systemd:lima`; it requires Lima on macOS and creates,
 force-cycles, verifies, and deletes an isolated Ubuntu VM.
-`npm run verify:steady-file:systemd:lima` uses the same disposable boundary for
-the focused product journey without the reboot/crash matrix. Both delete their
-VM by default; SEA construction can still consume substantial temporary disk.
+`npm run verify:steady-file:systemd:lima` instead uses sequential builder and
+clean no-Node target VMs for the focused product journey without the
+reboot/crash matrix. It deletes both VMs and its isolated Lima cache
+unconditionally and refuses to start unless at least 15 GiB is free. SEA
+construction can still consume substantial temporary disk.
 
 Current source is organized as follows:
 

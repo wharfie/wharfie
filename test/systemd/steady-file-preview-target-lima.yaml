@@ -1,0 +1,55 @@
+minimumLimaVersion: 2.1.0
+
+vmType: vz
+arch: default
+cpus: 2
+memory: 2GiB
+disk: 6GiB
+plain: true
+
+user:
+  name: wharfie
+  comment: Wharfie preview target
+  home: /home/wharfie
+  shell: /bin/bash
+  uid: 1001
+
+images:
+  - location: https://cloud-images.ubuntu.com/releases/noble/release-20260615/ubuntu-24.04-server-cloudimg-arm64.img
+    arch: aarch64
+    digest: sha256:cafa1a965b591b7c4184b484ffd8e625981a79d48f9b4ae8a4adf7b4c5ade927
+  - location: https://cloud-images.ubuntu.com/releases/noble/release-20260615/ubuntu-24.04-server-cloudimg-amd64.img
+    arch: x86_64
+    digest: sha256:5fa5b05e5ec239858c4531485d6023b0896448c2df7c63b34f8dae6ea6051a44
+
+mounts: []
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      test "{{.User}}" = wharfie
+      install -d -m 0700 -o wharfie -g wharfie /home/wharfie/preview
+      install -d -m 0700 -o wharfie -g wharfie /home/wharfie/preview/handoff
+      loginctl enable-linger wharfie
+
+probes:
+  - mode: readiness
+    description: non-root handoff account and persistent systemd user manager are ready
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      test "$(id -un)" = wharfie
+      test "$(id -u)" -gt 0
+      test "$HOME" = /home/wharfie
+      test -d /home/wharfie/preview/handoff
+      test -O /home/wharfie/preview/handoff
+      test "$(stat -c '%a' /home/wharfie/preview/handoff)" = 700
+      test "$(loginctl show-user "$(id -u)" --property=Linger --value)" = yes
+      systemctl --user show-environment >/dev/null
+    hint: |
+      The Wharfie handoff account, lingering, or systemd user manager did not become ready.

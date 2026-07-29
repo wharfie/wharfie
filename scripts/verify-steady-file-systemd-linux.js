@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   closeSync,
   cpSync,
   existsSync,
@@ -21,6 +22,7 @@ import path from 'node:path';
 import { parseApplicationPackageReceiptOutput } from '../src/cli/app/package-command-receipt.js';
 import { createPackageTarball, readJson } from './package-verification.js';
 import { verifyPackageSeaArtifactHandoff } from './package-sea-verification.js';
+import { writeSteadyFilePreviewHandoff } from './steady-file-preview-handoff.js';
 
 const APP_ID = 'steady-file-demo';
 const WORKFLOW_ID = 'verify-stable';
@@ -775,6 +777,165 @@ function assertProofEnvironment() {
 }
 
 /**
+ * Remove the builder-local input path from an already-verified decision.
+ * @param {Record<string, any>} value - Exact builder result.
+ * @returns {Readonly<Record<string, any>>} - Portable decision.
+ */
+function normalizeStableDecision(value) {
+  assertStableDecision(value);
+  const normalized = { ...value };
+  delete normalized.path;
+  return Object.freeze(normalized);
+}
+
+/**
+ * @param {PackagedArtifact} packaged - Builder-local package result.
+ * @param {'source'|'target'} label - Stable handoff label.
+ * @returns {Readonly<Record<string, any>>} - Path-free artifact evidence.
+ */
+function createPortableArtifactEvidence(packaged, label) {
+  const evidence = createArtifactEvidence(packaged);
+  return Object.freeze({
+    path: `${label}/app`,
+    recordPath: `${label}/artifact-record.json`,
+    artifactId: evidence.artifactId,
+    revisionId: evidence.revisionId,
+    byteDigest: evidence.byteDigest,
+    size: evidence.size,
+    target: evidence.target,
+    sha256: evidence.sha256,
+  });
+}
+
+/**
+ * Build and publish the exact portable payload without starting target state.
+ * @param {string} repoRoot - Extracted committed repository.
+ * @param {string} handoffRoot - Empty handoff destination.
+ * @param {string} builderReceiptPath - Compact builder receipt.
+ * @returns {Record<string, any>} - Builder receipt.
+ */
+function buildHandoff(repoRoot, handoffRoot, builderReceiptPath) {
+  assertProofEnvironment();
+  assert.equal(
+    readJson(path.join(repoRoot, 'package.json')).name,
+    '@wharfie/wharfie',
+  );
+  assert.ok(path.isAbsolute(handoffRoot));
+  assert.ok(path.isAbsolute(builderReceiptPath));
+  assert.equal(
+    existsSync(PROOF_ROOT),
+    false,
+    'builder proof root must begin absent',
+  );
+  assert.equal(
+    existsSync(handoffRoot),
+    false,
+    'builder handoff root must begin absent',
+  );
+  assert.equal(
+    existsSync(builderReceiptPath),
+    false,
+    'builder receipt must begin absent',
+  );
+  process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
+    .filter(Boolean)
+    .join(path.delimiter);
+  mkdirSync(PROOF_ROOT, { recursive: true, mode: 0o700 });
+  mkdirSync(path.join(handoffRoot, 'source'), {
+    recursive: true,
+    mode: 0o700,
+  });
+  mkdirSync(path.join(handoffRoot, 'target'), {
+    recursive: true,
+    mode: 0o700,
+  });
+  writeFileSync(INPUT_PATH, INPUT_BYTES, { mode: 0o600 });
+
+  const nodeProbe = run('/usr/bin/env', ['node', '--version'], {
+    env: packagedEnvironment(),
+    allowFailure: true,
+  });
+  assert.notEqual(
+    nodeProbe.status,
+    0,
+    'packaged PATH unexpectedly exposes Node',
+  );
+
+  const packaged = packageSteadyFileArtifacts();
+  const sourceOrdinary = parseCompleteJson(
+    runArtifact(packaged.source.artifactPath, [INPUT_PATH]),
+    'source packaged steady-file CLI',
+  );
+  const targetOrdinary = parseCompleteJson(
+    runArtifact(packaged.target.artifactPath, [INPUT_PATH]),
+    'target packaged steady-file CLI',
+  );
+  assert.deepEqual(sourceOrdinary, packaged.ordinarySource);
+  assert.deepEqual(targetOrdinary, packaged.ordinarySource);
+  const expected = normalizeStableDecision(packaged.ordinarySource);
+
+  const source = createPortableArtifactEvidence(packaged.source, 'source');
+  const target = createPortableArtifactEvidence(packaged.target, 'target');
+  for (const [label, artifact] of Object.entries({
+    source: packaged.source,
+    target: packaged.target,
+  })) {
+    const appPath = path.join(handoffRoot, label, 'app');
+    const recordPath = path.join(handoffRoot, label, 'artifact-record.json');
+    cpSync(artifact.artifactPath, appPath);
+    cpSync(artifact.artifact.recordPath, recordPath);
+    chmodSync(appPath, 0o500);
+    chmodSync(recordPath, 0o400);
+  }
+
+  const npmVersion = run(path.join(path.dirname(process.execPath), 'npm'), [
+    '--version',
+  ]).stdout.trim();
+  const machineId = readFileSync('/etc/machine-id', 'utf8').trim();
+  const written = writeSteadyFilePreviewHandoff(handoffRoot, {
+    schemaVersion: 1,
+    kind: 'wharfie.steady-file-preview.handoff',
+    commit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
+    builder: {
+      machineId,
+      toolchain: {
+        node: process.versions.node,
+        npm: npmVersion,
+      },
+    },
+    package: packaged.package,
+    starter: { files: packaged.sourceTree },
+    mutation: packaged.targetMutation,
+    ordinary: {
+      input: {
+        bytes: statSync(INPUT_PATH).size,
+        sha256: sha256File(INPUT_PATH),
+      },
+      expected,
+      equivalent: true,
+    },
+    artifacts: { source, target },
+  });
+  const receipt = {
+    schemaVersion: 1,
+    kind: 'wharfie.steady-file-preview.builder',
+    commit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
+    builtAt: Date.now(),
+    builderProcessId: process.pid,
+    builderMachineId: machineId,
+    toolchain: written.handoff.builder.toolchain,
+    handoff: {
+      sha256: written.files['handoff.json'].sha256,
+      files: written.files,
+    },
+    ordinaryEquivalent: true,
+  };
+  writeJsonAtomic(builderReceiptPath, receipt);
+  process.stdout.write(`${JSON.stringify(receipt)}\n`);
+  return receipt;
+}
+
+/**
  * Run ordinary behavior, package A/B, submit work, install the service, and
  * then leave rediscovery and inspection to a later verifier process.
  * @param {string} repoRoot - Extracted committed repository.
@@ -1260,12 +1421,23 @@ async function verify() {
 
 const phase = process.argv[2];
 const repoRoot = path.resolve(process.argv[3] || process.cwd());
-if (phase === 'prepare') {
+if (phase === 'build') {
+  if (!process.argv[4] || !process.argv[5]) {
+    throw new Error(
+      'Usage: verify-steady-file-systemd-linux.js build <repo-root> <handoff-root> <builder-receipt>',
+    );
+  }
+  buildHandoff(
+    repoRoot,
+    path.resolve(process.argv[4]),
+    path.resolve(process.argv[5]),
+  );
+} else if (phase === 'prepare') {
   await prepare(repoRoot);
 } else if (phase === 'verify') {
   await verify();
 } else {
   throw new Error(
-    'Usage: verify-steady-file-systemd-linux.js <prepare|verify> [repo-root]',
+    'Usage: verify-steady-file-systemd-linux.js <build|prepare|verify> [repo-root] [handoff-root] [builder-receipt]',
   );
 }

@@ -281,32 +281,36 @@ create a container, touch a block device, or call a cloud provider.
 ## What the Linux service proof covers
 
 `npm run verify:steady-file:systemd:lima` performs the displayed product
-journey in one disposable Ubuntu VM. The checksummed commit-bound run:
+journey across sequential disposable builder and target Ubuntu VMs. The
+commit-bound acceptance run:
 
-1. installs the repository's npm tarball in a clean guest;
-2. runs the source CLI and distinct A and B packaged CLIs with Node absent from
-   the packaged command `PATH`;
-3. starts one packaged A workflow before systemd exists and verifies every
+1. installs the repository's npm tarball in a clean builder;
+2. runs the source CLI and distinct A and B packaged CLIs, emits an exact
+   checksummed handoff, and deletes the builder;
+3. copies only that handoff and the literal input to a separate target with no
+   Node, npm, repository mount, or container runtime;
+4. starts one packaged A workflow before systemd exists and verifies every
    created application-state directory is mode `0700`;
-4. installs A, records a healthy resident, and ends the initiating verifier;
-5. returns in a different process, rediscovers the completed run, and reads
-   integrity-verified history, inspection, and logical output;
-6. updates to meaningful revision B, rolls back through B to A, and proves the
+5. installs A, records a healthy resident, and ends the initiating controller
+   while its durable timer is still waiting;
+6. returns in a different host process, observes the same unfinished timer,
+   rediscovers the completed run, and reads integrity-verified history,
+   inspection, and logical output;
+7. updates to meaningful revision B, rolls back through B to A, and proves the
    reads are byte-for-byte preserved;
-7. uninstalls through A, independently verifies the unit is absent, proves the
+8. uninstalls through A, independently verifies the unit is absent, proves the
    reads remain, confirms prune retains both referenced releases, then purges
    the exact app root; and
-8. deletes the external SEA handoffs and VM and retains only small checksummed
-   JSON receipts.
+9. deletes the external handoff, target, and isolated Lima cache and retains
+   only small checksummed JSON receipts.
 
 The older checksummed walkthrough completed its workflow before the initiating
 verifier ended. The current verifier instead requires a still-waiting durable
 timer with at least 30 seconds remaining, exits that process, and requires a
-later process to observe the same timer before completion. A fresh clean-host
-receipt for that stronger assertion remains part of the developer-preview
-milestone. The separate service-substrate proof covers crash and reboot
-recovery. Neither proof establishes replacement by another coordinator
-machine.
+later process to observe the same timer before completion. A fresh acceptance
+receipt from the split harness remains the final developer-preview gate. The
+separate service-substrate proof covers crash and reboot recovery. Neither
+proof establishes replacement by another coordinator machine.
 
 ## Classified findings
 

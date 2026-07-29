@@ -80,7 +80,7 @@
     "verify:package": "node ./scripts/verify-package-contents.js",
     "verify:package:sea": "node ./scripts/verify-package-sea.js",
     "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
-    "verify:steady-file:systemd:lima": "WHARFIE_SYSTEMD_PROOF_SCENARIO=steady-file ./scripts/run-systemd-user-service-lima.sh",
+    "verify:steady-file:systemd:lima": "./scripts/run-steady-file-preview-lima.sh",
     "verify:host:retained-storage:preflight": "node ./scripts/collect-aws-host-retained-storage-preflight-linux.js",
     "verify:host:retained-storage:preflight:sea:linux:docker:readiness": "node ./scripts/inspect-aws-host-retained-storage-host-preflight-sea-linux-docker-readiness.js",
     "verify:host:retained-storage:preflight:sea:linux:docker": "node ./scripts/run-aws-host-retained-storage-host-preflight-sea-linux-docker.js",
