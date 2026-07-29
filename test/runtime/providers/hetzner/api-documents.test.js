@@ -245,6 +245,7 @@ describe('Hetzner API response documents', () => {
     expect(decodedServer).toMatchObject({
       id: 42,
       publicIpv4: { id: 6, ip: '203.0.113.7', blocked: false },
+      publicIpv6: null,
       firewalls: [{ id: 5, status: 'applied' }],
       location: { id: 9, name: 'ash' },
       serverType: { id: 1, name: 'cx23' },
@@ -252,6 +253,35 @@ describe('Hetzner API response documents', () => {
     });
     expect(Object.isFrozen(decodedServer.labels)).toBe(true);
     expect(Object.isFrozen(decodedServer.serverType)).toBe(true);
+  });
+
+  it('projects exact public IPv6 state when the provider assigned it', () => {
+    const decoded = decodeHetznerServer(
+      server({
+        public_net: {
+          ipv4: {
+            id: 6,
+            ip: '203.0.113.7',
+            blocked: false,
+          },
+          ipv6: {
+            id: 7,
+            ip: '2001:db8:1234::/64',
+            blocked: false,
+            dns_ptr: [],
+          },
+          floating_ips: [],
+          firewalls: [{ id: 5, status: 'applied' }],
+        },
+      }),
+    );
+
+    expect(decoded.publicIpv6).toEqual({
+      id: 7,
+      ip: '2001:db8:1234::/64',
+      blocked: false,
+    });
+    expect(Object.isFrozen(decoded.publicIpv6)).toBe(true);
   });
 
   it('decodes official pagination and nullable Primary IP create actions', () => {
@@ -341,6 +371,20 @@ describe('Hetzner API response documents', () => {
     [
       'server with malformed labels',
       () => decodeHetznerServer(server({ labels: { owner: 7 } })),
+    ],
+    [
+      'server with malformed public IPv6',
+      () =>
+        decodeHetznerServer(
+          server({
+            public_net: {
+              ipv4: { id: 6, ip: '203.0.113.7', blocked: false },
+              ipv6: { id: 7, ip: '2001:db8::/64', blocked: 'false' },
+              floating_ips: [],
+              firewalls: [],
+            },
+          }),
+        ),
     ],
     [
       'primary IP with an unsafe ID',
