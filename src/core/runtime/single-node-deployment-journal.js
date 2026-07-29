@@ -22,6 +22,10 @@ import {
 import { assertLogicalId } from './logical-id.js';
 import { assertManifestIsSecretFree } from './manifest-security.js';
 import {
+  validateHetznerDeletionRecord,
+  validateHetznerDestructionAttempt,
+} from './providers/hetzner/single-node-destruction.js';
+import {
   createHetznerProvisionedResourceRecord,
   validateHetznerProvisionedResourceRecord,
   validateHetznerProvisioningMutationAttempt,
@@ -53,6 +57,11 @@ const JOURNAL_TEMP_PATTERN =
   /^\.journal-([0-9]{16})-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.tmp$/u;
 const SSH_FINGERPRINT_PATTERN = /^SHA256:([A-Za-z0-9+/]{43})$/u;
 const HETZNER_RESOURCE_ROLES = new Set(['firewall', 'primaryIp', 'server']);
+const HETZNER_DESTRUCTION_ROLES = Object.freeze([
+  'server',
+  'primaryIp',
+  'firewall',
+]);
 const PHASES = new Set([
   'planned',
   'provisioning',
@@ -84,6 +93,8 @@ const PAYLOAD_KEYS = new Set([
   'phase',
   'mutationAttempts',
   'resources',
+  'destroyAttempts',
+  'deletionRecords',
   'sshHost',
   'artifact',
   'activation',
@@ -480,6 +491,89 @@ function validateResources(value, valuePath) {
   return deepFreeze(resources);
 }
 
+/** @param {string} role @returns {number} */
+function destructionRoleIndex(role) {
+  return HETZNER_DESTRUCTION_ROLES.indexOf(role);
+}
+
+/**
+ * @param {unknown} value - Candidate full destroy attempts.
+ * @param {Readonly<Record<string, any>>} intent - Exact provisioning intent.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>[]>} - Canonical attempts.
+ */
+function validateDestroyAttempts(value, intent, valuePath) {
+  if (
+    !Array.isArray(value) ||
+    value.length > HETZNER_DESTRUCTION_ROLES.length
+  ) {
+    throw new TypeError(`${valuePath} must be one bounded attempt array.`);
+  }
+  const attempts = value.map((entry, index) =>
+    validateHetznerDestructionAttempt(
+      entry,
+      intent,
+      undefined,
+      undefined,
+      `${valuePath}[${index}]`,
+    ),
+  );
+  attempts.sort(
+    (left, right) =>
+      destructionRoleIndex(left.role) - destructionRoleIndex(right.role),
+  );
+  if (
+    attempts.some(
+      (entry, index) => index > 0 && attempts[index - 1].role === entry.role,
+    )
+  ) {
+    throw new Error(`${valuePath} must contain one attempt per role.`);
+  }
+  return deepFreeze(attempts);
+}
+
+/**
+ * @param {unknown} value - Candidate full deletion records.
+ * @param {Readonly<Record<string, any>>} intent - Exact provisioning intent.
+ * @param {Readonly<Record<string, any>[]>} attempts - Exact prior attempts.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>[]>} - Canonical records.
+ */
+function validateDeletionRecords(value, intent, attempts, valuePath) {
+  if (
+    !Array.isArray(value) ||
+    value.length > HETZNER_DESTRUCTION_ROLES.length
+  ) {
+    throw new TypeError(`${valuePath} must be one bounded deletion array.`);
+  }
+  const records = value.map((entry, index) => {
+    const entryPath = `${valuePath}[${index}]`;
+    const candidate = cloneBoundedJsonObject(entry, 16 * 1024, entryPath);
+    const attempt =
+      attempts.find((stored) => stored.role === candidate.role) ?? null;
+    return validateHetznerDeletionRecord(
+      candidate,
+      intent,
+      candidate.role,
+      candidate.providerResourceId,
+      attempt,
+      entryPath,
+    );
+  });
+  records.sort(
+    (left, right) =>
+      destructionRoleIndex(left.role) - destructionRoleIndex(right.role),
+  );
+  if (
+    records.some(
+      (entry, index) => index > 0 && records[index - 1].role === entry.role,
+    )
+  ) {
+    throw new Error(`${valuePath} must contain one deletion per role.`);
+  }
+  return deepFreeze(records);
+}
+
 /**
  * @param {unknown} value - Candidate host evidence.
  * @param {string} valuePath - Boundary label.
@@ -609,6 +703,39 @@ function resourceForRole(resources, role) {
   return resources.find((resource) => resource.role === role) || null;
 }
 
+/** @param {Readonly<Record<string, any>[]>} values @param {string} role */
+function evidenceForRole(values, role) {
+  return values.find((value) => value.role === role) || null;
+}
+
+/** @param {Readonly<Record<string, any>[]>} resources @param {string} role */
+function resourceIsAbsent(resources, role) {
+  const resource = resourceForRole(resources, role);
+  return resource === null || resource.state === 'absent';
+}
+
+/**
+ * Enforce provider dependency order while treating never-created roles as
+ * already absent.
+ * @param {Readonly<Record<string, any>[]>} resources - Current resources.
+ * @param {string} role - Role about to be deleted.
+ * @param {string} valuePath - Boundary label.
+ */
+function assertDestructionOrder(resources, role, valuePath) {
+  if (role === 'primaryIp' && !resourceIsAbsent(resources, 'server')) {
+    throw new Error(`${valuePath} requires the server to be absent first.`);
+  }
+  if (
+    role === 'firewall' &&
+    (!resourceIsAbsent(resources, 'server') ||
+      !resourceIsAbsent(resources, 'primaryIp'))
+  ) {
+    throw new Error(
+      `${valuePath} requires the server and primary IP to be absent first.`,
+    );
+  }
+}
+
 /**
  * Reject semantically partial snapshots that cannot represent one recoverable
  * deployment frontier.
@@ -630,6 +757,61 @@ function assertCoherentPayload(payload, valuePath) {
     ) {
       throw new Error(
         `${valuePath}.resources must follow a succeeded mutation attempt.`,
+      );
+    }
+  }
+  if (
+    payload.phase !== 'destroying' &&
+    payload.phase !== 'destroyed' &&
+    (payload.destroyAttempts.length !== 0 ||
+      payload.deletionRecords.length !== 0)
+  ) {
+    throw new Error(
+      `${valuePath} destruction evidence is only valid while destroying.`,
+    );
+  }
+  for (const attempt of payload.destroyAttempts) {
+    const resource = resourceForRole(payload.resources, attempt.role);
+    if (
+      resource === null ||
+      resource.providerResourceId !== attempt.providerResourceId
+    ) {
+      throw new Error(
+        `${valuePath}.destroyAttempts must match an exact known resource.`,
+      );
+    }
+    assertDestructionOrder(
+      payload.resources,
+      attempt.role,
+      `${valuePath}.destroyAttempts.${attempt.role}`,
+    );
+  }
+  for (const deletion of payload.deletionRecords) {
+    const resource = resourceForRole(payload.resources, deletion.role);
+    const attempt = evidenceForRole(payload.destroyAttempts, deletion.role);
+    if (
+      resource === null ||
+      resource.providerResourceId !== deletion.providerResourceId ||
+      resource.state !== 'absent' ||
+      deletion.destroyAttemptId !== (attempt?.attemptId ?? null)
+    ) {
+      throw new Error(
+        `${valuePath}.deletionRecords must prove an exact known resource absent.`,
+      );
+    }
+    assertDestructionOrder(
+      payload.resources,
+      deletion.role,
+      `${valuePath}.deletionRecords.${deletion.role}`,
+    );
+  }
+  for (const resource of payload.resources) {
+    if (
+      resource.state === 'absent' &&
+      evidenceForRole(payload.deletionRecords, resource.role) === null
+    ) {
+      throw new Error(
+        `${valuePath}.resources cannot become absent without a deletion record.`,
       );
     }
   }
@@ -683,6 +865,8 @@ function assertCoherentPayload(payload, valuePath) {
     payload.phase === 'planned' &&
     (payload.resources.length !== 0 ||
       payload.mutationAttempts.length !== 0 ||
+      payload.destroyAttempts.length !== 0 ||
+      payload.deletionRecords.length !== 0 ||
       payload.sshHost !== null ||
       payload.artifact !== null ||
       payload.activation !== null)
@@ -817,6 +1001,17 @@ function canonicalizePayload(value, valuePath) {
     payload.resources,
     `${valuePath}.resources`,
   );
+  const destroyAttempts = validateDestroyAttempts(
+    payload.destroyAttempts,
+    providerIntent.intent,
+    `${valuePath}.destroyAttempts`,
+  );
+  const deletionRecords = validateDeletionRecords(
+    payload.deletionRecords,
+    providerIntent.intent,
+    destroyAttempts,
+    `${valuePath}.deletionRecords`,
+  );
   const sshHost = validateSshHost(payload.sshHost, `${valuePath}.sshHost`);
   const artifact = validateArtifactEvidence(
     payload.artifact,
@@ -848,6 +1043,8 @@ function canonicalizePayload(value, valuePath) {
       phase: payload.phase,
       mutationAttempts,
       resources,
+      destroyAttempts,
+      deletionRecords,
       sshHost,
       artifact,
       activation,
@@ -907,6 +1104,8 @@ export function createSingleNodeDeploymentJournal(value) {
       phase: 'planned',
       mutationAttempts: [],
       resources: [],
+      destroyAttempts: [],
+      deletionRecords: [],
       sshHost: null,
       artifact: null,
       activation: null,
@@ -967,6 +1166,8 @@ function successor(prior, changes) {
       phase: current.phase,
       mutationAttempts: current.mutationAttempts,
       resources: current.resources,
+      destroyAttempts: current.destroyAttempts,
+      deletionRecords: current.deletionRecords,
       sshHost: current.sshHost,
       artifact: current.artifact,
       activation: current.activation,
@@ -1037,6 +1238,39 @@ export function getSingleNodeDeploymentProvisioningRecoveryState(journal) {
     storedMutationAttempts[role] = attempt?.evidence ?? null;
   }
   return deepFreeze({ storedResourceIds, storedMutationAttempts });
+}
+
+/**
+ * Project the exact recovery inputs consumed by Hetzner destruction. Missing
+ * never-created roles remain null; known IDs remain durable after deletion.
+ * @param {unknown} journal - Current journal.
+ * @returns {Readonly<{storedResourceIds: Readonly<Record<string, number|null>>, storedDestroyAttempts: Readonly<Record<string, Readonly<Record<string, any>>|null>>, storedDeletionRecords: Readonly<Record<string, Readonly<Record<string, any>>|null>>}>} - Provider recovery inputs.
+ */
+export function getSingleNodeDeploymentDestructionRecoveryState(journal) {
+  const current = validateSingleNodeDeploymentJournal(journal);
+  /** @type {Record<string, number|null>} */
+  const storedResourceIds = {};
+  /** @type {Record<string, Readonly<Record<string, any>>|null>} */
+  const storedDestroyAttempts = {};
+  /** @type {Record<string, Readonly<Record<string, any>>|null>} */
+  const storedDeletionRecords = {};
+  for (const role of HETZNER_DESTRUCTION_ROLES) {
+    storedResourceIds[role] =
+      resourceForRole(current.resources, role)?.providerResourceId ?? null;
+    storedDestroyAttempts[role] = evidenceForRole(
+      current.destroyAttempts,
+      role,
+    );
+    storedDeletionRecords[role] = evidenceForRole(
+      current.deletionRecords,
+      role,
+    );
+  }
+  return deepFreeze({
+    storedResourceIds,
+    storedDestroyAttempts,
+    storedDeletionRecords,
+  });
 }
 
 /**
@@ -1168,7 +1402,129 @@ export function completeSingleNodeDeploymentMutation(prior, value) {
 }
 
 /**
- * Append, enrich, or mark absent one immutable provider resource identity.
+ * Persist the exact-ID fence that must durably precede a provider DELETE.
+ * Exact retries return the current journal without consuming a generation.
+ * @param {unknown} prior - Current journal.
+ * @param {unknown} value - Full provider-emitted destruction attempt.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function prepareSingleNodeDeploymentDestruction(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (current.phase !== 'destroying') {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot prepare destruction in this phase.',
+    );
+  }
+  const attempt = validateHetznerDestructionAttempt(
+    value,
+    current.providerIntent.intent,
+    undefined,
+    undefined,
+    'singleNodeDeploymentJournal.prepareDestruction',
+  );
+  const existing = evidenceForRole(current.destroyAttempts, attempt.role);
+  if (existing !== null) {
+    if (JSON.stringify(existing) === JSON.stringify(attempt)) return current;
+    throw new Error(
+      'singleNodeDeploymentJournal destruction attempt conflicts with its durable fence.',
+    );
+  }
+  if (evidenceForRole(current.deletionRecords, attempt.role) !== null) {
+    throw new Error(
+      'singleNodeDeploymentJournal destruction outcome is immutable.',
+    );
+  }
+  const resource = resourceForRole(current.resources, attempt.role);
+  if (
+    resource === null ||
+    resource.providerResourceId !== attempt.providerResourceId
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal destruction attempt must match an exact known resource.',
+    );
+  }
+  if (resource.state !== 'present') {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot prepare destruction for an absent resource.',
+    );
+  }
+  assertDestructionOrder(
+    current.resources,
+    attempt.role,
+    'singleNodeDeploymentJournal.prepareDestruction',
+  );
+  return successor(current, {
+    destroyAttempts: [...current.destroyAttempts, attempt],
+  });
+}
+
+/**
+ * Atomically retain exact absence proof and mark its known provider identity
+ * absent. Null destroyAttemptId records recover an already-absent resource.
+ * @param {unknown} prior - Current journal.
+ * @param {unknown} value - Full provider-emitted deletion record.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function recordSingleNodeDeploymentDeletion(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (current.phase !== 'destroying') {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot record deletion in this phase.',
+    );
+  }
+  const candidate = cloneBoundedJsonObject(
+    value,
+    16 * 1024,
+    'singleNodeDeploymentJournal.recordDeletion',
+  );
+  const attempt = evidenceForRole(current.destroyAttempts, candidate.role);
+  const deletion = validateHetznerDeletionRecord(
+    candidate,
+    current.providerIntent.intent,
+    candidate.role,
+    candidate.providerResourceId,
+    attempt,
+    'singleNodeDeploymentJournal.recordDeletion',
+  );
+  const existing = evidenceForRole(current.deletionRecords, deletion.role);
+  if (existing !== null) {
+    if (JSON.stringify(existing) === JSON.stringify(deletion)) return current;
+    throw new Error(
+      'singleNodeDeploymentJournal deletion record conflicts with its durable proof.',
+    );
+  }
+  const resource = resourceForRole(current.resources, deletion.role);
+  if (
+    resource === null ||
+    resource.providerResourceId !== deletion.providerResourceId
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal deletion must match an exact known resource.',
+    );
+  }
+  if (resource.state !== 'present') {
+    throw new Error(
+      'singleNodeDeploymentJournal deletion outcome is immutable.',
+    );
+  }
+  assertDestructionOrder(
+    current.resources,
+    deletion.role,
+    'singleNodeDeploymentJournal.recordDeletion',
+  );
+  return successor(current, {
+    deletionRecords: [...current.deletionRecords, deletion],
+    resources: current.resources.map(
+      (/** @type {Record<string, any>} */ entry) =>
+        entry.role === deletion.role
+          ? deepFreeze({ ...entry, state: 'absent' })
+          : entry,
+    ),
+  });
+}
+
+/**
+ * Enrich one immutable present provider resource identity.
  * Exact retries return the current record without consuming a generation.
  * @param {unknown} prior - Current record.
  * @param {unknown} value - Provider resource evidence.
@@ -1185,6 +1541,11 @@ export function recordSingleNodeDeploymentResource(prior, value) {
     value,
     'singleNodeDeploymentJournal.resource',
   );
+  if (evidence.state === 'absent') {
+    throw new Error(
+      'singleNodeDeploymentJournal resources become absent only with a deletion record.',
+    );
+  }
   if (evidence.provider !== current.providerIntent.provider) {
     throw new Error(
       'singleNodeDeploymentJournal resource provider does not match its intent.',
@@ -1360,33 +1721,47 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
     );
   }
 
+  const mutationAttemptsChanged =
+    JSON.stringify(candidate.mutationAttempts) !==
+    JSON.stringify(current.mutationAttempts);
+  const resourcesChanged =
+    JSON.stringify(candidate.resources) !== JSON.stringify(current.resources);
+  const destroyAttemptsChanged =
+    JSON.stringify(candidate.destroyAttempts) !==
+    JSON.stringify(current.destroyAttempts);
+  const deletionRecordsChanged =
+    JSON.stringify(candidate.deletionRecords) !==
+    JSON.stringify(current.deletionRecords);
+  const sshHostChanged =
+    JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost);
+  const artifactChanged =
+    JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact);
+  const activationChanged =
+    JSON.stringify(candidate.activation) !== JSON.stringify(current.activation);
+
   let expected;
   if (candidate.phase !== current.phase) {
     if (
-      JSON.stringify(candidate.mutationAttempts) !==
-        JSON.stringify(current.mutationAttempts) ||
-      candidate.resources.length !== current.resources.length ||
-      JSON.stringify(candidate.resources) !==
-        JSON.stringify(current.resources) ||
-      JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost) ||
-      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
-      JSON.stringify(candidate.activation) !==
-        JSON.stringify(current.activation)
+      mutationAttemptsChanged ||
+      resourcesChanged ||
+      destroyAttemptsChanged ||
+      deletionRecordsChanged ||
+      sshHostChanged ||
+      artifactChanged ||
+      activationChanged
     ) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
       );
     }
     expected = advanceSingleNodeDeploymentJournal(current, candidate.phase);
-  } else if (
-    JSON.stringify(candidate.mutationAttempts) !==
-    JSON.stringify(current.mutationAttempts)
-  ) {
+  } else if (mutationAttemptsChanged) {
     if (
-      JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost) ||
-      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
-      JSON.stringify(candidate.activation) !==
-        JSON.stringify(current.activation)
+      destroyAttemptsChanged ||
+      deletionRecordsChanged ||
+      sshHostChanged ||
+      artifactChanged ||
+      activationChanged
     ) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
@@ -1415,9 +1790,7 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
       );
     }
     const changedAttempt = changedAttempts[0];
-    if (
-      JSON.stringify(candidate.resources) === JSON.stringify(current.resources)
-    ) {
+    if (!resourcesChanged) {
       expected = prepareSingleNodeDeploymentMutation(
         current,
         changedAttempt.evidence,
@@ -1441,17 +1814,66 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
         ),
       );
     }
-  } else if (
-    JSON.stringify(candidate.resources) !== JSON.stringify(current.resources)
-  ) {
+  } else if (destroyAttemptsChanged) {
     if (
-      JSON.stringify(candidate.mutationAttempts) !==
-        JSON.stringify(current.mutationAttempts) ||
-      JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost) ||
-      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
-      JSON.stringify(candidate.activation) !==
-        JSON.stringify(current.activation)
+      resourcesChanged ||
+      deletionRecordsChanged ||
+      sshHostChanged ||
+      artifactChanged ||
+      activationChanged
     ) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must make one transition.',
+      );
+    }
+    const changedAttempts = candidate.destroyAttempts.filter(
+      (/** @type {Record<string, any>} */ attempt) => {
+        const before = evidenceForRole(current.destroyAttempts, attempt.role);
+        return JSON.stringify(before) !== JSON.stringify(attempt);
+      },
+    );
+    const removedAttempts = current.destroyAttempts.filter(
+      (/** @type {Record<string, any>} */ attempt) =>
+        evidenceForRole(candidate.destroyAttempts, attempt.role) === null,
+    );
+    if (changedAttempts.length !== 1 || removedAttempts.length !== 0) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must change one destruction attempt.',
+      );
+    }
+    expected = prepareSingleNodeDeploymentDestruction(
+      current,
+      changedAttempts[0],
+    );
+  } else if (deletionRecordsChanged) {
+    if (
+      !resourcesChanged ||
+      sshHostChanged ||
+      artifactChanged ||
+      activationChanged
+    ) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must make one transition.',
+      );
+    }
+    const changedRecords = candidate.deletionRecords.filter(
+      (/** @type {Record<string, any>} */ deletion) => {
+        const before = evidenceForRole(current.deletionRecords, deletion.role);
+        return JSON.stringify(before) !== JSON.stringify(deletion);
+      },
+    );
+    const removedRecords = current.deletionRecords.filter(
+      (/** @type {Record<string, any>} */ deletion) =>
+        evidenceForRole(candidate.deletionRecords, deletion.role) === null,
+    );
+    if (changedRecords.length !== 1 || removedRecords.length !== 0) {
+      throw new Error(
+        'singleNodeDeploymentJournal successor must change one deletion record.',
+      );
+    }
+    expected = recordSingleNodeDeploymentDeletion(current, changedRecords[0]);
+  } else if (resourcesChanged) {
+    if (sshHostChanged || artifactChanged || activationChanged) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
       );
@@ -1472,39 +1894,19 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
       );
     }
     expected = recordSingleNodeDeploymentResource(current, changed[0]);
-  } else if (
-    JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost)
-  ) {
-    if (
-      JSON.stringify(candidate.mutationAttempts) !==
-        JSON.stringify(current.mutationAttempts) ||
-      JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact) ||
-      JSON.stringify(candidate.activation) !==
-        JSON.stringify(current.activation)
-    ) {
+  } else if (sshHostChanged) {
+    if (artifactChanged || activationChanged) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
       );
     }
     expected = recordSingleNodeDeploymentSshHost(current, candidate.sshHost);
-  } else if (
-    JSON.stringify(candidate.activation) !== JSON.stringify(current.activation)
-  ) {
+  } else if (activationChanged) {
     expected = recordSingleNodeDeploymentActivation(
       current,
       candidate.activation,
     );
-  } else if (
-    JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact)
-  ) {
-    if (
-      JSON.stringify(candidate.mutationAttempts) !==
-      JSON.stringify(current.mutationAttempts)
-    ) {
-      throw new Error(
-        'singleNodeDeploymentJournal successor must make one transition.',
-      );
-    }
+  } else if (artifactChanged) {
     expected = recordSingleNodeDeploymentArtifact(current, candidate.artifact);
   } else {
     throw new Error(
@@ -1554,22 +1956,27 @@ export function createSingleNodeDeploymentJournalPaths(value) {
   );
   const deploymentRoot = path.join(deploymentsRoot, input.deploymentInstanceId);
   const journalRoot = path.join(deploymentRoot, JOURNAL_DIRECTORY_NAME);
+  const sharedDirectories = [
+    layout.dataRoot,
+    path.join(layout.dataRoot, 'applications'),
+    layout.appRoot,
+    layout.stateRoot,
+    layout.controlPath,
+  ];
+  const privateDirectories = [
+    path.join(layout.controlPath, DEPLOYMENTS_DIRECTORY_NAME),
+    deploymentsRoot,
+    deploymentRoot,
+    journalRoot,
+  ];
   return deepFreeze({
     ...layout,
     deploymentsRoot,
     deploymentRoot,
     journalRoot,
-    directories: [
-      layout.dataRoot,
-      path.join(layout.dataRoot, 'applications'),
-      layout.appRoot,
-      layout.stateRoot,
-      layout.controlPath,
-      path.join(layout.controlPath, DEPLOYMENTS_DIRECTORY_NAME),
-      deploymentsRoot,
-      deploymentRoot,
-      journalRoot,
-    ],
+    sharedDirectories,
+    privateDirectories,
+    directories: [...sharedDirectories, ...privateDirectories],
   });
 }
 
@@ -1601,11 +2008,32 @@ function assertPrivateStats(stats, kind, uid, mode, maximumLinks = 1) {
 }
 
 /**
- * Sync a held, private directory.
- * @param {string} directory - Exact directory.
+ * Authenticate a shared local-app layout ancestor without tightening its
+ * existing mode. These paths may be used by non-journal app storage.
+ * @param {import('node:fs').Stats} stats - Filesystem stats.
  * @param {number} uid - Required owner.
  */
-async function syncDirectory(directory, uid) {
+function assertSharedDirectoryStats(stats, uid) {
+  const actualUid = Number(stats.uid);
+  const actualMode = Number(stats.mode) & 0o777;
+  if (
+    !stats.isDirectory() ||
+    stats.isSymbolicLink() ||
+    !Number.isSafeInteger(actualUid) ||
+    actualUid !== Number(uid) ||
+    (actualMode & 0o022) !== 0
+  ) {
+    throw new SingleNodeDeploymentJournalInvalidError();
+  }
+}
+
+/**
+ * Sync a held, authenticated directory.
+ * @param {string} directory - Exact directory.
+ * @param {number} uid - Required owner.
+ * @param {boolean} [requirePrivate] - Whether exact 0700 is required.
+ */
+async function syncDirectory(directory, uid, requirePrivate = true) {
   const handle = await open(
     directory,
     fsConstants.O_RDONLY |
@@ -1613,12 +2041,12 @@ async function syncDirectory(directory, uid) {
       (fsConstants.O_NOFOLLOW || 0),
   );
   try {
-    assertPrivateStats(
-      await handle.stat(),
-      'directory',
-      uid,
-      PRIVATE_DIRECTORY_MODE,
-    );
+    const stats = await handle.stat();
+    if (requirePrivate) {
+      assertPrivateStats(stats, 'directory', uid, PRIVATE_DIRECTORY_MODE);
+    } else {
+      assertSharedDirectoryStats(stats, uid);
+    }
     await handle.sync();
   } finally {
     await handle.close();
@@ -1631,27 +2059,46 @@ async function syncDirectory(directory, uid) {
  * @param {number} uid - Required owner.
  */
 async function ensurePrivateTree(paths, uid) {
-  for (let index = 0; index < paths.directories.length; index += 1) {
-    const directory = paths.directories[index];
-    let created = false;
-    try {
-      await mkdir(directory, {
-        recursive: index === 0,
-        mode: PRIVATE_DIRECTORY_MODE,
-      });
-      created = true;
-    } catch (error) {
-      if (!hasCode(error, 'EEXIST')) throw error;
-    }
-    let stats;
-    try {
-      stats = await lstat(directory);
-    } catch {
-      throw new SingleNodeDeploymentJournalInvalidError();
-    }
-    assertPrivateStats(stats, 'directory', uid, PRIVATE_DIRECTORY_MODE);
-    if (created && index > 0) {
-      await syncDirectory(path.dirname(directory), uid);
+  const tiers = [
+    { directories: paths.sharedDirectories, requirePrivate: false },
+    { directories: paths.privateDirectories, requirePrivate: true },
+  ];
+  for (const tier of tiers) {
+    for (let index = 0; index < tier.directories.length; index += 1) {
+      const directory = tier.directories[index];
+      const recursive =
+        tier.requirePrivate === false &&
+        directory === paths.sharedDirectories[0];
+      let created = false;
+      try {
+        const firstCreated = await mkdir(directory, {
+          recursive,
+          mode: PRIVATE_DIRECTORY_MODE,
+        });
+        created = recursive ? firstCreated !== undefined : true;
+      } catch (error) {
+        if (!hasCode(error, 'EEXIST')) throw error;
+      }
+      let stats;
+      try {
+        stats = await lstat(directory);
+      } catch {
+        throw new SingleNodeDeploymentJournalInvalidError();
+      }
+      if (tier.requirePrivate) {
+        assertPrivateStats(stats, 'directory', uid, PRIVATE_DIRECTORY_MODE);
+      } else {
+        assertSharedDirectoryStats(stats, uid);
+      }
+      if (created && directory !== paths.sharedDirectories[0]) {
+        const parentRequiresPrivate =
+          tier.requirePrivate && directory !== paths.privateDirectories[0];
+        await syncDirectory(
+          path.dirname(directory),
+          uid,
+          parentRequiresPrivate,
+        );
+      }
     }
   }
   await syncDirectory(paths.journalRoot, uid);
@@ -1670,7 +2117,16 @@ async function inspectPrivateTree(paths, uid) {
     if (hasCode(error, 'ENOENT')) return false;
     throw error;
   }
-  for (const directory of paths.directories) {
+  for (const directory of paths.sharedDirectories) {
+    let stats;
+    try {
+      stats = await lstat(directory);
+    } catch {
+      throw new SingleNodeDeploymentJournalInvalidError();
+    }
+    assertSharedDirectoryStats(stats, uid);
+  }
+  for (const directory of paths.privateDirectories) {
     let stats;
     try {
       stats = await lstat(directory);
@@ -2030,6 +2486,15 @@ export function createSingleNodeDeploymentJournalStore(value) {
   });
   const uid = Number(expectedUid);
 
+  /**
+   * Establish the authenticated private namespace without publishing journal
+   * authority. This lets earlier local credential and identity setup inherit a
+   * safely created 0700 data root.
+   */
+  async function prepareStorage() {
+    await ensurePrivateTree(paths, uid);
+  }
+
   /** @returns {Promise<Readonly<Record<string, any>> | null>} */
   async function read() {
     const latest = await loadLatest(paths, uid, false);
@@ -2110,7 +2575,7 @@ export function createSingleNodeDeploymentJournalStore(value) {
     return next;
   }
 
-  return Object.freeze({ paths, read, initialize, commit });
+  return Object.freeze({ paths, prepareStorage, read, initialize, commit });
 }
 
 export default {
@@ -2125,11 +2590,14 @@ export default {
   createSingleNodeDeploymentJournal,
   createSingleNodeDeploymentJournalPaths,
   createSingleNodeDeploymentJournalStore,
+  getSingleNodeDeploymentDestructionRecoveryState,
   getSingleNodeDeploymentMutationAttempt,
   getSingleNodeDeploymentProvisioningRecoveryState,
+  prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentArtifact,
+  recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
   validateSingleNodeDeploymentJournal,
