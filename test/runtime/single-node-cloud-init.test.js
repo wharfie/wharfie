@@ -21,6 +21,7 @@ import {
 } from '../../src/core/runtime/single-node-deployment-intent.js';
 import { SINGLE_NODE_RUNTIME_ACCOUNT } from '../../src/core/runtime/single-node-runtime-account.js';
 
+/** @param {string|Buffer} value */
 function sshWireString(value) {
   const bytes = Buffer.from(value);
   const length = Buffer.alloc(4);
@@ -66,6 +67,7 @@ function makeIdentity() {
   };
 }
 
+/** @param {Buffer} bytes */
 function parseCloudConfig(bytes) {
   const text = bytes.toString('utf8');
   expect(text.startsWith('#cloud-config\n')).toBe(true);
@@ -172,11 +174,12 @@ describe('single-node cloud-init', () => {
     const sentinel = 'secret-sentinel-token';
     let thrown;
     try {
-      createSingleNodeCloudInit({
+      const input = /** @type {any} */ ({
         ...makeIdentity(),
         ...makePublicKey(),
         providerToken: sentinel,
       });
+      createSingleNodeCloudInit(input);
     } catch (error) {
       thrown = error;
     }

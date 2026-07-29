@@ -44,7 +44,10 @@ node replacement.
 2. Make plan strictly read-only and persist exact action intent before
    mutations.
 3. Implement shared cloud-init and SSH host activation.
-4. Implement Hetzner server/firewall/key/IP convergence and destroy.
+4. Implement Hetzner server/firewall/IP convergence and destroy. The generated
+   SSH public key enters cloud-init only for the non-root runtime user; do not
+   create a provider SSH-key resource that also grants the image's default
+   account access.
 5. Cut a live disposable Hetzner hello-world proof.
 6. Implement reduced AWS instance/security-group convergence using an external
    default VPC/subnet.

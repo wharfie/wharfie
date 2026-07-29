@@ -89,8 +89,10 @@ only the instance, its delete-on-termination root volume, and a restrictive
 security group. It fails clearly when the external network prerequisite is
 absent.
 
-Hetzner owns one server, its Primary IPv4, one directly attached firewall, and
-one deployment SSH-key resource.
+Hetzner owns one server, its Primary IPv4, and one directly attached firewall.
+Wharfie does not create a provider SSH-key resource: cloud-init installs the
+deployment public key only for the non-root runtime account, avoiding
+provider-side injection into the image's default or root account.
 
 Both providers use a pinned provider image observation for Ubuntu 24.04, public
 IPv4, outbound access, and inbound TCP/22 only from the exact addresses in the
@@ -120,9 +122,9 @@ SSH transport instead of requiring unrelated AWS and Hetzner artifact services.
 
 Wharfie generates a deployment-specific client keypair. The private key remains
 in local application data with owner-only permissions; only the public key
-enters cloud-init and any provider SSH-key resource. Cloud-init creates the
-non-root runtime user, enables lingering, disables password authentication, and
-prepares the fixed service directories. It contains no provider credential.
+enters cloud-init. Cloud-init creates the non-root runtime user, enables
+lingering, disables password authentication, and prepares the fixed service
+directories. It contains no provider credential.
 
 The first SSH host key is trust-on-first-use. Wharfie cross-checks the address
 against the exact provider-created resource, records the observed fingerprint,
