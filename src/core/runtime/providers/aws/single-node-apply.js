@@ -404,9 +404,10 @@ function snapshotFunctions(value, methods, valuePath) {
 /**
  * @param {unknown} value
  * @param {'read'|'operation'} mode
+ * @param {Readonly<Record<string, any>>} lifecycle
  * @returns {Readonly<Record<string, any>>}
  */
-function validateAuthority(value, mode) {
+function validateAuthority(value, mode, lifecycle) {
   const pathName = `awsSingleNodeApply.${mode}Authority`;
   const authority = snapshotExactObject(value, AUTHORITY_KEYS, pathName);
   const expectedKind =
@@ -429,12 +430,10 @@ function validateAuthority(value, mode) {
   );
   if (
     typeof authority.resolveScope !== 'function' ||
-    typeof authority.close !== 'function'
+    authority.close !== lifecycle.capability
   ) {
     throw new TypeError(`${pathName} lifecycle methods are invalid.`);
   }
-  /** @type {Promise<void>|undefined} */
-  let closePromise;
   return Object.freeze({
     providerScope,
     api,
@@ -444,14 +443,7 @@ function validateAuthority(value, mode) {
         `${pathName}.resolvedScope`,
       );
     },
-    close() {
-      if (closePromise === undefined) {
-        closePromise = Promise.resolve().then(
-          async () => await Reflect.apply(authority.close, undefined, []),
-        );
-      }
-      return closePromise;
-    },
+    close: lifecycle.close,
   });
 }
 
@@ -622,6 +614,58 @@ async function invoke(capability, value) {
 }
 
 /**
+ * Capture only an own data-property close capability before inspecting the
+ * rest of an opened authority. Exact contract validation can then fail
+ * without leaking authority-local resources.
+ * @param {unknown} value
+ * @param {'read'|'operation'} mode
+ * @returns {Readonly<Record<string, any>>}
+ */
+function captureAuthorityLifecycle(value, mode) {
+  const valuePath = `awsSingleNodeApply.${mode}Authority.close`;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${valuePath} must be an own function.`);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'close');
+  if (
+    !descriptor ||
+    !Object.hasOwn(descriptor, 'value') ||
+    typeof descriptor.value !== 'function'
+  ) {
+    throw new TypeError(`${valuePath} must be an own function.`);
+  }
+  const capability = descriptor.value;
+  /** @type {Promise<void>|undefined} */
+  let closePromise;
+  return Object.freeze({
+    capability,
+    close() {
+      if (closePromise === undefined) {
+        closePromise = Promise.resolve().then(
+          async () => await Reflect.apply(capability, undefined, []),
+        );
+      }
+      return closePromise;
+    },
+  });
+}
+
+/**
+ * Open and immediately register cleanup before exact authority validation.
+ * @param {Function} createAuthority
+ * @param {unknown} request
+ * @param {'read'|'operation'} mode
+ * @param {Readonly<Record<string, any>>[]} lifecycles
+ * @returns {Promise<Readonly<Record<string, any>>>}
+ */
+async function openAuthority(createAuthority, request, mode, lifecycles) {
+  const value = await invoke(createAuthority, request);
+  const lifecycle = captureAuthorityLifecycle(value, mode);
+  lifecycles.push(lifecycle);
+  return validateAuthority(value, mode, lifecycle);
+}
+
+/**
  * Create the AWS single-node apply composition root.
  * @param {unknown} dependencies
  * @returns {Readonly<{apply(value: unknown): Promise<Readonly<Record<string, any>>>}>}
@@ -712,13 +756,14 @@ export function createAwsSingleNodeApplyCoordinator(dependencies) {
         /** @type {Readonly<Record<string, any>>} */
         let authority;
         if (journal === null) {
-          const readAuthority = validateAuthority(
-            await invoke(ports.createReadAuthority, {
+          const readAuthority = await openAuthority(
+            ports.createReadAuthority,
+            {
               region: desired.intent.provider.region,
-            }),
+            },
             'read',
+            authorities,
           );
-          authorities.push(readAuthority);
           const providerScope = await authenticateAuthorityScope(
             readAuthority,
             null,
@@ -749,13 +794,14 @@ export function createAwsSingleNodeApplyCoordinator(dependencies) {
           }
           await readAuthority.close();
 
-          const operationAuthority = validateAuthority(
-            await invoke(ports.createOperationAuthority, {
+          const operationAuthority = await openAuthority(
+            ports.createOperationAuthority,
+            {
               region: desired.intent.provider.region,
-            }),
+            },
             'operation',
+            authorities,
           );
-          authorities.push(operationAuthority);
           await authenticateAuthorityScope(
             operationAuthority,
             providerScope.providerScopeId,
@@ -768,16 +814,14 @@ export function createAwsSingleNodeApplyCoordinator(dependencies) {
           const mode = ['planned', 'provisioning'].includes(journal.phase)
             ? 'operation'
             : 'read';
-          authority = validateAuthority(
-            await invoke(
-              mode === 'operation'
-                ? ports.createOperationAuthority
-                : ports.createReadAuthority,
-              { region: desired.intent.provider.region },
-            ),
+          authority = await openAuthority(
+            mode === 'operation'
+              ? ports.createOperationAuthority
+              : ports.createReadAuthority,
+            { region: desired.intent.provider.region },
             mode,
+            authorities,
           );
-          authorities.push(authority);
           await authenticateAuthorityScope(authority, expectedScopeId);
         }
 
