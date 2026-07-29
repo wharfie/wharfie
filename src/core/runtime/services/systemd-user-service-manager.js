@@ -104,6 +104,7 @@ const SERVICE_PURGE_TOP_LEVEL_ENTRIES = new Set([
   'releases',
   'state',
 ]);
+const SERVICE_PURGE_REMOVAL_BATCH_SIZE = 64;
 const PACKAGED_STORAGE_LAYOUT_KEYS = Object.freeze([
   'appId',
   'dataRoot',
@@ -998,20 +999,28 @@ async function removeOwnedPurgeTreeEntry(options) {
     'Systemd user-service purge directory',
     options.uid,
   );
-  const opened = await options.fsOps.opendir(options.entryPath);
-  try {
-    while (true) {
-      const entry = await opened.read();
-      if (entry === null) break;
-      await removeOwnedPurgeTreeEntry({
-        ...options,
-        entryPath: path.join(options.entryPath, entry.name),
+  while (true) {
+    const opened = await options.fsOps.opendir(options.entryPath);
+    /** @type {string[]} */
+    const names = [];
+    try {
+      while (names.length < SERVICE_PURGE_REMOVAL_BATCH_SIZE) {
+        const entry = await opened.read();
+        if (entry === null) break;
+        names.push(entry.name);
+      }
+    } finally {
+      await opened.close().catch((error) => {
+        if (!hasCode(error, 'ERR_DIR_CLOSED')) throw error;
       });
     }
-  } finally {
-    await opened.close().catch((error) => {
-      if (!hasCode(error, 'ERR_DIR_CLOSED')) throw error;
-    });
+    if (names.length === 0) break;
+    for (const name of names) {
+      await removeOwnedPurgeTreeEntry({
+        ...options,
+        entryPath: path.join(options.entryPath, name),
+      });
+    }
   }
   await syncDirectory(options.fsOps, options.entryPath);
   await options.fsOps.rmdir(options.entryPath);

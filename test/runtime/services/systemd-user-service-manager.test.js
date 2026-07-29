@@ -4092,6 +4092,75 @@ describe('systemd user service manager', () => {
     });
   });
 
+  it('closes each directory enumeration before deleting its selected purge batch', async () => {
+    const enumeratedDirectories = new Set();
+    const assertNoOpenEnumeration = (
+      /** @type {import('node:fs').PathLike} */ targetPath,
+    ) => {
+      const target = String(targetPath);
+      if (
+        [...enumeratedDirectories].some(
+          (directory) =>
+            target === directory ||
+            target.startsWith(`${directory}${path.sep}`),
+        )
+      ) {
+        throw new Error('mutation attempted under an open directory cursor');
+      }
+    };
+    const fsOps = /** @type {typeof fsp} */ (
+      Object.assign(Object.create(fsp), {
+        async opendir(/** @type {import('node:fs').PathLike} */ directoryPath) {
+          const directory = String(directoryPath);
+          const opened = await fsp.opendir(directoryPath);
+          enumeratedDirectories.add(directory);
+          return {
+            async read() {
+              const entry = await opened.read();
+              if (entry === null) enumeratedDirectories.delete(directory);
+              return entry;
+            },
+            async close() {
+              try {
+                await opened.close();
+              } finally {
+                enumeratedDirectories.delete(directory);
+              }
+            },
+          };
+        },
+        async unlink(/** @type {import('node:fs').PathLike} */ filePath) {
+          assertNoOpenEnumeration(filePath);
+          await fsp.unlink(filePath);
+        },
+        async rmdir(/** @type {import('node:fs').PathLike} */ directoryPath) {
+          assertNoOpenEnumeration(directoryPath);
+          await fsp.rmdir(directoryPath);
+        },
+      })
+    );
+    const harness = await createHarness({ fsOps });
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    const nested = path.join(harness.layout.stateRoot, 'nested');
+    await fsp.mkdir(nested, { mode: 0o700 });
+    await Promise.all(
+      Array.from({ length: 65 }, (_, index) =>
+        fsp.writeFile(path.join(nested, `entry-${index}`), 'payload', {
+          mode: 0o600,
+        }),
+      ),
+    );
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).resolves.toMatchObject({
+      action: 'purge',
+      outcome: 'purged',
+    });
+    expect(enumeratedDirectories).toEqual(new Set());
+  });
+
   it('refuses a symlinked app-owned state anchor without touching its target', async () => {
     const harness = await createHarness();
     await harness.operator.install();
