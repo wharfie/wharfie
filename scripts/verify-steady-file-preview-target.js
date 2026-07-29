@@ -27,6 +27,8 @@ const TARGET_HANDOFF_ROOT = `${TARGET_ROOT}/handoff`;
 const TARGET_INPUT_PATH = `${TARGET_ROOT}/artifact.tar`;
 const SOURCE_ARTIFACT_PATH = `${TARGET_HANDOFF_ROOT}/source/app`;
 const TARGET_ARTIFACT_PATH = `${TARGET_HANDOFF_ROOT}/target/app`;
+const TARGET_APPLICATIONS_ROOT =
+  '/home/wharfie/.local/share/wharfie-nodejs/applications';
 const PACKAGED_PATH =
   '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
@@ -255,10 +257,36 @@ export function purgeSteadyFilePreviewApplication(remote, artifactPath) {
     remediation:
       'Retry service purge with the same --confirm-data-loss application ID.',
   });
-  const receipt = runArtifactJson(
-    remote,
-    artifactPath,
-    args,
+  const retry = runArtifact(remote, artifactPath, args, {
+    allowFailure: true,
+  });
+  if (retry.status !== 0) {
+    const retryFailure = parseFinalJsonText(
+      retry.stderr.trim() || retry.stdout,
+      'steady-file application-data purge retry failure',
+    );
+    assert.deepEqual(retryFailure, failure);
+    const tree = remote.run(
+      '/usr/bin/find',
+      [
+        TARGET_APPLICATIONS_ROOT,
+        '-xdev',
+        '-printf',
+        '%y %m %U:%G %D:%i %s %p\\n',
+      ],
+      { allowFailure: true },
+    );
+    throw new Error(
+      [
+        'Steady-file application-data purge did not converge after its exact public retry.',
+        `failure=${JSON.stringify(retryFailure)}`,
+        `diagnosticStatus=${tree.status}`,
+        `diagnostic=${(tree.stdout || tree.stderr).trim().slice(0, 64 * 1024)}`,
+      ].join('\n'),
+    );
+  }
+  const receipt = parseFinalJson(
+    retry,
     'steady-file application-data purge retry',
   );
   return Object.freeze({

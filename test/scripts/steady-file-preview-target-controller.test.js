@@ -96,6 +96,58 @@ describe('steady-file preview target controller transport', () => {
     ]);
   });
 
+  it('reports a bounded target tree when the exact purge retry cannot converge', () => {
+    const incomplete = {
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'purge',
+      code: 'systemd-user-service-purge-incomplete',
+      message:
+        'Systemd user-service purge was interrupted and is safe to retry.',
+      remediation:
+        'Retry service purge with the same --confirm-data-loss application ID.',
+    };
+    const results = [
+      successfulSpawn({
+        status: 1,
+        stderr: `${JSON.stringify(incomplete)}\n`,
+      }),
+      successfulSpawn({
+        status: 1,
+        stderr: `${JSON.stringify(incomplete)}\n`,
+      }),
+      successfulSpawn({
+        stdout:
+          'd 700 1001:1001 1:2 4096 /home/wharfie/.local/share/wharfie-nodejs/applications\n',
+      }),
+    ];
+    let resultIndex = 0;
+    const spawn = createSpawnMock(() => results[resultIndex++]);
+    const remote = createSteadyFilePreviewRemote('preview-target', {
+      spawn,
+    });
+
+    expect(() =>
+      purgeSteadyFilePreviewApplication(
+        remote,
+        '/home/wharfie/preview/handoff/source/app',
+      ),
+    ).toThrow(
+      /diagnostic=d 700 1001:1001 1:2 4096 .*wharfie-nodejs\/applications/,
+    );
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(spawn.mock.calls[2][1]).toEqual([
+      'shell',
+      '--tty=false',
+      'preview-target',
+      '/usr/bin/find',
+      '/home/wharfie/.local/share/wharfie-nodejs/applications',
+      '-xdev',
+      '-printf',
+      '%y %m %U:%G %D:%i %s %p\\n',
+    ]);
+  });
+
   it('compares canonical JSON values without requiring matching object prototypes', () => {
     const fingerprint = Object.assign(Object.create(null), {
       bytes: 43,
