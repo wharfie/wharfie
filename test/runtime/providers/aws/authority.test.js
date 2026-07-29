@@ -33,6 +33,9 @@ function makeHarness(overrides = {}) {
   };
   const ec2 = {
     describeImages: jest.fn(async (request) => ({ request })),
+    describeInstanceCreditSpecifications: jest.fn(async (request) => ({
+      request,
+    })),
     describeInstanceTypeOfferings: jest.fn(async (request) => ({ request })),
     describeInstances: jest.fn(async (request) => ({ request })),
     describeInternetGateways: jest.fn(async (request) => ({ request })),
@@ -84,6 +87,7 @@ describe('AWS single-node read authority', () => {
     expect(Object.keys(authority.api).sort()).toEqual(
       [
         'describeImages',
+        'describeInstanceCreditSpecifications',
         'describeInstanceTypeOfferings',
         'describeInstances',
         'describeInternetGateways',
@@ -99,6 +103,15 @@ describe('AWS single-node read authority', () => {
     expect(authority.api.createSecurityGroup).toBeUndefined();
     await expect(authority.api.describeVpcs({ Filters: [] })).resolves.toEqual({
       request: { Filters: [] },
+    });
+    await expect(
+      authority.api.describeInstanceCreditSpecifications({
+        Filters: [{ Name: 'instance-id', Values: ['i-safe'] }],
+      }),
+    ).resolves.toEqual({
+      request: {
+        Filters: [{ Name: 'instance-id', Values: ['i-safe'] }],
+      },
     });
     await expect(
       authority.api.describeNetworkAcls({
