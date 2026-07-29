@@ -22,6 +22,7 @@ import {
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournal,
   prepareSingleNodeDeploymentMutation,
+  recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
   validateSingleNodeDeploymentJournalSuccessor,
 } from '../../../../src/core/runtime/single-node-deployment-journal.js';
@@ -226,14 +227,57 @@ async function makeProvisionedJournal() {
 }
 
 /**
- * @param {{failFirstDestroy?: boolean, missingJournal?: boolean}} [options]
+ * @param {string} role
+ */
+async function makePreparedJournal(role) {
+  const complete = await makeProvisionedJournal();
+  let journal = createSingleNodeDeploymentJournal({
+    desired: complete.desired,
+    providerIntent: complete.providerIntent,
+  });
+  journal = advanceSingleNodeDeploymentJournal(journal, 'provisioning');
+  return prepareSingleNodeDeploymentMutation(
+    journal,
+    createHetznerProvisioningMutationAttempt(
+      journal.providerIntent.intent,
+      role,
+    ),
+  );
+}
+
+/**
+ * @param {{failFirstDestroy?: boolean, failAfterPreparedRecovery?: boolean, missingJournal?: boolean, bindingError?: Error, preparedCreateOutcome?: 'found'|'pending'|'pending-then-found', destroyedJournal?: boolean}} [options]
  */
 async function makeHarness(options = {}) {
   /** @type {Readonly<Record<string, any>>|null} */
-  let journal = options.missingJournal ? null : await makeProvisionedJournal();
+  let journal = options.missingJournal
+    ? null
+    : options.preparedCreateOutcome
+      ? await makePreparedJournal('firewall')
+      : await makeProvisionedJournal();
+  if (options.destroyedJournal && journal !== null) {
+    journal = advanceSingleNodeDeploymentJournal(journal, 'destroying');
+    for (const role of ['server', 'primaryIp', 'firewall']) {
+      const resource = journal.resources.find(
+        (/** @type {Record<string, any>} */ entry) => entry.role === role,
+      );
+      if (resource === undefined) continue;
+      journal = recordSingleNodeDeploymentDeletion(
+        journal,
+        createHetznerDeletionRecord(
+          journal.providerIntent.intent,
+          role,
+          resource.providerResourceId,
+          null,
+        ),
+      );
+    }
+    journal = advanceSingleNodeDeploymentJournal(journal, 'destroyed');
+  }
   /** @type {string[]} */
   const events = [];
   let convergeCalls = 0;
+  let preparedRecoveryCalls = 0;
   const release = jest.fn(async () => undefined);
   const readToken = jest.fn(async () => {
     events.push('token');
@@ -243,14 +287,10 @@ async function makeHarness(options = {}) {
     events.push('api');
     return {};
   });
-  const dependencies = {
-    acquireOperationLock: async () => {
-      events.push('lock');
-      return release;
-    },
-    readToken,
-    bindCredential: async (/** @type {Record<string, any>} */ value) => {
-      events.push('bind');
+  const requireCredentialBinding = jest.fn(
+    async (/** @type {Record<string, any>} */ value) => {
+      events.push('require-binding');
+      if (options.bindingError) throw options.bindingError;
       return {
         schemaVersion: 1,
         kind: 'hetznerCredentialBindingEvidence',
@@ -258,6 +298,14 @@ async function makeHarness(options = {}) {
         bindingId: `whcb1_${sha256Base64Url('binding')}`,
       };
     },
+  );
+  const dependencies = {
+    acquireOperationLock: async () => {
+      events.push('lock');
+      return release;
+    },
+    readToken,
+    requireCredentialBinding,
     createApi,
     createJournalStore: () => ({
       prepareStorage: async () => {
@@ -280,12 +328,44 @@ async function makeHarness(options = {}) {
         return journal;
       },
     }),
+    reconcilePreparedMutation: async (
+      /** @type {Record<string, any>} */ value,
+    ) => {
+      preparedRecoveryCalls += 1;
+      events.push(`recover-create:${value.mutationAttempt.role}`);
+      if (
+        options.preparedCreateOutcome !== 'found' &&
+        !(
+          options.preparedCreateOutcome === 'pending-then-found' &&
+          preparedRecoveryCalls > 1
+        )
+      ) {
+        const error = /** @type {Error & {code?: string, role?: string}} */ (
+          new Error('prepared create cleanup remains pending')
+        );
+        error.code = 'HETZNER_PROVISIONING_DESTROY_RECOVERY_PENDING';
+        error.role = value.mutationAttempt.role;
+        throw error;
+      }
+      return createHetznerProvisionedResourceRecord(
+        value.intent,
+        value.mutationAttempt.role,
+        IDS[value.mutationAttempt.role],
+      );
+    },
     waitForAction: async () => undefined,
     convergeDestruction: async (/** @type {Record<string, any>} */ value) => {
       convergeCalls += 1;
+      if (options.failAfterPreparedRecovery === true && convergeCalls === 1) {
+        throw new Error('injected crash after prepared create recovery');
+      }
       const attempts = { ...value.storedDestroyAttempts };
       const deletions = { ...value.storedDeletionRecords };
       for (const role of ['server', 'primaryIp', 'firewall']) {
+        if (value.storedResourceIds[role] === null) {
+          events.push(`never-created:${role}`);
+          continue;
+        }
         if (deletions[role] !== null) {
           events.push(`recover:${role}`);
           continue;
@@ -349,8 +429,10 @@ async function makeHarness(options = {}) {
     events,
     release,
     readToken,
+    requireCredentialBinding,
     createApi,
     getJournal: () => journal,
+    getPreparedRecoveryCalls: () => preparedRecoveryCalls,
   };
 }
 
@@ -391,7 +473,7 @@ describe('Hetzner single-node destroy coordinator', () => {
     expect(harness.events.indexOf('storage')).toBeLessThan(
       harness.events.indexOf('token'),
     );
-    expect(harness.events.indexOf('bind')).toBeLessThan(
+    expect(harness.events.indexOf('require-binding')).toBeLessThan(
       harness.events.indexOf('api'),
     );
     expect(
@@ -436,6 +518,181 @@ describe('Hetzner single-node destroy coordinator', () => {
     ).toHaveLength(1);
     expect(harness.events).toContain('recover:server');
     expect(harness.release).toHaveBeenCalledTimes(2);
+  });
+
+  it('atomically adopts an exact owned prepared create before destroying it', async () => {
+    const harness = await makeHarness({ preparedCreateOutcome: 'found' });
+    const coordinator = createHetznerSingleNodeDestroyCoordinator(
+      harness.dependencies,
+    );
+
+    await expect(coordinator.destroy(harness.input)).resolves.toMatchObject({
+      status: 'destroyed',
+    });
+    const journal = /** @type {Readonly<Record<string, any>>} */ (
+      harness.getJournal()
+    );
+    const mutation = journal.mutationAttempts.find(
+      (/** @type {Record<string, any>} */ attempt) =>
+        attempt.role === 'firewall',
+    );
+    const resource = journal.resources.find(
+      (/** @type {Record<string, any>} */ entry) => entry.role === 'firewall',
+    );
+
+    expect(mutation).toMatchObject({
+      state: 'succeeded',
+      providerResourceId: IDS.firewall,
+    });
+    expect(resource).toMatchObject({
+      providerResourceId: IDS.firewall,
+      state: 'absent',
+    });
+    expect(harness.events.indexOf('recover-create:firewall')).toBeLessThan(
+      harness.events.indexOf('attempt:firewall'),
+    );
+    expect(harness.getPreparedRecoveryCalls()).toBe(1);
+  });
+
+  it('keeps a clean prepared-create inventory retryable in destroying', async () => {
+    const harness = await makeHarness({ preparedCreateOutcome: 'pending' });
+    const coordinator = createHetznerSingleNodeDestroyCoordinator(
+      harness.dependencies,
+    );
+
+    await expect(coordinator.destroy(harness.input)).rejects.toMatchObject({
+      code: 'HETZNER_PROVISIONING_DESTROY_RECOVERY_PENDING',
+      role: 'firewall',
+    });
+    const journal = /** @type {Readonly<Record<string, any>>} */ (
+      harness.getJournal()
+    );
+    const mutation = journal.mutationAttempts.find(
+      (/** @type {Record<string, any>} */ attempt) =>
+        attempt.role === 'firewall',
+    );
+
+    expect(mutation).toMatchObject({
+      state: 'prepared',
+      providerResourceId: null,
+    });
+    expect(journal.phase).toBe('destroying');
+    expect(journal.resources).toEqual([]);
+    expect(journal.destroyAttempts).toEqual([]);
+    expect(journal.deletionRecords).toEqual([]);
+    expect(harness.getPreparedRecoveryCalls()).toBe(1);
+  });
+
+  it('adopts and deletes a prepared create when it becomes visible on retry', async () => {
+    const harness = await makeHarness({
+      preparedCreateOutcome: 'pending-then-found',
+    });
+    const coordinator = createHetznerSingleNodeDestroyCoordinator(
+      harness.dependencies,
+    );
+
+    await expect(coordinator.destroy(harness.input)).rejects.toMatchObject({
+      code: 'HETZNER_PROVISIONING_DESTROY_RECOVERY_PENDING',
+    });
+    const interrupted = /** @type {Readonly<Record<string, any>>} */ (
+      harness.getJournal()
+    );
+    expect(interrupted.phase).toBe('destroying');
+    expect(interrupted.mutationAttempts[0]).toMatchObject({
+      state: 'prepared',
+      providerResourceId: null,
+    });
+    expect(harness.getPreparedRecoveryCalls()).toBe(1);
+
+    await expect(coordinator.destroy(harness.input)).resolves.toMatchObject({
+      status: 'destroyed',
+    });
+    expect(harness.getJournal()?.phase).toBe('destroyed');
+    expect(harness.getJournal()?.mutationAttempts[0]).toMatchObject({
+      state: 'succeeded',
+      providerResourceId: IDS.firewall,
+    });
+    expect(harness.getJournal()?.resources[0]).toMatchObject({
+      providerResourceId: IDS.firewall,
+      state: 'absent',
+    });
+    expect(harness.getPreparedRecoveryCalls()).toBe(2);
+  });
+
+  it('recovers a crash after durable exact adoption without reinventory', async () => {
+    const harness = await makeHarness({
+      preparedCreateOutcome: 'found',
+      failAfterPreparedRecovery: true,
+    });
+    const coordinator = createHetznerSingleNodeDestroyCoordinator(
+      harness.dependencies,
+    );
+
+    await expect(coordinator.destroy(harness.input)).rejects.toThrow(
+      'injected crash after prepared create recovery',
+    );
+    const interrupted = /** @type {Readonly<Record<string, any>>} */ (
+      harness.getJournal()
+    );
+    expect(interrupted.phase).toBe('destroying');
+    expect(interrupted.mutationAttempts[0]).toMatchObject({
+      state: 'succeeded',
+      providerResourceId: IDS.firewall,
+    });
+    expect(interrupted.resources[0]).toMatchObject({
+      providerResourceId: IDS.firewall,
+      state: 'present',
+    });
+    expect(harness.getPreparedRecoveryCalls()).toBe(1);
+
+    await expect(coordinator.destroy(harness.input)).resolves.toMatchObject({
+      status: 'destroyed',
+    });
+    expect(harness.getJournal()?.phase).toBe('destroyed');
+    expect(harness.getPreparedRecoveryCalls()).toBe(1);
+  });
+
+  it.each([
+    ['missing', new Error('credential binding missing')],
+    ['wrong-token', new Error('credential binding mismatch')],
+  ])(
+    'does not mutate the journal or provider when the binding is %s',
+    async (_name, bindingError) => {
+      const harness = await makeHarness({ bindingError });
+      const coordinator = createHetznerSingleNodeDestroyCoordinator(
+        harness.dependencies,
+      );
+      const before = /** @type {Readonly<Record<string, any>>} */ (
+        harness.getJournal()
+      );
+
+      await expect(coordinator.destroy(harness.input)).rejects.toBe(
+        bindingError,
+      );
+
+      expect(harness.getJournal()).toBe(before);
+      expect(harness.events.some((event) => event.startsWith('journal:'))).toBe(
+        false,
+      );
+      expect(harness.createApi).not.toHaveBeenCalled();
+      expect(harness.getPreparedRecoveryCalls()).toBe(0);
+      expect(harness.release).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('replays an already-destroyed journal without credentials or provider reads', async () => {
+    const harness = await makeHarness({ destroyedJournal: true });
+    const coordinator = createHetznerSingleNodeDestroyCoordinator(
+      harness.dependencies,
+    );
+
+    await expect(coordinator.destroy(harness.input)).resolves.toMatchObject({
+      status: 'destroyed',
+    });
+    expect(harness.readToken).not.toHaveBeenCalled();
+    expect(harness.requireCredentialBinding).not.toHaveBeenCalled();
+    expect(harness.createApi).not.toHaveBeenCalled();
+    expect(harness.release).toHaveBeenCalledTimes(1);
   });
 
   it('rejects missing local authority before reading credentials or provider state', async () => {
