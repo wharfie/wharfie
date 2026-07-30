@@ -1017,18 +1017,33 @@ async function inspectInstanceAttributes(api, instanceId, budget) {
  * @returns {Promise<'exact'|'incomplete'|'conflict'>}
  */
 async function inspectCpuCredits(api, instanceId, budget) {
-  const records = await readAllFlat(
-    api,
-    'describeInstanceCreditSpecifications',
-    {
-      Filters: [{ Name: 'instance-id', Values: [instanceId] }],
-      MaxResults: 1000,
-    },
+  if (budget.pages >= MAX_PAGES) {
+    throw new AwsSingleNodeEvidenceUnknownError();
+  }
+  const page = decodePage(
+    await read(
+      api,
+      'describeInstanceCreditSpecifications',
+      deepFreeze({ InstanceIds: [instanceId] }),
+    ),
     'InstanceCreditSpecifications',
-    'InstanceId',
-    INSTANCE_ID_PATTERN,
-    budget,
   );
+  consumeBudget(budget, page.records.length);
+  if (page.nextToken !== null) {
+    throw new AwsSingleNodeEvidenceUnknownError();
+  }
+  const seenIds = new Set();
+  for (const record of page.records) {
+    if (!isPlainObject(record)) {
+      throw new AwsSingleNodeEvidenceUnknownError();
+    }
+    const id = evidenceId(record.InstanceId, INSTANCE_ID_PATTERN);
+    if (seenIds.has(id)) {
+      throw new AwsSingleNodeEvidenceUnknownError();
+    }
+    seenIds.add(id);
+  }
+  const records = page.records;
   if (records.length === 0) return 'incomplete';
   if (records.length !== 1 || records[0].InstanceId !== instanceId) {
     return 'conflict';
