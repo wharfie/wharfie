@@ -24,6 +24,7 @@ import {
 } from '../../../src/core/runtime/single-node-deployment-intent.js';
 import { createSingleNodeDeploymentDesired } from '../../../src/core/runtime/single-node-deployment-desired.js';
 import { getSingleNodeDeploymentInstanceId } from '../../../src/core/runtime/single-node-deployment-identity.js';
+import { validateSingleNodeDeploymentPreview } from '../../../src/core/runtime/single-node-deployment-preview.js';
 import {
   AWS_SINGLE_NODE_APPLY_RESULT_KIND,
   AWS_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
@@ -108,7 +109,7 @@ const SOURCE_LEAF_NAMES = Object.freeze([
   'reconcile',
   'destroy',
 ]);
-const PACKAGED_LEAF_NAMES = Object.freeze(['apply', 'destroy']);
+const PACKAGED_LEAF_NAMES = Object.freeze(['preview', 'apply', 'destroy']);
 const DEFAULT_OPERATIONS = Object.freeze([
   prepareAwsSelectedSeaPlan,
   applyAwsSelectedSea,
@@ -212,6 +213,190 @@ function operationResult(method) {
 }
 
 /**
+ * @param {Readonly<Record<string, any>>} desired
+ * @returns {Readonly<Record<string, any>>}
+ */
+function createTestPreviewProviderSpec(desired) {
+  if (desired.intent.provider.kind === 'aws') {
+    return {
+      kind: 'aws',
+      scope: {
+        partition: 'aws',
+        accountId: '123456789012',
+        region: desired.intent.provider.region,
+      },
+      machineType: 't3.micro',
+      image: {
+        id: 'ami-0123456789abcdef0',
+        name: 'ubuntu-24.04',
+        ownerAccountId: '099720109477',
+        creationDate: '2026-01-01T00:00:00.000Z',
+        architecture: 'x86_64',
+        rootDeviceType: 'ebs',
+        virtualizationType: 'hvm',
+        enaSupport: true,
+        rootDeviceName: '/dev/sda1',
+        rootBlockDevice: {
+          snapshotId: 'snap-0123456789abcdef0',
+          volumeType: 'gp3',
+          sizeGiB: 8,
+          sourceEncrypted: true,
+          encrypted: true,
+          deleteOnTermination: true,
+        },
+      },
+      network: {
+        vpcId: 'vpc-0123456789abcdef0',
+        subnet: {
+          id: 'subnet-0123456789abcdef0',
+          availabilityZone: 'us-east-1a',
+          availabilityZoneId: 'use1-az1',
+          mapPublicIpOnLaunch: true,
+          assignIpv6AddressOnCreation: false,
+        },
+        networkAcl: {
+          id: 'acl-0123456789abcdef0',
+          associationId: 'aclassoc-0123456789abcdef0',
+          ipv4Ingress: {
+            allowRuleNumber: 100,
+            terminalDenyRuleNumber: 32767,
+          },
+          ipv4Egress: {
+            allowRuleNumber: 100,
+            terminalDenyRuleNumber: 32767,
+          },
+        },
+        routeTable: {
+          id: 'rtb-0123456789abcdef0',
+          destinationCidrBlock: '0.0.0.0/0',
+        },
+        internetGatewayId: 'igw-0123456789abcdef0',
+      },
+    };
+  }
+  return {
+    kind: 'hetzner',
+    location: { id: '1', name: desired.intent.provider.location },
+    machineType: { id: '2', name: 'cx22' },
+    image: { id: '3', name: 'ubuntu-24.04' },
+    network: { kind: 'public' },
+  };
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} desired
+ * @param {Readonly<Record<string, any>>|null} journal
+ * @returns {Readonly<Record<string, any>>[]}
+ */
+function createTestManagedResources(desired, journal) {
+  const roles =
+    desired.intent.provider.kind === 'aws'
+      ? ['instance', 'root-volume', 'security-group']
+      : ['firewall', 'primary-ip', 'server'];
+  /** @type {Readonly<Record<string, string>>} */
+  const ids =
+    desired.intent.provider.kind === 'aws'
+      ? {
+          instance: 'i-0123456789abcdef0',
+          'root-volume': 'vol-0123456789abcdef0',
+          'security-group': 'sg-0123456789abcdef0',
+        }
+      : {
+          firewall: '101',
+          'primary-ip': '102',
+          server: '103',
+        };
+  return roles.map((role) => ({
+    role,
+    id: journal === null ? null : ids[role],
+    state: journal === null ? 'planned' : 'present',
+  }));
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} desired
+ * @returns {Readonly<Record<string, string>>[]}
+ */
+function createTestReferencedResources(desired) {
+  return desired.intent.provider.kind === 'aws'
+    ? [
+        { role: 'image', id: 'ami-0123456789abcdef0' },
+        {
+          role: 'internet-gateway',
+          id: 'igw-0123456789abcdef0',
+        },
+        { role: 'network-acl', id: 'acl-0123456789abcdef0' },
+        { role: 'route-table', id: 'rtb-0123456789abcdef0' },
+        { role: 'subnet', id: 'subnet-0123456789abcdef0' },
+        { role: 'vpc', id: 'vpc-0123456789abcdef0' },
+      ]
+    : [
+        { role: 'image', id: '3' },
+        { role: 'location', id: '1' },
+        { role: 'machine-type', id: '2' },
+      ];
+}
+
+/**
+ * @param {{desired: Readonly<Record<string, any>>, providerPlan: Readonly<Record<string, any>>, journal: Readonly<Record<string, any>>|null}} request
+ * @returns {Readonly<Record<string, any>>}
+ */
+function createTestPreviewReceipt(request) {
+  const { desired, providerPlan, journal } = request;
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: 'wharfie.single-node-deployment.preview',
+    provider: desired.intent.provider.kind,
+    status: journal === null ? providerPlan.status : 'recovery-required',
+    blockedReason: journal === null ? providerPlan.blockedReason : null,
+    deployment: Object.freeze({
+      appId: desired.intent.appId,
+      deploymentId: desired.intent.deployment.id,
+      deploymentInstanceId: desired.deploymentInstanceId,
+      revisionId: desired.artifact.revisionId,
+      desiredRevisionId: desired.desiredRevisionId,
+      artifact: Object.freeze({
+        artifactId: desired.artifact.artifactId,
+        byteDigest: desired.artifact.byteDigest,
+        size: desired.artifact.size,
+        target: desired.intent.target,
+      }),
+      mode: desired.intent.mode,
+      machine: desired.intent.machine,
+      access: desired.intent.access,
+    }),
+    journal:
+      journal === null
+        ? Object.freeze({
+            state: 'absent',
+            phase: null,
+            desiredMatches: null,
+          })
+        : Object.freeze({
+            state: 'present',
+            phase: journal.phase,
+            desiredMatches: true,
+          }),
+    providerSpec: createTestPreviewProviderSpec(desired),
+    resources: Object.freeze({
+      referenced: Object.freeze(createTestReferencedResources(desired)),
+      managed: Object.freeze(createTestManagedResources(desired, journal)),
+    }),
+    actions: Object.freeze(
+      (journal === null
+        ? providerPlan.actions
+        : [
+            { kind: 'verify-managed-node' },
+            { kind: 'verify-or-repair-application' },
+          ]
+      ).map((/** @type {Record<string, any>} */ action) =>
+        Object.freeze({ kind: action.kind }),
+      ),
+    ),
+  });
+}
+
+/**
  * @param {(options?: Record<string, any>) => import('commander').Command} factory
  * @param {Record<string, any>} [operations]
  * @returns {{command: import('commander').Command, output: Record<string, jest.Mock>, processRef: {cwd: jest.Mock<() => string>, exitCode: number | undefined}, readJsonObjectFile: jest.Mock}}
@@ -265,6 +450,74 @@ function makePackagedHarness(overrides = {}) {
     artifactRecord: EMBEDDED_ARTIFACT_RECORD,
     source,
   }));
+  const preview = jest.fn(
+    async (/** @type {Record<string, any>} */ request) => ({
+      schemaVersion: 1,
+      kind: 'hetznerSingleNodeDeploymentPlan',
+      providerSpec: { kind: 'testHetznerProviderSpec' },
+      inspection: {
+        status: 'absent',
+        observedOwnedResourceCount: 0,
+      },
+      status: 'actionable',
+      blockedReason: null,
+      actions: [
+        {
+          actionId: 'test-provision',
+          kind: 'provision-managed-node',
+          dependsOn: [],
+        },
+        {
+          actionId: 'test-activate',
+          kind: 'activate-application',
+          dependsOn: ['test-provision'],
+        },
+      ],
+      desired: request.desired,
+      credential: 'must-not-be-projected',
+    }),
+  );
+  const awsPreview = jest.fn(
+    async (/** @type {Record<string, any>} */ request) => ({
+      schemaVersion: 1,
+      kind: 'awsSingleNodeDeploymentPlan',
+      providerSpec: { kind: 'testAwsProviderSpec' },
+      inspection: {
+        status: 'absent',
+        observedOwnedResourceCount: 0,
+      },
+      status: 'actionable',
+      blockedReason: null,
+      actions: [
+        {
+          actionId: 'test-provision',
+          kind: 'provision-managed-node',
+          dependsOn: [],
+        },
+        {
+          actionId: 'test-activate',
+          kind: 'activate-application',
+          dependsOn: ['test-provision'],
+        },
+      ],
+      desired: request.desired,
+      credential: 'must-not-be-projected',
+    }),
+  );
+  const readJournal = jest.fn(async () => null);
+  const prepareJournalStorage = jest.fn();
+  const initializeJournal = jest.fn();
+  const commitJournal = jest.fn();
+  const journalStore = Object.freeze({
+    read: readJournal,
+    prepareStorage: prepareJournalStorage,
+    initialize: initializeJournal,
+    commit: commitJournal,
+  });
+  const createJournalStore =
+    overrides.createJournalStore ?? jest.fn(() => journalStore);
+  const createPreviewReceipt =
+    overrides.createPreviewReceipt ?? jest.fn(createTestPreviewReceipt);
   const apply = jest.fn(async (/** @type {Record<string, any>} */ request) => {
     const desired = createSingleNodeDeploymentDesired({
       intent: request.intent,
@@ -347,6 +600,12 @@ function makePackagedHarness(overrides = {}) {
   const dependencies = {
     readRevisionRuntimePair,
     readDeploymentPayload,
+    createPreviewByProvider: {
+      aws: overrides.createPreviewByProvider?.aws ?? awsPreview,
+      hetzner: overrides.createPreviewByProvider?.hetzner ?? preview,
+    },
+    createJournalStore,
+    createPreviewReceipt,
     createApplyCoordinator,
     createDestroyCoordinator,
     createApplyCoordinatorByProvider: {
@@ -367,6 +626,15 @@ function makePackagedHarness(overrides = {}) {
     source,
     readRevisionRuntimePair,
     readDeploymentPayload,
+    preview,
+    awsPreview,
+    readJournal,
+    prepareJournalStorage,
+    initializeJournal,
+    commitJournal,
+    journalStore,
+    createJournalStore,
+    createPreviewReceipt,
     apply,
     createApplyCoordinator,
     awsApply,
@@ -452,7 +720,7 @@ beforeEach(() => {
 });
 
 describe('deployment command adapters', () => {
-  it('keeps the source lifecycle and narrows packaged deployment to apply and destroy', () => {
+  it('keeps the source lifecycle and narrows packaged deployment to preview, apply, and destroy', () => {
     expect(createSourceDeploymentCommand).toEqual(expect.any(Function));
     expect(createPackagedDeploymentCommand).toEqual(expect.any(Function));
     expectFreshLeaves(createSourceDeploymentCommand, SOURCE_LEAF_NAMES);
@@ -477,6 +745,17 @@ describe('deployment command adapters', () => {
       '--json',
       '--dir',
       '--output-dir',
+    ]);
+    expect(
+      leaf(packaged, 'preview').options.map((option) => option.long),
+    ).toEqual([
+      '--deployment',
+      '--provider',
+      '--location',
+      '--region',
+      '--allow-ssh-from',
+      '--data-root',
+      '--json',
     ]);
     expect(
       leaf(packaged, 'apply').options.map((option) => option.long),
@@ -677,6 +956,23 @@ describe('source deployment command adapter', () => {
 describe('packaged deployment command adapter', () => {
   it.each([
     [
+      'preview --provider',
+      'preview',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'hetzner',
+        '--provider',
+        'aws',
+        '--location',
+        'ash',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      '--provider',
+    ],
+    [
       'apply --deployment',
       'apply',
       [
@@ -817,6 +1113,8 @@ describe('packaged deployment command adapter', () => {
       ).rejects.toThrow(`${optionName} may be specified only once.`);
 
       expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
+      expect(harness.preview).not.toHaveBeenCalled();
+      expect(harness.awsPreview).not.toHaveBeenCalled();
       expect(harness.apply).not.toHaveBeenCalled();
       expect(harness.awsApply).not.toHaveBeenCalled();
       expect(harness.destroy).not.toHaveBeenCalled();
@@ -848,6 +1146,36 @@ describe('packaged deployment command adapter', () => {
   });
 
   it.each([
+    [
+      'AWS preview without a region',
+      'preview',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'aws',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      'AWS packaged deployment preview requires --region.',
+    ],
+    [
+      'Hetzner preview with an AWS region',
+      'preview',
+      [
+        '--deployment',
+        'production',
+        '--provider',
+        'hetzner',
+        '--location',
+        'ash',
+        '--region',
+        'us-east-1',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ],
+      'Hetzner packaged deployment preview does not accept --region.',
+    ],
     [
       'an unsupported apply provider',
       'apply',
@@ -936,12 +1264,229 @@ describe('packaged deployment command adapter', () => {
       expect(harness.processRef.exitCode).toBe(1);
       expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
       expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+      expect(harness.preview).not.toHaveBeenCalled();
+      expect(harness.awsPreview).not.toHaveBeenCalled();
       expect(harness.createApplyCoordinator).not.toHaveBeenCalled();
       expect(harness.createAwsApplyCoordinator).not.toHaveBeenCalled();
       expect(harness.createDestroyCoordinator).not.toHaveBeenCalled();
       expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
     },
   );
+
+  it('maps exact embedded authority and a read-only journal lookup into one Hetzner preview receipt', async () => {
+    const harness = makePackagedHarness();
+
+    await parse(harness.command, [
+      'preview',
+      '--deployment',
+      'production',
+      '--provider',
+      'hetzner',
+      '--location',
+      'ash',
+      '--allow-ssh-from',
+      '198.51.100.9/32',
+      '--allow-ssh-from',
+      '192.0.2.4/32',
+      '--json',
+    ]);
+
+    const intent = createSingleNodeDeploymentIntent({
+      deployment: { id: 'production' },
+      appId: 'adapter-app',
+      target: EMBEDDED_ARTIFACT_RECORD.target,
+      mode: SINGLE_NODE_DEPLOYMENT_MODE,
+      machine: SINGLE_NODE_MACHINE,
+      access: {
+        kind: SINGLE_NODE_ACCESS_KIND,
+        allowedIpv4: ['198.51.100.9/32', '192.0.2.4/32'],
+      },
+      provider: createHetznerSingleNodeDeploymentProvider('ash'),
+    });
+    const desired = createSingleNodeDeploymentDesired({
+      intent,
+      revision: EMBEDDED_REVISION,
+      artifactRecord: EMBEDDED_ARTIFACT_RECORD,
+      observation: EMBEDDED_OBSERVATION,
+    });
+
+    expectExactCall(harness.preview, { desired });
+    expect(harness.awsPreview).not.toHaveBeenCalled();
+    expectExactCall(harness.createJournalStore, {
+      appId: 'adapter-app',
+      deploymentInstanceId: desired.deploymentInstanceId,
+      dataRoot: '/stable/wharfie-data',
+    });
+    expect(harness.readJournal).toHaveBeenCalledTimes(1);
+    expect(harness.prepareJournalStorage).not.toHaveBeenCalled();
+    expect(harness.initializeJournal).not.toHaveBeenCalled();
+    expect(harness.commitJournal).not.toHaveBeenCalled();
+    const providerPlan = await harness.preview.mock.results[0].value;
+    expectExactCall(harness.createPreviewReceipt, {
+      desired,
+      providerPlan,
+      journal: null,
+    });
+    const receipt = harness.createPreviewReceipt.mock.results[0].value;
+    const validatedReceipt = validateSingleNodeDeploymentPreview(receipt);
+    expect(harness.output.json).toHaveBeenCalledWith(validatedReceipt);
+    expect(JSON.stringify(validatedReceipt)).not.toContain(
+      'must-not-be-projected',
+    );
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.createApplyCoordinator).not.toHaveBeenCalled();
+    expect(harness.createAwsApplyCoordinator).not.toHaveBeenCalled();
+    expect(harness.createDestroyCoordinator).not.toHaveBeenCalled();
+    expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
+    expect(harness.output.line).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('uses explicit local authority and emits a compact AWS preview summary', async () => {
+    const harness = makePackagedHarness();
+    harness.readJournal.mockResolvedValueOnce({
+      phase: 'active',
+      generation: 7,
+    });
+
+    await parse(harness.command, [
+      'preview',
+      '--deployment',
+      'production',
+      '--provider',
+      'aws',
+      '--region',
+      'us-east-1',
+      '--allow-ssh-from',
+      '198.51.100.9/32',
+      '--data-root',
+      '/operator/wharfie',
+    ]);
+
+    expect(harness.awsPreview).toHaveBeenCalledTimes(1);
+    expect(harness.preview).not.toHaveBeenCalled();
+    expect(harness.createJournalStore).toHaveBeenCalledWith(
+      expect.objectContaining({ dataRoot: '/operator/wharfie' }),
+    );
+    expect(harness.resolveDataRoot).not.toHaveBeenCalled();
+    const desired = harness.awsPreview.mock.calls[0][0].desired;
+    expect(harness.output.line).toHaveBeenCalledWith(
+      `production preview is recovery-required on aws/us-east-1 with t3.micro; 3 managed roles, 6 references; journal active; 2 semantic actions (${desired.deploymentInstanceId})`,
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits selected Hetzner placement and machine in the human preview summary', async () => {
+    const harness = makePackagedHarness();
+
+    await parse(harness.command, [
+      'preview',
+      '--deployment',
+      'production',
+      '--provider',
+      'hetzner',
+      '--location',
+      'ash',
+      '--allow-ssh-from',
+      '198.51.100.9/32',
+    ]);
+
+    const desired = harness.preview.mock.calls[0][0].desired;
+    expect(harness.output.line).toHaveBeenCalledWith(
+      `production preview is actionable on hetzner/ash with cx22; 3 managed roles, 3 references; journal absent; 2 semantic actions (${desired.deploymentInstanceId})`,
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes held payload authority when provider preview fails', async () => {
+    const previewFailure = new Error('provider preview failed');
+    const preview = jest.fn(async () => {
+      throw previewFailure;
+    });
+    const harness = makePackagedHarness({
+      createPreviewByProvider: {
+        hetzner: preview,
+      },
+    });
+
+    await parse(harness.command, [
+      'preview',
+      '--deployment',
+      'production',
+      '--provider',
+      'hetzner',
+      '--location',
+      'ash',
+      '--allow-ssh-from',
+      '198.51.100.9/32',
+      '--json',
+    ]);
+
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(harness.readJournal).toHaveBeenCalledTimes(1);
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.createPreviewReceipt).not.toHaveBeenCalled();
+    expect(harness.output.failure).toHaveBeenCalledWith(previewFailure);
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('refuses a validated preview receipt outside exact embedded authority', async () => {
+    const createPreviewReceipt = jest.fn(
+      (
+        /** @type {{desired: Readonly<Record<string, any>>, providerPlan: Readonly<Record<string, any>>, journal: Readonly<Record<string, any>>|null}} */ request,
+      ) => {
+        const receipt = createTestPreviewReceipt(request);
+        const foreignIntent = createSingleNodeDeploymentIntent({
+          deployment: request.desired.intent.deployment,
+          appId: 'foreign-app',
+          target: request.desired.intent.target,
+          mode: request.desired.intent.mode,
+          machine: request.desired.intent.machine,
+          access: request.desired.intent.access,
+          provider: request.desired.intent.provider,
+        });
+        return {
+          ...receipt,
+          deployment: {
+            ...receipt.deployment,
+            appId: 'foreign-app',
+            deploymentInstanceId:
+              getSingleNodeDeploymentInstanceId(foreignIntent),
+          },
+        };
+      },
+    );
+    const harness = makePackagedHarness({ createPreviewReceipt });
+
+    await parse(harness.command, [
+      'preview',
+      '--deployment',
+      'production',
+      '--provider',
+      'hetzner',
+      '--location',
+      'ash',
+      '--allow-ssh-from',
+      '198.51.100.9/32',
+      '--json',
+    ]);
+
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment preview result does not match the exact embedded authority.',
+      }),
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.processRef.exitCode).toBe(1);
+  });
 
   it('maps exact embedded authority into one Hetzner apply request', async () => {
     const harness = makePackagedHarness();

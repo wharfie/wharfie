@@ -80,6 +80,14 @@ not define a third-party plugin SDK.
 Plan is strictly read-only. It cannot package, stage, create a control store,
 reserve an address, or perform another provider mutation.
 
+The packaged `deployment preview` command realizes that boundary as a
+point-in-time diagnostic receipt. It validates the embedded desired state,
+performs only provider identity/describe/list queries, and reads an existing
+local journal without creating its directory. The receipt separates external
+references from managed resource roles and names semantic apply steps; it does
+not claim to predict generated resource identities or byte-exact mutation
+requests. Apply always re-plans before persisting those authorities.
+
 ### Minimal physical substrate
 
 The preview uses provider public/default networking.

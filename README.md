@@ -611,22 +611,34 @@ consume exact durable staged evidence.
 
 `wharfie app package --self-deployable` creates an operator SEA carrying an
 authenticated Linux deployment SEA. That packaged executable replaces the
-legacy source lifecycle with narrow AWS and Hetzner apply and destroy
+legacy source lifecycle with narrow AWS and Hetzner preview, apply, and destroy
 commands:
 
 ```text
+<app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
 
-Apply requires exactly `--region` for AWS or `--location` for Hetzner. Repeat
-`--allow-ssh-from` for each operator IPv4 `/32`. Credentials are never command
-arguments: AWS uses the ordinary credential chain and Hetzner reads ambient
-`HCLOUD_TOKEN`. Use a dedicated Hetzner project for this preview because its
-token is project-wide. The coordinator creates or recovers the fixed small
-single-node systemd-user deployment and emits a compact nonsecret result.
+Preview and apply require exactly `--region` for AWS or `--location` for
+Hetzner. Repeat `--allow-ssh-from` for each operator IPv4 `/32`. Credentials
+are never command arguments: AWS uses the ordinary credential chain and
+Hetzner reads ambient `HCLOUD_TOKEN`. Use a dedicated Hetzner project for this
+preview because its token is project-wide.
+
+Preview is a strictly read-only, point-in-time provider query. It does not
+create the data root, acquire an operation lock, stage an artifact, generate
+SSH material, reserve identities, or call a provider mutation. Its redacted
+receipt shows the exact embedded revision and artifact, selected placement and
+machine configuration, referenced infrastructure, managed resource roles,
+local journal phase when present, and the semantic steps apply would evaluate.
+AWS can identify the account, partition, and region; the Hetzner API validates
+the token through project-scoped reads but does not expose a project identity.
+Apply re-plans current provider state and then creates or recovers the fixed
+small single-node systemd-user deployment.
 
 Destroy reads only the embedded app identity plus the exact durable journal
 under the selected data root; it does not decode the embedded Linux payload.
@@ -646,7 +658,7 @@ primary IPv4, and server. Application and control data currently live on that
 node's root disk. Destroy therefore deletes that data along with the owned
 root volume or server; it is not a retained-data operation.
 
-Packaged plan, inspect, and reconcile are not exposed yet. The AWS path
+Packaged inspect and reconcile are not exposed yet. The AWS path
 completed a live packaged apply/activate/adopt/restart/destroy slice in
 `us-east-2` on 2026-07-29, including independently verified instance, volume,
 and security-group cleanup. The Hetzner path completed the equivalent slice in
@@ -742,6 +754,7 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
 - [SEA packaging reproducibility checkpoint](llm/checkpoints/2026-07-30-sea-packaging-reproducibility.md) — the root-cause analysis and byte-identical nested operator proof for the pinned default unsigned/ad-hoc builder path, with independent cloud and local cleanup.
 - [Two-provider self-deployment checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md) — the live AWS and Hetzner apply/activate/adopt/restart/destroy proofs, independent provider cleanup, and remaining ADR 0035 acceptance boundary.
+- [Packaged deployment preview checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-preview.md) — the stable zero-write receipt, structural read-only provider boundaries, live AWS/Hetzner packaged proofs, and complete artifact cleanup.
 - [Single-host developer preview checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md) — the accepted split builder/clean-target product journey, unfinished timer across controller exit, update/rollback, purge, checksums, complete cleanup, and Outcome 2 handoff.
 - [Steady-file systemd walkthrough checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md) — the preceding same-host Linux arm64 product journey and the private-storage defect it exposed.
 - [Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md) — the preceding restart point for the checksummed disposable-Ubuntu package, crash/reboot continuation, activation-recovery matrix, retained reads, uninstall/prune, cleanup, and next work.
