@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promises } from 'node:fs';
@@ -11,6 +12,20 @@ import {
 
 const CODE_SIGNING_IDENTITY_PATTERN =
   /^\s*\d+\)\s+([0-9a-f]{40,64})\s+"([^"]+)"\s*$/gim;
+const CODE_SIGNING_IDENTIFIER_PREFIX = 'io.wharfie.sea.sha256.';
+
+/**
+ * Derive a stable codesign identifier from the exact unsigned SEA bytes.
+ * This prevents codesign from falling back to the private build filename,
+ * whose random suffix is intentionally not part of artifact identity.
+ * @param {Buffer | Uint8Array} bytes - Exact unsigned SEA bytes.
+ * @returns {string} - Stable reverse-DNS-style codesign identifier.
+ */
+function createCodeSigningIdentifier(bytes) {
+  return `${CODE_SIGNING_IDENTIFIER_PREFIX}${createHash('sha256')
+    .update(bytes)
+    .digest('hex')}`;
+}
 
 /**
  * @typedef CodeSigningIdentity
@@ -227,6 +242,8 @@ class MacOSBinarySignature extends BaseResource {
     }
     const beforeSigningBytes = await promises.readFile(binaryPath);
     generationBuild.getSuccessfulBuildEvidence(beforeSigningBytes);
+    const codeSigningIdentifier =
+      createCodeSigningIdentifier(beforeSigningBytes);
     const signingDir = await promises.mkdtemp(
       join(tmpdir(), 'wharfie-macos-signing-'),
     );
@@ -250,6 +267,8 @@ class MacOSBinarySignature extends BaseResource {
           '--verify',
           '--options',
           'runtime',
+          '--identifier',
+          codeSigningIdentifier,
           '--sign',
           '-',
           '--entitlements',
@@ -272,6 +291,8 @@ class MacOSBinarySignature extends BaseResource {
           '--verify',
           '--options',
           'runtime',
+          '--identifier',
+          codeSigningIdentifier,
           '--sign',
           identity.hash,
           '--entitlements',

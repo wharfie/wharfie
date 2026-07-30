@@ -545,6 +545,66 @@ export function greet(input) {
     expect(changedLock.revisionId).not.toBe(changedRuntime.revisionId);
   });
 
+  it('excludes only known runtime documentation from application revision identity', async () => {
+    const appDir = await makeAppFixture();
+    const runtimeRoot = await makeRuntimeFixture();
+    const runtimeReadmes = [
+      path.join(runtimeRoot, 'src', 'README.md'),
+      path.join(runtimeRoot, 'src', 'cli', 'README.md'),
+      path.join(runtimeRoot, 'src', 'core', 'README.md'),
+    ];
+    await Promise.all([
+      fsp.mkdir(path.join(runtimeRoot, 'src', 'cli')),
+      fsp.mkdir(path.join(runtimeRoot, 'src', 'core')),
+    ]);
+    await Promise.all(
+      runtimeReadmes.map((runtimeReadme) =>
+        fsp.writeFile(runtimeReadme, 'runtime guide one\n'),
+      ),
+    );
+
+    const first = await compileApplicationRevision({
+      appDir,
+      manifest: makeManifest(),
+      runtimeRoot,
+    });
+
+    await Promise.all(
+      runtimeReadmes.map((runtimeReadme) =>
+        fsp.writeFile(runtimeReadme, 'runtime guide two\n'),
+      ),
+    );
+    const documentationChanged = await compileApplicationRevision({
+      appDir,
+      manifest: makeManifest(),
+      runtimeRoot,
+    });
+    expect(documentationChanged.revisionId).toBe(first.revisionId);
+
+    const runtimeMarkdown = path.join(
+      runtimeRoot,
+      'src',
+      'runtime-template.md',
+    );
+    await fsp.writeFile(runtimeMarkdown, 'runtime content one\n');
+    const runtimeMarkdownAdded = await compileApplicationRevision({
+      appDir,
+      manifest: makeManifest(),
+      runtimeRoot,
+    });
+    expect(runtimeMarkdownAdded.revisionId).not.toBe(first.revisionId);
+
+    await fsp.writeFile(runtimeMarkdown, 'runtime content two\n');
+    const runtimeMarkdownChanged = await compileApplicationRevision({
+      appDir,
+      manifest: makeManifest(),
+      runtimeRoot,
+    });
+    expect(runtimeMarkdownChanged.revisionId).not.toBe(
+      runtimeMarkdownAdded.revisionId,
+    );
+  });
+
   it('requires exact locked external packages and dependency declarations', async () => {
     const appDir = await makeAppFixture();
     const contract = getTargetIndependentAppContract({

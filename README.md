@@ -740,6 +740,8 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
+- [SEA packaging reproducibility checkpoint](llm/checkpoints/2026-07-30-sea-packaging-reproducibility.md) — the root-cause analysis and byte-identical nested operator proof for the pinned default unsigned/ad-hoc builder path, with independent cloud and local cleanup.
+- [Two-provider self-deployment checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md) — the live AWS and Hetzner apply/activate/adopt/restart/destroy proofs, independent provider cleanup, and remaining ADR 0035 acceptance boundary.
 - [Single-host developer preview checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md) — the accepted split builder/clean-target product journey, unfinished timer across controller exit, update/rollback, purge, checksums, complete cleanup, and Outcome 2 handoff.
 - [Steady-file systemd walkthrough checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md) — the preceding same-host Linux arm64 product journey and the private-storage defect it exposed.
 - [Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md) — the preceding restart point for the checksummed disposable-Ubuntu package, crash/reboot continuation, activation-recovery matrix, retained reads, uninstall/prune, cleanup, and next work.
@@ -1314,11 +1316,14 @@ The frozen-lock contract deliberately ignores package lifecycle scripts,
 creates no package `bin` links, and treats failure of a selected optional
 package as fatal. It rejects aliases, links, bundled dependencies, unsupported
 targets, and non-registry edges. Private-registry authentication, workspace-lock
-selection, musl Linux, and reproducible builds are not yet supported. Published native
-packages must already contain usable locked target bytes. Windows SEA targets
-are deliberately deferred until private runtime extraction has a tested ACL and
-reparse-point design. Moved Darwin SEAs and the clean hosted-Linux verifier
-exercise a real LMDB dependency with Node absent from `PATH`.
+selection and musl Linux are not yet supported. The pinned default unsigned
+Linux and ad-hoc macOS builder path reproduces exact SEA bytes for identical
+sealed inputs; certificate-signed and cross-host reproducibility remain outside
+that proof. Published native packages must already contain usable locked target
+bytes. Windows SEA targets are deliberately deferred until private runtime
+extraction has a tested ACL and reparse-point design. Moved Darwin SEAs and the
+clean hosted-Linux verifier exercise a real LMDB dependency with Node absent
+from `PATH`.
 
 Ordinary packaged application argv does not prepare Wharfie's core native
 dependencies. Reserved operator and private-runtime paths prepare them lazily

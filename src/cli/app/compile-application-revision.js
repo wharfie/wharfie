@@ -60,6 +60,11 @@ const JAVASCRIPT_SOURCE_EXTENSIONS = new Set([
   '.tsx',
 ]);
 const NODE_MODULE_SPECIFIERS = new Set(['module', 'node:module']);
+const RUNTIME_DOCUMENTATION_PATHS = new Set([
+  'src/README.md',
+  'src/cli/README.md',
+  'src/core/README.md',
+]);
 
 /**
  * @typedef Sha256Digest
@@ -1598,6 +1603,9 @@ export async function createRuntimeInput(
   const files = await describeFileTree(root, {
     includePath: (logicalPath, kind) => {
       if (logicalPath === 'package.json' && kind === 'file') return true;
+      if (kind === 'file' && RUNTIME_DOCUMENTATION_PATHS.has(logicalPath)) {
+        return false;
+      }
       if (logicalPath === 'src' || logicalPath.startsWith('src/')) return true;
       if (logicalPath === 'bin' && kind === 'directory') return true;
       if (logicalPath === 'bin/wharfie' && kind === 'file') return true;

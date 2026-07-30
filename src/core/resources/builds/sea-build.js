@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   constants as fsConstants,
@@ -38,6 +38,28 @@ const NODE_SEA_SENTINEL_FUSE = Buffer.from(
 );
 const FILE_SEQUENCE_SCAN_CHUNK_SIZE = 1024 * 1024;
 const FUSE_MARKER_GENERATION_ATTEMPTS = 16;
+const FUSE_MARKER_DOMAIN = 'wharfie.sea.nested-fuse-mask.v1\0';
+
+/**
+ * Render one sealed build input as a canonical path relative to the private
+ * build directory. Node embeds its SEA config paths in the generated blob, so
+ * absolute temporary paths would make otherwise identical builds differ.
+ * @param {string} buildDir - Private SEA build directory.
+ * @param {string} filePath - Path known to be inside the build directory.
+ * @returns {string} - Slash-separated path relative to buildDir.
+ */
+function toSeaConfigPath(buildDir, filePath) {
+  const relativePath = relative(resolve(buildDir), resolve(filePath));
+  if (
+    relativePath.length === 0 ||
+    isAbsolute(relativePath) ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${sep}`)
+  ) {
+    throw new Error('SEA config path must name a file inside its build tree.');
+  }
+  return relativePath.split(sep).join('/');
+}
 
 /**
  * Resolve the source-tree public app API only when a nested build is actually
@@ -177,20 +199,29 @@ async function fileContainsSequence(filePath, needle) {
 }
 
 /**
- * Create a same-length marker absent from both inputs to an injection. The
- * marker is ASCII so failures remain diagnosable in binary inspection.
+ * Create a deterministic same-length marker absent from both inputs to an
+ * injection. The marker is ASCII so failures remain diagnosable in binary
+ * inspection.
  * @param {string} nodeBinaryPath - Pre-injection Node executable.
  * @param {Buffer} blobData - Original SEA blob.
  * @returns {Promise<Buffer>} - Collision-free marker.
  */
 async function createCollisionFreeFuseMarker(nodeBinaryPath, blobData) {
+  const blobDigest = createHash('sha256').update(blobData).digest();
   for (
     let attempt = 0;
     attempt < FUSE_MARKER_GENERATION_ATTEMPTS;
     attempt += 1
   ) {
+    const attemptBytes = Buffer.allocUnsafe(4);
+    attemptBytes.writeUInt32BE(attempt);
+    const markerDigest = createHash('sha256')
+      .update(FUSE_MARKER_DOMAIN, 'utf8')
+      .update(blobDigest)
+      .update(attemptBytes)
+      .digest('base64url');
     const marker = Buffer.from(
-      `WHARFIE_SEA_MASK_${randomBytes(32).toString('base64url')}`.slice(
+      `WHARFIE_SEA_MASK_${markerDigest}`.slice(
         0,
         NODE_SEA_SENTINEL_FUSE.length,
       ),
@@ -1172,7 +1203,7 @@ class SeaBuild extends BaseResource {
       platform: 'node',
       minify: true,
       keepNames: false,
-      sourcemap: 'inline',
+      sourcemap: false,
       target: `node${nodeVersion}`,
       logLevel: 'silent',
       external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'lmdb'],
@@ -1394,14 +1425,19 @@ class SeaBuild extends BaseResource {
     const preparedAssets = await this._prepareSeaAssetsWithEvidence(buildDir);
     const assets = preparedAssets.assets;
     const seaConfig = {
-      main: join(buildDir, 'esbundle.js'),
-      output: blobPath,
+      main: toSeaConfigPath(buildDir, codeBundlePath),
+      output: toSeaConfigPath(buildDir, blobPath),
       disableExperimentalSEAWarning: true,
       useSnapshot: false,
       useCodeCache: false,
       execArgv: [],
       execArgvExtension: 'cli',
-      assets,
+      assets: Object.fromEntries(
+        Object.entries(assets).map(([name, assetPath]) => [
+          name,
+          toSeaConfigPath(buildDir, assetPath),
+        ]),
+      ),
     };
 
     writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
@@ -1414,8 +1450,12 @@ class SeaBuild extends BaseResource {
     }
     await execFile(
       process.execPath,
-      ['--no-warnings', '--experimental-sea-config', seaConfigPath],
-      {},
+      [
+        '--no-warnings',
+        '--experimental-sea-config',
+        toSeaConfigPath(buildDir, seaConfigPath),
+      ],
+      { cwd: buildDir },
       true,
     );
     const codeBundleAfter = await readStableRegularFile(

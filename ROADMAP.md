@@ -256,20 +256,22 @@ capability.
   owned-resource cleanup. The
   [two-provider checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md)
   records both the result and the remaining ADR 0035 evidence gap.
+- Repeated default packaging now reproduces the exact self-deployable operator
+  SEA bytes on the pinned builder. The
+  [reproducibility checkpoint](llm/checkpoints/2026-07-30-sea-packaging-reproducibility.md)
+  records the failure, fixes, final nested-artifact proof, and signing boundary.
 
 ### Work next
 
-1. Resolve final SEA byte reproducibility or formalize retention of the
-   original operator SEA as recovery authority.
-2. Complete the remaining ADR 0035 evidence in one repeatable, redacted
+1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
    two-provider harness, including read-only planning, guest audit, reboot,
    unfinished durable work, fault injection, and bounded proof receipts.
-3. Extend the packaged surface from apply/destroy to an approachable credential
+2. Extend the packaged surface from apply/destroy to an approachable credential
    check, preview, status, update, and recovery sequence. Preview every mutation
    and distinguish owned resources from external references.
-4. Decide and implement an explicit retained-data capability before making any
+3. Decide and implement an explicit retained-data capability before making any
    durability claim beyond the current root-disk lifecycle.
-5. Delete or quarantine provider abstractions that do not help this one
+4. Delete or quarantine provider abstractions that do not help this one
    lifecycle before adding another provider or topology.
 
 ### Exit evidence
