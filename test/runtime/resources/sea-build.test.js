@@ -45,8 +45,70 @@ const emptySeaEvidence = () => ({
 
 describe('SeaBuild', () => {
   afterEach(() => {
+    jest.unstable_unmockModule('../../../src/core/lib/esbuild.js');
     jest.resetModules();
     jest.restoreAllMocks();
+  });
+
+  it('disables source maps for activity and SEA bundles', async () => {
+    const buildBundle = jest.fn(
+      /** @param {Record<string, any>} _options */
+      async (_options) => ({
+        errors: [],
+        warnings: [],
+        outputFiles: [{ text: 'bundled-code' }],
+      }),
+    );
+    jest.unstable_mockModule('../../../src/core/lib/esbuild.js', () => ({
+      build: buildBundle,
+    }));
+
+    const [{ default: FunctionResource }, { default: SeaBuild }] =
+      await Promise.all([
+        import('../../../src/core/resources/builds/function-resource.js'),
+        import('../../../src/core/resources/builds/sea-build.js'),
+      ]);
+    const buildTarget =
+      /** @type {import('../../../src/core/runtime/build-target.js').BuildTarget} */ ({
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+      });
+    const functionResource = new FunctionResource({
+      name: 'source-map-policy-activity',
+      properties: {
+        functionName: 'source-map-policy-activity',
+        entrypoint: {
+          path: path.join(process.cwd(), 'activity.js'),
+          export: 'default',
+        },
+        buildTarget,
+      },
+    });
+    const seaBuild = new SeaBuild({
+      name: 'source-map-policy-sea',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: process.execPath,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+      },
+    });
+
+    await functionResource.esbuild();
+    await seaBuild.esbuild(path.join(os.tmpdir(), 'source-map-policy-build'));
+
+    expect(buildBundle).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ sourcemap: false }),
+    );
+    expect(buildBundle).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ sourcemap: false }),
+    );
   });
 
   it('fails instead of writing a non-SEA script fallback when builder Node lacks SEA support', async () => {
@@ -113,7 +175,7 @@ describe('SeaBuild', () => {
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
-  it('disables inherited execution arguments while allowing explicit runtime options', async () => {
+  it('uses a path-independent SEA config and disables inherited execution arguments', async () => {
     const generatedBlob = Buffer.from('generated-sea-blob', 'utf8');
     /** @type {Record<string, any> | undefined} */
     let observedConfig;
@@ -121,14 +183,17 @@ describe('SeaBuild', () => {
       /**
        * @param {string} _file
        * @param {string[]} args
-       * @param {Record<string, any>} _options
+       * @param {Record<string, any>} options
        * @param {boolean} _rejectOnStderr
        */
-      async (_file, args, _options, _rejectOnStderr) => {
-        const configPath = args[2];
+      async (_file, args, options, _rejectOnStderr) => {
+        const configPath = path.resolve(options.cwd, args[2]);
         const parsedConfig = JSON.parse(await fsp.readFile(configPath, 'utf8'));
         observedConfig = parsedConfig;
-        await fsp.writeFile(parsedConfig.output, generatedBlob);
+        await fsp.writeFile(
+          path.resolve(options.cwd, parsedConfig.output),
+          generatedBlob,
+        );
       },
     );
     const inject = jest.fn(
@@ -162,11 +227,13 @@ describe('SeaBuild', () => {
     );
     const buildDir = path.join(tmpRoot, 'build');
     const nodeBinaryPath = path.join(tmpRoot, 'node');
+    const sourceAssetPath = path.join(tmpRoot, 'source.asset');
     const codeBundle = Buffer.from('void 0;\n', 'utf8');
     await fsp.mkdir(buildDir, { mode: 0o700 });
     await Promise.all([
       fsp.writeFile(path.join(buildDir, 'esbundle.js'), codeBundle),
       fsp.writeFile(nodeBinaryPath, 'node-binary', 'utf8'),
+      fsp.writeFile(sourceAssetPath, 'portable-asset', 'utf8'),
     ]);
     const build = new SeaBuild({
       name: 'closed-exec-argv',
@@ -177,6 +244,7 @@ describe('SeaBuild', () => {
         nodeVersion: process.versions.node,
         platform: process.platform,
         architecture: process.arch,
+        assets: { portable: sourceAssetPath },
       },
     });
 
@@ -184,20 +252,17 @@ describe('SeaBuild', () => {
       const evidence = await build.seaBuild(buildDir, nodeBinaryPath);
 
       expect(observedConfig).toMatchObject({
-        main: path.join(buildDir, 'esbundle.js'),
-        output: path.join(buildDir, 'sea.blob'),
+        main: 'esbundle.js',
+        output: 'sea.blob',
         execArgv: [],
         execArgvExtension: 'cli',
-        assets: {},
+        assets: { portable: 'assets/00000000.asset' },
       });
+      expect(JSON.stringify(observedConfig)).not.toContain(tmpRoot);
       expect(execFile).toHaveBeenCalledWith(
         process.execPath,
-        [
-          '--no-warnings',
-          '--experimental-sea-config',
-          path.join(buildDir, 'sea-config.json'),
-        ],
-        {},
+        ['--no-warnings', '--experimental-sea-config', 'sea-config.json'],
+        { cwd: buildDir },
         true,
       );
       expect(inject).toHaveBeenCalledWith(
@@ -277,16 +342,22 @@ describe('SeaBuild', () => {
         Buffer.alloc(boundaryPaddingLength, 'x'),
         outerBinaryCore,
       ]);
-      /** @type {Buffer | undefined} */
-      let observedInjectionBlob;
+      /** @type {Buffer[]} */
+      const observedInjectionBlobs = [];
       const execFile = jest.fn(
         /**
          * @param {string} _file
          * @param {string[]} args
+         * @param {Record<string, any>} options
          */
-        async (_file, args) => {
-          const config = JSON.parse(await fsp.readFile(args[2], 'utf8'));
-          await fsp.writeFile(config.output, generatedBlob);
+        async (_file, args, options) => {
+          const config = JSON.parse(
+            await fsp.readFile(path.resolve(options.cwd, args[2]), 'utf8'),
+          );
+          await fsp.writeFile(
+            path.resolve(options.cwd, config.output),
+            generatedBlob,
+          );
         },
       );
       const runCmd = jest.fn();
@@ -300,7 +371,7 @@ describe('SeaBuild', () => {
          * @param {Record<string, any>} _options
          */
         async (binaryPath, _resourceName, resourceData, _options) => {
-          observedInjectionBlob = Buffer.from(resourceData);
+          observedInjectionBlobs.push(Buffer.from(resourceData));
           const executable = Buffer.concat([
             await fsp.readFile(binaryPath),
             sectionPrefix,
@@ -361,10 +432,10 @@ describe('SeaBuild', () => {
       try {
         const evidence = await build.seaBuild(buildDir, nodeBinaryPath);
 
-        if (!observedInjectionBlob) {
+        if (!observedInjectionBlobs[0]) {
           throw new Error('postject did not receive an injection blob');
         }
-        const injectedBlob = observedInjectionBlob;
+        const injectedBlob = observedInjectionBlobs[0];
         expect(injectedBlob).toHaveLength(generatedBlob.length);
         expect(injectedBlob.indexOf(NODE_SEA_SENTINEL_FUSE)).toBe(-1);
         const firstNestedOffset = generatedBlob.indexOf(NODE_SEA_SENTINEL_FUSE);
@@ -429,6 +500,18 @@ describe('SeaBuild', () => {
         await expect(
           fsp.readFile(path.join(buildDir, 'sea.blob')),
         ).resolves.toEqual(generatedBlob);
+
+        const repeatedBuildDir = path.join(tmpRoot, 'repeated-build');
+        const repeatedNodeBinaryPath = path.join(tmpRoot, 'repeated-node');
+        await fsp.mkdir(repeatedBuildDir, { mode: 0o700 });
+        await Promise.all([
+          fsp.writeFile(path.join(repeatedBuildDir, 'esbundle.js'), codeBundle),
+          fsp.writeFile(repeatedNodeBinaryPath, outerBinary),
+        ]);
+        await build.seaBuild(repeatedBuildDir, repeatedNodeBinaryPath);
+
+        expect(observedInjectionBlobs).toHaveLength(2);
+        expect(observedInjectionBlobs[1]).toEqual(injectedBlob);
       } finally {
         await fsp.rm(tmpRoot, { force: true, recursive: true });
       }

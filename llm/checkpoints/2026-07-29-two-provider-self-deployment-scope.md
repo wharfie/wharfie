@@ -194,31 +194,32 @@ complete every acceptance item in ADR 0035. In particular, this proof did not
 audit the guest for absent Node/npm/Docker/checkout, reboot the cloud host,
 carry an unfinished durable timer through coordinator exit, or inject live
 lost responses and ownership conflicts. Those ambiguity and conflict paths
-have automated coverage, not live-provider evidence. The retained operator SEA
-also remains recovery authority while packaging reproducibility is unresolved.
+have automated coverage, not live-provider evidence.
 
-## Known recovery loose end
+## Packaging recovery resolution
 
-Rebuilding an earlier logical revision reproduced its revision ID and byte
-length but not its final SEA byte digest. The journal correctly rejected the
-substitute and no cloud mutation occurred. Current recovery is sound when the
-original self-deployable SEA is retained—the successful second apply proved
-that path—but byte-for-byte packaging reproducibility remains unresolved and
-should be fixed or made an explicit artifact-retention contract.
+The rebuild mismatch found during this proof is resolved by the
+[SEA packaging reproducibility checkpoint](2026-07-30-sea-packaging-reproducibility.md).
+Two clean final-source builds produced the identical complete self-deployable
+operator SEA, including its embedded Linux artifact. The guarantee covers the
+pinned default unsigned/ad-hoc builder path; certificate-signed or cross-host
+reproducibility is not claimed.
+
+Deployment journals continue to require exact artifact bytes. The fix makes an
+unchanged default build reproduce them; it does not relax that recovery
+authority.
 
 ## Work next
 
-1. Resolve final SEA byte reproducibility or formalize retention of the
-   original operator SEA as recovery authority.
-2. Complete the remaining ADR 0035 evidence in one repeatable, redacted
+1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
    two-provider acceptance harness: read-only credential check/plan, clean
    guest audit, host reboot, unfinished durable work, fault injection, and
    bounded proof receipts.
-3. Add approachable preview/status/update/recovery commands around the proven
+2. Add approachable preview/status/update/recovery commands around the proven
    provider slice.
-4. Decide an explicit retained-data capability before claiming durability
+3. Decide an explicit retained-data capability before claiming durability
    beyond the node root-disk lifecycle.
-5. Delete or quarantine superseded general AWS graph code that does not serve
+4. Delete or quarantine superseded general AWS graph code that does not serve
    this narrow lifecycle.
 
 ## Security and recovery defaults

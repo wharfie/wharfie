@@ -222,6 +222,29 @@ describe('ActorSystem build graph', () => {
     expect(build?.dependsOn).toContain(coreRuntimeDependencies);
   });
 
+  it('does not install source-map support in the packaged SEA entrypoint', () => {
+    const system = new ActorSystem({
+      name: 'source-map-free-system',
+      properties: {
+        targets: [
+          {
+            nodeVersion: process.versions.node,
+            platform: 'linux',
+            architecture: 'arm64',
+          },
+        ],
+      },
+    });
+    const build = system
+      .getResources()
+      .find((resource) => resource instanceof SeaBuild);
+    const entryCode = build?.get('entryCode');
+
+    expect(typeof entryCode).toBe('string');
+    expect(entryCode).not.toContain('source-map-support');
+    expect(entryCode).not.toContain('sourceMapSupport');
+  });
+
   it('rejects Windows targets before defining a core-runtime SEA build', () => {
     expect(
       () =>
