@@ -139,21 +139,38 @@ wharfie deployment destroy <deployment-instance> --region <region> [--control-po
 
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
-Hetzner apply and destroy:
+AWS and Hetzner apply and destroy:
 
 ```text
+<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
 
 The SEA reads the authenticated embedded Linux payload and application
 revision, creates the fixed small single-node systemd-user intent, and applies
 or recovers it through durable local authority. Repeat `--allow-ssh-from` for
-each operator address. `HCLOUD_TOKEN` is read only from the ambient process;
-there is no credential option and result output contains no credential data.
+each operator address. AWS apply requires exactly `--region`; Hetzner apply
+requires exactly `--location`. AWS uses the ordinary credential chain and
+Hetzner reads `HCLOUD_TOKEN` from the ambient process. There is no credential
+option and result output contains no credential data.
+
 Destroy authenticates only the embedded app identity, then uses the exact
 deployment instance and durable local authority without decoding the embedded
-Linux payload. Packaged `plan`, `inspect`, and `reconcile` are not exposed yet.
+Linux payload. Its journal supplies the bound AWS region or Hetzner location,
+so destroy accepts neither `--region` nor `--location`; a non-default
+`--data-root` must match apply.
+
+AWS requires an existing usable default-VPC public-network path. Hetzner uses
+its public network; Wharfie creates no private network. AWS owns one security
+group, instance, and encrypted root volume. Hetzner owns one firewall, primary
+IPv4, and server. Destroy deletes those resources and the application/control
+data currently held on the node's root disk.
+
+Packaged `plan`, `inspect`, and `reconcile` are not exposed yet. The
+two-provider surface has focused automated evidence, not a claimed successful
+live AWS or Hetzner lifecycle.
 
 Source plan and direct apply package a selected SEA and durably pre-stage it.
 A later source `apply --plan` and source reconcile validate exact durable

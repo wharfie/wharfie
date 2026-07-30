@@ -593,19 +593,43 @@ consume exact durable staged evidence.
 
 `wharfie app package --self-deployable` creates an operator SEA carrying an
 authenticated Linux deployment SEA. That packaged executable replaces the
-legacy AWS lifecycle with narrow Hetzner apply and destroy commands:
+legacy source lifecycle with narrow AWS and Hetzner apply and destroy
+commands:
 
 ```text
+<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
 
-It accepts no credential option. The coordinator reads ambient `HCLOUD_TOKEN`,
-creates, recovers, or destroys the fixed small single-node systemd-user
-deployment, and emits a compact nonsecret result. Destroy reads only the
-embedded app identity plus durable local deployment authority; it does not
-decode the embedded Linux payload. Packaged plan, inspect, and reconcile are
-not exposed yet.
+Apply requires exactly `--region` for AWS or `--location` for Hetzner. Repeat
+`--allow-ssh-from` for each operator IPv4 `/32`. Credentials are never command
+arguments: AWS uses the ordinary credential chain and Hetzner reads ambient
+`HCLOUD_TOKEN`. The coordinator creates or recovers the fixed small
+single-node systemd-user deployment and emits a compact nonsecret result.
+
+Destroy reads only the embedded app identity plus the exact durable journal
+under the selected data root; it does not decode the embedded Linux payload.
+The journal supplies the bound AWS region or Hetzner location, so packaged
+destroy accepts neither `--region` nor `--location`. Use the same data root
+that authorized apply.
+
+This slice does not create a network. AWS requires one available default VPC
+with a suitable default subnet that assigns public IPv4 addresses, has
+available addresses and instance-type capacity, and reaches the internet
+through its existing route, gateway, and network ACL. Hetzner uses its public
+network in the selected location and does not create a private network.
+
+Wharfie owns and later destroys only the bounded substrate it creates: an AWS
+security group, instance, and encrypted root EBS volume, or a Hetzner firewall,
+primary IPv4, and server. Application and control data currently live on that
+node's root disk. Destroy therefore deletes that data along with the owned
+root volume or server; it is not a retained-data operation.
+
+Packaged plan, inspect, and reconcile are not exposed yet. The two-provider
+surface has focused automated and mock-provider evidence, but no successful
+live AWS or Hetzner cloud lifecycle is claimed yet.
 Create the canonical profile with
 `@wharfie/wharfie/deployment-profile`, whose narrow Node authoring API exports
 `DEPLOYMENT_MODE`, `createAwsSingleNodeProvider()`, and
