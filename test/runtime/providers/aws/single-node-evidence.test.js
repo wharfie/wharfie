@@ -772,6 +772,18 @@ describe('AWS single-node instance evidence', () => {
         return exactAttributeResponse(request);
       },
     );
+    /** @type {unknown[]} */
+    const creditReceivers = [];
+    const describeInstanceCreditSpecifications = jest.fn(
+      /**
+       * @this {unknown}
+       * @param {Record<string, any>} request
+       */
+      async function (request) {
+        creditReceivers.push(this);
+        return exactCreditResponse();
+      },
+    );
     const exact = await inspectAwsSingleNodeInstance(
       instanceInput(
         makeEvidenceApi({
@@ -779,9 +791,7 @@ describe('AWS single-node instance evidence', () => {
             Reservations: [reservation()],
           })),
           describeInstanceAttribute,
-          describeInstanceCreditSpecifications: jest.fn(async () =>
-            exactCreditResponse(),
-          ),
+          describeInstanceCreditSpecifications,
         }),
         INSTANCE_ID,
       ),
@@ -812,6 +822,13 @@ describe('AWS single-node instance evidence', () => {
       ),
     ).toBe(true);
     expect(receivers).toEqual([undefined, undefined, undefined]);
+    expect(describeInstanceCreditSpecifications).toHaveBeenCalledWith({
+      InstanceIds: [INSTANCE_ID],
+    });
+    const creditRequest = describeInstanceCreditSpecifications.mock.calls[0][0];
+    expect(Object.isFrozen(creditRequest)).toBe(true);
+    expect(Object.isFrozen(creditRequest.InstanceIds)).toBe(true);
+    expect(creditReceivers).toEqual([undefined]);
   });
 
   it('returns settling while pending provider fields are late', async () => {
@@ -970,6 +987,24 @@ describe('AWS single-node instance evidence', () => {
                 DisableApiTermination: { Value: false },
               }),
             ),
+          }),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(AwsSingleNodeEvidenceUnknownError);
+  });
+
+  it('rejects pagination from one exact CPU-credit lookup', async () => {
+    await expect(
+      inspectAwsSingleNodeInstance(
+        instanceInput(
+          makeEvidenceApi({
+            describeInstances: jest.fn(async () => ({
+              Reservations: [reservation()],
+            })),
+            describeInstanceCreditSpecifications: jest.fn(async () => ({
+              ...exactCreditResponse(),
+              NextToken: 'unexpected-credit-page',
+            })),
           }),
         ),
       ),
