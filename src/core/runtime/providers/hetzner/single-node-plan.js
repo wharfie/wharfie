@@ -486,7 +486,7 @@ export async function resolveHetznerSingleNodePlan(value) {
   const [locations, serverTypes, images, firewalls, primaryIps, servers] =
     await Promise.all([
       api.listLocations({ name: desired.intent.provider.location }),
-      api.listServerTypes({ architecture: EXPECTED_ARCHITECTURE }),
+      api.listServerTypes(),
       api.listImages({
         name: UBUNTU_IMAGE_NAME,
         type: 'system',

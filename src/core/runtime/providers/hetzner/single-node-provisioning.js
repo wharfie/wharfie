@@ -34,6 +34,8 @@ export const HETZNER_PROVISIONING_MUTATION_ATTEMPT_KIND =
 export const HETZNER_PROVISIONING_MUTATION_ATTEMPT_ID_PREFIX = 'wshma1';
 export const HETZNER_PROVISIONED_RESOURCE_SCHEMA_VERSION = 1;
 export const HETZNER_PROVISIONED_RESOURCE_KIND = 'hetznerProvisionedResource';
+export const HETZNER_PROVISIONING_MAX_SETTLE_ATTEMPTS = 60;
+export const HETZNER_PROVISIONING_SETTLE_RETRY_DELAY_MILLISECONDS = 1_000;
 
 const PROVISIONING_INTENT_ID_DOMAIN =
   'wharfie:hetzner-single-node-provisioning-intent:v1';
@@ -68,7 +70,9 @@ const CONVERGE_KEYS = new Set([
   'api',
   'waitForAction',
   'recordMutationAttempt',
+  'recordMutationRejection',
   'recordResource',
+  'wait',
 ]);
 const DESTROY_RECOVERY_KEYS = new Set(['intent', 'mutationAttempt', 'api']);
 const STORED_ID_KEYS = new Set(['firewall', 'primaryIp', 'server']);
@@ -550,6 +554,14 @@ function notSettledError(role) {
     role,
     `Hetzner ${role} provisioning has not settled yet.`,
   );
+}
+
+/**
+ * @param {number} milliseconds - Delay in milliseconds.
+ * @returns {Promise<void>} - Settles after the delay.
+ */
+function defaultWait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 /**
@@ -1043,6 +1055,51 @@ async function readback(role, id, api) {
 }
 
 /**
+ * Poll one exact provider resource until its normal asynchronous projections
+ * agree with the persisted intent. Spec conflicts and read failures remain
+ * fail-closed; only the explicit not-settled state is retryable.
+ * @param {string} role - Resource role.
+ * @param {number} id - Exact provider ID.
+ * @param {Readonly<Record<string, Function>>} api - API.
+ * @param {(observed: any) => void} verify - Exact role verifier.
+ * @param {(milliseconds: number) => Promise<any>} wait - Injected delay.
+ * @returns {Promise<any>} - Settled exact readback.
+ */
+async function readbackUntilSettled(role, id, api, verify, wait) {
+  for (
+    let attempt = 1;
+    attempt <= HETZNER_PROVISIONING_MAX_SETTLE_ATTEMPTS;
+    attempt += 1
+  ) {
+    const observed = await readback(role, id, api);
+    try {
+      verify(observed);
+      return observed;
+    } catch (error) {
+      const retryable =
+        error !== null &&
+        typeof error === 'object' &&
+        /** @type {Record<string, any>} */ (error).code ===
+          'HETZNER_PROVISIONING_NOT_SETTLED' &&
+        /** @type {Record<string, any>} */ (error).role === role;
+      if (!retryable || attempt === HETZNER_PROVISIONING_MAX_SETTLE_ATTEMPTS) {
+        throw error;
+      }
+    }
+    try {
+      await wait(HETZNER_PROVISIONING_SETTLE_RETRY_DELAY_MILLISECONDS);
+    } catch {
+      throw safeRoleError(
+        'HETZNER_PROVISIONING_SETTLE_WAIT_FAILED',
+        role,
+        `Hetzner ${role} provisioning settle wait failed.`,
+      );
+    }
+  }
+  throw notSettledError(role);
+}
+
+/**
  * @param {unknown} left - Left JSON value.
  * @param {unknown} right - Right JSON value.
  * @returns {boolean} - Canonical equality.
@@ -1196,7 +1253,7 @@ function verifyServer(observed, resourceIntent, dependencies) {
   const firewallPending =
     canonicalEqual(observed.firewalls, []) ||
     canonicalEqual(observed.firewalls, [
-      { id: dependencies.firewall.id, status: 'applying' },
+      { id: dependencies.firewall.id, status: 'pending' },
     ]);
   if (!firewallSettled && !firewallPending) {
     throw safeRoleError(
@@ -1256,8 +1313,8 @@ function createBody(role, resourceIntent, context) {
   return deepFreeze({
     name: ownership.name,
     labels: ownership.labels,
-    server_type: spec.serverType.id,
-    image: spec.image.id,
+    server_type: String(spec.serverType.id),
+    image: String(spec.image.id),
     location: spec.location.name,
     firewalls: [{ firewall: context.firewall.id }],
     public_net: {
@@ -1393,6 +1450,39 @@ async function recordAttempt(attempt, recordMutationAttempt) {
 }
 
 /**
+ * @param {unknown} error - Provider mutation failure.
+ * @returns {boolean} - Whether the provider definitely rejected the request.
+ */
+function isConfirmedMutationRejection(error) {
+  if (error === null || typeof error !== 'object') return false;
+  const failure = /** @type {Record<string, any>} */ (error);
+  return (
+    failure.code === 'HETZNER_API_REQUEST_FAILED' &&
+    Number.isSafeInteger(failure.status) &&
+    failure.status >= 400 &&
+    failure.status <= 499
+  );
+}
+
+/**
+ * Durably release a create fence only after a definite provider rejection.
+ * @param {Readonly<Record<string, any>>} attempt - Exact attempt evidence.
+ * @param {(record: Readonly<Record<string, any>>) => Promise<any>} recordMutationRejection - Durable callback.
+ * @returns {Promise<void>} - Settles only after durable persistence.
+ */
+async function recordRejectedAttempt(attempt, recordMutationRejection) {
+  try {
+    await recordMutationRejection(attempt);
+  } catch {
+    throw safeRoleError(
+      'HETZNER_PROVISIONING_REJECTION_RECORD_FAILED',
+      attempt.role,
+      `Hetzner ${attempt.role} mutation rejection could not be recorded durably.`,
+    );
+  }
+}
+
+/**
  * Ensure one role, creating at most once and recovering ambiguity only through
  * inventory.
  * @param {string} role - Resource role.
@@ -1402,7 +1492,9 @@ async function recordAttempt(attempt, recordMutationAttempt) {
  * @param {Readonly<Record<string, Function>>} api - API.
  * @param {(actionId: number) => Promise<any>} waitForAction - Action waiter.
  * @param {(record: Readonly<Record<string, any>>) => Promise<any>} recordMutationAttempt - Attempt recorder.
+ * @param {(record: Readonly<Record<string, any>>) => Promise<any>} recordMutationRejection - Confirmed-rejection recorder.
  * @param {(record: Readonly<Record<string, any>>) => Promise<any>} recordResource - Resource recorder.
+ * @param {(milliseconds: number) => Promise<any>} wait - Eventual-consistency delay.
  * @param {Readonly<Record<string, any>>} context - Allocated dependencies.
  * @returns {Promise<any>} - Verified provider observation.
  */
@@ -1414,7 +1506,9 @@ async function ensureResource(
   api,
   waitForAction,
   recordMutationAttempt,
+  recordMutationRejection,
   recordResource,
+  wait,
   context,
 ) {
   const resourceIntent = intent.resources[role];
@@ -1438,7 +1532,8 @@ async function ensureResource(
       );
       responseId = parseCreationResourceId(role, response);
       creation = parseCreation(role, response);
-    } catch {
+    } catch (error) {
+      const confirmedRejection = isConfirmedMutationRejection(error);
       if (responseId !== null) {
         id = responseId;
       } else {
@@ -1450,6 +1545,14 @@ async function ensureResource(
         );
         id = classifiedId(role, observedInventory.classification);
         if (id === null) {
+          if (confirmedRejection) {
+            await recordRejectedAttempt(attempt, recordMutationRejection);
+            throw safeRoleError(
+              'HETZNER_PROVISIONING_MUTATION_REJECTED',
+              role,
+              `Hetzner ${role} create request was rejected.`,
+            );
+          }
           throw safeRoleError(
             'HETZNER_PROVISIONING_MUTATION_UNRESOLVED',
             role,
@@ -1478,18 +1581,37 @@ async function ensureResource(
       );
     }
   }
-  const observed = await readback(role, /** @type {number} */ (id), api);
   if (role === 'firewall') {
-    verifyFirewall(observed, resourceIntent, context.expectedServerId);
-  } else if (role === 'primaryIp') {
-    verifyPrimaryIp(observed, resourceIntent, context.expectedServerId);
-  } else {
-    verifyServer(observed, resourceIntent, {
-      firewall: context.firewall,
-      primaryIp: context.primaryIp,
-    });
+    return await readbackUntilSettled(
+      role,
+      /** @type {number} */ (id),
+      api,
+      (observed) =>
+        verifyFirewall(observed, resourceIntent, context.expectedServerId),
+      wait,
+    );
   }
-  return observed;
+  if (role === 'primaryIp') {
+    return await readbackUntilSettled(
+      role,
+      /** @type {number} */ (id),
+      api,
+      (observed) =>
+        verifyPrimaryIp(observed, resourceIntent, context.expectedServerId),
+      wait,
+    );
+  }
+  return await readbackUntilSettled(
+    role,
+    /** @type {number} */ (id),
+    api,
+    (observed) =>
+      verifyServer(observed, resourceIntent, {
+        firewall: context.firewall,
+        primaryIp: context.primaryIp,
+      }),
+    wait,
+  );
 }
 
 /**
@@ -1544,7 +1666,21 @@ export async function convergeHetznerSingleNodeProvisioning(value) {
   }
   const waitForAction = input.waitForAction;
   const recordMutationAttempt = input.recordMutationAttempt;
+  const recordMutationRejection =
+    input.recordMutationRejection ??
+    (async () => {
+      throw new Error('mutation rejection recorder is unavailable');
+    });
   const recordResource = input.recordResource;
+  if (typeof recordMutationRejection !== 'function') {
+    throw new TypeError(
+      'hetznerProvisioning.recordMutationRejection must be a function.',
+    );
+  }
+  const wait = input.wait ?? defaultWait;
+  if (typeof wait !== 'function') {
+    throw new TypeError('hetznerProvisioning.wait must be a function.');
+  }
   if (!(input.cloudInitBytes instanceof Uint8Array)) {
     throw new TypeError('hetznerProvisioning.cloudInitBytes must be bytes.');
   }
@@ -1603,7 +1739,9 @@ export async function convergeHetznerSingleNodeProvisioning(value) {
     api,
     waitForAction,
     recordMutationAttempt,
+    recordMutationRejection,
     recordResource,
+    wait,
     context,
   );
   context.firewall = { id: firewall.id };
@@ -1616,7 +1754,9 @@ export async function convergeHetznerSingleNodeProvisioning(value) {
     api,
     waitForAction,
     recordMutationAttempt,
+    recordMutationRejection,
     recordResource,
+    wait,
     context,
   );
   context.primaryIp = { id: primaryIp.id, ip: primaryIp.ip };
@@ -1629,20 +1769,26 @@ export async function convergeHetznerSingleNodeProvisioning(value) {
     api,
     waitForAction,
     recordMutationAttempt,
+    recordMutationRejection,
     recordResource,
+    wait,
     context,
   );
-  const finalFirewall = await readback('firewall', firewall.id, api);
-  verifyFirewall(
-    finalFirewall,
-    intent.resources.firewall,
-    providerId(server.id, 'hetznerProvisioning.server.id'),
+  const serverId = providerId(server.id, 'hetznerProvisioning.server.id');
+  await readbackUntilSettled(
+    'firewall',
+    firewall.id,
+    api,
+    (observed) => verifyFirewall(observed, intent.resources.firewall, serverId),
+    wait,
   );
-  const finalPrimaryIp = await readback('primaryIp', primaryIp.id, api);
-  verifyPrimaryIp(
-    finalPrimaryIp,
-    intent.resources.primaryIp,
-    providerId(server.id, 'hetznerProvisioning.server.id'),
+  await readbackUntilSettled(
+    'primaryIp',
+    primaryIp.id,
+    api,
+    (observed) =>
+      verifyPrimaryIp(observed, intent.resources.primaryIp, serverId),
+    wait,
   );
   const result = deepFreeze(
     sortCanonicalJsonValue({
@@ -1672,6 +1818,8 @@ export async function convergeHetznerSingleNodeProvisioning(value) {
 }
 
 export default {
+  HETZNER_PROVISIONING_MAX_SETTLE_ATTEMPTS,
+  HETZNER_PROVISIONING_SETTLE_RETRY_DELAY_MILLISECONDS,
   HETZNER_PROVISIONING_INTENT_ID_PREFIX,
   HETZNER_PROVISIONING_INTENT_KIND,
   HETZNER_PROVISIONING_INTENT_SCHEMA_VERSION,

@@ -41,6 +41,7 @@ const DEPENDENCY_KEYS = new Set([
   'reconcilePreparedMutation',
   'waitForAction',
   'convergeDestruction',
+  'wait',
 ]);
 const DESTRUCTION_RESULT_KEYS = new Set([
   'schemaVersion',
@@ -397,6 +398,7 @@ export function createHetznerSingleNodeDestroyCoordinator(dependencies) {
             api,
             waitForAction: (/** @type {number} */ actionId) =>
               ports.waitForAction(api, actionId),
+            wait: ports.wait,
             recordDestroyAttempt: async (/** @type {unknown} */ attempt) => {
               await commit(
                 prepareSingleNodeDeploymentDestruction(journal, attempt),
@@ -468,6 +470,8 @@ export function createProductionHetznerSingleNodeDestroyCoordinator() {
         getAction: api.getAction.bind(api),
       }).waitForAction(actionId),
     convergeDestruction: convergeHetznerSingleNodeDestruction,
+    wait: async (/** @type {number} */ milliseconds) =>
+      await new Promise((resolve) => setTimeout(resolve, milliseconds)),
   });
 }
 

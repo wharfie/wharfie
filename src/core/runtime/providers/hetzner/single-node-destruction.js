@@ -18,6 +18,8 @@ export const HETZNER_DESTRUCTION_ATTEMPT_ID_PREFIX = 'wshda1';
 export const HETZNER_DELETION_RECORD_SCHEMA_VERSION = 1;
 export const HETZNER_DELETION_RECORD_KIND = 'hetznerResourceDeletion';
 export const HETZNER_DELETION_RECORD_ID_PREFIX = 'wshdd1';
+export const HETZNER_DESTRUCTION_MAX_SETTLE_ATTEMPTS = 60;
+export const HETZNER_DESTRUCTION_SETTLE_RETRY_DELAY_MILLISECONDS = 1_000;
 
 const DESTRUCTION_ATTEMPT_ID_DOMAIN =
   'wharfie:hetzner-destruction-mutation-attempt:v1';
@@ -36,6 +38,7 @@ const CONVERGE_KEYS = new Set([
   'waitForAction',
   'recordDestroyAttempt',
   'recordDeletion',
+  'wait',
 ]);
 const ATTEMPT_KEYS = new Set([
   'schemaVersion',
@@ -435,6 +438,14 @@ function safeRoleError(code, role, message) {
 }
 
 /**
+ * @param {number} milliseconds - Delay in milliseconds.
+ * @returns {Promise<void>} - Settles after the delay.
+ */
+function defaultWait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/**
  * @param {unknown} error - Candidate provider error.
  * @returns {boolean} - Whether the exact provider ID is absent.
  */
@@ -784,6 +795,7 @@ function deletionActionId(value) {
  * @param {Readonly<Record<string, any>>} attempt - Exact delete attempt.
  * @param {Readonly<Record<string, Function>>} api - API methods.
  * @param {(record: Readonly<Record<string, any>>) => Promise<any>} recordDeletion - Durable recorder.
+ * @param {(milliseconds: number) => Promise<any>} wait - Injected delay.
  * @param {string} unresolvedCode - Code when the resource remains.
  * @returns {Promise<Readonly<Record<string, any>>>} - Deletion evidence.
  */
@@ -794,19 +806,36 @@ async function establishAbsence(
   attempt,
   api,
   recordDeletion,
+  wait,
   unresolvedCode,
 ) {
-  const classification = await classifyCurrent(role, intent, id, api);
-  if (requireExactOrAbsent(role, classification)) {
-    throw safeRoleError(
-      unresolvedCode,
-      role,
-      `Hetzner ${role} deletion has not established absence yet.`,
-    );
+  for (
+    let attemptNumber = 1;
+    attemptNumber <= HETZNER_DESTRUCTION_MAX_SETTLE_ATTEMPTS;
+    attemptNumber += 1
+  ) {
+    const classification = await classifyCurrent(role, intent, id, api);
+    if (!requireExactOrAbsent(role, classification)) {
+      const deletion = createHetznerDeletionRecord(intent, role, id, attempt);
+      await persistDeletion(deletion, recordDeletion);
+      return deletion;
+    }
+    if (attemptNumber === HETZNER_DESTRUCTION_MAX_SETTLE_ATTEMPTS) break;
+    try {
+      await wait(HETZNER_DESTRUCTION_SETTLE_RETRY_DELAY_MILLISECONDS);
+    } catch {
+      throw safeRoleError(
+        'HETZNER_DESTRUCTION_SETTLE_WAIT_FAILED',
+        role,
+        `Hetzner ${role} deletion settle wait failed.`,
+      );
+    }
   }
-  const deletion = createHetznerDeletionRecord(intent, role, id, attempt);
-  await persistDeletion(deletion, recordDeletion);
-  return deletion;
+  throw safeRoleError(
+    unresolvedCode,
+    role,
+    `Hetzner ${role} deletion has not established absence yet.`,
+  );
 }
 
 /**
@@ -820,6 +849,7 @@ async function establishAbsence(
  * @param {(actionId: number) => Promise<any>} waitForAction - Bounded waiter.
  * @param {(record: Readonly<Record<string, any>>) => Promise<any>} recordDestroyAttempt - Attempt recorder.
  * @param {(record: Readonly<Record<string, any>>) => Promise<any>} recordDeletion - Deletion recorder.
+ * @param {(milliseconds: number) => Promise<any>} wait - Injected delay.
  * @returns {Promise<Readonly<Record<string, any>>|null>} - Deletion evidence.
  */
 async function destroyResource(
@@ -832,6 +862,7 @@ async function destroyResource(
   waitForAction,
   recordDestroyAttempt,
   recordDeletion,
+  wait,
 ) {
   const initial = await classifyCurrent(role, intent, id, api);
   const exists = requireExactOrAbsent(role, initial);
@@ -883,6 +914,7 @@ async function destroyResource(
       attempt,
       api,
       recordDeletion,
+      wait,
       'HETZNER_DESTRUCTION_MUTATION_UNRESOLVED',
     );
   }
@@ -898,6 +930,7 @@ async function destroyResource(
       attempt,
       api,
       recordDeletion,
+      wait,
       'HETZNER_DESTRUCTION_MUTATION_UNRESOLVED',
     );
   }
@@ -912,6 +945,7 @@ async function destroyResource(
         attempt,
         api,
         recordDeletion,
+        wait,
         'HETZNER_DESTRUCTION_ACTION_UNRESOLVED',
       );
     }
@@ -923,6 +957,7 @@ async function destroyResource(
     attempt,
     api,
     recordDeletion,
+    wait,
     'HETZNER_DESTRUCTION_NOT_SETTLED',
   );
 }
@@ -981,13 +1016,15 @@ export async function convergeHetznerSingleNodeDestruction(value) {
   if (
     typeof input.waitForAction !== 'function' ||
     typeof input.recordDestroyAttempt !== 'function' ||
-    typeof input.recordDeletion !== 'function'
+    typeof input.recordDeletion !== 'function' ||
+    (input.wait !== undefined && typeof input.wait !== 'function')
   ) {
     throw new TypeError('hetznerDestruction callbacks must be functions.');
   }
   const waitForAction = input.waitForAction;
   const recordDestroyAttempt = input.recordDestroyAttempt;
   const recordDeletion = input.recordDeletion;
+  const wait = input.wait ?? defaultWait;
   /** @type {Record<string, Readonly<Record<string, any>>|null>} */
   const finalDeletions = {};
   for (const role of RESOURCE_ROLES) {
@@ -1001,6 +1038,7 @@ export async function convergeHetznerSingleNodeDestruction(value) {
       waitForAction,
       recordDestroyAttempt,
       recordDeletion,
+      wait,
     );
   }
   const result = deepFreeze(
@@ -1033,6 +1071,8 @@ export default {
   HETZNER_DELETION_RECORD_ID_PREFIX,
   HETZNER_DELETION_RECORD_KIND,
   HETZNER_DELETION_RECORD_SCHEMA_VERSION,
+  HETZNER_DESTRUCTION_MAX_SETTLE_ATTEMPTS,
+  HETZNER_DESTRUCTION_SETTLE_RETRY_DELAY_MILLISECONDS,
   HETZNER_DESTRUCTION_ATTEMPT_ID_PREFIX,
   HETZNER_DESTRUCTION_ATTEMPT_KIND,
   HETZNER_DESTRUCTION_ATTEMPT_SCHEMA_VERSION,

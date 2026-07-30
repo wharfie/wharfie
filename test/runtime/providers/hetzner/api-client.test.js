@@ -216,6 +216,67 @@ describe('Hetzner API client', () => {
     expect(request).not.toHaveProperty('body');
   });
 
+  it('uses only each endpoint current list query contract', async () => {
+    const responses = [
+      listDocument({ locations: [location()] }),
+      listDocument({ server_types: [serverType()] }),
+      listDocument({ images: [image()] }),
+      listDocument({ firewalls: [firewall()] }),
+      listDocument({ primary_ips: [primaryIp()] }),
+    ];
+    const fetchImplementation = fetchMock(async () => {
+      const document = responses.shift();
+      if (document === undefined) throw new Error('No response queued.');
+      return jsonResponse(document);
+    });
+    const client = clientWith(fetchImplementation);
+
+    await client.listLocations({ name: 'ash', sort: 'name', perPage: 50 });
+    await client.listServerTypes({ name: 'cx23', perPage: 50 });
+    await client.listImages({
+      name: 'ubuntu-24.04',
+      type: 'system',
+      status: 'available',
+      architecture: 'x86',
+      includeDeprecated: false,
+      boundTo: 6,
+      sort: 'name',
+      perPage: 50,
+    });
+    await client.listFirewalls({
+      name: 'wharfie-demo',
+      labelSelector: 'owner=wharfie',
+      sort: 'name',
+      perPage: 50,
+    });
+    await client.listPrimaryIps({
+      name: 'wharfie-demo',
+      labelSelector: 'owner=wharfie',
+      ip: '203.0.113.7',
+      sort: 'name',
+      perPage: 50,
+    });
+
+    expect(fetchImplementation.mock.calls.map(([url]) => url)).toEqual([
+      `${BASE_URL}/locations?name=ash&sort=name&per_page=50&page=1`,
+      `${BASE_URL}/server_types?name=cx23&per_page=50&page=1`,
+      `${BASE_URL}/images?name=ubuntu-24.04&type=system&status=available&architecture=x86&include_deprecated=false&bound_to=6&sort=name&per_page=50&page=1`,
+      `${BASE_URL}/firewalls?name=wharfie-demo&label_selector=owner%3Dwharfie&sort=name&per_page=50&page=1`,
+      `${BASE_URL}/primary_ips?name=wharfie-demo&label_selector=owner%3Dwharfie&ip=203.0.113.7&sort=name&per_page=50&page=1`,
+    ]);
+
+    await expect(
+      client.listServerTypes({ architecture: 'x86' }),
+    ).rejects.toThrow('Hetzner API request is invalid.');
+    await expect(
+      client.listLocations({ labelSelector: 'owner=wharfie' }),
+    ).rejects.toThrow('Hetzner API request is invalid.');
+    await expect(client.listFirewalls({ status: 'applied' })).rejects.toThrow(
+      'Hetzner API request is invalid.',
+    );
+    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+  });
+
   it('automatically follows bounded pagination while preserving filters', async () => {
     const responses = [
       listDocument(
@@ -258,6 +319,45 @@ describe('Hetzner API client', () => {
     expect(fetchImplementation.mock.calls.map(([url]) => url)).toEqual([
       `${BASE_URL}/servers?label_selector=owner%3Dwharfie&status=running&per_page=1&page=1`,
       `${BASE_URL}/servers?label_selector=owner%3Dwharfie&status=running&per_page=1&page=2`,
+    ]);
+  });
+
+  it('follows official pagination when totals and the last page are null', async () => {
+    const responses = [
+      listDocument(
+        { locations: [location()] },
+        {
+          per_page: 1,
+          next_page: 2,
+          last_page: null,
+          total_entries: null,
+        },
+      ),
+      listDocument(
+        { locations: [location({ id: 2, name: 'hil' })] },
+        {
+          page: 2,
+          per_page: 1,
+          previous_page: 1,
+          last_page: null,
+          total_entries: null,
+        },
+      ),
+    ];
+    const fetchImplementation = fetchMock(async () => {
+      const document = responses.shift();
+      if (document === undefined) throw new Error('No response queued.');
+      return jsonResponse(document);
+    });
+    const client = clientWith(fetchImplementation);
+
+    await expect(client.listLocations({ perPage: 1 })).resolves.toEqual([
+      expect.objectContaining({ id: 1 }),
+      expect.objectContaining({ id: 2 }),
+    ]);
+    expect(fetchImplementation.mock.calls.map(([url]) => url)).toEqual([
+      `${BASE_URL}/locations?per_page=1&page=1`,
+      `${BASE_URL}/locations?per_page=1&page=2`,
     ]);
   });
 
@@ -707,6 +807,12 @@ describe('Hetzner API client', () => {
     await expect(client.listServers({ page: 2 })).rejects.toThrow(
       'Hetzner API request is invalid.',
     );
+    await expect(client.listServers({ name: true })).rejects.toThrow(
+      'Hetzner API request is invalid.',
+    );
+    await expect(
+      client.listImages({ includeDeprecated: 'false' }),
+    ).rejects.toThrow('Hetzner API request is invalid.');
     await expect(client.createServer(null)).rejects.toThrow(
       'Hetzner API request is invalid.',
     );

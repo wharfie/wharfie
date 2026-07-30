@@ -305,22 +305,36 @@ function serverFirewall(value) {
 
 /**
  * @param {unknown} value - Candidate server.
- * @returns {Readonly<{id: number, name: string, status: string, location: ReturnType<typeof decodeHetznerLocation>, publicIpv4: Readonly<{id: number, ip: string, blocked: boolean}>, publicIpv6: Readonly<{id: number, ip: string, blocked: boolean}>|null, firewalls: Readonly<ReturnType<typeof serverFirewall>[]>, serverType: Readonly<{id: number, name: string|null}>|null, image: Readonly<{id: number, name: string|null}>|null, labels: Readonly<Record<string, string>>, locked: boolean, deleteProtected: boolean}>} - Server.
+ * @returns {Readonly<{id: number, name: string, status: string, location: ReturnType<typeof decodeHetznerLocation>, publicIpv4: Readonly<{id: number, ip: string, blocked: boolean}>|null, publicIpv6: Readonly<{id: number, ip: string, blocked: boolean}>|null, firewalls: Readonly<ReturnType<typeof serverFirewall>[]>, serverType: Readonly<{id: number, name: string|null}>|null, image: Readonly<{id: number, name: string|null}>|null, labels: Readonly<Record<string, string>>, locked: boolean, deleteProtected: boolean}>} - Server.
  */
 export function decodeHetznerServer(value) {
+  const publicIpv4 =
+    isObject(value) && isObject(value.public_net)
+      ? value.public_net.ipv4
+      : undefined;
+  const publicFirewalls =
+    isObject(value) && isObject(value.public_net)
+      ? (value.public_net.firewalls ?? [])
+      : undefined;
+  const publicIpv4HasNoIdentifier =
+    isObject(publicIpv4) &&
+    (publicIpv4.id === null || publicIpv4.id === undefined);
   if (
     !isObject(value) ||
     typeof value.locked !== 'boolean' ||
     !isObject(value.protection) ||
     typeof value.protection.delete !== 'boolean' ||
     !isObject(value.public_net) ||
-    !isObject(value.public_net.ipv4) ||
-    typeof value.public_net.ipv4.blocked !== 'boolean' ||
+    (publicIpv4 !== null &&
+      (!isObject(publicIpv4) ||
+        typeof publicIpv4.ip !== 'string' ||
+        publicIpv4.ip.length === 0 ||
+        typeof publicIpv4.blocked !== 'boolean')) ||
     (value.public_net.ipv6 !== null &&
       value.public_net.ipv6 !== undefined &&
       (!isObject(value.public_net.ipv6) ||
         typeof value.public_net.ipv6.blocked !== 'boolean')) ||
-    !Array.isArray(value.public_net.firewalls)
+    !Array.isArray(publicFirewalls)
   ) {
     throw new TypeError(INVALID_DOCUMENT);
   }
@@ -329,11 +343,14 @@ export function decodeHetznerServer(value) {
     name: nonEmptyString(value.name),
     status: nonEmptyString(value.status),
     location: decodeHetznerLocation(value.location),
-    publicIpv4: Object.freeze({
-      id: identifier(value.public_net.ipv4.id),
-      ip: nonEmptyString(value.public_net.ipv4.ip),
-      blocked: value.public_net.ipv4.blocked,
-    }),
+    publicIpv4:
+      publicIpv4 === null || publicIpv4HasNoIdentifier
+        ? null
+        : Object.freeze({
+            id: identifier(publicIpv4.id),
+            ip: nonEmptyString(publicIpv4.ip),
+            blocked: publicIpv4.blocked,
+          }),
     publicIpv6:
       value.public_net.ipv6 === null || value.public_net.ipv6 === undefined
         ? null
@@ -342,7 +359,7 @@ export function decodeHetznerServer(value) {
             ip: nonEmptyString(value.public_net.ipv6.ip),
             blocked: value.public_net.ipv6.blocked,
           }),
-    firewalls: Object.freeze(value.public_net.firewalls.map(serverFirewall)),
+    firewalls: Object.freeze(publicFirewalls.map(serverFirewall)),
     serverType: resourceReference(value.server_type),
     image: resourceReference(value.image),
     labels: labels(value.labels),
@@ -406,7 +423,7 @@ function decodeSingle(value, key, decode) {
 /**
  * Decode and cross-check one official list pagination document.
  * @param {unknown} value - Candidate list response.
- * @returns {Readonly<{page: number, perPage: number, previousPage: number|null, nextPage: number|null, lastPage: number, totalEntries: number}>} - Pagination.
+ * @returns {Readonly<{page: number, perPage: number, previousPage: number|null, nextPage: number|null, lastPage: number|null, totalEntries: number|null}>} - Pagination.
  */
 export function decodeHetznerPagination(value) {
   if (
@@ -419,11 +436,6 @@ export function decodeHetznerPagination(value) {
   const pagination = value.meta.pagination;
   const page = identifier(pagination.page);
   const perPage = identifier(pagination.per_page);
-  const lastPage = identifier(pagination.last_page);
-  const totalEntries = numberValue(pagination.total_entries);
-  if (!Number.isSafeInteger(totalEntries) || totalEntries < 0) {
-    throw new TypeError(INVALID_DOCUMENT);
-  }
   /**
    * @param {unknown} candidate - Candidate nullable page.
    * @returns {number|null} - Page number.
@@ -434,10 +446,23 @@ export function decodeHetznerPagination(value) {
   };
   const previousPage = nullablePage(pagination.previous_page);
   const nextPage = nullablePage(pagination.next_page);
+  const lastPage = nullablePage(pagination.last_page);
+  const totalEntries =
+    pagination.total_entries === null
+      ? null
+      : numberValue(pagination.total_entries);
   if (
-    page > lastPage ||
+    totalEntries !== null &&
+    (!Number.isSafeInteger(totalEntries) || totalEntries < 0)
+  ) {
+    throw new TypeError(INVALID_DOCUMENT);
+  }
+  if (
     (page === 1 ? previousPage !== null : previousPage !== page - 1) ||
-    (page === lastPage ? nextPage !== null : nextPage !== page + 1)
+    (nextPage !== null && nextPage !== page + 1) ||
+    (lastPage !== null &&
+      (page > lastPage ||
+        (page === lastPage ? nextPage !== null : nextPage !== page + 1)))
   ) {
     throw new TypeError(INVALID_DOCUMENT);
   }

@@ -514,20 +514,43 @@ describe('Hetzner credential binding corruption boundaries', () => {
 
 describe('Hetzner credential binding concurrency and removal', () => {
   it('converges concurrent same-token first binds to one durable winner', async () => {
+    const randomSources = Array.from({ length: 16 }, (_unused, index) =>
+      jest.fn(deterministicRandomBytes(21 + index)),
+    );
     const fixture = await makeFixture({
-      randomBytes: deterministicRandomBytes(21),
+      randomBytes: randomSources[0],
     });
-    const competing = createHetznerCredentialBindingStore({
-      root: fixture.root,
-      randomBytes: deterministicRandomBytes(22),
-    });
+    const stores = [
+      fixture.store,
+      ...Array.from({ length: 15 }, (_unused, index) =>
+        createHetznerCredentialBindingStore({
+          root: fixture.root,
+          randomBytes: randomSources[index + 1],
+        }),
+      ),
+    ];
     const instanceId = deploymentInstanceId();
-    const [first, second] = await Promise.all([
-      fixture.store.ensureBinding(ensureRequest(instanceId)),
-      competing.ensureBinding(ensureRequest(instanceId)),
-    ]);
+    /** @type {() => void} */
+    let releaseStart = () => {};
+    const start = new Promise((resolve) => {
+      releaseStart = () => resolve(undefined);
+    });
+    const pending = stores.map(async (store) => {
+      await start;
+      return await store.ensureBinding(ensureRequest(instanceId));
+    });
+    releaseStart();
+    const results = await Promise.all(pending);
+    const [first] = results;
 
-    expect(second).toEqual(first);
+    expect(results).toHaveLength(stores.length);
+    expect(
+      results.every((result) => result.bindingId === first.bindingId),
+    ).toBe(true);
+    expect(
+      randomSources.filter((randomSource) => randomSource.mock.calls.length > 0)
+        .length,
+    ).toBeGreaterThan(1);
     expect(
       await readdir(bindingPaths(fixture.root, instanceId).directory),
     ).toEqual([HETZNER_CREDENTIAL_BINDING_FILE_NAME]);
