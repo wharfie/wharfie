@@ -363,6 +363,7 @@ function makeHarness(options = {}) {
   const api = Object.fromEntries(
     [
       'describeSecurityGroups',
+      'describeInstanceAttribute',
       'describeInstances',
       'describeVolumes',
       'describeInstanceCreditSpecifications',

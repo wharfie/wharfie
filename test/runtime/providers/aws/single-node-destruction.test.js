@@ -238,6 +238,12 @@ function makeProvider(options = {}) {
         throw new Error('mock inspector owns reads');
       },
     ),
+    describeInstanceAttribute: jest.fn(
+      /** @this {unknown} */ async function () {
+        expect(this).toBeUndefined();
+        throw new Error('mock inspector owns reads');
+      },
+    ),
     describeInstanceCreditSpecifications: jest.fn(
       /** @this {unknown} */ async function () {
         expect(this).toBeUndefined();

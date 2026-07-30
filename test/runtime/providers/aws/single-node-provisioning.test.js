@@ -428,9 +428,6 @@ function instance(overrides = {}) {
     EnaSupport: true,
     EbsOptimized: true,
     Monitoring: { State: 'disabled' },
-    DisableApiStop: false,
-    DisableApiTermination: false,
-    InstanceInitiatedShutdownBehavior: 'stop',
     HibernationOptions: { Configured: false },
     EnclaveOptions: { Enabled: false },
     Placement: { AvailabilityZone: 'us-east-2a', Tenancy: 'default' },
@@ -523,6 +520,39 @@ function exactCreditResponse() {
   };
 }
 
+/**
+ * @param {Record<string, any>} request
+ * @param {Record<string, any>} [values]
+ */
+function exactAttributeResponse(request, values = {}) {
+  let responseKey;
+  let expectedValue;
+  switch (request.Attribute) {
+    case 'disableApiStop':
+      responseKey = 'DisableApiStop';
+      expectedValue = false;
+      break;
+    case 'disableApiTermination':
+      responseKey = 'DisableApiTermination';
+      expectedValue = false;
+      break;
+    case 'instanceInitiatedShutdownBehavior':
+      responseKey = 'InstanceInitiatedShutdownBehavior';
+      expectedValue = 'stop';
+      break;
+    default:
+      throw new Error('unsupported test attribute');
+  }
+  const value = Object.hasOwn(values, request.Attribute)
+    ? values[request.Attribute]
+    : expectedValue;
+  return {
+    $metadata: { httpStatusCode: 200 },
+    InstanceId: request.InstanceId,
+    [responseKey]: { Value: value },
+  };
+}
+
 function emptyRecoveryIds() {
   return { securityGroup: null, instance: null, rootVolume: null };
 }
@@ -608,9 +638,6 @@ function makeHarness(options = {}) {
     if (instanceState === 'terminal') {
       return instance({ State: { Name: 'terminated' } });
     }
-    if (instanceState === 'spec-conflict') {
-      return instance({ DisableApiTermination: true });
-    }
     return instance();
   }
 
@@ -667,6 +694,18 @@ function makeHarness(options = {}) {
         apiReceivers.push(this);
         const observed = observedVolume();
         return { Volumes: observed === null ? [] : [observed] };
+      },
+    ),
+    describeInstanceAttribute: jest.fn(
+      /** @this {unknown} @param {Record<string, any>} request */
+      async function (request) {
+        apiReceivers.push(this);
+        return exactAttributeResponse(
+          request,
+          instanceState === 'spec-conflict'
+            ? { disableApiTermination: true }
+            : {},
+        );
       },
     ),
     describeInstanceCreditSpecifications: jest.fn(

@@ -65,6 +65,7 @@ const FACTORY_KEYS = new Set(['now', 'sleep']);
 const RECOVERY_KEYS = new Set(RESOURCE_ROLES);
 const READ_METHODS = Object.freeze([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstances',
   'describeVolumes',
   'describeInstanceCreditSpecifications',

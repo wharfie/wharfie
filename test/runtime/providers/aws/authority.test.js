@@ -33,6 +33,7 @@ function makeHarness(overrides = {}) {
   };
   const ec2 = {
     describeImages: jest.fn(async (request) => ({ request })),
+    describeInstanceAttribute: jest.fn(async (request) => ({ request })),
     describeInstanceCreditSpecifications: jest.fn(async (request) => ({
       request,
     })),
@@ -87,6 +88,7 @@ describe('AWS single-node read authority', () => {
     expect(Object.keys(authority.api).sort()).toEqual(
       [
         'describeImages',
+        'describeInstanceAttribute',
         'describeInstanceCreditSpecifications',
         'describeInstanceTypeOfferings',
         'describeInstances',
@@ -103,6 +105,17 @@ describe('AWS single-node read authority', () => {
     expect(authority.api.createSecurityGroup).toBeUndefined();
     await expect(authority.api.describeVpcs({ Filters: [] })).resolves.toEqual({
       request: { Filters: [] },
+    });
+    await expect(
+      authority.api.describeInstanceAttribute({
+        InstanceId: 'i-safe',
+        Attribute: 'disableApiStop',
+      }),
+    ).resolves.toEqual({
+      request: {
+        InstanceId: 'i-safe',
+        Attribute: 'disableApiStop',
+      },
     });
     await expect(
       authority.api.describeInstanceCreditSpecifications({

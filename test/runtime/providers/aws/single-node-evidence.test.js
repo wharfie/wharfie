@@ -358,6 +358,10 @@ function makeEvidenceApi(overrides = {}) {
     describeSecurityGroups: jest.fn(async () => ({ SecurityGroups: [] })),
     describeInstances: jest.fn(async () => ({ Reservations: [] })),
     describeVolumes: jest.fn(async () => ({ Volumes: [] })),
+    describeInstanceAttribute: jest.fn(
+      /** @param {Record<string, any>} request */
+      async (request) => exactAttributeResponse(request),
+    ),
     describeInstanceCreditSpecifications: jest.fn(async () => ({
       InstanceCreditSpecifications: [],
     })),
@@ -418,9 +422,6 @@ function instance(overrides = {}) {
     EnaSupport: true,
     EbsOptimized: true,
     Monitoring: { State: 'disabled' },
-    DisableApiStop: false,
-    DisableApiTermination: false,
-    InstanceInitiatedShutdownBehavior: 'stop',
     HibernationOptions: { Configured: false },
     EnclaveOptions: { Enabled: false },
     Placement: { AvailabilityZone: 'us-east-2a', Tenancy: 'default' },
@@ -516,6 +517,41 @@ function exactCreditResponse() {
     InstanceCreditSpecifications: [
       { InstanceId: INSTANCE_ID, CpuCredits: 'standard' },
     ],
+  };
+}
+
+/**
+ * Model the actual DescribeInstanceAttribute output shape rather than adding
+ * attributes that EC2 does not return from DescribeInstances.
+ * @param {Record<string, any>} request
+ * @param {Record<string, any>} [values]
+ */
+function exactAttributeResponse(request, values = {}) {
+  let responseKey;
+  let expectedValue;
+  switch (request.Attribute) {
+    case 'disableApiStop':
+      responseKey = 'DisableApiStop';
+      expectedValue = false;
+      break;
+    case 'disableApiTermination':
+      responseKey = 'DisableApiTermination';
+      expectedValue = false;
+      break;
+    case 'instanceInitiatedShutdownBehavior':
+      responseKey = 'InstanceInitiatedShutdownBehavior';
+      expectedValue = 'stop';
+      break;
+    default:
+      throw new Error('unsupported test attribute');
+  }
+  const value = Object.hasOwn(values, request.Attribute)
+    ? values[request.Attribute]
+    : expectedValue;
+  return {
+    $metadata: { httpStatusCode: 200 },
+    InstanceId: request.InstanceId,
+    [responseKey]: { Value: value },
   };
 }
 
@@ -733,12 +769,25 @@ describe('AWS single-node instance evidence', () => {
       publicIpv4: null,
     });
 
+    /** @type {unknown[]} */
+    const receivers = [];
+    const describeInstanceAttribute = jest.fn(
+      /**
+       * @this {unknown}
+       * @param {Record<string, any>} request
+       */
+      async function (request) {
+        receivers.push(this);
+        return exactAttributeResponse(request);
+      },
+    );
     const exact = await inspectAwsSingleNodeInstance(
       instanceInput(
         makeEvidenceApi({
           describeInstances: jest.fn(async () => ({
             Reservations: [reservation()],
           })),
+          describeInstanceAttribute,
           describeInstanceCreditSpecifications: jest.fn(async () =>
             exactCreditResponse(),
           ),
@@ -756,6 +805,22 @@ describe('AWS single-node instance evidence', () => {
       publicIpv4: PUBLIC_IPV4,
     });
     expect(deeplyFrozen(exact)).toBe(true);
+    expect(describeInstanceAttribute.mock.calls.map((call) => call[0])).toEqual(
+      [
+        { InstanceId: INSTANCE_ID, Attribute: 'disableApiStop' },
+        { InstanceId: INSTANCE_ID, Attribute: 'disableApiTermination' },
+        {
+          InstanceId: INSTANCE_ID,
+          Attribute: 'instanceInitiatedShutdownBehavior',
+        },
+      ],
+    );
+    expect(
+      describeInstanceAttribute.mock.calls.every((call) =>
+        Object.isFrozen(call[0]),
+      ),
+    ).toBe(true);
+    expect(receivers).toEqual([undefined, undefined, undefined]);
   });
 
   it('returns settling while pending provider fields are late', async () => {
@@ -796,21 +861,29 @@ describe('AWS single-node instance evidence', () => {
 
   it('distinguishes deletion terminal from stopped instances needing termination', async () => {
     for (const state of ['shutting-down', 'terminated']) {
+      const describeInstanceAttribute = jest.fn(
+        /** @param {Record<string, any>} request */
+        async (request) => exactAttributeResponse(request),
+      );
+      const describeInstanceCreditSpecifications = jest.fn(async () =>
+        exactCreditResponse(),
+      );
       const result = await inspectAwsSingleNodeInstance(
         instanceInput(
           makeEvidenceApi({
             describeInstances: jest.fn(async () => ({
               Reservations: [reservation({ State: { Name: state } })],
             })),
-            describeInstanceCreditSpecifications: jest.fn(async () =>
-              exactCreditResponse(),
-            ),
+            describeInstanceAttribute,
+            describeInstanceCreditSpecifications,
           }),
         ),
       );
       expect(result.status).toBe('terminal');
       expect(result.instanceState).toBe(state);
       expect(result.ownershipStatus).toBe('owned');
+      expect(describeInstanceAttribute).not.toHaveBeenCalled();
+      expect(describeInstanceCreditSpecifications).not.toHaveBeenCalled();
     }
 
     for (const state of ['stopping', 'stopped']) {
@@ -860,6 +933,56 @@ describe('AWS single-node instance evidence', () => {
       specStatus: 'conflict',
       instanceId: INSTANCE_ID,
     });
+  });
+
+  it('returns owned spec conflict for instance-attribute drift', async () => {
+    const result = await inspectAwsSingleNodeInstance(
+      instanceInput(
+        makeEvidenceApi({
+          describeInstances: jest.fn(async () => ({
+            Reservations: [reservation()],
+          })),
+          describeInstanceAttribute: jest.fn(
+            /** @param {Record<string, any>} request */
+            async (request) =>
+              exactAttributeResponse(request, {
+                disableApiTermination: true,
+              }),
+          ),
+          describeInstanceCreditSpecifications: jest.fn(async () =>
+            exactCreditResponse(),
+          ),
+        }),
+      ),
+    );
+    expect(result).toMatchObject({
+      status: 'present',
+      ownershipStatus: 'owned',
+      specStatus: 'conflict',
+      instanceId: INSTANCE_ID,
+    });
+  });
+
+  it('rejects a malformed instance-attribute response', async () => {
+    await expect(
+      inspectAwsSingleNodeInstance(
+        instanceInput(
+          makeEvidenceApi({
+            describeInstances: jest.fn(async () => ({
+              Reservations: [reservation()],
+            })),
+            describeInstanceAttribute: jest.fn(
+              /** @param {Record<string, any>} request */
+              async (request) => ({
+                $metadata: { httpStatusCode: 200 },
+                InstanceId: request.InstanceId,
+                DisableApiTermination: { Value: false },
+              }),
+            ),
+          }),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(AwsSingleNodeEvidenceUnknownError);
   });
 
   it('rejects instance ownership, natural-slot, and stored-ID conflicts', async () => {
