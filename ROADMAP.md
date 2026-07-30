@@ -61,7 +61,9 @@ The repository has substantial foundations:
   update, rollback, failed-target restoration, history/output reads,
   uninstall, prune, and host cleanup; and
 - packaged AWS and Hetzner single-node apply/destroy commands, recoverable
-  provider mutations, and mock-based proofs.
+  provider mutations, automated recovery proofs, and live packaged
+  apply/activate/adopt/restart/destroy proofs with independent owned-resource
+  cleanup.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -69,8 +71,10 @@ processes; it did not repeat crash or reboot recovery, which remains covered by
 the separate purpose-built service proof. The explicit epoch-authority kernel
 proves that a bound ledger can reject stale writers, but the production runtime
 does not bind it yet and neither run proves replacement of a failed coordinator
-by another machine. The cloud deployment work has not produced a successful
-clean-account end-to-end receipt.
+by another machine. The cloud deployment work now proves a bounded
+credentialed lifecycle through healthy guest service and independently
+verified owned-resource cleanup on AWS and Hetzner. The broader ADR 0035
+acceptance artifact remains partial.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -211,24 +215,25 @@ capability.
   data, so destroy is deliberately data-destructive.
 - Provider mutations are designed around explicit ownership, durable intent,
   conditional operations, readback, and conservative ambiguity recovery.
-- Most evidence is currently mock-based. Some host and delivery proof harnesses
-  exist, but no successful clean-account lifecycle is claimed.
+- Both provider paths have focused automated ambiguity/recovery coverage and
+  one live packaged apply/activate/adopt/restart/destroy proof with independent
+  owned-resource cleanup. The
+  [two-provider checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md)
+  records both the result and the remaining ADR 0035 evidence gap.
 
 ### Work next
 
-1. Run bounded live AWS and Hetzner apply/destroy proofs, retain
-   machine-readable receipts, and independently check that cleanup removes only
-   Wharfie-owned resources.
-2. Extend the packaged surface from apply/destroy to an approachable credential
+1. Resolve final SEA byte reproducibility or formalize retention of the
+   original operator SEA as recovery authority.
+2. Complete the remaining ADR 0035 evidence in one repeatable, redacted
+   two-provider harness, including read-only planning, guest audit, reboot,
+   unfinished durable work, fault injection, and bounded proof receipts.
+3. Extend the packaged surface from apply/destroy to an approachable credential
    check, preview, status, update, and recovery sequence. Preview every mutation
    and distinguish owned resources from external references.
-3. Bootstrap a narrowly scoped runtime identity and the exact packaged
-   artifact; do not expose provider credentials to application components.
-4. Connect node startup to the same durable service and operator experience
-   proved locally.
-5. Decide and implement an explicit retained-data capability before making any
+4. Decide and implement an explicit retained-data capability before making any
    durability claim beyond the current root-disk lifecycle.
-6. Delete or quarantine provider abstractions that do not help this one
+5. Delete or quarantine provider abstractions that do not help this one
    lifecycle before adding another provider or topology.
 
 ### Exit evidence
@@ -308,8 +313,8 @@ leases, multi-node placement, and cloud fulfillment remain later slices.
 - a public multi-language application framework;
 - a hosted Wharfie control plane requirement;
 - arbitrary physical exactly-once execution; or
-- additional providers, topology variants, or resource types before the first
-  clean lifecycle works.
+- additional providers, topology variants, or resource types without an
+  explicit capability decision after the bounded two-provider proof.
 
 TypeScript/Node remains the public authoring and orchestration boundary.
 Target-specific Node bindings, Node-API modules, WASI/WASM, or persistent

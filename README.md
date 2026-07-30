@@ -606,7 +606,8 @@ commands:
 Apply requires exactly `--region` for AWS or `--location` for Hetzner. Repeat
 `--allow-ssh-from` for each operator IPv4 `/32`. Credentials are never command
 arguments: AWS uses the ordinary credential chain and Hetzner reads ambient
-`HCLOUD_TOKEN`. The coordinator creates or recovers the fixed small
+`HCLOUD_TOKEN`. Use a dedicated Hetzner project for this preview because its
+token is project-wide. The coordinator creates or recovers the fixed small
 single-node systemd-user deployment and emits a compact nonsecret result.
 
 Destroy reads only the embedded app identity plus the exact durable journal
@@ -628,12 +629,11 @@ node's root disk. Destroy therefore deletes that data along with the owned
 root volume or server; it is not a retained-data operation.
 
 Packaged plan, inspect, and reconcile are not exposed yet. The AWS path
-completed a live packaged lifecycle in `us-east-2` on 2026-07-29: activation,
-healthy systemd service, second-process adoption, service restart, destroy, and
-independently verified instance, volume, and security-group cleanup. The
-Hetzner path is reconciled with the current official API contract and has
-bounded apply/destroy convergence plus durable rejection recovery, but it has
-not completed a credentialed live lifecycle yet. See the
+completed a live packaged apply/activate/adopt/restart/destroy slice in
+`us-east-2` on 2026-07-29, including independently verified instance, volume,
+and security-group cleanup. The Hetzner path completed the equivalent slice in
+`fsn1`, including second-process adoption without replacement and independently
+verified firewall, Primary IPv4, and server cleanup. See the
 [two-provider checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md).
 Create the canonical profile with
 `@wharfie/wharfie/deployment-profile`, whose narrow Node authoring API exports

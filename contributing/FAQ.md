@@ -19,11 +19,15 @@ working foundations for loading manifests, invoking activities locally,
 persisting an append-only manual run → invocation → attempt ledger,
 inspecting/recovering exact runs from source or a packaged artifact, asking an
 exact live owner to cancel a foreground run, packaging target-specific Node SEA
-executables, and driving the finite AWS deployment lifecycle through focused
-automated evidence. The deployment path has not yet been proven through a
-clean account or completed guest service projection. A standalone Wharfie
-builder binary is withheld until its build-host dependencies can be embedded.
-It is not production ready.
+executables, and driving bounded AWS and Hetzner single-node deployment
+lifecycles. Both providers have completed a live packaged
+apply/activate/adopt/restart/destroy slice with healthy guest service and
+independently verified Wharfie-owned resource cleanup. The broader
+[ADR 0035](../docs/architecture/decisions/0035-two-provider-single-node-self-deployment.md)
+acceptance proof remains partial; the
+[two-provider checkpoint](../llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md)
+records the boundary. A standalone Wharfie builder binary is withheld until
+its build-host dependencies can be embedded. It is not production ready.
 
 ## How do `inspect`, `recover`, and `cancel` differ?
 

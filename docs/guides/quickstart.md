@@ -933,7 +933,8 @@ operator IPv4 `/32`. AWS apply requires `--region`; Hetzner apply requires
 
 Credentials are never CLI arguments. AWS uses the ordinary credential chain;
 Hetzner reads `HCLOUD_TOKEN` from the ambient process. Receipts and human
-output omit credentials.
+output omit credentials. Use a dedicated Hetzner project for this preview
+because its token is project-wide.
 
 Destroy authenticates only the embedded app identity and uses the exact
 deployment instance plus durable local authority without decoding the large
@@ -956,10 +957,10 @@ retain an application data volume.
 
 Packaged plan, inspect, and reconcile are not exposed yet. Focused automated
 tests cover both provider coordinators. The AWS path completed a live packaged
-apply, healthy service and restart checks, second-process adoption, destroy,
-and independently verified cleanup in `us-east-2` on 2026-07-29. Hetzner has
-current-contract automated lifecycle coverage but has not completed a
-credentialed live lifecycle yet.
+apply/activate/adopt/restart/destroy slice with independently verified cleanup
+in `us-east-2` on 2026-07-29. Hetzner completed the equivalent live slice in
+`fsn1`, including second-process adoption without replacement and independently
+verified cleanup.
 
 The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,

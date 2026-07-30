@@ -1,7 +1,9 @@
 # Two-provider self-deployment implementation checkpoint
 
 - **Date:** 2026-07-29
-- **Status:** AWS live lifecycle complete and cleaned up; Hetzner implementation hardened against the current API contract, live proof pending credentials
+- **Status:** AWS and Hetzner live packaged
+  apply/activate/adopt/restart/destroy slices complete and independently
+  cleaned up; the broader ADR 0035 acceptance proof remains partial
 - **Branch:** `agent/two-provider-deploy`
 - **Base commit:** `a2431716d72f15a1f53ec476690394623d14fa86`
 - **Current implementation commit:** `1b7adf4`
@@ -48,11 +50,10 @@ process failure rather than automatic coordinator or node replacement.
 - The production AWS boundary has now completed one live packaged lifecycle in
   `us-east-2`: plan, create, bootstrap, pinned-SSH activation, systemd health,
   second-process adoption, service restart, destroy, and independent cleanup.
-- Hetzner now has current-contract HTTP fixtures, full coordinator and durable
-  recovery coverage, and bounded eventual-consistency convergence. Its live
-  account behavior, public networking, SSH reachability, and cleanup remain
-  empirical release risks because no `HCLOUD_TOKEN` was available for this
-  checkpoint.
+- The production Hetzner boundary has now completed the equivalent live
+  packaged lifecycle in `fsn1`: create, bootstrap, pinned-SSH activation,
+  systemd health, second-process adoption without replacement, service restart,
+  destroy, and independent cleanup.
 
 ## Live AWS hello-world proof
 
@@ -147,9 +148,54 @@ and artifact ID
 `waf1_lSuqgUi0F63d6NXt-SAknyOv8b2EeJOnMrZ2OVUEeeU`. The superseded 307 MB SEA
 and build temporaries were removed.
 
-No ambient `HCLOUD_TOKEN` or installed authenticated Hetzner CLI was available,
-so this checkpoint makes no live-resource claim. No Hetzner resource was
-created or billed.
+## Live Hetzner hello-world proof
+
+An existing `HETZNER_TOKEN` was mapped to Wharfie's supported `HCLOUD_TOKEN`
+only in each credentialed child process. The value was never printed, copied
+into the repository, serialized into evidence, or sent to the remote host.
+
+A read-only preflight through the production provider client found `fsn1`,
+usable x86 `cpx12` and `cpx22` server types, the Ubuntu 24.04 system image,
+and zero existing Wharfie-owned resources. Using `fsn1`, the retained
+self-deployable hello-world SEA, and one operator IPv4 `/32`, the packaged SEA
+then:
+
+1. selected the fixed `cpx12` server type and Ubuntu 24.04 x64 image;
+2. created exactly one firewall, Primary IPv4, and server, with no private
+   network or IPv6 and only restricted SSH ingress;
+3. returned an `active` receipt after pinned-SSH upload and systemd-user
+   convergence;
+4. reported service status schema 3 with `health: healthy`, an enabled,
+   loaded, active, running service, a `READY` current resident, verified
+   artifact integrity, and lingering enabled;
+5. ran the remote ordinary CLI and returned `Hello, Grace!`;
+6. ran the identical packaged apply from a fresh coordinator process and
+   returned the same deployment instance, address, revision, artifact, and
+   provider resource identities without advancing the generation-14 journal;
+7. restarted the systemd user service, observed its PID and runtime generation
+   change from 1 to 2 with health restored; and
+8. returned a `destroyed` receipt and a generation-22 journal with every owned
+   resource recorded absent.
+
+Independent exact provider reads then returned 404 for the firewall, Primary
+IPv4, and server, while exact-label inventory returned zero resources. No
+Wharfie-created Hetzner resource remains running or billable. The
+provider-specific local authority directory was removed after that proof; only
+the retained operator SEA and its artifact record remain in the demo output.
+Raw credentialed stdout was not retained as a separate proof bundle; this
+redacted checkpoint is the durable record.
+
+## Boundary of the live proof
+
+The AWS and Hetzner runs prove the narrow packaged provider slice: resource
+creation, exact artifact activation, healthy service, fresh-process adoption,
+service restart, destroy, and independent owned-resource cleanup. They do not
+complete every acceptance item in ADR 0035. In particular, this proof did not
+audit the guest for absent Node/npm/Docker/checkout, reboot the cloud host,
+carry an unfinished durable timer through coordinator exit, or inject live
+lost responses and ownership conflicts. Those ambiguity and conflict paths
+have automated coverage, not live-provider evidence. The retained operator SEA
+also remains recovery authority while packaging reproducibility is unresolved.
 
 ## Known recovery loose end
 
@@ -162,12 +208,14 @@ should be fixed or made an explicit artifact-retention contract.
 
 ## Work next
 
-1. Run the same bounded hello-world lifecycle against Hetzner and independently
-   verify cleanup.
-2. Resolve final SEA byte reproducibility or formalize retention of the
+1. Resolve final SEA byte reproducibility or formalize retention of the
    original operator SEA as recovery authority.
-3. Add approachable preview/status/update/recovery commands only after the
-   Hetzner lifecycle passes.
+2. Complete the remaining ADR 0035 evidence in one repeatable, redacted
+   two-provider acceptance harness: read-only credential check/plan, clean
+   guest audit, host reboot, unfinished durable work, fault injection, and
+   bounded proof receipts.
+3. Add approachable preview/status/update/recovery commands around the proven
+   provider slice.
 4. Decide an explicit retained-data capability before claiming durability
    beyond the node root-disk lifecycle.
 5. Delete or quarantine superseded general AWS graph code that does not serve
@@ -176,7 +224,8 @@ should be fixed or made an explicit artifact-retention contract.
 ## Security and recovery defaults
 
 - AWS credentials come only from the ordinary SDK chain.
-- Hetzner credentials come only from `HCLOUD_TOKEN`.
+- Hetzner credentials come only from `HCLOUD_TOKEN`; use a dedicated Hetzner
+  project for the preview because that token is project-wide.
 - Provider credentials never reach the remote host or serialized evidence.
 - SSH is limited to explicit IPv4 `/32` sources.
 - A generated deployment client private key stays in owner-only local state.
@@ -189,7 +238,8 @@ should be fixed or made an explicit artifact-retention contract.
 
 ## Stop conditions
 
-Do not expand into persistent volumes, custom networks, object stores, general
+The live provider-substrate gate is satisfied, but the broader ADR 0035
+acceptance artifact is not. Complete or explicitly narrow that artifact before
+expanding into persistent volumes, custom networks, object stores, general
 provider plugins, multiple nodes, cloud application secrets, ingress beyond
-restricted SSH, mesh enrollment, or coordinator leases before both bounded
-single-node provider paths pass and clean up.
+restricted SSH, mesh enrollment, or coordinator leases.

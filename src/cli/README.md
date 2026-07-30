@@ -154,7 +154,8 @@ or recovers it through durable local authority. Repeat `--allow-ssh-from` for
 each operator address. AWS apply requires exactly `--region`; Hetzner apply
 requires exactly `--location`. AWS uses the ordinary credential chain and
 Hetzner reads `HCLOUD_TOKEN` from the ambient process. There is no credential
-option and result output contains no credential data.
+option and result output contains no credential data. Use a dedicated Hetzner
+project for this preview because its token is project-wide.
 
 Destroy authenticates only the embedded app identity, then uses the exact
 deployment instance and durable local authority without decoding the embedded
@@ -169,9 +170,9 @@ IPv4, and server. Destroy deletes those resources and the application/control
 data currently held on the node's root disk.
 
 Packaged `plan`, `inspect`, and `reconcile` are not exposed yet. AWS has
-completed a live packaged lifecycle and independently verified cleanup.
-Hetzner has current-contract automated lifecycle coverage but no claimed
-credentialed live lifecycle yet.
+completed a live packaged apply/activate/adopt/restart/destroy slice with
+independently verified cleanup. Hetzner completed the equivalent live slice in
+`fsn1`, including second-process adoption without replacement.
 
 Source plan and direct apply package a selected SEA and durably pre-stage it.
 A later source `apply --plan` and source reconcile validate exact durable
