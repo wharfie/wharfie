@@ -52,18 +52,20 @@ source prepared-plan apply and reconcile consume exact durable staged evidence.
 packaged deployment surface has AWS and Hetzner `apply` and `destroy`. AWS
 apply requires a region and uses the ordinary credential chain; Hetzner apply
 requires a location and reads ambient `HCLOUD_TOKEN`. Credentials are never
-CLI arguments. Destroy reads only embedded app identity plus exact durable
-local deployment authority. Its journal supplies the bound provider location,
-so destroy accepts no region or location selector.
+CLI arguments. Use a dedicated Hetzner project for this preview because its
+token is project-wide. Destroy reads only embedded app identity plus exact
+durable local deployment authority. Its journal supplies the bound provider
+location, so destroy accepts no region or location selector.
 
 The AWS path requires suitable default-VPC public-network prerequisites;
 Hetzner uses its public network and Wharfie creates no private network. Destroy
 removes the bounded resources Wharfie created, including the node and its
 root-disk data. Packaged plan, inspect, and reconcile are not exposed yet.
-The AWS path has completed a live packaged lifecycle and independently verified
-cleanup. The Hetzner path has current-contract automated lifecycle coverage but
-no claimed credentialed live lifecycle yet. Wharfie provisions only its fixed
-capability substrate and is not a general infrastructure-as-code system.
+The AWS path has completed a live packaged apply/activate/adopt/restart/destroy
+slice and independently verified cleanup. The Hetzner path has current-contract
+automated lifecycle coverage and completed the equivalent live slice in
+`fsn1`. Wharfie provisions only its fixed capability substrate and is not a
+general infrastructure-as-code system.
 
 See the [Quickstart](./quickstart.md) for the working local and experimental
 deployment command surfaces.
