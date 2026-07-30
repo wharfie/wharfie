@@ -6,6 +6,7 @@ import {
   SINGLE_NODE_BOOTSTRAP_COMPLETE_PATH,
   SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH,
   SINGLE_NODE_CLOUD_INIT_MAX_BYTES,
+  SINGLE_NODE_DATA_ROOT,
   SINGLE_NODE_DEPLOYMENT_ROOT,
   createSingleNodeCloudInit,
   validateSshEd25519PublicKey,
@@ -123,7 +124,30 @@ describe('single-node cloud-init', () => {
       '/dev/null',
       SINGLE_NODE_BOOTSTRAP_COMPLETE_PATH,
     ]);
-    expect(config.runcmd[0]).toContain(SINGLE_NODE_DEPLOYMENT_ROOT);
+    expect(config.runcmd.slice(0, 2)).toEqual([
+      [
+        '/usr/bin/install',
+        '-d',
+        '-m',
+        '0700',
+        '-o',
+        SINGLE_NODE_RUNTIME_ACCOUNT.user,
+        '-g',
+        SINGLE_NODE_RUNTIME_ACCOUNT.user,
+        SINGLE_NODE_DATA_ROOT,
+      ],
+      [
+        '/usr/bin/install',
+        '-d',
+        '-m',
+        '0700',
+        '-o',
+        SINGLE_NODE_RUNTIME_ACCOUNT.user,
+        '-g',
+        SINGLE_NODE_RUNTIME_ACCOUNT.user,
+        SINGLE_NODE_DEPLOYMENT_ROOT,
+      ],
+    ]);
     expect(first.bytes.toString('utf8')).not.toMatch(
       /\b(?:sudo|apt|package_install)\b/i,
     );
