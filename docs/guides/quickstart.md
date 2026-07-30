@@ -916,9 +916,11 @@ the exact durable stage instead of treating that Node process as artifact
 authority.
 
 An executable built with `wharfie app package --self-deployable` instead
-exposes narrow AWS and Hetzner apply and destroy commands:
+exposes narrow AWS and Hetzner preview, apply, and destroy commands:
 
 ```text
+<app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
@@ -928,13 +930,25 @@ exposes narrow AWS and Hetzner apply and destroy commands:
 The command authenticates its embedded revision and Linux deployment SEA,
 creates the fixed small single-node systemd-user intent, and applies or
 recovers it through durable local authority. Repeat `--allow-ssh-from` for each
-operator IPv4 `/32`. AWS apply requires `--region`; Hetzner apply requires
-`--location`. Supplying the other provider's selector is rejected.
+operator IPv4 `/32`. AWS preview/apply requires `--region`; Hetzner
+preview/apply requires `--location`. Supplying the other provider's selector is
+rejected.
 
 Credentials are never CLI arguments. AWS uses the ordinary credential chain;
 Hetzner reads `HCLOUD_TOKEN` from the ambient process. Receipts and human
 output omit credentials. Use a dedicated Hetzner project for this preview
 because its token is project-wide.
+
+Preview authenticates the same embedded desired state but never prepares the
+data root, takes the operation lock, generates deployment secrets, or calls a
+provider mutation. It performs only AWS identity/describe or Hetzner list
+queries and a side-effect-free read of any existing local journal. The
+redacted JSON receipt distinguishes referenced infrastructure from the three
+managed resource roles and reports the semantic steps apply would evaluate.
+It is a point-in-time diagnostic: apply re-plans provider state and persists
+its exact generated identities before mutation. AWS reports its exact
+account/partition/region scope; Hetzner validates its project-scoped token but
+the API does not expose the project identity.
 
 Destroy authenticates only the embedded app identity and uses the exact
 deployment instance plus durable local authority without decoding the large
@@ -955,8 +969,8 @@ control data currently live on the node's root disk. Destroy removes these
 owned resources and permanently deletes that root-disk data; it does not
 retain an application data volume.
 
-Packaged plan, inspect, and reconcile are not exposed yet. Focused automated
-tests cover both provider coordinators. The AWS path completed a live packaged
+Packaged inspect and reconcile are not exposed yet. Focused automated tests
+cover both provider coordinators. The AWS path completed a live packaged
 apply/activate/adopt/restart/destroy slice with independently verified cleanup
 in `us-east-2` on 2026-07-29. Hetzner completed the equivalent live slice in
 `fsn1`, including second-process adoption without replacement and independently

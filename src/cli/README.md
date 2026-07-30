@@ -139,9 +139,11 @@ wharfie deployment destroy <deployment-instance> --region <region> [--control-po
 
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
-AWS and Hetzner apply and destroy:
+AWS and Hetzner preview, apply, and destroy:
 
 ```text
+<app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
@@ -151,11 +153,18 @@ AWS and Hetzner apply and destroy:
 The SEA reads the authenticated embedded Linux payload and application
 revision, creates the fixed small single-node systemd-user intent, and applies
 or recovers it through durable local authority. Repeat `--allow-ssh-from` for
-each operator address. AWS apply requires exactly `--region`; Hetzner apply
-requires exactly `--location`. AWS uses the ordinary credential chain and
-Hetzner reads `HCLOUD_TOKEN` from the ambient process. There is no credential
-option and result output contains no credential data. Use a dedicated Hetzner
-project for this preview because its token is project-wide.
+each operator address. AWS preview/apply requires exactly `--region`; Hetzner
+preview/apply requires exactly `--location`. AWS uses the ordinary credential
+chain and Hetzner reads `HCLOUD_TOKEN` from the ambient process. There is no
+credential option and result output contains no credential data. Use a
+dedicated Hetzner project for this preview because its token is project-wide.
+
+Preview validates the embedded authority and performs only provider identity,
+describe, and list reads plus a side-effect-free local journal read. It does
+not create local state or cloud resources. Its point-in-time receipt separates
+referenced infrastructure from managed resource roles and reports the semantic
+steps a later apply would evaluate. Apply re-plans before generating and
+persisting its exact resource identities, SSH material, and cloud-init.
 
 Destroy authenticates only the embedded app identity, then uses the exact
 deployment instance and durable local authority without decoding the embedded
@@ -169,7 +178,7 @@ group, instance, and encrypted root volume. Hetzner owns one firewall, primary
 IPv4, and server. Destroy deletes those resources and the application/control
 data currently held on the node's root disk.
 
-Packaged `plan`, `inspect`, and `reconcile` are not exposed yet. AWS has
+Packaged `inspect` and `reconcile` are not exposed yet. AWS has
 completed a live packaged apply/activate/adopt/restart/destroy slice with
 independently verified cleanup. Hetzner completed the equivalent live slice in
 `fsn1`, including second-process adoption without replacement.

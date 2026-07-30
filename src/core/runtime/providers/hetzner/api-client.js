@@ -79,6 +79,14 @@ const SERVER_LIST_QUERY_KEYS = new Set([
   'perPage',
   'sort',
 ]);
+const PREVIEW_READ_METHODS = Object.freeze([
+  'listLocations',
+  'listServerTypes',
+  'listImages',
+  'listFirewalls',
+  'listPrimaryIps',
+  'listServers',
+]);
 const INVALID_OPTIONS = 'Hetzner API client options are invalid.';
 const INVALID_REQUEST = 'Hetzner API request is invalid.';
 
@@ -770,6 +778,33 @@ function createClient(rawOptions) {
 }
 
 /**
+ * Retain only the six collection reads owned by single-node planning. Each
+ * wrapper invokes its capability without a receiver, so neither the full
+ * client nor its sibling mutation methods are reachable from preview code.
+ * @param {Readonly<Record<string, Function>>} client - Full internal client.
+ * @returns {Readonly<Record<string, Function>>} - GET-only preview client.
+ */
+function previewClientProjection(client) {
+  /** @type {Record<string, Function>} */
+  const result = {};
+  for (const method of PREVIEW_READ_METHODS) {
+    const descriptor = Object.getOwnPropertyDescriptor(client, method);
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, 'value') ||
+      typeof descriptor.value !== 'function'
+    ) {
+      throw new TypeError(INVALID_OPTIONS);
+    }
+    const capability = descriptor.value;
+    result[method] = (/** @type {unknown} */ request) =>
+      Reflect.apply(capability, undefined, [request]);
+  }
+  return Object.freeze(result);
+}
+
+/**
  * Create a production Hetzner client. The endpoint and native fetch authority
  * are deliberately not configurable through this public constructor.
  * @param {unknown} value - Exact `{token}` options.
@@ -792,6 +827,16 @@ export function createHetznerApiClient(value) {
     throw new TypeError(INVALID_OPTIONS);
   }
   return createClient({ token: tokenDescriptor.value });
+}
+
+/**
+ * Create the production GET-only API capability used by deployment preview.
+ * The complete client remains private to this construction call.
+ * @param {unknown} value - Exact `{token}` options.
+ * @returns {Readonly<Record<string, Function>>} - Planner list methods only.
+ */
+export function createHetznerPreviewApiClient(value) {
+  return previewClientProjection(createHetznerApiClient(value));
 }
 
 /**

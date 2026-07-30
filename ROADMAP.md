@@ -60,10 +60,10 @@ The repository has substantial foundations:
   through install, automatic replacement, forced host restart, retained work,
   update, rollback, failed-target restoration, history/output reads,
   uninstall, prune, and host cleanup; and
-- packaged AWS and Hetzner single-node apply/destroy commands, recoverable
-  provider mutations, automated recovery proofs, and live packaged
-  apply/activate/adopt/restart/destroy proofs with independent owned-resource
-  cleanup.
+- packaged AWS and Hetzner single-node read-only preview plus apply/destroy
+  commands, recoverable provider mutations, automated recovery proofs, and
+  live packaged apply/activate/adopt/restart/destroy proofs with independent
+  owned-resource cleanup.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -210,6 +210,11 @@ capability.
   on AWS or Hetzner, then destroy it from exact durable local authority.
   Credentials come only from the ordinary AWS chain or ambient
   `HCLOUD_TOKEN`; they are not CLI arguments.
+- The same SEA can first perform a zero-write, point-in-time preview that
+  validates ambient access and separates selected external references from
+  managed resource roles and semantic apply steps. The
+  [packaged preview checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-preview.md)
+  records both live provider proofs and cleanup.
 - AWS reuses a qualifying default-VPC public-network path; Hetzner uses its
   public network. The current node root disk holds application and control
   data, so destroy is deliberately data-destructive.
@@ -228,11 +233,11 @@ capability.
 ### Work next
 
 1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
-   two-provider harness, including read-only planning, guest audit, reboot,
+   two-provider harness, including live packaged preview, guest audit, reboot,
    unfinished durable work, fault injection, and bounded proof receipts.
-2. Extend the packaged surface from apply/destroy to an approachable credential
-   check, preview, status, update, and recovery sequence. Preview every mutation
-   and distinguish owned resources from external references.
+2. Extend the packaged surface from preview/apply/destroy to an approachable
+   status, update, and recovery sequence, preserving the read-only preview
+   boundary and explicit owned-versus-referenced resource split.
 3. Decide and implement an explicit retained-data capability before making any
    durability claim beyond the current root-disk lifecycle.
 4. Delete or quarantine provider abstractions that do not help this one

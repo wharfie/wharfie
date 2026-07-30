@@ -299,6 +299,12 @@ describe('docs command surface', () => {
       '<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>...',
     );
     expect(quickstart).toContain(
+      '<app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>...',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>...',
+    );
+    expect(quickstart).toContain(
       '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws',
     );
     expect(quickstart).toContain(
@@ -314,7 +320,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('ordinary credential chain');
     expect(quickstart).toContain('`HCLOUD_TOKEN`');
     expect(quickstart).toContain(
-      'Packaged plan, inspect, and reconcile are not exposed',
+      'Packaged inspect and reconcile are not exposed',
     );
     expect(quickstart).toContain('--confirm-coordinator-stopped');
     expect(quickstart).toMatch(/Direct apply defaults to\s+`bootstrap`/);
