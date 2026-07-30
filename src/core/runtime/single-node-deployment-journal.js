@@ -1523,6 +1523,64 @@ export function prepareSingleNodeDeploymentMutation(prior, value) {
 }
 
 /**
+ * Resolve one prepared mutation as a provider-confirmed rejection. Removing
+ * the current fence is safe only when the provider returned a definite
+ * non-commit response; ambiguous outcomes must remain prepared for inventory
+ * recovery. The prior generation retains the rejected attempt in the durable
+ * journal chain while the successor permits an intentional retry or cleanup.
+ * @param {unknown} prior - Current journal.
+ * @param {unknown} value - Exact provider-emitted mutation attempt.
+ * @returns {Readonly<Record<string, any>>} - Successor without the rejected fence.
+ */
+export function rejectSingleNodeDeploymentMutation(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  if (current.phase !== 'provisioning') {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot reject mutations in this phase.',
+    );
+  }
+  const evidence =
+    current.providerIntent.provider === 'hetzner'
+      ? validateHetznerProvisioningMutationAttempt(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          'singleNodeDeploymentJournal.rejectMutation',
+        )
+      : validateAwsProvisioningMutationAttempt(
+          value,
+          current.providerIntent.intent,
+          undefined,
+          'singleNodeDeploymentJournal.rejectMutation',
+        );
+  const attempt =
+    current.mutationAttempts.find(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.role === evidence.role,
+    ) || null;
+  if (
+    attempt === null ||
+    attempt.state !== 'prepared' ||
+    JSON.stringify(attempt.evidence) !== JSON.stringify(evidence)
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal rejected mutation does not match its durable fence.',
+    );
+  }
+  if (resourceForRole(current.resources, evidence.role) !== null) {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot reject a mutation with resource evidence.',
+    );
+  }
+  return successor(current, {
+    mutationAttempts: current.mutationAttempts.filter(
+      (/** @type {Record<string, any>} */ candidate) =>
+        candidate.role !== evidence.role,
+    ),
+  });
+}
+
+/**
  * Resolve one prepared mutation to an exact provider identity and atomically
  * add its resource evidence. This is valid for a direct response or for an
  * ownership-qualified inventory recovery after an ambiguous response.
@@ -2016,12 +2074,20 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
             entry.role === attempt.role,
         ),
     );
-    if (changedAttempts.length === 0 || removedAttempts.length !== 0) {
+    if (
+      changedAttempts.length === 0 &&
+      removedAttempts.length === 1 &&
+      !resourcesChanged
+    ) {
+      expected = rejectSingleNodeDeploymentMutation(
+        current,
+        removedAttempts[0].evidence,
+      );
+    } else if (changedAttempts.length === 0 || removedAttempts.length !== 0) {
       throw new Error(
         'singleNodeDeploymentJournal successor must change a nonempty mutation batch.',
       );
-    }
-    if (!resourcesChanged) {
+    } else if (!resourcesChanged) {
       expected = prepareSingleNodeDeploymentMutations(
         current,
         changedAttempts.map(
@@ -2841,6 +2907,7 @@ export default {
   prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
   prepareSingleNodeDeploymentMutations,
+  rejectSingleNodeDeploymentMutation,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentArtifact,
   recordSingleNodeDeploymentDeletion,

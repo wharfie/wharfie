@@ -246,7 +246,7 @@ describe('Hetzner single-node read-only plan', () => {
       name: 'cpx12',
     });
     expect(api.listLocations).toHaveBeenCalledWith({ name: 'fsn1' });
-    expect(api.listServerTypes).toHaveBeenCalledWith({ architecture: 'x86' });
+    expect(api.listServerTypes.mock.calls).toContainEqual([]);
     expect(api.listImages).toHaveBeenCalledWith({
       name: 'ubuntu-24.04',
       type: 'system',

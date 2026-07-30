@@ -4,6 +4,8 @@ import { createApplicationRevision } from '../../../../src/core/runtime/applicat
 import { createArtifactRecord } from '../../../../src/core/runtime/artifact-record.js';
 import { sha256Base64Url } from '../../../../src/core/runtime/content-id.js';
 import {
+  HETZNER_DESTRUCTION_MAX_SETTLE_ATTEMPTS,
+  HETZNER_DESTRUCTION_SETTLE_RETRY_DELAY_MILLISECONDS,
   convergeHetznerSingleNodeDestruction,
   createHetznerDeletionRecord,
   createHetznerDestructionAttempt,
@@ -332,6 +334,7 @@ function convergenceEffects(provider) {
     waitForAction: provider.waitForAction,
     recordDestroyAttempt: provider.recordDestroyAttempt,
     recordDeletion: provider.recordDeletion,
+    wait: async () => undefined,
   };
 }
 
@@ -607,6 +610,77 @@ describe('Hetzner single-node destruction convergence', () => {
     expect(provider.api.deletePrimaryIp).not.toHaveBeenCalled();
     expect(provider.api.deleteFirewall).not.toHaveBeenCalled();
     expect(provider.events.join(' ')).not.toContain('hcloud-secret-token');
+  });
+
+  it('polls a still-visible server to absence without issuing a second DELETE', async () => {
+    const intent = await makeIntent();
+    const provider = makeProvider(intent, { leaveServerPresent: true });
+    const wait = jest.fn(async (milliseconds) => {
+      expect(milliseconds).toBe(
+        HETZNER_DESTRUCTION_SETTLE_RETRY_DELAY_MILLISECONDS,
+      );
+      provider.state.server = [];
+    });
+
+    await expect(
+      convergeHetznerSingleNodeDestruction({
+        intent,
+        storedResourceIds: IDS,
+        ...convergenceEffects(provider),
+        wait,
+      }),
+    ).resolves.toMatchObject({ status: 'destroyed' });
+
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(provider.api.deleteServer).toHaveBeenCalledTimes(1);
+    expect(provider.api.deletePrimaryIp).toHaveBeenCalledTimes(1);
+    expect(provider.api.deleteFirewall).toHaveBeenCalledTimes(1);
+    expect(provider.events.indexOf('absent:server')).toBeLessThan(
+      provider.events.indexOf('delete:primaryIp'),
+    );
+  });
+
+  it('leaves a bounded settle timeout durably retryable without false absence', async () => {
+    const intent = await makeIntent();
+    const provider = makeProvider(intent, { leaveServerPresent: true });
+    const wait = jest.fn(async () => undefined);
+
+    await expect(
+      convergeHetznerSingleNodeDestruction({
+        intent,
+        storedResourceIds: IDS,
+        ...convergenceEffects(provider),
+        wait,
+      }),
+    ).rejects.toMatchObject({
+      code: 'HETZNER_DESTRUCTION_NOT_SETTLED',
+      role: 'server',
+    });
+
+    expect(wait).toHaveBeenCalledTimes(
+      HETZNER_DESTRUCTION_MAX_SETTLE_ATTEMPTS - 1,
+    );
+    expect(provider.api.deleteServer).toHaveBeenCalledTimes(1);
+    expect(provider.api.deletePrimaryIp).not.toHaveBeenCalled();
+    expect(provider.api.deleteFirewall).not.toHaveBeenCalled();
+    expect(provider.attempts).toHaveLength(1);
+    expect(provider.deletions).toHaveLength(0);
+
+    provider.state.server = [];
+    await expect(
+      convergeHetznerSingleNodeDestruction({
+        intent,
+        storedResourceIds: IDS,
+        storedDestroyAttempts: {
+          server: provider.attempts[0],
+          primaryIp: null,
+          firewall: null,
+        },
+        ...convergenceEffects(provider),
+        wait,
+      }),
+    ).resolves.toMatchObject({ status: 'destroyed' });
+    expect(provider.api.deleteServer).toHaveBeenCalledTimes(1);
   });
 
   it('rejects tampered or mismatched persisted evidence before provider effects', async () => {

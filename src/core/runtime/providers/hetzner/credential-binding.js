@@ -486,12 +486,26 @@ async function readBinding(options) {
     }
     const text = await handle.readFile({ encoding: 'utf8' });
     const after = await handle.stat();
+    assertPrivateStats(
+      after,
+      'file',
+      options.expectedUid,
+      PRIVATE_FILE_MODE,
+      options.maximumFileLinks,
+    );
+    const stableLinkMetadata =
+      before.nlink === after.nlink && before.ctimeMs === after.ctimeMs;
+    const completedPublicationCleanup =
+      options.maximumFileLinks === 2 &&
+      before.nlink === 2 &&
+      after.nlink === 1 &&
+      before.ctimeMs !== after.ctimeMs;
     if (
       before.dev !== after.dev ||
       before.ino !== after.ino ||
       before.size !== after.size ||
       before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs ||
+      (!stableLinkMetadata && !completedPublicationCleanup) ||
       Buffer.byteLength(text, 'utf8') !== before.size ||
       Buffer.byteLength(text, 'utf8') > BINDING_FILE_MAX_BYTES
     ) {

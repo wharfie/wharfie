@@ -278,6 +278,8 @@ async function makeHarness(options = {}) {
   const events = [];
   let convergeCalls = 0;
   let preparedRecoveryCalls = 0;
+  /** @type {Function|undefined} */
+  let convergeWait;
   const release = jest.fn(async () => undefined);
   const readToken = jest.fn(async () => {
     events.push('token');
@@ -354,8 +356,10 @@ async function makeHarness(options = {}) {
       );
     },
     waitForAction: async () => undefined,
+    wait: jest.fn(async () => undefined),
     convergeDestruction: async (/** @type {Record<string, any>} */ value) => {
       convergeCalls += 1;
+      convergeWait = value.wait;
       if (options.failAfterPreparedRecovery === true && convergeCalls === 1) {
         throw new Error('injected crash after prepared create recovery');
       }
@@ -431,8 +435,10 @@ async function makeHarness(options = {}) {
     readToken,
     requireCredentialBinding,
     createApi,
+    wait: dependencies.wait,
     getJournal: () => journal,
     getPreparedRecoveryCalls: () => preparedRecoveryCalls,
+    getConvergeWait: () => convergeWait,
   };
 }
 
@@ -487,6 +493,7 @@ describe('Hetzner single-node destroy coordinator', () => {
     expect(JSON.stringify(result)).not.toContain('test-secret-token');
     expect(JSON.stringify(result)).not.toContain(String(IDS.server));
     expect(harness.release).toHaveBeenCalledTimes(1);
+    expect(harness.getConvergeWait()).toBe(harness.wait);
   });
 
   it('recovers after one recorded deletion without issuing its attempt again', async () => {

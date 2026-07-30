@@ -284,6 +284,64 @@ describe('Hetzner API response documents', () => {
     expect(Object.isFrozen(decoded.publicIpv6)).toBe(true);
   });
 
+  it('normalizes transient nullable server network fields', () => {
+    const withoutFirewalls = decodeHetznerServer(
+      server({
+        public_net: {
+          ipv4: null,
+          ipv6: null,
+          floating_ips: [],
+        },
+      }),
+    );
+    const withNullFirewalls = decodeHetznerServer(
+      server({
+        public_net: {
+          ipv4: null,
+          ipv6: null,
+          floating_ips: [],
+          firewalls: null,
+        },
+      }),
+    );
+    const withoutIpv4Identifier = decodeHetznerServer(
+      server({
+        public_net: {
+          ipv4: {
+            ip: '203.0.113.7',
+            blocked: false,
+          },
+          ipv6: null,
+          floating_ips: [],
+          firewalls: [],
+        },
+      }),
+    );
+    const withNullIpv4Identifier = decodeHetznerServer(
+      server({
+        public_net: {
+          ipv4: {
+            id: null,
+            ip: '203.0.113.7',
+            blocked: false,
+          },
+          ipv6: null,
+          floating_ips: [],
+          firewalls: [],
+        },
+      }),
+    );
+
+    expect(withoutFirewalls.publicIpv4).toBeNull();
+    expect(withoutFirewalls.firewalls).toEqual([]);
+    expect(withNullFirewalls.publicIpv4).toBeNull();
+    expect(withNullFirewalls.firewalls).toEqual([]);
+    expect(withoutIpv4Identifier.publicIpv4).toBeNull();
+    expect(withNullIpv4Identifier.publicIpv4).toBeNull();
+    expect(Object.isFrozen(withoutFirewalls.firewalls)).toBe(true);
+    expect(Object.isFrozen(withNullFirewalls.firewalls)).toBe(true);
+  });
+
   it('decodes official pagination and nullable Primary IP create actions', () => {
     expect(
       decodeHetznerPagination({
@@ -305,6 +363,27 @@ describe('Hetzner API response documents', () => {
       nextPage: 3,
       lastPage: 3,
       totalEntries: 60,
+    });
+    expect(
+      decodeHetznerPagination({
+        meta: {
+          pagination: {
+            page: 1,
+            per_page: 25,
+            previous_page: null,
+            next_page: null,
+            last_page: null,
+            total_entries: null,
+          },
+        },
+      }),
+    ).toEqual({
+      page: 1,
+      perPage: 25,
+      previousPage: null,
+      nextPage: null,
+      lastPage: null,
+      totalEntries: null,
     });
 
     const result = decodeHetznerPrimaryIpCreationResponse({

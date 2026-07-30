@@ -4,6 +4,8 @@ import { createApplicationRevision } from '../../../../src/core/runtime/applicat
 import { createArtifactRecord } from '../../../../src/core/runtime/artifact-record.js';
 import { sha256Base64Url } from '../../../../src/core/runtime/content-id.js';
 import {
+  HETZNER_PROVISIONING_MAX_SETTLE_ATTEMPTS,
+  HETZNER_PROVISIONING_SETTLE_RETRY_DELAY_MILLISECONDS,
   convergeHetznerSingleNodeProvisioning,
   createHetznerProvisionedResourceRecord,
   createHetznerProvisioningMutationAttempt,
@@ -204,7 +206,7 @@ async function makeFixture(
 
 /**
  * @param {Awaited<ReturnType<typeof makeFixture>>} fixture
- * @param {{lostResponseRole?: string, waitFailure?: boolean, recordFailure?: boolean, attemptRecordFailure?: boolean, readbackFailureRole?: string, transitionalServer?: boolean}} [options]
+ * @param {{lostResponseRole?: string, rejectedCreateRole?: string, waitFailure?: boolean, recordFailure?: boolean, attemptRecordFailure?: boolean, rejectionRecordFailure?: boolean, readbackFailureRole?: string, transitionalServer?: boolean, settleDuringWait?: boolean}} [options]
  */
 function makeProvider(fixture, options = {}) {
   const state = {
@@ -214,12 +216,14 @@ function makeProvider(fixture, options = {}) {
     creationOrder: /** @type {string[]} */ ([]),
     events: /** @type {string[]} */ ([]),
     attempts: /** @type {any[]} */ ([]),
+    rejections: /** @type {any[]} */ ([]),
     records: /** @type {any[]} */ ([]),
     actionIds: /** @type {number[]} */ ([]),
   };
   let nextId = 10;
   let nextActionId = 100;
   let recordFailed = false;
+  let createRejected = false;
 
   /** @param {any[]} values @param {any} query */
   function list(values, query) {
@@ -256,6 +260,17 @@ function makeProvider(fixture, options = {}) {
     }
   }
 
+  /** @param {string} role */
+  function maybeReject(role) {
+    if (options.rejectedCreateRole === role && !createRejected) {
+      createRejected = true;
+      throw Object.assign(new Error('provider rejected hcloud-token-secret'), {
+        code: 'HETZNER_API_REQUEST_FAILED',
+        status: 422,
+      });
+    }
+  }
+
   const api = {
     listFirewalls: jest.fn(async (/** @type {any} */ query) =>
       list(state.firewalls, query),
@@ -268,6 +283,7 @@ function makeProvider(fixture, options = {}) {
     createFirewall: jest.fn(async (/** @type {any} */ body) => {
       state.creationOrder.push('firewall');
       state.events.push('create:firewall');
+      maybeReject('firewall');
       const firewall = {
         id: nextId++,
         name: body.name,
@@ -301,6 +317,7 @@ function makeProvider(fixture, options = {}) {
     createPrimaryIp: jest.fn(async (/** @type {any} */ body) => {
       state.creationOrder.push('primaryIp');
       state.events.push('create:primaryIp');
+      maybeReject('primaryIp');
       const primaryIp = {
         id: nextId++,
         name: body.name,
@@ -333,6 +350,7 @@ function makeProvider(fixture, options = {}) {
     createServer: jest.fn(async (/** @type {any} */ body) => {
       state.creationOrder.push('server');
       state.events.push('create:server');
+      maybeReject('server');
       const primaryIp = get(state.primaryIps, body.public_net.ipv4);
       const firewall = get(state.firewalls, body.firewalls[0].firewall);
       const server = {
@@ -349,7 +367,7 @@ function makeProvider(fixture, options = {}) {
         firewalls: [
           {
             id: firewall.id,
-            status: options.transitionalServer ? 'applying' : 'applied',
+            status: options.transitionalServer ? 'pending' : 'applied',
           },
         ],
         serverType: { id: 114, name: 'cx23' },
@@ -394,6 +412,13 @@ function makeProvider(fixture, options = {}) {
       throw new Error('attempt storage carried hcloud-token-secret');
     }
   });
+  const recordMutationRejection = jest.fn(async (/** @type {any} */ record) => {
+    state.rejections.push(record);
+    state.events.push(`rejection:${record.role}`);
+    if (options.rejectionRecordFailure) {
+      throw new Error('rejection storage carried hcloud-token-secret');
+    }
+  });
   const recordResource = jest.fn(async (/** @type {any} */ record) => {
     if (options.recordFailure && !recordFailed) {
       recordFailed = true;
@@ -402,12 +427,39 @@ function makeProvider(fixture, options = {}) {
     state.records.push(record);
     state.events.push(`resource:${record.role}`);
   });
+  let settleWaits = 0;
+  const wait = jest.fn(async (/** @type {number} */ milliseconds) => {
+    state.events.push(`settle:${milliseconds}`);
+    settleWaits += 1;
+    if (options.settleDuringWait !== true) return;
+    const server = state.servers[0];
+    const firewall = state.firewalls[0];
+    const primaryIp = state.primaryIps[0];
+    if (settleWaits === 1) {
+      server.status = 'running';
+      server.firewalls = [{ id: firewall.id, status: 'applied' }];
+    } else if (settleWaits === 2) {
+      firewall.appliedTo = [
+        {
+          type: 'server',
+          serverId: server.id,
+          labelSelector: null,
+          appliedToResources: [],
+        },
+      ];
+    } else if (settleWaits === 3) {
+      primaryIp.assigneeId = server.id;
+      primaryIp.assigneeType = 'server';
+    }
+  });
   return {
     api,
     state,
     waitForAction,
     recordMutationAttempt,
+    recordMutationRejection,
     recordResource,
+    wait,
   };
 }
 
@@ -513,8 +565,8 @@ describe('Hetzner single-node provisioning convergence', () => {
     expect(serverBody).toEqual({
       name: fixture.intent.resources.server.ownership.name,
       labels: fixture.intent.resources.server.ownership.labels,
-      server_type: 114,
-      image: IMAGE.id,
+      server_type: '114',
+      image: String(IMAGE.id),
       location: 'fsn1',
       firewalls: [{ firewall: 10 }],
       public_net: {
@@ -706,68 +758,141 @@ describe('Hetzner single-node provisioning convergence', () => {
     },
   );
 
-  it('reports initializing server, firewall, and IP attachment states as retryable without reposting', async () => {
+  it('durably releases a definitely rejected server fence so apply can retry and destroy can clean earlier resources', async () => {
     const fixture = await makeFixture();
     const provider = makeProvider(fixture, {
-      lostResponseRole: 'server',
-      transitionalServer: true,
+      rejectedCreateRole: 'server',
     });
-    const base = {
+    const input = {
       ...fixture,
       api: provider.api,
       waitForAction: provider.waitForAction,
       recordMutationAttempt: provider.recordMutationAttempt,
+      recordMutationRejection: provider.recordMutationRejection,
       recordResource: provider.recordResource,
     };
 
-    await expect(
-      convergeHetznerSingleNodeProvisioning(base),
-    ).rejects.toMatchObject({
-      code: 'HETZNER_PROVISIONING_NOT_SETTLED',
+    const failure = await convergeHetznerSingleNodeProvisioning(input).catch(
+      (/** @type {any} */ error) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: 'HETZNER_PROVISIONING_MUTATION_REJECTED',
       role: 'server',
     });
+    expect(failure.message).not.toContain('hcloud-token-secret');
+    expect(provider.state.rejections.map((record) => record.role)).toEqual([
+      'server',
+    ]);
+    expect(provider.state.records.map((record) => record.role)).toEqual([
+      'firewall',
+      'primaryIp',
+    ]);
+
     const storedMutationAttempts = attemptsByRole(provider.state.attempts);
-    const retry = { ...base, storedMutationAttempts };
-    const server = provider.state.servers[0];
-    const firewall = provider.state.firewalls[0];
-    const primaryIp = provider.state.primaryIps[0];
+    storedMutationAttempts.server = null;
+    const storedResourceIds = {
+      firewall: provider.state.records.find(
+        (record) => record.role === 'firewall',
+      ).providerResourceId,
+      primaryIp: provider.state.records.find(
+        (record) => record.role === 'primaryIp',
+      ).providerResourceId,
+      server: null,
+    };
+    await expect(
+      convergeHetznerSingleNodeProvisioning({
+        ...input,
+        storedMutationAttempts,
+        storedResourceIds,
+      }),
+    ).resolves.toMatchObject({ status: 'provisioned' });
+    expect(provider.api.createFirewall).toHaveBeenCalledTimes(1);
+    expect(provider.api.createPrimaryIp).toHaveBeenCalledTimes(1);
+    expect(provider.api.createServer).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the fence when a confirmed rejection cannot be recorded durably', async () => {
+    const fixture = await makeFixture();
+    const provider = makeProvider(fixture, {
+      rejectedCreateRole: 'firewall',
+      rejectionRecordFailure: true,
+    });
 
     await expect(
-      convergeHetznerSingleNodeProvisioning(retry),
+      convergeHetznerSingleNodeProvisioning({
+        ...fixture,
+        api: provider.api,
+        waitForAction: provider.waitForAction,
+        recordMutationAttempt: provider.recordMutationAttempt,
+        recordMutationRejection: provider.recordMutationRejection,
+        recordResource: provider.recordResource,
+      }),
     ).rejects.toMatchObject({
-      code: 'HETZNER_PROVISIONING_NOT_SETTLED',
+      code: 'HETZNER_PROVISIONING_REJECTION_RECORD_FAILED',
       role: 'firewall',
     });
+    expect(provider.state.attempts).toHaveLength(1);
+    expect(provider.state.records).toHaveLength(0);
+  });
 
-    firewall.appliedTo = [
-      {
-        type: 'server',
-        serverId: server.id,
-        labelSelector: null,
-        appliedToResources: [],
-      },
-    ];
-    await expect(
-      convergeHetznerSingleNodeProvisioning(retry),
-    ).rejects.toMatchObject({
-      code: 'HETZNER_PROVISIONING_NOT_SETTLED',
-      role: 'primaryIp',
+  it('polls initializing server, firewall, and IP attachment states to settled in one convergence without reposting', async () => {
+    const fixture = await makeFixture();
+    const provider = makeProvider(fixture, {
+      transitionalServer: true,
+      settleDuringWait: true,
     });
 
-    primaryIp.assigneeId = server.id;
-    primaryIp.assigneeType = 'server';
     await expect(
-      convergeHetznerSingleNodeProvisioning(retry),
+      convergeHetznerSingleNodeProvisioning({
+        ...fixture,
+        api: provider.api,
+        waitForAction: provider.waitForAction,
+        recordMutationAttempt: provider.recordMutationAttempt,
+        recordResource: provider.recordResource,
+        wait: provider.wait,
+      }),
+    ).resolves.toMatchObject({ status: 'provisioned' });
+
+    expect(provider.wait).toHaveBeenCalledTimes(3);
+    expect(provider.wait).toHaveBeenNthCalledWith(
+      1,
+      HETZNER_PROVISIONING_SETTLE_RETRY_DELAY_MILLISECONDS,
+    );
+    expect(provider.state.servers[0].firewalls).toEqual([
+      { id: provider.state.firewalls[0].id, status: 'applied' },
+    ]);
+    expect(provider.api.createFirewall).toHaveBeenCalledTimes(1);
+    expect(provider.api.createPrimaryIp).toHaveBeenCalledTimes(1);
+    expect(provider.api.createServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops bounded settle polling safely without duplicate POSTs', async () => {
+    const fixture = await makeFixture();
+    const provider = makeProvider(fixture, {
+      transitionalServer: true,
+    });
+
+    await expect(
+      convergeHetznerSingleNodeProvisioning({
+        ...fixture,
+        api: provider.api,
+        waitForAction: provider.waitForAction,
+        recordMutationAttempt: provider.recordMutationAttempt,
+        recordResource: provider.recordResource,
+        wait: provider.wait,
+      }),
     ).rejects.toMatchObject({
       code: 'HETZNER_PROVISIONING_NOT_SETTLED',
       role: 'server',
     });
 
-    server.status = 'running';
-    server.firewalls = [{ id: firewall.id, status: 'applied' }];
-    await expect(
-      convergeHetznerSingleNodeProvisioning(retry),
-    ).resolves.toMatchObject({ status: 'provisioned' });
+    expect(provider.api.getServer).toHaveBeenCalledTimes(
+      HETZNER_PROVISIONING_MAX_SETTLE_ATTEMPTS + 1,
+    );
+    expect(provider.wait).toHaveBeenCalledTimes(
+      HETZNER_PROVISIONING_MAX_SETTLE_ATTEMPTS - 1,
+    );
     expect(provider.api.createFirewall).toHaveBeenCalledTimes(1);
     expect(provider.api.createPrimaryIp).toHaveBeenCalledTimes(1);
     expect(provider.api.createServer).toHaveBeenCalledTimes(1);

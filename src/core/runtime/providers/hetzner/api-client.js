@@ -29,15 +29,55 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000;
 const MAX_REQUEST_TIMEOUT_MS = 2 * 60 * 1000;
-const LIST_QUERY_KEYS = new Map([
-  ['name', 'name'],
-  ['labelSelector', 'label_selector'],
-  ['status', 'status'],
-  ['type', 'type'],
-  ['architecture', 'architecture'],
-  ['includeDeprecated', 'include_deprecated'],
-  ['perPage', 'per_page'],
-  ['sort', 'sort'],
+const LIST_QUERY_PARAMETERS = Object.freeze({
+  name: Object.freeze({ wireName: 'name', type: 'string' }),
+  labelSelector: Object.freeze({
+    wireName: 'label_selector',
+    type: 'string',
+  }),
+  status: Object.freeze({ wireName: 'status', type: 'string' }),
+  type: Object.freeze({ wireName: 'type', type: 'string' }),
+  architecture: Object.freeze({ wireName: 'architecture', type: 'string' }),
+  includeDeprecated: Object.freeze({
+    wireName: 'include_deprecated',
+    type: 'boolean',
+  }),
+  boundTo: Object.freeze({ wireName: 'bound_to', type: 'identifier' }),
+  ip: Object.freeze({ wireName: 'ip', type: 'string' }),
+  perPage: Object.freeze({ wireName: 'per_page', type: 'page-size' }),
+  sort: Object.freeze({ wireName: 'sort', type: 'string' }),
+});
+const LOCATION_LIST_QUERY_KEYS = new Set(['name', 'perPage', 'sort']);
+const SERVER_TYPE_LIST_QUERY_KEYS = new Set(['name', 'perPage']);
+const IMAGE_LIST_QUERY_KEYS = new Set([
+  'name',
+  'type',
+  'status',
+  'architecture',
+  'includeDeprecated',
+  'boundTo',
+  'perPage',
+  'sort',
+]);
+const FIREWALL_LIST_QUERY_KEYS = new Set([
+  'name',
+  'labelSelector',
+  'perPage',
+  'sort',
+]);
+const PRIMARY_IP_LIST_QUERY_KEYS = new Set([
+  'name',
+  'labelSelector',
+  'ip',
+  'perPage',
+  'sort',
+]);
+const SERVER_LIST_QUERY_KEYS = new Set([
+  'name',
+  'labelSelector',
+  'status',
+  'perPage',
+  'sort',
 ]);
 const INVALID_OPTIONS = 'Hetzner API client options are invalid.';
 const INVALID_REQUEST = 'Hetzner API request is invalid.';
@@ -120,14 +160,19 @@ function mutationOutcomeUnknown(details = {}) {
 
 /**
  * @param {unknown} value - Candidate list query.
+ * @param {Set<string>} allowedKeys - Endpoint-specific query keys.
  * @returns {URLSearchParams} - Validated query.
  */
-function listQuery(value) {
+function listQuery(value, allowedKeys) {
   if (value === undefined) return new URLSearchParams();
   if (!isPlainObject(value)) throw new TypeError(INVALID_REQUEST);
   const search = new URLSearchParams();
   for (const key of Reflect.ownKeys(value)) {
-    if (typeof key !== 'string' || !LIST_QUERY_KEYS.has(key)) {
+    if (
+      typeof key !== 'string' ||
+      !allowedKeys.has(key) ||
+      !Object.hasOwn(LIST_QUERY_PARAMETERS, key)
+    ) {
       throw new TypeError(INVALID_REQUEST);
     }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -139,23 +184,26 @@ function listQuery(value) {
       throw new TypeError(INVALID_REQUEST);
     }
     const item = descriptor.value;
-    if (
-      key === 'perPage' &&
-      (!Number.isSafeInteger(item) || item < 1 || item > 50)
-    ) {
+    const parameter =
+      /** @type {Readonly<Record<string, Readonly<{wireName: string, type: string}>>>} */ (
+        LIST_QUERY_PARAMETERS
+      )[key];
+    if (parameter.type === 'page-size') {
+      if (!Number.isSafeInteger(item) || item < 1 || item > 50) {
+        throw new TypeError(INVALID_REQUEST);
+      }
+    } else if (parameter.type === 'identifier') {
+      if (!Number.isSafeInteger(item) || item < 1) {
+        throw new TypeError(INVALID_REQUEST);
+      }
+    } else if (parameter.type === 'boolean') {
+      if (typeof item !== 'boolean') {
+        throw new TypeError(INVALID_REQUEST);
+      }
+    } else if (typeof item !== 'string' || item.length === 0) {
       throw new TypeError(INVALID_REQUEST);
     }
-    if (
-      (typeof item !== 'string' || item.length === 0) &&
-      typeof item !== 'boolean' &&
-      (!Number.isSafeInteger(item) || item < 1)
-    ) {
-      throw new TypeError(INVALID_REQUEST);
-    }
-    search.append(
-      /** @type {string} */ (LIST_QUERY_KEYS.get(key)),
-      String(item),
-    );
+    search.append(parameter.wireName, String(item));
   }
   return search;
 }
@@ -508,10 +556,11 @@ function createClient(rawOptions) {
    * @param {string} path - Collection path.
    * @param {unknown} query - List query.
    * @param {(document: unknown) => unknown} decode - Decoder.
+   * @param {Set<string>} allowedQueryKeys - Endpoint query allowlist.
    * @returns {Promise<Readonly<any[]>>} - Complete decoded list.
    */
-  async function list(path, query, decode) {
-    const originalSearch = listQuery(query);
+  async function list(path, query, decode, allowedQueryKeys) {
+    const originalSearch = listQuery(query, allowedQueryKeys);
     /** @type {any[]} */
     const items = [];
     const seenPages = new Set();
@@ -540,7 +589,8 @@ function createClient(rawOptions) {
           pagination.lastPage !== expectedLastPage) ||
         (expectedTotalEntries !== undefined &&
           pagination.totalEntries !== expectedTotalEntries) ||
-        pagination.totalEntries > MAX_LIST_ITEMS ||
+        (pagination.totalEntries !== null &&
+          pagination.totalEntries > MAX_LIST_ITEMS) ||
         items.length + pageItems.length > MAX_LIST_ITEMS
       ) {
         throw new HetznerApiError(
@@ -565,7 +615,10 @@ function createClient(rawOptions) {
         items.push(item);
       }
       if (pagination.nextPage === null) {
-        if (items.length !== pagination.totalEntries) {
+        if (
+          pagination.totalEntries !== null &&
+          items.length !== pagination.totalEntries
+        ) {
           throw new HetznerApiError(
             'HETZNER_API_PAGINATION_INVALID',
             'Hetzner API pagination was inconsistent.',
@@ -629,10 +682,11 @@ function createClient(rawOptions) {
   /**
    * @param {string} path - Collection path.
    * @param {(document: unknown) => unknown} decode - Response decoder.
+   * @param {Set<string>} allowedQueryKeys - Endpoint query allowlist.
    * @returns {(query?: unknown) => Promise<unknown>} - Bound list method.
    */
-  function listMethod(path, decode) {
-    return (query) => list(path, query, decode);
+  function listMethod(path, decode, allowedQueryKeys) {
+    return (query) => list(path, query, decode, allowedQueryKeys);
   }
 
   /**
@@ -663,30 +717,51 @@ function createClient(rawOptions) {
   }
 
   return Object.freeze({
-    listLocations: listMethod('/locations', decodeHetznerLocationsResponse),
+    listLocations: listMethod(
+      '/locations',
+      decodeHetznerLocationsResponse,
+      LOCATION_LIST_QUERY_KEYS,
+    ),
     getLocation: getMethod('/locations', decodeHetznerLocationResponse),
     listServerTypes: listMethod(
       '/server_types',
       decodeHetznerServerTypesResponse,
+      SERVER_TYPE_LIST_QUERY_KEYS,
     ),
     getServerType: getMethod('/server_types', decodeHetznerServerTypeResponse),
-    listImages: listMethod('/images', decodeHetznerImagesResponse),
+    listImages: listMethod(
+      '/images',
+      decodeHetznerImagesResponse,
+      IMAGE_LIST_QUERY_KEYS,
+    ),
     getImage: getMethod('/images', decodeHetznerImageResponse),
-    listFirewalls: listMethod('/firewalls', decodeHetznerFirewallsResponse),
+    listFirewalls: listMethod(
+      '/firewalls',
+      decodeHetznerFirewallsResponse,
+      FIREWALL_LIST_QUERY_KEYS,
+    ),
     getFirewall: getMethod('/firewalls', decodeHetznerFirewallResponse),
     createFirewall: createMethod(
       '/firewalls',
       decodeHetznerFirewallCreationResponse,
     ),
     deleteFirewall: deleteMethod('/firewalls'),
-    listPrimaryIps: listMethod('/primary_ips', decodeHetznerPrimaryIpsResponse),
+    listPrimaryIps: listMethod(
+      '/primary_ips',
+      decodeHetznerPrimaryIpsResponse,
+      PRIMARY_IP_LIST_QUERY_KEYS,
+    ),
     getPrimaryIp: getMethod('/primary_ips', decodeHetznerPrimaryIpResponse),
     createPrimaryIp: createMethod(
       '/primary_ips',
       decodeHetznerPrimaryIpCreationResponse,
     ),
     deletePrimaryIp: deleteMethod('/primary_ips'),
-    listServers: listMethod('/servers', decodeHetznerServersResponse),
+    listServers: listMethod(
+      '/servers',
+      decodeHetznerServersResponse,
+      SERVER_LIST_QUERY_KEYS,
+    ),
     getServer: getMethod('/servers', decodeHetznerServerResponse),
     createServer: createMethod('/servers', decodeHetznerServerCreationResponse),
     deleteServer: deleteMethod('/servers', decodeHetznerActionResponse),

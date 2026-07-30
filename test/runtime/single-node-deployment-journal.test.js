@@ -47,6 +47,7 @@ import {
   prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
   prepareSingleNodeDeploymentMutations,
+  rejectSingleNodeDeploymentMutation,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
@@ -854,6 +855,54 @@ describe('single-node deployment journal contract', () => {
         providerResource('firewall', 99),
       ),
     ).toThrow(/immutable/iu);
+  });
+
+  it('durably releases only a matching prepared fence after a known rejection', () => {
+    const provisioning = advanceSingleNodeDeploymentJournal(
+      createInitial(),
+      'provisioning',
+    );
+    const providerFence = providerAttempt('server');
+    const prepared = prepareSingleNodeDeploymentMutation(
+      provisioning,
+      providerFence,
+    );
+
+    const rejected = rejectSingleNodeDeploymentMutation(
+      prepared,
+      providerFence,
+    );
+
+    expect(rejected.generation).toBe(prepared.generation + 1);
+    expect(rejected.previousJournalId).toBe(prepared.journalId);
+    expect(
+      getSingleNodeDeploymentMutationAttempt(rejected, 'server'),
+    ).toBeNull();
+    expect(
+      validateSingleNodeDeploymentJournalSuccessor(prepared, rejected),
+    ).toEqual(rejected);
+    expect(
+      prepareSingleNodeDeploymentMutation(rejected, providerFence),
+    ).toMatchObject({
+      generation: rejected.generation + 1,
+      mutationAttempts: [
+        expect.objectContaining({ role: 'server', state: 'prepared' }),
+      ],
+    });
+    expect(() =>
+      rejectSingleNodeDeploymentMutation(
+        prepared,
+        providerAttempt('primaryIp'),
+      ),
+    ).toThrow(/does not match/iu);
+
+    const completed = completeSingleNodeDeploymentMutation(
+      prepared,
+      providerResource('server', 42),
+    );
+    expect(() =>
+      rejectSingleNodeDeploymentMutation(completed, providerFence),
+    ).toThrow(/does not match/iu);
   });
 
   it('rejects resource identity, address, and lifecycle regression', () => {

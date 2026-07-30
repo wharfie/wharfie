@@ -261,7 +261,7 @@ function activationEvidence(desired, incarnationId, sshIdentity) {
 }
 
 /**
- * @param {{failFirstProvision?: boolean, failFirstPlanRead?: boolean}} [options]
+ * @param {{failFirstProvision?: boolean, failFirstPlanRead?: boolean, rejectFirstServer?: boolean}} [options]
  */
 function makeHarness(options = {}) {
   const fixture = makeFixture();
@@ -272,6 +272,8 @@ function makeHarness(options = {}) {
   let journal = null;
   const providerRoles = new Set();
   let convergeCalls = 0;
+  /** @type {undefined|((milliseconds: number) => Promise<void>)} */
+  let convergeWait;
   let planCalls = 0;
   let entropyByte = 1;
   let serviceHealthy = false;
@@ -364,6 +366,7 @@ function makeHarness(options = {}) {
     waitForAction: async () => undefined,
     convergeProvisioning: async (/** @type {Record<string, any>} */ value) => {
       convergeCalls += 1;
+      convergeWait = value.wait;
       events.push(`converge-${convergeCalls}`);
       /** @type {Record<string, number>} */
       const ids = { firewall: 101, primaryIp: 102, server: 103 };
@@ -382,9 +385,20 @@ function makeHarness(options = {}) {
           continue;
         }
         events.push(`attempt-${role}`);
-        await value.recordMutationAttempt(
-          createHetznerProvisioningMutationAttempt(value.intent, role),
+        const mutationAttempt = createHetznerProvisioningMutationAttempt(
+          value.intent,
+          role,
         );
+        await value.recordMutationAttempt(mutationAttempt);
+        if (
+          options.rejectFirstServer === true &&
+          convergeCalls === 1 &&
+          role === 'server'
+        ) {
+          events.push('reject-server');
+          await value.recordMutationRejection(mutationAttempt);
+          throw new Error('injected definite server rejection');
+        }
         providerRoles.add(role);
         await value.recordResource(
           createHetznerProvisionedResourceRecord(value.intent, role, ids[role]),
@@ -444,6 +458,7 @@ function makeHarness(options = {}) {
     dependencies,
     release,
     getJournal: () => journal,
+    getConvergeWait: () => convergeWait,
     removeProviderRole: (/** @type {string} */ role) =>
       providerRoles.delete(role),
     stopService: () => {
@@ -515,6 +530,7 @@ describe('Hetzner single-node apply coordinator', () => {
     expect(harness.events.indexOf('host-key')).toBeLessThan(
       harness.events.indexOf('activate'),
     );
+    expect(harness.getConvergeWait()).toBe(harness.dependencies.wait);
     expect(source.close).toHaveBeenCalledTimes(1);
     expect(harness.release).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(result)).not.toContain('test-secret-token');
@@ -557,6 +573,48 @@ describe('Hetzner single-node apply coordinator', () => {
     expect(harness.dependencies.randomBytes).toHaveBeenCalledTimes(4);
     expect(second.close).toHaveBeenCalledTimes(1);
     expect(harness.release).toHaveBeenCalledTimes(2);
+  });
+
+  it('durably releases a definitely rejected create fence and retries without replacing earlier resources', async () => {
+    const harness = makeHarness({ rejectFirstServer: true });
+    const coordinator = createHetznerSingleNodeApplyCoordinator(
+      harness.dependencies,
+    );
+    const first = makeSourceRequest(harness.fixture);
+
+    await expect(coordinator.apply(first.request)).rejects.toThrow(
+      'injected definite server rejection',
+    );
+    const rejected = /** @type {Readonly<Record<string, any>>} */ (
+      harness.getJournal()
+    );
+    expect(rejected.phase).toBe('provisioning');
+    expect(
+      rejected.resources
+        .map((/** @type {Record<string, any>} */ resource) => resource.role)
+        .sort(),
+    ).toEqual(['firewall', 'primaryIp']);
+    expect(
+      rejected.mutationAttempts
+        .map((/** @type {Record<string, any>} */ attempt) => attempt.role)
+        .sort(),
+    ).toEqual(['firewall', 'primaryIp']);
+    expect(harness.events).toContain('reject-server');
+
+    const second = makeSourceRequest(harness.fixture);
+    await expect(coordinator.apply(second.request)).resolves.toMatchObject({
+      status: 'active',
+      incarnationId: rejected.incarnationId,
+    });
+    expect(
+      harness.events.filter((event) => event === 'attempt-firewall'),
+    ).toHaveLength(1);
+    expect(
+      harness.events.filter((event) => event === 'attempt-primaryIp'),
+    ).toHaveLength(1);
+    expect(
+      harness.events.filter((event) => event === 'attempt-server'),
+    ).toHaveLength(2);
   });
 
   it('does not bind a credential until its first authenticated plan read succeeds', async () => {

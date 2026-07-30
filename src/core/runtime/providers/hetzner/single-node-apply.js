@@ -21,6 +21,7 @@ import {
   createSingleNodeDeploymentJournalStore,
   getSingleNodeDeploymentProvisioningRecoveryState,
   prepareSingleNodeDeploymentMutation,
+  rejectSingleNodeDeploymentMutation,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
@@ -806,6 +807,7 @@ export function createHetznerSingleNodeApplyCoordinator(dependencies) {
               api,
               waitForAction: (/** @type {number} */ actionId) =>
                 ports.waitForAction(api, actionId),
+              wait: ports.wait,
               recordMutationAttempt: async (/** @type {unknown} */ attempt) => {
                 if (!allowMutations) {
                   throw new Error(
@@ -814,6 +816,18 @@ export function createHetznerSingleNodeApplyCoordinator(dependencies) {
                 }
                 await commit(
                   prepareSingleNodeDeploymentMutation(currentJournal, attempt),
+                );
+              },
+              recordMutationRejection: async (
+                /** @type {unknown} */ attempt,
+              ) => {
+                if (!allowMutations) {
+                  throw new Error(
+                    'hetznerSingleNodeApply provider verification cannot reject mutations.',
+                  );
+                }
+                await commit(
+                  rejectSingleNodeDeploymentMutation(currentJournal, attempt),
                 );
               },
               recordResource: async (/** @type {unknown} */ resourceRecord) => {
