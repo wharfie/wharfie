@@ -15,7 +15,6 @@ import {
   DescribeVpcsCommand,
   EC2Client,
 } from '@aws-sdk/client-ec2';
-import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
@@ -36,11 +35,9 @@ const OPEN_KEYS = new Set(['region']);
 const DEPENDENCY_KEYS = new Set([
   'resolveCredentials',
   'createStsClient',
-  'createSsmClient',
   'createEc2Client',
 ]);
 const STS_CLIENT_METHODS = new Set(['getCallerIdentity', 'close']);
-const SSM_CLIENT_METHODS = new Set(['getParameter', 'close']);
 const EC2_CLIENT_METHODS = new Set([
   'describeImages',
   'describeInstanceAttribute',
@@ -57,7 +54,6 @@ const EC2_CLIENT_METHODS = new Set([
   'close',
 ]);
 const READ_METHODS = Object.freeze([
-  'getParameter',
   'describeImages',
   'describeInstanceAttribute',
   'describeInstanceCreditSpecifications',
@@ -317,17 +313,19 @@ export function createAwsSingleNodeReadAuthorityFactory(dependencies) {
       throw new AwsSingleNodeCredentialResolutionError();
     }
     const credentials = credentialSnapshot(resolvedCredentials);
+    const credentialProvider = async () => credentials;
     /** @type {Readonly<Record<string, Function>>[]} */
     const constructed = [];
     /** @type {Readonly<Record<string, Function>>} */
     let sts;
     /** @type {Readonly<Record<string, Function>>} */
-    let ssm;
-    /** @type {Readonly<Record<string, Function>>} */
     let ec2;
     try {
       sts = validateClient(
-        await ports.createStsClient({ region, credentials }),
+        await ports.createStsClient({
+          region,
+          credentials: credentialProvider,
+        }),
         STS_CLIENT_METHODS,
         'awsSingleNodeReadAuthority.stsClient',
       );
@@ -339,14 +337,11 @@ export function createAwsSingleNodeReadAuthorityFactory(dependencies) {
         throw new AwsSingleNodeScopeResolutionError();
       }
       const providerScope = scopeFromCallerIdentity(identity, region);
-      ssm = validateClient(
-        await ports.createSsmClient({ region, credentials }),
-        SSM_CLIENT_METHODS,
-        'awsSingleNodeReadAuthority.ssmClient',
-      );
-      constructed.push(ssm);
       ec2 = validateClient(
-        await ports.createEc2Client({ region, credentials }),
+        await ports.createEc2Client({
+          region,
+          credentials: credentialProvider,
+        }),
         EC2_CLIENT_METHODS,
         'awsSingleNodeReadAuthority.ec2Client',
       );
@@ -381,9 +376,8 @@ export function createAwsSingleNodeReadAuthorityFactory(dependencies) {
       /** @type {Record<string, Function>} */
       const api = {};
       for (const method of READ_METHODS) {
-        const client = method === 'getParameter' ? ssm : ec2;
         api[method] = async (/** @type {unknown} */ request) =>
-          await read(client, method, request);
+          await read(ec2, method, request);
       }
 
       return Object.freeze({
@@ -464,14 +458,6 @@ const productionOpen = createAwsSingleNodeReadAuthorityFactory({
     return sdkPort(sdk, {
       getCallerIdentity: GetCallerIdentityCommand,
     });
-  },
-  createSsmClient(/** @type {Record<string, any>} */ value) {
-    const sdk = new SSMClient({
-      ...BaseAWS.config({ maxAttempts: 3 }),
-      region: value.region,
-      credentials: value.credentials,
-    });
-    return sdkPort(sdk, { getParameter: GetParameterCommand });
   },
   createEc2Client(/** @type {Record<string, any>} */ value) {
     const sdk = new EC2Client({

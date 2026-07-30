@@ -27,10 +27,6 @@ function makeHarness(overrides = {}) {
     getCallerIdentity: jest.fn(async () => identity()),
     close: jest.fn(async () => {}),
   };
-  const ssm = {
-    getParameter: jest.fn(async (request) => ({ request })),
-    close: jest.fn(async () => {}),
-  };
   const ec2 = {
     describeImages: jest.fn(async (request) => ({ request })),
     describeInstanceAttribute: jest.fn(async (request) => ({ request })),
@@ -56,13 +52,11 @@ function makeHarness(overrides = {}) {
       expiration: new Date('2030-01-01T00:00:00.000Z'),
     })),
     createStsClient: jest.fn(async () => sts),
-    createSsmClient: jest.fn(async () => ssm),
     createEc2Client: jest.fn(async () => ec2),
     ...overrides,
   };
   return {
     sts,
-    ssm,
     ec2,
     dependencies,
     open: createAwsSingleNodeReadAuthorityFactory(dependencies),
@@ -99,7 +93,6 @@ describe('AWS single-node read authority', () => {
         'describeSubnets',
         'describeVolumes',
         'describeVpcs',
-        'getParameter',
       ].sort(),
     );
     expect(authority.api.createSecurityGroup).toBeUndefined();
@@ -142,17 +135,29 @@ describe('AWS single-node read authority', () => {
       region: REGION,
     });
     expect(harness.dependencies.createEc2Client).toHaveBeenCalledTimes(1);
-    const creationInput = harness.dependencies.createEc2Client.mock.calls[0][0];
-    expect(creationInput.region).toBe(REGION);
-    expect(creationInput.credentials).toMatchObject({
+    const stsCreationInput =
+      harness.dependencies.createStsClient.mock.calls[0][0];
+    const ec2CreationInput =
+      harness.dependencies.createEc2Client.mock.calls[0][0];
+    expect(ec2CreationInput.region).toBe(REGION);
+    expect(typeof ec2CreationInput.credentials).toBe('function');
+    expect(stsCreationInput.credentials).toBe(ec2CreationInput.credentials);
+    const credentialSnapshot = await ec2CreationInput.credentials();
+    expect(credentialSnapshot).toMatchObject({
       accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'secret-credential-sentinel',
+      sessionToken: 'session-credential-sentinel',
     });
+    expect(Object.isFrozen(credentialSnapshot)).toBe(true);
+    await expect(stsCreationInput.credentials()).resolves.toBe(
+      credentialSnapshot,
+    );
+    expect(authority.credentials).toBeUndefined();
     expect(JSON.stringify(authority)).not.toContain('credential-sentinel');
 
     await authority.close();
     await authority.close();
     expect(harness.ec2.close).toHaveBeenCalledTimes(1);
-    expect(harness.ssm.close).toHaveBeenCalledTimes(1);
     expect(harness.sts.close).toHaveBeenCalledTimes(1);
     await expect(authority.api.describeVpcs({ Filters: [] })).rejects.toThrow(
       /closed/iu,
@@ -208,7 +213,6 @@ describe('AWS single-node read authority', () => {
     }
     expect(thrown).toBeInstanceOf(AwsSingleNodeAuthorityInitializationError);
     expect(String(thrown)).not.toContain(sentinel);
-    expect(harness.ssm.close).toHaveBeenCalledTimes(1);
     expect(harness.sts.close).toHaveBeenCalledTimes(1);
   });
 

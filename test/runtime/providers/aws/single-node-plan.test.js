@@ -6,7 +6,8 @@ import { sha256Base64Url } from '../../../../src/core/runtime/content-id.js';
 import { createAwsProviderScope } from '../../../../src/core/runtime/deployment-provider-scope.js';
 import {
   AWS_SINGLE_NODE_INSTANCE_TYPE,
-  AWS_SINGLE_NODE_UBUNTU_PARAMETER,
+  AWS_SINGLE_NODE_UBUNTU_IMAGE_NAME_FILTER,
+  AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
   AwsSingleNodePlanEvidenceError,
   AwsSingleNodePlanReadError,
   resolveAwsSingleNodePlan,
@@ -28,7 +29,15 @@ const INTERNET_GATEWAY_ID = 'igw-0123456789abcdef0';
 const NETWORK_ACL_ID = 'acl-0123456789abcdef0';
 const NETWORK_ACL_ASSOCIATION_ID = 'aclassoc-0123456789abcdef0';
 const AMI_ID = 'ami-0123456789abcdef0';
+const OLDER_AMI_ID = 'ami-11111111111111111';
 const SNAPSHOT_ID = 'snap-0123456789abcdef0';
+const OLDER_SNAPSHOT_ID = 'snap-11111111111111111';
+const AMI_NAME =
+  'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260701';
+const OLDER_AMI_NAME =
+  'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260601';
+const AMI_CREATION_DATE = '2026-07-02T12:34:56.000Z';
+const OLDER_AMI_CREATION_DATE = '2026-06-02T12:34:56.000Z';
 const TARGET = Object.freeze({
   nodeVersion: '24.13.1',
   platform: 'linux',
@@ -44,6 +53,27 @@ function digest(value) {
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
   return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
+}
+
+/**
+ * @param {string} [snapshotId]
+ * @returns {Record<string, any>[]}
+ */
+function blockDeviceMappings(snapshotId = SNAPSHOT_ID) {
+  return [
+    {
+      DeviceName: '/dev/sda1',
+      Ebs: {
+        SnapshotId: snapshotId,
+        VolumeType: 'gp3',
+        VolumeSize: 8,
+        Encrypted: false,
+        DeleteOnTermination: true,
+      },
+    },
+    { DeviceName: '/dev/sdb', VirtualName: 'ephemeral0' },
+    { DeviceName: '/dev/sdc', VirtualName: 'ephemeral1' },
+  ];
 }
 
 function makeDesired() {
@@ -137,49 +167,40 @@ function providerScope() {
   });
 }
 
-function parameterResponse() {
+/**
+ * @param {Record<string, any>} [overrides]
+ * @returns {Record<string, any>}
+ */
+function imageRecord(overrides = {}) {
   return {
-    Parameter: {
-      Name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
-      Type: 'String',
-      Value: AMI_ID,
-      Version: 42,
-      ARN: `arn:aws:ssm:${REGION}::parameter${AWS_SINGLE_NODE_UBUNTU_PARAMETER}`,
-      DataType: 'text',
-      LastModifiedDate: new Date('2026-07-01T00:00:00.000Z'),
-    },
+    ImageId: AMI_ID,
+    Name: AMI_NAME,
+    CreationDate: AMI_CREATION_DATE,
+    OwnerId: AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
+    Public: true,
+    State: 'available',
+    Architecture: 'x86_64',
+    ImageType: 'machine',
+    RootDeviceType: 'ebs',
+    RootDeviceName: '/dev/sda1',
+    VirtualizationType: 'hvm',
+    EnaSupport: true,
+    PlatformDetails: 'Linux/UNIX',
+    BlockDeviceMappings: blockDeviceMappings(),
+    ...overrides,
   };
 }
 
 function imageResponse() {
   return {
     Images: [
-      {
-        ImageId: AMI_ID,
-        OwnerId: '099720109477',
-        Public: true,
-        State: 'available',
-        Architecture: 'x86_64',
-        ImageType: 'machine',
-        RootDeviceType: 'ebs',
-        RootDeviceName: '/dev/sda1',
-        VirtualizationType: 'hvm',
-        EnaSupport: true,
-        PlatformDetails: 'Linux/UNIX',
-        PublicSsmParameterName: AWS_SINGLE_NODE_UBUNTU_PARAMETER.slice(1),
-        BlockDeviceMappings: [
-          {
-            DeviceName: '/dev/sda1',
-            Ebs: {
-              SnapshotId: SNAPSHOT_ID,
-              VolumeType: 'gp3',
-              VolumeSize: 8,
-              Encrypted: false,
-              DeleteOnTermination: true,
-            },
-          },
-        ],
-      },
+      imageRecord({
+        ImageId: OLDER_AMI_ID,
+        Name: OLDER_AMI_NAME,
+        CreationDate: OLDER_AMI_CREATION_DATE,
+        BlockDeviceMappings: blockDeviceMappings(OLDER_SNAPSHOT_ID),
+      }),
+      imageRecord(),
     ],
   };
 }
@@ -269,7 +290,6 @@ function networkAclResponse(subnetId = SUBNET_ID) {
  */
 function makeApi(overrides = {}) {
   return {
-    getParameter: jest.fn(async () => parameterResponse()),
     describeImages: jest.fn(async () => imageResponse()),
     describeInstanceTypeOfferings: jest.fn(async () => ({
       InstanceTypeOfferings: [
@@ -412,12 +432,12 @@ describe('AWS single-node read-only plan', () => {
         },
         internetGateway: { internetGatewayId: INTERNET_GATEWAY_ID },
         image: {
-          sourceParameter: {
-            name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
-            version: 42,
+          sourceImage: {
+            ownerAccountId: AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
+            name: AMI_NAME,
+            creationDate: AMI_CREATION_DATE,
           },
           imageId: AMI_ID,
-          ownerAccountId: '099720109477',
           architecture: 'x86_64',
           rootBlockDevice: {
             snapshotId: SNAPSHOT_ID,
@@ -447,9 +467,22 @@ describe('AWS single-node read-only plan', () => {
     expect(api.createSecurityGroup).not.toHaveBeenCalled();
     expect(api.createNetworkAclEntry).not.toHaveBeenCalled();
     expect(api.runInstances).not.toHaveBeenCalled();
-    expect(api.getParameter).toHaveBeenCalledWith({
-      Name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
-      WithDecryption: false,
+    expect(api.describeImages).toHaveBeenCalledWith({
+      Owners: [AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID],
+      IncludeDeprecated: false,
+      IncludeDisabled: false,
+      Filters: [
+        { Name: 'architecture', Values: ['x86_64'] },
+        { Name: 'block-device-mapping.volume-type', Values: ['gp3'] },
+        { Name: 'ena-support', Values: ['true'] },
+        { Name: 'image-type', Values: ['machine'] },
+        { Name: 'is-public', Values: ['true'] },
+        { Name: 'name', Values: [AWS_SINGLE_NODE_UBUNTU_IMAGE_NAME_FILTER] },
+        { Name: 'root-device-type', Values: ['ebs'] },
+        { Name: 'state', Values: ['available'] },
+        { Name: 'virtualization-type', Values: ['hvm'] },
+      ],
+      MaxResults: 1000,
     });
     expect(api.describeVpcs).toHaveBeenCalledWith({
       Filters: [{ Name: 'is-default', Values: ['true'] }],
@@ -460,6 +493,10 @@ describe('AWS single-node read-only plan', () => {
         { Name: 'association.subnet-id', Values: [SUBNET_ID] },
         { Name: 'vpc-id', Values: [VPC_ID] },
       ],
+      MaxResults: 100,
+    });
+    expect(api.describeRouteTables).toHaveBeenCalledWith({
+      Filters: [{ Name: 'vpc-id', Values: [VPC_ID] }],
       MaxResults: 100,
     });
     const ownershipFilters = [
@@ -506,10 +543,244 @@ describe('AWS single-node read-only plan', () => {
     });
   });
 
+  it('selects the latest image deterministically with an order-independent tie break', async () => {
+    const tiedCreationDate = '2026-08-01T12:34:56.000Z';
+    const lowerImageId = 'ami-22222222222222222';
+    const higherImageId = 'ami-33333333333333333';
+    const lower = imageRecord({
+      ImageId: lowerImageId,
+      Name: `${AMI_NAME}.1`,
+      CreationDate: tiedCreationDate,
+    });
+    const higher = imageRecord({
+      ImageId: higherImageId,
+      Name: `${AMI_NAME}.2`,
+      CreationDate: tiedCreationDate,
+    });
+    const desired = makeDesired();
+    const scope = providerScope();
+    const forward = await resolveAwsSingleNodePlan({
+      desired,
+      providerScope: scope,
+      api: makeApi({
+        describeImages: jest.fn(async () => ({
+          Images: [higher, lower, imageRecord()],
+        })),
+      }),
+    });
+    const reverse = await resolveAwsSingleNodePlan({
+      desired,
+      providerScope: scope,
+      api: makeApi({
+        describeImages: jest.fn(async () => ({
+          Images: [imageRecord(), lower, higher],
+        })),
+      }),
+    });
+
+    expect(forward).toEqual(reverse);
+    expect(forward.providerSpec.image).toMatchObject({
+      imageId: lowerImageId,
+      sourceImage: {
+        ownerAccountId: AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
+        name: `${AMI_NAME}.1`,
+        creationDate: tiedCreationDate,
+      },
+    });
+  });
+
+  it('validates the selected root and ephemeral mappings independent of response order', async () => {
+    const selected = imageRecord({
+      BlockDeviceMappings: [...blockDeviceMappings()].reverse(),
+    });
+    const plan = await resolveAwsSingleNodePlan({
+      desired: makeDesired(),
+      providerScope: providerScope(),
+      api: makeApi({
+        describeImages: jest.fn(async () => ({ Images: [selected] })),
+      }),
+    });
+
+    expect(plan.providerSpec.image.rootBlockDevice.snapshotId).toBe(
+      SNAPSHOT_ID,
+    );
+  });
+
+  it('does not decode irrelevant historical root mappings after strict candidate admission', async () => {
+    const historical = imageRecord({
+      ImageId: OLDER_AMI_ID,
+      Name: OLDER_AMI_NAME,
+      CreationDate: OLDER_AMI_CREATION_DATE,
+      BlockDeviceMappings: [
+        {
+          DeviceName: '/dev/sda1',
+          Ebs: { VolumeType: 'gp3', unrelated: 'historical-shape' },
+        },
+      ],
+    });
+    const plan = await resolveAwsSingleNodePlan({
+      desired: makeDesired(),
+      providerScope: providerScope(),
+      api: makeApi({
+        describeImages: jest.fn(async () => ({
+          Images: [historical, imageRecord()],
+        })),
+      }),
+    });
+
+    expect(plan.providerSpec.image.imageId).toBe(AMI_ID);
+  });
+
+  it('rejects malformed historical candidate identity instead of silently skipping it', async () => {
+    const malformedHistorical = imageRecord({
+      ImageId: OLDER_AMI_ID,
+      Name: OLDER_AMI_NAME,
+      CreationDate: OLDER_AMI_CREATION_DATE,
+      OwnerId: '999999999999',
+    });
+
+    await expect(
+      resolveAwsSingleNodePlan({
+        desired: makeDesired(),
+        providerScope: providerScope(),
+        api: makeApi({
+          describeImages: jest.fn(async () => ({
+            Images: [malformedHistorical, imageRecord()],
+          })),
+        }),
+      }),
+    ).rejects.toBeInstanceOf(AwsSingleNodePlanEvidenceError);
+  });
+
+  it('rejects duplicate image identities across discovery pages', async () => {
+    await expect(
+      resolveAwsSingleNodePlan({
+        desired: makeDesired(),
+        providerScope: providerScope(),
+        api: makeApi({
+          describeImages: jest.fn(async () => ({
+            Images: [
+              imageRecord(),
+              imageRecord({
+                Name: `${AMI_NAME}.1`,
+                CreationDate: OLDER_AMI_CREATION_DATE,
+              }),
+            ],
+          })),
+        }),
+      }),
+    ).rejects.toBeInstanceOf(AwsSingleNodePlanEvidenceError);
+  });
+
+  it('never falls back when the deterministically selected latest image has malformed mappings', async () => {
+    const malformedLatest = imageRecord({
+      ImageId: 'ami-66666666666666666',
+      Name: 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20261001',
+      CreationDate: '2026-10-02T12:34:56.000Z',
+      BlockDeviceMappings: [],
+    });
+
+    await expect(
+      resolveAwsSingleNodePlan({
+        desired: makeDesired(),
+        providerScope: providerScope(),
+        api: makeApi({
+          describeImages: jest.fn(async () => ({
+            Images: [imageRecord(), malformedLatest],
+          })),
+        }),
+      }),
+    ).rejects.toBeInstanceOf(AwsSingleNodePlanEvidenceError);
+  });
+
+  it('reads every bounded image page before selecting the latest candidate', async () => {
+    const newer = imageRecord({
+      ImageId: 'ami-44444444444444444',
+      Name: 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260801',
+      CreationDate: '2026-08-02T12:34:56.000Z',
+    });
+    const describeImages = jest
+      .fn(
+        /**
+         * @param {Record<string, any>} _request
+         * @returns {Promise<Record<string, any>>}
+         */
+        async (_request) => ({ Images: [] }),
+      )
+      .mockResolvedValueOnce({
+        Images: [imageRecord()],
+        NextToken: 'ubuntu-page-two',
+      })
+      .mockResolvedValueOnce({ Images: [newer] });
+
+    const plan = await resolveAwsSingleNodePlan({
+      desired: makeDesired(),
+      providerScope: providerScope(),
+      api: makeApi({ describeImages }),
+    });
+
+    expect(plan.providerSpec.image.imageId).toBe(newer.ImageId);
+    expect(describeImages).toHaveBeenNthCalledWith(2, {
+      Owners: [AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID],
+      IncludeDeprecated: false,
+      IncludeDisabled: false,
+      Filters: [
+        { Name: 'architecture', Values: ['x86_64'] },
+        { Name: 'block-device-mapping.volume-type', Values: ['gp3'] },
+        { Name: 'ena-support', Values: ['true'] },
+        { Name: 'image-type', Values: ['machine'] },
+        { Name: 'is-public', Values: ['true'] },
+        { Name: 'name', Values: [AWS_SINGLE_NODE_UBUNTU_IMAGE_NAME_FILTER] },
+        { Name: 'root-device-type', Values: ['ebs'] },
+        { Name: 'state', Values: ['available'] },
+        { Name: 'virtualization-type', Values: ['hvm'] },
+      ],
+      MaxResults: 1000,
+      NextToken: 'ubuntu-page-two',
+    });
+  });
+
+  it('pins honest source-image drift into new provider and aggregate identities', async () => {
+    const desired = makeDesired();
+    const scope = providerScope();
+    const first = await resolveAwsSingleNodePlan({
+      desired,
+      providerScope: scope,
+      api: makeApi(),
+    });
+    const newer = imageRecord({
+      ImageId: 'ami-55555555555555555',
+      Name: 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260901',
+      CreationDate: '2026-09-02T12:34:56.000Z',
+      BlockDeviceMappings: blockDeviceMappings('snap-55555555555555555'),
+    });
+    const drifted = await resolveAwsSingleNodePlan({
+      desired,
+      providerScope: scope,
+      api: makeApi({
+        describeImages: jest.fn(async () => ({
+          Images: [...imageResponse().Images, newer],
+        })),
+      }),
+    });
+
+    expect(drifted.providerSpec.image).toMatchObject({
+      imageId: newer.ImageId,
+      sourceImage: {
+        name: newer.Name,
+        creationDate: newer.CreationDate,
+      },
+    });
+    expect(drifted.providerSpec.providerSpecId).not.toBe(
+      first.providerSpec.providerSpecId,
+    );
+    expect(drifted.planId).not.toBe(first.planId);
+  });
+
   it.each([false, true])(
     'separates observed source encryption (%s) from encrypted launch intent',
     async (sourceEncrypted) => {
-      const image = imageResponse();
+      const image = { Images: [imageRecord()] };
       image.Images[0].BlockDeviceMappings[0].Ebs.Encrypted = sourceEncrypted;
       const plan = await resolveAwsSingleNodePlan({
         desired: makeDesired(),
@@ -1220,6 +1491,133 @@ describe('AWS single-node read-only plan', () => {
     ).rejects.toBeInstanceOf(AwsSingleNodePlanEvidenceError);
   });
 
+  it.each([
+    ['missing candidates', null],
+    ['wrong Canonical owner', { OwnerId: '999999999999' }],
+    ['non-public image', { Public: false }],
+    ['non-canonical Ubuntu name', { Name: 'ubuntu-noble-latest' }],
+    ['missing creation date', { CreationDate: undefined }],
+    ['non-canonical creation date', { CreationDate: '2026-07-02' }],
+    ['impossible creation date', { CreationDate: '2026-99-99T00:00:00.000Z' }],
+    [
+      'non-root block mapping',
+      {
+        BlockDeviceMappings: [
+          {
+            DeviceName: '/dev/sdb',
+            Ebs: {
+              SnapshotId: SNAPSHOT_ID,
+              VolumeType: 'gp3',
+              VolumeSize: 8,
+              Encrypted: false,
+              DeleteOnTermination: true,
+            },
+          },
+        ],
+      },
+    ],
+    ['missing mappings', { BlockDeviceMappings: [] }],
+    [
+      'missing ephemeral mapping',
+      { BlockDeviceMappings: blockDeviceMappings().slice(0, 2) },
+    ],
+    [
+      'extra ephemeral mapping',
+      {
+        BlockDeviceMappings: [
+          ...blockDeviceMappings(),
+          { DeviceName: '/dev/sdd', VirtualName: 'ephemeral2' },
+        ],
+      },
+    ],
+    [
+      'duplicate ephemeral mapping',
+      {
+        BlockDeviceMappings: [
+          blockDeviceMappings()[0],
+          blockDeviceMappings()[1],
+          blockDeviceMappings()[1],
+        ],
+      },
+    ],
+    [
+      'wrong ephemeral identity',
+      {
+        BlockDeviceMappings: [
+          blockDeviceMappings()[0],
+          { DeviceName: '/dev/sdb', VirtualName: 'ephemeral1' },
+          blockDeviceMappings()[2],
+        ],
+      },
+    ],
+    [
+      'extra root mapping field',
+      {
+        BlockDeviceMappings: [
+          { ...blockDeviceMappings()[0], VirtualName: 'ephemeral0' },
+          ...blockDeviceMappings().slice(1),
+        ],
+      },
+    ],
+    [
+      'extra root EBS field',
+      {
+        BlockDeviceMappings: [
+          {
+            ...blockDeviceMappings()[0],
+            Ebs: {
+              ...blockDeviceMappings()[0].Ebs,
+              Iops: 3000,
+            },
+          },
+          ...blockDeviceMappings().slice(1),
+        ],
+      },
+    ],
+  ])('rejects %s image discovery evidence', async (_name, overrides) => {
+    const Images =
+      overrides === null
+        ? []
+        : [imageRecord(/** @type {Record<string, any>} */ (overrides))];
+    await expect(
+      resolveAwsSingleNodePlan({
+        desired: makeDesired(),
+        providerScope: providerScope(),
+        api: makeApi({
+          describeImages: jest.fn(async () => ({ Images })),
+        }),
+      }),
+    ).rejects.toBeInstanceOf(AwsSingleNodePlanEvidenceError);
+  });
+
+  it('fails closed on repeated direct-image pagination tokens', async () => {
+    const describeImages = jest
+      .fn(
+        /**
+         * @param {Record<string, any>} _request
+         * @returns {Promise<Record<string, any>>}
+         */
+        async (_request) => ({ Images: [] }),
+      )
+      .mockResolvedValueOnce({
+        Images: [imageRecord()],
+        NextToken: 'same-image-token',
+      })
+      .mockResolvedValueOnce({
+        Images: [],
+        NextToken: 'same-image-token',
+      });
+
+    await expect(
+      resolveAwsSingleNodePlan({
+        desired: makeDesired(),
+        providerScope: providerScope(),
+        api: makeApi({ describeImages }),
+      }),
+    ).rejects.toBeInstanceOf(AwsSingleNodePlanEvidenceError);
+    expect(describeImages).toHaveBeenCalledTimes(2);
+  });
+
   it('validates serialized plans and rejects changed provider selection', async () => {
     const plan = await resolveAwsSingleNodePlan({
       desired: makeDesired(),
@@ -1248,11 +1646,45 @@ describe('AWS single-node read-only plan', () => {
     expect(() => validateAwsSingleNodePlan(changedSourceEncryption)).toThrow(
       /providerSpecId does not match/iu,
     );
+    const changedSourceImageName = clone(plan);
+    changedSourceImageName.providerSpec.image.sourceImage.name = `${AMI_NAME}.9`;
+    expect(() => validateAwsSingleNodePlan(changedSourceImageName)).toThrow(
+      /providerSpecId does not match/iu,
+    );
+    const changedSourceCreationDate = clone(plan);
+    changedSourceCreationDate.providerSpec.image.sourceImage.creationDate =
+      '2026-07-03T12:34:56.000Z';
+    expect(() => validateAwsSingleNodePlan(changedSourceCreationDate)).toThrow(
+      /providerSpecId does not match/iu,
+    );
+    const changedSourceOwner = clone(plan);
+    changedSourceOwner.providerSpec.image.sourceImage.ownerAccountId =
+      '999999999999';
+    expect(() => validateAwsSingleNodePlan(changedSourceOwner)).toThrow(
+      /image is invalid/iu,
+    );
     const disabledLaunchEncryption = clone(plan);
     disabledLaunchEncryption.providerSpec.image.rootBlockDevice.encrypted = false;
     expect(() => validateAwsSingleNodePlan(disabledLaunchEncryption)).toThrow(
       /image is invalid/iu,
     );
+  });
+
+  it('rejects non-commercial partitions before any provider read', async () => {
+    const api = makeApi();
+    await expect(
+      resolveAwsSingleNodePlan({
+        desired: makeDesired(),
+        providerScope: createAwsProviderScope({
+          partition: 'aws-us-gov',
+          accountId: ACCOUNT_ID,
+          region: REGION,
+        }),
+        api,
+      }),
+    ).rejects.toThrow(/credential-bound region/iu);
+    expect(api.describeImages).not.toHaveBeenCalled();
+    expect(api.describeVpcs).not.toHaveBeenCalled();
   });
 
   it('sanitizes provider read failures and rejects public credential fields', async () => {
