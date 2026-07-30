@@ -60,9 +60,10 @@ The AWS path requires suitable default-VPC public-network prerequisites;
 Hetzner uses its public network and Wharfie creates no private network. Destroy
 removes the bounded resources Wharfie created, including the node and its
 root-disk data. Packaged plan, inspect, and reconcile are not exposed yet.
-This command surface has focused automated evidence but no claimed successful
-live-cloud lifecycle. Wharfie provisions only its fixed capability substrate
-and is not a general infrastructure-as-code system.
+The AWS path has completed a live packaged lifecycle and independently verified
+cleanup. The Hetzner path has current-contract automated lifecycle coverage but
+no claimed credentialed live lifecycle yet. Wharfie provisions only its fixed
+capability substrate and is not a general infrastructure-as-code system.
 
 See the [Quickstart](./quickstart.md) for the working local and experimental
 deployment command surfaces.
