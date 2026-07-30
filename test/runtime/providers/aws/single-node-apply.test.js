@@ -438,6 +438,25 @@ async function makeHarness(options = {}) {
   const release = jest.fn(async () => undefined);
   const api = {
     ...makePlanApi(),
+    /** @param {Record<string, any>} request */
+    describeInstanceAttribute: async (request) => {
+      if (request.Attribute === 'disableApiStop') {
+        return {
+          InstanceId: request.InstanceId,
+          DisableApiStop: { Value: false },
+        };
+      }
+      if (request.Attribute === 'disableApiTermination') {
+        return {
+          InstanceId: request.InstanceId,
+          DisableApiTermination: { Value: false },
+        };
+      }
+      return {
+        InstanceId: request.InstanceId,
+        InstanceInitiatedShutdownBehavior: { Value: 'stop' },
+      };
+    },
     describeInstanceCreditSpecifications: async () => ({
       InstanceCreditSpecifications: [
         { InstanceId: INSTANCE_ID, CpuCredits: 'standard' },
@@ -634,6 +653,7 @@ async function makeHarness(options = {}) {
     verifyProvisioning: async (/** @type {Record<string, any>} */ value) => {
       verifyCalls += 1;
       events.push('verify');
+      expect(value.api).toHaveProperty('describeInstanceAttribute');
       expect(value.api).toHaveProperty('describeInstanceCreditSpecifications');
       expect(value.api).not.toHaveProperty('createSecurityGroup');
       expect(value.api).not.toHaveProperty('authorizeSecurityGroupIngress');

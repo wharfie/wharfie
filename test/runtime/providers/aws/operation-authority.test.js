@@ -16,6 +16,7 @@ const REGION = 'us-east-2';
 const ACCOUNT_ID = '123456789012';
 const READ_METHODS = Object.freeze([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstanceCreditSpecifications',
   'describeInstances',
   'describeVolumes',
@@ -121,7 +122,7 @@ describe('AWS single-node operation authority', () => {
     /** @type {unknown} */
     let observedReceiver = Symbol('not-called');
     const harness = makeHarness();
-    harness.ec2.describeInstances = jest.fn(
+    harness.ec2.describeInstanceAttribute = jest.fn(
       /**
        * @this {undefined}
        * @param {unknown} request
@@ -133,11 +134,14 @@ describe('AWS single-node operation authority', () => {
       },
     );
     const authority = await harness.open({ region: REGION });
-    const request = { InstanceIds: ['i-0123456789abcdef0'] };
+    const request = {
+      InstanceId: 'i-0123456789abcdef0',
+      Attribute: 'disableApiTermination',
+    };
 
-    await expect(authority.api.describeInstances(request)).resolves.toEqual({
-      request,
-    });
+    await expect(
+      authority.api.describeInstanceAttribute(request),
+    ).resolves.toEqual({ request });
     expect(observedReceiver).toBeUndefined();
     expect(harness.sts.getCallerIdentity).toHaveBeenCalledTimes(1);
 

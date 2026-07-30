@@ -54,6 +54,7 @@ const CONVERGE_KEYS = new Set([
 const FACTORY_KEYS = new Set(['now', 'sleep']);
 const API_METHODS = Object.freeze([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstanceCreditSpecifications',
   'describeInstances',
   'describeVolumes',

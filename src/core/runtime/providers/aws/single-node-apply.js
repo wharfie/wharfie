@@ -90,6 +90,7 @@ const AUTHORITY_KEYS = new Set([
 const PLAN_READ_METHODS = Object.freeze([
   'getParameter',
   'describeImages',
+  'describeInstanceAttribute',
   'describeInstanceTypeOfferings',
   'describeInstances',
   'describeInternetGateways',
@@ -103,6 +104,7 @@ const PLAN_READ_METHODS = Object.freeze([
 ]);
 const PROVISIONING_READ_METHODS = Object.freeze([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstances',
   'describeVolumes',
   'describeInstanceCreditSpecifications',

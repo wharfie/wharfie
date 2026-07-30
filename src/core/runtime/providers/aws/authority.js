@@ -2,6 +2,7 @@
 
 import {
   DescribeImagesCommand,
+  DescribeInstanceAttributeCommand,
   DescribeInstanceCreditSpecificationsCommand,
   DescribeInstanceTypeOfferingsCommand,
   DescribeInstancesCommand,
@@ -42,6 +43,7 @@ const STS_CLIENT_METHODS = new Set(['getCallerIdentity', 'close']);
 const SSM_CLIENT_METHODS = new Set(['getParameter', 'close']);
 const EC2_CLIENT_METHODS = new Set([
   'describeImages',
+  'describeInstanceAttribute',
   'describeInstanceCreditSpecifications',
   'describeInstanceTypeOfferings',
   'describeInstances',
@@ -57,6 +59,7 @@ const EC2_CLIENT_METHODS = new Set([
 const READ_METHODS = Object.freeze([
   'getParameter',
   'describeImages',
+  'describeInstanceAttribute',
   'describeInstanceCreditSpecifications',
   'describeInstanceTypeOfferings',
   'describeInstances',
@@ -478,6 +481,7 @@ const productionOpen = createAwsSingleNodeReadAuthorityFactory({
     });
     return sdkPort(sdk, {
       describeImages: DescribeImagesCommand,
+      describeInstanceAttribute: DescribeInstanceAttributeCommand,
       describeInstanceCreditSpecifications:
         DescribeInstanceCreditSpecificationsCommand,
       describeInstanceTypeOfferings: DescribeInstanceTypeOfferingsCommand,

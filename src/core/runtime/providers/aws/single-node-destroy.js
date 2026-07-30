@@ -58,6 +58,7 @@ const AUTHORITY_KEYS = new Set([
 ]);
 const AUTHORITY_API_METHODS = Object.freeze([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstances',
   'describeVolumes',
   'describeInstanceCreditSpecifications',

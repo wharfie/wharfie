@@ -22,6 +22,7 @@ const MAX_PAGES = 16;
 const MAX_RECORDS = 4096;
 const READ_METHODS = Object.freeze([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstances',
   'describeVolumes',
   'describeInstanceCreditSpecifications',
@@ -72,6 +73,24 @@ const ALL_INSTANCE_STATES = Object.freeze([
   'stopping',
   'stopped',
   'terminated',
+]);
+const INSTANCE_ATTRIBUTE_VALUE_KEYS = new Set(['Value']);
+const INSTANCE_ATTRIBUTE_SPECS = Object.freeze([
+  Object.freeze({
+    requestName: 'disableApiStop',
+    responseKey: 'DisableApiStop',
+    expectedValue: false,
+  }),
+  Object.freeze({
+    requestName: 'disableApiTermination',
+    responseKey: 'DisableApiTermination',
+    expectedValue: false,
+  }),
+  Object.freeze({
+    requestName: 'instanceInitiatedShutdownBehavior',
+    responseKey: 'InstanceInitiatedShutdownBehavior',
+    expectedValue: 'stop',
+  }),
 ]);
 
 /** A natural slot or stored identity belongs to an unexpected resource. */
@@ -915,9 +934,6 @@ function exactInstanceFixedSpec(instance, spec) {
     instance.EbsOptimized === true &&
     isPlainObject(instance.Monitoring) &&
     instance.Monitoring.State === 'disabled' &&
-    instance.DisableApiStop === false &&
-    instance.DisableApiTermination === false &&
-    instance.InstanceInitiatedShutdownBehavior === 'stop' &&
     isPlainObject(instance.HibernationOptions) &&
     instance.HibernationOptions.Configured === false &&
     isPlainObject(instance.EnclaveOptions) &&
@@ -930,6 +946,68 @@ function exactInstanceFixedSpec(instance, spec) {
     instance.Placement.AvailabilityZone === spec.subnet.availabilityZone &&
     instance.Placement.Tenancy === 'default'
   );
+}
+
+/**
+ * Decode three non-listable launch attributes through their only supported
+ * EC2 read boundary. Successful SDK outputs contain the selected attribute,
+ * the instance ID, and optional Smithy metadata.
+ * @param {Readonly<Record<string, Function>>} api
+ * @param {string} instanceId
+ * @param {{pages: number, records: number}} budget
+ * @returns {Promise<{conflict: boolean, incomplete: boolean}>}
+ */
+async function inspectInstanceAttributes(api, instanceId, budget) {
+  let conflict = false;
+  for (const spec of INSTANCE_ATTRIBUTE_SPECS) {
+    if (budget.pages >= MAX_PAGES) {
+      throw new AwsSingleNodeEvidenceUnknownError();
+    }
+    const response = await read(
+      api,
+      'describeInstanceAttribute',
+      deepFreeze({
+        InstanceId: instanceId,
+        Attribute: spec.requestName,
+      }),
+    );
+    consumeBudget(budget, 1);
+    if (!isPlainObject(response)) {
+      throw new AwsSingleNodeEvidenceUnknownError();
+    }
+    const keys = Reflect.ownKeys(response);
+    if (
+      keys.length < 2 ||
+      keys.length > 3 ||
+      !Object.hasOwn(response, 'InstanceId') ||
+      !Object.hasOwn(response, spec.responseKey) ||
+      keys.some(
+        (key) =>
+          typeof key !== 'string' ||
+          !['$metadata', 'InstanceId', spec.responseKey].includes(key),
+      )
+    ) {
+      throw new AwsSingleNodeEvidenceUnknownError();
+    }
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(response, key);
+      if (
+        !descriptor ||
+        !descriptor.enumerable ||
+        !Object.hasOwn(descriptor, 'value')
+      ) {
+        throw new AwsSingleNodeEvidenceUnknownError();
+      }
+    }
+    const attribute = exactDataObject(
+      response[spec.responseKey],
+      INSTANCE_ATTRIBUTE_VALUE_KEYS,
+    );
+    conflict ||=
+      response.InstanceId !== instanceId ||
+      attribute.Value !== spec.expectedValue;
+  }
+  return { conflict, incomplete: false };
 }
 
 /**
@@ -1033,7 +1111,12 @@ async function inspectInstanceInternal(intent, securityGroupId, storedId, api) {
     terminal,
   );
   const root = inspectRootMapping(instance, spec);
-  const credit = await inspectCpuCredits(api, instance.InstanceId, budget);
+  const attributes = terminal
+    ? { conflict: false, incomplete: true }
+    : await inspectInstanceAttributes(api, instance.InstanceId, budget);
+  const credit = terminal
+    ? 'incomplete'
+    : await inspectCpuCredits(api, instance.InstanceId, budget);
   const conflict =
     !knownState ||
     ['stopping', 'stopped'].includes(state) ||
@@ -1046,12 +1129,14 @@ async function inspectInstanceInternal(intent, securityGroupId, storedId, api) {
     metadata.conflict ||
     network.conflict ||
     root.conflict ||
+    attributes.conflict ||
     credit === 'conflict';
   const incomplete =
     state === 'pending' ||
     metadata.incomplete ||
     network.incomplete ||
     root.incomplete ||
+    attributes.incomplete ||
     credit === 'incomplete';
   const specStatus = conflict
     ? 'conflict'

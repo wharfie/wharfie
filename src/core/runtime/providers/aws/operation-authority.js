@@ -5,6 +5,7 @@ import {
   CreateSecurityGroupCommand,
   DeleteSecurityGroupCommand,
   DeleteVolumeCommand,
+  DescribeInstanceAttributeCommand,
   DescribeInstanceCreditSpecificationsCommand,
   DescribeInstancesCommand,
   DescribeSecurityGroupsCommand,
@@ -40,6 +41,7 @@ const DEPENDENCY_KEYS = new Set([
 const STS_CLIENT_METHODS = new Set(['getCallerIdentity', 'close']);
 const EC2_CLIENT_METHODS = new Set([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstanceCreditSpecifications',
   'describeInstances',
   'describeVolumes',
@@ -53,6 +55,7 @@ const EC2_CLIENT_METHODS = new Set([
 ]);
 const READ_METHODS = Object.freeze([
   'describeSecurityGroups',
+  'describeInstanceAttribute',
   'describeInstanceCreditSpecifications',
   'describeInstances',
   'describeVolumes',
@@ -491,6 +494,7 @@ const productionOpen = createAwsSingleNodeOperationAuthorityFactory({
     });
     return sdkPort(sdk, {
       describeSecurityGroups: DescribeSecurityGroupsCommand,
+      describeInstanceAttribute: DescribeInstanceAttributeCommand,
       describeInstanceCreditSpecifications:
         DescribeInstanceCreditSpecificationsCommand,
       describeInstances: DescribeInstancesCommand,
