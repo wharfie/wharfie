@@ -1000,8 +1000,10 @@ owned resources and permanently deletes that root-disk data; it does not
 retain an application data volume.
 
 Packaged plan, inspect, and reconcile are not exposed yet. Focused automated
-tests cover both provider coordinators, but no successful live AWS or Hetzner
-cloud lifecycle is claimed yet.
+tests cover both provider coordinators. The AWS path completed a live packaged
+apply, healthy service and restart checks, second-process adoption, destroy,
+and independently verified cleanup in `us-east-2` on 2026-07-29. Hetzner has
+not completed a live lifecycle yet.
 
 The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,

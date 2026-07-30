@@ -1,10 +1,10 @@
 # Two-provider self-deployment implementation checkpoint
 
 - **Date:** 2026-07-29
-- **Status:** packaged local proof complete; live provider proofs pending
+- **Status:** AWS live lifecycle complete and cleaned up; Hetzner live proof pending
 - **Branch:** `agent/two-provider-deploy`
 - **Base commit:** `a2431716d72f15a1f53ec476690394623d14fa86`
-- **Current proof commit:** `ae94fc8`
+- **Current proof commit:** `83769f6`
 - **Decision:** [ADR 0035](../../docs/architecture/decisions/0035-two-provider-single-node-self-deployment.md)
 
 ## Goal
@@ -45,47 +45,90 @@ process failure rather than automatic coordinator or node replacement.
 - Destroy derives the provider region or location from exact durable authority
   instead of accepting a redirecting selector. Root-disk application and
   control data are deliberately destroyed with the preview node.
-- The production AWS boundary was checked against installed AWS SDK request,
-  response, credential-provider, and bundle shapes. A real-shape audit caught
-  and fixed the separate `DescribeInstanceAttribute` reads required for stop
-  protection, termination protection, and shutdown behavior.
-- There is still no successful live AWS or Hetzner lifecycle proof. Default
-  networking, account policy, provider behavior, SSH reachability, and cleanup
-  therefore remain empirical release risks.
+- The production AWS boundary has now completed one live packaged lifecycle in
+  `us-east-2`: plan, create, bootstrap, pinned-SSH activation, systemd health,
+  second-process adoption, service restart, destroy, and independent cleanup.
+- Hetzner still has mock-provider evidence only. Its live account behavior,
+  public networking, SSH reachability, and cleanup remain empirical release
+  risks.
 
-## Local packaged proof
+## Live AWS hello-world proof
 
-The hello-world demo was rebuilt from the proof commit with:
+The hello-world demo was rebuilt from `83769f6` with:
 
 ```text
 nvm use 24.13.1
 node ../wharfie/bin/wharfie app package . --self-deployable --target node24.13.1-darwin-arm64 --output-dir ./dist --json --no-pretty
 ```
 
-The resulting arm64 Mach-O operator SEA is 309,250,512 bytes with SHA-256
-`ea980014b97a60d7f7a7aac01d2f128dc7d94060e02e1a48cf2b079223070408`.
-It ran the ordinary hello application, exposed only packaged apply and destroy,
-passed macOS code-signature verification, and reached the expected
-credential-resolution failure for each provider under an isolated empty
-environment. No live provider credentials were used.
+The retained arm64 Mach-O operator SEA is 307,004,880 bytes with SHA-256
+`6ee201f7d7c4df7395da7a2c58ee4df9e1c4f9882fe0e4ca8bf78ef23a6c7586`.
+Its embedded Linux x64 artifact is 156,961,984 bytes. The local ordinary CLI
+returned `Hello, Ada!` before cloud authority was used.
 
-Focused final validation passed 16 suites and 263 tests. Full source,
-application, test, and SEA-verifier typechecks passed; full lint and package
-content verification also passed. Test and package temporary payloads were
-removed, leaving only the final demo SEA and its artifact record.
+Using the ordinary ambient AWS credential chain, an explicit `us-east-2`
+region, and one operator IPv4 `/32`, the packaged SEA then:
+
+1. resolved a qualifying default-VPC public path, a Canonical Ubuntu 24.04
+   x64 image, and the fixed `t3.small` machine;
+2. created exactly one dedicated security group, EC2 instance, encrypted
+   delete-on-termination root EBS volume, and no network;
+3. returned an `active` receipt after pinned-SSH upload and systemd-user
+   convergence;
+4. reported service status schema 3 with `health: healthy`, an enabled,
+   loaded, active, running `wharfie-hello-world.service`, a `READY` current
+   resident, verified artifact integrity, and lingering enabled;
+5. ran the remote ordinary CLI and returned `Hello, Ada!`;
+6. ran the identical packaged apply from a fresh coordinator process and
+   returned the same deployment instance, address, revision, and artifact
+   without replacement;
+7. restarted the systemd user service, observed a new PID and runtime
+   generation with health restored, and returned `Hello, Grace!`; and
+8. returned a `destroyed` receipt, after which independent AWS reads found the
+   instance terminated and both the root volume and security group absent.
+
+Two earlier diagnostic incarnations were also destroyed and independently
+proved absent. No Wharfie-created AWS resource was left running.
+
+The live audit found and fixed six gaps before that successful lifecycle:
+
+- AWS SDK clients now receive one immutable credential snapshot through a
+  provider function instead of mutating the frozen snapshot object.
+- Canonical Ubuntu discovery is EC2-only, avoiding an unnecessary SSM
+  permission; it strictly handles the live three-entry block-device mapping.
+- `DescribeRouteTables` uses AWS's live maximum page size of 100.
+- EC2 CPU-credit evidence uses the exact instance-ID request shape rather than
+  a filter that returns no rows.
+- Linux upload uses GNU `dd`'s portable `conv=excl,fsync` form.
+- Cloud-init explicitly creates the Wharfie data root as the non-root service
+  account before creating its deployment child.
+
+Final validation for the last activation fixes passed 13 suites and 175 tests,
+source and test typechecks, targeted ESLint and Prettier, and
+`git diff --check`. Temporary payloads, detached worktrees, superseded SEAs,
+and local live authority were removed; only the current demo SEA and artifact
+record remain.
+
+## Known recovery loose end
+
+Rebuilding an earlier logical revision reproduced its revision ID and byte
+length but not its final SEA byte digest. The journal correctly rejected the
+substitute and no cloud mutation occurred. Current recovery is sound when the
+original self-deployable SEA is retained—the successful second apply proved
+that path—but byte-for-byte packaging reproducibility remains unresolved and
+should be fixed or made an explicit artifact-retention contract.
 
 ## Work next
 
-1. Run a bounded live Hetzner hello-world apply, readiness check, coordinator
-   restart recovery, and destroy; independently check provider cleanup.
-2. Repeat the same bounded proof in a disposable AWS scope with a qualifying
-   default public subnet.
-3. Fix any empirical provider mismatch before expanding the public surface.
-4. Add approachable preview/status/update/recovery commands only after both
-   provider lifecycles pass.
-5. Decide an explicit retained-data capability before claiming durability
+1. Run the same bounded hello-world lifecycle against Hetzner and independently
+   verify cleanup.
+2. Resolve final SEA byte reproducibility or formalize retention of the
+   original operator SEA as recovery authority.
+3. Add approachable preview/status/update/recovery commands only after the
+   Hetzner lifecycle passes.
+4. Decide an explicit retained-data capability before claiming durability
    beyond the node root-disk lifecycle.
-6. Delete or quarantine superseded general AWS graph code that does not serve
+5. Delete or quarantine superseded general AWS graph code that does not serve
    this narrow lifecycle.
 
 ## Security and recovery defaults
@@ -107,4 +150,4 @@ removed, leaving only the final demo SEA and its artifact record.
 Do not expand into persistent volumes, custom networks, object stores, general
 provider plugins, multiple nodes, cloud application secrets, ingress beyond
 restricted SSH, mesh enrollment, or coordinator leases before both bounded
-single-node live proofs pass and clean up.
+single-node provider paths pass and clean up.
