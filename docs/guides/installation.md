@@ -49,13 +49,20 @@ Source plan and direct apply package and durably pre-stage a selected SEA;
 source prepared-plan apply and reconcile consume exact durable staged evidence.
 
 `wharfie app package --self-deployable` creates an application SEA whose
-packaged deployment surface has only Hetzner `apply` and `destroy`. Apply
-authenticates the embedded Linux SEA; destroy reads only embedded app identity
-plus exact durable local deployment authority. Both accept no credential
-option and the provider coordinator reads ambient `HCLOUD_TOKEN` when needed.
-Packaged plan, inspect, and reconcile are not exposed yet. This command surface
-has focused automated evidence. Wharfie provisions only its fixed capability
-substrate and is not a general infrastructure-as-code system.
+packaged deployment surface has AWS and Hetzner `apply` and `destroy`. AWS
+apply requires a region and uses the ordinary credential chain; Hetzner apply
+requires a location and reads ambient `HCLOUD_TOKEN`. Credentials are never
+CLI arguments. Destroy reads only embedded app identity plus exact durable
+local deployment authority. Its journal supplies the bound provider location,
+so destroy accepts no region or location selector.
+
+The AWS path requires suitable default-VPC public-network prerequisites;
+Hetzner uses its public network and Wharfie creates no private network. Destroy
+removes the bounded resources Wharfie created, including the node and its
+root-disk data. Packaged plan, inspect, and reconcile are not exposed yet.
+This command surface has focused automated evidence but no claimed successful
+live-cloud lifecycle. Wharfie provisions only its fixed capability substrate
+and is not a general infrastructure-as-code system.
 
 See the [Quickstart](./quickstart.md) for the working local and experimental
 deployment command surfaces.

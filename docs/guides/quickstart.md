@@ -961,22 +961,47 @@ the exact durable stage instead of treating that Node process as artifact
 authority.
 
 An executable built with `wharfie app package --self-deployable` instead
-exposes narrow Hetzner apply and destroy commands:
+exposes narrow AWS and Hetzner apply and destroy commands:
 
 ```text
+<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
 
 The command authenticates its embedded revision and Linux deployment SEA,
 creates the fixed small single-node systemd-user intent, and applies or
 recovers it through durable local authority. Repeat `--allow-ssh-from` for each
-operator IPv4 `/32`. It accepts no token option: the Hetzner coordinator reads
-`HCLOUD_TOKEN` from the ambient process and output omits credentials.
+operator IPv4 `/32`. AWS apply requires `--region`; Hetzner apply requires
+`--location`. Supplying the other provider's selector is rejected.
+
+Credentials are never CLI arguments. AWS uses the ordinary credential chain;
+Hetzner reads `HCLOUD_TOKEN` from the ambient process. Receipts and human
+output omit credentials.
+
 Destroy authenticates only the embedded app identity and uses the exact
 deployment instance plus durable local authority without decoding the large
-embedded Linux payload. Packaged plan, inspect, and reconcile are not exposed
-yet.
+embedded Linux payload. The journal supplies the AWS region or Hetzner
+location selected by apply. Destroy therefore accepts neither `--region` nor
+`--location`; pass the same `--data-root` used for apply if the default stable
+root is not being used.
+
+This experimental slice assumes provider networking already exists. AWS needs
+one available default VPC with a usable default subnet that assigns public IPv4
+addresses, has address and instance-type capacity, and has working internet
+route, gateway, and network-ACL evidence. Hetzner uses its public network in
+the selected location; Wharfie does not create a private network.
+
+AWS apply owns one security group, EC2 instance, and encrypted root EBS volume.
+Hetzner apply owns one firewall, primary IPv4, and server. Application and
+control data currently live on the node's root disk. Destroy removes these
+owned resources and permanently deletes that root-disk data; it does not
+retain an application data volume.
+
+Packaged plan, inspect, and reconcile are not exposed yet. Focused automated
+tests cover both provider coordinators, but no successful live AWS or Hetzner
+cloud lifecycle is claimed yet.
 
 The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,

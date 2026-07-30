@@ -67,8 +67,8 @@ The repository has substantial foundations:
   through install, automatic replacement, forced host restart, retained work,
   update, rollback, failed-target restoration, history/output reads,
   uninstall, prune, and host cleanup; and
-- extensive AWS-shaped deployment contracts, resource drivers, and mock-based
-  proofs.
+- packaged AWS and Hetzner single-node apply/destroy commands, recoverable
+  provider mutations, and mock-based proofs.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -238,6 +238,13 @@ capability.
 - AWS-shaped specifications, ownership bindings, plans, inspections, actions,
   resource drivers, retained storage, artifacts, runtime identity, node
   bootstrap, and service-health contracts exist.
+- A self-deployable SEA can apply or recover the bounded single-node substrate
+  on AWS or Hetzner, then destroy it from exact durable local authority.
+  Credentials come only from the ordinary AWS chain or ambient
+  `HCLOUD_TOKEN`; they are not CLI arguments.
+- AWS reuses a qualifying default-VPC public-network path; Hetzner uses its
+  public network. The current node root disk holds application and control
+  data, so destroy is deliberately data-destructive.
 - Provider mutations are designed around explicit ownership, durable intent,
   conditional operations, readback, and conservative ambiguity recovery.
 - Most evidence is currently mock-based. Some host and delivery proof harnesses
@@ -245,28 +252,28 @@ capability.
 
 ### Work next
 
-1. Cut the first public deployment profile to the minimum AWS resources needed
-   to run the golden-path application on one node.
-2. Expose one approachable sequence for credential check, plan, deploy, status,
-   update, recovery, and destroy. Preview every mutation and distinguish owned
-   resources from external references.
+1. Run bounded live AWS and Hetzner apply/destroy proofs, retain
+   machine-readable receipts, and independently check that cleanup removes only
+   Wharfie-owned resources.
+2. Extend the packaged surface from apply/destroy to an approachable credential
+   check, preview, status, update, and recovery sequence. Preview every mutation
+   and distinguish owned resources from external references.
 3. Bootstrap a narrowly scoped runtime identity and the exact packaged
    artifact; do not expose provider credentials to application components.
 4. Connect node startup to the same durable service and operator experience
    proved locally.
-5. Run a bounded clean-account proof, retain machine-readable receipts, and
-   verify destroy removes only owned resources while honoring declared
-   retention.
+5. Decide and implement an explicit retained-data capability before making any
+   durability claim beyond the current root-disk lifecycle.
 6. Delete or quarantine provider abstractions that do not help this one
    lifecycle before adding another provider or topology.
 
 ### Exit evidence
 
-Given ordinary AWS credentials and a packaged golden-path application, a user
-can preview and create one recoverable node, observe the application continue
-there, inspect and update it through the executable, and destroy its owned
-substrate without unexplained residue. The proof begins in a clean account and
-ends with independently checked receipts.
+Given ordinary AWS credentials or a Hetzner token and a packaged golden-path
+application, a user can preview and create one recoverable node, observe the
+application continue there, inspect and update it through the executable, and
+destroy its owned substrate without unexplained residue. The proof begins in a
+clean provider scope and ends with independently checked receipts.
 
 ## Immediate milestone: single-host developer preview
 

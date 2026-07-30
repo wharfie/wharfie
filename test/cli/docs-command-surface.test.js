@@ -367,12 +367,25 @@ describe('docs command surface', () => {
       'wharfie deployment destroy <deployment-instance> --region <region>',
     );
     expect(quickstart).toContain(
+      '<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>...',
+    );
+    expect(quickstart).toContain(
       '<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>...',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws',
     );
     expect(quickstart).toContain(
       '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner',
     );
+    expect(quickstart).not.toContain(
+      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws --region',
+    );
+    expect(quickstart).not.toContain(
+      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner --location',
+    );
     expect(quickstart).toContain('wharfie app package --self-deployable');
+    expect(quickstart).toContain('ordinary credential chain');
     expect(quickstart).toContain('`HCLOUD_TOKEN`');
     expect(quickstart).toContain(
       'Packaged plan, inspect, and reconcile are not exposed',
