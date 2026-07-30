@@ -711,13 +711,20 @@ describe('single-node remote activation', () => {
 
     expect(staleRemovalIndex).toBeGreaterThanOrEqual(0);
     expect(uploadIndex).toBeGreaterThan(staleRemovalIndex);
-    expect(
-      new Set(
-        remote.calls
-          .filter((call) => call.argv[0] === '/usr/bin/dd')
-          .map((call) => call.argv[1]),
-      ),
-    ).toEqual(new Set([`of=${expectedTemporaryPath}`]));
+    const uploadCalls = remote.calls.filter(
+      (call) => call.argv[0] === '/usr/bin/dd',
+    );
+    expect(uploadCalls).toHaveLength(1);
+    expect(uploadCalls[0].argv).toEqual([
+      '/usr/bin/dd',
+      `of=${expectedTemporaryPath}`,
+      'bs=65536',
+      'status=none',
+      'conv=excl,fsync',
+    ]);
+    expect(new Set(uploadCalls.map((call) => call.argv[1]))).toEqual(
+      new Set([`of=${expectedTemporaryPath}`]),
+    );
     expect(remote.files.has(expectedTemporaryPath)).toBe(false);
     expect(remote.files.get(evidence.artifact.remotePath)).toEqual(
       fixture.artifactBytes,

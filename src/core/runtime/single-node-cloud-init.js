@@ -16,8 +16,9 @@ export const SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH =
   '/etc/wharfie/bootstrap-v1.json';
 export const SINGLE_NODE_BOOTSTRAP_COMPLETE_PATH =
   '/var/lib/wharfie-bootstrap-v1.complete';
-export const SINGLE_NODE_DEPLOYMENT_ROOT =
-  '/home/wharfie/.local/share/wharfie-nodejs/deployments';
+export const SINGLE_NODE_DATA_ROOT =
+  '/home/wharfie/.local/share/wharfie-nodejs';
+export const SINGLE_NODE_DEPLOYMENT_ROOT = `${SINGLE_NODE_DATA_ROOT}/deployments`;
 
 const SSH_ED25519_ALGORITHM = 'ssh-ed25519';
 const SSH_FINGERPRINT_PATTERN = /^SHA256:[A-Za-z0-9+/]{43}$/;
@@ -176,6 +177,17 @@ export function createSingleNodeCloudInit(value) {
         SINGLE_NODE_RUNTIME_ACCOUNT.user,
         '-g',
         SINGLE_NODE_RUNTIME_ACCOUNT.user,
+        SINGLE_NODE_DATA_ROOT,
+      ],
+      [
+        '/usr/bin/install',
+        '-d',
+        '-m',
+        '0700',
+        '-o',
+        SINGLE_NODE_RUNTIME_ACCOUNT.user,
+        '-g',
+        SINGLE_NODE_RUNTIME_ACCOUNT.user,
         SINGLE_NODE_DEPLOYMENT_ROOT,
       ],
       ['/usr/bin/loginctl', 'enable-linger', SINGLE_NODE_RUNTIME_ACCOUNT.user],
@@ -240,6 +252,7 @@ export default {
   SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH,
   SINGLE_NODE_CLOUD_INIT_CONTRACT_VERSION,
   SINGLE_NODE_CLOUD_INIT_MAX_BYTES,
+  SINGLE_NODE_DATA_ROOT,
   SINGLE_NODE_DEPLOYMENT_ROOT,
   createSingleNodeCloudInit,
   validateSshEd25519PublicKey,
