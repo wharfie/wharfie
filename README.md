@@ -630,8 +630,10 @@ root volume or server; it is not a retained-data operation.
 Packaged plan, inspect, and reconcile are not exposed yet. The AWS path
 completed a live packaged lifecycle in `us-east-2` on 2026-07-29: activation,
 healthy systemd service, second-process adoption, service restart, destroy, and
-independently verified instance, volume, and security-group cleanup. Hetzner
-still has focused automated and mock-provider evidence only. See the
+independently verified instance, volume, and security-group cleanup. The
+Hetzner path is reconciled with the current official API contract and has
+bounded apply/destroy convergence plus durable rejection recovery, but it has
+not completed a credentialed live lifecycle yet. See the
 [two-provider checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md).
 Create the canonical profile with
 `@wharfie/wharfie/deployment-profile`, whose narrow Node authoring API exports

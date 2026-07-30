@@ -958,7 +958,8 @@ Packaged plan, inspect, and reconcile are not exposed yet. Focused automated
 tests cover both provider coordinators. The AWS path completed a live packaged
 apply, healthy service and restart checks, second-process adoption, destroy,
 and independently verified cleanup in `us-east-2` on 2026-07-29. Hetzner has
-not completed a live lifecycle yet.
+current-contract automated lifecycle coverage but has not completed a
+credentialed live lifecycle yet.
 
 The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,

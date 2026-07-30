@@ -1,10 +1,10 @@
 # Two-provider self-deployment implementation checkpoint
 
 - **Date:** 2026-07-29
-- **Status:** AWS live lifecycle complete and cleaned up; Hetzner live proof pending
+- **Status:** AWS live lifecycle complete and cleaned up; Hetzner implementation hardened against the current API contract, live proof pending credentials
 - **Branch:** `agent/two-provider-deploy`
 - **Base commit:** `a2431716d72f15a1f53ec476690394623d14fa86`
-- **Current proof commit:** `83769f6`
+- **Current implementation commit:** `1b7adf4`
 - **Decision:** [ADR 0035](../../docs/architecture/decisions/0035-two-provider-single-node-self-deployment.md)
 
 ## Goal
@@ -48,9 +48,11 @@ process failure rather than automatic coordinator or node replacement.
 - The production AWS boundary has now completed one live packaged lifecycle in
   `us-east-2`: plan, create, bootstrap, pinned-SSH activation, systemd health,
   second-process adoption, service restart, destroy, and independent cleanup.
-- Hetzner still has mock-provider evidence only. Its live account behavior,
-  public networking, SSH reachability, and cleanup remain empirical release
-  risks.
+- Hetzner now has current-contract HTTP fixtures, full coordinator and durable
+  recovery coverage, and bounded eventual-consistency convergence. Its live
+  account behavior, public networking, SSH reachability, and cleanup remain
+  empirical release risks because no `HCLOUD_TOKEN` was available for this
+  checkpoint.
 
 ## Live AWS hello-world proof
 
@@ -61,7 +63,8 @@ nvm use 24.13.1
 node ../wharfie/bin/wharfie app package . --self-deployable --target node24.13.1-darwin-arm64 --output-dir ./dist --json --no-pretty
 ```
 
-The retained arm64 Mach-O operator SEA is 307,004,880 bytes with SHA-256
+The arm64 Mach-O operator SEA used for the AWS proof was 307,004,880 bytes with
+SHA-256
 `6ee201f7d7c4df7395da7a2c58ee4df9e1c4f9882fe0e4ca8bf78ef23a6c7586`.
 Its embedded Linux x64 artifact is 156,961,984 bytes. The local ordinary CLI
 returned `Hello, Ada!` before cloud authority was used.
@@ -105,9 +108,48 @@ The live audit found and fixed six gaps before that successful lifecycle:
 
 Final validation for the last activation fixes passed 13 suites and 175 tests,
 source and test typechecks, targeted ESLint and Prettier, and
-`git diff --check`. Temporary payloads, detached worktrees, superseded SEAs,
-and local live authority were removed; only the current demo SEA and artifact
-record remain.
+`git diff --check`. Temporary payloads, detached worktrees, and local live
+authority were removed.
+
+## Hetzner implementation hardening
+
+Commit `1b7adf4` reconciles the implementation with the current official
+Hetzner Cloud OpenAPI contract and closes the mock-only lifecycle gaps found
+before live testing:
+
+- server-type discovery no longer sends the unsupported `architecture` query;
+  x86 selection remains a strict local check;
+- exact server-type and image IDs are serialized as the required decimal
+  strings, while firewall and Primary IP references remain numeric;
+- official `pending` firewall state, nullable transient public-network fields,
+  and nullable pagination totals are decoded without weakening exact ownership
+  checks or pagination bounds;
+- apply polls only explicitly recognized asynchronous states for up to 60
+  seconds, without replaying a create;
+- destroy polls exact ownership to absence for up to 60 seconds and preserves
+  the server → Primary IP → firewall dependency order without replaying a
+  delete;
+- a definite provider 4xx now durably releases its prepared create fence, so a
+  rejected server create cannot permanently block retry or cleanup of an
+  already-created Primary IP; ambiguous transport and 5xx outcomes remain
+  fenced and fail closed; and
+- concurrent first credential binds accept only the legitimate hard-link
+  publication cleanup transition and converge on one immutable winner.
+
+The combined Hetzner provider and journal validation passed 11 suites and 208
+tests. All source, app, test, and SEA-verifier typechecks passed, as did
+targeted ESLint, Prettier, and `git diff --check`.
+
+The hello-world self-deployable SEA was rebuilt from `1b7adf4` and locally
+returned `Hello, Ada!`. The retained artifact is 307,021,392 bytes with SHA-256
+`952baa8148b417addde8d5edf920249f23aff1bd847893a732b67639550479e5`
+and artifact ID
+`waf1_lSuqgUi0F63d6NXt-SAknyOv8b2EeJOnMrZ2OVUEeeU`. The superseded 307 MB SEA
+and build temporaries were removed.
+
+No ambient `HCLOUD_TOKEN` or installed authenticated Hetzner CLI was available,
+so this checkpoint makes no live-resource claim. No Hetzner resource was
+created or billed.
 
 ## Known recovery loose end
 

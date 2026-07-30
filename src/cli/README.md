@@ -168,9 +168,10 @@ group, instance, and encrypted root volume. Hetzner owns one firewall, primary
 IPv4, and server. Destroy deletes those resources and the application/control
 data currently held on the node's root disk.
 
-Packaged `plan`, `inspect`, and `reconcile` are not exposed yet. The
-two-provider surface has focused automated evidence, not a claimed successful
-live AWS or Hetzner lifecycle.
+Packaged `plan`, `inspect`, and `reconcile` are not exposed yet. AWS has
+completed a live packaged lifecycle and independently verified cleanup.
+Hetzner has current-contract automated lifecycle coverage but no claimed
+credentialed live lifecycle yet.
 
 Source plan and direct apply package a selected SEA and durably pre-stage it.
 A later source `apply --plan` and source reconcile validate exact durable
