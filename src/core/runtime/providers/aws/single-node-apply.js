@@ -88,7 +88,6 @@ const AUTHORITY_KEYS = new Set([
   'close',
 ]);
 const PLAN_READ_METHODS = Object.freeze([
-  'getParameter',
   'describeImages',
   'describeInstanceAttribute',
   'describeInstanceTypeOfferings',

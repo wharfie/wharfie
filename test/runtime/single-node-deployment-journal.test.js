@@ -32,7 +32,6 @@ import {
 import { createAwsSingleNodeProvisioningIntent } from '../../src/core/runtime/providers/aws/single-node-provisioning-intent.js';
 import {
   AWS_SINGLE_NODE_INSTANCE_TYPE,
-  AWS_SINGLE_NODE_UBUNTU_PARAMETER,
   resolveAwsSingleNodePlan,
 } from '../../src/core/runtime/providers/aws/single-node-plan.js';
 import {
@@ -309,22 +308,13 @@ async function makeAuthority() {
 
 function makeAwsReadApi() {
   return {
-    getParameter: async () => ({
-      Parameter: {
-        Name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
-        Type: 'String',
-        Value: AWS_AMI_ID,
-        Version: 42,
-        ARN: `arn:aws:ssm:${AWS_REGION}::parameter${AWS_SINGLE_NODE_UBUNTU_PARAMETER}`,
-        DataType: 'text',
-        LastModifiedDate: new Date('2026-07-01T00:00:00.000Z'),
-      },
-    }),
     describeImages: async () => ({
       Images: [
         {
           ImageId: AWS_AMI_ID,
           OwnerId: '099720109477',
+          Name: 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260701',
+          CreationDate: '2026-07-01T00:00:00.000Z',
           Public: true,
           State: 'available',
           Architecture: 'x86_64',
@@ -334,7 +324,6 @@ function makeAwsReadApi() {
           VirtualizationType: 'hvm',
           EnaSupport: true,
           PlatformDetails: 'Linux/UNIX',
-          PublicSsmParameterName: AWS_SINGLE_NODE_UBUNTU_PARAMETER.slice(1),
           BlockDeviceMappings: [
             {
               DeviceName: '/dev/sda1',
@@ -346,6 +335,8 @@ function makeAwsReadApi() {
                 DeleteOnTermination: true,
               },
             },
+            { DeviceName: '/dev/sdb', VirtualName: 'ephemeral0' },
+            { DeviceName: '/dev/sdc', VirtualName: 'ephemeral1' },
           ],
         },
       ],

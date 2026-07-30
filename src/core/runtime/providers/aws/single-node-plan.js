@@ -19,8 +19,9 @@ export const AWS_SINGLE_NODE_PLAN_ID_PREFIX = 'wsap1';
 export const AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX = 'wsas1';
 export const AWS_SINGLE_NODE_ACTION_ID_PREFIX = 'wsna1';
 export const AWS_SINGLE_NODE_INSTANCE_TYPE = 't3.small';
-export const AWS_SINGLE_NODE_UBUNTU_PARAMETER =
-  '/aws/service/canonical/ubuntu/server/noble/stable/current/amd64/hvm/ebs-gp3/ami-id';
+export const AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID = '099720109477';
+export const AWS_SINGLE_NODE_UBUNTU_IMAGE_NAME_FILTER =
+  'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*';
 
 const PLAN_ID_DOMAIN = 'wharfie:aws-single-node-plan:v1';
 const PROVIDER_SPEC_ID_DOMAIN = 'wharfie:aws-single-node-provider-spec:v1';
@@ -31,7 +32,6 @@ const MAX_RECORDS = 4096;
 const PLAN_MAX_BYTES = 256 * 1024;
 const INPUT_KEYS = new Set(['desired', 'providerScope', 'api']);
 const API_METHODS = Object.freeze([
-  'getParameter',
   'describeImages',
   'describeInstanceTypeOfferings',
   'describeInstances',
@@ -121,9 +121,8 @@ const NETWORK_ACL_ENTRY_KEYS = new Set([
 const PORT_RANGE_KEYS = new Set(['From', 'To']);
 const ICMP_TYPE_CODE_KEYS = new Set(['Code', 'Type']);
 const IMAGE_KEYS = new Set([
-  'sourceParameter',
+  'sourceImage',
   'imageId',
-  'ownerAccountId',
   'architecture',
   'rootDeviceType',
   'virtualizationType',
@@ -131,7 +130,7 @@ const IMAGE_KEYS = new Set([
   'rootDeviceName',
   'rootBlockDevice',
 ]);
-const SOURCE_PARAMETER_KEYS = new Set(['name', 'version']);
+const SOURCE_IMAGE_KEYS = new Set(['ownerAccountId', 'name', 'creationDate']);
 const ROOT_BLOCK_DEVICE_KEYS = new Set([
   'snapshotId',
   'volumeType',
@@ -140,6 +139,15 @@ const ROOT_BLOCK_DEVICE_KEYS = new Set([
   'encrypted',
   'deleteOnTermination',
 ]);
+const ROOT_DEVICE_MAPPING_KEYS = new Set(['DeviceName', 'Ebs']);
+const ROOT_DEVICE_EBS_KEYS = new Set([
+  'DeleteOnTermination',
+  'Encrypted',
+  'SnapshotId',
+  'VolumeSize',
+  'VolumeType',
+]);
+const EPHEMERAL_DEVICE_MAPPING_KEYS = new Set(['DeviceName', 'VirtualName']);
 const INSPECTION_KEYS = new Set(['status', 'observedOwnedResourceCount']);
 const ACTION_KEYS = new Set(['actionId', 'kind', 'dependsOn']);
 const ACTION_KINDS = Object.freeze([
@@ -153,11 +161,14 @@ const INTERNET_GATEWAY_ID_PATTERN = /^igw-[0-9a-f]{8,32}$/u;
 const NETWORK_ACL_ID_PATTERN = /^acl-[0-9a-f]{8,32}$/u;
 const NETWORK_ACL_ASSOCIATION_ID_PATTERN = /^aclassoc-[0-9a-f]{8,32}$/u;
 const AMI_ID_PATTERN = /^ami-[0-9a-f]{8,32}$/u;
+const UBUNTU_IMAGE_NAME_PATTERN =
+  /^ubuntu\/images\/hvm-ssd-gp3\/ubuntu-noble-24\.04-amd64-server-[0-9]{8}(?:\.[0-9]+)?$/u;
+const ISO_CREATION_DATE_PATTERN =
+  /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/u;
 const SNAPSHOT_ID_PATTERN = /^snap-[0-9a-f]{8,32}$/u;
 const SECURITY_GROUP_ID_PATTERN = /^sg-[0-9a-f]{8,32}$/u;
 const INSTANCE_ID_PATTERN = /^i-[0-9a-f]{8,32}$/u;
 const VOLUME_ID_PATTERN = /^vol-[0-9a-f]{8,32}$/u;
-const ACCOUNT_ID_PATTERN = /^[0-9]{12}$/u;
 const AVAILABILITY_ZONE_PATTERN = /^[a-z][a-z0-9-]+[a-z0-9]$/u;
 const AVAILABILITY_ZONE_ID_PATTERN =
   /^[a-z0-9]+(?:-[a-z0-9]+)*-az[1-9][0-9]*$/u;
@@ -239,6 +250,23 @@ function exactDataObject(value, expected, valuePath) {
   return object;
 }
 
+/**
+ * @param {unknown} value
+ * @param {Set<string>} expected
+ * @returns {Record<string, any>}
+ */
+function exactEvidenceObject(value, expected) {
+  try {
+    return exactDataObject(
+      value,
+      expected,
+      'awsSingleNodePlan provider evidence',
+    );
+  } catch {
+    throw new AwsSingleNodePlanEvidenceError();
+  }
+}
+
 /** @param {unknown} value @param {RegExp} pattern @returns {string} */
 function providerId(value, pattern) {
   if (typeof value !== 'string' || !pattern.test(value)) {
@@ -247,16 +275,8 @@ function providerId(value, pattern) {
   return value;
 }
 
-/** @param {unknown} value @returns {string} */
-function accountId(value) {
-  if (typeof value !== 'string' || !ACCOUNT_ID_PATTERN.test(value)) {
-    throw new AwsSingleNodePlanEvidenceError();
-  }
-  return value;
-}
-
 /**
- * Project only the ten read methods this planner owns. Unknown mutation
+ * Project only the read methods this planner owns. Unknown mutation
  * capabilities are neither inspected nor retained.
  * @param {unknown} value
  * @returns {Readonly<Record<string, Function>>}
@@ -769,7 +789,7 @@ async function resolveInternetRoute(api, vpc, subnet, expectedOwnerId) {
     'describeRouteTables',
     {
       Filters: [{ Name: 'vpc-id', Values: [vpc.vpcId] }],
-      MaxResults: 200,
+      MaxResults: 100,
     },
     'RouteTables',
   );
@@ -881,87 +901,93 @@ async function resolveInternetRoute(api, vpc, subnet, expectedOwnerId) {
 
 /**
  * @param {unknown} value
- * @param {Readonly<Record<string, any>>} providerScope
- * @returns {Readonly<{name: string, version: number, imageId: string}>}
+ * @returns {string}
  */
-function decodeUbuntuParameter(value, providerScope) {
-  if (!isPlainObject(value) || !isPlainObject(value.Parameter)) {
+function canonicalCreationDate(value) {
+  if (typeof value !== 'string' || !ISO_CREATION_DATE_PATTERN.test(value)) {
     throw new AwsSingleNodePlanEvidenceError();
   }
-  const parameter = value.Parameter;
-  const expectedArn = `arn:${providerScope.partition}:ssm:${providerScope.region}::parameter${AWS_SINGLE_NODE_UBUNTU_PARAMETER}`;
-  if (
-    parameter.Name !== AWS_SINGLE_NODE_UBUNTU_PARAMETER ||
-    parameter.Type !== 'String' ||
-    parameter.DataType !== 'text' ||
-    parameter.ARN !== expectedArn ||
-    typeof parameter.Value !== 'string' ||
-    !AMI_ID_PATTERN.test(parameter.Value) ||
-    !Number.isSafeInteger(parameter.Version) ||
-    parameter.Version < 1 ||
-    (parameter.Selector !== undefined && parameter.Selector !== null) ||
-    parameter.SourceResult !== undefined
-  ) {
+  let canonical;
+  try {
+    canonical = new Date(value).toISOString();
+  } catch {
     throw new AwsSingleNodePlanEvidenceError();
   }
-  return deepFreeze({
-    name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
-    version: parameter.Version,
-    imageId: parameter.Value,
-  });
+  if (canonical !== value) throw new AwsSingleNodePlanEvidenceError();
+  return value;
 }
 
 /**
  * @param {unknown} value
- * @param {Readonly<Record<string, any>>} selection
  * @returns {Readonly<Record<string, any>>}
  */
-function decodeUbuntuImage(value, selection) {
+function decodeUbuntuImageCandidate(value) {
   if (
     !isPlainObject(value) ||
-    !Array.isArray(value.Images) ||
-    value.Images.length !== 1 ||
-    (value.NextToken !== undefined && value.NextToken !== null)
+    value.OwnerId !== AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID ||
+    value.Public !== true ||
+    value.State !== 'available' ||
+    value.Architecture !== 'x86_64' ||
+    value.ImageType !== 'machine' ||
+    value.RootDeviceType !== 'ebs' ||
+    value.VirtualizationType !== 'hvm' ||
+    value.EnaSupport !== true ||
+    value.Platform !== undefined ||
+    value.PlatformDetails !== 'Linux/UNIX' ||
+    value.ImageAllowed === false ||
+    typeof value.Name !== 'string' ||
+    !UBUNTU_IMAGE_NAME_PATTERN.test(value.Name) ||
+    !Array.isArray(value.BlockDeviceMappings) ||
+    !value.BlockDeviceMappings.some(
+      (/** @type {unknown} */ mapping) =>
+        isPlainObject(mapping) &&
+        isPlainObject(mapping.Ebs) &&
+        mapping.Ebs.VolumeType === 'gp3',
+    )
   ) {
     throw new AwsSingleNodePlanEvidenceError();
   }
-  const image = value.Images[0];
+  return Object.freeze({
+    record: value,
+    imageId: providerId(value.ImageId, AMI_ID_PATTERN),
+    sourceImage: deepFreeze({
+      ownerAccountId: AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
+      name: value.Name,
+      creationDate: canonicalCreationDate(value.CreationDate),
+    }),
+  });
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} candidate
+ * @returns {Readonly<Record<string, any>>}
+ */
+function decodeSelectedUbuntuImage(candidate) {
+  const value = candidate.record;
   if (
-    !isPlainObject(image) ||
-    image.ImageId !== selection.imageId ||
-    image.State !== 'available' ||
-    image.Public !== true ||
-    image.Architecture !== 'x86_64' ||
-    image.ImageType !== 'machine' ||
-    image.RootDeviceType !== 'ebs' ||
-    image.VirtualizationType !== 'hvm' ||
-    image.EnaSupport !== true ||
-    image.Platform !== undefined ||
-    image.PlatformDetails !== 'Linux/UNIX' ||
-    image.PublicSsmParameterName !== selection.name.slice(1) ||
-    image.ImageAllowed === false ||
-    !Array.isArray(image.BlockDeviceMappings) ||
-    image.BlockDeviceMappings.length !== 1 ||
-    !isPlainObject(image.BlockDeviceMappings[0])
+    !Array.isArray(value.BlockDeviceMappings) ||
+    value.BlockDeviceMappings.length !== 3
   ) {
     throw new AwsSingleNodePlanEvidenceError();
   }
   const rootDeviceName =
-    typeof image.RootDeviceName === 'string' &&
-    ROOT_DEVICE_NAME_PATTERN.test(image.RootDeviceName)
-      ? image.RootDeviceName
+    typeof value.RootDeviceName === 'string' &&
+    ROOT_DEVICE_NAME_PATTERN.test(value.RootDeviceName)
+      ? value.RootDeviceName
       : null;
-  const mapping = image.BlockDeviceMappings[0];
-  if (
-    rootDeviceName === null ||
-    mapping.DeviceName !== rootDeviceName ||
-    mapping.VirtualName !== undefined ||
-    mapping.NoDevice !== undefined ||
-    !isPlainObject(mapping.Ebs)
-  ) {
+  if (rootDeviceName === null) {
     throw new AwsSingleNodePlanEvidenceError();
   }
-  const ebs = mapping.Ebs;
+  const rootMappings = value.BlockDeviceMappings.filter(
+    (/** @type {unknown} */ mapping) =>
+      isPlainObject(mapping) && mapping.DeviceName === rootDeviceName,
+  );
+  if (rootMappings.length !== 1) throw new AwsSingleNodePlanEvidenceError();
+  const rootMapping = exactEvidenceObject(
+    rootMappings[0],
+    ROOT_DEVICE_MAPPING_KEYS,
+  );
+  const ebs = exactEvidenceObject(rootMapping.Ebs, ROOT_DEVICE_EBS_KEYS);
   if (
     ebs.VolumeType !== 'gp3' ||
     !Number.isSafeInteger(ebs.VolumeSize) ||
@@ -972,13 +998,33 @@ function decodeUbuntuImage(value, selection) {
   ) {
     throw new AwsSingleNodePlanEvidenceError();
   }
+  const expectedEphemeralMappings = new Map([
+    ['/dev/sdb', 'ephemeral0'],
+    ['/dev/sdc', 'ephemeral1'],
+  ]);
+  for (const mappingValue of value.BlockDeviceMappings) {
+    if (mappingValue === rootMappings[0]) continue;
+    const mapping = exactEvidenceObject(
+      mappingValue,
+      EPHEMERAL_DEVICE_MAPPING_KEYS,
+    );
+    const expectedVirtualName = expectedEphemeralMappings.get(
+      mapping.DeviceName,
+    );
+    if (
+      expectedVirtualName === undefined ||
+      mapping.VirtualName !== expectedVirtualName
+    ) {
+      throw new AwsSingleNodePlanEvidenceError();
+    }
+    expectedEphemeralMappings.delete(mapping.DeviceName);
+  }
+  if (expectedEphemeralMappings.size !== 0) {
+    throw new AwsSingleNodePlanEvidenceError();
+  }
   return deepFreeze({
-    sourceParameter: {
-      name: selection.name,
-      version: selection.version,
-    },
-    imageId: selection.imageId,
-    ownerAccountId: accountId(image.OwnerId),
+    sourceImage: candidate.sourceImage,
+    imageId: candidate.imageId,
     architecture: 'x86_64',
     rootDeviceType: 'ebs',
     virtualizationType: 'hvm',
@@ -1001,29 +1047,51 @@ function decodeUbuntuImage(value, selection) {
  * @returns {Promise<Readonly<Record<string, any>>>}
  */
 async function resolveUbuntuImage(api, providerScope) {
-  const selection = decodeUbuntuParameter(
-    await read(
-      api,
-      'getParameter',
-      deepFreeze({
-        Name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
-        WithDecryption: false,
-      }),
-    ),
-    providerScope,
+  if (providerScope.partition !== 'aws') {
+    throw new AwsSingleNodePlanEvidenceError();
+  }
+  const records = await readAll(
+    api,
+    'describeImages',
+    {
+      Owners: [AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID],
+      IncludeDeprecated: false,
+      IncludeDisabled: false,
+      Filters: [
+        { Name: 'architecture', Values: ['x86_64'] },
+        { Name: 'block-device-mapping.volume-type', Values: ['gp3'] },
+        { Name: 'ena-support', Values: ['true'] },
+        { Name: 'image-type', Values: ['machine'] },
+        { Name: 'is-public', Values: ['true'] },
+        { Name: 'name', Values: [AWS_SINGLE_NODE_UBUNTU_IMAGE_NAME_FILTER] },
+        { Name: 'root-device-type', Values: ['ebs'] },
+        { Name: 'state', Values: ['available'] },
+        { Name: 'virtualization-type', Values: ['hvm'] },
+      ],
+      MaxResults: 1000,
+    },
+    'Images',
   );
-  return decodeUbuntuImage(
-    await read(
-      api,
-      'describeImages',
-      deepFreeze({
-        ImageIds: [selection.imageId],
-        IncludeDeprecated: false,
-        IncludeDisabled: false,
-      }),
-    ),
-    selection,
+  if (records.length === 0) {
+    throw new AwsSingleNodePlanEvidenceError();
+  }
+  const candidates = records.map((record) =>
+    decodeUbuntuImageCandidate(record),
   );
+  const imageIds = new Set();
+  for (const candidate of candidates) {
+    if (imageIds.has(candidate.imageId)) {
+      throw new AwsSingleNodePlanEvidenceError();
+    }
+    imageIds.add(candidate.imageId);
+  }
+  candidates.sort(
+    (left, right) =>
+      right.sourceImage.creationDate.localeCompare(
+        left.sourceImage.creationDate,
+      ) || left.imageId.localeCompare(right.imageId),
+  );
+  return decodeSelectedUbuntuImage(candidates[0]);
 }
 
 /**
@@ -1206,6 +1274,11 @@ function validateProviderSpec(value, valuePath) {
     spec.providerScope,
     `${valuePath}.providerScope`,
   );
+  if (providerScope.partition !== 'aws') {
+    throw new TypeError(
+      `${valuePath}.providerScope.partition is unsupported by this preview.`,
+    );
+  }
   const vpc = exactDataObject(spec.vpc, VPC_KEYS, `${valuePath}.vpc`);
   const vpcId = providerId(vpc.vpcId, VPC_ID_PATTERN);
   const subnet = exactDataObject(
@@ -1271,10 +1344,10 @@ function validateProviderSpec(value, valuePath) {
     throw new TypeError(`${valuePath} network references conflict.`);
   }
   const image = exactDataObject(spec.image, IMAGE_KEYS, `${valuePath}.image`);
-  const sourceParameter = exactDataObject(
-    image.sourceParameter,
-    SOURCE_PARAMETER_KEYS,
-    `${valuePath}.image.sourceParameter`,
+  const sourceImage = exactDataObject(
+    image.sourceImage,
+    SOURCE_IMAGE_KEYS,
+    `${valuePath}.image.sourceImage`,
   );
   const root = exactDataObject(
     image.rootBlockDevice,
@@ -1282,9 +1355,9 @@ function validateProviderSpec(value, valuePath) {
     `${valuePath}.image.rootBlockDevice`,
   );
   if (
-    sourceParameter.name !== AWS_SINGLE_NODE_UBUNTU_PARAMETER ||
-    !Number.isSafeInteger(sourceParameter.version) ||
-    sourceParameter.version < 1 ||
+    sourceImage.ownerAccountId !== AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID ||
+    typeof sourceImage.name !== 'string' ||
+    !UBUNTU_IMAGE_NAME_PATTERN.test(sourceImage.name) ||
     image.architecture !== 'x86_64' ||
     image.rootDeviceType !== 'ebs' ||
     image.virtualizationType !== 'hvm' ||
@@ -1301,8 +1374,8 @@ function validateProviderSpec(value, valuePath) {
   ) {
     throw new TypeError(`${valuePath}.image is invalid.`);
   }
+  canonicalCreationDate(sourceImage.creationDate);
   providerId(image.imageId, AMI_ID_PATTERN);
-  accountId(image.ownerAccountId);
   providerId(root.snapshotId, SNAPSHOT_ID_PATTERN);
   providerId(subnet.subnetId, SUBNET_ID_PATTERN);
   providerId(routeTable.routeTableId, ROUTE_TABLE_ID_PATTERN);
@@ -1342,12 +1415,12 @@ function validateProviderSpec(value, valuePath) {
       },
       internetGateway: { internetGatewayId, vpcId },
       image: {
-        sourceParameter: {
-          name: AWS_SINGLE_NODE_UBUNTU_PARAMETER,
-          version: sourceParameter.version,
+        sourceImage: {
+          ownerAccountId: AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
+          name: sourceImage.name,
+          creationDate: sourceImage.creationDate,
         },
         imageId: image.imageId,
-        ownerAccountId: image.ownerAccountId,
         architecture: 'x86_64',
         rootDeviceType: 'ebs',
         virtualizationType: 'hvm',
@@ -1621,7 +1694,8 @@ export async function resolveAwsSingleNodePlan(value) {
   );
   if (
     desired.intent.provider.kind !== 'aws' ||
-    desired.intent.provider.region !== providerScope.region
+    desired.intent.provider.region !== providerScope.region ||
+    providerScope.partition !== 'aws'
   ) {
     throw new Error(
       'awsSingleNodePlan desired state does not match its credential-bound region.',
@@ -1691,7 +1765,8 @@ export default {
   AWS_SINGLE_NODE_PLAN_KIND,
   AWS_SINGLE_NODE_PLAN_SCHEMA_VERSION,
   AWS_SINGLE_NODE_PROVIDER_SPEC_ID_PREFIX,
-  AWS_SINGLE_NODE_UBUNTU_PARAMETER,
+  AWS_SINGLE_NODE_UBUNTU_IMAGE_NAME_FILTER,
+  AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
   AwsSingleNodePlanEvidenceError,
   AwsSingleNodePlanReadError,
   resolveAwsSingleNodePlan,
