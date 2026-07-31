@@ -916,6 +916,41 @@ describe('AWS single-node instance evidence', () => {
     }
   });
 
+  it('accepts an exact terminated tombstone after EC2 strips subnet details', async () => {
+    const tombstone = reservation({
+      State: { Name: 'terminated' },
+      SecurityGroups: [],
+      NetworkInterfaces: [],
+      BlockDeviceMappings: [],
+      PublicIpAddress: undefined,
+    });
+    delete tombstone.Instances[0].SubnetId;
+    let describeCallCount = 0;
+    const describeInstances = jest.fn(
+      /** @returns {Promise<Record<string, any>>} */ async () => {
+        describeCallCount += 1;
+        return describeCallCount === 1
+          ? { Reservations: [] }
+          : { Reservations: [tombstone] };
+      },
+    );
+
+    await expect(
+      inspectAwsSingleNodeInstance(
+        instanceInput(makeEvidenceApi({ describeInstances }), INSTANCE_ID),
+      ),
+    ).resolves.toEqual({
+      status: 'terminal',
+      ownershipStatus: 'owned',
+      specStatus: 'conflict',
+      instanceId: INSTANCE_ID,
+      instanceState: 'terminated',
+      rootVolumeId: null,
+      publicIpv4: null,
+    });
+    expect(describeInstances).toHaveBeenCalledTimes(2);
+  });
+
   it('returns owned spec conflict for launch drift and nonstandard CPU credits', async () => {
     const drifted = reservation({
       KeyName: 'unexpected-key',
