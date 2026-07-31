@@ -26,6 +26,7 @@ import {
 } from '../../../../src/core/runtime/providers/aws/single-node-plan.js';
 import {
   createSingleNodeDeploymentJournal,
+  getSingleNodeDeploymentCurrentRelease,
   validateSingleNodeDeploymentJournalSuccessor,
 } from '../../../../src/core/runtime/single-node-deployment-journal.js';
 import { createSingleNodeDeploymentDesired } from '../../../../src/core/runtime/single-node-deployment-desired.js';
@@ -666,6 +667,9 @@ async function makeHarness(options = {}) {
     },
     activate: async (/** @type {Record<string, any>} */ value) => {
       events.push('activate');
+      expect(value.retainedArtifactIds).toEqual([
+        value.desired.artifact.artifactId,
+      ]);
       if (Object.hasOwn(value, 'artifactSource')) {
         await value.artifactSource.close();
       }
@@ -733,6 +737,9 @@ describe('AWS single-node apply coordinator', () => {
     const journal = /** @type {Readonly<Record<string, any>>} */ (
       harness.getJournal()
     );
+    const currentRelease = /** @type {Readonly<Record<string, any>>} */ (
+      getSingleNodeDeploymentCurrentRelease(journal)
+    );
 
     expect(result).toMatchObject({
       schemaVersion: AWS_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
@@ -745,7 +752,7 @@ describe('AWS single-node apply coordinator', () => {
       artifactId: harness.fixture.artifactRecord.artifactId,
     });
     expect(journal.phase).toBe('active');
-    expect(journal.activation.activationEvidenceId).toBe(
+    expect(currentRelease.activation.activationEvidenceId).toBe(
       result.activationEvidenceId,
     );
     expect(harness.mutationBatches).toEqual([

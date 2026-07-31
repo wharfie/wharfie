@@ -382,6 +382,12 @@ describe('docs command surface', () => {
       '<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]',
     );
     expect(quickstart).toContain(
+      '<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]',
+    );
+    expect(quickstart).toContain(
       'joins it with an exact provider observation and the pinned guest',
     );
     expect(quickstart).toContain(
@@ -394,16 +400,16 @@ describe('docs command surface', () => {
       'Status accepts no\n`--provider`, `--region`, or `--location`',
     );
     expect(quickstart).toContain(
-      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws',
-    );
-    expect(quickstart).toContain(
-      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner',
+      '<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]',
     );
     expect(quickstart).not.toContain(
-      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws --region',
+      '<app> wharfie deployment destroy --deployment-instance <id> --provider',
     );
     expect(quickstart).not.toContain(
-      '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner --location',
+      '<app> wharfie deployment destroy --deployment-instance <id> --region',
+    );
+    expect(quickstart).not.toContain(
+      '<app> wharfie deployment destroy --deployment-instance <id> --location',
     );
     expect(quickstart).toContain('wharfie app package --self-deployable');
     expect(quickstart).toContain('ordinary credential chain');

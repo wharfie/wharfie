@@ -267,6 +267,17 @@ capability.
   credentials or a generic remote shell. The
   [packaged exec checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-exec.md)
   records the boundary and automated evidence.
+- A new SEA can update an active deployment to its authenticated embedded Linux
+  release without revisiting provider state. Journal schema v3 keeps committed
+  current release authority until target activation is fully proven, retains
+  one rollback release, and records one crash-recoverable install or update
+  transition. `deployment recover` resumes the exact journal-selected apply,
+  update, repair, or destroy action without accepting a provider or mode
+  selector; the committed-current SEA can reconverge current and abandon a
+  permanently failed target. Remote wrapper storage is bounded to current,
+  rollback, and target. The
+  [packaged update/recovery checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-update-recovery.md)
+  records the contract and automated crash-boundary evidence.
 - AWS reuses a qualifying default-VPC public-network path; Hetzner uses its
   public network. The current node root disk holds application and control
   data, so destroy is deliberately data-destructive.
@@ -284,14 +295,13 @@ capability.
 
 ### Work next
 
-1. Extend the packaged preview/apply/status/exec/destroy surface with an
-   approachable update and recovery sequence, preserving the read-only
-   preview/status boundaries and explicit owned-versus-referenced resource
-   split.
-2. Complete the remaining ADR 0035 evidence in one repeatable, redacted
+1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
    two-provider harness, including live packaged preview, packaged remote
    durable work, guest audit, reboot, fault injection, and bounded proof
    receipts.
+2. Add authenticated journal checkpoint/epoch rollover before treating one
+   coordinator as indefinitely evolving; v3 currently reserves terminal
+   records for recovery and destruction, then refuses further updates.
 3. Decide and implement an explicit retained-data capability before making any
    durability claim beyond the current root-disk lifecycle.
 4. Delete or quarantine provider abstractions that do not help this one

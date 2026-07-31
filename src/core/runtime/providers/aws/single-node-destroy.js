@@ -11,6 +11,7 @@ import {
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournalStore,
   getSingleNodeDeploymentDestructionRecoveryState,
+  getSingleNodeDeploymentEffectiveDesired,
   getSingleNodeDeploymentProvisioningRecoveryState,
   prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutations,
@@ -481,12 +482,13 @@ function validateDestructionResult(value, intent, journal) {
  * @returns {Readonly<Record<string, any>>}
  */
 function createResult(journal) {
+  const desired = getSingleNodeDeploymentEffectiveDesired(journal);
   return Object.freeze({
     schemaVersion: AWS_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
     kind: AWS_SINGLE_NODE_DESTROY_RESULT_KIND,
     provider: 'aws',
     status: 'destroyed',
-    appId: journal.desired.intent.appId,
+    appId: desired.intent.appId,
     deploymentInstanceId: journal.deploymentInstanceId,
     incarnationId: journal.incarnationId,
     provisioningIntentId: journal.providerIntent.intent.provisioningIntentId,
@@ -552,10 +554,11 @@ export function createAwsSingleNodeDestroyCoordinator(dependencies) {
           );
         }
         let journal = validateSingleNodeDeploymentJournal(stored);
+        const desired = getSingleNodeDeploymentEffectiveDesired(journal);
         if (
           journal.deploymentInstanceId !== input.deploymentInstanceId ||
-          journal.desired.intent.appId !== input.appId ||
-          journal.desired.intent.provider.kind !== 'aws' ||
+          desired.intent.appId !== input.appId ||
+          desired.intent.provider.kind !== 'aws' ||
           journal.providerIntent.provider !== 'aws'
         ) {
           throw new Error(

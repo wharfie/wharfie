@@ -5,6 +5,10 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { DEPLOYMENT_OPENSSH_MAX_REMOTE_ARGUMENTS } from '../../src/core/runtime/deployment-openssh-transport.js';
 import { SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH } from '../../src/core/runtime/single-node-cloud-init.js';
 import {
+  getSingleNodeDeploymentCurrentRelease,
+  prepareSingleNodeDeploymentReleaseUpdate,
+} from '../../src/core/runtime/single-node-deployment-journal.js';
+import {
   SINGLE_NODE_REMOTE_EXEC_MAX_STDERR_BYTES,
   SINGLE_NODE_REMOTE_EXEC_MAX_STDOUT_BYTES,
   SINGLE_NODE_REMOTE_EXEC_TIMEOUT_MILLISECONDS,
@@ -16,6 +20,7 @@ import {
   createSingleNodeStatusActiveJournal,
   createSingleNodeStatusActivatingJournal,
   createSingleNodeStatusAuthorityFixture,
+  createSingleNodeStatusUpdateTarget,
 } from './fixtures/single-node-status-fixture.js';
 
 const DATA_ROOT = '/private/remote-exec-data';
@@ -103,6 +108,9 @@ describe('single-node remote application execution', () => {
     });
     const runRemoteArgv = successfulRun(fixture, applicationOutcome);
     const harness = makeHarness(fixture, runRemoteArgv);
+    const currentRelease = /** @type {Readonly<Record<string, any>>} */ (
+      getSingleNodeDeploymentCurrentRelease(journal)
+    );
     const argv = [
       'workflow',
       'start',
@@ -144,7 +152,7 @@ describe('single-node remote application execution', () => {
       [
         {
           argv: [
-            journal.activation.artifact.remotePath,
+            currentRelease.activation.artifact.remotePath,
             'wharfie',
             'service',
             'status',
@@ -158,7 +166,7 @@ describe('single-node remote application execution', () => {
       ],
       [
         {
-          argv: [journal.activation.artifact.remotePath, ...argv],
+          argv: [currentRelease.activation.artifact.remotePath, ...argv],
           stdin: null,
           timeoutMilliseconds: SINGLE_NODE_REMOTE_EXEC_TIMEOUT_MILLISECONDS,
           maximumStdoutBytes: SINGLE_NODE_REMOTE_EXEC_MAX_STDOUT_BYTES,
@@ -187,6 +195,38 @@ describe('single-node remote application execution', () => {
         argv: [],
       }),
     ).resolves.toBe(outcome);
+  });
+
+  it('refuses execution when the guest advanced before update settlement', async () => {
+    const fixture = await createSingleNodeStatusAuthorityFixture();
+    const target = createSingleNodeStatusUpdateTarget(fixture, 'exec-v2');
+    const journal = prepareSingleNodeDeploymentReleaseUpdate(
+      createSingleNodeStatusActiveJournal(fixture),
+      target.desired,
+    );
+    const targetStatus = createHealthySingleNodeServiceStatus({
+      ...fixture,
+      desired: target.desired,
+    });
+    const runRemoteArgv = /** @type {any} */ (jest.fn())
+      .mockResolvedValueOnce(
+        createProcessOutcome({
+          stdout: JSON.stringify(fixture.bootstrapIdentity),
+        }),
+      )
+      .mockResolvedValueOnce(
+        createProcessOutcome({ stdout: JSON.stringify(targetStatus) }),
+      );
+    const harness = makeHarness(fixture, runRemoteArgv);
+
+    await expect(
+      harness.executor.execute({
+        journal,
+        dataRoot: DATA_ROOT,
+        argv: ['workflow', 'list'],
+      }),
+    ).rejects.toThrow(/not the exact healthy active release/i);
+    expect(runRemoteArgv).toHaveBeenCalledTimes(2);
   });
 
   it('rejects non-active state before opening SSH authority', async () => {

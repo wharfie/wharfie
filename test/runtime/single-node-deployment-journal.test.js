@@ -35,23 +35,34 @@ import {
   resolveAwsSingleNodePlan,
 } from '../../src/core/runtime/providers/aws/single-node-plan.js';
 import {
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE,
   SingleNodeDeploymentJournalConflictError,
   SingleNodeDeploymentJournalInvalidError,
+  SingleNodeDeploymentJournalRecoveryReserveError,
+  abandonSingleNodeDeploymentReleaseUpdate,
   advanceSingleNodeDeploymentJournal,
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournal,
   createSingleNodeDeploymentJournalStore,
+  getSingleNodeDeploymentCurrentRelease,
   getSingleNodeDeploymentDestructionRecoveryState,
+  getSingleNodeDeploymentEffectiveDesired,
+  getSingleNodeDeploymentEffectiveTargetRelease,
   getSingleNodeDeploymentMutationAttempt,
   getSingleNodeDeploymentProvisioningRecoveryState,
   prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
   prepareSingleNodeDeploymentMutations,
+  prepareSingleNodeDeploymentReleaseUpdate,
   rejectSingleNodeDeploymentMutation,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
+  settleSingleNodeDeploymentReleaseTransition,
   validateSingleNodeDeploymentJournal,
   validateSingleNodeDeploymentJournalSuccessor,
 } from '../../src/core/runtime/single-node-deployment-journal.js';
@@ -164,6 +175,21 @@ function clone(value) {
   return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
 }
 
+/** @param {Readonly<Record<string, any>>} value */
+function resealJournal(value) {
+  const payload = /** @type {any} */ (clone(value));
+  delete payload.journalId;
+  return sortCanonicalJsonValue({
+    ...payload,
+    journalId: createCanonicalJsonSha256Id({
+      domain: SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN,
+      prefix: SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+      value: payload,
+      valuePath: 'testSingleNodeDeploymentJournal',
+    }),
+  });
+}
+
 /** @param {string} name */
 function serverType(name) {
   return {
@@ -185,10 +211,16 @@ function serverType(name) {
   };
 }
 
-/** @param {Readonly<Record<string, any>>} [provider] */
+/** @param {Readonly<Record<string, any>>} [provider] @param {{variant?: string, nodeVersion?: string}} [options] */
 function makeDesired(
   provider = Object.freeze({ kind: 'hetzner', location: LOCATION.name }),
+  options = {},
 ) {
+  const variant = options.variant ?? 'v1';
+  const target = Object.freeze({
+    ...TARGET,
+    nodeVersion: options.nodeVersion ?? TARGET.nodeVersion,
+  });
   const revision = createApplicationRevision({
     contract: {
       schemaVersion: 4,
@@ -211,7 +243,10 @@ function makeDesired(
       },
     },
     inputs: {
-      source: { format: 'wharfie-source-tree-v1', digest: digest('source') },
+      source: {
+        format: 'wharfie-source-tree-v1',
+        digest: digest(`source-${variant}`),
+      },
       dependencies: {
         format: 'wharfie-npm-package-lock-v3-closure-v1',
         digest: digest('dependencies'),
@@ -219,11 +254,11 @@ function makeDesired(
       runtime: { format: 'wharfie-runtime-v1', digest: digest('runtime') },
     },
   });
-  const bytes = Buffer.from('exact Linux SEA payload');
+  const bytes = Buffer.from(`exact Linux SEA payload ${variant}`);
   const artifactRecord = createArtifactRecord({
     bytes,
     revision,
-    target: TARGET,
+    target,
     provenance: {
       schemaVersion: 1,
       builder: {
@@ -233,9 +268,9 @@ function makeDesired(
         toolchainDigest: digest('toolchain'),
       },
       node: {
-        version: TARGET.nodeVersion,
+        version: target.nodeVersion,
         archive: {
-          fileName: `node-v${TARGET.nodeVersion}-linux-x64.tar.gz`,
+          fileName: `node-v${target.nodeVersion}-linux-x64.tar.gz`,
           digest: digest('node-archive'),
         },
         binary: { digest: digest('node-binary') },
@@ -250,7 +285,7 @@ function makeDesired(
   const deploymentIntent = createSingleNodeDeploymentIntent({
     deployment: { id: 'hello-production' },
     appId: 'hello-app',
-    target: TARGET,
+    target,
     mode: SINGLE_NODE_DEPLOYMENT_MODE,
     machine: SINGLE_NODE_MACHINE,
     access: {
@@ -622,14 +657,14 @@ function deletionRecord(record, role) {
   );
 }
 
-function remoteActivationEvidence() {
-  const remotePath = `${SINGLE_NODE_DEPLOYMENT_ROOT}/${authority.desired.deploymentInstanceId}/artifacts/${authority.desired.artifact.artifactId}/app-sea`;
+function remoteActivationEvidence(desired = authority.desired) {
+  const remotePath = `${SINGLE_NODE_DEPLOYMENT_ROOT}/${desired.deploymentInstanceId}/artifacts/${desired.artifact.artifactId}/app-sea`;
   const payload = sortCanonicalJsonValue({
     schemaVersion: SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_SCHEMA_VERSION,
     kind: SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_KIND,
-    deploymentInstanceId: authority.desired.deploymentInstanceId,
+    deploymentInstanceId: desired.deploymentInstanceId,
     incarnationId: authority.providerIntent.intent.incarnationId,
-    desiredRevisionId: authority.desired.desiredRevisionId,
+    desiredRevisionId: desired.desiredRevisionId,
     address: PUBLIC_IPV4,
     sshHostKey: {
       algorithm: 'ssh-ed25519',
@@ -640,18 +675,18 @@ function remoteActivationEvidence() {
       sshPublicKeyFingerprint: SSH_PUBLIC_FINGERPRINT,
     },
     artifact: {
-      artifactId: authority.desired.artifact.artifactId,
-      revisionId: authority.desired.artifact.revisionId,
-      byteDigest: authority.desired.artifact.byteDigest,
-      size: authority.desired.artifact.size,
+      artifactId: desired.artifact.artifactId,
+      revisionId: desired.artifact.revisionId,
+      byteDigest: desired.artifact.byteDigest,
+      size: desired.artifact.size,
       remotePath,
     },
     service: {
-      appId: authority.desired.intent.appId,
-      unit: `wharfie-${authority.desired.intent.appId}.service`,
+      appId: desired.intent.appId,
+      unit: `wharfie-${desired.intent.appId}.service`,
       health: 'healthy',
-      activeArtifactId: authority.desired.artifact.artifactId,
-      activeRevisionId: authority.desired.artifact.revisionId,
+      activeArtifactId: desired.artifact.artifactId,
+      activeRevisionId: desired.artifact.revisionId,
     },
   });
   return sortCanonicalJsonValue({
@@ -674,6 +709,21 @@ function createProvisioned() {
   record = completeRole(record, 'primaryIp', 12, PUBLIC_IPV4);
   record = completeRole(record, 'server', 13, PUBLIC_IPV4);
   return advanceSingleNodeDeploymentJournal(record, 'provisioned');
+}
+
+function createActive() {
+  let record = recordSingleNodeDeploymentSshHost(createProvisioned(), {
+    address: PUBLIC_IPV4,
+    algorithm: 'ssh-ed25519',
+    fingerprint: SSH_FINGERPRINT,
+  });
+  record = advanceSingleNodeDeploymentJournal(record, 'activating');
+  record = recordSingleNodeDeploymentActivation(
+    record,
+    remoteActivationEvidence(),
+  );
+  record = settleSingleNodeDeploymentReleaseTransition(record);
+  return advanceSingleNodeDeploymentJournal(record, 'active');
 }
 
 /** @param {Readonly<Record<string, any>>} record @param {string} role @param {string} id @param {string|null} publicIpv4 */
@@ -740,9 +790,9 @@ describe('single-node deployment journal contract', () => {
     const journal = createInitial();
 
     expect(journal).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: 'singleNodeDeploymentJournal',
-      journalId: expect.stringMatching(/^wsnj2_[A-Za-z0-9_-]{43}$/u),
+      journalId: expect.stringMatching(/^wsnj3_[A-Za-z0-9_-]{43}$/u),
       generation: 0,
       previousJournalId: null,
       deploymentInstanceId: authority.desired.deploymentInstanceId,
@@ -753,8 +803,18 @@ describe('single-node deployment journal contract', () => {
       destroyAttempts: [],
       deletionRecords: [],
       sshHost: null,
-      artifact: null,
-      activation: null,
+      release: {
+        current: null,
+        rollback: null,
+        transition: {
+          kind: 'install',
+          target: {
+            desired: authority.desired,
+            artifact: null,
+            activation: null,
+          },
+        },
+      },
     });
     expect(Object.isFrozen(journal)).toBe(true);
     expect(Object.isFrozen(journal.providerIntent.intent)).toBe(true);
@@ -946,18 +1006,30 @@ describe('single-node deployment journal contract', () => {
     record = advanceSingleNodeDeploymentJournal(record, 'activating');
     const evidence = remoteActivationEvidence();
     record = recordSingleNodeDeploymentActivation(record, evidence);
+    record = settleSingleNodeDeploymentReleaseTransition(record);
     record = advanceSingleNodeDeploymentJournal(record, 'active');
 
     expect(record.phase).toBe('active');
     expect(record.sshHost.address).toBe(PUBLIC_IPV4);
-    expect(record.artifact.artifactId).toBe(
+    expect(record.release.current.artifact.artifactId).toBe(
       authority.desired.artifact.artifactId,
     );
-    expect(record.activation).toEqual(evidence);
-    expect(record.activation.activationEvidenceId).toMatch(
+    expect(record.release.current.activation).toEqual(evidence);
+    expect(record.release.current.activation.activationEvidenceId).toMatch(
       /^wsne1_[A-Za-z0-9_-]{43}$/u,
     );
-    expect(record.artifact.remotePath).toBe(evidence.artifact.remotePath);
+    expect(record.release.current.artifact.remotePath).toBe(
+      evidence.artifact.remotePath,
+    );
+    expect(getSingleNodeDeploymentCurrentRelease(record)).toEqual(
+      record.release.current,
+    );
+    expect(getSingleNodeDeploymentEffectiveTargetRelease(record)).toEqual(
+      record.release.current,
+    );
+    expect(getSingleNodeDeploymentEffectiveDesired(record)).toEqual(
+      authority.desired,
+    );
     expect(() =>
       recordSingleNodeDeploymentActivation(
         advanceSingleNodeDeploymentJournal(
@@ -985,6 +1057,199 @@ describe('single-node deployment journal contract', () => {
         },
       ),
     ).toThrow(/provider-observed address/iu);
+  });
+
+  it('keeps current authoritative until an update settles and retains one rollback release', () => {
+    let record = createProvisioned();
+    record = recordSingleNodeDeploymentSshHost(record, {
+      address: PUBLIC_IPV4,
+      algorithm: 'ssh-ed25519',
+      fingerprint: SSH_FINGERPRINT,
+    });
+    record = advanceSingleNodeDeploymentJournal(record, 'activating');
+    record = recordSingleNodeDeploymentActivation(
+      record,
+      remoteActivationEvidence(),
+    );
+    record = settleSingleNodeDeploymentReleaseTransition(record);
+    record = advanceSingleNodeDeploymentJournal(record, 'active');
+    const installed = getSingleNodeDeploymentCurrentRelease(record);
+    const updatedDesired = makeDesired(undefined, {
+      variant: 'v2',
+      nodeVersion: '24.14.0',
+    });
+
+    const prepared = prepareSingleNodeDeploymentReleaseUpdate(
+      record,
+      updatedDesired,
+    );
+    expect(getSingleNodeDeploymentCurrentRelease(prepared)).toEqual(installed);
+    expect(getSingleNodeDeploymentEffectiveDesired(prepared)).toEqual(
+      updatedDesired,
+    );
+    expect(
+      validateSingleNodeDeploymentJournalSuccessor(record, prepared),
+    ).toEqual(prepared);
+    expect(
+      prepareSingleNodeDeploymentReleaseUpdate(prepared, updatedDesired),
+    ).toEqual(prepared);
+
+    const activated = recordSingleNodeDeploymentActivation(
+      prepared,
+      remoteActivationEvidence(updatedDesired),
+    );
+    expect(getSingleNodeDeploymentCurrentRelease(activated)).toEqual(installed);
+    expect(
+      validateSingleNodeDeploymentJournalSuccessor(prepared, activated),
+    ).toEqual(activated);
+
+    const settled = settleSingleNodeDeploymentReleaseTransition(activated);
+    expect(settled.release.transition).toBeNull();
+    expect(settled.release.current.desired).toEqual(updatedDesired);
+    expect(settled.release.rollback).toEqual(installed);
+    expect(
+      validateSingleNodeDeploymentJournalSuccessor(activated, settled),
+    ).toEqual(settled);
+    expect(
+      prepareSingleNodeDeploymentReleaseUpdate(settled, updatedDesired),
+    ).toEqual(settled);
+  });
+
+  it('abandons a failed update while preserving committed current and rollback releases', () => {
+    let record = createActive();
+    const secondDesired = makeDesired(undefined, {
+      variant: 'v2',
+      nodeVersion: '24.14.0',
+    });
+    record = prepareSingleNodeDeploymentReleaseUpdate(record, secondDesired);
+    record = recordSingleNodeDeploymentActivation(
+      record,
+      remoteActivationEvidence(secondDesired),
+    );
+    record = settleSingleNodeDeploymentReleaseTransition(record);
+
+    const current = record.release.current;
+    const rollback = record.release.rollback;
+    const thirdDesired = makeDesired(undefined, {
+      variant: 'v3',
+      nodeVersion: '24.15.0',
+    });
+    const pending = prepareSingleNodeDeploymentReleaseUpdate(
+      record,
+      thirdDesired,
+    );
+    const abandoned = abandonSingleNodeDeploymentReleaseUpdate(pending);
+
+    expect(abandoned.generation).toBe(pending.generation + 1);
+    expect(abandoned.previousJournalId).toBe(pending.journalId);
+    expect(abandoned.release).toEqual({
+      current,
+      rollback,
+      transition: null,
+    });
+    expect(
+      validateSingleNodeDeploymentJournalSuccessor(pending, abandoned),
+    ).toEqual(abandoned);
+  });
+
+  it('rejects update abandonment for stable, install, and non-active journals', () => {
+    const active = createActive();
+    expect(() => abandonSingleNodeDeploymentReleaseUpdate(active)).toThrow(
+      /active release update/iu,
+    );
+
+    let installing = recordSingleNodeDeploymentSshHost(createProvisioned(), {
+      address: PUBLIC_IPV4,
+      algorithm: 'ssh-ed25519',
+      fingerprint: SSH_FINGERPRINT,
+    });
+    installing = advanceSingleNodeDeploymentJournal(installing, 'activating');
+    expect(() => abandonSingleNodeDeploymentReleaseUpdate(installing)).toThrow(
+      /active release update/iu,
+    );
+
+    const pending = prepareSingleNodeDeploymentReleaseUpdate(
+      active,
+      makeDesired(undefined, { variant: 'v2' }),
+    );
+    const destroying = advanceSingleNodeDeploymentJournal(
+      pending,
+      'destroying',
+    );
+    expect(() => abandonSingleNodeDeploymentReleaseUpdate(destroying)).toThrow(
+      /active release update/iu,
+    );
+  });
+
+  it('rejects a resealed abandonment successor that tampers with rollback authority', () => {
+    const active = createActive();
+    const pending = prepareSingleNodeDeploymentReleaseUpdate(
+      active,
+      makeDesired(undefined, { variant: 'v2' }),
+    );
+    const abandoned = abandonSingleNodeDeploymentReleaseUpdate(pending);
+    const tampered = /** @type {any} */ (clone(abandoned));
+    tampered.release.rollback = active.release.current;
+    const resealed = resealJournal(tampered);
+
+    expect(validateSingleNodeDeploymentJournal(resealed)).toEqual(resealed);
+    expect(() =>
+      validateSingleNodeDeploymentJournalSuccessor(pending, resealed),
+    ).toThrow(/incomplete release transition|legal transition/iu);
+  });
+
+  it('reserves final journal records without blocking repair or an in-flight update', () => {
+    const active = createActive();
+    const target = makeDesired(undefined, { variant: 'v2' });
+    const firstRefusedGeneration =
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS -
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE -
+      3;
+    const lastAllowed = /** @type {any} */ (clone(active));
+    lastAllowed.generation = firstRefusedGeneration - 1;
+    lastAllowed.previousJournalId = active.journalId;
+    expect(
+      prepareSingleNodeDeploymentReleaseUpdate(
+        resealJournal(lastAllowed),
+        target,
+      ),
+    ).toMatchObject({ generation: firstRefusedGeneration });
+
+    const nearCapacity = /** @type {any} */ (clone(active));
+    nearCapacity.generation = firstRefusedGeneration;
+    nearCapacity.previousJournalId = active.journalId;
+    const stable = resealJournal(nearCapacity);
+
+    expect(
+      prepareSingleNodeDeploymentReleaseUpdate(
+        stable,
+        stable.release.current.desired,
+      ),
+    ).toEqual(stable);
+    expect(() =>
+      prepareSingleNodeDeploymentReleaseUpdate(stable, target),
+    ).toThrow(SingleNodeDeploymentJournalRecoveryReserveError);
+
+    const pending = prepareSingleNodeDeploymentReleaseUpdate(active, target);
+    const latePending = /** @type {any} */ (clone(pending));
+    latePending.generation =
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS -
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE;
+    latePending.previousJournalId = pending.journalId;
+    const resumable = resealJournal(latePending);
+    expect(prepareSingleNodeDeploymentReleaseUpdate(resumable, target)).toEqual(
+      resumable,
+    );
+    const activated = recordSingleNodeDeploymentActivation(
+      resumable,
+      remoteActivationEvidence(target),
+    );
+    expect(
+      settleSingleNodeDeploymentReleaseTransition(activated),
+    ).toMatchObject({
+      generation: resumable.generation + 2,
+      release: { transition: null },
+    });
   });
 
   it('retains exact ordered destruction fences and deletion proof', () => {
@@ -1186,13 +1451,13 @@ describe('single-node deployment journal contract', () => {
   });
 });
 
-describe('single-node deployment journal AWS v2 contract', () => {
-  it('round-trips exact AWS plan, scope, and incarnation authority while rejecting v1', () => {
+describe('single-node deployment journal AWS v3 contract', () => {
+  it('round-trips exact AWS plan, scope, and incarnation authority while rejecting v2', () => {
     const initial = createSingleNodeDeploymentJournal(awsAuthority);
 
     expect(initial).toMatchObject({
-      schemaVersion: 2,
-      journalId: expect.stringMatching(/^wsnj2_[A-Za-z0-9_-]{43}$/u),
+      schemaVersion: 3,
+      journalId: expect.stringMatching(/^wsnj3_[A-Za-z0-9_-]{43}$/u),
       phase: 'planned',
       providerIntent: {
         provider: 'aws',
@@ -1216,7 +1481,7 @@ describe('single-node deployment journal AWS v2 contract', () => {
     );
 
     const legacy = /** @type {any} */ (clone(initial));
-    legacy.schemaVersion = 1;
+    legacy.schemaVersion = 2;
     expect(() => validateSingleNodeDeploymentJournal(legacy)).toThrow(
       /unsupported schema/iu,
     );
@@ -1515,6 +1780,9 @@ describe('single-node deployment journal persistence', () => {
     );
     const committed = await store.commit(commitRequest(initial, provisioning));
 
+    expect(store.paths.deploymentsRoot).toMatch(
+      /single-node-deployments\/v3$/u,
+    );
     expect(await store.read()).toEqual(committed);
     expect(await readdir(store.paths.journalRoot)).toEqual([
       'journal-0000000000000000.json',

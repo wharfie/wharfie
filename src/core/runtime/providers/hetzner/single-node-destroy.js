@@ -9,6 +9,7 @@ import {
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournalStore,
   getSingleNodeDeploymentDestructionRecoveryState,
+  getSingleNodeDeploymentEffectiveDesired,
   prepareSingleNodeDeploymentDestruction,
   recordSingleNodeDeploymentDeletion,
   validateSingleNodeDeploymentJournal,
@@ -228,12 +229,13 @@ function validateDestructionResult(value, intent, journal) {
  * @returns {Readonly<Record<string, any>>}
  */
 function createResult(journal) {
+  const desired = getSingleNodeDeploymentEffectiveDesired(journal);
   return Object.freeze({
     schemaVersion: HETZNER_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
     kind: HETZNER_SINGLE_NODE_DESTROY_RESULT_KIND,
     provider: 'hetzner',
     status: 'destroyed',
-    appId: journal.desired.intent.appId,
+    appId: desired.intent.appId,
     deploymentInstanceId: journal.deploymentInstanceId,
     incarnationId: journal.incarnationId,
     provisioningIntentId: journal.providerIntent.intent.provisioningIntentId,
@@ -293,9 +295,10 @@ export function createHetznerSingleNodeDestroyCoordinator(dependencies) {
           );
         }
         let journal = validateSingleNodeDeploymentJournal(stored);
+        const desired = getSingleNodeDeploymentEffectiveDesired(journal);
         if (
           journal.deploymentInstanceId !== input.deploymentInstanceId ||
-          journal.desired.intent.appId !== input.appId ||
+          desired.intent.appId !== input.appId ||
           journal.providerIntent.provider !== 'hetzner'
         ) {
           throw new Error(

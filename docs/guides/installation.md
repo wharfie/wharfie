@@ -50,10 +50,14 @@ source prepared-plan apply and reconcile consume exact durable staged evidence.
 
 `wharfie app package --self-deployable` creates an application SEA whose
 packaged deployment surface has AWS and Hetzner `preview`, `apply`, `status`,
-and `destroy`:
+`update`, `recover`, `exec`, and `destroy`:
 
 ```text
 <app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
+<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
+<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
 ```
 
 AWS preview/apply requires a region and uses the ordinary credential chain;
@@ -65,9 +69,14 @@ creates neither local state nor cloud resources. Status derives provider scope
 from the exact journal and joins that local evidence with an exact provider
 observation and the pinned guest's packaged `service status`. It creates or
 mutates neither local nor remote state and is app-bound rather than bound to
-the current outer SEA revision. Destroy reads only embedded app identity plus
-exact durable local deployment authority. Its journal supplies the bound
-provider location, so destroy accepts no region or location selector.
+the current outer SEA revision. Update activates the invoking SEA's exact
+embedded Linux release while retaining committed current authority until
+settlement. Recover resumes only the exact apply, update/repair, or destroy
+frontier selected by the journal; during a failed update, the committed-current
+SEA may reconverge current and abandon the target before a later update.
+Destroy reads only embedded app identity plus exact durable local deployment
+authority. Its journal supplies the bound provider and location, so destroy
+accepts no provider, region, or location selector.
 
 The AWS path requires suitable default-VPC public-network prerequisites;
 Hetzner uses its public network and Wharfie creates no private network. Destroy

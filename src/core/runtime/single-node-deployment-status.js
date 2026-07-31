@@ -28,10 +28,12 @@ import {
 } from './single-node-deployment-intent.js';
 import {
   SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+  getSingleNodeDeploymentEffectiveDesired,
+  getSingleNodeDeploymentReleaseTransition,
   validateSingleNodeDeploymentJournal,
 } from './single-node-deployment-journal.js';
 
-export const SINGLE_NODE_DEPLOYMENT_STATUS_SCHEMA_VERSION = 1;
+export const SINGLE_NODE_DEPLOYMENT_STATUS_SCHEMA_VERSION = 2;
 export const SINGLE_NODE_DEPLOYMENT_STATUS_KIND =
   'wharfie.single-node-deployment.status';
 
@@ -70,6 +72,7 @@ const JOURNAL_KEYS = new Set([
   'generation',
   'incarnationId',
   'phase',
+  'releaseTransition',
 ]);
 const PROVIDER_STATE_KEYS = new Set(['status', 'resources']);
 const RESOURCE_KEYS = new Set(['role', 'id', 'state', 'publicIpv4']);
@@ -108,6 +111,7 @@ const NEXT_ACTIONS = new Set([
   'resume-apply',
   'resume-destroy',
   'repair-activation',
+  'resume-update',
   'investigate-conflict',
 ]);
 const JOURNAL_PHASES = new Set([
@@ -395,6 +399,19 @@ function validateJournalProjection(value, valuePath) {
   if (!JOURNAL_PHASES.has(journal.phase)) {
     throw new TypeError(`${valuePath}.phase is unsupported.`);
   }
+  if (
+    journal.releaseTransition !== null &&
+    !['install', 'update'].includes(journal.releaseTransition)
+  ) {
+    throw new TypeError(`${valuePath}.releaseTransition is unsupported.`);
+  }
+  if (
+    (journal.releaseTransition === 'install' && journal.phase === 'active') ||
+    (journal.releaseTransition === 'update' &&
+      !['active', 'destroying', 'destroyed'].includes(journal.phase))
+  ) {
+    throw new Error(`${valuePath}.releaseTransition conflicts with its phase.`);
+  }
   return deepFreeze(sortCanonicalJsonValue(journal));
 }
 
@@ -650,11 +667,12 @@ function validateGuestObservation(
 
 /**
  * @param {string} phase
+ * @param {string|null} releaseTransition
  * @param {Readonly<Record<string, any>>} providerState
  * @param {Readonly<Record<string, any>>} guest
  * @returns {Readonly<{status: string, reason: string|null, nextAction: string}>}
  */
-function deriveDisposition(phase, providerState, guest) {
+function deriveDisposition(phase, releaseTransition, providerState, guest) {
   const states = providerState.resources.map(
     (/** @type {Readonly<Record<string, any>>} */ resource) => resource.state,
   );
@@ -729,6 +747,35 @@ function deriveDisposition(phase, providerState, guest) {
     guest.state === 'observed' &&
     service?.health === 'healthy' &&
     service.desiredMatches === true;
+  if (phase === 'active' && releaseTransition === 'update') {
+    if (healthyDesired) {
+      return Object.freeze({
+        status: 'recovery-required',
+        reason: 'journal-behind-effects',
+        nextAction: 'resume-update',
+      });
+    }
+    if (guest.state === 'observed' && service?.health === 'healthy') {
+      return Object.freeze({
+        status: 'converging',
+        reason: null,
+        nextAction: 'resume-update',
+      });
+    }
+    const reason =
+      guest.state === 'unreachable'
+        ? 'guest-unreachable'
+        : guest.state === 'invalid'
+          ? 'guest-invalid'
+          : service?.desiredMatches === false
+            ? 'guest-release-mismatch'
+            : 'guest-unhealthy';
+    return Object.freeze({
+      status: 'recovery-required',
+      reason,
+      nextAction: 'resume-update',
+    });
+  }
   if (phase === 'provisioned' || phase === 'activating') {
     if (healthyDesired) {
       return Object.freeze({
@@ -826,7 +873,12 @@ export function validateSingleNodeDeploymentStatus(
     null,
     providerState,
   );
-  const disposition = deriveDisposition(journal.phase, providerState, guest);
+  const disposition = deriveDisposition(
+    journal.phase,
+    journal.releaseTransition,
+    providerState,
+    guest,
+  );
   if (
     status.status !== disposition.status ||
     status.reason !== disposition.reason ||
@@ -873,8 +925,8 @@ export function createSingleNodeDeploymentStatus(value) {
     'singleNodeDeploymentStatus.journal',
   );
   const desired = validateSingleNodeDeploymentDesired(
-    journal.desired,
-    'singleNodeDeploymentStatus.journal.desired',
+    getSingleNodeDeploymentEffectiveDesired(journal),
+    'singleNodeDeploymentStatus.journal.effectiveDesired',
   );
   const provider = journal.providerIntent.provider;
   if (!PROVIDERS.has(provider) || desired.intent.provider.kind !== provider) {
@@ -896,7 +948,14 @@ export function createSingleNodeDeploymentStatus(value) {
     journal,
     providerState,
   );
-  const disposition = deriveDisposition(journal.phase, providerState, guest);
+  const releaseTransition =
+    getSingleNodeDeploymentReleaseTransition(journal)?.kind ?? null;
+  const disposition = deriveDisposition(
+    journal.phase,
+    releaseTransition,
+    providerState,
+    guest,
+  );
   return validateSingleNodeDeploymentStatus({
     schemaVersion: SINGLE_NODE_DEPLOYMENT_STATUS_SCHEMA_VERSION,
     kind: SINGLE_NODE_DEPLOYMENT_STATUS_KIND,
@@ -923,6 +982,7 @@ export function createSingleNodeDeploymentStatus(value) {
       generation: journal.generation,
       incarnationId: journal.incarnationId,
       phase: journal.phase,
+      releaseTransition,
     },
     providerState,
     guest,

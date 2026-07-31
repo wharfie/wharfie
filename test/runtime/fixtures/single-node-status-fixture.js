@@ -24,6 +24,7 @@ import {
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
+  settleSingleNodeDeploymentReleaseTransition,
 } from '../../../src/core/runtime/single-node-deployment-journal.js';
 import { createSingleNodeDeploymentDesired } from '../../../src/core/runtime/single-node-deployment-desired.js';
 import { createSingleNodeDeploymentIncarnationId } from '../../../src/core/runtime/single-node-deployment-identity.js';
@@ -268,6 +269,53 @@ export async function createSingleNodeStatusAuthorityFixture() {
   });
 }
 
+/**
+ * Build a compatible release-only target for update and recovery tests.
+ * @param {Readonly<Record<string, any>>} fixture
+ * @param {string} label
+ */
+export function createSingleNodeStatusUpdateTarget(fixture, label) {
+  const revision = createApplicationRevision({
+    contract: fixture.revision.contract,
+    inputs: {
+      ...fixture.revision.inputs,
+      source: {
+        format: 'wharfie-source-tree-v1',
+        digest: digest(`source-${label}`),
+      },
+    },
+  });
+  const bytes = Buffer.from(`updated Linux SEA payload ${label}`);
+  const artifactRecord = createArtifactRecord({
+    bytes,
+    revision,
+    target: fixture.artifactRecord.target,
+    provenance: {
+      ...fixture.artifactRecord.provenance,
+      builder: {
+        ...fixture.artifactRecord.provenance.builder,
+        runtimeDigest: revision.inputs.runtime.digest,
+      },
+    },
+  });
+  const observation = Object.freeze({
+    artifactId: artifactRecord.artifactId,
+    byteDigest: artifactRecord.byteDigest,
+    size: artifactRecord.size,
+  });
+  return Object.freeze({
+    revision,
+    artifactRecord,
+    observation,
+    desired: createSingleNodeDeploymentDesired({
+      intent: fixture.desired.intent,
+      revision,
+      artifactRecord,
+      observation,
+    }),
+  });
+}
+
 /** @param {Awaited<ReturnType<typeof createSingleNodeStatusAuthorityFixture>>} fixture */
 export function createSingleNodeStatusInitialJournal(fixture) {
   return createSingleNodeDeploymentJournal({
@@ -376,6 +424,7 @@ export function createSingleNodeStatusActiveJournal(fixture) {
     journal,
     activationEvidence(fixture),
   );
+  journal = settleSingleNodeDeploymentReleaseTransition(journal);
   return advanceSingleNodeDeploymentJournal(journal, 'active');
 }
 

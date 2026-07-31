@@ -22,10 +22,12 @@ import {
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournal,
   prepareSingleNodeDeploymentMutation,
+  prepareSingleNodeDeploymentReleaseUpdate,
   recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
+  settleSingleNodeDeploymentReleaseTransition,
 } from '../../src/core/runtime/single-node-deployment-journal.js';
 import { createSingleNodeDeploymentDesired } from '../../src/core/runtime/single-node-deployment-desired.js';
 import { createSingleNodeDeploymentIncarnationId } from '../../src/core/runtime/single-node-deployment-identity.js';
@@ -49,6 +51,7 @@ import {
   createSingleNodeDeploymentStatus,
   validateSingleNodeDeploymentStatus,
 } from '../../src/core/runtime/single-node-deployment-status.js';
+import { createSingleNodeStatusUpdateTarget } from './fixtures/single-node-status-fixture.js';
 
 const TARGET = Object.freeze({
   nodeVersion: '24.13.1',
@@ -227,6 +230,8 @@ async function makeAuthority() {
     cloudInitDigest: digest('#cloud-config\n'),
   });
   return Object.freeze({
+    revision,
+    artifactRecord,
     desired,
     providerIntent: Object.freeze({
       provider: 'hetzner',
@@ -236,7 +241,10 @@ async function makeAuthority() {
 }
 
 function makeInitialJournal() {
-  return createSingleNodeDeploymentJournal(authority);
+  return createSingleNodeDeploymentJournal({
+    desired: authority.desired,
+    providerIntent: authority.providerIntent,
+  });
 }
 
 function makeProvisionedJournal() {
@@ -329,6 +337,7 @@ function makeActiveJournal() {
     journal,
     remoteActivationEvidence(),
   );
+  journal = settleSingleNodeDeploymentReleaseTransition(journal);
   return advanceSingleNodeDeploymentJournal(journal, 'active');
 }
 
@@ -369,16 +378,16 @@ function providerObservation(journal, status = 'exact', states = {}) {
   };
 }
 
-function healthyGuest() {
+function healthyGuest(desired = authority.desired, desiredMatches = true) {
   return {
     state: 'observed',
     address: PUBLIC_IPV4,
     hostKeyFingerprint: SSH_FINGERPRINT,
     service: {
       health: 'healthy',
-      activeArtifactId: authority.desired.artifact.artifactId,
-      activeRevisionId: authority.desired.artifact.revisionId,
-      desiredMatches: true,
+      activeArtifactId: desired.artifact.artifactId,
+      activeRevisionId: desired.artifact.revisionId,
+      desiredMatches,
     },
   };
 }
@@ -400,7 +409,7 @@ describe('single-node deployment status receipt', () => {
     });
 
     expect(receipt).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: SINGLE_NODE_DEPLOYMENT_STATUS_KIND,
       provider: 'hetzner',
       status: 'healthy',
@@ -418,6 +427,7 @@ describe('single-node deployment status receipt', () => {
         generation: journal.generation,
         incarnationId: journal.incarnationId,
         phase: 'active',
+        releaseTransition: null,
       },
       guest: {
         state: 'observed',
@@ -464,6 +474,66 @@ describe('single-node deployment status receipt', () => {
       reason: 'provider-conflict',
       nextAction: 'investigate-conflict',
     });
+  });
+
+  it('projects an in-flight update and distinguishes source from target effects', () => {
+    const target = createSingleNodeStatusUpdateTarget(authority, 'status-v2');
+    const journal = prepareSingleNodeDeploymentReleaseUpdate(
+      makeActiveJournal(),
+      target.desired,
+    );
+    const sourceActive = createSingleNodeDeploymentStatus({
+      journal,
+      providerObservation: providerObservation(journal),
+      guestObservation: healthyGuest(authority.desired, false),
+    });
+
+    expect(sourceActive).toMatchObject({
+      schemaVersion: 2,
+      status: 'converging',
+      reason: null,
+      nextAction: 'resume-update',
+      deployment: {
+        desiredRevisionId: target.desired.desiredRevisionId,
+        artifact: { artifactId: target.desired.artifact.artifactId },
+      },
+      journal: { phase: 'active', releaseTransition: 'update' },
+    });
+
+    const targetActive = createSingleNodeDeploymentStatus({
+      journal,
+      providerObservation: providerObservation(journal),
+      guestObservation: healthyGuest(target.desired),
+    });
+    expect(targetActive).toMatchObject({
+      status: 'recovery-required',
+      reason: 'journal-behind-effects',
+      nextAction: 'resume-update',
+    });
+    expect(validateSingleNodeDeploymentStatus(sourceActive)).toEqual(
+      sourceActive,
+    );
+    expect(validateSingleNodeDeploymentStatus(targetActive)).toEqual(
+      targetActive,
+    );
+
+    const destroying = advanceSingleNodeDeploymentJournal(
+      journal,
+      'destroying',
+    );
+    const destroyingReceipt = createSingleNodeDeploymentStatus({
+      journal: destroying,
+      providerObservation: providerObservation(destroying, 'converging'),
+      guestObservation: NO_GUEST,
+    });
+    expect(destroyingReceipt).toMatchObject({
+      status: 'destroying',
+      nextAction: 'resume-destroy',
+      journal: { phase: 'destroying', releaseTransition: 'update' },
+    });
+    expect(validateSingleNodeDeploymentStatus(destroyingReceipt)).toEqual(
+      destroyingReceipt,
+    );
   });
 
   it('reports effects ahead of planned and activating journals as recovery', () => {

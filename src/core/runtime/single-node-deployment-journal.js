@@ -46,19 +46,22 @@ import {
 } from './single-node-deployment-identity.js';
 import { validateSingleNodeRemoteActivationEvidence } from './single-node-remote-activation.js';
 
-export const SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION = 2;
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION = 3;
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND =
   'singleNodeDeploymentJournal';
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN =
-  'wharfie:single-node-deployment-journal:v2';
-export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX = 'wsnj2';
+  'wharfie:single-node-deployment-journal:v3';
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX = 'wsnj3';
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES = 1024 * 1024;
 export const SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS = 4096;
+export const SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE = 32;
+
+const SINGLE_NODE_DEPLOYMENT_RELEASE_UPDATE_RECORDS = 3;
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const DEPLOYMENTS_DIRECTORY_NAME = 'single-node-deployments';
-const STORAGE_VERSION_DIRECTORY_NAME = 'v2';
+const STORAGE_VERSION_DIRECTORY_NAME = 'v3';
 const JOURNAL_DIRECTORY_NAME = 'journal';
 const JOURNAL_FILE_PATTERN = /^journal-([0-9]{16})\.json$/u;
 const JOURNAL_TEMP_PATTERN =
@@ -107,7 +110,6 @@ const PAYLOAD_KEYS = new Set([
   'previousJournalId',
   'deploymentInstanceId',
   'incarnationId',
-  'desired',
   'providerIntent',
   'phase',
   'mutationAttempts',
@@ -115,8 +117,7 @@ const PAYLOAD_KEYS = new Set([
   'destroyAttempts',
   'deletionRecords',
   'sshHost',
-  'artifact',
-  'activation',
+  'release',
 ]);
 const DOCUMENT_KEYS = new Set(['journalId', ...PAYLOAD_KEYS]);
 const INITIALIZE_KEYS = new Set(['desired', 'providerIntent']);
@@ -143,6 +144,9 @@ const ARTIFACT_KEYS = new Set([
   'size',
   'remotePath',
 ]);
+const RELEASE_STATE_KEYS = new Set(['current', 'rollback', 'transition']);
+const RELEASE_KEYS = new Set(['desired', 'artifact', 'activation']);
+const RELEASE_TRANSITION_KEYS = new Set(['kind', 'target']);
 const COMMIT_KEYS = new Set([
   'expectedGeneration',
   'expectedJournalId',
@@ -181,6 +185,17 @@ export class SingleNodeDeploymentJournalCapacityError extends Error {
     super('Single-node deployment journal reached its safe record bound.');
     this.name = 'SingleNodeDeploymentJournalCapacityError';
     this.code = 'WHARFIE_SINGLE_NODE_DEPLOYMENT_JOURNAL_CAPACITY';
+  }
+}
+
+/** A new release would consume journal space reserved for safe recovery. */
+export class SingleNodeDeploymentJournalRecoveryReserveError extends Error {
+  constructor() {
+    super(
+      'Single-node deployment journal records are reserved for recovery and destruction.',
+    );
+    this.name = 'SingleNodeDeploymentJournalRecoveryReserveError';
+    this.code = 'WHARFIE_SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RESERVE';
   }
 }
 
@@ -808,6 +823,159 @@ function artifactFromActivation(activation, desired, valuePath) {
   );
 }
 
+/**
+ * A release update may replace application bytes and its Node runtime without
+ * changing the durable deployment substrate those bytes inhabit.
+ * @param {Readonly<Record<string, any>>} desired - Candidate release desired state.
+ * @param {Readonly<Record<string, any>>} substrateDesired - Provisioned substrate authority.
+ * @param {string} valuePath - Boundary label.
+ */
+function assertCompatibleReleaseDesired(desired, substrateDesired, valuePath) {
+  const candidate = desired.intent;
+  const substrate = substrateDesired.intent;
+  if (
+    desired.deploymentInstanceId !== substrateDesired.deploymentInstanceId ||
+    candidate.appId !== substrate.appId ||
+    JSON.stringify(candidate.deployment) !==
+      JSON.stringify(substrate.deployment) ||
+    JSON.stringify(candidate.provider) !== JSON.stringify(substrate.provider) ||
+    JSON.stringify(candidate.mode) !== JSON.stringify(substrate.mode) ||
+    JSON.stringify(candidate.machine) !== JSON.stringify(substrate.machine) ||
+    JSON.stringify(candidate.access) !== JSON.stringify(substrate.access) ||
+    candidate.target.platform !== substrate.target.platform ||
+    candidate.target.architecture !== substrate.target.architecture ||
+    candidate.target.libc !== substrate.target.libc
+  ) {
+    throw new Error(
+      `${valuePath} must preserve deployment, app, provider, mode, machine, access, platform, architecture, and libc.`,
+    );
+  }
+}
+
+/**
+ * Canonicalize one current, rollback, or transition-target release.
+ * @param {unknown} value - Candidate release.
+ * @param {{substrateDesired: Readonly<Record<string, any>>, incarnationId: string, providerAddress: string|null, sshHost: Readonly<Record<string, any>>|null, complete: boolean}} context - Release validation context.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Canonical release.
+ */
+function validateRelease(value, context, valuePath) {
+  const release = exactDataObject(value, RELEASE_KEYS, valuePath);
+  const desired = validateSingleNodeDeploymentDesired(
+    release.desired,
+    `${valuePath}.desired`,
+  );
+  assertCompatibleReleaseDesired(
+    desired,
+    context.substrateDesired,
+    `${valuePath}.desired`,
+  );
+  const artifact = validateArtifactEvidence(
+    release.artifact,
+    desired,
+    `${valuePath}.artifact`,
+  );
+  const activation = validateActivationEvidence(
+    release.activation,
+    {
+      desired,
+      incarnationId: context.incarnationId,
+      providerAddress: context.providerAddress,
+      sshHost: context.sshHost,
+    },
+    `${valuePath}.activation`,
+  );
+  if (activation !== null && artifact === null) {
+    throw new Error(`${valuePath}.activation requires artifact evidence.`);
+  }
+  if (
+    activation !== null &&
+    (activation.address !== context.sshHost?.address ||
+      activation.sshHostKey.fingerprint !== context.sshHost?.fingerprint ||
+      activation.artifact.artifactId !== artifact?.artifactId ||
+      activation.artifact.byteDigest.value !== artifact?.byteDigest.value ||
+      activation.artifact.size !== artifact?.size ||
+      activation.artifact.remotePath !== artifact?.remotePath)
+  ) {
+    throw new Error(
+      `${valuePath}.activation does not match its compact artifact evidence.`,
+    );
+  }
+  if (context.complete && (artifact === null || activation === null)) {
+    throw new Error(`${valuePath} must contain settled release evidence.`);
+  }
+  return deepFreeze(sortCanonicalJsonValue({ desired, artifact, activation }));
+}
+
+/**
+ * Canonicalize the release state machine while keeping substrate authority
+ * flat and immutable.
+ * @param {unknown} value - Candidate release state.
+ * @param {{substrateDesired: Readonly<Record<string, any>>, incarnationId: string, providerAddress: string|null, sshHost: Readonly<Record<string, any>>|null}} context - Validation context.
+ * @param {string} valuePath - Boundary label.
+ * @returns {Readonly<Record<string, any>>} - Canonical release state.
+ */
+function validateReleaseState(value, context, valuePath) {
+  const state = exactDataObject(value, RELEASE_STATE_KEYS, valuePath);
+  const current =
+    state.current === null
+      ? null
+      : validateRelease(
+          state.current,
+          { ...context, complete: true },
+          `${valuePath}.current`,
+        );
+  const rollback =
+    state.rollback === null
+      ? null
+      : validateRelease(
+          state.rollback,
+          { ...context, complete: true },
+          `${valuePath}.rollback`,
+        );
+  let transition = null;
+  if (state.transition !== null) {
+    const candidate = exactDataObject(
+      state.transition,
+      RELEASE_TRANSITION_KEYS,
+      `${valuePath}.transition`,
+    );
+    if (candidate.kind !== 'install' && candidate.kind !== 'update') {
+      throw new TypeError(
+        `${valuePath}.transition.kind must be 'install' or 'update'.`,
+      );
+    }
+    const target = validateRelease(
+      candidate.target,
+      { ...context, complete: false },
+      `${valuePath}.transition.target`,
+    );
+    transition = deepFreeze(
+      sortCanonicalJsonValue({ kind: candidate.kind, target }),
+    );
+  }
+  if (current === null && transition?.kind !== 'install') {
+    throw new Error(`${valuePath} without a current release requires install.`);
+  }
+  if (current !== null && transition?.kind === 'install') {
+    throw new Error(`${valuePath} cannot install over a current release.`);
+  }
+  if (transition?.kind === 'update' && current === null) {
+    throw new Error(`${valuePath}.update requires a current release.`);
+  }
+  if (
+    transition?.kind === 'update' &&
+    transition.target.desired.desiredRevisionId ===
+      current?.desired.desiredRevisionId
+  ) {
+    throw new Error(`${valuePath}.update must target a different release.`);
+  }
+  if (rollback !== null && current === null) {
+    throw new Error(`${valuePath}.rollback requires a current release.`);
+  }
+  return deepFreeze(sortCanonicalJsonValue({ current, rollback, transition }));
+}
+
 /** @param {Readonly<Record<string, any>[]>} resources @param {string} role */
 function resourceForRole(resources, role) {
   return resources.find((resource) => resource.role === role) || null;
@@ -978,28 +1146,16 @@ function assertCoherentPayload(payload, valuePath) {
       );
     }
   }
-  if (payload.artifact !== null && payload.sshHost === null) {
-    throw new Error(`${valuePath}.artifact requires pinned SSH host evidence.`);
-  }
-  if (payload.activation !== null && payload.artifact === null) {
-    throw new Error(
-      `${valuePath}.activation requires verified artifact evidence.`,
-    );
-  }
-  if (
-    payload.activation !== null &&
-    (payload.activation.address !== payload.sshHost?.address ||
-      payload.activation.sshHostKey.fingerprint !==
-        payload.sshHost?.fingerprint ||
-      payload.activation.artifact.artifactId !== payload.artifact?.artifactId ||
-      payload.activation.artifact.byteDigest.value !==
-        payload.artifact?.byteDigest.value ||
-      payload.activation.artifact.size !== payload.artifact?.size ||
-      payload.activation.artifact.remotePath !== payload.artifact?.remotePath)
-  ) {
-    throw new Error(
-      `${valuePath}.activation does not match its compact durable projections.`,
-    );
+  const releases = [
+    payload.release.current,
+    payload.release.rollback,
+    payload.release.transition?.target ?? null,
+  ].filter((release) => release !== null);
+  const hasReleaseEvidence = releases.some(
+    (release) => release.artifact !== null || release.activation !== null,
+  );
+  if (hasReleaseEvidence && payload.sshHost === null) {
+    throw new Error(`${valuePath}.release evidence requires pinned SSH host.`);
   }
   if (
     payload.phase === 'planned' &&
@@ -1008,16 +1164,20 @@ function assertCoherentPayload(payload, valuePath) {
       payload.destroyAttempts.length !== 0 ||
       payload.deletionRecords.length !== 0 ||
       payload.sshHost !== null ||
-      payload.artifact !== null ||
-      payload.activation !== null)
+      payload.release.current !== null ||
+      payload.release.rollback !== null ||
+      payload.release.transition?.kind !== 'install' ||
+      hasReleaseEvidence)
   ) {
     throw new Error(`${valuePath}.planned state cannot contain effects.`);
   }
   if (
     payload.phase === 'provisioning' &&
     (payload.sshHost !== null ||
-      payload.artifact !== null ||
-      payload.activation !== null)
+      payload.release.current !== null ||
+      payload.release.rollback !== null ||
+      payload.release.transition?.kind !== 'install' ||
+      hasReleaseEvidence)
   ) {
     throw new Error(
       `${valuePath}.provisioning state cannot contain activation evidence.`,
@@ -1037,8 +1197,8 @@ function assertCoherentPayload(payload, valuePath) {
       );
     }
   }
-  if (payload.phase === 'active' && payload.activation === null) {
-    throw new Error(`${valuePath}.active state requires activation evidence.`);
+  if (payload.phase === 'active' && payload.release.current === null) {
+    throw new Error(`${valuePath}.active state requires a current release.`);
   }
   if (
     payload.phase === 'destroyed' &&
@@ -1092,23 +1252,15 @@ function canonicalizePayload(value, valuePath) {
       `${valuePath}.previousJournalId`,
     );
   }
-  const desired = validateSingleNodeDeploymentDesired(
-    payload.desired,
-    `${valuePath}.desired`,
-  );
   assertSingleNodeDeploymentInstanceId(
     payload.deploymentInstanceId,
     `${valuePath}.deploymentInstanceId`,
   );
-  if (payload.deploymentInstanceId !== desired.deploymentInstanceId) {
-    throw new Error(
-      `${valuePath}.deploymentInstanceId does not match desired state.`,
-    );
-  }
   const providerIntent = validateProviderIntent(
     payload.providerIntent,
     `${valuePath}.providerIntent`,
   );
+  const substrateDesired = providerIntent.intent.plan.desired;
   assertSingleNodeDeploymentIncarnationId(
     payload.incarnationId,
     `${valuePath}.incarnationId`,
@@ -1116,10 +1268,9 @@ function canonicalizePayload(value, valuePath) {
   if (
     providerIntent.intent.incarnationId !== payload.incarnationId ||
     providerIntent.intent.plan.deploymentInstanceId !==
-      desired.deploymentInstanceId ||
-    JSON.stringify(providerIntent.intent.plan.desired) !==
-      JSON.stringify(desired) ||
-    desired.intent.provider.kind !== providerIntent.provider
+      payload.deploymentInstanceId ||
+    substrateDesired.deploymentInstanceId !== payload.deploymentInstanceId ||
+    substrateDesired.intent.provider.kind !== providerIntent.provider
   ) {
     throw new Error(
       `${valuePath}.providerIntent does not bind the exact deployment.`,
@@ -1128,7 +1279,7 @@ function canonicalizePayload(value, valuePath) {
   const mutationAttempts = validateMutationAttempts(
     payload.mutationAttempts,
     {
-      deploymentInstanceId: desired.deploymentInstanceId,
+      deploymentInstanceId: payload.deploymentInstanceId,
       incarnationId: payload.incarnationId,
       providerIntent,
     },
@@ -1156,23 +1307,18 @@ function canonicalizePayload(value, valuePath) {
     `${valuePath}.deletionRecords`,
   );
   const sshHost = validateSshHost(payload.sshHost, `${valuePath}.sshHost`);
-  const artifact = validateArtifactEvidence(
-    payload.artifact,
-    desired,
-    `${valuePath}.artifact`,
-  );
   const providerAddress =
     resourceForRole(resources, providerAddressRole(providerIntent.provider))
       ?.publicIpv4 ?? null;
-  const activation = validateActivationEvidence(
-    payload.activation,
+  const release = validateReleaseState(
+    payload.release,
     {
-      desired,
+      substrateDesired,
       incarnationId: payload.incarnationId,
       providerAddress,
       sshHost,
     },
-    `${valuePath}.activation`,
+    `${valuePath}.release`,
   );
   const result = deepFreeze(
     sortCanonicalJsonValue({
@@ -1180,9 +1326,8 @@ function canonicalizePayload(value, valuePath) {
       kind: SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND,
       generation,
       previousJournalId: payload.previousJournalId,
-      deploymentInstanceId: desired.deploymentInstanceId,
+      deploymentInstanceId: payload.deploymentInstanceId,
       incarnationId: payload.incarnationId,
-      desired,
       providerIntent,
       phase: payload.phase,
       mutationAttempts,
@@ -1190,8 +1335,7 @@ function canonicalizePayload(value, valuePath) {
       destroyAttempts,
       deletionRecords,
       sshHost,
-      artifact,
-      activation,
+      release,
     }),
   );
   assertCoherentPayload(result, valuePath);
@@ -1235,6 +1379,14 @@ export function createSingleNodeDeploymentJournal(value) {
     input.providerIntent,
     'singleNodeDeploymentJournal.providerIntent',
   );
+  if (
+    JSON.stringify(providerIntent.intent.plan.desired) !==
+    JSON.stringify(desired)
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal providerIntent does not bind the initial desired state.',
+    );
+  }
   return sealPayload(
     {
       schemaVersion: SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION,
@@ -1243,7 +1395,6 @@ export function createSingleNodeDeploymentJournal(value) {
       previousJournalId: null,
       deploymentInstanceId: desired.deploymentInstanceId,
       incarnationId: providerIntent.intent.incarnationId,
-      desired,
       providerIntent,
       phase: 'planned',
       mutationAttempts: [],
@@ -1251,8 +1402,14 @@ export function createSingleNodeDeploymentJournal(value) {
       destroyAttempts: [],
       deletionRecords: [],
       sshHost: null,
-      artifact: null,
-      activation: null,
+      release: {
+        current: null,
+        rollback: null,
+        transition: {
+          kind: 'install',
+          target: { desired, artifact: null, activation: null },
+        },
+      },
     },
     'singleNodeDeploymentJournal',
   );
@@ -1305,7 +1462,6 @@ function successor(prior, changes) {
       previousJournalId: current.journalId,
       deploymentInstanceId: current.deploymentInstanceId,
       incarnationId: current.incarnationId,
-      desired: current.desired,
       providerIntent: current.providerIntent,
       phase: current.phase,
       mutationAttempts: current.mutationAttempts,
@@ -1313,12 +1469,41 @@ function successor(prior, changes) {
       destroyAttempts: current.destroyAttempts,
       deletionRecords: current.deletionRecords,
       sshHost: current.sshHost,
-      artifact: current.artifact,
-      activation: current.activation,
+      release: current.release,
       ...changes,
     },
     'singleNodeDeploymentJournal.successor',
   );
+}
+
+/** @param {unknown} journal @returns {Readonly<Record<string, any>>} */
+export function getSingleNodeDeploymentReleaseState(journal) {
+  return validateSingleNodeDeploymentJournal(journal).release;
+}
+
+/** @param {unknown} journal @returns {Readonly<Record<string, any>> | null} */
+export function getSingleNodeDeploymentCurrentRelease(journal) {
+  return getSingleNodeDeploymentReleaseState(journal).current;
+}
+
+/** @param {unknown} journal @returns {Readonly<Record<string, any>> | null} */
+export function getSingleNodeDeploymentReleaseTransition(journal) {
+  return getSingleNodeDeploymentReleaseState(journal).transition;
+}
+
+/** @param {unknown} journal @returns {Readonly<Record<string, any>>} */
+export function getSingleNodeDeploymentEffectiveTargetRelease(journal) {
+  const release = getSingleNodeDeploymentReleaseState(journal);
+  const target = release.transition?.target ?? release.current;
+  if (target === null) {
+    throw new Error('singleNodeDeploymentJournal has no effective release.');
+  }
+  return target;
+}
+
+/** @param {unknown} journal @returns {Readonly<Record<string, any>>} */
+export function getSingleNodeDeploymentEffectiveDesired(journal) {
+  return getSingleNodeDeploymentEffectiveTargetRelease(journal).desired;
 }
 
 /**
@@ -1902,28 +2087,45 @@ export function recordSingleNodeDeploymentSshHost(prior, value) {
  */
 export function recordSingleNodeDeploymentArtifact(prior, value) {
   const current = validateSingleNodeDeploymentJournal(prior);
-  if (current.phase !== 'activating') {
+  const transition = current.release.transition;
+  if (
+    transition === null ||
+    (transition.kind === 'install' && current.phase !== 'activating') ||
+    (transition.kind === 'update' && current.phase !== 'active')
+  ) {
     throw new Error(
       'singleNodeDeploymentJournal cannot record artifact evidence in this phase.',
     );
   }
   const artifact = validateArtifactEvidence(
     value,
-    current.desired,
-    'singleNodeDeploymentJournal.artifact',
+    transition.target.desired,
+    'singleNodeDeploymentJournal.release.transition.target.artifact',
   );
   if (artifact === null) {
-    throw new TypeError('singleNodeDeploymentJournal.artifact cannot be null.');
+    throw new TypeError(
+      'singleNodeDeploymentJournal transition artifact cannot be null.',
+    );
   }
-  if (current.artifact !== null) {
-    if (JSON.stringify(current.artifact) === JSON.stringify(artifact)) {
+  if (transition.target.artifact !== null) {
+    if (
+      JSON.stringify(transition.target.artifact) === JSON.stringify(artifact)
+    ) {
       return current;
     }
     throw new Error(
-      'singleNodeDeploymentJournal artifact evidence is immutable.',
+      'singleNodeDeploymentJournal transition artifact evidence is immutable.',
     );
   }
-  return successor(current, { artifact });
+  return successor(current, {
+    release: {
+      ...current.release,
+      transition: {
+        ...transition,
+        target: { ...transition.target, artifact },
+      },
+    },
+  });
 }
 
 /**
@@ -1932,9 +2134,14 @@ export function recordSingleNodeDeploymentArtifact(prior, value) {
  * @param {unknown} value - Activation evidence.
  * @returns {Readonly<Record<string, any>>} - Current or successor.
  */
-export function recordSingleNodeDeploymentActivation(prior, value) {
+export function recordSingleNodeDeploymentTransitionActivation(prior, value) {
   const current = validateSingleNodeDeploymentJournal(prior);
-  if (current.phase !== 'activating') {
+  const transition = current.release.transition;
+  if (
+    transition === null ||
+    (transition.kind === 'install' && current.phase !== 'activating') ||
+    (transition.kind === 'update' && current.phase !== 'active')
+  ) {
     throw new Error(
       'singleNodeDeploymentJournal cannot record activation evidence in this phase.',
     );
@@ -1942,7 +2149,7 @@ export function recordSingleNodeDeploymentActivation(prior, value) {
   const activation = validateActivationEvidence(
     value,
     {
-      desired: current.desired,
+      desired: transition.target.desired,
       incarnationId: current.incarnationId,
       providerAddress:
         resourceForRole(
@@ -1951,15 +2158,18 @@ export function recordSingleNodeDeploymentActivation(prior, value) {
         )?.publicIpv4 ?? null,
       sshHost: current.sshHost,
     },
-    'singleNodeDeploymentJournal.activation',
+    'singleNodeDeploymentJournal.release.transition.target.activation',
   );
   if (activation === null) {
     throw new TypeError(
       'singleNodeDeploymentJournal.activation cannot be null.',
     );
   }
-  if (current.activation !== null) {
-    if (JSON.stringify(current.activation) === JSON.stringify(activation)) {
+  if (transition.target.activation !== null) {
+    if (
+      JSON.stringify(transition.target.activation) ===
+      JSON.stringify(activation)
+    ) {
       return current;
     }
     throw new Error(
@@ -1968,18 +2178,154 @@ export function recordSingleNodeDeploymentActivation(prior, value) {
   }
   const artifact = artifactFromActivation(
     activation,
-    current.desired,
-    'singleNodeDeploymentJournal.artifact',
+    transition.target.desired,
+    'singleNodeDeploymentJournal.release.transition.target.artifact',
   );
   if (
-    current.artifact !== null &&
-    JSON.stringify(current.artifact) !== JSON.stringify(artifact)
+    transition.target.artifact !== null &&
+    JSON.stringify(transition.target.artifact) !== JSON.stringify(artifact)
   ) {
     throw new Error(
       'singleNodeDeploymentJournal activation artifact conflicts with durable evidence.',
     );
   }
-  return successor(current, { activation, artifact });
+  return successor(current, {
+    release: {
+      ...current.release,
+      transition: {
+        ...transition,
+        target: { ...transition.target, activation, artifact },
+      },
+    },
+  });
+}
+
+/**
+ * Backward-compatible operation name for transition activation.
+ * @param {unknown} prior - Current record.
+ * @param {unknown} value - Activation evidence.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function recordSingleNodeDeploymentActivation(prior, value) {
+  return recordSingleNodeDeploymentTransitionActivation(prior, value);
+}
+
+/**
+ * Prepare an idempotent in-place release update while retaining current
+ * authority until the new release is fully proven and settled.
+ * @param {unknown} prior - Current record.
+ * @param {unknown} value - New desired release.
+ * @returns {Readonly<Record<string, any>>} - Current or successor.
+ */
+export function prepareSingleNodeDeploymentReleaseUpdate(prior, value) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  const desired = validateSingleNodeDeploymentDesired(
+    value,
+    'singleNodeDeploymentJournal.release.update.desired',
+  );
+  if (current.phase !== 'active' || current.release.current === null) {
+    throw new Error(
+      'singleNodeDeploymentJournal can only prepare an update while active.',
+    );
+  }
+  assertCompatibleReleaseDesired(
+    desired,
+    current.providerIntent.intent.plan.desired,
+    'singleNodeDeploymentJournal.release.update.desired',
+  );
+  const pending = current.release.transition;
+  if (pending !== null) {
+    if (
+      pending.target.desired.desiredRevisionId === desired.desiredRevisionId
+    ) {
+      return current;
+    }
+    throw new Error(
+      'singleNodeDeploymentJournal already has a different release transition.',
+    );
+  }
+  if (
+    current.release.current.desired.desiredRevisionId ===
+    desired.desiredRevisionId
+  ) {
+    return current;
+  }
+  const lastGeneration = SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS - 1;
+  const remainingAfterUpdate =
+    lastGeneration -
+    (current.generation + SINGLE_NODE_DEPLOYMENT_RELEASE_UPDATE_RECORDS);
+  if (
+    remainingAfterUpdate <
+    SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE
+  ) {
+    throw new SingleNodeDeploymentJournalRecoveryReserveError();
+  }
+  return successor(current, {
+    release: {
+      ...current.release,
+      transition: {
+        kind: 'update',
+        target: { desired, artifact: null, activation: null },
+      },
+    },
+  });
+}
+
+/**
+ * Abandon one failed in-place update without changing committed release
+ * authority. The current and rollback releases remain exact; only the
+ * uncommitted update target is discarded.
+ * @param {unknown} prior - Current record.
+ * @returns {Readonly<Record<string, any>>} - Successor record.
+ */
+export function abandonSingleNodeDeploymentReleaseUpdate(prior) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  const committed = current.release.current;
+  if (
+    current.phase !== 'active' ||
+    committed === null ||
+    committed.artifact === null ||
+    committed.activation === null ||
+    current.release.transition?.kind !== 'update'
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal can only abandon an active release update with a complete current release.',
+    );
+  }
+  return successor(current, {
+    release: { ...current.release, transition: null },
+  });
+}
+
+/**
+ * Settle a completely proven install or update transition atomically.
+ * @param {unknown} prior - Current record.
+ * @returns {Readonly<Record<string, any>>} - Successor record.
+ */
+export function settleSingleNodeDeploymentReleaseTransition(prior) {
+  const current = validateSingleNodeDeploymentJournal(prior);
+  const transition = current.release.transition;
+  if (
+    transition === null ||
+    transition.target.artifact === null ||
+    transition.target.activation === null ||
+    (transition.kind === 'install' && current.phase !== 'activating') ||
+    (transition.kind === 'update' && current.phase !== 'active')
+  ) {
+    throw new Error(
+      'singleNodeDeploymentJournal cannot settle an incomplete release transition.',
+    );
+  }
+  return successor(current, {
+    release: {
+      current: transition.target,
+      rollback:
+        transition.kind === 'update'
+          ? current.release.current
+          : current.release.rollback,
+      transition: null,
+    },
+  });
 }
 
 /**
@@ -2002,7 +2348,6 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
     candidate.previousJournalId !== current.journalId ||
     candidate.deploymentInstanceId !== current.deploymentInstanceId ||
     candidate.incarnationId !== current.incarnationId ||
-    JSON.stringify(candidate.desired) !== JSON.stringify(current.desired) ||
     JSON.stringify(candidate.providerIntent) !==
       JSON.stringify(current.providerIntent)
   ) {
@@ -2024,10 +2369,8 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
     JSON.stringify(current.deletionRecords);
   const sshHostChanged =
     JSON.stringify(candidate.sshHost) !== JSON.stringify(current.sshHost);
-  const artifactChanged =
-    JSON.stringify(candidate.artifact) !== JSON.stringify(current.artifact);
-  const activationChanged =
-    JSON.stringify(candidate.activation) !== JSON.stringify(current.activation);
+  const releaseChanged =
+    JSON.stringify(candidate.release) !== JSON.stringify(current.release);
 
   let expected;
   if (candidate.phase !== current.phase) {
@@ -2037,8 +2380,7 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
       destroyAttemptsChanged ||
       deletionRecordsChanged ||
       sshHostChanged ||
-      artifactChanged ||
-      activationChanged
+      releaseChanged
     ) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
@@ -2050,8 +2392,7 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
       destroyAttemptsChanged ||
       deletionRecordsChanged ||
       sshHostChanged ||
-      artifactChanged ||
-      activationChanged
+      releaseChanged
     ) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
@@ -2130,8 +2471,7 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
       resourcesChanged ||
       deletionRecordsChanged ||
       sshHostChanged ||
-      artifactChanged ||
-      activationChanged
+      releaseChanged
     ) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
@@ -2157,12 +2497,7 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
       changedAttempts[0],
     );
   } else if (deletionRecordsChanged) {
-    if (
-      !resourcesChanged ||
-      sshHostChanged ||
-      artifactChanged ||
-      activationChanged
-    ) {
+    if (!resourcesChanged || sshHostChanged || releaseChanged) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
       );
@@ -2184,7 +2519,7 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
     }
     expected = recordSingleNodeDeploymentDeletion(current, changedRecords[0]);
   } else if (resourcesChanged) {
-    if (sshHostChanged || artifactChanged || activationChanged) {
+    if (sshHostChanged || releaseChanged) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
       );
@@ -2206,19 +2541,50 @@ export function validateSingleNodeDeploymentJournalSuccessor(prior, next) {
     }
     expected = recordSingleNodeDeploymentResource(current, changed[0]);
   } else if (sshHostChanged) {
-    if (artifactChanged || activationChanged) {
+    if (releaseChanged) {
       throw new Error(
         'singleNodeDeploymentJournal successor must make one transition.',
       );
     }
     expected = recordSingleNodeDeploymentSshHost(current, candidate.sshHost);
-  } else if (activationChanged) {
-    expected = recordSingleNodeDeploymentActivation(
-      current,
-      candidate.activation,
-    );
-  } else if (artifactChanged) {
-    expected = recordSingleNodeDeploymentArtifact(current, candidate.artifact);
+  } else if (releaseChanged) {
+    const before = current.release.transition;
+    const after = candidate.release.transition;
+    if (before === null && after?.kind === 'update') {
+      expected = prepareSingleNodeDeploymentReleaseUpdate(
+        current,
+        after.target.desired,
+      );
+    } else if (before !== null && after === null) {
+      const preservesCommittedReleases =
+        JSON.stringify(candidate.release.current) ===
+          JSON.stringify(current.release.current) &&
+        JSON.stringify(candidate.release.rollback) ===
+          JSON.stringify(current.release.rollback);
+      expected =
+        before.kind === 'update' && preservesCommittedReleases
+          ? abandonSingleNodeDeploymentReleaseUpdate(current)
+          : settleSingleNodeDeploymentReleaseTransition(current);
+    } else if (
+      before !== null &&
+      after !== null &&
+      JSON.stringify(before.target.activation) !==
+        JSON.stringify(after.target.activation)
+    ) {
+      expected = recordSingleNodeDeploymentTransitionActivation(
+        current,
+        after.target.activation,
+      );
+    } else if (before !== null && after !== null) {
+      expected = recordSingleNodeDeploymentArtifact(
+        current,
+        after.target.artifact,
+      );
+    } else {
+      throw new Error(
+        'singleNodeDeploymentJournal successor changed release state illegally.',
+      );
+    }
   } else {
     throw new Error(
       'singleNodeDeploymentJournal successor must make one transition.',
@@ -2812,7 +3178,7 @@ export function createSingleNodeDeploymentJournalStore(value) {
     if (
       latest !== null &&
       (latest.deploymentInstanceId !== input.deploymentInstanceId ||
-        latest.desired.intent.appId !== input.appId)
+        latest.providerIntent.intent.plan.desired.intent.appId !== input.appId)
     ) {
       throw new SingleNodeDeploymentJournalInvalidError();
     }
@@ -2824,7 +3190,7 @@ export function createSingleNodeDeploymentJournalStore(value) {
     const initial = createSingleNodeDeploymentJournal(request);
     if (
       initial.deploymentInstanceId !== input.deploymentInstanceId ||
-      initial.desired.intent.appId !== input.appId
+      initial.providerIntent.intent.plan.desired.intent.appId !== input.appId
     ) {
       throw new Error(
         'singleNodeDeploymentJournal initial authority does not match its store.',
@@ -2836,7 +3202,6 @@ export function createSingleNodeDeploymentJournalStore(value) {
       if (
         latest.deploymentInstanceId === initial.deploymentInstanceId &&
         latest.incarnationId === initial.incarnationId &&
-        JSON.stringify(latest.desired) === JSON.stringify(initial.desired) &&
         JSON.stringify(latest.providerIntent) ===
           JSON.stringify(initial.providerIntent)
       ) {
@@ -2895,15 +3260,23 @@ export default {
   SINGLE_NODE_DEPLOYMENT_JOURNAL_KIND,
   SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
   SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE,
   SINGLE_NODE_DEPLOYMENT_JOURNAL_SCHEMA_VERSION,
+  abandonSingleNodeDeploymentReleaseUpdate,
   advanceSingleNodeDeploymentJournal,
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournal,
   createSingleNodeDeploymentJournalPaths,
   createSingleNodeDeploymentJournalStore,
+  getSingleNodeDeploymentCurrentRelease,
   getSingleNodeDeploymentDestructionRecoveryState,
+  getSingleNodeDeploymentEffectiveDesired,
+  getSingleNodeDeploymentEffectiveTargetRelease,
   getSingleNodeDeploymentMutationAttempt,
   getSingleNodeDeploymentProvisioningRecoveryState,
+  getSingleNodeDeploymentReleaseState,
+  getSingleNodeDeploymentReleaseTransition,
+  prepareSingleNodeDeploymentReleaseUpdate,
   prepareSingleNodeDeploymentDestruction,
   prepareSingleNodeDeploymentMutation,
   prepareSingleNodeDeploymentMutations,
@@ -2913,6 +3286,8 @@ export default {
   recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
+  recordSingleNodeDeploymentTransitionActivation,
+  settleSingleNodeDeploymentReleaseTransition,
   validateSingleNodeDeploymentJournal,
   validateSingleNodeDeploymentJournalSuccessor,
 };

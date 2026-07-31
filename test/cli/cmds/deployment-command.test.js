@@ -41,7 +41,16 @@ import {
   createSingleNodeDeploymentIncarnationId,
   getSingleNodeDeploymentInstanceId,
 } from '../../../src/core/runtime/single-node-deployment-identity.js';
-import { createSingleNodeDeploymentJournal } from '../../../src/core/runtime/single-node-deployment-journal.js';
+import {
+  advanceSingleNodeDeploymentJournal,
+  createSingleNodeDeploymentJournal,
+  getSingleNodeDeploymentCurrentRelease,
+  prepareSingleNodeDeploymentReleaseUpdate,
+} from '../../../src/core/runtime/single-node-deployment-journal.js';
+import {
+  SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_KIND,
+  SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_SCHEMA_VERSION,
+} from '../../../src/core/runtime/single-node-deployment-update.js';
 import { validateSingleNodeDeploymentPreview } from '../../../src/core/runtime/single-node-deployment-preview.js';
 import { createSingleNodeDeploymentStatus } from '../../../src/core/runtime/single-node-deployment-status.js';
 import {
@@ -63,7 +72,9 @@ import {
 import {
   createSingleNodeStatusActiveJournal,
   createSingleNodeStatusAuthorityFixture,
+  createSingleNodeStatusDestroyedJournal,
   createSingleNodeStatusInitialJournal,
+  createSingleNodeStatusUpdateTarget,
   createProcessOutcome,
 } from '../../runtime/fixtures/single-node-status-fixture.js';
 
@@ -138,6 +149,8 @@ const PACKAGED_LEAF_NAMES = Object.freeze([
   'preview',
   'apply',
   'status',
+  'update',
+  'recover',
   'exec',
   'destroy',
 ]);
@@ -442,6 +455,14 @@ let STATUS_HETZNER_JOURNAL;
 let STATUS_HETZNER_ACTIVE_JOURNAL;
 /** @type {Readonly<Record<string, any>>} */
 let STATUS_AWS_JOURNAL;
+/** @type {ReturnType<typeof createSingleNodeStatusUpdateTarget>} */
+let STATUS_UPDATE_TARGET;
+/** @type {Readonly<Record<string, any>>} */
+let STATUS_PENDING_UPDATE_JOURNAL;
+/** @type {Readonly<Record<string, any>>} */
+let STATUS_DESTROYING_JOURNAL;
+/** @type {Readonly<Record<string, any>>} */
+let STATUS_DESTROYED_JOURNAL;
 const STATUS_AWS_REGION = 'us-east-2';
 const STATUS_AWS_ACCOUNT_ID = '123456789012';
 const STATUS_AWS_IDS = Object.freeze({
@@ -710,19 +731,28 @@ function makeHarness(factory, operations = undefined) {
  * @returns {Record<string, any>}
  */
 function makePackagedHarness(overrides = {}) {
+  const embedded =
+    overrides.embedded ??
+    Object.freeze({
+      pair: EMBEDDED_PAIR,
+      artifactRecord: EMBEDDED_ARTIFACT_RECORD,
+      observation: EMBEDDED_OBSERVATION,
+    });
   const source = {
-    observation: EMBEDDED_OBSERVATION,
+    observation: embedded.observation,
     createReadStream: jest.fn(),
     verifyUnchanged: jest.fn(),
     close: jest.fn(async () => undefined),
   };
   const readRevisionRuntimePair =
-    overrides.readRevisionRuntimePair ?? jest.fn(async () => EMBEDDED_PAIR);
-  const readDeploymentPayload = jest.fn(async () => ({
-    manifest: { kind: 'singleNodeDeploymentPayload' },
-    artifactRecord: EMBEDDED_ARTIFACT_RECORD,
-    source,
-  }));
+    overrides.readRevisionRuntimePair ?? jest.fn(async () => embedded.pair);
+  const readDeploymentPayload =
+    overrides.readDeploymentPayload ??
+    jest.fn(async () => ({
+      manifest: { kind: 'singleNodeDeploymentPayload' },
+      artifactRecord: embedded.artifactRecord,
+      source,
+    }));
   const preview = jest.fn(
     async (/** @type {Record<string, any>} */ request) => ({
       schemaVersion: 1,
@@ -808,7 +838,7 @@ function makePackagedHarness(overrides = {}) {
     overrides.executeRemote ?? jest.fn(async () => createProcessOutcome());
   const apply = jest.fn(async (/** @type {Record<string, any>} */ request) => {
     const desired = createSingleNodeDeploymentDesired({
-      intent: request.intent,
+      intent: request.intent ?? request.desired?.intent,
       revision: request.revision,
       artifactRecord: request.artifactRecord,
       observation: request.observation,
@@ -831,7 +861,7 @@ function makePackagedHarness(overrides = {}) {
   const awsApply = jest.fn(
     async (/** @type {Record<string, any>} */ request) => {
       const desired = createSingleNodeDeploymentDesired({
-        intent: request.intent,
+        intent: request.intent ?? request.desired?.intent,
         revision: request.revision,
         artifactRecord: request.artifactRecord,
         observation: request.observation,
@@ -851,6 +881,42 @@ function makePackagedHarness(overrides = {}) {
     },
   );
   const createAwsApplyCoordinator = jest.fn(() => ({ apply: awsApply }));
+  const update =
+    overrides.update ??
+    jest.fn(async (/** @type {Record<string, any>} */ request) => {
+      const desired = createSingleNodeDeploymentDesired({
+        intent: request.desired?.intent,
+        revision: request.revision,
+        artifactRecord: request.artifactRecord,
+        observation: request.observation,
+      });
+      const current =
+        overrides.journal === undefined || overrides.journal === null
+          ? null
+          : getSingleNodeDeploymentCurrentRelease(overrides.journal);
+      return {
+        schemaVersion: SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_SCHEMA_VERSION,
+        kind: SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_KIND,
+        provider: desired.intent.provider.kind,
+        status: 'active',
+        deploymentInstanceId: desired.deploymentInstanceId,
+        incarnationId: overrides.journal?.incarnationId ?? 'test-incarnation',
+        publicIpv4: overrides.journal?.sshHost?.address ?? '203.0.113.43',
+        priorDesiredRevisionId:
+          current?.desired.desiredRevisionId ?? desired.desiredRevisionId,
+        priorArtifactId:
+          current?.desired.artifact.artifactId ?? desired.artifact.artifactId,
+        desiredRevisionId: desired.desiredRevisionId,
+        artifactId: desired.artifact.artifactId,
+        activationEvidenceId: ACTIVATION_EVIDENCE_ID,
+        journalId: overrides.journal?.journalId ?? 'test-journal',
+        journalGeneration: overrides.journal?.generation ?? 0,
+        credential: 'must-not-be-projected',
+      };
+    });
+  const createUpdateCoordinator =
+    overrides.createUpdateCoordinator ??
+    jest.fn(() => ({ update, recover: update }));
   const destroy = jest.fn(
     async (/** @type {Record<string, any>} */ request) => ({
       schemaVersion: HETZNER_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
@@ -905,6 +971,7 @@ function makePackagedHarness(overrides = {}) {
     executeRemote,
     createStatusReceipt,
     createApplyCoordinator,
+    createUpdateCoordinator,
     createDestroyCoordinator,
     createApplyCoordinatorByProvider: {
       aws: createAwsApplyCoordinator,
@@ -942,6 +1009,8 @@ function makePackagedHarness(overrides = {}) {
     createApplyCoordinator,
     awsApply,
     createAwsApplyCoordinator,
+    update,
+    createUpdateCoordinator,
     destroy,
     createDestroyCoordinator,
     awsDestroy,
@@ -993,6 +1062,30 @@ function expectStatusJournalReadOnly(harness) {
 }
 
 /**
+ * @param {{revision: Readonly<Record<string, any>>, artifactRecord: Readonly<Record<string, any>>, desired: Readonly<Record<string, any>>, observation?: Readonly<Record<string, any>>}} target
+ * @returns {Readonly<Record<string, any>>}
+ */
+function createPackagedEmbeddedFixture(target) {
+  const observation = target.observation ?? {
+    artifactId: target.artifactRecord.artifactId,
+    byteDigest: target.artifactRecord.byteDigest,
+    size: target.artifactRecord.size,
+  };
+  return Object.freeze({
+    pair: Object.freeze({
+      revision: target.revision,
+      runtime: Object.freeze({
+        appId: target.desired.intent.appId,
+        revisionId: target.revision.revisionId,
+        target: target.artifactRecord.target,
+      }),
+    }),
+    artifactRecord: target.artifactRecord,
+    observation: Object.freeze(observation),
+  });
+}
+
+/**
  * @param {Readonly<Record<string, any>>} journal
  * @param {Record<string, any>} [overrides]
  * @returns {Readonly<Record<string, any>>}
@@ -1000,9 +1093,8 @@ function expectStatusJournalReadOnly(harness) {
 function makeStatusHarness(journal, overrides = {}) {
   return makePackagedHarness({
     journal,
-    readRevisionRuntimePair: jest.fn(async () => ({
-      runtime: { appId: journal.desired.intent.appId },
-    })),
+    embedded:
+      overrides.embedded ?? createPackagedEmbeddedFixture(STATUS_AUTHORITY),
     ...overrides,
   });
 }
@@ -1043,6 +1135,20 @@ beforeAll(async () => {
   STATUS_HETZNER_ACTIVE_JOURNAL =
     createSingleNodeStatusActiveJournal(STATUS_AUTHORITY);
   STATUS_AWS_JOURNAL = await createTestAwsStatusJournal(STATUS_AUTHORITY);
+  STATUS_UPDATE_TARGET = createSingleNodeStatusUpdateTarget(
+    STATUS_AUTHORITY,
+    'deployment-command-v2',
+  );
+  STATUS_PENDING_UPDATE_JOURNAL = prepareSingleNodeDeploymentReleaseUpdate(
+    STATUS_HETZNER_ACTIVE_JOURNAL,
+    STATUS_UPDATE_TARGET.desired,
+  );
+  STATUS_DESTROYING_JOURNAL = advanceSingleNodeDeploymentJournal(
+    STATUS_HETZNER_ACTIVE_JOURNAL,
+    'destroying',
+  );
+  STATUS_DESTROYED_JOURNAL =
+    createSingleNodeStatusDestroyedJournal(STATUS_AUTHORITY);
 });
 
 beforeEach(() => {
@@ -1055,7 +1161,7 @@ beforeEach(() => {
 });
 
 describe('deployment command adapters', () => {
-  it('keeps the source lifecycle and narrows packaged deployment to preview, apply, status, exec, and destroy', () => {
+  it('keeps the source lifecycle and exposes the closed packaged deployment leaves', () => {
     expect(createSourceDeploymentCommand).toEqual(expect.any(Function));
     expect(createPackagedDeploymentCommand).toEqual(expect.any(Function));
     expectFreshLeaves(createSourceDeploymentCommand, SOURCE_LEAF_NAMES);
@@ -1106,12 +1212,18 @@ describe('deployment command adapters', () => {
     expect(
       leaf(packaged, 'status').options.map((option) => option.long),
     ).toEqual(['--deployment-instance', '--data-root', '--json']);
+    expect(
+      leaf(packaged, 'update').options.map((option) => option.long),
+    ).toEqual(['--deployment-instance', '--data-root', '--json']);
+    expect(
+      leaf(packaged, 'recover').options.map((option) => option.long),
+    ).toEqual(['--deployment-instance', '--data-root', '--json']);
     expect(leaf(packaged, 'exec').options.map((option) => option.long)).toEqual(
       ['--deployment-instance', '--data-root'],
     );
     expect(
       leaf(packaged, 'destroy').options.map((option) => option.long),
-    ).toEqual(['--deployment-instance', '--provider', '--data-root', '--json']);
+    ).toEqual(['--deployment-instance', '--data-root', '--json']);
     for (const name of ['inspect', 'reconcile', 'destroy']) {
       expect(
         leaf(source, name).options.map((option) => option.long),
@@ -1401,6 +1513,30 @@ describe('packaged deployment command adapter', () => {
       '--data-root',
     ],
     [
+      'update --deployment-instance',
+      'update',
+      [
+        '--deployment-instance',
+        PACKAGED_DEPLOYMENT_INSTANCE_ID,
+        '--deployment-instance',
+        PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      ],
+      '--deployment-instance',
+    ],
+    [
+      'recover --data-root',
+      'recover',
+      [
+        '--deployment-instance',
+        PACKAGED_DEPLOYMENT_INSTANCE_ID,
+        '--data-root',
+        '/operator/one',
+        '--data-root',
+        '/operator/two',
+      ],
+      '--data-root',
+    ],
+    [
       'exec --deployment-instance',
       'exec',
       [
@@ -1436,23 +1572,8 @@ describe('packaged deployment command adapter', () => {
         PACKAGED_DEPLOYMENT_INSTANCE_ID,
         '--deployment-instance',
         PACKAGED_DEPLOYMENT_INSTANCE_ID,
-        '--provider',
-        'hetzner',
       ],
       '--deployment-instance',
-    ],
-    [
-      'destroy --provider',
-      'destroy',
-      [
-        '--deployment-instance',
-        PACKAGED_DEPLOYMENT_INSTANCE_ID,
-        '--provider',
-        'hetzner',
-        '--provider',
-        'hetzner',
-      ],
-      '--provider',
     ],
     [
       'destroy --data-root',
@@ -1460,8 +1581,6 @@ describe('packaged deployment command adapter', () => {
       [
         '--deployment-instance',
         PACKAGED_DEPLOYMENT_INSTANCE_ID,
-        '--provider',
-        'hetzner',
         '--data-root',
         '/operator/one',
         '--data-root',
@@ -1486,6 +1605,7 @@ describe('packaged deployment command adapter', () => {
       expect(harness.awsPreview).not.toHaveBeenCalled();
       expect(harness.apply).not.toHaveBeenCalled();
       expect(harness.awsApply).not.toHaveBeenCalled();
+      expect(harness.update).not.toHaveBeenCalled();
       expect(harness.executeRemote).not.toHaveBeenCalled();
       expect(harness.destroy).not.toHaveBeenCalled();
       expect(harness.awsDestroy).not.toHaveBeenCalled();
@@ -1505,10 +1625,8 @@ describe('packaged deployment command adapter', () => {
         PACKAGED_DEPLOYMENT_INSTANCE_ID,
         '--provider',
         'aws',
-        '--region',
-        'us-east-1',
       ]),
-    ).rejects.toThrow("unknown option '--region'");
+    ).rejects.toThrow("unknown option '--provider'");
 
     expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
     expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
@@ -2184,7 +2302,7 @@ describe('packaged deployment command adapter', () => {
     expect(harness.createStatusReceipt).toHaveBeenCalledTimes(1);
     expect(harness.output.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'wharfie.single-node-deployment.status',
         provider: 'hetzner',
         status: 'converging',
@@ -2200,6 +2318,7 @@ describe('packaged deployment command adapter', () => {
           generation: journal.generation,
           incarnationId: journal.incarnationId,
           phase: 'planned',
+          releaseTransition: 'install',
         },
         providerState: expect.objectContaining({ status: 'exact' }),
         guest: {
@@ -2332,6 +2451,220 @@ describe('packaged deployment command adapter', () => {
     expect(harness.processRef.exitCode).toBe(1);
   });
 
+  it('updates an active journal from the invoking SEA exact embedded release', async () => {
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
+    const target = STATUS_UPDATE_TARGET;
+    const harness = makeStatusHarness(journal, {
+      embedded: createPackagedEmbeddedFixture(target),
+    });
+
+    await parse(harness.command, [
+      'update',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--data-root',
+      '/operator/update-authority',
+      '--json',
+    ]);
+
+    expectExactCall(harness.createJournalStore, {
+      appId: target.desired.intent.appId,
+      deploymentInstanceId: journal.deploymentInstanceId,
+      dataRoot: '/operator/update-authority',
+    });
+    expect(harness.createUpdateCoordinator).toHaveBeenCalledWith();
+    expectExactCall(harness.update, {
+      desired: target.desired,
+      revision: target.revision,
+      artifactRecord: target.artifactRecord,
+      observation: target.observation,
+      artifactSource: harness.source,
+      dataRoot: '/operator/update-authority',
+    });
+    expect(harness.output.json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.deployment.update',
+      provider: 'hetzner',
+      status: 'active',
+      deploymentId: 'production',
+      appId: 'status-app',
+      revisionId: target.revision.revisionId,
+      artifactId: target.artifactRecord.artifactId,
+      desiredRevisionId: target.desired.desiredRevisionId,
+      deploymentInstanceId: journal.deploymentInstanceId,
+      publicIpv4: STATUS_AUTHORITY.publicIpv4,
+    });
+    expect(harness.apply).not.toHaveBeenCalled();
+    expect(harness.destroy).not.toHaveBeenCalled();
+    expect(harness.readDeploymentPayload).toHaveBeenCalledTimes(1);
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('refuses update before reading payload when the journal is not active', async () => {
+    const journal = STATUS_HETZNER_JOURNAL;
+    const harness = makeStatusHarness(journal, {
+      embedded: createPackagedEmbeddedFixture(STATUS_UPDATE_TARGET),
+    });
+
+    await parse(harness.command, [
+      'update',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--json',
+    ]);
+
+    expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+    expect(harness.createUpdateCoordinator).not.toHaveBeenCalled();
+    expect(harness.update).not.toHaveBeenCalled();
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment update requires active local deployment authority; run deployment recover instead.',
+      }),
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('fails update closed when the coordinator activates a different artifact', async () => {
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
+    const target = STATUS_UPDATE_TARGET;
+    const update = jest.fn(async () => ({
+      schemaVersion: SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_SCHEMA_VERSION,
+      kind: SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_KIND,
+      provider: 'hetzner',
+      status: 'active',
+      deploymentInstanceId: journal.deploymentInstanceId,
+      desiredRevisionId: target.desired.desiredRevisionId,
+      artifactId: STATUS_AUTHORITY.artifactRecord.artifactId,
+      activationEvidenceId: ACTIVATION_EVIDENCE_ID,
+      publicIpv4: STATUS_AUTHORITY.publicIpv4,
+    }));
+    const harness = makeStatusHarness(journal, {
+      embedded: createPackagedEmbeddedFixture(target),
+      update,
+    });
+
+    await parse(harness.command, [
+      'update',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--json',
+    ]);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment update did not reach the exact active release.',
+      }),
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it.each([
+    ['apply', () => STATUS_HETZNER_JOURNAL, () => STATUS_AUTHORITY],
+    ['update', () => STATUS_PENDING_UPDATE_JOURNAL, () => STATUS_UPDATE_TARGET],
+    ['restore', () => STATUS_PENDING_UPDATE_JOURNAL, () => STATUS_AUTHORITY],
+    ['repair', () => STATUS_HETZNER_ACTIVE_JOURNAL, () => STATUS_AUTHORITY],
+    ['destroy', () => STATUS_DESTROYING_JOURNAL, () => STATUS_AUTHORITY],
+    ['none', () => STATUS_DESTROYED_JOURNAL, () => STATUS_AUTHORITY],
+  ])(
+    'recovers the exact durable %s frontier without mutable selectors',
+    async (expectedAction, getJournal, getTarget) => {
+      const journal = getJournal();
+      const target = getTarget();
+      const harness = makeStatusHarness(journal, {
+        embedded: createPackagedEmbeddedFixture(target),
+      });
+
+      await parse(harness.command, [
+        'recover',
+        '--deployment-instance',
+        journal.deploymentInstanceId,
+        '--json',
+      ]);
+
+      expect(harness.output.json).toHaveBeenCalledWith({
+        schemaVersion: 1,
+        kind: 'wharfie.deployment.recover',
+        provider: 'hetzner',
+        status: ['destroy', 'none'].includes(expectedAction)
+          ? 'destroyed'
+          : 'active',
+        action: expectedAction,
+        appId: 'status-app',
+        deploymentInstanceId: journal.deploymentInstanceId,
+        artifactId: ['destroy', 'none'].includes(expectedAction)
+          ? null
+          : target.artifactRecord.artifactId,
+        publicIpv4:
+          expectedAction === 'apply'
+            ? '203.0.113.41'
+            : ['destroy', 'none'].includes(expectedAction)
+              ? null
+              : STATUS_AUTHORITY.publicIpv4,
+      });
+      expect(harness.apply).toHaveBeenCalledTimes(
+        expectedAction === 'apply' ? 1 : 0,
+      );
+      expect(harness.update).toHaveBeenCalledTimes(
+        ['update', 'restore', 'repair'].includes(expectedAction) ? 1 : 0,
+      );
+      expect(harness.destroy).toHaveBeenCalledTimes(
+        expectedAction === 'destroy' ? 1 : 0,
+      );
+      expect(harness.readDeploymentPayload).toHaveBeenCalledTimes(
+        ['apply', 'update', 'restore', 'repair'].includes(expectedAction)
+          ? 1
+          : 0,
+      );
+      expect(harness.source.close).toHaveBeenCalledTimes(
+        ['apply', 'update', 'restore', 'repair'].includes(expectedAction)
+          ? 1
+          : 0,
+      );
+      expect(harness.output.failure).not.toHaveBeenCalled();
+      expect(harness.processRef.exitCode).toBeUndefined();
+      expectStatusJournalReadOnly(harness);
+    },
+  );
+
+  it('fails recovery closed when this SEA is not the exact pending release', async () => {
+    const wrongTarget = createSingleNodeStatusUpdateTarget(
+      STATUS_AUTHORITY,
+      'deployment-command-v3-wrong',
+    );
+    const harness = makeStatusHarness(STATUS_PENDING_UPDATE_JOURNAL, {
+      embedded: createPackagedEmbeddedFixture(wrongTarget),
+    });
+
+    await parse(harness.command, [
+      'recover',
+      '--deployment-instance',
+      STATUS_PENDING_UPDATE_JOURNAL.deploymentInstanceId,
+      '--json',
+    ]);
+
+    expect(harness.createUpdateCoordinator).not.toHaveBeenCalled();
+    expect(harness.update).not.toHaveBeenCalled();
+    expect(harness.apply).not.toHaveBeenCalled();
+    expect(harness.destroy).not.toHaveBeenCalled();
+    expect(harness.source.close).toHaveBeenCalledTimes(1);
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment recover requires the SEA containing the exact committed current or in-flight target release.',
+      }),
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
   it('executes exact application argv from active journal authority and relays bounded bytes and exit code unchanged', async () => {
     const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
     const stdout = Buffer.from([0x00, 0x6f, 0x75, 0x74, 0x0a]);
@@ -2356,7 +2689,7 @@ describe('packaged deployment command adapter', () => {
     ]);
 
     expectExactCall(harness.createJournalStore, {
-      appId: journal.desired.intent.appId,
+      appId: journal.providerIntent.intent.plan.desired.intent.appId,
       deploymentInstanceId: journal.deploymentInstanceId,
       dataRoot: '/operator/exec-authority',
     });
@@ -2482,15 +2815,14 @@ describe('packaged deployment command adapter', () => {
     expect(harness.processRef.exitCode).toBe(1);
   });
 
-  it('destroys from embedded app identity without reading the deployment payload', async () => {
-    const harness = makePackagedHarness();
+  it('derives Hetzner destroy authority from the journal without reading the deployment payload', async () => {
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
+    const harness = makeStatusHarness(journal);
 
     await parse(harness.command, [
       'destroy',
       '--deployment-instance',
-      PACKAGED_DEPLOYMENT_INSTANCE_ID,
-      '--provider',
-      'hetzner',
+      journal.deploymentInstanceId,
       '--json',
     ]);
 
@@ -2498,8 +2830,8 @@ describe('packaged deployment command adapter', () => {
     expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
     expect(harness.createDestroyCoordinator).toHaveBeenCalledWith();
     expectExactCall(harness.destroy, {
-      appId: 'adapter-app',
-      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      appId: 'status-app',
+      deploymentInstanceId: journal.deploymentInstanceId,
       dataRoot: '/stable/wharfie-data',
     });
     expect(harness.resolveDataRoot).toHaveBeenCalledWith();
@@ -2509,8 +2841,8 @@ describe('packaged deployment command adapter', () => {
       kind: 'wharfie.deployment.destroy',
       provider: 'hetzner',
       status: 'destroyed',
-      appId: 'adapter-app',
-      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      appId: 'status-app',
+      deploymentInstanceId: journal.deploymentInstanceId,
     });
     expect(JSON.stringify(harness.output.json.mock.calls[0][0])).not.toContain(
       'must-not-be-projected',
@@ -2521,14 +2853,13 @@ describe('packaged deployment command adapter', () => {
   });
 
   it('dispatches AWS destroy from journal-bound deployment authority', async () => {
-    const harness = makePackagedHarness();
+    const journal = STATUS_AWS_JOURNAL;
+    const harness = makeStatusHarness(journal);
 
     await parse(harness.command, [
       'destroy',
       '--deployment-instance',
-      PACKAGED_DEPLOYMENT_INSTANCE_ID,
-      '--provider',
-      'aws',
+      journal.deploymentInstanceId,
       '--json',
     ]);
 
@@ -2537,8 +2868,8 @@ describe('packaged deployment command adapter', () => {
     expect(harness.createAwsDestroyCoordinator).toHaveBeenCalledWith();
     expect(harness.createDestroyCoordinator).not.toHaveBeenCalled();
     expectExactCall(harness.awsDestroy, {
-      appId: 'adapter-app',
-      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      appId: 'status-app',
+      deploymentInstanceId: journal.deploymentInstanceId,
       dataRoot: '/stable/wharfie-data',
     });
     expect(harness.output.json).toHaveBeenCalledWith({
@@ -2546,8 +2877,8 @@ describe('packaged deployment command adapter', () => {
       kind: 'wharfie.deployment.destroy',
       provider: 'aws',
       status: 'destroyed',
-      appId: 'adapter-app',
-      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      appId: 'status-app',
+      deploymentInstanceId: journal.deploymentInstanceId,
     });
     expect(JSON.stringify(harness.output.json.mock.calls[0][0])).not.toContain(
       'must-not-be-projected',
@@ -2557,14 +2888,13 @@ describe('packaged deployment command adapter', () => {
   });
 
   it('uses explicit destroy state and emits one compact human result', async () => {
-    const harness = makePackagedHarness();
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
+    const harness = makeStatusHarness(journal);
 
     await parse(harness.command, [
       'destroy',
       '--deployment-instance',
-      PACKAGED_DEPLOYMENT_INSTANCE_ID,
-      '--provider',
-      'hetzner',
+      journal.deploymentInstanceId,
       '--data-root',
       '/operator/wharfie',
     ]);
@@ -2572,31 +2902,30 @@ describe('packaged deployment command adapter', () => {
     expect(harness.destroy.mock.calls[0][0].dataRoot).toBe('/operator/wharfie');
     expect(harness.resolveDataRoot).not.toHaveBeenCalled();
     expect(harness.output.line).toHaveBeenCalledWith(
-      `${PACKAGED_DEPLOYMENT_INSTANCE_ID} is destroyed for adapter-app`,
+      `${journal.deploymentInstanceId} is destroyed for status-app`,
     );
     expect(harness.output.json).not.toHaveBeenCalled();
     expect(harness.output.failure).not.toHaveBeenCalled();
   });
 
   it('refuses destroy output outside the embedded app authority', async () => {
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
     const destroy = jest.fn(async () => ({
       schemaVersion: HETZNER_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
       kind: HETZNER_SINGLE_NODE_DESTROY_RESULT_KIND,
       provider: 'hetzner',
       status: 'destroyed',
       appId: 'foreign-app',
-      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      deploymentInstanceId: journal.deploymentInstanceId,
     }));
-    const harness = makePackagedHarness({
+    const harness = makeStatusHarness(journal, {
       createDestroyCoordinator: jest.fn(() => ({ destroy })),
     });
 
     await parse(harness.command, [
       'destroy',
       '--deployment-instance',
-      PACKAGED_DEPLOYMENT_INSTANCE_ID,
-      '--provider',
-      'hetzner',
+      journal.deploymentInstanceId,
       '--json',
     ]);
 
@@ -2613,15 +2942,16 @@ describe('packaged deployment command adapter', () => {
   });
 
   it('refuses AWS destroy output outside the embedded app authority', async () => {
+    const journal = STATUS_AWS_JOURNAL;
     const awsDestroy = jest.fn(async () => ({
       schemaVersion: AWS_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
       kind: AWS_SINGLE_NODE_DESTROY_RESULT_KIND,
       provider: 'aws',
       status: 'destroyed',
       appId: 'foreign-app',
-      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      deploymentInstanceId: journal.deploymentInstanceId,
     }));
-    const harness = makePackagedHarness({
+    const harness = makeStatusHarness(journal, {
       createDestroyCoordinatorByProvider: {
         aws: jest.fn(() => ({ destroy: awsDestroy })),
       },
@@ -2630,9 +2960,7 @@ describe('packaged deployment command adapter', () => {
     await parse(harness.command, [
       'destroy',
       '--deployment-instance',
-      PACKAGED_DEPLOYMENT_INSTANCE_ID,
-      '--provider',
-      'aws',
+      journal.deploymentInstanceId,
       '--json',
     ]);
 

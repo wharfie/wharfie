@@ -961,7 +961,7 @@ the exact durable stage instead of treating that Node process as artifact
 authority.
 
 An executable built with `wharfie app package --self-deployable` instead
-exposes narrow AWS and Hetzner preview, apply, status, and destroy commands:
+exposes narrow AWS and Hetzner deployment commands:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
@@ -969,8 +969,10 @@ exposes narrow AWS and Hetzner preview, apply, status, and destroy commands:
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
-<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
-<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
+<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
+<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
 ```
 
 The command authenticates its embedded revision and Linux deployment SEA,
@@ -1006,12 +1008,21 @@ nor the guest. Its authority is bound to the embedded app identity, not to the
 outer SEA's current revision, so a newer SEA for the same application can
 inspect an older journal-bound deployment.
 
+Invoke `deployment update` through the new SEA. Its authenticated embedded
+Linux payload is the only new release authority; provider, placement, machine,
+access, mode, and deployment identity remain journal-bound. Invoke
+`deployment recover` after interruption. The target SEA resumes a pending
+update, while the committed-current SEA can reconverge current and abandon a
+failed target before a later update. A third release cannot replace an
+unresolved transition. `deployment exec` runs only the committed current
+artifact and fails closed if the guest advanced before local settlement.
+
 Destroy authenticates only the embedded app identity and uses the exact
 deployment instance plus durable local authority without decoding the large
-embedded Linux payload. The journal supplies the AWS region or Hetzner
-location selected by apply. Destroy therefore accepts neither `--region` nor
-`--location`; pass the same `--data-root` used for apply if the default stable
-root is not being used.
+embedded Linux payload. The journal supplies the provider and the AWS region
+or Hetzner location selected by apply. Destroy therefore accepts no provider,
+region, or location selector; pass the same `--data-root` used for apply if the
+default stable root is not being used.
 
 This experimental slice assumes provider networking already exists. AWS needs
 one available default VPC with a usable default subnet that assigns public IPv4

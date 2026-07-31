@@ -18,11 +18,16 @@ import {
   advanceSingleNodeDeploymentJournal,
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournalStore,
+  getSingleNodeDeploymentCurrentRelease,
+  getSingleNodeDeploymentEffectiveDesired,
+  getSingleNodeDeploymentEffectiveTargetRelease,
   getSingleNodeDeploymentProvisioningRecoveryState,
+  getSingleNodeDeploymentReleaseTransition,
   prepareSingleNodeDeploymentMutations,
-  recordSingleNodeDeploymentActivation,
   recordSingleNodeDeploymentResource,
   recordSingleNodeDeploymentSshHost,
+  recordSingleNodeDeploymentTransitionActivation,
+  settleSingleNodeDeploymentReleaseTransition,
   validateSingleNodeDeploymentJournal,
 } from '../../single-node-deployment-journal.js';
 import {
@@ -736,7 +741,8 @@ export function createAwsSingleNodeApplyCoordinator(dependencies) {
             : validateSingleNodeDeploymentJournal(journalValue);
         if (
           journal !== null &&
-          journal.desired.desiredRevisionId !== desired.desiredRevisionId
+          getSingleNodeDeploymentEffectiveDesired(journal).desiredRevisionId !==
+            desired.desiredRevisionId
         ) {
           throw new Error(
             'awsSingleNodeApply durable desired state conflicts with this apply.',
@@ -745,7 +751,9 @@ export function createAwsSingleNodeApplyCoordinator(dependencies) {
         if (
           journal !== null &&
           (journal.providerIntent.provider !== 'aws' ||
-            ['destroying', 'destroyed'].includes(journal.phase))
+            ['destroying', 'destroyed'].includes(journal.phase) ||
+            getSingleNodeDeploymentReleaseTransition(journal)?.kind ===
+              'update')
         ) {
           throw new Error(
             'awsSingleNodeApply cannot resume this deployment journal.',
@@ -886,8 +894,8 @@ export function createAwsSingleNodeApplyCoordinator(dependencies) {
           journal
         );
         if (
-          currentJournal.desired.desiredRevisionId !==
-            desired.desiredRevisionId ||
+          getSingleNodeDeploymentEffectiveDesired(currentJournal)
+            .desiredRevisionId !== desired.desiredRevisionId ||
           currentJournal.incarnationId !== incarnationId ||
           currentJournal.providerIntent.provider !== 'aws' ||
           currentJournal.providerIntent.intent.provisioningIntentId !==
@@ -1074,35 +1082,79 @@ export function createAwsSingleNodeApplyCoordinator(dependencies) {
           sshHostKeyFingerprint: enrolledHost.fingerprint,
           sshPublicKeyFingerprint: sshIdentity.publicKeyFingerprint,
         };
+        const retainedArtifactIds = [
+          currentJournal.release.current,
+          currentJournal.release.rollback,
+          currentJournal.release.transition?.target,
+        ]
+          .filter((release) => release !== null && release !== undefined)
+          .map((release) => release.desired.artifact.artifactId)
+          .filter((artifactId, index, values) =>
+            values.slice(0, index).every((value) => value !== artifactId),
+          )
+          .sort();
         const observedActivation = validateSingleNodeRemoteActivationEvidence(
           await invoke(ports.activate, {
             desired,
             incarnationId,
             providerAddress,
+            retainedArtifactIds,
             sshIdentity,
             ...artifactInput,
           }),
           activationContext,
         );
-        if (currentJournal.activation === null) {
-          await commit(
-            recordSingleNodeDeploymentActivation(
-              currentJournal,
-              observedActivation,
-            ),
+        const releaseTransition =
+          getSingleNodeDeploymentReleaseTransition(currentJournal);
+        /** @type {Readonly<Record<string, any>>} */
+        let activation;
+        if (releaseTransition !== null) {
+          if (releaseTransition.kind !== 'install') {
+            throw new Error(
+              'awsSingleNodeApply cannot reconcile an in-flight release update.',
+            );
+          }
+          if (releaseTransition.target.activation === null) {
+            await commit(
+              recordSingleNodeDeploymentTransitionActivation(
+                currentJournal,
+                observedActivation,
+              ),
+            );
+          } else if (
+            JSON.stringify(releaseTransition.target.activation) !==
+            JSON.stringify(observedActivation)
+          ) {
+            throw new Error(
+              'awsSingleNodeApply activation conflicts with durable transition evidence.',
+            );
+          }
+          const targetRelease =
+            getSingleNodeDeploymentEffectiveTargetRelease(currentJournal);
+          activation = validateSingleNodeRemoteActivationEvidence(
+            targetRelease.activation,
+            activationContext,
           );
-        } else if (
-          JSON.stringify(currentJournal.activation) !==
-          JSON.stringify(observedActivation)
-        ) {
-          throw new Error(
-            'awsSingleNodeApply activation conflicts with durable evidence.',
+          await commit(
+            settleSingleNodeDeploymentReleaseTransition(currentJournal),
+          );
+        } else {
+          const currentRelease =
+            getSingleNodeDeploymentCurrentRelease(currentJournal);
+          if (
+            currentRelease === null ||
+            JSON.stringify(currentRelease.activation) !==
+              JSON.stringify(observedActivation)
+          ) {
+            throw new Error(
+              'awsSingleNodeApply activation conflicts with the committed release.',
+            );
+          }
+          activation = validateSingleNodeRemoteActivationEvidence(
+            currentRelease.activation,
+            activationContext,
           );
         }
-        const activation = validateSingleNodeRemoteActivationEvidence(
-          currentJournal.activation,
-          activationContext,
-        );
         if (currentJournal.phase === 'activating') {
           await commit(
             advanceSingleNodeDeploymentJournal(currentJournal, 'active'),
