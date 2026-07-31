@@ -764,11 +764,15 @@ function assertInstanceIdentity(
   const instance = record.instance;
   const spec = intent.plan.providerSpec;
   const id = evidenceId(instance.InstanceId, INSTANCE_ID_PATTERN);
+  const state = isPlainObject(instance.State) ? instance.State.Name : null;
+  const terminal =
+    typeof state === 'string' && TERMINAL_INSTANCE_STATES.has(state);
   if (
     (storedId !== null && id !== storedId) ||
     record.reservation.OwnerId !== spec.providerScope.accountId ||
     instance.ClientToken !== expectedClientToken ||
-    instance.SubnetId !== spec.subnet.subnetId
+    (instance.SubnetId !== spec.subnet.subnetId &&
+      !(terminal && instance.SubnetId === undefined))
   ) {
     throw new AwsSingleNodeEvidenceConflictError();
   }
