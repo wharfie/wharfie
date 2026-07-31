@@ -61,8 +61,10 @@ import {
   HETZNER_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
 } from '../../../src/core/runtime/providers/hetzner/single-node-destroy.js';
 import {
+  createSingleNodeStatusActiveJournal,
   createSingleNodeStatusAuthorityFixture,
   createSingleNodeStatusInitialJournal,
+  createProcessOutcome,
 } from '../../runtime/fixtures/single-node-status-fixture.js';
 
 const AWS_SOURCE_DEPLOYMENT_IMPORT =
@@ -136,6 +138,7 @@ const PACKAGED_LEAF_NAMES = Object.freeze([
   'preview',
   'apply',
   'status',
+  'exec',
   'destroy',
 ]);
 const DEFAULT_OPERATIONS = Object.freeze([
@@ -435,6 +438,8 @@ const PACKAGED_DEPLOYMENT_INSTANCE_ID = getSingleNodeDeploymentInstanceId(
 let STATUS_AUTHORITY;
 /** @type {Readonly<Record<string, any>>} */
 let STATUS_HETZNER_JOURNAL;
+/** @type {Readonly<Record<string, any>>} */
+let STATUS_HETZNER_ACTIVE_JOURNAL;
 /** @type {Readonly<Record<string, any>>} */
 let STATUS_AWS_JOURNAL;
 const STATUS_AWS_REGION = 'us-east-2';
@@ -799,6 +804,8 @@ function makePackagedHarness(overrides = {}) {
     }));
   const createStatusReceipt =
     overrides.createStatusReceipt ?? jest.fn(createSingleNodeDeploymentStatus);
+  const executeRemote =
+    overrides.executeRemote ?? jest.fn(async () => createProcessOutcome());
   const apply = jest.fn(async (/** @type {Record<string, any>} */ request) => {
     const desired = createSingleNodeDeploymentDesired({
       intent: request.intent,
@@ -875,6 +882,8 @@ function makePackagedHarness(overrides = {}) {
   const output = {
     json: jest.fn(),
     line: jest.fn(),
+    stdout: jest.fn(),
+    stderr: jest.fn(),
     failure: jest.fn(),
   };
   const processRef = { exitCode: undefined };
@@ -893,6 +902,7 @@ function makePackagedHarness(overrides = {}) {
         overrides.inspectStatusByProvider?.hetzner ?? inspectHetznerStatus,
     },
     inspectRemoteStatus,
+    executeRemote,
     createStatusReceipt,
     createApplyCoordinator,
     createDestroyCoordinator,
@@ -926,6 +936,7 @@ function makePackagedHarness(overrides = {}) {
     inspectAwsStatus,
     inspectHetznerStatus,
     inspectRemoteStatus,
+    executeRemote,
     createStatusReceipt,
     apply,
     createApplyCoordinator,
@@ -1029,6 +1040,8 @@ beforeAll(async () => {
   STATUS_AUTHORITY = await createSingleNodeStatusAuthorityFixture();
   STATUS_HETZNER_JOURNAL =
     createSingleNodeStatusInitialJournal(STATUS_AUTHORITY);
+  STATUS_HETZNER_ACTIVE_JOURNAL =
+    createSingleNodeStatusActiveJournal(STATUS_AUTHORITY);
   STATUS_AWS_JOURNAL = await createTestAwsStatusJournal(STATUS_AUTHORITY);
 });
 
@@ -1042,7 +1055,7 @@ beforeEach(() => {
 });
 
 describe('deployment command adapters', () => {
-  it('keeps the source lifecycle and narrows packaged deployment to preview, apply, status, and destroy', () => {
+  it('keeps the source lifecycle and narrows packaged deployment to preview, apply, status, exec, and destroy', () => {
     expect(createSourceDeploymentCommand).toEqual(expect.any(Function));
     expect(createPackagedDeploymentCommand).toEqual(expect.any(Function));
     expectFreshLeaves(createSourceDeploymentCommand, SOURCE_LEAF_NAMES);
@@ -1093,6 +1106,9 @@ describe('deployment command adapters', () => {
     expect(
       leaf(packaged, 'status').options.map((option) => option.long),
     ).toEqual(['--deployment-instance', '--data-root', '--json']);
+    expect(leaf(packaged, 'exec').options.map((option) => option.long)).toEqual(
+      ['--deployment-instance', '--data-root'],
+    );
     expect(
       leaf(packaged, 'destroy').options.map((option) => option.long),
     ).toEqual(['--deployment-instance', '--provider', '--data-root', '--json']);
@@ -1385,6 +1401,34 @@ describe('packaged deployment command adapter', () => {
       '--data-root',
     ],
     [
+      'exec --deployment-instance',
+      'exec',
+      [
+        '--deployment-instance',
+        PACKAGED_DEPLOYMENT_INSTANCE_ID,
+        '--deployment-instance',
+        PACKAGED_DEPLOYMENT_INSTANCE_ID,
+        '--',
+        'manifest',
+      ],
+      '--deployment-instance',
+    ],
+    [
+      'exec --data-root',
+      'exec',
+      [
+        '--deployment-instance',
+        PACKAGED_DEPLOYMENT_INSTANCE_ID,
+        '--data-root',
+        '/operator/one',
+        '--data-root',
+        '/operator/two',
+        '--',
+        'manifest',
+      ],
+      '--data-root',
+    ],
+    [
       'destroy --deployment-instance',
       'destroy',
       [
@@ -1442,6 +1486,7 @@ describe('packaged deployment command adapter', () => {
       expect(harness.awsPreview).not.toHaveBeenCalled();
       expect(harness.apply).not.toHaveBeenCalled();
       expect(harness.awsApply).not.toHaveBeenCalled();
+      expect(harness.executeRemote).not.toHaveBeenCalled();
       expect(harness.destroy).not.toHaveBeenCalled();
       expect(harness.awsDestroy).not.toHaveBeenCalled();
     },
@@ -2284,6 +2329,156 @@ describe('packaged deployment command adapter', () => {
     expect(harness.output.json).not.toHaveBeenCalled();
     expect(harness.output.line).not.toHaveBeenCalled();
     expectStatusJournalReadOnly(harness);
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('executes exact application argv from active journal authority and relays bounded bytes and exit code unchanged', async () => {
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
+    const stdout = Buffer.from([0x00, 0x6f, 0x75, 0x74, 0x0a]);
+    const stderr = Buffer.from([0x65, 0x72, 0x72, 0x00]);
+    const outcome = createProcessOutcome({ exitCode: 23, stdout, stderr });
+    const executeRemote = jest.fn(async () => outcome);
+    const harness = makeStatusHarness(journal, { executeRemote });
+
+    await parse(harness.command, [
+      'exec',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--data-root',
+      '/operator/exec-authority',
+      '--',
+      'workflow',
+      'start',
+      '--json',
+      'two words',
+      '$HOME',
+      'semi;colon',
+    ]);
+
+    expectExactCall(harness.createJournalStore, {
+      appId: journal.desired.intent.appId,
+      deploymentInstanceId: journal.deploymentInstanceId,
+      dataRoot: '/operator/exec-authority',
+    });
+    expectExactCall(executeRemote, {
+      journal,
+      dataRoot: '/operator/exec-authority',
+      argv: ['workflow', 'start', '--json', 'two words', '$HOME', 'semi;colon'],
+    });
+    expect(harness.output.stdout).toHaveBeenCalledTimes(1);
+    expect(harness.output.stdout.mock.calls[0][0]).toBe(stdout);
+    expect(harness.output.stderr).toHaveBeenCalledTimes(1);
+    expect(harness.output.stderr.mock.calls[0][0]).toBe(stderr);
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.output.line).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.resolveDataRoot).not.toHaveBeenCalled();
+    expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+    expect(harness.inspectAwsStatus).not.toHaveBeenCalled();
+    expect(harness.inspectHetznerStatus).not.toHaveBeenCalled();
+    expect(harness.inspectRemoteStatus).not.toHaveBeenCalled();
+    expectStatusJournalReadOnly(harness);
+    expect(harness.processRef.exitCode).toBe(23);
+  });
+
+  it('executes the deployed application with empty argv', async () => {
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
+    const harness = makeStatusHarness(journal);
+
+    await parse(harness.command, [
+      'exec',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+    ]);
+
+    expectExactCall(harness.executeRemote, {
+      journal,
+      dataRoot: '/stable/wharfie-data',
+      argv: [],
+    });
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(0);
+  });
+
+  it('refuses exec before remote contact when durable authority is not active', async () => {
+    const journal = STATUS_HETZNER_JOURNAL;
+    const harness = makeStatusHarness(journal);
+
+    await parse(harness.command, [
+      'exec',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--',
+      'manifest',
+    ]);
+
+    expect(harness.executeRemote).not.toHaveBeenCalled();
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment exec requires active local deployment authority.',
+      }),
+    );
+    expect(harness.output.stdout).not.toHaveBeenCalled();
+    expect(harness.output.stderr).not.toHaveBeenCalled();
+    expectStatusJournalReadOnly(harness);
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('refuses exec without existing journal-bound authority', async () => {
+    const harness = makePackagedHarness();
+
+    await parse(harness.command, [
+      'exec',
+      '--deployment-instance',
+      PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      '--',
+      'manifest',
+    ]);
+
+    expect(harness.executeRemote).not.toHaveBeenCalled();
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment exec requires existing local deployment authority.',
+      }),
+    );
+    expect(harness.output.stdout).not.toHaveBeenCalled();
+    expect(harness.output.stderr).not.toHaveBeenCalled();
+    expectStatusJournalReadOnly(harness);
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('does not expose partial output when remote execution has no exact exit', async () => {
+    const journal = STATUS_HETZNER_ACTIVE_JOURNAL;
+    const executeRemote = jest.fn(async () => ({
+      status: 'ambiguous',
+      exitCode: null,
+      signal: 'SIGKILL',
+      timedOut: true,
+      stdout: Buffer.from('partial stdout'),
+      stderr: Buffer.from('partial stderr'),
+    }));
+    const harness = makeStatusHarness(journal, { executeRemote });
+
+    await parse(harness.command, [
+      'exec',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--',
+      'workflow',
+      'inspect',
+    ]);
+
+    expect(executeRemote).toHaveBeenCalledTimes(1);
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment exec did not observe an exact remote exit.',
+      }),
+    );
+    expect(harness.output.stdout).not.toHaveBeenCalled();
+    expect(harness.output.stderr).not.toHaveBeenCalled();
     expect(harness.processRef.exitCode).toBe(1);
   });
 

@@ -61,9 +61,11 @@ The repository has substantial foundations:
   update, rollback, failed-target restoration, history/output reads,
   uninstall, prune, and host cleanup; and
 - packaged AWS and Hetzner single-node read-only preview and status plus
-  apply/destroy commands, recoverable provider mutations, automated recovery
-  proofs, and live packaged apply/activate/adopt/restart/destroy proofs with
-  independent owned-resource cleanup.
+  apply/exec/destroy commands, recoverable provider mutations, automated
+  recovery proofs, and live packaged apply/activate/adopt/restart/destroy
+  proofs with independent owned-resource cleanup. Journal-bound `exec` reaches
+  only the exact active remote application through pinned SSH, although that
+  command has not yet received a new live-provider proof.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -223,6 +225,12 @@ capability.
   outer SEA's current revision. The
   [packaged status checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-status.md)
   records the receipt and no-write boundaries.
+- The same SEA can execute ordinary application or packaged operator argv on
+  the exact active guest artifact with `deployment exec`. The command re-proves
+  journal, SSH, bootstrap, artifact, and service authority without provider
+  credentials or a generic remote shell. The
+  [packaged exec checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-exec.md)
+  records the boundary and automated evidence.
 - AWS reuses a qualifying default-VPC public-network path; Hetzner uses its
   public network. The current node root disk holds application and control
   data, so destroy is deliberately data-destructive.
@@ -240,13 +248,14 @@ capability.
 
 ### Work next
 
-1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
-   two-provider harness, including live packaged preview, guest audit, reboot,
-   unfinished durable work, fault injection, and bounded proof receipts.
-2. Extend the packaged preview/apply/status/destroy surface with an
+1. Extend the packaged preview/apply/status/exec/destroy surface with an
    approachable update and recovery sequence, preserving the read-only
    preview/status boundaries and explicit owned-versus-referenced resource
    split.
+2. Complete the remaining ADR 0035 evidence in one repeatable, redacted
+   two-provider harness, including live packaged preview, packaged remote
+   durable work, guest audit, reboot, fault injection, and bounded proof
+   receipts.
 3. Decide and implement an explicit retained-data capability before making any
    durability claim beyond the current root-disk lifecycle.
 4. Delete or quarantine provider abstractions that do not help this one

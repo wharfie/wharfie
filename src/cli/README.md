@@ -139,7 +139,7 @@ wharfie deployment destroy <deployment-instance> --region <region> [--control-po
 
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
-AWS and Hetzner preview, apply, status, and destroy:
+AWS and Hetzner preview, apply, status, exec, and destroy:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
@@ -147,6 +147,7 @@ AWS and Hetzner preview, apply, status, and destroy:
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
@@ -174,6 +175,13 @@ creates no local or provider state, and mutates neither provider nor guest.
 The read is bound to the executable's embedded app identity but not to the
 outer SEA's current revision, so it can inspect an older deployment of the
 same app.
+
+Exec also derives all authority from the existing active journal and accepts
+no provider, placement, credential, host, identity, or executable selector.
+Arguments after `--` are forwarded to only the journal-pinned active
+application SEA. Its bounded stdout and stderr bytes are relayed without
+formatting, and its observed remote exit code becomes the local exit code.
+Exec performs no provider reads or mutations.
 
 Destroy authenticates only the embedded app identity, then uses the exact
 deployment instance and durable local authority without decoding the embedded
