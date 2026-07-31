@@ -961,13 +961,14 @@ the exact durable stage instead of treating that Node process as artifact
 authority.
 
 An executable built with `wharfie app package --self-deployable` instead
-exposes narrow AWS and Hetzner preview, apply, and destroy commands:
+exposes narrow AWS and Hetzner preview, apply, status, and destroy commands:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
@@ -995,6 +996,16 @@ its exact generated identities before mutation. AWS reports its exact
 account/partition/region scope; Hetzner validates its project-scoped token but
 the API does not expose the project identity.
 
+Status is also read-only, but starts from one exact durable deployment journal
+instead of desired input. It derives the provider and scope from that journal,
+joins it with an exact provider observation and the pinned guest's packaged
+`service status`, and reports one current disposition. Status accepts no
+`--provider`, `--region`, or `--location`; use the same `--data-root` used for
+apply. It creates no missing local state and mutates neither cloud resources
+nor the guest. Its authority is bound to the embedded app identity, not to the
+outer SEA's current revision, so a newer SEA for the same application can
+inspect an older journal-bound deployment.
+
 Destroy authenticates only the embedded app identity and uses the exact
 deployment instance plus durable local authority without decoding the large
 embedded Linux payload. The journal supplies the AWS region or Hetzner
@@ -1014,12 +1025,12 @@ control data currently live on the node's root disk. Destroy removes these
 owned resources and permanently deletes that root-disk data; it does not
 retain an application data volume.
 
-Packaged inspect and reconcile are not exposed yet. Focused automated tests
-cover both provider coordinators. The AWS path completed a live packaged
-apply/activate/adopt/restart/destroy slice with independently verified cleanup
-in `us-east-2` on 2026-07-29. Hetzner completed the equivalent live slice in
-`fsn1`, including second-process adoption without replacement and independently
-verified cleanup.
+Packaged `deployment inspect` and `deployment reconcile` are not exposed yet.
+Focused automated tests cover both provider coordinators. The AWS path
+completed a live packaged apply/activate/adopt/restart/destroy slice with
+independently verified cleanup in `us-east-2` on 2026-07-29. Hetzner completed
+the equivalent live slice in `fsn1`, including second-process adoption without
+replacement and independently verified cleanup.
 
 The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,

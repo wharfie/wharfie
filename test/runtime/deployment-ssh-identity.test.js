@@ -13,7 +13,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from '@jest/globals';
 
 import { createBoundedProcessRunner } from '../../src/core/runtime/bounded-process.js';
-import { createDeploymentSshIdentityStore } from '../../src/core/runtime/deployment-ssh-identity.js';
+import {
+  DeploymentSshIdentityMissingError,
+  createDeploymentSshIdentityStore,
+} from '../../src/core/runtime/deployment-ssh-identity.js';
 import {
   createSingleNodeDeploymentIncarnationId,
   getSingleNodeDeploymentInstanceId,
@@ -68,6 +71,15 @@ async function makeStore(runProcess = createBoundedProcessRunner()) {
 }
 
 describe('deployment SSH identity store', () => {
+  it('requires an existing identity without creating its root', async () => {
+    const { root, store } = await makeStore();
+
+    await expect(store.readIdentity(makeSelection())).rejects.toBeInstanceOf(
+      DeploymentSshIdentityMissingError,
+    );
+    await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('generates one private Ed25519 identity with exact modes', async () => {
     const { store } = await makeStore();
     const identity = await store.ensureIdentity(makeSelection());
@@ -90,8 +102,10 @@ describe('deployment SSH identity store', () => {
     const selection = makeSelection();
     const first = await store.ensureIdentity(selection);
     const privateBytes = await readFile(first.privateKeyPath);
+    const required = await store.readIdentity(selection);
     const second = await store.ensureIdentity(selection);
 
+    expect(required).toEqual(first);
     expect(second).toEqual(first);
     expect(await readFile(second.privateKeyPath)).toEqual(privateBytes);
   });

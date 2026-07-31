@@ -10,6 +10,7 @@ import {
   createHetznerProvisionedResourceRecord,
   createHetznerProvisioningMutationAttempt,
   createHetznerSingleNodeProvisioningIntent,
+  inspectHetznerSingleNodeProvisioning,
   reconcileHetznerPreparedCreateForDestroy,
   validateHetznerProvisionedResourceRecord,
   validateHetznerProvisioningMutationAttempt,
@@ -734,6 +735,117 @@ describe('Hetzner single-node provisioning convergence', () => {
       'primaryIp',
       'server',
     ]);
+  });
+
+  it('inspects exact resources once through only six read capabilities', async () => {
+    const fixture = await makeFixture();
+    const provider = makeProvider(fixture);
+    const result = await convergeHetznerSingleNodeProvisioning({
+      ...fixture,
+      api: provider.api,
+      waitForAction: provider.waitForAction,
+      recordMutationAttempt: provider.recordMutationAttempt,
+      recordResource: provider.recordResource,
+    });
+    const createCounts = {
+      firewall: provider.api.createFirewall.mock.calls.length,
+      primaryIp: provider.api.createPrimaryIp.mock.calls.length,
+      server: provider.api.createServer.mock.calls.length,
+    };
+    let mutationCapabilityRead = false;
+    const readApi = {
+      listFirewalls: provider.api.listFirewalls,
+      getFirewall: provider.api.getFirewall,
+      listPrimaryIps: provider.api.listPrimaryIps,
+      getPrimaryIp: provider.api.getPrimaryIp,
+      listServers: provider.api.listServers,
+      getServer: provider.api.getServer,
+    };
+    Object.defineProperty(readApi, 'createServer', {
+      enumerable: true,
+      get() {
+        mutationCapabilityRead = true;
+        throw new Error('mutation capability must remain unreachable');
+      },
+    });
+
+    await expect(
+      inspectHetznerSingleNodeProvisioning({
+        intent: fixture.intent,
+        storedResourceIds: {
+          firewall: result.resources.firewallId,
+          primaryIp: result.resources.primaryIpId,
+          server: result.resources.serverId,
+        },
+        api: readApi,
+      }),
+    ).resolves.toEqual({
+      firewall: { id: 10, state: 'exact', publicIpv4: null },
+      primaryIp: { id: 11, state: 'exact', publicIpv4: '192.0.2.44' },
+      server: { id: 12, state: 'exact', publicIpv4: '192.0.2.44' },
+    });
+    expect(mutationCapabilityRead).toBe(false);
+    expect(provider.api.createFirewall).toHaveBeenCalledTimes(
+      createCounts.firewall,
+    );
+    expect(provider.api.createPrimaryIp).toHaveBeenCalledTimes(
+      createCounts.primaryIp,
+    );
+    expect(provider.api.createServer).toHaveBeenCalledTimes(
+      createCounts.server,
+    );
+  });
+
+  it('maps transitional and drifted exact-ownership resources without polling', async () => {
+    const fixture = await makeFixture();
+    const provider = makeProvider(fixture);
+    const result = await convergeHetznerSingleNodeProvisioning({
+      ...fixture,
+      api: provider.api,
+      waitForAction: provider.waitForAction,
+      recordMutationAttempt: provider.recordMutationAttempt,
+      recordResource: provider.recordResource,
+    });
+    const input = {
+      intent: fixture.intent,
+      storedResourceIds: {
+        firewall: result.resources.firewallId,
+        primaryIp: result.resources.primaryIpId,
+        server: result.resources.serverId,
+      },
+      api: provider.api,
+    };
+
+    provider.state.servers[0].status = 'initializing';
+    await expect(
+      inspectHetznerSingleNodeProvisioning(input),
+    ).resolves.toMatchObject({
+      firewall: { state: 'exact' },
+      primaryIp: { state: 'exact' },
+      server: { state: 'settling' },
+    });
+
+    provider.state.servers[0].status = 'running';
+    const exactFirewallRules = clone(provider.state.firewalls[0].rules);
+    provider.state.firewalls[0].rules = [];
+    await expect(
+      inspectHetznerSingleNodeProvisioning(input),
+    ).resolves.toMatchObject({
+      firewall: { state: 'conflict' },
+      primaryIp: { state: 'exact' },
+      server: { state: 'exact' },
+    });
+
+    provider.state.firewalls[0].rules = exactFirewallRules;
+    provider.state.servers[0].publicIpv4.ip = '192.0.2.91';
+    await expect(
+      inspectHetznerSingleNodeProvisioning(input),
+    ).resolves.toMatchObject({
+      firewall: { state: 'exact' },
+      primaryIp: { state: 'exact', publicIpv4: '192.0.2.44' },
+      server: { state: 'conflict', publicIpv4: '192.0.2.91' },
+    });
+    expect(provider.wait).not.toHaveBeenCalled();
   });
 
   it.each(['firewall', 'primaryIp', 'server'])(

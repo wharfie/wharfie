@@ -611,14 +611,15 @@ consume exact durable staged evidence.
 
 `wharfie app package --self-deployable` creates an operator SEA carrying an
 authenticated Linux deployment SEA. That packaged executable replaces the
-legacy source lifecycle with narrow AWS and Hetzner preview, apply, and destroy
-commands:
+legacy source lifecycle with narrow AWS and Hetzner preview, apply, status, and
+destroy commands:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
@@ -640,6 +641,16 @@ the token through project-scoped reads but does not expose a project identity.
 Apply re-plans current provider state and then creates or recovers the fixed
 small single-node systemd-user deployment.
 
+Status is a strictly read-only evidence join over the exact local deployment
+journal, an exact observation from the journal-bound provider, and the pinned
+guest's packaged `service status`. The journal supplies the provider and its
+scope, so status accepts no provider, region, or location selector. It never
+creates local state or provider resources and never mutates either the
+provider or guest. Status binds the embedded application identity but not the
+outer SEA's current revision, so a newer SEA for the same app can inspect an
+older journal-bound deployment. See the
+[packaged deployment status checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-status.md).
+
 Destroy reads only the embedded app identity plus the exact durable journal
 under the selected data root; it does not decode the embedded Linux payload.
 The journal supplies the bound AWS region or Hetzner location, so packaged
@@ -658,12 +669,12 @@ primary IPv4, and server. Application and control data currently live on that
 node's root disk. Destroy therefore deletes that data along with the owned
 root volume or server; it is not a retained-data operation.
 
-Packaged inspect and reconcile are not exposed yet. The AWS path
-completed a live packaged apply/activate/adopt/restart/destroy slice in
-`us-east-2` on 2026-07-29, including independently verified instance, volume,
-and security-group cleanup. The Hetzner path completed the equivalent slice in
-`fsn1`, including second-process adoption without replacement and independently
-verified firewall, Primary IPv4, and server cleanup. See the
+Packaged `deployment inspect` and `deployment reconcile` are not exposed yet.
+The AWS path completed a live packaged apply/activate/adopt/restart/destroy
+slice in `us-east-2` on 2026-07-29, including independently verified instance,
+volume, and security-group cleanup. The Hetzner path completed the equivalent
+slice in `fsn1`, including second-process adoption without replacement and
+independently verified firewall, Primary IPv4, and server cleanup. See the
 [two-provider checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md).
 Create the canonical profile with
 `@wharfie/wharfie/deployment-profile`, whose narrow Node authoring API exports

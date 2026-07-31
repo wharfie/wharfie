@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 
 import { createApplicationRevision } from '../../../src/core/runtime/application-revision.js';
 import { createArtifactRecord } from '../../../src/core/runtime/artifact-record.js';
@@ -13,7 +20,14 @@ import {
 import {
   DEPLOYMENT_INSTANCE_ID_DOMAIN,
   DEPLOYMENT_INSTANCE_ID_PREFIX,
+  createAwsProviderScope,
 } from '../../../src/core/runtime/deployment-provider-scope.js';
+import { createAwsSingleNodeProvisioningIntent } from '../../../src/core/runtime/providers/aws/single-node-provisioning-intent.js';
+import {
+  AWS_SINGLE_NODE_INSTANCE_TYPE,
+  AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
+  resolveAwsSingleNodePlan,
+} from '../../../src/core/runtime/providers/aws/single-node-plan.js';
 import {
   SINGLE_NODE_ACCESS_KIND,
   SINGLE_NODE_DEPLOYMENT_MODE,
@@ -23,8 +37,13 @@ import {
   createSingleNodeDeploymentIntent,
 } from '../../../src/core/runtime/single-node-deployment-intent.js';
 import { createSingleNodeDeploymentDesired } from '../../../src/core/runtime/single-node-deployment-desired.js';
-import { getSingleNodeDeploymentInstanceId } from '../../../src/core/runtime/single-node-deployment-identity.js';
+import {
+  createSingleNodeDeploymentIncarnationId,
+  getSingleNodeDeploymentInstanceId,
+} from '../../../src/core/runtime/single-node-deployment-identity.js';
+import { createSingleNodeDeploymentJournal } from '../../../src/core/runtime/single-node-deployment-journal.js';
 import { validateSingleNodeDeploymentPreview } from '../../../src/core/runtime/single-node-deployment-preview.js';
+import { createSingleNodeDeploymentStatus } from '../../../src/core/runtime/single-node-deployment-status.js';
 import {
   AWS_SINGLE_NODE_APPLY_RESULT_KIND,
   AWS_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
@@ -41,6 +60,10 @@ import {
   HETZNER_SINGLE_NODE_DESTROY_RESULT_KIND,
   HETZNER_SINGLE_NODE_DESTROY_RESULT_SCHEMA_VERSION,
 } from '../../../src/core/runtime/providers/hetzner/single-node-destroy.js';
+import {
+  createSingleNodeStatusAuthorityFixture,
+  createSingleNodeStatusInitialJournal,
+} from '../../runtime/fixtures/single-node-status-fixture.js';
 
 const AWS_SOURCE_DEPLOYMENT_IMPORT =
   '../../../src/cli/app/aws-source-deployment.js';
@@ -109,7 +132,12 @@ const SOURCE_LEAF_NAMES = Object.freeze([
   'reconcile',
   'destroy',
 ]);
-const PACKAGED_LEAF_NAMES = Object.freeze(['preview', 'apply', 'destroy']);
+const PACKAGED_LEAF_NAMES = Object.freeze([
+  'preview',
+  'apply',
+  'status',
+  'destroy',
+]);
 const DEFAULT_OPERATIONS = Object.freeze([
   prepareAwsSelectedSeaPlan,
   applyAwsSelectedSea,
@@ -126,6 +154,203 @@ const DEFAULT_OPERATIONS = Object.freeze([
 /** @param {string|Buffer} value @returns {{algorithm: 'sha256', value: string}} */
 function digest(value) {
   return { algorithm: 'sha256', value: sha256Base64Url(value) };
+}
+
+function createTestAwsStatusPlanApi() {
+  const ids = STATUS_AWS_IDS;
+  return {
+    describeImages: async () => ({
+      Images: [
+        {
+          ImageId: ids.image,
+          OwnerId: AWS_SINGLE_NODE_UBUNTU_OWNER_ACCOUNT_ID,
+          Name: 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260701',
+          CreationDate: '2026-07-02T12:34:56.000Z',
+          Public: true,
+          State: 'available',
+          Architecture: 'x86_64',
+          ImageType: 'machine',
+          RootDeviceType: 'ebs',
+          RootDeviceName: '/dev/sda1',
+          VirtualizationType: 'hvm',
+          EnaSupport: true,
+          PlatformDetails: 'Linux/UNIX',
+          BlockDeviceMappings: [
+            {
+              DeviceName: '/dev/sda1',
+              Ebs: {
+                SnapshotId: ids.snapshot,
+                VolumeType: 'gp3',
+                VolumeSize: 8,
+                Encrypted: false,
+                DeleteOnTermination: true,
+              },
+            },
+            { DeviceName: '/dev/sdb', VirtualName: 'ephemeral0' },
+            { DeviceName: '/dev/sdc', VirtualName: 'ephemeral1' },
+          ],
+        },
+      ],
+    }),
+    describeInstanceTypeOfferings: async () => ({
+      InstanceTypeOfferings: [
+        {
+          InstanceType: AWS_SINGLE_NODE_INSTANCE_TYPE,
+          Location: 'use2-az1',
+        },
+      ],
+    }),
+    describeInstances: async () => ({ Reservations: [] }),
+    describeInternetGateways: async () => ({
+      InternetGateways: [
+        {
+          InternetGatewayId: ids.internetGateway,
+          OwnerId: STATUS_AWS_ACCOUNT_ID,
+          Attachments: [{ VpcId: ids.vpc, State: 'available' }],
+        },
+      ],
+    }),
+    describeNetworkAcls: async () => ({
+      NetworkAcls: [
+        {
+          NetworkAclId: ids.networkAcl,
+          VpcId: ids.vpc,
+          OwnerId: STATUS_AWS_ACCOUNT_ID,
+          IsDefault: true,
+          Associations: [
+            {
+              NetworkAclAssociationId: ids.networkAclAssociation,
+              NetworkAclId: ids.networkAcl,
+              SubnetId: ids.subnet,
+            },
+          ],
+          Entries: [
+            {
+              RuleNumber: 100,
+              Protocol: '-1',
+              RuleAction: 'allow',
+              Egress: false,
+              CidrBlock: '0.0.0.0/0',
+            },
+            {
+              RuleNumber: 32767,
+              Protocol: '-1',
+              RuleAction: 'deny',
+              Egress: false,
+              CidrBlock: '0.0.0.0/0',
+            },
+            {
+              RuleNumber: 100,
+              Protocol: '-1',
+              RuleAction: 'allow',
+              Egress: true,
+              CidrBlock: '0.0.0.0/0',
+            },
+            {
+              RuleNumber: 32767,
+              Protocol: '-1',
+              RuleAction: 'deny',
+              Egress: true,
+              CidrBlock: '0.0.0.0/0',
+            },
+          ],
+        },
+      ],
+    }),
+    describeRouteTables: async () => ({
+      RouteTables: [
+        {
+          RouteTableId: ids.routeTable,
+          VpcId: ids.vpc,
+          OwnerId: STATUS_AWS_ACCOUNT_ID,
+          Associations: [{ Main: true }],
+          Routes: [
+            {
+              DestinationCidrBlock: '0.0.0.0/0',
+              GatewayId: ids.internetGateway,
+              Origin: 'CreateRoute',
+              State: 'active',
+            },
+          ],
+        },
+      ],
+    }),
+    describeSecurityGroups: async () => ({ SecurityGroups: [] }),
+    describeSubnets: async () => ({
+      Subnets: [
+        {
+          SubnetId: ids.subnet,
+          VpcId: ids.vpc,
+          OwnerId: STATUS_AWS_ACCOUNT_ID,
+          State: 'available',
+          DefaultForAz: true,
+          MapPublicIpOnLaunch: true,
+          AssignIpv6AddressOnCreation: false,
+          Ipv6Native: false,
+          AvailableIpAddressCount: 4091,
+          AvailabilityZone: 'us-east-2a',
+          AvailabilityZoneId: 'use2-az1',
+        },
+      ],
+    }),
+    describeVolumes: async () => ({ Volumes: [] }),
+    describeVpcs: async () => ({
+      Vpcs: [
+        {
+          VpcId: ids.vpc,
+          OwnerId: STATUS_AWS_ACCOUNT_ID,
+          IsDefault: true,
+          State: 'available',
+        },
+      ],
+    }),
+  };
+}
+
+/**
+ * @param {Awaited<ReturnType<typeof createSingleNodeStatusAuthorityFixture>>} fixture
+ * @returns {Promise<Readonly<Record<string, any>>>}
+ */
+async function createTestAwsStatusJournal(fixture) {
+  const intent = createSingleNodeDeploymentIntent({
+    deployment: fixture.desired.intent.deployment,
+    appId: fixture.desired.intent.appId,
+    target: fixture.desired.intent.target,
+    mode: fixture.desired.intent.mode,
+    machine: fixture.desired.intent.machine,
+    access: fixture.desired.intent.access,
+    provider: { kind: 'aws', region: STATUS_AWS_REGION },
+  });
+  const desired = createSingleNodeDeploymentDesired({
+    intent,
+    revision: fixture.revision,
+    artifactRecord: fixture.artifactRecord,
+    observation: {
+      artifactId: fixture.artifactRecord.artifactId,
+      byteDigest: fixture.artifactRecord.byteDigest,
+      size: fixture.artifactRecord.size,
+    },
+  });
+  const plan = await resolveAwsSingleNodePlan({
+    desired,
+    providerScope: createAwsProviderScope({
+      partition: 'aws',
+      accountId: STATUS_AWS_ACCOUNT_ID,
+      region: STATUS_AWS_REGION,
+    }),
+    api: createTestAwsStatusPlanApi(),
+  });
+  const providerIntent = createAwsSingleNodeProvisioningIntent({
+    plan,
+    incarnationId: createSingleNodeDeploymentIncarnationId(
+      Buffer.alloc(32, 41),
+    ),
+    cloudInitDigest: digest('#cloud-config\n'),
+  });
+  return createSingleNodeDeploymentJournal({
+    desired,
+    providerIntent: { provider: 'aws', intent: providerIntent },
+  });
 }
 
 const EMBEDDED_REVISION = createApplicationRevision({
@@ -206,6 +431,24 @@ const PACKAGED_DEPLOYMENT_INSTANCE_ID = getSingleNodeDeploymentInstanceId(
     provider: createHetznerSingleNodeDeploymentProvider('ash'),
   }),
 );
+/** @type {Awaited<ReturnType<typeof createSingleNodeStatusAuthorityFixture>>} */
+let STATUS_AUTHORITY;
+/** @type {Readonly<Record<string, any>>} */
+let STATUS_HETZNER_JOURNAL;
+/** @type {Readonly<Record<string, any>>} */
+let STATUS_AWS_JOURNAL;
+const STATUS_AWS_REGION = 'us-east-2';
+const STATUS_AWS_ACCOUNT_ID = '123456789012';
+const STATUS_AWS_IDS = Object.freeze({
+  vpc: 'vpc-0123456789abcdef0',
+  subnet: 'subnet-0123456789abcdef0',
+  routeTable: 'rtb-0123456789abcdef0',
+  internetGateway: 'igw-0123456789abcdef0',
+  networkAcl: 'acl-0123456789abcdef0',
+  networkAclAssociation: 'aclassoc-0123456789abcdef0',
+  image: 'ami-0123456789abcdef0',
+  snapshot: 'snap-0123456789abcdef0',
+});
 
 /** @param {string} method @returns {Record<string, string>} */
 function operationResult(method) {
@@ -397,6 +640,30 @@ function createTestPreviewReceipt(request) {
 }
 
 /**
+ * @param {{journal: Readonly<Record<string, any>>}} request
+ * @returns {Readonly<Record<string, any>>}
+ */
+function createTestExactStatusObservation(request) {
+  const roles =
+    request.journal.providerIntent.provider === 'aws'
+      ? ['instance', 'root-volume', 'security-group']
+      : ['firewall', 'primary-ip', 'server'];
+  return Object.freeze({
+    status: 'exact',
+    resources: Object.freeze(
+      roles.map((role) =>
+        Object.freeze({
+          role,
+          id: null,
+          state: 'absent',
+          publicIpv4: null,
+        }),
+      ),
+    ),
+  });
+}
+
+/**
  * @param {(options?: Record<string, any>) => import('commander').Command} factory
  * @param {Record<string, any>} [operations]
  * @returns {{command: import('commander').Command, output: Record<string, jest.Mock>, processRef: {cwd: jest.Mock<() => string>, exitCode: number | undefined}, readJsonObjectFile: jest.Mock}}
@@ -444,7 +711,8 @@ function makePackagedHarness(overrides = {}) {
     verifyUnchanged: jest.fn(),
     close: jest.fn(async () => undefined),
   };
-  const readRevisionRuntimePair = jest.fn(async () => EMBEDDED_PAIR);
+  const readRevisionRuntimePair =
+    overrides.readRevisionRuntimePair ?? jest.fn(async () => EMBEDDED_PAIR);
   const readDeploymentPayload = jest.fn(async () => ({
     manifest: { kind: 'singleNodeDeploymentPayload' },
     artifactRecord: EMBEDDED_ARTIFACT_RECORD,
@@ -504,7 +772,8 @@ function makePackagedHarness(overrides = {}) {
       credential: 'must-not-be-projected',
     }),
   );
-  const readJournal = jest.fn(async () => null);
+  const readJournal =
+    overrides.readJournal ?? jest.fn(async () => overrides.journal ?? null);
   const prepareJournalStorage = jest.fn();
   const initializeJournal = jest.fn();
   const commitJournal = jest.fn();
@@ -518,6 +787,18 @@ function makePackagedHarness(overrides = {}) {
     overrides.createJournalStore ?? jest.fn(() => journalStore);
   const createPreviewReceipt =
     overrides.createPreviewReceipt ?? jest.fn(createTestPreviewReceipt);
+  const inspectAwsStatus = jest.fn(createTestExactStatusObservation);
+  const inspectHetznerStatus = jest.fn(createTestExactStatusObservation);
+  const inspectRemoteStatus =
+    overrides.inspectRemoteStatus ??
+    jest.fn(async () => ({
+      state: 'not-ready',
+      address: null,
+      hostKeyFingerprint: null,
+      service: null,
+    }));
+  const createStatusReceipt =
+    overrides.createStatusReceipt ?? jest.fn(createSingleNodeDeploymentStatus);
   const apply = jest.fn(async (/** @type {Record<string, any>} */ request) => {
     const desired = createSingleNodeDeploymentDesired({
       intent: request.intent,
@@ -606,6 +887,13 @@ function makePackagedHarness(overrides = {}) {
     },
     createJournalStore,
     createPreviewReceipt,
+    inspectStatusByProvider: {
+      aws: overrides.inspectStatusByProvider?.aws ?? inspectAwsStatus,
+      hetzner:
+        overrides.inspectStatusByProvider?.hetzner ?? inspectHetznerStatus,
+    },
+    inspectRemoteStatus,
+    createStatusReceipt,
     createApplyCoordinator,
     createDestroyCoordinator,
     createApplyCoordinatorByProvider: {
@@ -635,6 +923,10 @@ function makePackagedHarness(overrides = {}) {
     journalStore,
     createJournalStore,
     createPreviewReceipt,
+    inspectAwsStatus,
+    inspectHetznerStatus,
+    inspectRemoteStatus,
+    createStatusReceipt,
     apply,
     createApplyCoordinator,
     awsApply,
@@ -681,6 +973,29 @@ function expectExactCall(operation, expected) {
   expect(operation.mock.calls[0]).toStrictEqual([expected]);
 }
 
+/** @param {Readonly<Record<string, any>>} harness @returns {void} */
+function expectStatusJournalReadOnly(harness) {
+  expect(harness.readJournal).toHaveBeenCalledTimes(1);
+  expect(harness.prepareJournalStorage).not.toHaveBeenCalled();
+  expect(harness.initializeJournal).not.toHaveBeenCalled();
+  expect(harness.commitJournal).not.toHaveBeenCalled();
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} journal
+ * @param {Record<string, any>} [overrides]
+ * @returns {Readonly<Record<string, any>>}
+ */
+function makeStatusHarness(journal, overrides = {}) {
+  return makePackagedHarness({
+    journal,
+    readRevisionRuntimePair: jest.fn(async () => ({
+      runtime: { appId: journal.desired.intent.appId },
+    })),
+    ...overrides,
+  });
+}
+
 /**
  * @param {() => import('commander').Command} factory
  * @param {ReadonlyArray<string>} names
@@ -710,6 +1025,13 @@ function expectFreshLeaves(factory, names) {
   }
 }
 
+beforeAll(async () => {
+  STATUS_AUTHORITY = await createSingleNodeStatusAuthorityFixture();
+  STATUS_HETZNER_JOURNAL =
+    createSingleNodeStatusInitialJournal(STATUS_AUTHORITY);
+  STATUS_AWS_JOURNAL = await createTestAwsStatusJournal(STATUS_AUTHORITY);
+});
+
 beforeEach(() => {
   for (const operation of DEFAULT_OPERATIONS) {
     operation.mockReset();
@@ -720,7 +1042,7 @@ beforeEach(() => {
 });
 
 describe('deployment command adapters', () => {
-  it('keeps the source lifecycle and narrows packaged deployment to preview, apply, and destroy', () => {
+  it('keeps the source lifecycle and narrows packaged deployment to preview, apply, status, and destroy', () => {
     expect(createSourceDeploymentCommand).toEqual(expect.any(Function));
     expect(createPackagedDeploymentCommand).toEqual(expect.any(Function));
     expectFreshLeaves(createSourceDeploymentCommand, SOURCE_LEAF_NAMES);
@@ -768,6 +1090,9 @@ describe('deployment command adapters', () => {
       '--data-root',
       '--json',
     ]);
+    expect(
+      leaf(packaged, 'status').options.map((option) => option.long),
+    ).toEqual(['--deployment-instance', '--data-root', '--json']);
     expect(
       leaf(packaged, 'destroy').options.map((option) => option.long),
     ).toEqual(['--deployment-instance', '--provider', '--data-root', '--json']);
@@ -1780,6 +2105,185 @@ describe('packaged deployment command adapter', () => {
       }),
     );
     expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('derives Hetzner status from the journal and emits the exact JSON receipt without mutation', async () => {
+    const journal = STATUS_HETZNER_JOURNAL;
+    const harness = makeStatusHarness(journal);
+
+    await parse(harness.command, [
+      'status',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--data-root',
+      '/operator/status-authority',
+      '--json',
+    ]);
+
+    expect(harness.createJournalStore).toHaveBeenCalledWith({
+      appId: 'status-app',
+      deploymentInstanceId: journal.deploymentInstanceId,
+      dataRoot: '/operator/status-authority',
+    });
+    expect(harness.resolveDataRoot).not.toHaveBeenCalled();
+    expectExactCall(harness.inspectHetznerStatus, {
+      journal,
+      dataRoot: '/operator/status-authority',
+    });
+    expect(harness.inspectAwsStatus).not.toHaveBeenCalled();
+    expectExactCall(harness.inspectRemoteStatus, {
+      journal,
+      dataRoot: '/operator/status-authority',
+    });
+    expect(harness.createStatusReceipt).toHaveBeenCalledTimes(1);
+    expect(harness.output.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schemaVersion: 1,
+        kind: 'wharfie.single-node-deployment.status',
+        provider: 'hetzner',
+        status: 'converging',
+        reason: null,
+        nextAction: 'resume-apply',
+        deployment: expect.objectContaining({
+          appId: 'status-app',
+          deploymentId: 'production',
+          deploymentInstanceId: journal.deploymentInstanceId,
+        }),
+        journal: {
+          journalId: journal.journalId,
+          generation: journal.generation,
+          incarnationId: journal.incarnationId,
+          phase: 'planned',
+        },
+        providerState: expect.objectContaining({ status: 'exact' }),
+        guest: {
+          state: 'not-ready',
+          address: null,
+          hostKeyFingerprint: null,
+          service: null,
+        },
+      }),
+    );
+    expect(harness.output.line).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+    expectStatusJournalReadOnly(harness);
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('derives AWS dispatch from the journal without accepting a provider selector', async () => {
+    const journal = STATUS_AWS_JOURNAL;
+    const harness = makeStatusHarness(journal);
+
+    await parse(harness.command, [
+      'status',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+    ]);
+
+    expectExactCall(harness.inspectAwsStatus, { journal });
+    expect(harness.inspectHetznerStatus).not.toHaveBeenCalled();
+    expectExactCall(harness.inspectRemoteStatus, {
+      journal,
+      dataRoot: '/stable/wharfie-data',
+    });
+    expect(harness.output.line).toHaveBeenCalledWith(
+      `production is converging on aws; journal planned; provider exact; guest not-ready; next resume-apply (${journal.deploymentInstanceId})`,
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expectStatusJournalReadOnly(harness);
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('rejects a mutable provider selector before reading journal-bound status authority', async () => {
+    const journal = STATUS_AWS_JOURNAL;
+    const harness = makeStatusHarness(journal);
+    const command = leaf(harness.command, 'status');
+    command.exitOverride();
+    command.configureOutput({ writeErr: jest.fn() });
+
+    await expect(
+      parse(harness.command, [
+        'status',
+        '--deployment-instance',
+        journal.deploymentInstanceId,
+        '--provider',
+        'aws',
+      ]),
+    ).rejects.toThrow("unknown option '--provider'");
+
+    expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
+    expect(harness.readJournal).not.toHaveBeenCalled();
+    expect(harness.inspectAwsStatus).not.toHaveBeenCalled();
+    expect(harness.inspectHetznerStatus).not.toHaveBeenCalled();
+    expect(harness.inspectRemoteStatus).not.toHaveBeenCalled();
+    expect(harness.prepareJournalStorage).not.toHaveBeenCalled();
+    expect(harness.initializeJournal).not.toHaveBeenCalled();
+    expect(harness.commitJournal).not.toHaveBeenCalled();
+  });
+
+  it('skips guest inspection when journal-derived provider state is not exact and emits a human result', async () => {
+    const journal = STATUS_HETZNER_JOURNAL;
+    const inspectHetznerStatus = jest.fn(async () => ({
+      ...createTestExactStatusObservation({ journal }),
+      status: 'converging',
+    }));
+    const inspectRemoteStatus = jest.fn();
+    const harness = makeStatusHarness(journal, {
+      inspectStatusByProvider: { hetzner: inspectHetznerStatus },
+      inspectRemoteStatus,
+    });
+
+    await parse(harness.command, [
+      'status',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+    ]);
+
+    expectExactCall(inspectHetznerStatus, {
+      journal,
+      dataRoot: '/stable/wharfie-data',
+    });
+    expect(inspectRemoteStatus).not.toHaveBeenCalled();
+    expect(harness.output.line).toHaveBeenCalledWith(
+      `production is converging on hetzner; journal planned; provider converging; guest not-ready; next resume-apply (${journal.deploymentInstanceId})`,
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expectStatusJournalReadOnly(harness);
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('fails closed when status has no local journal and never reaches provider or guest state', async () => {
+    const harness = makePackagedHarness();
+
+    await parse(harness.command, [
+      'status',
+      '--deployment-instance',
+      PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      '--json',
+    ]);
+
+    expect(harness.createJournalStore).toHaveBeenCalledWith({
+      appId: 'adapter-app',
+      deploymentInstanceId: PACKAGED_DEPLOYMENT_INSTANCE_ID,
+      dataRoot: '/stable/wharfie-data',
+    });
+    expect(harness.inspectAwsStatus).not.toHaveBeenCalled();
+    expect(harness.inspectHetznerStatus).not.toHaveBeenCalled();
+    expect(harness.inspectRemoteStatus).not.toHaveBeenCalled();
+    expect(harness.createStatusReceipt).not.toHaveBeenCalled();
+    expect(harness.output.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          'Packaged deployment status requires existing local deployment authority.',
+      }),
+    );
+    expect(harness.output.json).not.toHaveBeenCalled();
+    expect(harness.output.line).not.toHaveBeenCalled();
+    expectStatusJournalReadOnly(harness);
     expect(harness.processRef.exitCode).toBe(1);
   });
 
