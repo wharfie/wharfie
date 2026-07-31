@@ -114,6 +114,7 @@ const MAX_LOCAL_PATH_BYTES = 16 * 1024;
 const MAX_BOOTSTRAP_IDENTITY_BYTES = 16 * 1024;
 const MAX_SERVICE_RESULT_BYTES = 64 * 1024;
 const MAX_SERVICE_STATUS_BYTES = 256 * 1024;
+const MAX_REMOTE_ARTIFACT_ENTRY_BYTES = 4 * 1024;
 const SSH_FINGERPRINT_PATTERN = /^SHA256:[A-Za-z0-9+/]{43}$/;
 
 /**
@@ -490,6 +491,46 @@ function decodeRemoteArtifactRootEntries(bytesValue) {
   }
   names.sort();
   return Object.freeze(names);
+}
+
+/**
+ * Decode a no-follow GNU find projection of the one final artifact entry.
+ * Empty output is authoritative absence; every present entry must already
+ * have the exact immutable metadata produced by this activator.
+ * @param {unknown} bytesValue - Bounded find output.
+ * @param {number} expectedSize - Desired artifact byte length.
+ * @returns {boolean} - Whether one exact reusable entry is present.
+ */
+function decodeRemoteArtifactEntry(bytesValue, expectedSize) {
+  const bytes = outputBytes(bytesValue, 'remote artifact entry');
+  if (bytes.byteLength > MAX_REMOTE_ARTIFACT_ENTRY_BYTES) {
+    throw new Error(
+      'Remote artifact entry exceeded its bounded response size.',
+    );
+  }
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error('Remote artifact entry returned invalid UTF-8.');
+  }
+  if (text.length === 0) return false;
+  const fields = text.split('\0');
+  if (
+    fields.pop() !== '' ||
+    fields.length !== 6 ||
+    fields[0] !== 'app-sea' ||
+    fields[1] !== 'f' ||
+    fields[2] !== String(expectedSize) ||
+    fields[3] !== '500' ||
+    fields[4] !== String(SINGLE_NODE_RUNTIME_ACCOUNT.uid) ||
+    fields[5] !== '1'
+  ) {
+    throw new Error(
+      'Remote content-addressed artifact entry conflicts with desired artifact.',
+    );
+  }
+  return true;
 }
 
 /**
@@ -1274,6 +1315,84 @@ export function createSingleNodeRemoteActivator(options) {
         }
 
         /**
+         * Inspect the exact final path without following a symlink or treating
+         * an inspection failure as a cache miss.
+         * @returns {Promise<boolean>} - Whether exact immutable metadata exists.
+         */
+        async function inspectRemoteArtifactEntry() {
+          const result = await runRequired(
+            [
+              '/usr/bin/find',
+              artifactDirectory,
+              '-mindepth',
+              '1',
+              '-maxdepth',
+              '1',
+              '-name',
+              'app-sea',
+              '-printf',
+              '%f\\0%y\\0%s\\0%m\\0%U\\0%n\\0',
+            ],
+            null,
+            30_000,
+            MAX_REMOTE_ARTIFACT_ENTRY_BYTES,
+            'Remote artifact entry could not be inspected safely.',
+          );
+          return decodeRemoteArtifactEntry(
+            result.stdout,
+            input.desired.artifact.size,
+          );
+        }
+
+        const expectedHex = Buffer.from(
+          input.desired.artifact.byteDigest.value,
+          'base64url',
+        ).toString('hex');
+
+        /**
+         * Re-prove the bytes and executability of metadata already inspected
+         * as one exact regular file.
+         * @returns {Promise<void>}
+         */
+        async function verifyRemoteArtifactBytes() {
+          const digest = await runRequired(
+            ['/usr/bin/sha256sum', '--', remoteArtifactPath],
+            null,
+            30_000,
+            4 * 1024,
+            'Remote content-addressed artifact SHA-256 could not be read.',
+          );
+          assertRemoteDigest(
+            outputBytes(
+              digest.stdout,
+              'remote content-addressed artifact SHA-256',
+            ),
+            remoteArtifactPath,
+            expectedHex,
+          );
+          await runRequired(
+            ['/usr/bin/test', '-x', remoteArtifactPath],
+            null,
+            20_000,
+            0,
+            'Remote content-addressed artifact is not executable.',
+          );
+        }
+
+        /**
+         * Require and fully verify one already-published artifact.
+         * @returns {Promise<void>}
+         */
+        async function requireRemoteArtifact() {
+          if (!(await inspectRemoteArtifactEntry())) {
+            throw new Error(
+              'Published remote content-addressed artifact is absent.',
+            );
+          }
+          await verifyRemoteArtifactBytes();
+        }
+
+        /**
          * Enforce the exact journal-derived wrapper retention set only after
          * the target service has proved healthy. Each deletion is a fixed
          * argv over a validated content-addressed directory and is retry-safe.
@@ -1333,107 +1452,70 @@ export function createSingleNodeRemoteActivator(options) {
             0,
             'Stale remote temporary artifact could not be removed.',
           );
-          const uploadStream = artifactSource.createReadStream();
-          await runRequired(
-            [
-              '/usr/bin/dd',
-              `of=${temporaryPath}`,
-              'bs=65536',
-              'status=none',
-              'conv=excl,fsync',
-            ],
-            uploadStream,
-            10 * 60 * 1000,
-            0,
-            'Remote artifact upload did not complete exactly.',
-          );
-          const verified = await artifactSource.verifyUnchanged();
-          if (!sameJson(verified, sourceObservation)) {
-            throw new Error(
-              'Local artifact bytes changed while they were uploaded.',
+          if (await inspectRemoteArtifactEntry()) {
+            await verifyRemoteArtifactBytes();
+          } else {
+            const uploadStream = artifactSource.createReadStream();
+            await runRequired(
+              [
+                '/usr/bin/dd',
+                `of=${temporaryPath}`,
+                'bs=65536',
+                'status=none',
+                'conv=excl,fsync',
+              ],
+              uploadStream,
+              10 * 60 * 1000,
+              0,
+              'Remote artifact upload did not complete exactly.',
             );
-          }
-          const expectedHex = Buffer.from(
-            input.desired.artifact.byteDigest.value,
-            'base64url',
-          ).toString('hex');
-          const temporaryDigest = await runRequired(
-            ['/usr/bin/sha256sum', '--', temporaryPath],
-            null,
-            30_000,
-            4 * 1024,
-            'Remote temporary artifact SHA-256 could not be read.',
-          );
-          assertRemoteDigest(
-            outputBytes(
-              temporaryDigest.stdout,
-              'remote temporary artifact SHA-256',
-            ),
-            temporaryPath,
-            expectedHex,
-          );
-          await runRequired(
-            ['/usr/bin/chmod', '0500', temporaryPath],
-            null,
-            30_000,
-            0,
-            'Remote temporary artifact could not be made executable.',
-          );
-
-          const linkOutcome = await runRemoteArgv({
-            argv: ['/usr/bin/ln', '--', temporaryPath, remoteArtifactPath],
-            stdin: null,
-            timeoutMilliseconds: 30_000,
-            maximumStdoutBytes: 0,
-            maximumStderrBytes: 16 * 1024,
-          });
-          if (!succeeded(linkOutcome)) {
-            const existingDigest = await runRequired(
-              ['/usr/bin/sha256sum', '--', remoteArtifactPath],
+            const verified = await artifactSource.verifyUnchanged();
+            if (!sameJson(verified, sourceObservation)) {
+              throw new Error(
+                'Local artifact bytes changed while they were uploaded.',
+              );
+            }
+            const temporaryDigest = await runRequired(
+              ['/usr/bin/sha256sum', '--', temporaryPath],
               null,
               30_000,
               4 * 1024,
-              'Existing remote artifact conflicts with the desired artifact.',
+              'Remote temporary artifact SHA-256 could not be read.',
             );
             assertRemoteDigest(
               outputBytes(
-                existingDigest.stdout,
-                'existing remote artifact SHA-256',
+                temporaryDigest.stdout,
+                'remote temporary artifact SHA-256',
               ),
-              remoteArtifactPath,
+              temporaryPath,
               expectedHex,
             );
             await runRequired(
-              ['/usr/bin/test', '-x', remoteArtifactPath],
+              ['/usr/bin/chmod', '0500', temporaryPath],
               null,
-              20_000,
+              30_000,
               0,
-              'Existing remote artifact is not executable.',
+              'Remote temporary artifact could not be made executable.',
             );
-          }
-          await runRequired(
-            ['/usr/bin/rm', '-f', '--', temporaryPath],
-            null,
-            30_000,
-            0,
-            'Remote temporary artifact could not be removed.',
-          );
 
-          const installedDigest = await runRequired(
-            ['/usr/bin/sha256sum', '--', remoteArtifactPath],
-            null,
-            30_000,
-            4 * 1024,
-            'Installed remote artifact SHA-256 could not be read.',
-          );
-          assertRemoteDigest(
-            outputBytes(
-              installedDigest.stdout,
-              'installed remote artifact SHA-256',
-            ),
-            remoteArtifactPath,
-            expectedHex,
-          );
+            await runRemoteArgv({
+              argv: ['/usr/bin/ln', '--', temporaryPath, remoteArtifactPath],
+              stdin: null,
+              timeoutMilliseconds: 30_000,
+              maximumStdoutBytes: 0,
+              maximumStderrBytes: 16 * 1024,
+            });
+            await runRequired(
+              ['/usr/bin/rm', '-f', '--', temporaryPath],
+              null,
+              30_000,
+              0,
+              'Remote temporary artifact could not be removed.',
+            );
+            // The final path is the sole authority after an ambiguous link
+            // result. Removing our temp first also proves one-link immutability.
+            await requireRemoteArtifact();
+          }
 
           const convergeOutcome = await runRequired(
             [remoteArtifactPath, 'wharfie', 'service', 'converge', '--json'],
