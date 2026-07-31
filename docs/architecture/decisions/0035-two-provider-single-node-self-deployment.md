@@ -99,6 +99,16 @@ The command binds the embedded application identity, but deliberately does not
 bind the current outer SEA revision, allowing a newer artifact for the same
 application to inspect an older journal-bound deployment.
 
+The packaged
+`<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]`
+command is the initial provider-free application-operation boundary. It reads
+only existing active local deployment authority, re-proves the pinned SSH and
+bootstrap identities plus the exact healthy active service, and invokes only
+the journal-authorized application artifact with the supplied argv. It cannot
+select a host, SSH option, user, executable, shell command, or provider
+credential. Exact bounded stdout, stderr, and exit status retain ordinary CLI
+semantics.
+
 ### Minimal physical substrate
 
 The preview uses provider public/default networking.

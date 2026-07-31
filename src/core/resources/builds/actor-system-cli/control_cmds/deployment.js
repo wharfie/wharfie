@@ -30,6 +30,7 @@ import {
 } from '../../../../runtime/single-node-deployment-status.js';
 import { resolveStableLocalAppDataRoot } from '../../../../runtime/local-app-storage.js';
 import { readEmbeddedSingleNodeDeploymentPayload } from '../../../../runtime/single-node-deployment-payload.js';
+import { executeSingleNodeRemoteApplication } from '../../../../runtime/single-node-remote-exec.js';
 import { SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_PREFIX } from '../../../../runtime/single-node-remote-activation.js';
 import { inspectSingleNodeRemoteStatus } from '../../../../runtime/single-node-remote-status.js';
 import { createAwsSingleNodePreview } from '../../../../runtime/providers/aws/single-node-preview.js';
@@ -90,6 +91,8 @@ const DESTROY_RESULT_CONTRACTS = Object.freeze({
  * @typedef PackagedDeploymentCommandOutput
  * @property {(value: Readonly<Record<string, any>>) => void} json - Write one compact JSON result.
  * @property {(message: string) => void} line - Write one compact human result.
+ * @property {(bytes: Buffer) => void} stdout - Relay exact application standard output bytes.
+ * @property {(bytes: Buffer) => void} stderr - Relay exact application standard error bytes.
  * @property {(error: unknown) => void} failure - Write one safe failure.
  */
 
@@ -228,6 +231,16 @@ function resolveOutput(provided) {
       ((message) => {
         process.stdout.write(`${message}\n`);
       }),
+    stdout:
+      provided?.stdout ||
+      ((bytes) => {
+        process.stdout.write(bytes);
+      }),
+    stderr:
+      provided?.stderr ||
+      ((bytes) => {
+        process.stderr.write(bytes);
+      }),
     failure:
       provided?.failure ||
       ((error) => {
@@ -338,6 +351,48 @@ function createDestroyReceipt(value, authority) {
 }
 
 /**
+ * Refuse ambiguous transport completion before exposing any partial output.
+ * A nonzero observed application exit is still a successful execution of the
+ * operator command boundary and is relayed unchanged to the caller.
+ * @param {unknown} value - Candidate bounded remote process outcome.
+ * @returns {import('../../../../runtime/bounded-process.js').BoundedProcessOutcome} - Exact finite outcome.
+ */
+function validateRemoteExecutionOutcome(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(
+      'Packaged deployment exec returned an invalid process outcome.',
+    );
+  }
+  const outcome = /** @type {Record<string, any>} */ (value);
+  const expectedKeys = [
+    'exitCode',
+    'signal',
+    'status',
+    'stderr',
+    'stdout',
+    'timedOut',
+  ];
+  if (
+    Object.keys(outcome).sort().join('\0') !== expectedKeys.join('\0') ||
+    outcome.status !== 'exited' ||
+    !Number.isSafeInteger(outcome.exitCode) ||
+    outcome.exitCode < 0 ||
+    outcome.exitCode > 255 ||
+    outcome.signal !== null ||
+    outcome.timedOut !== false ||
+    !Buffer.isBuffer(outcome.stdout) ||
+    !Buffer.isBuffer(outcome.stderr)
+  ) {
+    throw new Error(
+      'Packaged deployment exec did not observe an exact remote exit.',
+    );
+  }
+  return /** @type {import('../../../../runtime/bounded-process.js').BoundedProcessOutcome} */ (
+    outcome
+  );
+}
+
+/**
  * Combine an operation error with a held-source cleanup error without losing
  * either failure.
  * @param {unknown} operationError - Original command failure, if any.
@@ -370,6 +425,7 @@ function combineCleanupError(operationError, cleanupError, operation) {
  *   createPreviewReceipt?: typeof createSingleNodeDeploymentPreview,
  *   createStatusReceipt?: typeof createSingleNodeDeploymentStatus,
  *   inspectRemoteStatus?: typeof inspectSingleNodeRemoteStatus,
+ *   executeRemote?: typeof executeSingleNodeRemoteApplication,
  *   resolveDataRoot?: typeof resolveStableLocalAppDataRoot,
  *   output?: Partial<PackagedDeploymentCommandOutput>,
  *   processRef?: PackagedDeploymentCommandProcess
@@ -421,6 +477,8 @@ export function createPackagedDeploymentCommand(options = {}) {
     options.createStatusReceipt || createSingleNodeDeploymentStatus;
   const inspectRemoteStatus =
     options.inspectRemoteStatus || inspectSingleNodeRemoteStatus;
+  const executeRemote =
+    options.executeRemote || executeSingleNodeRemoteApplication;
   const output = resolveOutput(options.output);
   const processRef = options.processRef || process;
 
@@ -847,6 +905,114 @@ export function createPackagedDeploymentCommand(options = {}) {
       }
     });
 
+  const exec = new Command('exec')
+    .description(
+      'Run this exact application on one active journal-authorized node',
+    )
+    .requiredOption(
+      '--deployment-instance <instance-id>',
+      'Exact durable deployment instance identity',
+      parseSingleOption('--deployment-instance'),
+    )
+    .option(
+      '--data-root <absolute>',
+      'Stable local deployment authority root',
+      parseSingleOption('--data-root'),
+    )
+    .argument(
+      '[application-argv...]',
+      'Arguments passed to the deployed application',
+    )
+    .action(async (applicationArgv, commandOptions) => {
+      /** @type {import('../../../../runtime/bounded-process.js').BoundedProcessOutcome|undefined} */
+      let outcome;
+      /** @type {unknown} */
+      let operationError;
+
+      try {
+        assertSingleNodeDeploymentInstanceId(
+          commandOptions.deploymentInstance,
+          'packagedDeploymentExec.deploymentInstanceId',
+        );
+        const pair = await readRevisionRuntimePair();
+        const appId = pair.runtime.appId;
+        const dataRoot = commandOptions.dataRoot ?? resolveDataRoot();
+        const journalStore = Reflect.apply(createJournalStore, undefined, [
+          {
+            appId,
+            deploymentInstanceId: commandOptions.deploymentInstance,
+            dataRoot,
+          },
+        ]);
+        const readJournal = Object.getOwnPropertyDescriptor(
+          journalStore,
+          'read',
+        );
+        if (
+          !readJournal ||
+          !readJournal.enumerable ||
+          !Object.hasOwn(readJournal, 'value') ||
+          typeof readJournal.value !== 'function'
+        ) {
+          throw new TypeError(
+            'Packaged deployment exec journal store is invalid.',
+          );
+        }
+        const journalValue = await Reflect.apply(
+          readJournal.value,
+          journalStore,
+          [],
+        );
+        if (journalValue === null) {
+          throw new Error(
+            'Packaged deployment exec requires existing local deployment authority.',
+          );
+        }
+        const journal = validateSingleNodeDeploymentJournal(
+          journalValue,
+          'packagedDeploymentExec.journal',
+        );
+        if (
+          journal.desired.intent.appId !== appId ||
+          journal.deploymentInstanceId !== commandOptions.deploymentInstance
+        ) {
+          throw new Error(
+            'Packaged deployment exec journal does not match the embedded application authority.',
+          );
+        }
+        if (journal.phase !== 'active') {
+          throw new Error(
+            'Packaged deployment exec requires active local deployment authority.',
+          );
+        }
+        outcome = validateRemoteExecutionOutcome(
+          await Reflect.apply(executeRemote, undefined, [
+            {
+              journal,
+              dataRoot,
+              argv: [...applicationArgv],
+            },
+          ]),
+        );
+      } catch (error) {
+        operationError = error;
+      }
+
+      if (operationError !== undefined) {
+        output.failure(operationError);
+        processRef.exitCode = 1;
+        return;
+      }
+
+      const result =
+        /** @type {import('../../../../runtime/bounded-process.js').BoundedProcessOutcome & {exitCode: number}} */ (
+          outcome
+        );
+      output.stdout(result.stdout);
+      output.stderr(result.stderr);
+      processRef.exitCode = result.exitCode;
+    });
+
   const destroy = new Command('destroy')
     .description(
       'Destroy or recover destruction of one locally authorized cloud node',
@@ -930,6 +1096,7 @@ export function createPackagedDeploymentCommand(options = {}) {
     .addCommand(preview)
     .addCommand(apply)
     .addCommand(status)
+    .addCommand(exec)
     .addCommand(destroy);
 }
 
