@@ -32,6 +32,7 @@ import {
   createSingleNodeRemoteActivator,
   validateSingleNodeRemoteActivationEvidence,
 } from '../../src/core/runtime/single-node-remote-activation.js';
+import { SINGLE_NODE_RUNTIME_ACCOUNT } from '../../src/core/runtime/single-node-runtime-account.js';
 
 /** @type {string[]} */
 const roots = [];
@@ -227,11 +228,13 @@ function outcome({
 
 /**
  * @param {Awaited<ReturnType<typeof makeFixture>>} fixture
- * @param {{readinessFailures?: number, bootstrapIdentity?: unknown, corruptDigest?: boolean, convergeArtifactId?: string, linkAmbiguousExact?: boolean, staleUploadBytes?: Buffer, artifactEntries?: {name: string, type: string}[]}} [options]
+ * @param {{readinessFailures?: number, bootstrapIdentity?: unknown, corruptDigest?: boolean, convergeArtifactId?: string, linkAmbiguousExact?: boolean, staleUploadBytes?: Buffer, artifactEntries?: {name: string, type: string}[], cachedArtifactBytes?: Buffer, cachedExecutable?: boolean, cachedType?: string, cachedMode?: string, cachedUid?: number, cachedLinks?: number, artifactInspectionFailure?: boolean, artifactEntryOutput?: string|Buffer}} [options]
  */
 function makeRemote(fixture, options = {}) {
   /** @type {Map<string, Buffer>} */
   const files = new Map();
+  /** @type {Map<string, {type: string, mode: string, uid: number}>} */
+  const fileMetadata = new Map();
   /** @type {Set<string>} */
   const executable = new Set();
   /** @type {Map<string, string>} */
@@ -254,8 +257,34 @@ function makeRemote(fixture, options = {}) {
     fixture.desired.deploymentInstanceId,
     'artifacts',
   );
+  const artifactDirectory = join(
+    artifactRoot,
+    fixture.desired.artifact.artifactId,
+  );
+  const remoteArtifactPath = join(artifactDirectory, 'app-sea');
+  if (Object.hasOwn(options, 'cachedArtifactBytes')) {
+    files.set(
+      remoteArtifactPath,
+      Buffer.from(/** @type {Buffer} */ (options.cachedArtifactBytes)),
+    );
+    fileMetadata.set(remoteArtifactPath, {
+      type: options.cachedType || 'f',
+      mode: options.cachedMode || '500',
+      uid: options.cachedUid ?? SINGLE_NODE_RUNTIME_ACCOUNT.uid,
+    });
+    artifactEntries.set(fixture.desired.artifact.artifactId, 'd');
+    if (options.cachedExecutable !== false) {
+      executable.add(remoteArtifactPath);
+    }
+    installedPath = remoteArtifactPath;
+  }
   if (options.staleUploadBytes) {
     files.set(deterministicTemporaryPath, options.staleUploadBytes);
+    fileMetadata.set(deterministicTemporaryPath, {
+      type: 'f',
+      mode: '600',
+      uid: SINGLE_NODE_RUNTIME_ACCOUNT.uid,
+    });
   }
 
   /** @param {string} path */
@@ -305,6 +334,11 @@ function makeRemote(fixture, options = {}) {
           chunks.push(Buffer.from(chunk));
         }
         files.set(path, Buffer.concat(chunks));
+        fileMetadata.set(path, {
+          type: 'f',
+          mode: '600',
+          uid: SINGLE_NODE_RUNTIME_ACCOUNT.uid,
+        });
         return outcome();
       }
       if (argv[0] === '/usr/bin/sha256sum') {
@@ -312,6 +346,13 @@ function makeRemote(fixture, options = {}) {
       }
       if (argv[0] === '/usr/bin/chmod') {
         executable.add(argv[2]);
+        const metadata = fileMetadata.get(argv[2]);
+        if (metadata) {
+          fileMetadata.set(argv[2], {
+            ...metadata,
+            mode: Number.parseInt(argv[1], 8).toString(8),
+          });
+        }
         return outcome();
       }
       if (argv[0] === '/usr/bin/ln') {
@@ -322,11 +363,21 @@ function makeRemote(fixture, options = {}) {
         if (!sourceBytes) return outcome({ exitCode: 1 });
         if (options.linkAmbiguousExact) {
           files.set(destination, Buffer.from(sourceBytes));
+          fileMetadata.set(destination, {
+            .../** @type {{type: string, mode: string, uid: number}} */ (
+              fileMetadata.get(source)
+            ),
+          });
           executable.add(destination);
           return outcome({ exitCode: 1 });
         }
         if (files.has(destination)) return outcome({ exitCode: 1 });
         files.set(destination, Buffer.from(sourceBytes));
+        fileMetadata.set(destination, {
+          .../** @type {{type: string, mode: string, uid: number}} */ (
+            fileMetadata.get(source)
+          ),
+        });
         if (executable.has(source)) executable.add(destination);
         return outcome();
       }
@@ -338,6 +389,11 @@ function makeRemote(fixture, options = {}) {
           for (const filePath of files.keys()) {
             if (filePath.startsWith(`${path}/`)) files.delete(filePath);
           }
+          for (const filePath of fileMetadata.keys()) {
+            if (filePath.startsWith(`${path}/`)) {
+              fileMetadata.delete(filePath);
+            }
+          }
           for (const executablePath of executable) {
             if (executablePath.startsWith(`${path}/`)) {
               executable.delete(executablePath);
@@ -346,10 +402,24 @@ function makeRemote(fixture, options = {}) {
           return outcome();
         }
         files.delete(path);
+        fileMetadata.delete(path);
         executable.delete(path);
         return outcome();
       }
       if (argv[0] === '/usr/bin/find') {
+        if (argv[1] === artifactDirectory) {
+          if (options.artifactInspectionFailure) {
+            return outcome({ exitCode: 1 });
+          }
+          if (options.artifactEntryOutput !== undefined) {
+            return outcome({ stdout: options.artifactEntryOutput });
+          }
+          const metadata = fileMetadata.get(remoteArtifactPath);
+          if (!metadata) return outcome();
+          return outcome({
+            stdout: `app-sea\0${metadata.type}\0${files.get(remoteArtifactPath)?.length ?? 0}\0${metadata.mode}\0${metadata.uid}\0${options.cachedLinks ?? 1}\0`,
+          });
+        }
         return outcome({
           stdout: [...artifactEntries]
             .map(([name, type]) => `${name}\0${type}\0`)
@@ -579,7 +649,16 @@ describe('single-node remote activation', () => {
     ]);
     expect(
       remote.calls
-        .filter((call) => call.argv[0] === '/usr/bin/find')
+        .filter(
+          (call) =>
+            call.argv[0] === '/usr/bin/find' &&
+            call.argv[1] ===
+              join(
+                SINGLE_NODE_DEPLOYMENT_ROOT,
+                fixture.desired.deploymentInstanceId,
+                'artifacts',
+              ),
+        )
         .map((call) => ({
           argv: call.argv,
           maximumStdoutBytes: call.maximumStdoutBytes,
@@ -621,6 +700,212 @@ describe('single-node remote activation', () => {
       },
     ]);
     expect(JSON.stringify(evidence)).not.toContain(fixture.root);
+  });
+
+  it('transfers one artifact once and reuses its independently verified content address', async () => {
+    const fixture = await makeFixture();
+    const remote = makeRemote(fixture);
+    const harness = makeActivator(fixture, remote);
+    const first = await harness.activator.activate(harness.input);
+    const observation = Object.freeze({
+      artifactId: fixture.desired.artifact.artifactId,
+      byteDigest: fixture.desired.artifact.byteDigest,
+      size: fixture.desired.artifact.size,
+    });
+    const createReadStream = jest.fn(() => {
+      throw new Error('cache hit must not open an upload stream');
+    });
+    const verifyUnchanged = jest.fn(async () => {
+      throw new Error('cache hit has no consumed stream to verify');
+    });
+    const close = jest.fn(async () => {});
+    const secondInput = /** @type {Record<string, any>} */ ({
+      ...harness.input,
+      artifactSource: Object.freeze({
+        observation,
+        createReadStream,
+        verifyUnchanged,
+        close,
+      }),
+    });
+    delete secondInput.artifactPath;
+
+    const second = await harness.activator.activate(secondInput);
+
+    expect(second).toEqual(first);
+    expect(
+      remote.calls.filter((call) => call.argv[0] === '/usr/bin/dd'),
+    ).toHaveLength(1);
+    expect(
+      remote.calls.filter((call) => call.argv[0] === '/usr/bin/ln'),
+    ).toHaveLength(1);
+    expect(
+      remote.calls.filter((call) => call.argv[0] === '/usr/bin/chmod'),
+    ).toHaveLength(1);
+    expect(createReadStream).not.toHaveBeenCalled();
+    expect(verifyUnchanged).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(
+      remote.calls.filter(
+        (call) =>
+          call.argv[0] === first.artifact.remotePath &&
+          call.argv[3] === 'converge',
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('reuses an exact published artifact after pre-cleaning its interrupted upload link', async () => {
+    const fixture = await makeFixture();
+    const staleUploadBytes = Buffer.from('stale hard-link source');
+    const remote = makeRemote(fixture, {
+      cachedArtifactBytes: fixture.artifactBytes,
+      staleUploadBytes,
+    });
+    const harness = makeActivator(fixture, remote);
+
+    const evidence = await harness.activator.activate(harness.input);
+    const temporaryPath = join(
+      SINGLE_NODE_DEPLOYMENT_ROOT,
+      fixture.desired.deploymentInstanceId,
+      'artifacts',
+      fixture.desired.artifact.artifactId,
+      `.app-sea.upload-${fixture.incarnationId}`,
+    );
+
+    expect(remote.files.has(temporaryPath)).toBe(false);
+    expect(remote.files.get(evidence.artifact.remotePath)).toEqual(
+      fixture.artifactBytes,
+    );
+    expect(remote.calls.some((call) => call.argv[0] === '/usr/bin/dd')).toBe(
+      false,
+    );
+    expect(remote.calls.some((call) => call.argv[0] === '/usr/bin/ln')).toBe(
+      false,
+    );
+  });
+
+  it('preserves cache-hit activation and held-source close failures together', async () => {
+    const fixture = await makeFixture();
+    const remote = makeRemote(fixture, {
+      cachedArtifactBytes: fixture.artifactBytes,
+      convergeArtifactId: `waf1_${'A'.repeat(43)}`,
+    });
+    const harness = makeActivator(fixture, remote);
+    const closeError = new Error('held source close failed');
+    const close = jest.fn(async () => {
+      throw closeError;
+    });
+    const input = /** @type {Record<string, any>} */ ({
+      ...harness.input,
+      artifactSource: Object.freeze({
+        observation: Object.freeze({
+          artifactId: fixture.desired.artifact.artifactId,
+          byteDigest: fixture.desired.artifact.byteDigest,
+          size: fixture.desired.artifact.size,
+        }),
+        createReadStream: jest.fn(() => {
+          throw new Error('cache hit must not open an upload stream');
+        }),
+        verifyUnchanged: jest.fn(),
+        close,
+      }),
+    });
+    delete input.artifactPath;
+
+    const error = await harness.activator
+      .activate(input)
+      .catch((value) => value);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors).toHaveLength(2);
+    expect(error.errors[0]).toEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(/exact desired artifact active/iu),
+      }),
+    );
+    expect(error.errors[1]).toBe(closeError);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(remote.calls.some((call) => call.argv[0] === '/usr/bin/dd')).toBe(
+      false,
+    );
+  });
+
+  it('fails closed on corrupt or unsafe content-addressed cache entries', async () => {
+    const fixture = await makeFixture();
+    const wrongBytes = Buffer.alloc(fixture.artifactBytes.length, 0x78);
+    const variants = [
+      {
+        options: { cachedArtifactBytes: wrongBytes },
+        message: /SHA-256 does not match/iu,
+      },
+      {
+        options: {
+          cachedArtifactBytes: fixture.artifactBytes,
+          cachedExecutable: false,
+        },
+        message: /not executable/iu,
+      },
+      {
+        options: {
+          cachedArtifactBytes: fixture.artifactBytes,
+          cachedType: 'l',
+        },
+        message: /entry conflicts/iu,
+      },
+      {
+        options: {
+          cachedArtifactBytes: fixture.artifactBytes,
+          cachedType: 'p',
+        },
+        message: /entry conflicts/iu,
+      },
+      {
+        options: {
+          cachedArtifactBytes: fixture.artifactBytes,
+          cachedMode: '700',
+        },
+        message: /entry conflicts/iu,
+      },
+      {
+        options: {
+          cachedArtifactBytes: fixture.artifactBytes,
+          cachedUid: SINGLE_NODE_RUNTIME_ACCOUNT.uid + 1,
+        },
+        message: /entry conflicts/iu,
+      },
+      {
+        options: {
+          cachedArtifactBytes: fixture.artifactBytes,
+          cachedLinks: 2,
+        },
+        message: /entry conflicts/iu,
+      },
+      {
+        options: { artifactEntryOutput: 'not-canonical-framing' },
+        message: /entry conflicts/iu,
+      },
+      {
+        options: { artifactInspectionFailure: true },
+        message: /could not be inspected safely/iu,
+      },
+    ];
+
+    for (const variant of variants) {
+      const remote = makeRemote(fixture, variant.options);
+      const harness = makeActivator(fixture, remote);
+      await expect(harness.activator.activate(harness.input)).rejects.toThrow(
+        variant.message,
+      );
+      expect(remote.calls.some((call) => call.argv[0] === '/usr/bin/dd')).toBe(
+        false,
+      );
+      expect(remote.calls.some((call) => call.argv[0] === '/usr/bin/ln')).toBe(
+        false,
+      );
+      expect(remote.calls.some((call) => call.argv[1] === 'wharfie')).toBe(
+        false,
+      );
+    }
   });
 
   it('prunes only stale content-addressed wrapper directories across A/B/C/D releases', async () => {
