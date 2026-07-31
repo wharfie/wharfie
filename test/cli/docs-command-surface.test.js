@@ -305,6 +305,21 @@ describe('docs command surface', () => {
       '<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>...',
     );
     expect(quickstart).toContain(
+      '<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]',
+    );
+    expect(quickstart).toContain(
+      'joins it with an exact provider observation and the pinned guest',
+    );
+    expect(quickstart).toContain(
+      "authority is bound to the embedded app identity, not to the\nouter SEA's current revision",
+    );
+    expect(quickstart).toContain(
+      'It creates no missing local state and mutates neither cloud resources\nnor the guest',
+    );
+    expect(quickstart).toContain(
+      'Status accepts no\n`--provider`, `--region`, or `--location`',
+    );
+    expect(quickstart).toContain(
       '<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws',
     );
     expect(quickstart).toContain(
@@ -320,7 +335,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('ordinary credential chain');
     expect(quickstart).toContain('`HCLOUD_TOKEN`');
     expect(quickstart).toContain(
-      'Packaged inspect and reconcile are not exposed',
+      'Packaged `deployment inspect` and `deployment reconcile` are not exposed',
     );
     expect(quickstart).toContain('--confirm-coordinator-stopped');
     expect(quickstart).toMatch(/Direct apply defaults to\s+`bootstrap`/);

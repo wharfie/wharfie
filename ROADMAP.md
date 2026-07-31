@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-07-29
+**Last updated:** 2026-07-30
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -60,10 +60,10 @@ The repository has substantial foundations:
   through install, automatic replacement, forced host restart, retained work,
   update, rollback, failed-target restoration, history/output reads,
   uninstall, prune, and host cleanup; and
-- packaged AWS and Hetzner single-node read-only preview plus apply/destroy
-  commands, recoverable provider mutations, automated recovery proofs, and
-  live packaged apply/activate/adopt/restart/destroy proofs with independent
-  owned-resource cleanup.
+- packaged AWS and Hetzner single-node read-only preview and status plus
+  apply/destroy commands, recoverable provider mutations, automated recovery
+  proofs, and live packaged apply/activate/adopt/restart/destroy proofs with
+  independent owned-resource cleanup.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -215,6 +215,14 @@ capability.
   managed resource roles and semantic apply steps. The
   [packaged preview checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-preview.md)
   records both live provider proofs and cleanup.
+- The same SEA can read one existing deployment with
+  `<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]`.
+  Status derives the provider from durable journal authority and joins that
+  journal with an exact provider observation and pinned guest service status.
+  It creates and mutates nothing, and its app-scoped read is not bound to the
+  outer SEA's current revision. The
+  [packaged status checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-status.md)
+  records the receipt and no-write boundaries.
 - AWS reuses a qualifying default-VPC public-network path; Hetzner uses its
   public network. The current node root disk holds application and control
   data, so destroy is deliberately data-destructive.
@@ -235,9 +243,10 @@ capability.
 1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
    two-provider harness, including live packaged preview, guest audit, reboot,
    unfinished durable work, fault injection, and bounded proof receipts.
-2. Extend the packaged surface from preview/apply/destroy to an approachable
-   status, update, and recovery sequence, preserving the read-only preview
-   boundary and explicit owned-versus-referenced resource split.
+2. Extend the packaged preview/apply/status/destroy surface with an
+   approachable update and recovery sequence, preserving the read-only
+   preview/status boundaries and explicit owned-versus-referenced resource
+   split.
 3. Decide and implement an explicit retained-data capability before making any
    durability claim beyond the current root-disk lifecycle.
 4. Delete or quarantine provider abstractions that do not help this one

@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import {
   createHetznerApiClient,
   createHetznerApiClientForTest,
+  createHetznerStatusApiClient,
   HetznerApiError,
 } from '../../../../src/core/runtime/providers/hetzner/api-client.js';
 
@@ -181,6 +182,26 @@ function fetchMock(implementation) {
 }
 
 describe('Hetzner API client', () => {
+  it('projects the exact frozen six-method status read capability', () => {
+    const client = createHetznerStatusApiClient({ token: TOKEN });
+
+    expect(Object.keys(client)).toEqual([
+      'listFirewalls',
+      'getFirewall',
+      'listPrimaryIps',
+      'getPrimaryIp',
+      'listServers',
+      'getServer',
+    ]);
+    expect(Object.isFrozen(client)).toBe(true);
+    expect(client).not.toHaveProperty('createFirewall');
+    expect(client).not.toHaveProperty('deleteFirewall');
+    expect(client).not.toHaveProperty('createPrimaryIp');
+    expect(client).not.toHaveProperty('deletePrimaryIp');
+    expect(client).not.toHaveProperty('createServer');
+    expect(client).not.toHaveProperty('deleteServer');
+  });
+
   it('uses bearer authentication, redirect refusal, and mapped list filters', async () => {
     const fetchImplementation = fetchMock(async () =>
       jsonResponse(listDocument({ servers: [server()] }, { per_page: 50 })),

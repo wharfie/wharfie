@@ -16,15 +16,24 @@ import {
   assertSingleNodeDeploymentInstanceId,
   getSingleNodeDeploymentInstanceId,
 } from '../../../../runtime/single-node-deployment-identity.js';
-import { createSingleNodeDeploymentJournalStore } from '../../../../runtime/single-node-deployment-journal.js';
+import {
+  createSingleNodeDeploymentJournalStore,
+  validateSingleNodeDeploymentJournal,
+} from '../../../../runtime/single-node-deployment-journal.js';
 import {
   createSingleNodeDeploymentPreview,
   validateSingleNodeDeploymentPreview,
 } from '../../../../runtime/single-node-deployment-preview.js';
+import {
+  createSingleNodeDeploymentStatus,
+  validateSingleNodeDeploymentStatus,
+} from '../../../../runtime/single-node-deployment-status.js';
 import { resolveStableLocalAppDataRoot } from '../../../../runtime/local-app-storage.js';
 import { readEmbeddedSingleNodeDeploymentPayload } from '../../../../runtime/single-node-deployment-payload.js';
 import { SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_PREFIX } from '../../../../runtime/single-node-remote-activation.js';
+import { inspectSingleNodeRemoteStatus } from '../../../../runtime/single-node-remote-status.js';
 import { createAwsSingleNodePreview } from '../../../../runtime/providers/aws/single-node-preview.js';
+import { inspectAwsSingleNodeStatus } from '../../../../runtime/providers/aws/single-node-status.js';
 import {
   AWS_SINGLE_NODE_APPLY_RESULT_KIND,
   AWS_SINGLE_NODE_APPLY_RESULT_SCHEMA_VERSION,
@@ -46,6 +55,7 @@ import {
   createProductionHetznerSingleNodeDestroyCoordinator,
 } from '../../../../runtime/providers/hetzner/single-node-destroy.js';
 import { createHetznerSingleNodePreview } from '../../../../runtime/providers/hetzner/single-node-preview.js';
+import { inspectHetznerSingleNodeStatus } from '../../../../runtime/providers/hetzner/single-node-status.js';
 import { readEmbeddedRevisionRuntimePair } from '../../lib/revision-runtime-assets.js';
 
 export const PACKAGED_DEPLOYMENT_APPLY_RECEIPT_SCHEMA_VERSION = 1;
@@ -353,10 +363,13 @@ function combineCleanupError(operationError, cleanupError, operation) {
  *   createApplyCoordinator?: typeof createProductionHetznerSingleNodeApplyCoordinator,
  *   createDestroyCoordinator?: typeof createProductionHetznerSingleNodeDestroyCoordinator,
  *   createPreviewByProvider?: Partial<{aws: typeof createAwsSingleNodePreview, hetzner: typeof createHetznerSingleNodePreview}>,
+ *   inspectStatusByProvider?: Partial<{aws: typeof inspectAwsSingleNodeStatus, hetzner: typeof inspectHetznerSingleNodeStatus}>,
  *   createApplyCoordinatorByProvider?: Partial<{aws: typeof createProductionAwsSingleNodeApplyCoordinator, hetzner: typeof createProductionHetznerSingleNodeApplyCoordinator}>,
  *   createDestroyCoordinatorByProvider?: Partial<{aws: typeof createProductionAwsSingleNodeDestroyCoordinator, hetzner: typeof createProductionHetznerSingleNodeDestroyCoordinator}>,
  *   createJournalStore?: typeof createSingleNodeDeploymentJournalStore,
  *   createPreviewReceipt?: typeof createSingleNodeDeploymentPreview,
+ *   createStatusReceipt?: typeof createSingleNodeDeploymentStatus,
+ *   inspectRemoteStatus?: typeof inspectSingleNodeRemoteStatus,
  *   resolveDataRoot?: typeof resolveStableLocalAppDataRoot,
  *   output?: Partial<PackagedDeploymentCommandOutput>,
  *   processRef?: PackagedDeploymentCommandProcess
@@ -373,6 +386,12 @@ export function createPackagedDeploymentCommand(options = {}) {
     hetzner:
       options.createPreviewByProvider?.hetzner ||
       createHetznerSingleNodePreview,
+  });
+  const inspectStatusByProvider = Object.freeze({
+    aws: options.inspectStatusByProvider?.aws || inspectAwsSingleNodeStatus,
+    hetzner:
+      options.inspectStatusByProvider?.hetzner ||
+      inspectHetznerSingleNodeStatus,
   });
   const createApplyCoordinatorByProvider = Object.freeze({
     aws:
@@ -398,6 +417,10 @@ export function createPackagedDeploymentCommand(options = {}) {
     options.createJournalStore || createSingleNodeDeploymentJournalStore;
   const createPreviewReceipt =
     options.createPreviewReceipt || createSingleNodeDeploymentPreview;
+  const createStatusReceipt =
+    options.createStatusReceipt || createSingleNodeDeploymentStatus;
+  const inspectRemoteStatus =
+    options.inspectRemoteStatus || inspectSingleNodeRemoteStatus;
   const output = resolveOutput(options.output);
   const processRef = options.processRef || process;
 
@@ -680,6 +703,150 @@ export function createPackagedDeploymentCommand(options = {}) {
     }
   });
 
+  const status = new Command('status')
+    .description(
+      'Inspect exact local, provider, and guest state without mutation',
+    )
+    .requiredOption(
+      '--deployment-instance <instance-id>',
+      'Exact durable deployment instance identity',
+      parseSingleOption('--deployment-instance'),
+    )
+    .option(
+      '--data-root <absolute>',
+      'Stable local deployment authority root',
+      parseSingleOption('--data-root'),
+    )
+    .option('--json', 'Output compact JSON')
+    .action(async (commandOptions) => {
+      /** @type {Readonly<Record<string, any>>|undefined} */
+      let receipt;
+      /** @type {unknown} */
+      let operationError;
+
+      try {
+        assertSingleNodeDeploymentInstanceId(
+          commandOptions.deploymentInstance,
+          'packagedDeploymentStatus.deploymentInstanceId',
+        );
+        const pair = await readRevisionRuntimePair();
+        const appId = pair.runtime.appId;
+        const dataRoot = commandOptions.dataRoot ?? resolveDataRoot();
+        const journalStore = Reflect.apply(createJournalStore, undefined, [
+          {
+            appId,
+            deploymentInstanceId: commandOptions.deploymentInstance,
+            dataRoot,
+          },
+        ]);
+        const readJournal = Object.getOwnPropertyDescriptor(
+          journalStore,
+          'read',
+        );
+        if (
+          !readJournal ||
+          !readJournal.enumerable ||
+          !Object.hasOwn(readJournal, 'value') ||
+          typeof readJournal.value !== 'function'
+        ) {
+          throw new TypeError(
+            'Packaged deployment status journal store is invalid.',
+          );
+        }
+        const journalValue = await Reflect.apply(
+          readJournal.value,
+          journalStore,
+          [],
+        );
+        if (journalValue === null) {
+          throw new Error(
+            'Packaged deployment status requires existing local deployment authority.',
+          );
+        }
+        const journal = validateSingleNodeDeploymentJournal(
+          journalValue,
+          'packagedDeploymentStatus.journal',
+        );
+        if (
+          journal.desired.intent.appId !== appId ||
+          journal.deploymentInstanceId !== commandOptions.deploymentInstance
+        ) {
+          throw new Error(
+            'Packaged deployment status journal does not match the embedded application authority.',
+          );
+        }
+        const provider = validateProvider(journal.providerIntent.provider);
+        const providerObservation = await Reflect.apply(
+          inspectStatusByProvider[provider],
+          undefined,
+          [provider === 'aws' ? { journal } : { journal, dataRoot }],
+        );
+        const guestObservation =
+          providerObservation?.status === 'exact'
+            ? await Reflect.apply(inspectRemoteStatus, undefined, [
+                { journal, dataRoot },
+              ])
+            : {
+                state: ['destroying', 'destroyed'].includes(journal.phase)
+                  ? 'not-applicable'
+                  : 'not-ready',
+                address: ['destroying', 'destroyed'].includes(journal.phase)
+                  ? null
+                  : (journal.sshHost?.address ?? null),
+                hostKeyFingerprint: ['destroying', 'destroyed'].includes(
+                  journal.phase,
+                )
+                  ? null
+                  : (journal.sshHost?.fingerprint ?? null),
+                service: null,
+              };
+        receipt = validateSingleNodeDeploymentStatus(
+          Reflect.apply(createStatusReceipt, undefined, [
+            { journal, providerObservation, guestObservation },
+          ]),
+        );
+        if (
+          receipt.provider !== provider ||
+          receipt.deployment.appId !== appId ||
+          receipt.deployment.deploymentId !==
+            journal.desired.intent.deployment.id ||
+          receipt.deployment.deploymentInstanceId !==
+            commandOptions.deploymentInstance ||
+          receipt.deployment.desiredRevisionId !==
+            journal.desired.desiredRevisionId ||
+          receipt.deployment.revisionId !==
+            journal.desired.artifact.revisionId ||
+          receipt.deployment.artifact.artifactId !==
+            journal.desired.artifact.artifactId ||
+          receipt.journal.journalId !== journal.journalId ||
+          receipt.journal.generation !== journal.generation ||
+          receipt.journal.incarnationId !== journal.incarnationId ||
+          receipt.journal.phase !== journal.phase
+        ) {
+          throw new Error(
+            'Packaged deployment status result does not match exact durable authority.',
+          );
+        }
+      } catch (error) {
+        operationError = error;
+      }
+
+      if (operationError !== undefined) {
+        output.failure(operationError);
+        processRef.exitCode = 1;
+        return;
+      }
+
+      const result = /** @type {Readonly<Record<string, any>>} */ (receipt);
+      if (commandOptions.json) {
+        output.json(result);
+      } else {
+        output.line(
+          `${result.deployment.deploymentId} is ${result.status} on ${result.provider}; journal ${result.journal.phase}; provider ${result.providerState.status}; guest ${result.guest.state}; next ${result.nextAction} (${result.deployment.deploymentInstanceId})`,
+        );
+      }
+    });
+
   const destroy = new Command('destroy')
     .description(
       'Destroy or recover destruction of one locally authorized cloud node',
@@ -762,6 +929,7 @@ export function createPackagedDeploymentCommand(options = {}) {
     .description('Deploy this embedded application payload')
     .addCommand(preview)
     .addCommand(apply)
+    .addCommand(status)
     .addCommand(destroy);
 }
 

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   DEPLOYMENT_SSH_KEYSCAN_PATH,
   ensureDeploymentSshHostKey,
+  readDeploymentSshHostKey,
 } from '../../src/core/runtime/deployment-ssh-host-key.js';
 
 /** @type {string[]} */
@@ -56,6 +57,36 @@ function finiteOutcome(stdout) {
 }
 
 describe('deployment SSH host-key enrollment', () => {
+  it('reads only previously enrolled exact host-key evidence', async () => {
+    const address = '203.0.113.10';
+    const knownHostsPath = await makeKnownHosts(`${address} ${publicKey()}\n`);
+    const before = await readFile(knownHostsPath);
+
+    const evidence = await readDeploymentSshHostKey({
+      address,
+      knownHostsPath,
+    });
+
+    expect(evidence).toEqual({
+      address,
+      algorithm: 'ssh-ed25519',
+      fingerprint: expect.stringMatching(/^SHA256:[A-Za-z0-9+/]{43}$/u),
+    });
+    expect(await readFile(knownHostsPath)).toEqual(before);
+  });
+
+  it('does not enroll an empty known-hosts file while reading', async () => {
+    const knownHostsPath = await makeKnownHosts();
+
+    await expect(
+      readDeploymentSshHostKey({
+        address: '203.0.113.10',
+        knownHostsPath,
+      }),
+    ).rejects.toThrow(/not exact enrolled evidence/iu);
+    expect(await readFile(knownHostsPath, 'utf8')).toBe('');
+  });
+
   it('records one exact provider-cross-checked Ed25519 host key', async () => {
     const address = '203.0.113.10';
     const knownHostsPath = await makeKnownHosts();

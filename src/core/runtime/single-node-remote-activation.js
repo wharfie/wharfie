@@ -352,7 +352,7 @@ function expectedBootstrapIdentity(input) {
  * @param {string} incarnationId - Exact deployment incarnation.
  * @returns {Readonly<{artifactDirectory: string, remoteArtifactPath: string, temporaryPath: string}>} - Canonical remote paths.
  */
-function getRemoteArtifactPaths(desired, incarnationId) {
+export function getSingleNodeRemoteArtifactPaths(desired, incarnationId) {
   const artifactDirectory = posix.join(
     SINGLE_NODE_DEPLOYMENT_ROOT,
     desired.deploymentInstanceId,
@@ -495,7 +495,7 @@ function isDesiredRelease(value, desired) {
  * @param {Readonly<Record<string, any>>} desired - Exact desired state.
  * @returns {{appId: string, unit: string, health: 'healthy', activeArtifactId: string, activeRevisionId: string}} - Safe exact status projection.
  */
-function validateServiceStatus(status, desired) {
+export function validateSingleNodeRemoteServiceStatus(status, desired) {
   const unit = `wharfie-${desired.intent.appId}.service`;
   const wiring = status.wiring;
   const installation = status.installation;
@@ -768,7 +768,7 @@ export function validateSingleNodeRemoteActivationEvidence(
     EVIDENCE_ARTIFACT_KEYS,
     'singleNodeRemoteActivationEvidence.artifact',
   );
-  const expectedRemotePath = getRemoteArtifactPaths(
+  const expectedRemotePath = getSingleNodeRemoteArtifactPaths(
     context.desired,
     context.incarnationId,
   ).remoteArtifactPath;
@@ -1091,7 +1091,7 @@ export function createSingleNodeRemoteActivator(options) {
           );
         }
         const { artifactDirectory, remoteArtifactPath, temporaryPath } =
-          getRemoteArtifactPaths(input.desired, input.incarnationId);
+          getSingleNodeRemoteArtifactPaths(input.desired, input.incarnationId);
 
         /**
          * @param {string[]} argv - Exact remote argv.
@@ -1257,7 +1257,7 @@ export function createSingleNodeRemoteActivator(options) {
             MAX_SERVICE_STATUS_BYTES,
             'Remote service status could not be read successfully.',
           );
-          const service = validateServiceStatus(
+          const service = validateSingleNodeRemoteServiceStatus(
             decodeJsonObject(
               statusOutcome.stdout,
               MAX_SERVICE_STATUS_BYTES,
@@ -1310,5 +1310,7 @@ export default {
   SINGLE_NODE_REMOTE_ACTIVATION_RETRY_DELAY_MILLISECONDS,
   createProductionSingleNodeRemoteActivator,
   createSingleNodeRemoteActivator,
+  getSingleNodeRemoteArtifactPaths,
   validateSingleNodeRemoteActivationEvidence,
+  validateSingleNodeRemoteServiceStatus,
 };

@@ -36,6 +36,15 @@ const PROCESS_ENVIRONMENT = Object.freeze({
   PATH: '/usr/bin:/bin',
 });
 
+/** The selected deployment incarnation has no complete local SSH identity. */
+export class DeploymentSshIdentityMissingError extends Error {
+  constructor() {
+    super('Deployment SSH identity is missing.');
+    this.name = 'DeploymentSshIdentityMissingError';
+    this.code = 'WHARFIE_DEPLOYMENT_SSH_IDENTITY_MISSING';
+  }
+}
+
 /**
  * @param {string} path - Directory path to durably publish.
  * @returns {Promise<void>}
@@ -186,7 +195,7 @@ async function inspectIdentity(value) {
 /**
  * Create a private deployment SSH identity store.
  * @param {{root: string, runProcess: {run(options: unknown): Promise<import('./bounded-process.js').BoundedProcessOutcome>}}} options - Local private root and shell-free process authority.
- * @returns {{ensureIdentity(value: unknown): Promise<Readonly<Record<string, string>>>, removeIdentity(value: unknown): Promise<void>}} - Identity lifecycle.
+ * @returns {{readIdentity(value: unknown): Promise<Readonly<Record<string, string>>>, ensureIdentity(value: unknown): Promise<Readonly<Record<string, string>>>, removeIdentity(value: unknown): Promise<void>}} - Identity lifecycle.
  */
 export function createDeploymentSshIdentityStore(options) {
   if (
@@ -259,6 +268,25 @@ export function createDeploymentSshIdentityStore(options) {
   }
 
   return Object.freeze({
+    /**
+     * Require and reverify an existing identity without creating directories,
+     * keys, known-host state, or another local authority.
+     * @param {unknown} value - Deployment and incarnation identities.
+     * @returns {Promise<Readonly<Record<string, string>>>} - Existing private paths and public evidence.
+     */
+    async readIdentity(value) {
+      const selection = validateSelection(value);
+      const paths = getPaths(selection);
+      try {
+        return await inspectIdentity({ ...paths, runProcess });
+      } catch (error) {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') {
+          throw new DeploymentSshIdentityMissingError();
+        }
+        throw error;
+      }
+    },
+
     /**
      * Generate once or adopt and reverify one existing identity.
      * @param {unknown} value - Deployment and incarnation identities.
@@ -369,5 +397,6 @@ export function createDeploymentSshIdentityStore(options) {
 
 export default {
   DEPLOYMENT_SSH_KEYGEN_PATH,
+  DeploymentSshIdentityMissingError,
   createDeploymentSshIdentityStore,
 };

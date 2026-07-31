@@ -87,6 +87,14 @@ const PREVIEW_READ_METHODS = Object.freeze([
   'listPrimaryIps',
   'listServers',
 ]);
+const STATUS_READ_METHODS = Object.freeze([
+  'listFirewalls',
+  'getFirewall',
+  'listPrimaryIps',
+  'getPrimaryIp',
+  'listServers',
+  'getServer',
+]);
 const INVALID_OPTIONS = 'Hetzner API client options are invalid.';
 const INVALID_REQUEST = 'Hetzner API request is invalid.';
 
@@ -778,16 +786,17 @@ function createClient(rawOptions) {
 }
 
 /**
- * Retain only the six collection reads owned by single-node planning. Each
- * wrapper invokes its capability without a receiver, so neither the full
- * client nor its sibling mutation methods are reachable from preview code.
+ * Retain only one explicit read-method set. Each wrapper invokes its
+ * capability without a receiver, so neither the full client nor sibling
+ * mutation methods are reachable from the returned projection.
  * @param {Readonly<Record<string, Function>>} client - Full internal client.
- * @returns {Readonly<Record<string, Function>>} - GET-only preview client.
+ * @param {Readonly<Array<string>>} methods - Exact read methods to retain.
+ * @returns {Readonly<Record<string, Function>>} - GET-only client.
  */
-function previewClientProjection(client) {
+function readClientProjection(client, methods) {
   /** @type {Record<string, Function>} */
   const result = {};
-  for (const method of PREVIEW_READ_METHODS) {
+  for (const method of methods) {
     const descriptor = Object.getOwnPropertyDescriptor(client, method);
     if (
       !descriptor ||
@@ -836,7 +845,24 @@ export function createHetznerApiClient(value) {
  * @returns {Readonly<Record<string, Function>>} - Planner list methods only.
  */
 export function createHetznerPreviewApiClient(value) {
-  return previewClientProjection(createHetznerApiClient(value));
+  return readClientProjection(
+    createHetznerApiClient(value),
+    PREVIEW_READ_METHODS,
+  );
+}
+
+/**
+ * Create the production GET-only API capability used by deployment status.
+ * Catalog reads and every mutation remain outside this exact resource
+ * inspection boundary.
+ * @param {unknown} value - Exact `{token}` options.
+ * @returns {Readonly<Record<string, Function>>} - Resource list/get methods.
+ */
+export function createHetznerStatusApiClient(value) {
+  return readClientProjection(
+    createHetznerApiClient(value),
+    STATUS_READ_METHODS,
+  );
 }
 
 /**

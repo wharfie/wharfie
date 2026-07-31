@@ -49,21 +49,31 @@ Source plan and direct apply package and durably pre-stage a selected SEA;
 source prepared-plan apply and reconcile consume exact durable staged evidence.
 
 `wharfie app package --self-deployable` creates an application SEA whose
-packaged deployment surface has AWS and Hetzner `preview`, `apply`, and
-`destroy`. AWS preview/apply requires a region and uses the ordinary credential
-chain; Hetzner preview/apply requires a location and reads ambient
-`HCLOUD_TOKEN`. Credentials are never CLI arguments. Use a dedicated Hetzner
-project for this preview because its token is project-wide. Preview performs
-only provider identity/describe/list queries and a side-effect-free local
-journal read; it creates neither local state nor cloud resources. Destroy reads
-only embedded app identity plus exact durable local deployment authority. Its
-journal supplies the bound provider location, so destroy accepts no region or
-location selector.
+packaged deployment surface has AWS and Hetzner `preview`, `apply`, `status`,
+and `destroy`:
+
+```text
+<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
+```
+
+AWS preview/apply requires a region and uses the ordinary credential chain;
+Hetzner preview/apply requires a location and reads ambient `HCLOUD_TOKEN`.
+Credentials are never CLI arguments. Use a dedicated Hetzner project for this
+preview because its token is project-wide. Preview performs only provider
+identity/describe/list queries and a side-effect-free local journal read; it
+creates neither local state nor cloud resources. Status derives provider scope
+from the exact journal and joins that local evidence with an exact provider
+observation and the pinned guest's packaged `service status`. It creates or
+mutates neither local nor remote state and is app-bound rather than bound to
+the current outer SEA revision. Destroy reads only embedded app identity plus
+exact durable local deployment authority. Its journal supplies the bound
+provider location, so destroy accepts no region or location selector.
 
 The AWS path requires suitable default-VPC public-network prerequisites;
 Hetzner uses its public network and Wharfie creates no private network. Destroy
 removes the bounded resources Wharfie created, including the node and its
-root-disk data. Packaged inspect and reconcile are not exposed yet.
+root-disk data. Packaged `deployment inspect` and `deployment reconcile` are
+not exposed yet.
 The AWS path has completed a live packaged apply/activate/adopt/restart/destroy
 slice and independently verified cleanup. The Hetzner path has current-contract
 automated lifecycle coverage and completed the equivalent live slice in

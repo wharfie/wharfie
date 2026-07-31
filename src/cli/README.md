@@ -139,13 +139,14 @@ wharfie deployment destroy <deployment-instance> --region <region> [--control-po
 
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
-AWS and Hetzner preview, apply, and destroy:
+AWS and Hetzner preview, apply, status, and destroy:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
 <app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
 ```
@@ -166,6 +167,14 @@ referenced infrastructure from managed resource roles and reports the semantic
 steps a later apply would evaluate. Apply re-plans before generating and
 persisting its exact resource identities, SSH material, and cloud-init.
 
+Status reads the exact local journal, derives its provider and scope, and joins
+that evidence with an exact provider observation and the pinned guest's
+packaged `service status`. It accepts no provider or placement selector,
+creates no local or provider state, and mutates neither provider nor guest.
+The read is bound to the executable's embedded app identity but not to the
+outer SEA's current revision, so it can inspect an older deployment of the
+same app.
+
 Destroy authenticates only the embedded app identity, then uses the exact
 deployment instance and durable local authority without decoding the embedded
 Linux payload. Its journal supplies the bound AWS region or Hetzner location,
@@ -178,10 +187,10 @@ group, instance, and encrypted root volume. Hetzner owns one firewall, primary
 IPv4, and server. Destroy deletes those resources and the application/control
 data currently held on the node's root disk.
 
-Packaged `inspect` and `reconcile` are not exposed yet. AWS has
-completed a live packaged apply/activate/adopt/restart/destroy slice with
-independently verified cleanup. Hetzner completed the equivalent live slice in
-`fsn1`, including second-process adoption without replacement.
+Packaged `deployment inspect` and `deployment reconcile` are not exposed yet.
+AWS has completed a live packaged apply/activate/adopt/restart/destroy slice
+with independently verified cleanup. Hetzner completed the equivalent live
+slice in `fsn1`, including second-process adoption without replacement.
 
 Source plan and direct apply package a selected SEA and durably pre-stage it.
 A later source `apply --plan` and source reconcile validate exact durable

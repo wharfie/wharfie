@@ -1,5 +1,6 @@
 /* eslint-disable jsdoc/valid-types -- Recursive exact runtime contracts are clearer as JSDoc object types. */
 
+import { isIPv4 } from 'node:net';
 import { TextDecoder } from 'node:util';
 
 import { validateSha256Digest } from '../../application-revision.js';
@@ -74,6 +75,7 @@ const CONVERGE_KEYS = new Set([
   'recordResource',
   'wait',
 ]);
+const INSPECT_KEYS = new Set(['intent', 'storedResourceIds', 'api']);
 const DESTROY_RECOVERY_KEYS = new Set(['intent', 'mutationAttempt', 'api']);
 const STORED_ID_KEYS = new Set(['firewall', 'primaryIp', 'server']);
 const MUTATION_ATTEMPT_KEYS = new Set([
@@ -109,6 +111,14 @@ const API_METHODS = Object.freeze([
   'listServers',
   'getServer',
   'createServer',
+]);
+const INSPECTION_API_METHODS = Object.freeze([
+  'listFirewalls',
+  'getFirewall',
+  'listPrimaryIps',
+  'getPrimaryIp',
+  'listServers',
+  'getServer',
 ]);
 /** @type {Readonly<Record<string, Readonly<{list: string, get: string, create: string}>>>} */
 const ROLE_CONFIG = Object.freeze({
@@ -581,6 +591,38 @@ function snapshotApi(value) {
       throw new TypeError(`hetznerProvisioning.api.${method} is required.`);
     }
     api[method] = candidate.bind(value);
+  }
+  return Object.freeze(api);
+}
+
+/**
+ * Snapshot only resource list/get capabilities without retaining their
+ * receiver or inspecting sibling mutation methods.
+ * @param {unknown} value - Candidate read-only API.
+ * @returns {Readonly<Record<string, Function>>} - Exact read methods.
+ */
+function snapshotInspectionApi(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('hetznerProvisioning inspection API must be a client.');
+  }
+  const object = /** @type {Record<string, any>} */ (value);
+  /** @type {Record<string, Function>} */
+  const api = {};
+  for (const method of INSPECTION_API_METHODS) {
+    const descriptor = Object.getOwnPropertyDescriptor(object, method);
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, 'value') ||
+      typeof descriptor.value !== 'function'
+    ) {
+      throw new TypeError(
+        `hetznerProvisioning inspection API.${method} is required.`,
+      );
+    }
+    const capability = descriptor.value;
+    api[method] = (/** @type {unknown} */ request) =>
+      Reflect.apply(capability, undefined, [request]);
   }
   return Object.freeze(api);
 }
@@ -1279,6 +1321,203 @@ function verifyServer(observed, resourceIntent, dependencies) {
 }
 
 /**
+ * Select the exact provider document named by one exact ownership
+ * classification.
+ * @param {Readonly<Record<string, any>>} inventoryValue - Role inventory.
+ * @param {number} id - Classified exact provider ID.
+ * @returns {Record<string, any>} - Exact provider document.
+ */
+function classifiedObservation(inventoryValue, id) {
+  const matches = inventoryValue.observations.filter(
+    (/** @type {Record<string, any>} */ observation) => observation.id === id,
+  );
+  if (matches.length !== 1) {
+    throw safeRoleError(
+      'HETZNER_PROVISIONING_INVENTORY_FAILED',
+      'resource',
+      'Hetzner resource inventory could not be verified.',
+    );
+  }
+  return matches[0];
+}
+
+/**
+ * Convert a pure exact-spec verifier into one status state.
+ * @param {string} role - Resource role.
+ * @param {() => void} verify - Pure verifier.
+ * @returns {'exact'|'settling'|'conflict'} - One-shot status.
+ */
+function inspectVerifiedState(role, verify) {
+  try {
+    verify();
+    return 'exact';
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === 'object' &&
+      /** @type {Record<string, any>} */ (error).code ===
+        'HETZNER_PROVISIONING_NOT_SETTLED' &&
+      /** @type {Record<string, any>} */ (error).role === role
+    ) {
+      return 'settling';
+    }
+    return 'conflict';
+  }
+}
+
+/**
+ * Inspect the three exact Hetzner resources once. This boundary accepts only
+ * list/get methods and never polls, waits, records, or mutates provider state.
+ * @param {unknown} value - Exact intent, durable IDs, and read API.
+ * @returns {Promise<Readonly<Record<string, Readonly<{id: number|null, state: 'absent'|'settling'|'exact'|'conflict', publicIpv4: string|null}>>>>} - Sanitized provider evidence.
+ */
+export async function inspectHetznerSingleNodeProvisioning(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('hetznerProvisioning inspection input is invalid.');
+  }
+  const input = /** @type {Record<string, any>} */ (value);
+  const keys = Reflect.ownKeys(input);
+  if (
+    keys.length !== INSPECT_KEYS.size ||
+    keys.some((key) => typeof key !== 'string' || !INSPECT_KEYS.has(key))
+  ) {
+    throw new TypeError(
+      'hetznerProvisioning inspection contains unsupported fields.',
+    );
+  }
+  for (const key of INSPECT_KEYS) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.hasOwn(descriptor, 'value')
+    ) {
+      throw new TypeError('hetznerProvisioning inspection input is invalid.');
+    }
+  }
+
+  const intent = validateHetznerSingleNodeProvisioningIntent(input.intent);
+  const ids = storedResourceIds(input.storedResourceIds);
+  const api = snapshotInspectionApi(input.api);
+  /** @type {Readonly<Record<string, any>>} */
+  const inventories = Object.freeze(
+    Object.fromEntries(
+      await Promise.all(
+        [...RESOURCE_KEYS].map(async (role) => [
+          role,
+          await inventory(role, intent.resources[role], ids[role], api),
+        ]),
+      ),
+    ),
+  );
+  /** @type {Record<string, number|null>} */
+  const observedIds = {};
+  /** @type {Record<string, Record<string, any>|null>} */
+  const observations = {};
+  /** @type {Record<string, 'absent'|'settling'|'exact'|'conflict'>} */
+  const states = {};
+
+  for (const role of RESOURCE_KEYS) {
+    const roleInventory = inventories[role];
+    const classification = roleInventory.classification;
+    if (classification.status === 'absent') {
+      observedIds[role] = ids[role];
+      observations[role] = null;
+      states[role] = 'absent';
+    } else if (classification.status === 'conflict') {
+      observedIds[role] = ids[role];
+      observations[role] = null;
+      states[role] = 'conflict';
+    } else if (classification.status === 'exact') {
+      const id = providerId(
+        classification.providerResourceId,
+        `hetznerProvisioning inspection.${role}.providerResourceId`,
+      );
+      observedIds[role] = id;
+      observations[role] = classifiedObservation(roleInventory, id);
+    } else {
+      throw safeRoleError(
+        'HETZNER_PROVISIONING_INVENTORY_FAILED',
+        role,
+        `Hetzner ${role} inventory could not be verified.`,
+      );
+    }
+  }
+
+  const expectedServerId =
+    observations.server === null ? null : observedIds.server;
+  if (observations.firewall !== null) {
+    states.firewall = inspectVerifiedState('firewall', () =>
+      verifyFirewall(
+        observations.firewall,
+        intent.resources.firewall,
+        expectedServerId,
+      ),
+    );
+  }
+  if (observations.primaryIp !== null) {
+    states.primaryIp = inspectVerifiedState('primaryIp', () =>
+      verifyPrimaryIp(
+        observations.primaryIp,
+        intent.resources.primaryIp,
+        expectedServerId,
+      ),
+    );
+  }
+  if (observations.server !== null) {
+    const firewallId = observedIds.firewall;
+    const primaryIpId = observedIds.primaryIp;
+    const primaryIpv4 =
+      typeof observations.primaryIp?.ip === 'string' &&
+      isIPv4(observations.primaryIp.ip)
+        ? observations.primaryIp.ip
+        : null;
+    if (firewallId === null || primaryIpId === null || primaryIpv4 === null) {
+      states.server = 'conflict';
+    } else {
+      const dependencies = {
+        firewall: { id: firewallId },
+        primaryIp: { id: primaryIpId, ip: primaryIpv4 },
+      };
+      states.server = inspectVerifiedState('server', () =>
+        verifyServer(
+          observations.server,
+          intent.resources.server,
+          dependencies,
+        ),
+      );
+    }
+  }
+
+  return deepFreeze(
+    sortCanonicalJsonValue(
+      Object.fromEntries(
+        [...RESOURCE_KEYS].map((role) => {
+          const observation = observations[role];
+          const candidateIpv4 =
+            role === 'primaryIp'
+              ? observation?.ip
+              : role === 'server'
+                ? observation?.publicIpv4?.ip
+                : null;
+          return [
+            role,
+            {
+              id: observedIds[role],
+              state: states[role],
+              publicIpv4:
+                typeof candidateIpv4 === 'string' && isIPv4(candidateIpv4)
+                  ? candidateIpv4
+                  : null,
+            },
+          ];
+        }),
+      ),
+    ),
+  );
+}
+
+/**
  * @param {string} role - Resource role.
  * @param {Readonly<Record<string, any>>} resourceIntent - Resource intent.
  * @param {Readonly<Record<string, any>>} context - Allocated context.
@@ -1832,6 +2071,7 @@ export default {
   createHetznerProvisionedResourceRecord,
   createHetznerProvisioningMutationAttempt,
   createHetznerSingleNodeProvisioningIntent,
+  inspectHetznerSingleNodeProvisioning,
   reconcileHetznerPreparedCreateForDestroy,
   validateHetznerProvisionedResourceRecord,
   validateHetznerProvisioningMutationAttempt,

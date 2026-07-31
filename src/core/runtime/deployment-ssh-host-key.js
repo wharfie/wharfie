@@ -119,6 +119,69 @@ function parseKeyscan(bytes, address) {
 }
 
 /**
+ * Require previously enrolled host-key evidence through an O_RDONLY handle.
+ * This boundary cannot scan, truncate, or publish host-key state.
+ * @param {{address: string, knownHostsPath: string}} value - Exact provider address and existing private store path.
+ * @returns {Promise<Readonly<{address: string, algorithm: 'ssh-ed25519', fingerprint: string}>>} - Existing durable host-key evidence.
+ */
+export async function readDeploymentSshHostKey(value) {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Reflect.ownKeys(value).length !== 2 ||
+    !['address', 'knownHostsPath'].every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return (
+        descriptor?.enumerable === true && Object.hasOwn(descriptor, 'value')
+      );
+    })
+  ) {
+    throw new TypeError('deploymentSshHostKey read input is invalid.');
+  }
+  const address = addressValue(value.address);
+  const knownHostsPath = knownHostsPathValue(value.knownHostsPath);
+  const handle = await open(
+    knownHostsPath,
+    fsConstants.O_RDONLY |
+      (fsConstants.O_NOFOLLOW || 0) |
+      fsConstants.O_NONBLOCK,
+  );
+  try {
+    const stats = await handle.stat();
+    if (
+      !stats.isFile() ||
+      stats.isSymbolicLink() ||
+      (stats.mode & 0o777) !== 0o600 ||
+      stats.size < 1 ||
+      stats.size > MAX_KNOWN_HOSTS_BYTES
+    ) {
+      throw new Error(
+        'deploymentSshHostKey known-hosts state is not exact enrolled evidence.',
+      );
+    }
+    const current = Buffer.alloc(stats.size);
+    const { bytesRead } = await handle.read(current, 0, current.byteLength, 0);
+    if (bytesRead !== current.byteLength) {
+      throw new Error(
+        'deploymentSshHostKey known-hosts state changed while read.',
+      );
+    }
+    const evidence = parseKnownHost(
+      current.toString('utf8').trimEnd(),
+      address,
+    );
+    return Object.freeze({
+      address: evidence.address,
+      algorithm: evidence.algorithm,
+      fingerprint: evidence.fingerprint,
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Enroll or reverify one first-use Ed25519 SSH host key. The caller must first
  * cross-check `address` against the exact provider-owned server; this boundary
  * records TOFU evidence and makes no provider-attestation claim.
@@ -229,4 +292,5 @@ export async function ensureDeploymentSshHostKey(value) {
 export default {
   DEPLOYMENT_SSH_KEYSCAN_PATH,
   ensureDeploymentSshHostKey,
+  readDeploymentSshHostKey,
 };

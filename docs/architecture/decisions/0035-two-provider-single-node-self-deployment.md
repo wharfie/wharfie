@@ -88,6 +88,17 @@ references from managed resource roles and names semantic apply steps; it does
 not claim to predict generated resource identities or byte-exact mutation
 requests. Apply always re-plans before persisting those authorities.
 
+The packaged
+`<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]`
+command is the corresponding read boundary for an existing deployment. It
+derives the provider and scope only from the exact durable journal, then joins
+that authority with a one-shot exact provider observation and the pinned
+guest's packaged `service status`. It does not create a missing data root,
+acquire mutation authority, change provider resources, or change guest state.
+The command binds the embedded application identity, but deliberately does not
+bind the current outer SEA revision, allowing a newer artifact for the same
+application to inspect an older journal-bound deployment.
+
 ### Minimal physical substrate
 
 The preview uses provider public/default networking.
