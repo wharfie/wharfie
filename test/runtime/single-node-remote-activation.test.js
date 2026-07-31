@@ -28,6 +28,7 @@ import {
 import {
   SINGLE_NODE_REMOTE_ACTIVATION_MAX_READINESS_ATTEMPTS,
   SINGLE_NODE_REMOTE_ACTIVATION_RETRY_DELAY_MILLISECONDS,
+  SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_BYTES,
   createSingleNodeRemoteActivator,
   validateSingleNodeRemoteActivationEvidence,
 } from '../../src/core/runtime/single-node-remote-activation.js';
@@ -51,6 +52,11 @@ const TARGET = Object.freeze({
 /** @param {string|Buffer} value */
 function digest(value) {
   return { algorithm: 'sha256', value: sha256Base64Url(value) };
+}
+
+/** @param {string} label */
+function artifactId(label) {
+  return `waf1_${sha256Base64Url(label)}`;
 }
 
 /** @param {string|Buffer} value */
@@ -221,13 +227,17 @@ function outcome({
 
 /**
  * @param {Awaited<ReturnType<typeof makeFixture>>} fixture
- * @param {{readinessFailures?: number, bootstrapIdentity?: unknown, corruptDigest?: boolean, convergeArtifactId?: string, linkAmbiguousExact?: boolean, staleUploadBytes?: Buffer}} [options]
+ * @param {{readinessFailures?: number, bootstrapIdentity?: unknown, corruptDigest?: boolean, convergeArtifactId?: string, linkAmbiguousExact?: boolean, staleUploadBytes?: Buffer, artifactEntries?: {name: string, type: string}[]}} [options]
  */
 function makeRemote(fixture, options = {}) {
   /** @type {Map<string, Buffer>} */
   const files = new Map();
   /** @type {Set<string>} */
   const executable = new Set();
+  /** @type {Map<string, string>} */
+  const artifactEntries = new Map(
+    (options.artifactEntries || []).map(({ name, type }) => [name, type]),
+  );
   /** @type {Record<string, any>[]} */
   const calls = [];
   let readinessFailures = options.readinessFailures || 0;
@@ -238,6 +248,11 @@ function makeRemote(fixture, options = {}) {
     'artifacts',
     fixture.desired.artifact.artifactId,
     `.app-sea.upload-${fixture.incarnationId}`,
+  );
+  const artifactRoot = join(
+    SINGLE_NODE_DEPLOYMENT_ROOT,
+    fixture.desired.deploymentInstanceId,
+    'artifacts',
   );
   if (options.staleUploadBytes) {
     files.set(deterministicTemporaryPath, options.staleUploadBytes);
@@ -278,7 +293,10 @@ function makeRemote(fixture, options = {}) {
           ),
         });
       }
-      if (argv[0] === '/usr/bin/install') return outcome();
+      if (argv[0] === '/usr/bin/install') {
+        artifactEntries.set(fixture.desired.artifact.artifactId, 'd');
+        return outcome();
+      }
       if (argv[0] === '/usr/bin/dd') {
         const path = argv[1].slice('of='.length);
         /** @type {Buffer[]} */
@@ -314,9 +332,29 @@ function makeRemote(fixture, options = {}) {
       }
       if (argv[0] === '/usr/bin/rm') {
         const path = argv[3];
+        if (argv[1] === '-rf') {
+          const artifactId = path.slice(`${artifactRoot}/`.length);
+          artifactEntries.delete(artifactId);
+          for (const filePath of files.keys()) {
+            if (filePath.startsWith(`${path}/`)) files.delete(filePath);
+          }
+          for (const executablePath of executable) {
+            if (executablePath.startsWith(`${path}/`)) {
+              executable.delete(executablePath);
+            }
+          }
+          return outcome();
+        }
         files.delete(path);
         executable.delete(path);
         return outcome();
+      }
+      if (argv[0] === '/usr/bin/find') {
+        return outcome({
+          stdout: [...artifactEntries]
+            .map(([name, type]) => `${name}\0${type}\0`)
+            .join(''),
+        });
       }
       if (argv[0] === '/usr/bin/test' && argv[1] === '-x') {
         return outcome({ exitCode: executable.has(argv[2]) ? 0 : 1 });
@@ -405,6 +443,7 @@ function makeRemote(fixture, options = {}) {
     calls,
     files,
     executable,
+    artifactEntries,
     runRemoteArgv,
     createTransport: jest.fn(() => ({ runRemoteArgv })),
   };
@@ -440,6 +479,7 @@ function makeActivator(fixture, remote, options = {}) {
       desired: fixture.desired,
       incarnationId: fixture.incarnationId,
       providerAddress: '203.0.113.10',
+      retainedArtifactIds: [fixture.desired.artifact.artifactId],
       sshIdentity: fixture.sshIdentity,
       artifactPath: fixture.artifactPath,
     },
@@ -537,7 +577,161 @@ describe('single-node remote activation', () => {
       ['wharfie', 'service', 'converge', '--json'],
       ['wharfie', 'service', 'status', '--json'],
     ]);
+    expect(
+      remote.calls
+        .filter((call) => call.argv[0] === '/usr/bin/find')
+        .map((call) => ({
+          argv: call.argv,
+          maximumStdoutBytes: call.maximumStdoutBytes,
+        })),
+    ).toEqual([
+      {
+        argv: [
+          '/usr/bin/find',
+          join(
+            SINGLE_NODE_DEPLOYMENT_ROOT,
+            fixture.desired.deploymentInstanceId,
+            'artifacts',
+          ),
+          '-mindepth',
+          '1',
+          '-maxdepth',
+          '1',
+          '-printf',
+          '%f\\0%y\\0',
+        ],
+        maximumStdoutBytes: SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_BYTES,
+      },
+      {
+        argv: [
+          '/usr/bin/find',
+          join(
+            SINGLE_NODE_DEPLOYMENT_ROOT,
+            fixture.desired.deploymentInstanceId,
+            'artifacts',
+          ),
+          '-mindepth',
+          '1',
+          '-maxdepth',
+          '1',
+          '-printf',
+          '%f\\0%y\\0',
+        ],
+        maximumStdoutBytes: SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_BYTES,
+      },
+    ]);
     expect(JSON.stringify(evidence)).not.toContain(fixture.root);
+  });
+
+  it('prunes only stale content-addressed wrapper directories across A/B/C/D releases', async () => {
+    const fixture = await makeFixture();
+    const releaseA = artifactId('release-a');
+    const releaseB = artifactId('release-b');
+    const releaseC = artifactId('release-c');
+    const releaseD = fixture.desired.artifact.artifactId;
+    const remote = makeRemote(fixture, {
+      artifactEntries: [releaseA, releaseB, releaseC].map((name) => ({
+        name,
+        type: 'd',
+      })),
+    });
+    const harness = makeActivator(fixture, remote);
+    const retainedArtifactIds = [releaseB, releaseC, releaseD].sort();
+
+    const request = {
+      ...harness.input,
+      retainedArtifactIds,
+    };
+
+    const first = await harness.activator.activate(request);
+    const retried = await harness.activator.activate(request);
+
+    expect(retried).toEqual(first);
+    expect([...remote.artifactEntries.keys()].sort()).toEqual(
+      retainedArtifactIds,
+    );
+    expect(
+      remote.calls
+        .filter(
+          (call) => call.argv[0] === '/usr/bin/rm' && call.argv[1] === '-rf',
+        )
+        .map((call) => call.argv),
+    ).toEqual([
+      [
+        '/usr/bin/rm',
+        '-rf',
+        '--',
+        join(
+          SINGLE_NODE_DEPLOYMENT_ROOT,
+          fixture.desired.deploymentInstanceId,
+          'artifacts',
+          releaseA,
+        ),
+      ],
+    ]);
+  });
+
+  it.each([
+    {
+      entry: { name: 'loose-wrapper', type: 'f' },
+      message: /unexpected entry name/iu,
+    },
+    {
+      entry: { name: artifactId('symlink-wrapper'), type: 'l' },
+      message: /unexpected entry type/iu,
+    },
+  ])(
+    'fails closed on unexpected artifact-root names or types',
+    async ({ entry, message }) => {
+      const fixture = await makeFixture();
+      const remote = makeRemote(fixture, { artifactEntries: [entry] });
+      const harness = makeActivator(fixture, remote);
+
+      await expect(harness.activator.activate(harness.input)).rejects.toThrow(
+        message,
+      );
+
+      expect(
+        remote.calls.some(
+          (call) => call.argv[0] === '/usr/bin/rm' && call.argv[1] === '-rf',
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('requires bounded canonical retention authority containing the target', async () => {
+    const fixture = await makeFixture();
+    const remote = makeRemote(fixture);
+    const harness = makeActivator(fixture, remote);
+    const other = artifactId('other-release');
+
+    await expect(
+      harness.activator.activate({
+        ...harness.input,
+        retainedArtifactIds: [other],
+      }),
+    ).rejects.toThrow(/must include the activation target/iu);
+    await expect(
+      harness.activator.activate({
+        ...harness.input,
+        retainedArtifactIds: [
+          fixture.desired.artifact.artifactId,
+          fixture.desired.artifact.artifactId,
+        ],
+      }),
+    ).rejects.toThrow(/unique and lexicographically sorted/iu);
+    await expect(
+      harness.activator.activate({
+        ...harness.input,
+        retainedArtifactIds: [
+          artifactId('one'),
+          artifactId('two'),
+          artifactId('three'),
+          fixture.desired.artifact.artifactId,
+        ].sort(),
+      }),
+    ).rejects.toThrow(/must contain 1-3 canonical artifact IDs/iu);
+    expect(remote.calls).toHaveLength(0);
   });
 
   it('refuses a bootstrap marker from another incarnation before upload', async () => {

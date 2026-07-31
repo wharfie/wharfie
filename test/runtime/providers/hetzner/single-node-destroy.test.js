@@ -21,6 +21,7 @@ import {
   advanceSingleNodeDeploymentJournal,
   completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournal,
+  getSingleNodeDeploymentEffectiveDesired,
   prepareSingleNodeDeploymentMutation,
   recordSingleNodeDeploymentDeletion,
   recordSingleNodeDeploymentResource,
@@ -232,7 +233,7 @@ async function makeProvisionedJournal() {
 async function makePreparedJournal(role) {
   const complete = await makeProvisionedJournal();
   let journal = createSingleNodeDeploymentJournal({
-    desired: complete.desired,
+    desired: getSingleNodeDeploymentEffectiveDesired(complete),
     providerIntent: complete.providerIntent,
   });
   journal = advanceSingleNodeDeploymentJournal(journal, 'provisioning');
@@ -424,7 +425,10 @@ async function makeHarness(options = {}) {
   const initial = journal;
   return {
     input: {
-      appId: initial?.desired.intent.appId ?? 'destroy-app',
+      appId:
+        initial === null
+          ? 'destroy-app'
+          : getSingleNodeDeploymentEffectiveDesired(initial).intent.appId,
       deploymentInstanceId:
         initial?.deploymentInstanceId ?? makeDesired().deploymentInstanceId,
       dataRoot: '/tmp/wharfie-destroy-test/data',

@@ -593,8 +593,7 @@ consume exact durable staged evidence.
 
 `wharfie app package --self-deployable` creates an operator SEA carrying an
 authenticated Linux deployment SEA. That packaged executable replaces the
-legacy source lifecycle with narrow AWS and Hetzner preview, apply, status, and
-destroy commands:
+legacy source lifecycle with narrow AWS and Hetzner deployment commands:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
@@ -602,8 +601,10 @@ destroy commands:
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
-<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
-<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
+<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
+<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
 ```
 
 Preview and apply require exactly `--region` for AWS or `--location` for
@@ -633,11 +634,35 @@ outer SEA's current revision, so a newer SEA for the same app can inspect an
 older journal-bound deployment. See the
 [packaged deployment status checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-status.md).
 
+Run `deployment update` through the new application SEA. Wharfie preserves the
+journal-bound provider, placement, machine, access, deployment, and application
+authority; the invoking SEA supplies only its authenticated embedded Linux
+release. The committed current release remains authoritative until the new
+artifact is uploaded, converged, observed healthy, recorded, and atomically
+settled. The previous current release is retained as one rollback slot.
+
+Run `deployment recover` after an interrupted apply, update, repair, or
+destroy. Recovery derives the exact action from the durable journal rather
+than accepting a mode or provider selector. Apply recovery requires the exact
+journal-selected install artifact. During an in-flight update, either the
+target SEA resumes it or the committed-current SEA reconverges current and
+atomically abandons the failed target; a third release cannot silently replace
+the pending choice. A stable active deployment is repaired toward its
+committed release, and an already destroyed deployment is a no-op. See the
+[packaged deployment update and recovery checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-update-recovery.md).
+
+`deployment exec` invokes ordinary application argv only on the committed
+current release. If an update reached the guest but local settlement was
+interrupted, exec fails closed until `deployment recover` settles the journal.
+Remote convergence retains at most the committed current, journal rollback,
+and in-flight target wrapper artifacts and removes older content-addressed
+wrappers through exact argv operations.
+
 Destroy reads only the embedded app identity plus the exact durable journal
 under the selected data root; it does not decode the embedded Linux payload.
-The journal supplies the bound AWS region or Hetzner location, so packaged
-destroy accepts neither `--region` nor `--location`. Use the same data root
-that authorized apply.
+The journal supplies the provider and its bound AWS region or Hetzner
+location, so packaged destroy accepts no provider, region, or location
+selector. Use the same data root that authorized apply.
 
 This slice does not create a network. AWS requires one available default VPC
 with a suitable default subnet that assigns public IPv4 addresses, has
@@ -748,6 +773,7 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [SEA packaging reproducibility checkpoint](llm/checkpoints/2026-07-30-sea-packaging-reproducibility.md) — the root-cause analysis and byte-identical nested operator proof for the pinned default unsigned/ad-hoc builder path, with independent cloud and local cleanup.
 - [Two-provider self-deployment checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md) — the live AWS and Hetzner apply/activate/adopt/restart/destroy proofs, independent provider cleanup, and remaining ADR 0035 acceptance boundary.
 - [Packaged deployment preview checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-preview.md) — the stable zero-write receipt, structural read-only provider boundaries, live AWS/Hetzner packaged proofs, and complete artifact cleanup.
+- [Packaged deployment update/recovery checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-update-recovery.md) — journal-v3 current/rollback/transition authority, provider-neutral release update, exact journal-directed recovery, and the remaining live two-provider continuity proof.
 - [Single-host developer preview checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md) — the accepted split builder/clean-target product journey, unfinished timer across controller exit, update/rollback, purge, checksums, complete cleanup, and Outcome 2 handoff.
 - [Steady-file systemd walkthrough checkpoint](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md) — the preceding same-host Linux arm64 product journey and the private-storage defect it exposed.
 - [Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md) — the preceding restart point for the checksummed disposable-Ubuntu package, crash/reboot continuation, activation-recovery matrix, retained reads, uninstall/prune, cleanup, and next work.

@@ -26,7 +26,10 @@ import {
   createHetznerSingleNodeDeploymentProvider,
   createSingleNodeDeploymentIntent,
 } from './single-node-deployment-intent.js';
-import { validateSingleNodeDeploymentJournal } from './single-node-deployment-journal.js';
+import {
+  getSingleNodeDeploymentEffectiveDesired,
+  validateSingleNodeDeploymentJournal,
+} from './single-node-deployment-journal.js';
 
 export const SINGLE_NODE_DEPLOYMENT_PREVIEW_SCHEMA_VERSION = 1;
 export const SINGLE_NODE_DEPLOYMENT_PREVIEW_KIND =
@@ -898,19 +901,22 @@ export function createSingleNodeDeploymentPreview(value) {
           input.journal,
           'singleNodeDeploymentPreview.journal',
         );
-  if (
-    journal !== null &&
-    (journal.deploymentInstanceId !== desired.deploymentInstanceId ||
-      journal.desired.intent.appId !== desired.intent.appId)
-  ) {
-    throw new Error(
-      'singleNodeDeploymentPreview journal does not match the deployment authority.',
-    );
+  if (journal !== null) {
+    const durableDesired = getSingleNodeDeploymentEffectiveDesired(journal);
+    if (
+      journal.deploymentInstanceId !== desired.deploymentInstanceId ||
+      durableDesired.intent.appId !== desired.intent.appId
+    ) {
+      throw new Error(
+        'singleNodeDeploymentPreview journal does not match the deployment authority.',
+      );
+    }
   }
   const desiredMatches =
     journal === null
       ? null
-      : journal.desired.desiredRevisionId === desired.desiredRevisionId;
+      : getSingleNodeDeploymentEffectiveDesired(journal).desiredRevisionId ===
+        desired.desiredRevisionId;
   const disposition = previewDisposition(plan, journal, desiredMatches);
   const receipt = {
     schemaVersion: SINGLE_NODE_DEPLOYMENT_PREVIEW_SCHEMA_VERSION,

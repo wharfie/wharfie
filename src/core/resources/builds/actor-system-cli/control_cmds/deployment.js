@@ -18,8 +18,16 @@ import {
 } from '../../../../runtime/single-node-deployment-identity.js';
 import {
   createSingleNodeDeploymentJournalStore,
+  getSingleNodeDeploymentCurrentRelease,
+  getSingleNodeDeploymentEffectiveDesired,
+  getSingleNodeDeploymentReleaseTransition,
   validateSingleNodeDeploymentJournal,
 } from '../../../../runtime/single-node-deployment-journal.js';
+import {
+  SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_KIND,
+  SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_SCHEMA_VERSION,
+  createProductionSingleNodeDeploymentUpdateCoordinator,
+} from '../../../../runtime/single-node-deployment-update.js';
 import {
   createSingleNodeDeploymentPreview,
   validateSingleNodeDeploymentPreview,
@@ -65,6 +73,12 @@ export const PACKAGED_DEPLOYMENT_APPLY_RECEIPT_KIND =
 export const PACKAGED_DEPLOYMENT_DESTROY_RECEIPT_SCHEMA_VERSION = 1;
 export const PACKAGED_DEPLOYMENT_DESTROY_RECEIPT_KIND =
   'wharfie.deployment.destroy';
+export const PACKAGED_DEPLOYMENT_UPDATE_RECEIPT_SCHEMA_VERSION = 1;
+export const PACKAGED_DEPLOYMENT_UPDATE_RECEIPT_KIND =
+  'wharfie.deployment.update';
+export const PACKAGED_DEPLOYMENT_RECOVER_RECEIPT_SCHEMA_VERSION = 1;
+export const PACKAGED_DEPLOYMENT_RECOVER_RECEIPT_KIND =
+  'wharfie.deployment.recover';
 
 const APPLY_RESULT_CONTRACTS = Object.freeze({
   aws: Object.freeze({
@@ -99,6 +113,26 @@ const DESTROY_RESULT_CONTRACTS = Object.freeze({
 /**
  * @typedef PackagedDeploymentCommandProcess
  * @property {number|string|null|undefined} exitCode - Process exit status.
+ */
+
+/**
+ * @typedef {Readonly<{
+ *   appId: string,
+ *   pair: Readonly<Record<string, any>>,
+ *   dataRoot: string,
+ *   journal: Readonly<Record<string, any>>,
+ *   provider: 'aws'|'hetzner',
+ *   substrateDesired: Readonly<Record<string, any>>
+ * }>} PackagedDeploymentJournalAuthority
+ */
+
+/**
+ * @typedef {Readonly<PackagedDeploymentJournalAuthority & {
+ *   payload: Readonly<Record<string, any>>,
+ *   source: Readonly<Record<string, any>>,
+ *   intent: Readonly<Record<string, any>>,
+ *   desired: Readonly<Record<string, any>>
+ * }>} PackagedDeploymentReleaseAuthority
  */
 
 /**
@@ -351,6 +385,91 @@ function createDestroyReceipt(value, authority) {
 }
 
 /**
+ * Bind one provider-neutral release update to the invoking SEA and its exact
+ * embedded Linux payload.
+ * @param {unknown} value - Candidate update coordinator result.
+ * @param {{desired: Readonly<Record<string, any>>, revision: Readonly<Record<string, any>>}} authority - Command-owned release authority.
+ * @returns {Readonly<Record<string, any>>} - Compact nonsecret public result.
+ */
+function createUpdateReceipt(value, authority) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Packaged deployment update returned an invalid result.');
+  }
+  const result = /** @type {Record<string, any>} */ (value);
+  const desired = authority.desired;
+  const provider = validateProvider(desired.intent.provider.kind);
+  if (
+    result.schemaVersion !==
+      SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_SCHEMA_VERSION ||
+    result.kind !== SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_KIND ||
+    result.provider !== provider ||
+    result.status !== 'active' ||
+    result.deploymentInstanceId !== desired.deploymentInstanceId ||
+    result.desiredRevisionId !== desired.desiredRevisionId ||
+    result.artifactId !== desired.artifact.artifactId ||
+    !isIPv4(result.publicIpv4)
+  ) {
+    throw new Error(
+      'Packaged deployment update did not reach the exact active release.',
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    result.activationEvidenceId,
+    SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_PREFIX,
+    'packagedDeploymentUpdateResult.activationEvidenceId',
+  );
+  return Object.freeze({
+    schemaVersion: PACKAGED_DEPLOYMENT_UPDATE_RECEIPT_SCHEMA_VERSION,
+    kind: PACKAGED_DEPLOYMENT_UPDATE_RECEIPT_KIND,
+    provider,
+    status: 'active',
+    deploymentId: desired.intent.deployment.id,
+    appId: desired.intent.appId,
+    revisionId: authority.revision.revisionId,
+    artifactId: result.artifactId,
+    desiredRevisionId: result.desiredRevisionId,
+    deploymentInstanceId: result.deploymentInstanceId,
+    publicIpv4: result.publicIpv4,
+  });
+}
+
+/**
+ * Normalize apply, update/repair, destroy, and already-destroyed recovery into
+ * one small receipt so automation need not infer which coordinator resumed.
+ * @param {'apply'|'update'|'restore'|'repair'|'destroy'|'none'} action - Durable action recovered.
+ * @param {Readonly<Record<string, any>>|null} receipt - Bound action receipt.
+ * @param {{provider: 'aws'|'hetzner', appId: string, deploymentInstanceId: string}} authority - Durable deployment authority.
+ * @returns {Readonly<Record<string, any>>} - Compact recovery receipt.
+ */
+function createRecoverReceipt(action, receipt, authority) {
+  const status =
+    action === 'destroy' || action === 'none' ? 'destroyed' : 'active';
+  if (
+    (receipt === null) !== (action === 'none') ||
+    (receipt !== null &&
+      (receipt.provider !== authority.provider ||
+        receipt.appId !== authority.appId ||
+        receipt.deploymentInstanceId !== authority.deploymentInstanceId ||
+        receipt.status !== status))
+  ) {
+    throw new Error(
+      'Packaged deployment recovery result does not match the exact deployment authority.',
+    );
+  }
+  return Object.freeze({
+    schemaVersion: PACKAGED_DEPLOYMENT_RECOVER_RECEIPT_SCHEMA_VERSION,
+    kind: PACKAGED_DEPLOYMENT_RECOVER_RECEIPT_KIND,
+    provider: authority.provider,
+    status,
+    action,
+    appId: authority.appId,
+    deploymentInstanceId: authority.deploymentInstanceId,
+    artifactId: status === 'active' ? receipt?.artifactId : null,
+    publicIpv4: status === 'active' ? receipt?.publicIpv4 : null,
+  });
+}
+
+/**
  * Refuse ambiguous transport completion before exposing any partial output.
  * A nonzero observed application exit is still a successful execution of the
  * operator command boundary and is relayed unchanged to the caller.
@@ -397,7 +516,7 @@ function validateRemoteExecutionOutcome(value) {
  * either failure.
  * @param {unknown} operationError - Original command failure, if any.
  * @param {unknown} cleanupError - Held-source cleanup failure.
- * @param {'preview'|'apply'} operation - Public operation name.
+ * @param {'preview'|'apply'|'update'|'recover'} operation - Public operation name.
  * @returns {unknown} - One reportable failure.
  */
 function combineCleanupError(operationError, cleanupError, operation) {
@@ -417,6 +536,7 @@ function combineCleanupError(operationError, cleanupError, operation) {
  *   readDeploymentPayload?: typeof readEmbeddedSingleNodeDeploymentPayload,
  *   createApplyCoordinator?: typeof createProductionHetznerSingleNodeApplyCoordinator,
  *   createDestroyCoordinator?: typeof createProductionHetznerSingleNodeDestroyCoordinator,
+ *   createUpdateCoordinator?: typeof createProductionSingleNodeDeploymentUpdateCoordinator,
  *   createPreviewByProvider?: Partial<{aws: typeof createAwsSingleNodePreview, hetzner: typeof createHetznerSingleNodePreview}>,
  *   inspectStatusByProvider?: Partial<{aws: typeof inspectAwsSingleNodeStatus, hetzner: typeof inspectHetznerSingleNodeStatus}>,
  *   createApplyCoordinatorByProvider?: Partial<{aws: typeof createProductionAwsSingleNodeApplyCoordinator, hetzner: typeof createProductionHetznerSingleNodeApplyCoordinator}>,
@@ -467,6 +587,9 @@ export function createPackagedDeploymentCommand(options = {}) {
       options.createDestroyCoordinator ||
       createProductionHetznerSingleNodeDestroyCoordinator,
   });
+  const createUpdateCoordinator =
+    options.createUpdateCoordinator ||
+    createProductionSingleNodeDeploymentUpdateCoordinator;
   const resolveDataRoot =
     options.resolveDataRoot || resolveStableLocalAppDataRoot;
   const createJournalStore =
@@ -538,6 +661,137 @@ export function createPackagedDeploymentCommand(options = {}) {
         intent,
         desired,
         dataRoot: commandOptions.dataRoot ?? resolveDataRoot(),
+      });
+    } catch (error) {
+      if (source === undefined) throw error;
+      try {
+        await source.close();
+      } catch (cleanupError) {
+        throw combineCleanupError(error, cleanupError, operation);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Read one exact app-scoped journal without accepting mutable provider or
+   * release selectors from the command line.
+   * @param {Record<string, any>} commandOptions - Commander option snapshot.
+   * @param {'status'|'exec'|'update'|'recover'|'destroy'} operation - Public operation name.
+   * @returns {Promise<PackagedDeploymentJournalAuthority>} - Durable authority and store context.
+   */
+  async function readJournalAuthority(commandOptions, operation) {
+    assertSingleNodeDeploymentInstanceId(
+      commandOptions.deploymentInstance,
+      `packagedDeployment${operation[0].toUpperCase()}${operation.slice(1)}.deploymentInstanceId`,
+    );
+    const pair = await readRevisionRuntimePair();
+    const appId = pair.runtime.appId;
+    const dataRoot = commandOptions.dataRoot ?? resolveDataRoot();
+    const journalStore = Reflect.apply(createJournalStore, undefined, [
+      {
+        appId,
+        deploymentInstanceId: commandOptions.deploymentInstance,
+        dataRoot,
+      },
+    ]);
+    const readJournal = Object.getOwnPropertyDescriptor(journalStore, 'read');
+    if (
+      !readJournal ||
+      !readJournal.enumerable ||
+      !Object.hasOwn(readJournal, 'value') ||
+      typeof readJournal.value !== 'function'
+    ) {
+      throw new TypeError(
+        `Packaged deployment ${operation} journal store is invalid.`,
+      );
+    }
+    const journalValue = await Reflect.apply(
+      readJournal.value,
+      journalStore,
+      [],
+    );
+    if (journalValue === null) {
+      throw new Error(
+        `Packaged deployment ${operation} requires existing local deployment authority.`,
+      );
+    }
+    const journal = validateSingleNodeDeploymentJournal(
+      journalValue,
+      `packagedDeployment${operation[0].toUpperCase()}${operation.slice(1)}.journal`,
+    );
+    const substrateDesired = journal.providerIntent.intent.plan.desired;
+    if (
+      substrateDesired.intent.appId !== appId ||
+      journal.deploymentInstanceId !== commandOptions.deploymentInstance
+    ) {
+      throw new Error(
+        `Packaged deployment ${operation} journal does not match the embedded application authority.`,
+      );
+    }
+    return Object.freeze({
+      appId,
+      pair,
+      dataRoot,
+      journal,
+      provider: validateProvider(journal.providerIntent.provider),
+      substrateDesired,
+    });
+  }
+
+  /**
+   * Bind the invoking SEA's embedded Linux payload to the immutable substrate
+   * fields already authorized by one journal.
+   * @param {PackagedDeploymentJournalAuthority} journalAuthority - Durable authority.
+   * @param {'update'|'recover'} operation - Public operation name.
+   * @param {boolean} requireEffectiveTarget - Require the journal's already-selected release.
+   * @returns {Promise<PackagedDeploymentReleaseAuthority>} - Held target release authority.
+   */
+  async function readJournalReleaseAuthority(
+    journalAuthority,
+    operation,
+    requireEffectiveTarget,
+  ) {
+    /** @type {Readonly<Record<string, any>>|undefined} */
+    let source;
+    try {
+      const payload = await readDeploymentPayload({
+        revision: journalAuthority.pair.revision,
+      });
+      source = payload.source;
+      const substrateIntent = journalAuthority.substrateDesired.intent;
+      const intent = createSingleNodeDeploymentIntent({
+        deployment: substrateIntent.deployment,
+        appId: substrateIntent.appId,
+        target: payload.artifactRecord.target,
+        mode: substrateIntent.mode,
+        machine: substrateIntent.machine,
+        access: substrateIntent.access,
+        provider: substrateIntent.provider,
+      });
+      const desired = createSingleNodeDeploymentDesired({
+        intent,
+        revision: journalAuthority.pair.revision,
+        artifactRecord: payload.artifactRecord,
+        observation: source.observation,
+      });
+      if (
+        requireEffectiveTarget &&
+        JSON.stringify(desired) !==
+          JSON.stringify(
+            getSingleNodeDeploymentEffectiveDesired(journalAuthority.journal),
+          )
+      ) {
+        throw new Error(
+          `Packaged deployment ${operation} requires the SEA containing the exact journal-selected release.`,
+        );
+      }
+      return Object.freeze({
+        ...journalAuthority,
+        payload,
+        source,
+        intent,
+        desired,
       });
     } catch (error) {
       if (source === undefined) throw error;
@@ -783,57 +1037,10 @@ export function createPackagedDeploymentCommand(options = {}) {
       let operationError;
 
       try {
-        assertSingleNodeDeploymentInstanceId(
-          commandOptions.deploymentInstance,
-          'packagedDeploymentStatus.deploymentInstanceId',
-        );
-        const pair = await readRevisionRuntimePair();
-        const appId = pair.runtime.appId;
-        const dataRoot = commandOptions.dataRoot ?? resolveDataRoot();
-        const journalStore = Reflect.apply(createJournalStore, undefined, [
-          {
-            appId,
-            deploymentInstanceId: commandOptions.deploymentInstance,
-            dataRoot,
-          },
-        ]);
-        const readJournal = Object.getOwnPropertyDescriptor(
-          journalStore,
-          'read',
-        );
-        if (
-          !readJournal ||
-          !readJournal.enumerable ||
-          !Object.hasOwn(readJournal, 'value') ||
-          typeof readJournal.value !== 'function'
-        ) {
-          throw new TypeError(
-            'Packaged deployment status journal store is invalid.',
-          );
-        }
-        const journalValue = await Reflect.apply(
-          readJournal.value,
-          journalStore,
-          [],
-        );
-        if (journalValue === null) {
-          throw new Error(
-            'Packaged deployment status requires existing local deployment authority.',
-          );
-        }
-        const journal = validateSingleNodeDeploymentJournal(
-          journalValue,
-          'packagedDeploymentStatus.journal',
-        );
-        if (
-          journal.desired.intent.appId !== appId ||
-          journal.deploymentInstanceId !== commandOptions.deploymentInstance
-        ) {
-          throw new Error(
-            'Packaged deployment status journal does not match the embedded application authority.',
-          );
-        }
-        const provider = validateProvider(journal.providerIntent.provider);
+        const authority = await readJournalAuthority(commandOptions, 'status');
+        const { appId, dataRoot, journal, provider } = authority;
+        const effectiveDesired =
+          getSingleNodeDeploymentEffectiveDesired(journal);
         const providerObservation = await Reflect.apply(
           inspectStatusByProvider[provider],
           undefined,
@@ -867,15 +1074,15 @@ export function createPackagedDeploymentCommand(options = {}) {
           receipt.provider !== provider ||
           receipt.deployment.appId !== appId ||
           receipt.deployment.deploymentId !==
-            journal.desired.intent.deployment.id ||
+            effectiveDesired.intent.deployment.id ||
           receipt.deployment.deploymentInstanceId !==
             commandOptions.deploymentInstance ||
           receipt.deployment.desiredRevisionId !==
-            journal.desired.desiredRevisionId ||
+            effectiveDesired.desiredRevisionId ||
           receipt.deployment.revisionId !==
-            journal.desired.artifact.revisionId ||
+            effectiveDesired.artifact.revisionId ||
           receipt.deployment.artifact.artifactId !==
-            journal.desired.artifact.artifactId ||
+            effectiveDesired.artifact.artifactId ||
           receipt.journal.journalId !== journal.journalId ||
           receipt.journal.generation !== journal.generation ||
           receipt.journal.incarnationId !== journal.incarnationId ||
@@ -905,6 +1112,309 @@ export function createPackagedDeploymentCommand(options = {}) {
       }
     });
 
+  const update = new Command('update')
+    .description(
+      "Activate this SEA's exact embedded release on one existing node",
+    )
+    .requiredOption(
+      '--deployment-instance <instance-id>',
+      'Exact durable deployment instance identity',
+      parseSingleOption('--deployment-instance'),
+    )
+    .option(
+      '--data-root <absolute>',
+      'Stable local deployment authority root',
+      parseSingleOption('--data-root'),
+    )
+    .option('--json', 'Output compact JSON')
+    .action(async (commandOptions) => {
+      /** @type {Readonly<Record<string, any>>|undefined} */
+      let source;
+      /** @type {Readonly<Record<string, any>>|undefined} */
+      let receipt;
+      /** @type {unknown} */
+      let operationError;
+
+      try {
+        const journalAuthority = await readJournalAuthority(
+          commandOptions,
+          'update',
+        );
+        if (journalAuthority.journal.phase !== 'active') {
+          throw new Error(
+            'Packaged deployment update requires active local deployment authority; run deployment recover instead.',
+          );
+        }
+        const authority = await readJournalReleaseAuthority(
+          journalAuthority,
+          'update',
+          false,
+        );
+        source = authority.source;
+        const coordinator = Reflect.apply(
+          createUpdateCoordinator,
+          undefined,
+          [],
+        );
+        if (
+          coordinator === null ||
+          typeof coordinator !== 'object' ||
+          typeof coordinator.update !== 'function'
+        ) {
+          throw new TypeError(
+            'Packaged deployment update coordinator is invalid.',
+          );
+        }
+        const result = await coordinator.update({
+          desired: authority.desired,
+          revision: authority.pair.revision,
+          artifactRecord: authority.payload.artifactRecord,
+          observation: authority.source.observation,
+          artifactSource: authority.source,
+          dataRoot: authority.dataRoot,
+        });
+        receipt = createUpdateReceipt(result, {
+          desired: authority.desired,
+          revision: authority.pair.revision,
+        });
+      } catch (error) {
+        operationError = error;
+      }
+
+      if (source !== undefined) {
+        try {
+          await source.close();
+        } catch (cleanupError) {
+          operationError = combineCleanupError(
+            operationError,
+            cleanupError,
+            'update',
+          );
+        }
+      }
+      if (operationError !== undefined) {
+        output.failure(operationError);
+        processRef.exitCode = 1;
+        return;
+      }
+
+      const result = /** @type {Readonly<Record<string, any>>} */ (receipt);
+      if (commandOptions.json) {
+        output.json(result);
+      } else {
+        output.line(
+          `${result.deploymentId} is active on ${result.artifactId} at ${result.publicIpv4} (${result.deploymentInstanceId})`,
+        );
+      }
+    });
+
+  const recover = new Command('recover')
+    .description('Resume the exact durable apply, update, or destroy frontier')
+    .requiredOption(
+      '--deployment-instance <instance-id>',
+      'Exact durable deployment instance identity',
+      parseSingleOption('--deployment-instance'),
+    )
+    .option(
+      '--data-root <absolute>',
+      'Stable local deployment authority root',
+      parseSingleOption('--data-root'),
+    )
+    .option('--json', 'Output compact JSON')
+    .action(async (commandOptions) => {
+      /** @type {Readonly<Record<string, any>>|undefined} */
+      let source;
+      /** @type {Readonly<Record<string, any>>|undefined} */
+      let receipt;
+      /** @type {unknown} */
+      let operationError;
+
+      try {
+        const authority = await readJournalAuthority(commandOptions, 'recover');
+        const recoveryAuthority = {
+          provider: authority.provider,
+          appId: authority.appId,
+          deploymentInstanceId: authority.journal.deploymentInstanceId,
+        };
+        /** @type {'apply'|'update'|'restore'|'repair'|'destroy'|'none'} */
+        let action;
+        /** @type {Readonly<Record<string, any>>|null} */
+        let actionReceipt;
+
+        if (
+          ['planned', 'provisioning', 'provisioned', 'activating'].includes(
+            authority.journal.phase,
+          )
+        ) {
+          action = 'apply';
+          const releaseAuthority = await readJournalReleaseAuthority(
+            authority,
+            'recover',
+            true,
+          );
+          source = releaseAuthority.source;
+          const coordinator = Reflect.apply(
+            createApplyCoordinatorByProvider[authority.provider],
+            undefined,
+            [],
+          );
+          if (
+            coordinator === null ||
+            typeof coordinator !== 'object' ||
+            typeof coordinator.apply !== 'function'
+          ) {
+            throw new TypeError(
+              'Packaged deployment recovery apply coordinator is invalid.',
+            );
+          }
+          actionReceipt = createApplyReceipt(
+            await coordinator.apply({
+              desired: releaseAuthority.desired,
+              revision: releaseAuthority.pair.revision,
+              artifactRecord: releaseAuthority.payload.artifactRecord,
+              observation: releaseAuthority.source.observation,
+              artifactSource: releaseAuthority.source,
+              dataRoot: releaseAuthority.dataRoot,
+            }),
+            {
+              intent: releaseAuthority.intent,
+              desired: releaseAuthority.desired,
+              revision: releaseAuthority.pair.revision,
+              artifactRecord: releaseAuthority.payload.artifactRecord,
+            },
+          );
+        } else if (authority.journal.phase === 'active') {
+          const transition = getSingleNodeDeploymentReleaseTransition(
+            authority.journal,
+          );
+          const releaseAuthority = await readJournalReleaseAuthority(
+            authority,
+            'recover',
+            false,
+          );
+          source = releaseAuthority.source;
+          const currentRelease = getSingleNodeDeploymentCurrentRelease(
+            authority.journal,
+          );
+          if (currentRelease === null) {
+            throw new Error(
+              'Packaged deployment recovery active journal has no committed current release.',
+            );
+          }
+          const targetsCurrent =
+            JSON.stringify(releaseAuthority.desired) ===
+            JSON.stringify(currentRelease.desired);
+          const targetsTransition =
+            transition !== null &&
+            JSON.stringify(releaseAuthority.desired) ===
+              JSON.stringify(transition.target.desired);
+          if (transition === null && targetsCurrent) {
+            action = 'repair';
+          } else if (transition !== null && targetsTransition) {
+            action = 'update';
+          } else if (transition !== null && targetsCurrent) {
+            action = 'restore';
+          } else {
+            throw new Error(
+              'Packaged deployment recover requires the SEA containing the exact committed current or in-flight target release.',
+            );
+          }
+          const coordinator = Reflect.apply(
+            createUpdateCoordinator,
+            undefined,
+            [],
+          );
+          if (
+            coordinator === null ||
+            typeof coordinator !== 'object' ||
+            typeof coordinator.recover !== 'function'
+          ) {
+            throw new TypeError(
+              'Packaged deployment recovery update coordinator is invalid.',
+            );
+          }
+          actionReceipt = createUpdateReceipt(
+            await coordinator.recover({
+              desired: releaseAuthority.desired,
+              revision: releaseAuthority.pair.revision,
+              artifactRecord: releaseAuthority.payload.artifactRecord,
+              observation: releaseAuthority.source.observation,
+              artifactSource: releaseAuthority.source,
+              dataRoot: releaseAuthority.dataRoot,
+            }),
+            {
+              desired: releaseAuthority.desired,
+              revision: releaseAuthority.pair.revision,
+            },
+          );
+        } else if (authority.journal.phase === 'destroying') {
+          action = 'destroy';
+          const coordinator = Reflect.apply(
+            createDestroyCoordinatorByProvider[authority.provider],
+            undefined,
+            [],
+          );
+          if (
+            coordinator === null ||
+            typeof coordinator !== 'object' ||
+            typeof coordinator.destroy !== 'function'
+          ) {
+            throw new TypeError(
+              'Packaged deployment recovery destroy coordinator is invalid.',
+            );
+          }
+          actionReceipt = createDestroyReceipt(
+            await coordinator.destroy({
+              appId: authority.appId,
+              deploymentInstanceId: authority.journal.deploymentInstanceId,
+              dataRoot: authority.dataRoot,
+            }),
+            recoveryAuthority,
+          );
+        } else if (authority.journal.phase === 'destroyed') {
+          action = 'none';
+          actionReceipt = null;
+        } else {
+          throw new Error(
+            'Packaged deployment recovery found an unsupported durable phase.',
+          );
+        }
+        receipt = createRecoverReceipt(
+          action,
+          actionReceipt,
+          recoveryAuthority,
+        );
+      } catch (error) {
+        operationError = error;
+      }
+
+      if (source !== undefined) {
+        try {
+          await source.close();
+        } catch (cleanupError) {
+          operationError = combineCleanupError(
+            operationError,
+            cleanupError,
+            'recover',
+          );
+        }
+      }
+      if (operationError !== undefined) {
+        output.failure(operationError);
+        processRef.exitCode = 1;
+        return;
+      }
+
+      const result = /** @type {Readonly<Record<string, any>>} */ (receipt);
+      if (commandOptions.json) {
+        output.json(result);
+      } else {
+        output.line(
+          `${result.deploymentInstanceId} recovered ${result.action}; ${result.status}`,
+        );
+      }
+    });
+
   const exec = new Command('exec')
     .description(
       'Run this exact application on one active journal-authorized node',
@@ -930,56 +1440,10 @@ export function createPackagedDeploymentCommand(options = {}) {
       let operationError;
 
       try {
-        assertSingleNodeDeploymentInstanceId(
-          commandOptions.deploymentInstance,
-          'packagedDeploymentExec.deploymentInstanceId',
+        const { dataRoot, journal } = await readJournalAuthority(
+          commandOptions,
+          'exec',
         );
-        const pair = await readRevisionRuntimePair();
-        const appId = pair.runtime.appId;
-        const dataRoot = commandOptions.dataRoot ?? resolveDataRoot();
-        const journalStore = Reflect.apply(createJournalStore, undefined, [
-          {
-            appId,
-            deploymentInstanceId: commandOptions.deploymentInstance,
-            dataRoot,
-          },
-        ]);
-        const readJournal = Object.getOwnPropertyDescriptor(
-          journalStore,
-          'read',
-        );
-        if (
-          !readJournal ||
-          !readJournal.enumerable ||
-          !Object.hasOwn(readJournal, 'value') ||
-          typeof readJournal.value !== 'function'
-        ) {
-          throw new TypeError(
-            'Packaged deployment exec journal store is invalid.',
-          );
-        }
-        const journalValue = await Reflect.apply(
-          readJournal.value,
-          journalStore,
-          [],
-        );
-        if (journalValue === null) {
-          throw new Error(
-            'Packaged deployment exec requires existing local deployment authority.',
-          );
-        }
-        const journal = validateSingleNodeDeploymentJournal(
-          journalValue,
-          'packagedDeploymentExec.journal',
-        );
-        if (
-          journal.desired.intent.appId !== appId ||
-          journal.deploymentInstanceId !== commandOptions.deploymentInstance
-        ) {
-          throw new Error(
-            'Packaged deployment exec journal does not match the embedded application authority.',
-          );
-        }
         if (journal.phase !== 'active') {
           throw new Error(
             'Packaged deployment exec requires active local deployment authority.',
@@ -1022,11 +1486,6 @@ export function createPackagedDeploymentCommand(options = {}) {
       'Exact durable deployment instance identity',
       parseSingleOption('--deployment-instance'),
     )
-    .requiredOption(
-      '--provider <provider>',
-      'Cloud provider (aws or hetzner)',
-      parseSingleOption('--provider'),
-    )
     .option(
       '--data-root <absolute>',
       'Stable local deployment authority root',
@@ -1040,13 +1499,10 @@ export function createPackagedDeploymentCommand(options = {}) {
       let operationError;
 
       try {
-        const provider = validateProvider(commandOptions.provider);
-        assertSingleNodeDeploymentInstanceId(
-          commandOptions.deploymentInstance,
-          'packagedDeploymentDestroy.deploymentInstanceId',
+        const { appId, dataRoot, provider } = await readJournalAuthority(
+          commandOptions,
+          'destroy',
         );
-        const pair = await readRevisionRuntimePair();
-        const appId = pair.runtime.appId;
         const coordinator = Reflect.apply(
           createDestroyCoordinatorByProvider[provider],
           undefined,
@@ -1064,7 +1520,7 @@ export function createPackagedDeploymentCommand(options = {}) {
         const result = await coordinator.destroy({
           appId,
           deploymentInstanceId: commandOptions.deploymentInstance,
-          dataRoot: commandOptions.dataRoot ?? resolveDataRoot(),
+          dataRoot,
         });
         receipt = createDestroyReceipt(result, {
           provider,
@@ -1096,6 +1552,8 @@ export function createPackagedDeploymentCommand(options = {}) {
     .addCommand(preview)
     .addCommand(apply)
     .addCommand(status)
+    .addCommand(update)
+    .addCommand(recover)
     .addCommand(exec)
     .addCommand(destroy);
 }

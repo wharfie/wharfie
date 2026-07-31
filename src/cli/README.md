@@ -139,7 +139,7 @@ wharfie deployment destroy <deployment-instance> --region <region> [--control-po
 
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
-AWS and Hetzner preview, apply, status, exec, and destroy:
+AWS and Hetzner preview, apply, status, update, recover, exec, and destroy:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
@@ -147,9 +147,10 @@ AWS and Hetzner preview, apply, status, exec, and destroy:
 <app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
 <app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
+<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
 <app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
-<app> wharfie deployment destroy --deployment-instance <instance-id> --provider aws [--data-root <absolute>] [--json]
-<app> wharfie deployment destroy --deployment-instance <instance-id> --provider hetzner [--data-root <absolute>] [--json]
+<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
 ```
 
 The SEA reads the authenticated embedded Linux payload and application
@@ -183,11 +184,20 @@ application SEA. Its bounded stdout and stderr bytes are relayed without
 formatting, and its observed remote exit code becomes the local exit code.
 Exec performs no provider reads or mutations.
 
+Update derives its target from the invoking SEA's authenticated embedded Linux
+payload. It leaves the committed release authoritative until exact remote
+activation evidence is durable, then promotes the target and retains one
+rollback release. Recover selects its action entirely from journal state: it
+can resume initial apply, resume an exact update, repair the committed release,
+restore the committed release and abandon a failed update target, resume
+destroy, or report a destroyed deployment as a no-op. Neither command accepts
+a provider, placement, machine, access, host, credential, or artifact selector.
+
 Destroy authenticates only the embedded app identity, then uses the exact
 deployment instance and durable local authority without decoding the embedded
 Linux payload. Its journal supplies the bound AWS region or Hetzner location,
-so destroy accepts neither `--region` nor `--location`; a non-default
-`--data-root` must match apply.
+so destroy accepts neither `--provider`, `--region`, nor `--location`; a
+non-default `--data-root` must match apply.
 
 AWS requires an existing usable default-VPC public-network path. Hetzner uses
 its public network; Wharfie creates no private network. AWS owns one security

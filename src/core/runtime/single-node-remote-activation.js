@@ -5,6 +5,7 @@ import { isAbsolute, normalize, posix } from 'node:path';
 import { setTimeout as sleepWithTimer } from 'node:timers/promises';
 
 import { createBoundedProcessRunner } from './bounded-process.js';
+import { assertArtifactId } from './artifact-record.js';
 import { sortCanonicalJsonValue } from './canonical-order.js';
 import {
   assertDomainSeparatedSha256Id,
@@ -35,11 +36,15 @@ export const SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_PREFIX = 'wsne1';
 export const SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_MAX_BYTES = 32 * 1024;
 export const SINGLE_NODE_REMOTE_ACTIVATION_MAX_READINESS_ATTEMPTS = 24;
 export const SINGLE_NODE_REMOTE_ACTIVATION_RETRY_DELAY_MILLISECONDS = 5_000;
+export const SINGLE_NODE_REMOTE_ARTIFACT_RETENTION_MAX_IDS = 3;
+export const SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_ENTRIES = 128;
+export const SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_BYTES = 16 * 1024;
 
 const ACTIVATION_COMMON_KEYS = [
   'desired',
   'incarnationId',
   'providerAddress',
+  'retainedArtifactIds',
   'sshIdentity',
 ];
 const ACTIVATION_PATH_KEYS = new Set([
@@ -269,6 +274,58 @@ function validateSshIdentity(value) {
 }
 
 /**
+ * Validate one bounded canonical release-retention authority. The ordering is
+ * part of the boundary so callers cannot express the same authority through
+ * multiple wire representations.
+ * @param {unknown} value - Candidate retained artifact identities.
+ * @param {Readonly<Record<string, any>>} desired - Exact activation target.
+ * @returns {readonly string[]} - Independent frozen canonical identities.
+ */
+function validateRetainedArtifactIds(value, desired) {
+  if (
+    !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype ||
+    value.length < 1 ||
+    value.length > SINGLE_NODE_REMOTE_ARTIFACT_RETENTION_MAX_IDS
+  ) {
+    throw new TypeError(
+      `singleNodeRemoteActivation.retainedArtifactIds must contain 1-${SINGLE_NODE_REMOTE_ARTIFACT_RETENTION_MAX_IDS} canonical artifact IDs.`,
+    );
+  }
+  const ids = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (
+      descriptor === undefined ||
+      descriptor.enumerable !== true ||
+      !Object.hasOwn(descriptor, 'value')
+    ) {
+      throw new TypeError(
+        `singleNodeRemoteActivation.retainedArtifactIds[${index}] must be an own enumerable data property.`,
+      );
+    }
+    assertArtifactId(
+      descriptor.value,
+      `singleNodeRemoteActivation.retainedArtifactIds[${index}]`,
+    );
+    ids.push(descriptor.value);
+  }
+  for (let index = 1; index < ids.length; index += 1) {
+    if (ids[index - 1] >= ids[index]) {
+      throw new TypeError(
+        'singleNodeRemoteActivation.retainedArtifactIds must be unique and lexicographically sorted.',
+      );
+    }
+  }
+  if (!ids.includes(desired.artifact.artifactId)) {
+    throw new TypeError(
+      'singleNodeRemoteActivation.retainedArtifactIds must include the activation target.',
+    );
+  }
+  return Object.freeze(ids);
+}
+
+/**
  * @param {unknown} value - Candidate activation input.
  * @returns {Readonly<Record<string, any>>} - Validated input.
  */
@@ -311,6 +368,10 @@ function validateActivationInput(value) {
     desired,
     incarnationId: input.incarnationId,
     providerAddress: providerAddressValue(input.providerAddress),
+    retainedArtifactIds: validateRetainedArtifactIds(
+      input.retainedArtifactIds,
+      desired,
+    ),
     sshIdentity: validateSshIdentity(input.sshIdentity),
     ...(hasArtifactPath
       ? {
@@ -350,16 +411,20 @@ function expectedBootstrapIdentity(input) {
  * so each retry removes and reuses the same name instead of leaking orphans.
  * @param {Readonly<Record<string, any>>} desired - Exact desired state.
  * @param {string} incarnationId - Exact deployment incarnation.
- * @returns {Readonly<{artifactDirectory: string, remoteArtifactPath: string, temporaryPath: string}>} - Canonical remote paths.
+ * @returns {Readonly<{artifactRoot: string, artifactDirectory: string, remoteArtifactPath: string, temporaryPath: string}>} - Canonical remote paths.
  */
 export function getSingleNodeRemoteArtifactPaths(desired, incarnationId) {
-  const artifactDirectory = posix.join(
+  const artifactRoot = posix.join(
     SINGLE_NODE_DEPLOYMENT_ROOT,
     desired.deploymentInstanceId,
     'artifacts',
+  );
+  const artifactDirectory = posix.join(
+    artifactRoot,
     desired.artifact.artifactId,
   );
   return Object.freeze({
+    artifactRoot,
     artifactDirectory,
     remoteArtifactPath: posix.join(artifactDirectory, 'app-sea'),
     temporaryPath: posix.join(
@@ -367,6 +432,64 @@ export function getSingleNodeRemoteArtifactPaths(desired, incarnationId) {
       `.app-sea.upload-${incarnationId}`,
     ),
   });
+}
+
+/**
+ * Decode a bounded GNU find projection of immediate artifact-root entries.
+ * Names are NUL-delimited so no filesystem spelling can alter record framing.
+ * @param {unknown} bytesValue - Bounded find output.
+ * @returns {readonly string[]} - Sorted validated artifact directory names.
+ */
+function decodeRemoteArtifactRootEntries(bytesValue) {
+  const bytes = outputBytes(bytesValue, 'remote artifact-root entries');
+  if (bytes.byteLength > SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_BYTES) {
+    throw new Error(
+      'Remote artifact-root entries exceeded their bounded response size.',
+    );
+  }
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error('Remote artifact-root entries returned invalid UTF-8.');
+  }
+  if (text.length === 0) return Object.freeze([]);
+  const fields = text.split('\0');
+  if (fields.pop() !== '' || fields.length % 2 !== 0) {
+    throw new Error('Remote artifact-root entries returned invalid framing.');
+  }
+  if (fields.length / 2 > SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_ENTRIES) {
+    throw new Error(
+      'Remote artifact-root contained too many entries for bounded cleanup.',
+    );
+  }
+  const names = [];
+  const seen = new Set();
+  for (let index = 0; index < fields.length; index += 2) {
+    const name = fields[index];
+    const type = fields[index + 1];
+    try {
+      assertArtifactId(name, 'remote artifact-root entry');
+    } catch {
+      throw new Error(
+        'Remote artifact-root contained an unexpected entry name.',
+      );
+    }
+    if (type !== 'd') {
+      throw new Error(
+        'Remote artifact-root contained an unexpected entry type.',
+      );
+    }
+    if (seen.has(name)) {
+      throw new Error(
+        'Remote artifact-root returned a duplicate directory entry.',
+      );
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  names.sort();
+  return Object.freeze(names);
 }
 
 /**
@@ -1090,8 +1213,15 @@ export function createSingleNodeRemoteActivator(options) {
             'Local artifact source does not match the exact desired artifact.',
           );
         }
-        const { artifactDirectory, remoteArtifactPath, temporaryPath } =
-          getSingleNodeRemoteArtifactPaths(input.desired, input.incarnationId);
+        const {
+          artifactRoot,
+          artifactDirectory,
+          remoteArtifactPath,
+          temporaryPath,
+        } = getSingleNodeRemoteArtifactPaths(
+          input.desired,
+          input.incarnationId,
+        );
 
         /**
          * @param {string[]} argv - Exact remote argv.
@@ -1117,6 +1247,75 @@ export function createSingleNodeRemoteActivator(options) {
           });
           if (!succeeded(outcome)) throw new Error(failureMessage);
           return /** @type {Record<string, any>} */ (outcome);
+        }
+
+        /**
+         * List and strictly validate every immediate artifact-root entry.
+         * @returns {Promise<readonly string[]>} - Sorted artifact directory IDs.
+         */
+        async function listArtifactDirectories() {
+          const result = await runRequired(
+            [
+              '/usr/bin/find',
+              artifactRoot,
+              '-mindepth',
+              '1',
+              '-maxdepth',
+              '1',
+              '-printf',
+              '%f\\0%y\\0',
+            ],
+            null,
+            30_000,
+            SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_BYTES,
+            'Remote artifact-root entries could not be listed safely.',
+          );
+          return decodeRemoteArtifactRootEntries(result.stdout);
+        }
+
+        /**
+         * Enforce the exact journal-derived wrapper retention set only after
+         * the target service has proved healthy. Each deletion is a fixed
+         * argv over a validated content-addressed directory and is retry-safe.
+         * @returns {Promise<void>}
+         */
+        async function enforceArtifactRetention() {
+          const before = await listArtifactDirectories();
+          for (const retainedArtifactId of input.retainedArtifactIds) {
+            if (!before.includes(retainedArtifactId)) {
+              throw new Error(
+                'Remote artifact-root is missing a retained artifact directory.',
+              );
+            }
+          }
+          const retained = new Set(input.retainedArtifactIds);
+          for (const artifactId of before) {
+            if (retained.has(artifactId)) continue;
+            await runRequired(
+              [
+                '/usr/bin/rm',
+                '-rf',
+                '--',
+                posix.join(artifactRoot, artifactId),
+              ],
+              null,
+              30_000,
+              0,
+              'Stale remote artifact directory could not be removed.',
+            );
+          }
+          const after = await listArtifactDirectories();
+          if (
+            after.length !== input.retainedArtifactIds.length ||
+            after.some(
+              (artifactId, index) =>
+                artifactId !== input.retainedArtifactIds[index],
+            )
+          ) {
+            throw new Error(
+              'Remote artifact-root did not converge to exact retained artifacts.',
+            );
+          }
         }
 
         try {
@@ -1265,6 +1464,7 @@ export function createSingleNodeRemoteActivator(options) {
             ),
             input.desired,
           );
+          await enforceArtifactRetention();
           return createActivationEvidence(
             input,
             hostKey,
@@ -1308,6 +1508,9 @@ export default {
   SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_SCHEMA_VERSION,
   SINGLE_NODE_REMOTE_ACTIVATION_MAX_READINESS_ATTEMPTS,
   SINGLE_NODE_REMOTE_ACTIVATION_RETRY_DELAY_MILLISECONDS,
+  SINGLE_NODE_REMOTE_ARTIFACT_RETENTION_MAX_IDS,
+  SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_BYTES,
+  SINGLE_NODE_REMOTE_ARTIFACT_ROOT_MAX_ENTRIES,
   createProductionSingleNodeRemoteActivator,
   createSingleNodeRemoteActivator,
   getSingleNodeRemoteArtifactPaths,

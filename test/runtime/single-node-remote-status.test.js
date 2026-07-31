@@ -1,10 +1,11 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { sha256Base64Url } from '../../src/core/runtime/content-id.js';
+import { SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH } from '../../src/core/runtime/single-node-cloud-init.js';
 import {
-  SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH,
-  SINGLE_NODE_DEPLOYMENT_ROOT,
-} from '../../src/core/runtime/single-node-cloud-init.js';
+  getSingleNodeDeploymentCurrentRelease,
+  prepareSingleNodeDeploymentReleaseUpdate,
+} from '../../src/core/runtime/single-node-deployment-journal.js';
 import { createSingleNodeRemoteStatusInspector } from '../../src/core/runtime/single-node-remote-status.js';
 import {
   createHealthySingleNodeServiceStatus,
@@ -14,6 +15,7 @@ import {
   createSingleNodeStatusAuthorityFixture,
   createSingleNodeStatusDestroyedJournal,
   createSingleNodeStatusInitialJournal,
+  createSingleNodeStatusUpdateTarget,
 } from './fixtures/single-node-status-fixture.js';
 
 const DATA_ROOT = '/private/status-data';
@@ -73,7 +75,6 @@ describe('single-node remote status inspection', () => {
     const fixture = await createSingleNodeStatusAuthorityFixture();
     const runRemoteArgv = createRemoteRun();
     const harness = makeHarness(fixture, runRemoteArgv);
-
     await expect(
       harness.inspector.inspect({
         journal: createSingleNodeStatusDestroyedJournal(fixture),
@@ -105,6 +106,9 @@ describe('single-node remote status inspection', () => {
   it('reads exact pinned authority and projects a healthy active service', async () => {
     const fixture = await createSingleNodeStatusAuthorityFixture();
     const journal = createSingleNodeStatusActiveJournal(fixture);
+    const currentRelease = /** @type {Readonly<Record<string, any>>} */ (
+      getSingleNodeDeploymentCurrentRelease(journal)
+    );
     const serviceStatus = createHealthySingleNodeServiceStatus(fixture);
     const runRemoteArgv = createRemoteRun()
       .mockResolvedValueOnce(
@@ -162,7 +166,7 @@ describe('single-node remote status inspection', () => {
       [
         {
           argv: [
-            journal.artifact.remotePath,
+            currentRelease.activation.artifact.remotePath,
             'wharfie',
             'service',
             'status',
@@ -177,31 +181,68 @@ describe('single-node remote status inspection', () => {
     ]);
   });
 
-  it('detects healthy activation effects before artifact evidence reaches the journal', async () => {
+  it('invokes committed current while comparing both sides of an update to its target', async () => {
+    const fixture = await createSingleNodeStatusAuthorityFixture();
+    const target = createSingleNodeStatusUpdateTarget(fixture, 'status-v2');
+    const journal = prepareSingleNodeDeploymentReleaseUpdate(
+      createSingleNodeStatusActiveJournal(fixture),
+      target.desired,
+    );
+    const currentRelease = /** @type {Readonly<Record<string, any>>} */ (
+      getSingleNodeDeploymentCurrentRelease(journal)
+    );
+
+    for (const [serviceStatus, desiredMatches] of [
+      [createHealthySingleNodeServiceStatus(fixture), false],
+      [
+        createHealthySingleNodeServiceStatus({
+          ...fixture,
+          desired: target.desired,
+        }),
+        true,
+      ],
+    ]) {
+      const runRemoteArgv = createRemoteRun()
+        .mockResolvedValueOnce(
+          createProcessOutcome({
+            stdout: JSON.stringify(fixture.bootstrapIdentity),
+          }),
+        )
+        .mockResolvedValueOnce(
+          createProcessOutcome({ stdout: JSON.stringify(serviceStatus) }),
+        );
+      const harness = makeHarness(fixture, runRemoteArgv);
+
+      await expect(
+        harness.inspector.inspect({ journal, dataRoot: DATA_ROOT }),
+      ).resolves.toMatchObject({
+        state: 'observed',
+        service: { desiredMatches },
+      });
+      expect(runRemoteArgv.mock.calls[1][0].argv[0]).toBe(
+        currentRelease.activation.artifact.remotePath,
+      );
+    }
+  });
+
+  it('does not inspect a guest before the first release is committed', async () => {
     const fixture = await createSingleNodeStatusAuthorityFixture();
     const journal = createSingleNodeStatusActivatingJournal(fixture);
-    const serviceStatus = createHealthySingleNodeServiceStatus(fixture);
-    const runRemoteArgv = createRemoteRun()
-      .mockResolvedValueOnce(
-        createProcessOutcome({
-          stdout: JSON.stringify(fixture.bootstrapIdentity),
-        }),
-      )
-      .mockResolvedValueOnce(
-        createProcessOutcome({ stdout: JSON.stringify(serviceStatus) }),
-      );
+    const runRemoteArgv = createRemoteRun();
     const harness = makeHarness(fixture, runRemoteArgv);
 
-    expect(journal.artifact).toBeNull();
     await expect(
       harness.inspector.inspect({ journal, dataRoot: DATA_ROOT }),
-    ).resolves.toMatchObject({
-      state: 'observed',
-      service: { health: 'healthy', desiredMatches: true },
+    ).resolves.toEqual({
+      state: 'not-ready',
+      address: fixture.publicIpv4,
+      hostKeyFingerprint: fixture.hostKeyFingerprint,
+      service: null,
     });
-    expect(runRemoteArgv.mock.calls[1][0].argv[0]).toBe(
-      `${SINGLE_NODE_DEPLOYMENT_ROOT}/${journal.deploymentInstanceId}/artifacts/${journal.desired.artifact.artifactId}/app-sea`,
-    );
+    expect(harness.readIdentity).not.toHaveBeenCalled();
+    expect(harness.readHostKey).not.toHaveBeenCalled();
+    expect(harness.createTransport).not.toHaveBeenCalled();
+    expect(runRemoteArgv).not.toHaveBeenCalled();
   });
 
   it.each(['identity', 'host-address', 'host-fingerprint'])(

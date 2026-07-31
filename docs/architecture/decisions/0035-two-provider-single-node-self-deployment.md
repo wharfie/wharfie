@@ -109,6 +109,36 @@ select a host, SSH option, user, executable, shell command, or provider
 credential. Exact bounded stdout, stderr, and exit status retain ordinary CLI
 semantics.
 
+The packaged
+`<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]`
+command supplies a new release only from the invoking SEA's authenticated
+embedded Linux payload. It cannot change provider, placement, deployment,
+machine, access, mode, platform, architecture, or libc authority. Node version,
+application revision, and artifact bytes may change. Update performs no
+provider read or mutation; it reuses the journal-pinned SSH identity and host.
+
+Deployment journal schema v3 separates immutable provider-substrate authority
+from release authority. `release.current` remains authoritative while one
+`install` or `update` transition accumulates target artifact and activation
+evidence. Only a fully proven target can settle atomically; update settlement
+moves the previous current release into one rollback slot. This project has no
+v2 compatibility or migration requirement, so v3 uses a new storage namespace
+and refuses older journals instead of reinterpreting them.
+
+The packaged
+`<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]`
+command derives apply, update, stable-release repair, destroy, or no-op from the
+exact durable phase and release transition. It accepts no provider or action
+selector. Apply recovery requires the journal-selected install artifact. For
+an update, the target SEA resumes the transition; the committed-current SEA
+may instead reconverge current and only then abandon a permanently failed
+target. Any third release is rejected until that explicit choice settles.
+Remote execution remains pinned to committed current authority and fails
+closed if the guest has already advanced but local settlement has not.
+Convergence retains only current, rollback, and an optional target wrapper SEA
+under the fixed remote artifact root and removes older validated artifact-ID
+directories without a shell or glob.
+
 ### Minimal physical substrate
 
 The preview uses provider public/default networking.
@@ -185,7 +215,8 @@ mutation failed.
 Destroy checks both durable provider IDs and live ownership evidence before
 mutation, waits for asynchronous deletion, and ends with an independent
 provider inventory proving absence. External network references are never
-deleted.
+deleted. Packaged destroy derives its provider from the journal and accepts no
+provider, region, or location selector.
 
 ## Acceptance evidence
 

@@ -17,7 +17,10 @@ import {
   SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH,
   createSingleNodeCloudInit,
 } from './single-node-cloud-init.js';
-import { validateSingleNodeDeploymentJournal } from './single-node-deployment-journal.js';
+import {
+  getSingleNodeDeploymentCurrentRelease,
+  validateSingleNodeDeploymentJournal,
+} from './single-node-deployment-journal.js';
 import { validateSingleNodeRemoteServiceStatus } from './single-node-remote-activation.js';
 
 export const SINGLE_NODE_REMOTE_EXEC_TIMEOUT_MILLISECONDS = 10 * 60 * 1000;
@@ -370,11 +373,11 @@ export function createSingleNodeRemoteExecutor(dependencies) {
         input.journal,
         'singleNodeRemoteExec.journal',
       );
+      const currentRelease = getSingleNodeDeploymentCurrentRelease(journal);
       if (
         journal.phase !== 'active' ||
         journal.sshHost === null ||
-        journal.artifact === null ||
-        journal.activation === null
+        currentRelease === null
       ) {
         throw new Error(
           'Remote application execution requires an active deployment with exact activation evidence.',
@@ -385,7 +388,7 @@ export function createSingleNodeRemoteExecutor(dependencies) {
         'singleNodeRemoteExec.dataRoot',
       );
       const argv = applicationArgv(input.argv);
-      const remoteArtifactPath = journal.activation.artifact.remotePath;
+      const remoteArtifactPath = currentRelease.activation.artifact.remotePath;
 
       // Validate the complete projected command before opening local identity.
       encodePosixArgv([remoteArtifactPath, ...argv]);
@@ -538,7 +541,7 @@ export function createSingleNodeRemoteExecutor(dependencies) {
             MAX_SERVICE_STATUS_BYTES,
             'singleNodeRemoteExec service status',
           ),
-          journal.desired,
+          currentRelease.desired,
         );
       } catch {
         throw new Error(

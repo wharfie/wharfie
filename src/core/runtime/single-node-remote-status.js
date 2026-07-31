@@ -15,11 +15,12 @@ import {
   SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH,
   createSingleNodeCloudInit,
 } from './single-node-cloud-init.js';
-import { validateSingleNodeDeploymentJournal } from './single-node-deployment-journal.js';
 import {
-  getSingleNodeRemoteArtifactPaths,
-  validateSingleNodeRemoteServiceStatus,
-} from './single-node-remote-activation.js';
+  getSingleNodeDeploymentCurrentRelease,
+  getSingleNodeDeploymentEffectiveDesired,
+  validateSingleNodeDeploymentJournal,
+} from './single-node-deployment-journal.js';
+import { validateSingleNodeRemoteServiceStatus } from './single-node-remote-activation.js';
 
 const MAX_BOOTSTRAP_IDENTITY_BYTES = 16 * 1024;
 const MAX_SERVICE_STATUS_BYTES = 256 * 1024;
@@ -247,16 +248,17 @@ function succeeded(value) {
  * Project only bounded release and health evidence from a status-V3 response.
  * The complete manager receipt intentionally stays on the guest.
  * @param {unknown} value
- * @param {Readonly<Record<string, any>>} desired
+ * @param {Readonly<Record<string, any>>} invocationDesired
+ * @param {Readonly<Record<string, any>>} effectiveDesired
  * @returns {Readonly<{health: string, activeArtifactId: string|null, activeRevisionId: string|null, desiredMatches: boolean}>}
  */
-function projectServiceStatus(value, desired) {
+function projectServiceStatus(value, invocationDesired, effectiveDesired) {
   const status = cloneBoundedJsonObject(
     value,
     MAX_SERVICE_STATUS_BYTES,
     'singleNodeRemoteStatus service status',
   );
-  const expectedAppId = desired.intent.appId;
+  const expectedAppId = invocationDesired.intent.appId;
   const expectedUnit = `wharfie-${expectedAppId}.service`;
   if (
     status.schemaVersion !== 3 ||
@@ -297,8 +299,11 @@ function projectServiceStatus(value, desired) {
     (convergence.disposition === 'authorized'
       ? !DESIRED_CONVERGENCE_BASES.has(convergence.basis)
       : convergence.basis !== null) ||
-    convergenceDesired.artifactId !== desired.artifact.artifactId ||
-    convergenceDesired.revisionId !== desired.artifact.revisionId
+    ![invocationDesired, effectiveDesired].some(
+      (desired) =>
+        convergenceDesired.artifactId === desired.artifact.artifactId &&
+        convergenceDesired.revisionId === desired.artifact.revisionId,
+    )
   ) {
     throw new Error(
       'singleNodeRemoteStatus desired convergence does not match durable authority.',
@@ -350,10 +355,15 @@ function projectServiceStatus(value, desired) {
     );
   }
   const desiredMatches =
-    activeArtifactId === desired.artifact.artifactId &&
-    activeRevisionId === desired.artifact.revisionId;
+    activeArtifactId === effectiveDesired.artifact.artifactId &&
+    activeRevisionId === effectiveDesired.artifact.revisionId;
+  const invocationMatches =
+    activeArtifactId === invocationDesired.artifact.artifactId &&
+    activeRevisionId === invocationDesired.artifact.revisionId;
   if (status.health === 'healthy' && desiredMatches) {
-    validateSingleNodeRemoteServiceStatus(status, desired);
+    validateSingleNodeRemoteServiceStatus(status, effectiveDesired);
+  } else if (status.health === 'healthy' && invocationMatches) {
+    validateSingleNodeRemoteServiceStatus(status, invocationDesired);
   }
   return Object.freeze({
     health: status.health,
@@ -430,12 +440,20 @@ export function createSingleNodeRemoteStatusInspector(dependencies) {
         );
       }
 
+      const currentRelease = getSingleNodeDeploymentCurrentRelease(journal);
+      if (currentRelease === null) {
+        return observation(
+          'not-ready',
+          journal.sshHost.address,
+          journal.sshHost.fingerprint,
+          null,
+        );
+      }
+      const effectiveDesired = getSingleNodeDeploymentEffectiveDesired(journal);
+
       const address = journal.sshHost.address;
       const fingerprint = journal.sshHost.fingerprint;
-      const remoteArtifactPath = getSingleNodeRemoteArtifactPaths(
-        journal.desired,
-        journal.incarnationId,
-      ).remoteArtifactPath;
+      const remoteArtifactPath = currentRelease.activation.artifact.remotePath;
       /** @type {Readonly<Record<string, any>>} */
       let identity;
       /** @type {Readonly<Record<string, string>>} */
@@ -579,7 +597,8 @@ export function createSingleNodeRemoteStatusInspector(dependencies) {
             MAX_SERVICE_STATUS_BYTES,
             'singleNodeRemoteStatus service status',
           ),
-          journal.desired,
+          currentRelease.desired,
+          effectiveDesired,
         );
         return observation('observed', address, fingerprint, service);
       } catch {

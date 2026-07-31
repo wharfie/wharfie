@@ -21,6 +21,7 @@ import {
 } from '../../../../src/core/runtime/providers/hetzner/single-node-plan.js';
 import {
   createSingleNodeDeploymentJournal,
+  getSingleNodeDeploymentCurrentRelease,
   validateSingleNodeDeploymentJournalSuccessor,
 } from '../../../../src/core/runtime/single-node-deployment-journal.js';
 import { createSingleNodeDeploymentDesired } from '../../../../src/core/runtime/single-node-deployment-desired.js';
@@ -439,6 +440,9 @@ function makeHarness(options = {}) {
     },
     activate: async (/** @type {Record<string, any>} */ value) => {
       events.push('activate');
+      expect(value.retainedArtifactIds).toEqual([
+        value.desired.artifact.artifactId,
+      ]);
       serviceHealthy = true;
       if (Object.hasOwn(value, 'artifactSource')) {
         await value.artifactSource.close();
@@ -496,10 +500,12 @@ describe('Hetzner single-node apply coordinator', () => {
     const coordinator = createHetznerSingleNodeApplyCoordinator(
       harness.dependencies,
     );
-
     const result = await coordinator.apply(source.request);
     const journal = /** @type {Readonly<Record<string, any>>} */ (
       harness.getJournal()
+    );
+    const currentRelease = /** @type {Readonly<Record<string, any>>} */ (
+      getSingleNodeDeploymentCurrentRelease(journal)
     );
 
     expect(result).toMatchObject({
@@ -512,7 +518,7 @@ describe('Hetzner single-node apply coordinator', () => {
       artifactId: harness.fixture.artifactRecord.artifactId,
     });
     expect(journal.phase).toBe('active');
-    expect(journal.activation.activationEvidenceId).toBe(
+    expect(currentRelease.activation.activationEvidenceId).toBe(
       result.activationEvidenceId,
     );
     expect(harness.events.indexOf('storage')).toBeLessThan(
