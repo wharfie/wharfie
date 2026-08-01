@@ -78,12 +78,15 @@ the first upload or the portable artifact's download size.
 
 ### 2. Compress the embedded guest and remote transport — next
 
-Exploratory local `gzip -9` measurements reduced representative SEA bytes by
-about 66–68%. Applied to the current 133.7 MB Linux guest, that suggests an
-encoded payload around 45–50 MB and a current-shape self-deployable artifact
-around 170–175 MB before stripping. These are planning estimates, not an
-accepted size claim; the implementation must repeat and retain the benchmark
-for every supported target.
+Exploratory local `gzip -9` ratio probes used two older retained Darwin SEAs,
+not the current Linux artifact. They reduced 124,676,912 bytes to 40,371,654
+bytes (67.6% smaller) and 307,021,392 bytes to 103,154,939 bytes (66.4%
+smaller). Those probes did not request a deterministic gzip header. Applying
+the observed range to the current 133.7 MB Linux guest suggests an encoded
+payload around 45–50 MB and a current-shape self-deployable artifact around
+170–175 MB before stripping. These are planning estimates, not an accepted
+size claim; the implementation must repeat and retain a deterministic
+benchmark for every supported target.
 
 Compression must be an encoding of an authoritative raw artifact, not a new
 meaning for its `waf1` identity. A safe record should bind at least:
@@ -108,10 +111,14 @@ distribution and provenance story.
 
 ### 3. Evaluate symbol stripping before SEA injection
 
-One local Darwin experiment removed the existing signature, ran `strip -x`,
-injected the SEA payload, and applied a new ad-hoc signature. The resulting
-executable remained runnable and changed from 124,676,912 bytes to 100,994,768
-bytes: a reduction of 23,682,144 bytes, or 19.0%.
+One controlled Darwin runtime measurement removed the existing signature from
+the 118,184,760-byte Node executable and ran `strip -x`, producing a
+94,293,216-byte executable: 23,891,544 fewer bytes, or about 20.2%. A separate
+probe injected an available 6,477,232-byte hello-world blob into that stripped
+runtime and applied a new ad-hoc signature; the resulting 100,994,768-byte SEA
+remained runnable. A retained unstripped 124,676,912-byte SEA provides useful
+scale, but it used different revision and signing inputs, so these observations
+do not constitute a controlled 19% before-and-after comparison of one SEA.
 
 The Linux Node binary also exposed roughly 17.8 MB of debug and symbol
 sections, but that is only an opportunity estimate until a stripped Linux SEA
@@ -169,9 +176,10 @@ contracts are proven in the existing SEA implementation.
 ### 5. Keep custom/pruned Node optional
 
 A custom Node build can remove features such as the inspector and replace full
-ICU with small or no ICU. Full ICU data accounts for roughly 33.1 MB in the
-examined toolchain, so an optional constrained profile could plausibly save
-another 25–35 MB.
+ICU with small or no ICU. The examined official Linux binary's symbol table
+reports a 33,107,248-byte `icudt78_dat` object. That bounds an ICU-related
+footprint opportunity, but no small-ICU or no-ICU runtime was built; actual
+artifact savings remain unmeasured.
 
 It should not become the default merely to improve a headline artifact size.
 Doing so creates a permanent cross-platform Node build, patch, CVE, signing,
