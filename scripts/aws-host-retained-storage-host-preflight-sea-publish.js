@@ -96,6 +96,36 @@ async function lstatIfExists(filePath) {
 }
 
 /**
+ * Classify an unchanged snapshot or the one expected transient transition:
+ * removing the winning publisher's staged hardlink changes nlink from two to
+ * one and updates ctime. A cleanup transition never makes a read trustworthy;
+ * callers must discard the read and retry until every snapshot is stable.
+ * @param {import('node:fs').BigIntStats} before
+ * @param {import('node:fs').BigIntStats} after
+ * @returns {'stable'|'retry'|'changed'}
+ */
+function classifyReadSnapshot(before, after) {
+  if (
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeNs !== after.mtimeNs ||
+    before.mode !== after.mode ||
+    before.uid !== after.uid ||
+    before.gid !== after.gid
+  ) {
+    return 'changed';
+  }
+  if (before.nlink === after.nlink && before.ctimeNs === after.ctimeNs) {
+    return 'stable';
+  }
+  if (before.nlink === 2n && after.nlink === 1n) {
+    return 'retry';
+  }
+  return 'changed';
+}
+
+/**
  * @param {string} filePath
  * @param {string} label
  * @param {number} expectedSize
@@ -107,56 +137,49 @@ async function readRegularFile(filePath, label, expectedSize) {
       `${label} expected size must be a positive safe integer.`,
     );
   }
-  const before = await fsp.lstat(filePath, { bigint: true });
-  if (before.isSymbolicLink() || !before.isFile()) {
-    throw new Error(`${label} must be a regular non-symbolic file.`);
-  }
   const noFollow =
     typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-  const handle = await fsp.open(filePath, fsConstants.O_RDONLY | noFollow);
-  try {
-    const opened = await handle.stat({ bigint: true });
-    if (
-      !opened.isFile() ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino ||
-      opened.size !== before.size ||
-      opened.mtimeNs !== before.mtimeNs ||
-      opened.ctimeNs !== before.ctimeNs
-    ) {
-      throw new Error(`${label} changed before it could be read.`);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const before = await fsp.lstat(filePath, { bigint: true });
+    if (before.isSymbolicLink() || !before.isFile()) {
+      throw new Error(`${label} must be a regular non-symbolic file.`);
     }
-    if (opened.size !== BigInt(expectedSize)) {
-      throw new Error(
-        `${label} size conflicts with the exact immutable bytes being published.`,
-      );
+    const handle = await fsp.open(filePath, fsConstants.O_RDONLY | noFollow);
+    try {
+      const opened = await handle.stat({ bigint: true });
+      const openTransition = classifyReadSnapshot(before, opened);
+      if (!opened.isFile() || openTransition === 'changed') {
+        throw new Error(`${label} changed before it could be read.`);
+      }
+      if (openTransition === 'retry') continue;
+      if (opened.size !== BigInt(expectedSize)) {
+        throw new Error(
+          `${label} size conflicts with the exact immutable bytes being published.`,
+        );
+      }
+      const bytes = await handle.readFile();
+      // Keep these observations ordered so the permitted 2-to-1 cleanup can
+      // be identified, discarded, and retried instead of appearing reversed.
+      const after = await handle.stat({ bigint: true });
+      const afterPath = await fsp.lstat(filePath, { bigint: true });
+      const readTransition = classifyReadSnapshot(opened, after);
+      const pathTransition = classifyReadSnapshot(after, afterPath);
+      if (
+        readTransition === 'changed' ||
+        afterPath.isSymbolicLink() ||
+        !afterPath.isFile() ||
+        pathTransition === 'changed' ||
+        BigInt(bytes.length) !== opened.size
+      ) {
+        throw new Error(`${label} changed while it was being read.`);
+      }
+      if (readTransition === 'retry' || pathTransition === 'retry') continue;
+      return bytes;
+    } finally {
+      await handle.close();
     }
-    const bytes = await handle.readFile();
-    const [after, afterPath] = await Promise.all([
-      handle.stat({ bigint: true }),
-      fsp.lstat(filePath, { bigint: true }),
-    ]);
-    if (
-      after.dev !== opened.dev ||
-      after.ino !== opened.ino ||
-      after.size !== opened.size ||
-      after.mtimeNs !== opened.mtimeNs ||
-      after.ctimeNs !== opened.ctimeNs ||
-      afterPath.isSymbolicLink() ||
-      !afterPath.isFile() ||
-      afterPath.dev !== after.dev ||
-      afterPath.ino !== after.ino ||
-      afterPath.size !== after.size ||
-      afterPath.mtimeNs !== after.mtimeNs ||
-      afterPath.ctimeNs !== after.ctimeNs ||
-      BigInt(bytes.length) !== opened.size
-    ) {
-      throw new Error(`${label} changed while it was being read.`);
-    }
-    return bytes;
-  } finally {
-    await handle.close();
   }
+  throw new Error(`${label} did not stabilize after staged-link cleanup.`);
 }
 
 /** @param {string} filePath @returns {Promise<void>} */

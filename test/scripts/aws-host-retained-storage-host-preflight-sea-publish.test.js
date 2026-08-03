@@ -302,12 +302,24 @@ describe('AWS retained-storage host preflight SEA immutable publication', () => 
 
   it('allows concurrent exact publishers to converge on one immutable pair', async () => {
     const built = fixture();
+    const fileName =
+      `wharfie-aws-retained-storage-host-preflight-x86_64-` +
+      `${built.record.artifactId}`;
+    const finalPath = path.join(outputDirectory, fileName);
     const originalLink = fsp.link.bind(fsp);
+    const originalOpen = fsp.open.bind(fsp);
+    const originalRm = fsp.rm.bind(fsp);
     let artifactLinkCalls = 0;
+    let delayedFinalRead = false;
     /** @type {(() => void) | undefined} */
     let releaseArtifactLinks;
     const artifactLinksReady = new Promise((resolve) => {
       releaseArtifactLinks = () => resolve(undefined);
+    });
+    /** @type {(() => void) | undefined} */
+    let releaseFinalRead;
+    const winnerCleanupFinished = new Promise((resolve) => {
+      releaseFinalRead = () => resolve(undefined);
     });
     jest.spyOn(fsp, 'link').mockImplementation(async (...args) => {
       const destination = String(args[1]);
@@ -317,6 +329,32 @@ describe('AWS retained-storage host preflight SEA immutable publication', () => 
         await artifactLinksReady;
       }
       return originalLink(...args);
+    });
+    jest.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (String(args[0]) !== finalPath || delayedFinalRead) return handle;
+      delayedFinalRead = true;
+      const originalReadFile = handle.readFile.bind(handle);
+      Object.defineProperty(handle, 'readFile', {
+        configurable: true,
+        value: async () => {
+          await winnerCleanupFinished;
+          return originalReadFile();
+        },
+      });
+      return handle;
+    });
+    jest.spyOn(fsp, 'rm').mockImplementation(async (...args) => {
+      const result = await originalRm(...args);
+      const removedPath = String(args[0]);
+      if (
+        removedPath.startsWith(
+          path.join(outputDirectory, '.wharfie-host-preflight-'),
+        )
+      ) {
+        releaseFinalRead?.();
+      }
+      return result;
     });
     const input = {
       outputDirectory,
@@ -332,6 +370,7 @@ describe('AWS retained-storage host preflight SEA immutable publication', () => 
     ]);
 
     expect(artifactLinkCalls).toBe(2);
+    expect(delayedFinalRead).toBe(true);
     expect(second).toEqual(first);
     await expect(fsp.readdir(outputDirectory)).resolves.toEqual(
       [first.fileName, `${first.fileName}.artifact.json`].sort(),
@@ -339,6 +378,8 @@ describe('AWS retained-storage host preflight SEA immutable publication', () => 
     await expect(fsp.readFile(first.path)).resolves.toEqual(
       built.artifactBytes,
     );
+    expect((await fsp.stat(first.path)).nlink).toBe(1);
+    expect((await fsp.stat(first.recordPath)).nlink).toBe(1);
     const sidecar = JSON.parse(await fsp.readFile(first.recordPath, 'utf8'));
     expect(
       validateAwsRetainedStorageHostPreflightSeaArtifactRecord(sidecar, {
