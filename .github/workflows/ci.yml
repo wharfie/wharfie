@@ -15,9 +15,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: 'package.json'
-          cache: npm
       - name: install pinned npm
-        run: npm install --global "$(node --print "require('./package.json').packageManager")"
+        # setup-node's npm cache probe runs before this step. The Node
+        # distribution's bundled npm is intentionally rejected by the exact
+        # devEngines pin, so bootstrap from outside the repository first.
+        working-directory: ${{ runner.temp }}
+        run: npm install --global "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
       - run: npm ci
       - run: npm run test:ci
       - name: verify packed install and real Linux SEA
