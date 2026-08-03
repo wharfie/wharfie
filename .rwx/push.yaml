@@ -27,8 +27,18 @@ tasks:
     filter:
       - .nvmrc
 
-  - key: npm-install
+  - key: npm
     use: [code, node]
+    run: |
+      package_manager="$(node --print "require('./package.json').packageManager")"
+      cd /tmp
+      npm install --global "$package_manager"
+      npm --version
+    filter:
+      - package.json
+
+  - key: npm-install
+    use: [code, npm]
     run: npm ci
     filter:
       - package.json
