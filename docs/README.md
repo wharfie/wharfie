@@ -232,8 +232,8 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest recorded restart handoff is the [V99 verified sensitive run-output
-checkpoint](../llm/checkpoints/2026-07-27-v99-verified-sensitive-run-output.md).
+The latest accepted product handoff is the [single-host developer preview
+checkpoint](../llm/checkpoints/2026-07-29-single-host-developer-preview.md).
 Its prior checkpoint lineage is recorded there.
 
 One CLI-free lifetime now composes the fixed retained controls, durable store,

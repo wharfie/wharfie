@@ -17,7 +17,6 @@ tasks:
     with:
       repository: https://github.com/wharfie/wharfie.git
       ref: ${{ init.commit-sha }}
-      github-token: ${{ github.token }}
 
   - key: node
     call: nodejs/install 1.1.12

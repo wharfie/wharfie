@@ -479,10 +479,11 @@ The current worker executes exact workflow
 rows as framework-owned continuations without Activity Protocol or authored
 code dispatch. A timer's persisted deadline is not recomputed after restart;
 if no matching resident is running, it remains waiting until one resumes.
-There is no public timer-fire command. Schedules, managed-effect workflow
-successors, multi-host leases, and heartbeats remain unsupported. The reserved
-framework-only `CONTINUATION` row remains fail-closed repair authority, not a
-signal queue or user-code dispatch request.
+There is no public timer-fire command. Managed-effect workflow successors,
+schedule pause/resume controls, multi-host leases, and heartbeats remain
+unsupported. The reserved framework-only `CONTINUATION` row remains
+fail-closed repair authority, not a signal queue or user-code dispatch
+request.
 
 Inspection is read-only. Recovery is an explicit durable mutation to use only
 after every prior runner has stopped; it does not load an app manifest, parse

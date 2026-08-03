@@ -120,7 +120,8 @@ and run-level `cancel` are workflow-aware. JSON inspection uses the schema-v8
 redacted view with safe timer, signal-wait, and signal-delivery lifecycle state,
 whose dedicated projection rows omit signal payloads, payload references,
 digests, and actor fields. The existing event history retains its safe actor
-metadata. Branches, schedules, managed-effect workflow successors, and public
+metadata. Branches, loops, parallel workflow steps, an early-signal inbox,
+managed-effect workflow successors, schedule pause/resume controls, and public
 log tail/search remain unsupported.
 
 The provider-backed `deployment` group has exactly five leaves: `plan`,
