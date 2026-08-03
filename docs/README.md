@@ -18,6 +18,10 @@ verified package tarball in a clean builder workspace, copy the supported
 starter, package it as an SEA, and promote that artifact to a Linux service.
 The longer [steady-file golden path](./guides/golden-path.md) covers the full
 source and operator surface.
+Contributors should use the
+[development validation guide](./guides/development-validation.md) for the
+authoritative clean-install gates and the exact scope and exit condition of
+each deliberate exclusion.
 
 ## The intended path
 

@@ -129,7 +129,6 @@
     "ignorePatterns": [
       "dist/",
       "tmp/",
-      "docs/",
       "scratch/",
       "coverage/"
     ],

@@ -2,8 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noImplicitAny": false,
-    "strictNullChecks": false,
-    "skipLibCheck": true
+    "strictNullChecks": false
   },
   "files": [
     "scripts/verify-aws-host-retained-storage-host-preflight-sea-linux.js",

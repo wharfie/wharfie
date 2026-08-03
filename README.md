@@ -1265,6 +1265,9 @@ the portable-module audit is a direct runtime dependency, and clean-install
 validation no longer relies on the unused TypeScript ESLint import preset or
 resolver. Native LMDB and generated-SEA proofs are available
 through `npm run test:native` and the SEA verifier.
+The exact authority of each gate, every repository-level exclusion, and its
+exit condition are recorded in the
+[development validation guide](docs/guides/development-validation.md).
 The destructive, disposable real-machine service gate is
 `npm run verify:service:systemd:lima`; it requires Lima on macOS and creates,
 force-cycles, verifies, and deletes an isolated Ubuntu VM.
