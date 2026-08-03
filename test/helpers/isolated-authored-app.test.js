@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from '@jest/globals';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -122,6 +123,30 @@ describe('isolated authored app fixtures', () => {
       expect(existsSync(fixture.root)).toBe(false);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
+      rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('removes a sealed revision tree stranded by a killed process', () => {
+    const sourceRoot = createSourceFixture('sealed-authored-source');
+    const fixture = createIsolatedAuthoredAppFixture(sourceRoot);
+    try {
+      const snapshotRoot = path.join(
+        fixture.appDir,
+        '.wharfie',
+        'revision-snapshots',
+        'sealed',
+      );
+      mkdirSync(snapshotRoot, { recursive: true });
+      const snapshotFile = path.join(snapshotRoot, 'activity.js');
+      writeFileSync(snapshotFile, 'export async function run() {}\n');
+      chmodSync(snapshotFile, 0o400);
+      chmodSync(snapshotRoot, 0o500);
+
+      const ownedRoot = fixture.root;
+      fixture.cleanup();
+      expect(existsSync(ownedRoot)).toBe(false);
+    } finally {
       rmSync(sourceRoot, { recursive: true, force: true });
     }
   });

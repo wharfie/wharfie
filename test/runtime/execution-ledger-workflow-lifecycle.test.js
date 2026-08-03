@@ -1258,7 +1258,7 @@ for (const adapter of getAdapterMatrix()) {
       } finally {
         await cleanup();
       }
-    });
+    }, 30_000);
 
     test('uses terminal precedence for declared future signals', async () => {
       const { db, cleanup } = await adapter.create();

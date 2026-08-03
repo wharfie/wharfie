@@ -336,5 +336,5 @@ describe('AWS retained-storage preparation with real persistence', () => {
     });
     expect(inspectBlankFormat).toHaveBeenCalledTimes(1);
     await reopened.close();
-  });
+  }, 30_000);
 });

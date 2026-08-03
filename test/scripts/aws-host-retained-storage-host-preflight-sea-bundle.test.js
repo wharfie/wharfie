@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -353,7 +354,7 @@ describe('AWS retained-storage host-preflight SEA snapshot bundle', () => {
 
   it('rejects a symlinked file inside an otherwise real snapshot root', async () => {
     const temporaryRoot = await fsp.mkdtemp(
-      '/private/tmp/wharfie-sea-bundle-symlink-',
+      path.join(await fsp.realpath(os.tmpdir()), 'wharfie-sea-bundle-symlink-'),
     );
     try {
       const scriptsDirectory = path.join(temporaryRoot, 'scripts');

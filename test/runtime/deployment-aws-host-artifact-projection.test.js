@@ -693,7 +693,7 @@ describe('AWS single-node host artifact projection', () => {
     const forgedControl = clone(makeContext(request));
     forgedControl.priorEvidence['control-storage'].directory.uid += 1;
     await expect(adapter.converge(forgedControl)).rejects.toThrow(
-      /cross-role-runtime-account-mismatch/u,
+      /exact fixed wharfie-runtime account/u,
     );
 
     await expect(adapter.converge(makeContext(request, 0))).rejects.toThrow(

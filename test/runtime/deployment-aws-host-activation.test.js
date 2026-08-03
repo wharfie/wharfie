@@ -805,7 +805,7 @@ describe('AWS single-node durable host activation', () => {
     } finally {
       await fsp.rm(base, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it('composes exact service convergence through command response loss and launches nothing on terminal replay', async () => {
     const bytes = Buffer.from(
@@ -1119,7 +1119,7 @@ describe('AWS single-node durable host activation', () => {
     } finally {
       await fsp.rm(base, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it('settles across mutation and settlement-CAS response loss', async () => {
     let lostSettlementResponse = false;

@@ -129,7 +129,7 @@ describe('disposable Jest runner', () => {
         path.join(ownedRoot, 'cache'),
         '--coverageDirectory',
         path.join(ownedRoot, 'coverage'),
-        '--maxWorkers=4',
+        '--maxWorkers=2',
       ],
       {
         env: {
@@ -640,19 +640,19 @@ describe('disposable Jest runner', () => {
     ['run in band kebab', ['--run-in-band']],
     ['run in band equals', ['--runInBand=true']],
     ['run in band kebab equals', ['--run-in-band=true']],
-    ['long worker value', ['--maxWorkers', '2']],
-    ['long worker equals', ['--maxWorkers=2']],
-    ['long worker kebab value', ['--max-workers', '2']],
-    ['long worker kebab equals', ['--max-workers=2']],
-    ['short worker value', ['-w', '2']],
-    ['short worker equals', ['-w=2']],
-    ['short worker attached', ['-w2']],
+    ['long worker value', ['--maxWorkers', '3']],
+    ['long worker equals', ['--maxWorkers=3']],
+    ['long worker kebab value', ['--max-workers', '3']],
+    ['long worker kebab equals', ['--max-workers=3']],
+    ['short worker value', ['-w', '3']],
+    ['short worker equals', ['-w=3']],
+    ['short worker attached', ['-w3']],
   ])('does not add the worker default for %s', (_, args) => {
     const harness = createHarness();
 
     runJest(args, harness.dependencies);
 
-    expect(spawnedArgs(harness)).not.toContain('--maxWorkers=4');
+    expect(spawnedArgs(harness)).not.toContain('--maxWorkers=2');
   });
 
   it('inserts owned options before the end-of-options separator', () => {
@@ -668,7 +668,7 @@ describe('disposable Jest runner', () => {
     expect(childArgs.indexOf('--coverageDirectory')).toBeLessThan(
       separatorIndex,
     );
-    expect(childArgs.indexOf('--maxWorkers=4')).toBeLessThan(separatorIndex);
+    expect(childArgs.indexOf('--maxWorkers=2')).toBeLessThan(separatorIndex);
     expect(childArgs.slice(separatorIndex + 1)).toEqual(positional);
   });
 

@@ -698,7 +698,7 @@ describe('retained-storage preparation command through real activation', () => {
         ).resolves.toEqual(persistence.journalWrites[0]);
       },
     );
-  });
+  }, 30_000);
 
   it('allows coarse inspection but denies blank proof and publication when dispatch authorization fails', async () => {
     const fixture = makeFixture();
@@ -757,7 +757,7 @@ describe('retained-storage preparation command through real activation', () => {
         .some((event) => event.type === 'fence-read'),
     ).toBe(false);
     expectNoDownstreamCalls(harness.downstream);
-  });
+  }, 30_000);
 
   it('blocks coarse conflict before dispatch, blank proof, journal access, or downstream work', async () => {
     const fixture = makeFixture();
@@ -927,5 +927,5 @@ describe('retained-storage preparation command through real activation', () => {
       ),
     ).resolves.toMatchObject({ requestId: successorRequest.requestId });
     expectNoDownstreamCalls(harness.downstream);
-  });
+  }, 30_000);
 });

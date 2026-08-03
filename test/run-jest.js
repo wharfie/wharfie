@@ -236,7 +236,9 @@ export function runJest(argv, dependencies = {}) {
   }
 
   if (!hasWorkerFlag(forwardedArgs)) {
-    ownedArguments.push('--maxWorkers=4');
+    // Integration suites spawn their own native and Node child processes; two
+    // Jest workers leave enough headroom on constrained hosted runners.
+    ownedArguments.push('--maxWorkers=2');
   }
   const separatorIndex = forwardedArgs.indexOf('--');
   forwardedArgs.splice(

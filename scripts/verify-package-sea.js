@@ -10200,7 +10200,7 @@ export default defineApp({
   assert.equal(packagedAuthority.revision.revisionId, packagedRevisionId);
   assert.deepEqual(
     embeddedManifest.schedules,
-    packagedAuthority.revision.contract.schedules,
+    JSON.parse(JSON.stringify(packagedAuthority.revision.contract.schedules)),
   );
 
   const controlPath = path.join(cleanRunDirectory, 'resident-control');

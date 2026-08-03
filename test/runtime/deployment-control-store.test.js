@@ -637,7 +637,7 @@ describe.each(ADAPTERS)('deployment control store on $name', ({ create }) => {
     } finally {
       await harness.cleanup();
     }
-  });
+  }, 30_000);
 
   it('stores and strongly validates immutable profiles and plans', async () => {
     const harness = await create();

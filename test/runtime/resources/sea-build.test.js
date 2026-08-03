@@ -173,6 +173,7 @@ describe('SeaBuild', () => {
         nodeVersion: process.versions.node,
         platform: process.platform,
         architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
       },
     });
 
@@ -927,6 +928,7 @@ describe('SeaBuild', () => {
         nodeVersion: process.versions.node,
         platform: process.platform,
         architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
         assets: {
           zeta: zetaPath,
           alpha: alphaPath,
@@ -1123,6 +1125,7 @@ describe('SeaBuild', () => {
         nodeVersion: process.versions.node,
         platform: process.platform,
         architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
         assets: { activity: assetPath },
         assetDigests: {
           activity: { algorithm: 'sha256', value: originalDigest },
@@ -1161,6 +1164,7 @@ describe('SeaBuild', () => {
         nodeVersion: process.versions.node,
         platform: process.platform,
         architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
         assets: { activity: linkPath },
       },
     });

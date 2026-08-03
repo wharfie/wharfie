@@ -1340,7 +1340,7 @@ describe('AWS single-node host service convergence', () => {
     const forgedControl = clone(makeContext(request, 0));
     forgedControl.priorEvidence['control-storage'].directory.gid += 1;
     await expect(adapter.observe(forgedControl)).rejects.toThrow(
-      /cross-role-runtime-account-mismatch/u,
+      /exact fixed wharfie-runtime account/u,
     );
 
     expect(inspectExactService).not.toHaveBeenCalled();

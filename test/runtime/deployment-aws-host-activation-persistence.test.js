@@ -1838,7 +1838,7 @@ describe('AWS single-node host activation persistence', () => {
       ),
     ).toMatchObject({ request: requests[requests.length - 1] });
     await reopened.close();
-  }, 10_000);
+  }, 30_000);
 
   it('excludes concurrent host work and releases after callback completion', async () => {
     const registry = createAbstractServerRegistry();

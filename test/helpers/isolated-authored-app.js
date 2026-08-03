@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   cpSync,
   lstatSync,
   mkdirSync,
@@ -20,6 +21,48 @@ const REPOSITORY_ROOT = path.resolve(
   fileURLToPath(new URL('../..', import.meta.url)),
 );
 const REPOSITORY_NODE_MODULES = path.join(REPOSITORY_ROOT, 'node_modules');
+
+/**
+ * Restore owner access after a killed process strands a sealed revision tree.
+ * Symlinks are deliberately never followed because fixtures link back to the
+ * repository and its dependency tree.
+ * @param {string} absolutePath - Owned fixture path to make removable.
+ */
+function restoreOwnedTreeAccess(absolutePath) {
+  const stat = lstatSync(absolutePath);
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    chmodSync(absolutePath, 0o700);
+    for (const name of readdirSync(absolutePath)) {
+      restoreOwnedTreeAccess(path.join(absolutePath, name));
+    }
+    return;
+  }
+  if (stat.isFile()) chmodSync(absolutePath, 0o600);
+}
+
+/** @param {string} root - Owned fixture root to remove. */
+function removeOwnedFixtureRoot(root) {
+  const options = {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 20,
+  };
+  try {
+    rmSync(root, options);
+  } catch (error) {
+    const code =
+      error && typeof error === 'object' && 'code' in error
+        ? error.code
+        : undefined;
+    if (code !== 'EACCES' && code !== 'ENOTEMPTY' && code !== 'EPERM') {
+      throw error;
+    }
+    restoreOwnedTreeAccess(root);
+    rmSync(root, options);
+  }
+}
 
 /**
  * Hash one fixture tree so a real source command cannot silently mutate the
@@ -135,7 +178,7 @@ export function createIsolatedAuthoredAppFixture(
       process.platform === 'win32' ? 'junction' : 'dir',
     );
   } catch (error) {
-    rmSync(root, { recursive: true, force: true });
+    removeOwnedFixtureRoot(root);
     throw error;
   }
 
@@ -159,7 +202,7 @@ export function createIsolatedAuthoredAppFixture(
     /** @type {unknown} */
     let cleanupError;
     try {
-      rmSync(root, { recursive: true, force: true });
+      removeOwnedFixtureRoot(root);
     } catch (error) {
       cleanupError = error;
     }
