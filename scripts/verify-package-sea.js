@@ -1862,7 +1862,7 @@ function assertManagedEffectBatchInspectionView(serialized, fixture, adapter) {
     'signalWaits',
     'timers',
   ]);
-  assert.equal(view.schemaVersion, 7);
+  assert.equal(view.schemaVersion, 8);
   assert.equal(view.kind, 'wharfie.execution-ledger.run');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -1916,7 +1916,7 @@ function assertManagedEffectBatchRecoveryView(serialized, fixture, expected) {
     'signalWaits',
     'timers',
   ]);
-  assert.equal(view.schemaVersion, 7);
+  assert.equal(view.schemaVersion, 8);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -2507,7 +2507,7 @@ function assertManagedEffectReconciliationView(
     'signalWaits',
     'timers',
   ]);
-  assert.equal(view.schemaVersion, 7);
+  assert.equal(view.schemaVersion, 8);
   assert.equal(view.kind, 'wharfie.execution-ledger.effect-reconciliation');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, batch.runId);
@@ -3560,7 +3560,7 @@ function terminalDeliveryAuthority(delivery) {
  * @returns {void}
  */
 function assertSeaCrashRecoveryView(serialized, view, scenario, expected) {
-  assert.equal(view.schemaVersion, 7);
+  assert.equal(view.schemaVersion, 8);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, expected.runId);
@@ -5418,7 +5418,7 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
 }
 
 /**
- * Reproduce the stable schema-v7 projection used by the packaged operator so
+ * Reproduce the stable schema-v8 projection used by the packaged operator so
  * successor responses can be compared as complete JSON values, not partial
  * shapes.
  * @param {Record<string, any>} raw - Verified rebuilt ledger run.
@@ -5430,7 +5430,7 @@ function createExpectedSeaOperatorRunView(
   kind = 'wharfie.execution-ledger.run',
 ) {
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     kind,
     integrity: { verified: true },
     run: {
@@ -5623,7 +5623,7 @@ function createExpectedSeaOperatorRunView(
 function assertSeaSuccessorOperatorView(serialized, source, target, expected) {
   const value = JSON.parse(serialized);
   assert.deepEqual(value, {
-    schemaVersion: 7,
+    schemaVersion: 8,
     kind: 'wharfie.execution-ledger.effect-successor',
     integrity: { verified: true },
     effectSuccessor: {
