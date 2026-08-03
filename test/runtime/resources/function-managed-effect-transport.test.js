@@ -238,6 +238,49 @@ describe('Function managed-effect worker transport', () => {
     }
   });
 
+  it('allows a component acknowledgement to survive a scheduler stall', async () => {
+    const activityId = `managed-effect-sink-stall-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const bundle = await buildPreparedActivity(
+      activityId,
+      [
+        'export async function execute(_input, runtime) {',
+        '  return await runtime.effects.request({',
+        "    effectId: 'stalled-sink-effect',",
+        "    capability: 'test-store',",
+        "    operation: 'get',",
+        '    input: { key: 1 },',
+        "    requestedReplayProperties: ['idempotent'],",
+        '  });',
+        '}',
+      ].join('\n'),
+    );
+    let handlerCalls = 0;
+
+    const evidence = await WharfieFunction.runPreparedActivityAttempt(
+      activityId,
+      bundle,
+      startFrame(activityId),
+      {
+        onComponentFrame: async (frame) => {
+          if (frame.type !== 'effect-request') return;
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        },
+        handleEffect: (request) => {
+          handlerCalls += 1;
+          return successfulEffectResult(request, { acknowledged: true });
+        },
+      },
+    );
+
+    expect(handlerCalls).toBe(1);
+    expect(evidence).toMatchObject({
+      status: 'completed',
+      terminal: { result: { acknowledged: true } },
+    });
+  });
+
   it('does not start a sink-gated effect after host cancellation wins', async () => {
     const activityId = `managed-effect-sink-cancel-${Date.now()}-${Math.floor(
       Math.random() * 1e9,

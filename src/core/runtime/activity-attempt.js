@@ -8,7 +8,9 @@ import {
 } from './activity-protocol.js';
 
 export const DEFAULT_ACTIVITY_CANCELLATION_GRACE_MS = 250;
-export const DEFAULT_ACTIVITY_HOST_OPERATION_TIMEOUT_MS = 250;
+// Component sinks may include a durable append or a worker MessagePort round
+// trip. Keep the boundary finite while tolerating ordinary scheduler stalls.
+export const DEFAULT_ACTIVITY_HOST_OPERATION_TIMEOUT_MS = 5_000;
 // This is an internal bundle/worker lookup key, not a public application API.
 // Keeping it here lets runtime execution derive the same symbol name without
 // importing build-only FunctionResource code into a packaged executable.

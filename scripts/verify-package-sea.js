@@ -10941,16 +10941,50 @@ export default defineApp({
       `crash fixture operator response is only ${crashInspectionBytes} bytes; ${CRASH_RECOVERY_MIN_RESPONSE_BYTES} bytes are required for deterministic stdout backpressure`,
     );
 
-    for (const command of ['list']) {
-      const result = spawnSync(cleanArtifactPath, ['wharfie', command], {
-        cwd: cleanRunDirectory,
-        encoding: 'utf8',
-        env: operatorEnvironment,
-      });
-      if (result.error) throw result.error;
-      assert.equal(result.status, 1);
-      assert.match(result.stderr, /unknown command/i);
-    }
+    const sourceRunPage = JSON.parse(
+      runCommand(
+        process.execPath,
+        [
+          wharfieBin,
+          'ops',
+          'list',
+          '--dir',
+          appDirectory,
+          '--limit',
+          '100',
+          '--json',
+        ],
+        {
+          cwd: cleanRunDirectory,
+          capture: true,
+          env: operatorEnvironment,
+        },
+      ).stdout,
+    );
+    const packagedRunPage = JSON.parse(
+      runCommand(
+        cleanArtifactPath,
+        ['wharfie', 'list', '--limit', '100', '--json'],
+        {
+          cwd: cleanRunDirectory,
+          capture: true,
+          env: operatorEnvironment,
+        },
+      ).stdout,
+    );
+    assert.deepEqual(
+      packagedRunPage,
+      sourceRunPage,
+      'source and packaged durable run-history views diverged',
+    );
+    assert.ok(
+      packagedRunPage.items.some(
+        (item) =>
+          item.runId === claimedRunId &&
+          item.revisionId === historicalOperatorRevisionId,
+      ),
+      'packaged durable run history omitted the seeded historical run',
+    );
 
     const missingCancellation = spawnSync(
       cleanArtifactPath,
