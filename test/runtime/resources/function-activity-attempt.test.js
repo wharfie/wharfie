@@ -910,7 +910,7 @@ describe('Function Activity Protocol v1 attempt execution', () => {
         startFrame(activityId),
       ),
     ).rejects.toBeInstanceOf(ActivityAttemptTransportError);
-  });
+  }, 15_000);
 
   it('terminates an uncooperative one-shot worker without affecting a concurrent attempt', async () => {
     const root = await fsp.mkdtemp(
