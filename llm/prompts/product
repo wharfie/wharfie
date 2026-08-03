@@ -65,16 +65,19 @@ Before making recommendations:
 - Read the code and config that anchor the design recommendation
 
 For Wharfie product/design work, start here unless the task clearly points elsewhere:
-- llm/design/README.md
-- llm/design/wharfie-progressive-agent-application.md
-- llm/design/wharfie-v2.md
+- PROJECT.md
+- ROADMAP.md
+- docs/architecture/decisions/README.md
 - package.json
+- src/app.d.ts
 - src/cli/app/load-app.js
 - src/cli/app/local-app.js
-- src/core/lib/graph/index.js
-- src/core/lib/db/tables/operations.js
-- src/core/runtime/services/scheduler-service.js
-- src/core/runtime/services/node-agent.js
+- src/core/runtime/app-runs.js
+- src/core/runtime/activity-protocol.js
+- src/core/runtime/activity-attempt.js
+- src/core/runtime/manual-ledger-run.js
+- src/core/lib/db/tables/execution-ledger.js
+- src/core/runtime/services/ledger-service.js
 
 Expand only as needed.
 

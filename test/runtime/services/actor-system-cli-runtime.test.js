@@ -2,600 +2,812 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-const PROCESS_RUNNER_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/lib/process-runner.js';
-const START_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/start.js';
 const ACTOR_SYSTEM_CLI_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/index.js';
-const DB_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/db.js';
-const QUEUE_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/queue.js';
-const LAMBDA_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/lambda.js';
-const NODE_AGENT_IMPORT = '../../../src/core/runtime/services/node-agent.js';
-const RESOURCE_UTIL_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/util/resources.js';
-const SPAWN_SELF_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/util/spawn-self.js';
-const DB_SERVICE_IMPORT = '../../../src/core/runtime/services/db-service.js';
-const PATHS_IMPORT = '../../../src/core/lib/paths.js';
-const STATE_START_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/start.js';
-const QUEUE_SERVICE_IMPORT =
-  '../../../src/core/runtime/services/queue-service.js';
-const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
-const RUNTIME_RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
-const RPC_GRPC_IMPORT = '../../../src/core/runtime/services/rpc-grpc.js';
-const LAMBDA_SERVICE_IMPORT =
-  '../../../src/core/runtime/services/lambda-service.js';
+const SOURCE_OPS_CLI_IMPORT = '../../../src/cli/cmds/ops.js';
 const PACKAGED_APP_ENTRY_IMPORT =
   '../../../src/core/resources/builds/packaged-app-entry.js';
 
-/**
- * @returns {Promise<void>} - Result.
- */
-async function flushTurn() {
-  await Promise.resolve();
-  await new Promise((resolve) => setImmediate(resolve));
+const originalArgv = process.argv;
+const originalEnvironment = { ...process.env };
+const originalExitCode = process.exitCode;
+
+function clearRuntimeEnvironment() {
+  delete process.env.WHARFIE_BOOTSTRAP_MODE;
+  delete process.env.WHARFIE_BOOTSTRAP_ARGS;
+  delete process.env.WHARFIE_RUNTIME_COMMAND;
+  delete process.env.WHARFIE_RUNTIME_ARGS;
 }
 
 /**
- * @returns {{ listeners: Map<string, (...args: any[]) => any>, restore: () => void }} - Result.
+ * @param {import('commander').Command} root - Command-tree root.
+ * @returns {import('commander').Command[]} - Root and every descendant.
  */
-function captureSignals() {
-  /** @type {Map<string, (...args: any[]) => any>} */
-  const listeners = new Map();
-  const processOn = jest
-    .spyOn(process, 'on')
-    .mockImplementation((eventName, handler) => {
-      listeners.set(String(eventName), handler);
-      return process;
-    });
+function collectCommandTree(root) {
+  return [
+    root,
+    ...root.commands.flatMap((command) => collectCommandTree(command)),
+  ];
+}
 
-  return {
-    listeners,
-    restore: () => {
-      processOn.mockRestore();
-    },
-  };
+/**
+ * @param {import('commander').Command} root - Command-tree root.
+ * @returns {void}
+ */
+function expectExactCommandParents(root) {
+  for (const child of root.commands) {
+    expect(child.parent).toBe(root);
+    expectExactCommandParents(child);
+  }
 }
 
 afterEach(() => {
+  process.argv = originalArgv;
+  process.env = { ...originalEnvironment };
+  process.exitCode = originalExitCode;
   jest.restoreAllMocks();
   jest.resetModules();
 });
 
-describe('actor-system CLI runtime surfaces', () => {
-  it('routes direct artifact execution through the hidden bootstrap mode', async () => {
-    const { default: stateStartCmd } = await import(STATE_START_CMD_IMPORT);
-    const parseAsync = jest
-      .spyOn(stateStartCmd, 'parseAsync')
-      .mockResolvedValue(stateStartCmd);
-    const { default: paths } = await import(PATHS_IMPORT);
-    const createWharfiePaths = jest
-      .spyOn(paths, 'createWharfiePaths')
-      .mockResolvedValue(undefined);
-    const originalArgv = process.argv;
-    const stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+describe('packaged application dispatch', () => {
+  it('invokes a manifest-selected named developer CLI export', async () => {
+    const { runDeveloperCli } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const launch = jest.fn(async (_argv) => undefined);
+    const argv = ['node', 'packaged-app', 'sync', '--json'];
 
-    process.env.WHARFIE_BOOTSTRAP_MODE = 'state-start';
-    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify([
-      '--role',
-      'leader',
-      '--control-port',
-      '8890',
-    ]);
+    await runDeveloperCli({ launch }, { cliExportName: 'launch', argv });
 
-    Object.defineProperty(process.stdin, 'isTTY', {
-      configurable: true,
-      value: true,
+    expect(launch).toHaveBeenCalledWith(argv);
+  });
+
+  it('fails when an explicitly selected developer CLI export is missing', async () => {
+    const { runDeveloperCli } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const fallback = jest.fn(async (_argv) => undefined);
+
+    await expect(
+      runDeveloperCli(
+        { default: fallback },
+        {
+          cliExportName: 'misspelledLaunch',
+          argv: ['node', 'packaged-app'],
+        },
+      ),
+    ).rejects.toThrow(/cli\.export 'misspelledLaunch'.*not a callable/i);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('exposes only honest packaged-app operator commands', async () => {
+    /** @type {string[]} */
+    const writes = [];
+    jest.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
     });
-    process.argv = ['node', 'wharfie-artifact'];
+    const { default: entrypoint } = await import(ACTOR_SYSTEM_CLI_IMPORT);
 
-    try {
-      const { default: entrypoint } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-      await entrypoint();
-    } finally {
-      process.argv = originalArgv;
-      delete process.env.WHARFIE_BOOTSTRAP_MODE;
-      delete process.env.WHARFIE_BOOTSTRAP_ARGS;
-      if (stdinIsTTY) {
-        Object.defineProperty(process.stdin, 'isTTY', stdinIsTTY);
-      } else {
-        Reflect.deleteProperty(process.stdin, 'isTTY');
-      }
-    }
+    await entrypoint(['node', 'wharfie-artifact']);
 
-    expect(createWharfiePaths).toHaveBeenCalledTimes(1);
-    expect(parseAsync).toHaveBeenCalledWith(
-      ['node', 'start', '--role', 'leader', '--control-port', '8890'],
-      { from: 'node' },
+    const help = writes.join('');
+    expect(help).toContain('manifest');
+    expect(help).toContain('metadata');
+    expect(help).toMatch(/\brun\b/);
+    expect(help).toContain('submit');
+    expect(help).toContain('start');
+    expect(help).toContain('worker');
+    expect(help).toContain('list');
+    expect(help).toContain('output');
+    expect(help).toContain('inspect');
+    expect(help).toContain('recover');
+    expect(help).toContain('reconcile');
+    expect(help).toContain('reconcile-effect');
+    expect(help).toContain('retry-effect');
+    expect(help).toContain('cancel');
+    expect(help).toContain('deployment');
+    expect(help).not.toMatch(/\bfunc\b/);
+    expect(help).not.toMatch(/\binfra\b/);
+    expect(help).not.toMatch(/\bctl\b/);
+  });
+
+  it('mounts the exact nested deployment lifecycle without replacing flat ledger commands', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const program = createProgram();
+    const deployment = program.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'deployment',
+    );
+
+    expect(deployment).toBeDefined();
+    expect(
+      deployment?.commands.map(
+        /** @param {import('commander').Command} command */
+        (command) => command.name(),
+      ),
+    ).toEqual(['plan', 'apply', 'inspect', 'reconcile', 'destroy']);
+    expect(
+      program.commands.filter(
+        /** @param {import('commander').Command} command */
+        (command) => command.name() === 'inspect',
+      ),
+    ).toHaveLength(1);
+    expect(
+      program.commands.filter(
+        /** @param {import('commander').Command} command */
+        (command) => command.name() === 'reconcile',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('owns one fresh complete command tree in every packaged program', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const first = createProgram();
+    const second = createProgram();
+    const firstTree = collectCommandTree(first);
+    const firstCommands = new Set(firstTree);
+    const secondTree = collectCommandTree(second);
+    const firstManifest = first.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'manifest',
+    );
+    const secondManifest = second.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'manifest',
+    );
+    const firstMetadata = first.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'metadata',
+    );
+    const secondMetadata = second.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'metadata',
+    );
+
+    expect(firstManifest).toBeDefined();
+    expect(firstMetadata).toBeDefined();
+    expect(secondTree.map((command) => command.name())).toEqual(
+      firstTree.map((command) => command.name()),
+    );
+    expect(secondTree.every((command) => !firstCommands.has(command))).toBe(
+      true,
+    );
+    expectExactCommandParents(first);
+    expectExactCommandParents(second);
+    expect(secondManifest).not.toBe(firstManifest);
+    expect(secondMetadata).not.toBe(firstMetadata);
+    expect(firstManifest?.parent).toBe(first);
+    expect(firstMetadata?.parent).toBe(first);
+    expect(secondManifest?.parent).toBe(second);
+    expect(secondMetadata?.parent).toBe(second);
+
+    firstManifest?.description('first-program-only manifest');
+    expect(secondManifest?.description()).toBe(
+      'Print the packaged Wharfie app manifest for this artifact',
     );
   });
 
-  it('honors runtime command env for packaged child-service bootstrap', async () => {
+  it('forwards the packaged process seam to deployment command failures', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const processRef = { exitCode: undefined };
+    const globalExitCode = process.exitCode;
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const program = createProgram({ processRef });
+
+    await program.parseAsync(
+      [
+        'deployment',
+        'inspect',
+        'not-a-deployment-instance',
+        '--region',
+        'us-east-1',
+      ],
+      { from: 'user' },
+    );
+
+    expect(processRef.exitCode).toBe(1);
+    expect(process.exitCode).toBe(globalExitCode);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it('mounts the same public retry-effect command in source and packaged parents', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
+    const packaged = createProgram();
+    const sourceRetry = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'retry-effect',
+    );
+    const packagedRetry = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'retry-effect',
+    );
+
+    expect(sourceRetry).toBeDefined();
+    expect(packagedRetry).toBeDefined();
+    expect(packagedRetry?.description()).toBe(sourceRetry?.description());
+    expect(
+      packagedRetry?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.flags,
+      ),
+    ).toEqual(
+      sourceRetry?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.flags,
+      ),
+    );
+    expect(sourceOps.helpInformation()).toContain('retry-effect');
+    expect(packaged.helpInformation()).toContain('retry-effect');
+  });
+
+  it('mounts app-scoped run history with only the source directory option', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
+    const packaged = createProgram();
+    const sourceList = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'list',
+    );
+    const packagedList = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'list',
+    );
+
+    expect(sourceList).toBeDefined();
+    expect(packagedList).toBeDefined();
+    expect(packagedList?.description()).toBe(sourceList?.description());
+    expect(
+      sourceList?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(
+      expect.arrayContaining(['--dir', '--limit', '--cursor', '--json']),
+    );
+    expect(
+      packagedList?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(expect.arrayContaining(['--limit', '--cursor', '--json']));
+    expect(
+      packagedList?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).not.toContain('--dir');
+    expect(sourceOps.helpInformation()).toContain('list');
+    expect(packaged.helpInformation()).toContain('list');
+  });
+
+  it('mounts the shared sensitive-log command with only the source application override', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
+    const packaged = createProgram();
+    const sourceLogs = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'logs',
+    );
+    const packagedLogs = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'logs',
+    );
+
+    expect(sourceLogs).toBeDefined();
+    expect(packagedLogs).toBeDefined();
+    expect(packagedLogs?.description()).toBe(sourceLogs?.description());
+    expect(
+      sourceLogs?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual([
+      '--app-id',
+      '--run-id',
+      '--attempt-id',
+      '--limit',
+      '--cursor',
+      '--confirm-sensitive-output',
+      '--json',
+    ]);
+    expect(
+      packagedLogs?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual([
+      '--run-id',
+      '--attempt-id',
+      '--limit',
+      '--cursor',
+      '--confirm-sensitive-output',
+      '--json',
+    ]);
+    expect(sourceLogs?.helpInformation()).toContain('--app-id <appId>');
+    expect(packagedLogs?.helpInformation()).not.toContain('--app-id');
+    expect(sourceOps.helpInformation()).toContain('logs');
+    expect(packaged.helpInformation()).toContain('logs');
+  });
+
+  it('mounts the shared sensitive run-output command with only the source application override', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
+    const packaged = createProgram();
+    const sourceOutput = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'output',
+    );
+    const packagedOutput = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'output',
+    );
+
+    expect(sourceOutput).toBeDefined();
+    expect(packagedOutput).toBeDefined();
+    expect(packagedOutput?.description()).toBe(sourceOutput?.description());
+    expect(
+      sourceOutput?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(['--app-id', '--run-id', '--confirm-sensitive-output', '--json']);
+    expect(
+      packagedOutput?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(['--run-id', '--confirm-sensitive-output', '--json']);
+    expect(sourceOutput?.helpInformation()).toContain('--app-id <appId>');
+    expect(packagedOutput?.helpInformation()).not.toContain('--app-id');
+    expect(sourceOps.helpInformation()).toContain('output');
+    expect(packaged.helpInformation()).toContain('output');
+  });
+
+  it('gates packaged run output before identity and reads only through embedded app scope', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const appId = 'packaged-run-output-demo';
+    const runId = 'packaged-run-output-run';
+    const persistedRevisionId = `wrv1_${'A'.repeat(43)}`;
+    const embeddedRevisionId = `wrv1_${'B'.repeat(43)}`;
+    const missingResolve = jest.fn(async () => ({
+      appId,
+      revisionId: embeddedRevisionId,
+    }));
+    const missingRead = jest.fn(
+      async (/** @type {{appId: string, runId: string}} */ _request) => null,
+    );
+    const missingOutput = {
+      json: jest.fn(),
+      table: jest.fn(),
+      failure: jest.fn(),
+    };
+    const unconfirmed = createProgram({
+      resolveExpectedIdentity: missingResolve,
+      readRunOutput: missingRead,
+      runOutputOutput: missingOutput,
+    });
+
+    await unconfirmed.parseAsync(['output', '--run-id', runId, '--json'], {
+      from: 'user',
+    });
+
+    expect(missingResolve).not.toHaveBeenCalled();
+    expect(missingRead).not.toHaveBeenCalled();
+    expect(missingOutput.json).not.toHaveBeenCalled();
+    expect(missingOutput.table).not.toHaveBeenCalled();
+    expect(missingOutput.failure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('--confirm-sensitive-output'),
+      }),
+    );
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+    const resolveExpectedIdentity = jest.fn(async () => ({
+      appId,
+      revisionId: embeddedRevisionId,
+    }));
+    const readRunOutput = jest.fn(
+      async (/** @type {{appId: string, runId: string}} */ request) => ({
+        scope: {
+          appId: request.appId,
+          revisionId: persistedRevisionId,
+          runId: request.runId,
+        },
+        snapshot: {
+          runKind: 'manual',
+          status: 'RUNNING',
+          version: 1,
+          lastSequence: 1,
+        },
+        outputs: [],
+        terminal: null,
+      }),
+    );
+    const output = {
+      json: jest.fn(),
+      table: jest.fn(),
+      failure: jest.fn(),
+    };
+    const confirmed = createProgram({
+      resolveExpectedIdentity,
+      readRunOutput,
+      runOutputOutput: output,
+    });
+
+    await confirmed.parseAsync(
+      ['output', '--run-id', runId, '--confirm-sensitive-output', '--json'],
+      { from: 'user' },
+    );
+
+    expect(resolveExpectedIdentity).toHaveBeenCalledTimes(1);
+    expect(readRunOutput).toHaveBeenCalledWith({ appId, runId });
+    expect(readRunOutput.mock.calls[0][0]).not.toHaveProperty('revisionId');
+    expect(output.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { appId, revisionId: persistedRevisionId, runId },
+      }),
+      expect.any(String),
+    );
+    expect(output.table).not.toHaveBeenCalled();
+    expect(output.failure).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(originalExitCode);
+  });
+
+  it('narrows packaged revision authority to app-scoped history at action time', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const root = mkdtempSync(join(tmpdir(), 'wharfie-packaged-history-'));
+    const controlRoot = join(root, 'missing-control');
+    try {
+      process.env.WHARFIE_CONTROL_ADAPTER = 'vanilla';
+      process.env.WHARFIE_CONTROL_PATH = controlRoot;
+      const consoleLog = jest
+        .spyOn(console, 'log')
+        .mockImplementation(() => undefined);
+      const consoleError = jest
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      const resolveExpectedIdentity = jest.fn(async () => ({
+        appId: 'packaged-history-demo',
+        revisionId: `wrv1_${'A'.repeat(43)}`,
+      }));
+      const packaged = createProgram({ resolveExpectedIdentity });
+
+      await packaged.parseAsync(['list', '--json'], { from: 'user' });
+
+      expect(resolveExpectedIdentity).toHaveBeenCalledTimes(1);
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(consoleLog).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(consoleLog.mock.calls[0][0]))).toEqual(
+        expect.objectContaining({
+          scope: { appId: 'packaged-history-demo' },
+          items: [],
+          nextCursor: null,
+        }),
+      );
+      expect(existsSync(controlRoot)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('mounts the flat public workflow-start command with the expected source-only directory option', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceOps = createSourceOpsCommand();
+    const packaged = createProgram();
+    const sourceStart = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'start',
+    );
+    const packagedStart = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'start',
+    );
+
+    expect(sourceStart).toBeDefined();
+    expect(packagedStart).toBeDefined();
+    expect(packagedStart?.description()).toBe(sourceStart?.description());
+    expect(
+      sourceStart?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        '--workflow',
+        '--idempotency-key',
+        '--dir',
+        '--input',
+        '--caller-metadata',
+        '--json',
+      ]),
+    );
+    expect(
+      packagedStart?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        '--workflow',
+        '--idempotency-key',
+        '--input',
+        '--caller-metadata',
+        '--json',
+      ]),
+    );
+    expect(
+      packagedStart?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.long,
+      ),
+    ).not.toContain('--dir');
+    expect(
+      sourceStart?.registeredArguments.map(
+        /** @param {import('commander').Argument} argument */
+        (argument) => ({
+          name: argument.name(),
+          required: argument.required,
+          variadic: argument.variadic,
+        }),
+      ),
+    ).toEqual([{ name: 'appArgs', required: false, variadic: true }]);
+    expect(
+      packagedStart?.registeredArguments.map(
+        /** @param {import('commander').Argument} argument */
+        (argument) => ({
+          name: argument.name(),
+          required: argument.required,
+          variadic: argument.variadic,
+        }),
+      ),
+    ).toEqual([{ name: 'appArgs', required: false, variadic: true }]);
+    expect(sourceOps.helpInformation()).toContain('start');
+    expect(packaged.helpInformation()).toContain('start');
+  });
+
+  it('honors the private ledger-service runtime command and arguments', async () => {
     const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
     const parseAsync = jest.fn(async (_argv, _options) => undefined);
-    const originalEnv = {
-      WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
-      WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
-      WHARFIE_RUNTIME_COMMAND: process.env.WHARFIE_RUNTIME_COMMAND,
-      WHARFIE_RUNTIME_ARGS: process.env.WHARFIE_RUNTIME_ARGS,
-    };
-    const originalArgv = process.argv;
+    const loadDeveloperCliModule = jest.fn(async () => ({
+      default: jest.fn(),
+    }));
+    clearRuntimeEnvironment();
+    process.env.WHARFIE_RUNTIME_COMMAND = 'ledger-service';
+    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify(['--once']);
 
-    process.env.WHARFIE_BOOTSTRAP_MODE = 'runtime';
-    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify(['--role', 'leader']);
-    process.env.WHARFIE_RUNTIME_COMMAND = 'serve-db';
-    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify([
-      '--db-address',
-      '127.0.0.1:9100',
-    ]);
-    process.argv = ['node', 'wharfie-artifact'];
-
-    try {
-      await runPackagedApp({
-        runtimeModules: {
-          'serve-db': { parseAsync },
-        },
-        argv: process.argv,
-      });
-    } finally {
-      process.argv = originalArgv;
-      for (const [key, value] of Object.entries(originalEnv)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-    }
+    await runPackagedApp({
+      loadDeveloperCliModule,
+      runtimeModules: {
+        'ledger-service': { parseAsync },
+      },
+      argv: ['node', 'wharfie-artifact'],
+    });
 
     expect(parseAsync).toHaveBeenCalledWith(
-      ['node', 'serve-db', '--db-address', '127.0.0.1:9100'],
+      ['node', 'ledger-service', '--once'],
       { from: 'node' },
     );
+    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
   });
 
-  it('captures stdout/stderr for successful process runs', async () => {
-    const { runProcess } = await import(PROCESS_RUNNER_IMPORT);
+  it('does not let retired bootstrap variables hijack application argv', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const developerCli = jest.fn(async (_argv) => undefined);
+    const argv = ['node', 'wharfie-artifact', 'serve'];
+    clearRuntimeEnvironment();
+    process.env.WHARFIE_BOOTSTRAP_MODE = 'state-start';
+    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify(['--role', 'leader']);
 
-    const result = await runProcess(
-      process.execPath,
-      [
-        '-e',
-        "process.stdout.write(process.env.WHARFIE_TEST_VALUE); process.stderr.write('warn');",
-      ],
-      {
-        env: { WHARFIE_TEST_VALUE: 'ok' },
-      },
-    );
-
-    expect(result).toEqual({
-      code: 0,
-      stdout: 'ok',
-      stderr: 'warn',
+    await runPackagedApp({
+      developerCliModule: { default: developerCli },
+      argv,
     });
+
+    expect(developerCli).toHaveBeenCalledWith(argv);
   });
 
-  it('turns non-zero child exits into deterministic errors', async () => {
-    const { runProcess } = await import(PROCESS_RUNNER_IMPORT);
+  it('does not enter private runtime dispatch from arguments alone', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const developerCli = jest.fn(async (_argv) => undefined);
+    const argv = ['node', 'wharfie-artifact'];
+    clearRuntimeEnvironment();
+    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify(['--once']);
 
-    await expect(
-      runProcess(process.execPath, [
-        '-e',
-        "process.stderr.write('boom'); process.exit(5);",
-      ]),
-    ).rejects.toThrow(/failed with 5: boom/);
-  });
-
-  it('wires the start command into NodeAgent with parsed options', async () => {
-    const agentStart = jest.fn(async () => {});
-    const agentStop = jest.fn(async () => {});
-    const agentWaitForever = jest.fn(async () => {});
-    const NodeAgent = jest.fn().mockImplementation(function (options) {
-      this.options = options;
-      this.start = agentStart;
-      this.stop = agentStop;
-      this.waitForever = agentWaitForever;
+    await runPackagedApp({
+      developerCliModule: { default: developerCli },
+      argv,
     });
-    const loadResourcesSpec = jest.fn((opts) => ({
-      queue: { adapter: 'memory', options: { path: '.wharfie/queue' } },
-    }));
-    const getSelfSpawnCommand = jest.fn(() => ({
-      cmd: '/fake/node',
-      prefixArgs: ['/fake/cli'],
-    }));
 
-    await jest.unstable_mockModule(NODE_AGENT_IMPORT, () => ({
-      default: NodeAgent,
-    }));
-    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec,
-    }));
-    await jest.unstable_mockModule(SPAWN_SELF_IMPORT, () => ({
-      getSelfSpawnCommand,
-    }));
-    await jest.unstable_mockModule('node:crypto', () => ({
-      randomUUID: () => 'node-123',
-    }));
-
-    const processOn = jest
-      .spyOn(process, 'on')
-      .mockImplementation(() => process);
-
-    const { default: startCmd } = await import(START_IMPORT);
-
-    await startCmd.parseAsync(
-      [
-        'node',
-        'start',
-        '--role',
-        'worker',
-        '--lambda-host',
-        '127.0.0.1',
-        '--lambda-port',
-        '9001',
-        '--db-address',
-        'db.remote:1111',
-        '--queue-address',
-        'queue.remote:2222',
-        '--poll-queue-url',
-        'queue://one',
-        '--poll-queue-url',
-        'queue://two',
-      ],
-      { from: 'node' },
-    );
-
-    expect(loadResourcesSpec).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: 'worker',
-        lambdaHost: '127.0.0.1',
-        lambdaPort: 9001,
-        dbAddress: 'db.remote:1111',
-        queueAddress: 'queue.remote:2222',
-        pollQueueUrl: ['queue://one', 'queue://two'],
-      }),
-    );
-    expect(NodeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: 'node-123',
-        role: 'worker',
-        resourcesSpec: {
-          queue: { adapter: 'memory', options: { path: '.wharfie/queue' } },
-        },
-        cmd: '/fake/node',
-        prefixArgs: ['/fake/cli'],
-        lambdaHost: '127.0.0.1',
-        lambdaPort: 9001,
-        dbAddressOverride: 'db.remote:1111',
-        queueAddressOverride: 'queue.remote:2222',
-        pollQueueUrls: ['queue://one', 'queue://two'],
-      }),
-    );
-    expect(agentStart).toHaveBeenCalledTimes(1);
-    expect(agentWaitForever).toHaveBeenCalledTimes(1);
-    expect(processOn).toHaveBeenCalledWith('SIGINT', expect.any(Function));
-    expect(processOn).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
+    expect(developerCli).toHaveBeenCalledWith(argv);
   });
 
-  it('rejects invalid roles before constructing the node agent', async () => {
-    const NodeAgent = jest.fn();
-
-    await jest.unstable_mockModule(NODE_AGENT_IMPORT, () => ({
-      default: NodeAgent,
-    }));
-    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec: () => ({ db: { adapter: 'memory' } }),
-    }));
-    await jest.unstable_mockModule(SPAWN_SELF_IMPORT, () => ({
-      getSelfSpawnCommand: () => ({ cmd: '/fake/node', prefixArgs: [] }),
-    }));
-    await jest.unstable_mockModule('node:crypto', () => ({
-      randomUUID: () => 'node-123',
-    }));
-
-    const { default: startCmd } = await import(START_IMPORT);
+  it('rejects malformed private runtime arguments', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    clearRuntimeEnvironment();
+    process.env.WHARFIE_RUNTIME_COMMAND = 'ledger-service';
+    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify({ once: true });
 
     await expect(
-      startCmd.parseAsync(['node', 'start', '--role', 'broken'], {
-        from: 'node',
-      }),
-    ).rejects.toThrow(/Invalid --role: broken/);
-
-    expect(NodeAgent).not.toHaveBeenCalled();
-  });
-
-  it('starts and stops the DB serve command using the resolved resources spec', async () => {
-    const close = jest.fn(async () => {});
-    const loadResourcesSpec = jest.fn((opts) => ({
-      db: { adapter: 'vanilla', options: { path: '.wharfie/db' } },
-    }));
-    const startDbService = jest.fn(async (opts) => ({
-      address: '127.0.0.1:9101',
-      close,
-    }));
-
-    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec,
-    }));
-    await jest.unstable_mockModule(DB_SERVICE_IMPORT, () => ({
-      startDbService,
-    }));
-
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-
-    const { listeners, restore } = captureSignals();
-    const { default: dbCmd } = await import(DB_CMD_IMPORT);
-
-    try {
-      const parsePromise = dbCmd.parseAsync(
-        ['node', 'db', '--host', '127.0.0.1', '--port', '9101'],
-        { from: 'node' },
-      );
-
-      await flushTurn();
-
-      await listeners.get('SIGTERM')?.();
-      await parsePromise;
-    } finally {
-      restore();
-    }
-
-    expect(loadResourcesSpec).toHaveBeenCalledWith(
-      expect.objectContaining({ host: '127.0.0.1', port: 9101 }),
-    );
-    expect(startDbService).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dbSpec: { adapter: 'vanilla', options: { path: '.wharfie/db' } },
-        host: '127.0.0.1',
-        port: 9101,
-        log: expect.any(Function),
-      }),
-    );
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('fails cleanly when the DB serve command has no db spec', async () => {
-    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec: () => ({}),
-    }));
-    await jest.unstable_mockModule(DB_SERVICE_IMPORT, () => ({
-      startDbService: jest.fn(),
-    }));
-
-    const { default: dbCmd } = await import(DB_CMD_IMPORT);
-
-    await expect(
-      dbCmd.parseAsync(['node', 'db'], { from: 'node' }),
-    ).rejects.toThrow(/DB service requires resources\.db/);
-  });
-
-  it('starts and stops the Queue serve command using the resolved resources spec', async () => {
-    const close = jest.fn(async () => {});
-    const loadResourcesSpec = jest.fn((opts) => ({
-      queue: { adapter: 'vanilla', options: { path: '.wharfie/queue' } },
-    }));
-    const startQueueService = jest.fn(async (opts) => ({
-      address: '127.0.0.1:9102',
-      close,
-    }));
-
-    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec,
-    }));
-    await jest.unstable_mockModule(QUEUE_SERVICE_IMPORT, () => ({
-      startQueueService,
-    }));
-
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-
-    const { listeners, restore } = captureSignals();
-    const { default: queueCmd } = await import(QUEUE_CMD_IMPORT);
-
-    try {
-      const parsePromise = queueCmd.parseAsync(
-        ['node', 'queue', '--host', '127.0.0.1', '--port', '9102'],
-        { from: 'node' },
-      );
-
-      await flushTurn();
-
-      await listeners.get('SIGINT')?.();
-      await parsePromise;
-    } finally {
-      restore();
-    }
-
-    expect(loadResourcesSpec).toHaveBeenCalledWith(
-      expect.objectContaining({ host: '127.0.0.1', port: 9102 }),
-    );
-    expect(startQueueService).toHaveBeenCalledWith(
-      expect.objectContaining({
-        queueSpec: { adapter: 'vanilla', options: { path: '.wharfie/queue' } },
-        host: '127.0.0.1',
-        port: 9102,
-        log: expect.any(Function),
-      }),
-    );
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('wires the Lambda serve command, queue polling, and shutdown hooks', async () => {
-    const functionRun = jest.fn(async (..._args) => {});
-    const dbClient = {
-      __wharfie_closeTransport: jest.fn(),
-    };
-    const queueClient = {
-      __wharfie_closeTransport: jest.fn(),
-    };
-    const objectStorage = { adapter: 'memory' };
-    const closeLocal = jest.fn(async () => {});
-    const closeLambdaService = jest.fn(async () => {});
-    /** @type {any} */
-    let lambdaOptions;
-
-    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec: () => ({
-        objectStorage: {
-          adapter: 'vanilla',
-          options: { path: '.wharfie/object-storage' },
+      runPackagedApp({
+        runtimeModules: {
+          'ledger-service': { parseAsync: jest.fn() },
         },
       }),
-    }));
-    await jest.unstable_mockModule(FUNCTION_IMPORT, () => ({
-      default: {
-        run: functionRun,
-      },
-    }));
-    await jest.unstable_mockModule(RUNTIME_RESOURCES_IMPORT, () => ({
-      createActorSystemResources: jest.fn(async (spec) => ({
-        resources: { objectStorage },
-        close: closeLocal,
-      })),
-    }));
-    await jest.unstable_mockModule(RPC_GRPC_IMPORT, () => ({
-      createGrpcRpcClient: jest.fn().mockImplementation((...args) => {
-        const [options] = /** @type {any[]} */ (args);
-        return options.address === 'db.remote:9100' ? dbClient : queueClient;
-      }),
-    }));
-    await jest.unstable_mockModule(LAMBDA_SERVICE_IMPORT, () => ({
-      startLambdaService: jest.fn(async (options) => {
-        lambdaOptions = options;
-        return {
-          address: '127.0.0.1:9103',
-          close: closeLambdaService,
-        };
-      }),
-    }));
+    ).rejects.toThrow(/WHARFIE_RUNTIME_ARGS must be a JSON array of strings/);
+  });
 
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
+  it('rejects non-string private runtime arguments', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    clearRuntimeEnvironment();
+    process.env.WHARFIE_RUNTIME_COMMAND = 'ledger-service';
+    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify(['--limit', 1]);
 
-    const { listeners, restore } = captureSignals();
-    const { default: lambdaCmd } = await import(LAMBDA_CMD_IMPORT);
-    const { createActorSystemResources } = await import(
-      RUNTIME_RESOURCES_IMPORT
+    await expect(
+      runPackagedApp({
+        runtimeModules: {
+          'ledger-service': { parseAsync: jest.fn() },
+        },
+      }),
+    ).rejects.toThrow(/WHARFIE_RUNTIME_ARGS must be a JSON array of strings/);
+  });
+
+  it('fails closed for an unknown private runtime command', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    clearRuntimeEnvironment();
+    process.env.WHARFIE_RUNTIME_COMMAND = 'retired-service';
+
+    await expect(
+      runPackagedApp({
+        runtimeModules: {
+          'ledger-service': { parseAsync: jest.fn() },
+        },
+      }),
+    ).rejects.toThrow(
+      /Unknown packaged runtime command 'retired-service'.*ledger-service/,
     );
-    const { createGrpcRpcClient } = await import(RPC_GRPC_IMPORT);
-    const { startLambdaService } = await import(LAMBDA_SERVICE_IMPORT);
+  });
 
-    try {
-      const parsePromise = lambdaCmd.parseAsync(
-        [
-          'node',
-          'lambda',
-          '--host',
-          '127.0.0.1',
-          '--port',
-          '9103',
-          '--db-address',
-          'db.remote:9100',
-          '--queue-address',
-          'queue.remote:9200',
-          '--poll-queue-url',
-          'queue://one',
-          '--poll-queue-url',
-          'queue://two',
-          '--poll-wait-seconds',
-          '3',
-          '--poll-max-messages',
-          '4',
-          '--poll-visibility-timeout',
-          '45',
-        ],
-        { from: 'node' },
-      );
+  it.each([
+    ['ctl', ['state', 'start']],
+    ['func', ['hello']],
+    ['infra', ['deploy']],
+  ])(
+    'keeps packaged %s argv on the developer CLI surface',
+    async (internalCommand, argvSuffix) => {
+      const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+      const developerCli = jest.fn(async (_argv) => undefined);
+      const operatorCli = jest.fn(async (_argv) => undefined);
+      const argv = ['node', 'wharfie-artifact', internalCommand, ...argvSuffix];
+      clearRuntimeEnvironment();
 
-      await flushTurn();
-
-      await lambdaOptions.execute({
-        functionName: 'alpha',
-        event: { ok: true },
-        context: null,
+      await runPackagedApp({
+        developerCliModule: { default: developerCli },
+        runtimeModules: { operatorCli },
+        argv,
       });
 
-      await listeners.get('SIGTERM')?.();
-      await parsePromise;
+      expect(developerCli).toHaveBeenCalledWith(argv);
+      expect(operatorCli).not.toHaveBeenCalled();
+    },
+  );
 
-      expect(createActorSystemResources).toHaveBeenCalledWith({
-        objectStorage: {
-          adapter: 'vanilla',
-          options: { path: '.wharfie/object-storage' },
-        },
+  it.each([
+    ['manifest', ['manifest']],
+    ['help', []],
+  ])(
+    'passes the lazy developer loader to packaged operator %s without loading it',
+    async (_label, operatorArgv) => {
+      const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+      const developerCli = jest.fn(async (_argv) => undefined);
+      const loadDeveloperCliModule = jest.fn(async () => ({
+        default: developerCli,
+      }));
+      const operatorCli = jest.fn(async (_argv, _context) => undefined);
+      clearRuntimeEnvironment();
+
+      await runPackagedApp({
+        loadDeveloperCliModule,
+        runtimeModules: { operatorCli },
+        argv: ['node', 'wharfie-artifact', 'wharfie', ...operatorArgv],
       });
-      expect(createGrpcRpcClient).toHaveBeenCalledTimes(2);
-      expect(createGrpcRpcClient).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          address: 'db.remote:9100',
-          log: expect.any(Function),
-        }),
+
+      expect(loadDeveloperCliModule).not.toHaveBeenCalled();
+      expect(developerCli).not.toHaveBeenCalled();
+      expect(operatorCli).toHaveBeenCalledWith(
+        ['node', 'wharfie-artifact', ...operatorArgv],
+        { loadDeveloperCliModule },
       );
-      expect(createGrpcRpcClient).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          address: 'queue.remote:9200',
-          log: expect.any(Function),
-        }),
-      );
-      expect(startLambdaService).toHaveBeenCalledWith(
-        expect.objectContaining({
-          host: '127.0.0.1',
-          port: 9103,
-          log: expect.any(Function),
-          poll: expect.objectContaining({
-            queue: queueClient,
-            queueUrls: ['queue://one', 'queue://two'],
-            waitTimeSeconds: 3,
-            maxNumberOfMessages: 4,
-            visibilityTimeout: 45,
-            log: expect.any(Function),
-          }),
-          execute: expect.any(Function),
-        }),
-      );
-      expect(functionRun).toHaveBeenCalledWith(
-        'alpha',
-        { ok: true },
-        {},
-        {
-          resources: {
-            db: dbClient,
-            queue: queueClient,
-            objectStorage,
-          },
-        },
-      );
-      expect(closeLambdaService).toHaveBeenCalledTimes(1);
-      expect(closeLocal).toHaveBeenCalledTimes(1);
-      expect(dbClient.__wharfie_closeTransport).toHaveBeenCalledTimes(1);
-      expect(queueClient.__wharfie_closeTransport).toHaveBeenCalledTimes(1);
-    } finally {
-      restore();
-    }
+    },
+  );
+
+  it('loads the developer CLI once only when developer argv is dispatched', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const developerCli = jest.fn(async (_argv) => undefined);
+    const loadDeveloperCliModule = jest.fn(async () => ({
+      default: developerCli,
+    }));
+    const argv = ['node', 'wharfie-artifact', 'serve'];
+    clearRuntimeEnvironment();
+
+    await runPackagedApp({ loadDeveloperCliModule, argv });
+
+    expect(loadDeveloperCliModule).toHaveBeenCalledTimes(1);
+    expect(developerCli).toHaveBeenCalledWith(argv);
   });
 
-  it('treats missing Lambda state addresses as a commander parse failure', async () => {
-    const { default: lambdaCmd } = await import(LAMBDA_CMD_IMPORT);
-
-    lambdaCmd.exitOverride();
-    lambdaCmd.configureOutput({
-      writeOut: () => {},
-      writeErr: () => {},
+  it('isolates developer CLI loader failures from runtime and operator dispatch', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const loadDeveloperCliModule = jest.fn(async () => {
+      throw new Error('developer CLI import failed');
     });
+    const operatorCli = jest.fn(async (_argv) => undefined);
+    const runtimeCli = {
+      parseAsync: jest.fn(async (_argv, _options) => undefined),
+    };
+    clearRuntimeEnvironment();
+
+    await runPackagedApp({
+      loadDeveloperCliModule,
+      runtimeModules: { operatorCli },
+      argv: ['node', 'wharfie-artifact', 'wharfie', 'manifest'],
+    });
+    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
+
+    process.env.WHARFIE_RUNTIME_COMMAND = 'ledger-service';
+    await runPackagedApp({
+      loadDeveloperCliModule,
+      runtimeModules: { 'ledger-service': runtimeCli },
+      argv: ['node', 'wharfie-artifact'],
+    });
+    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
+
+    clearRuntimeEnvironment();
+    await expect(
+      runPackagedApp({
+        loadDeveloperCliModule,
+        argv: ['node', 'wharfie-artifact', 'serve'],
+      }),
+    ).rejects.toThrow('developer CLI import failed');
+    expect(loadDeveloperCliModule).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails clearly when the reserved namespace has no operator CLI', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    clearRuntimeEnvironment();
 
     await expect(
-      lambdaCmd.parseAsync(['node', 'lambda'], { from: 'node' }),
-    ).rejects.toMatchObject({
-      message: expect.stringMatching(/--db-address/),
-    });
+      runPackagedApp({
+        developerCliModule: { default: jest.fn() },
+        argv: ['node', 'wharfie-artifact', 'wharfie', 'status'],
+      }),
+    ).rejects.toThrow(
+      "does not include the Wharfie operator CLI requested by 'wharfie'",
+    );
+  });
+
+  it('does not expose the operator CLI as an implicit fallback', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const operatorCli = jest.fn(async (_argv) => undefined);
+    clearRuntimeEnvironment();
+
+    await expect(
+      runPackagedApp({
+        runtimeModules: { operatorCli },
+        argv: ['node', 'wharfie-artifact', 'ctl', 'manifest'],
+      }),
+    ).rejects.toThrow(
+      "Wharfie operator commands must be invoked as '<app> wharfie <command>'",
+    );
+    expect(operatorCli).not.toHaveBeenCalled();
   });
 });

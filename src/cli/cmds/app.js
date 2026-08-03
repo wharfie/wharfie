@@ -1,13 +1,19 @@
 import { Command } from 'commander';
 
-import manifestCommand from './app_cmds/manifest.js';
-import packageCommand from './app_cmds/package.js';
-import runCommand from './app_cmds/run.js';
+import { createSourceAppManifestCommand } from './app_cmds/manifest.js';
+import { createPackageCommand } from './app_cmds/package.js';
+import { createSourceAppRunCommand } from './app_cmds/run.js';
 
-const appCommand = new Command('app')
-  .description('Local-only v2 app commands')
-  .addCommand(manifestCommand)
-  .addCommand(runCommand)
-  .addCommand(packageCommand);
-
-export default appCommand;
+/**
+ * Build one source application command group with exclusively owned leaves.
+ * @returns {Command} - Fresh source application command tree.
+ */
+export function createSourceAppCommand() {
+  return new Command('app')
+    .description(
+      'Local application manifest, execution, and packaging commands',
+    )
+    .addCommand(createSourceAppManifestCommand())
+    .addCommand(createSourceAppRunCommand())
+    .addCommand(createPackageCommand());
+}

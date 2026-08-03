@@ -2,6 +2,7 @@ coverage/
 mock/
 test-db/
 tmp/
+.wharfie/
 node_modules/
 *.pyc
 __pycache__
@@ -16,11 +17,6 @@ dist/
 .vscode
 node_binaries/
 esbuild_binaries/
-docs/build/
-docs/node_modules/
-docs/public/
-docs/.env
-docs/.env.local
 LLM_CONTEXT*
 DIFF_LLM_CONTEXT*
 llm_artifacts/

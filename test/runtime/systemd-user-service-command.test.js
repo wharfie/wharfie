@@ -1,0 +1,1566 @@
+/* eslint-env jest */
+/* eslint-disable jsdoc/require-jsdoc */
+
+import { describe, expect, it, jest } from '@jest/globals';
+
+import { createProgram } from '../../src/core/resources/builds/actor-system-cli/index.js';
+import { createSourceOpsCommand } from '../../src/cli/cmds/ops.js';
+import { createSystemdUserServiceCommand } from '../../src/core/runtime/operator/systemd-user-service-command.js';
+
+const sourceOpsCommand = createSourceOpsCommand();
+
+/** @typedef {'install'|'converge'|'update'|'rollback'|'recover'|'purge'|'start'|'stop'|'restart'|'uninstall'} ServiceResultAction */
+
+/** @type {ReadonlyArray<ServiceResultAction|'prune'|'status'>} */
+const ACTIONS = Object.freeze([
+  'install',
+  'converge',
+  'update',
+  'rollback',
+  'recover',
+  'prune',
+  'purge',
+  'start',
+  'stop',
+  'restart',
+  'status',
+  'uninstall',
+]);
+
+const OUTCOMES = Object.freeze({
+  install: 'target-active',
+  converge: 'target-active',
+  update: 'target-active',
+  rollback: 'target-active',
+  recover: 'target-active',
+  purge: 'purged',
+  start: 'started',
+  stop: 'stopped',
+  restart: 'restarted',
+  uninstall: 'uninstalled',
+});
+const STATUS_ARTIFACT_ID = `waf1_${Buffer.alloc(32, 4).toString('base64url')}`;
+const STATUS_REVISION_ID = `wrv1_${Buffer.alloc(32, 5).toString('base64url')}`;
+const REMOVED_ARTIFACT_ID = `waf1_${Buffer.alloc(32, 6).toString('base64url')}`;
+const STATUS_UNIT = 'wharfie-service-demo.service';
+
+/** @type {Array<[ServiceResultAction, string, string, string]>} */
+const HUMAN_ACTIVATION_CASES = [
+  [
+    'update',
+    'refused',
+    'source-retained',
+    'update: source retained; request refused (service-demo)',
+  ],
+  [
+    'rollback',
+    'failed',
+    'source-restored',
+    'rollback: source restored; request failed (service-demo)',
+  ],
+  [
+    'recover',
+    'pending',
+    'in-flight',
+    'recover: in-flight; request pending; run service recover (service-demo)',
+  ],
+  [
+    'converge',
+    'pending',
+    'in-flight',
+    'converge: in-flight; request pending; retry service converge (service-demo)',
+  ],
+];
+
+/** @type {Array<[ServiceResultAction, string, string, Record<string, any>]>} */
+const JSON_NONFULFILLED_CASES = [
+  ['update', 'refused', 'source-retained', {}],
+  ['rollback', 'failed', 'source-restored', {}],
+  ['converge', 'pending', 'in-flight', {}],
+  [
+    'install',
+    'pending',
+    'in-flight',
+    {
+      health: 'degraded',
+      activeArtifactId: null,
+      activeRevisionId: null,
+      rollbackArtifactId: null,
+      rollbackRevisionId: null,
+    },
+  ],
+];
+
+/**
+ * @param {ServiceResultAction} action - Result action.
+ * @param {Record<string, any>} [overrides] - Receipt overrides.
+ * @returns {Record<string, any>} - Complete service result.
+ */
+function makeResult(action, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.result',
+    appId: 'service-demo',
+    action,
+    requestStatus: 'fulfilled',
+    outcome: OUTCOMES[action],
+    health:
+      action === 'stop'
+        ? 'stopped'
+        : action === 'uninstall' || action === 'purge'
+          ? 'absent'
+          : 'healthy',
+    activeArtifactId:
+      action === 'uninstall' || action === 'purge' ? null : 'artifact-current',
+    activeRevisionId:
+      action === 'uninstall' || action === 'purge' ? null : 'revision-current',
+    rollbackArtifactId: ['update', 'rollback', 'recover'].includes(action)
+      ? 'artifact-previous'
+      : null,
+    rollbackRevisionId: ['update', 'rollback', 'recover'].includes(action)
+      ? 'revision-previous'
+      : null,
+    ...overrides,
+  };
+}
+
+/**
+ * @param {Record<string, any>} value - Receipt to copy.
+ * @param {string} field - Field to omit.
+ * @returns {Record<string, any>} - Copied receipt without the field.
+ */
+function withoutField(value, field) {
+  const copy = { ...value };
+  delete copy[field];
+  return copy;
+}
+
+/**
+ * @param {Record<string, any>} [overrides] - Desired-convergence overrides.
+ * @returns {Record<string, any>} - Complete status-V3 convergence decision.
+ */
+function makeDesiredConvergence(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.desired-convergence',
+    appId: 'service-demo',
+    unit: STATUS_UNIT,
+    desired: {
+      artifactId: STATUS_ARTIFACT_ID,
+      revisionId: STATUS_REVISION_ID,
+    },
+    disposition: 'authorized',
+    basis: 'durable-active',
+    ...overrides,
+  };
+}
+
+/**
+ * @param {Record<string, any>} [overrides] - Status overrides.
+ * @returns {Record<string, any>} - Complete status-V3 receipt.
+ */
+function makeStatus(overrides = {}) {
+  return {
+    schemaVersion: 3,
+    kind: 'wharfie.service.status',
+    appId: 'service-demo',
+    unit: STATUS_UNIT,
+    health: 'healthy',
+    installation: { state: 'installed' },
+    systemd: { activeState: 'active' },
+    wiring: {
+      state: 'managed',
+      unitFile: 'managed',
+      selection: 'managed',
+      effectiveUnit: 'managed',
+      cleanupPending: false,
+    },
+    desiredConvergence: makeDesiredConvergence(),
+    ...overrides,
+  };
+}
+
+function makePrune(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'wharfie.service.release-prune',
+    action: 'prune',
+    requestStatus: 'fulfilled',
+    appId: 'service-demo',
+    outcome: 'pruned',
+    installationState: 'installed',
+    selected: {
+      artifactId: STATUS_ARTIFACT_ID,
+      revisionId: STATUS_REVISION_ID,
+    },
+    rollback: null,
+    scannedReleaseCount: 2,
+    retainedReleaseCount: 1,
+    remainingReleaseCount: 1,
+    removed: [
+      {
+        artifactId: REMOVED_ARTIFACT_ID,
+        revisionId: STATUS_REVISION_ID,
+        artifactBytes: 123,
+      },
+    ],
+    removedCount: 1,
+    removedArtifactBytes: 123,
+    resumedPruneCount: 0,
+    recoveredStagingCount: 0,
+    ...overrides,
+  };
+}
+
+function makeOperator() {
+  return Object.fromEntries(
+    ACTIONS.map((action) => [
+      action,
+      jest.fn(
+        async (
+          /** @type {Record<string, any> | undefined} */ _input = undefined,
+        ) => {
+          if (action === 'status') return makeStatus();
+          if (action === 'prune') return makePrune();
+          return makeResult(action);
+        },
+      ),
+    ]),
+  );
+}
+
+describe('packaged systemd user service command', () => {
+  it('mounts only the intended packaged lifecycle operations and loads no host implementation for help', () => {
+    const loadOperator = jest.fn();
+    const packaged = createProgram({
+      loadSystemdUserServiceOperator: loadOperator,
+    });
+    const service = packaged.commands.find(
+      (command) => command.name() === 'service',
+    );
+
+    expect(service).toBeDefined();
+    expect(service?.commands.map((command) => command.name())).toEqual(ACTIONS);
+    expect(
+      service?.commands.every((command) =>
+        command.options.some((option) => option.long === '--json'),
+      ),
+    ).toBe(true);
+    expect(
+      sourceOpsCommand.commands.map((command) => command.name()),
+    ).not.toContain('service');
+    expect(packaged.helpInformation()).toContain('service');
+    expect(service?.helpInformation()).toContain('install');
+    expect(service?.helpInformation()).toContain('converge');
+    expect(service?.helpInformation()).toContain('update');
+    expect(service?.helpInformation()).toContain('rollback');
+    expect(service?.helpInformation()).toContain('recover');
+    expect(service?.helpInformation()).toContain('prune');
+    expect(service?.helpInformation()).toContain('purge');
+    expect(service?.helpInformation()).toContain('uninstall');
+    expect(
+      service?.commands
+        .find((command) => command.name() === 'purge')
+        ?.helpInformation(),
+    ).toContain('--confirm-data-loss <app-id>');
+    expect(loadOperator).not.toHaveBeenCalled();
+  });
+
+  it.each(ACTIONS)(
+    'delegates service %s and writes exactly one JSON object',
+    async (action) => {
+      const operator = makeOperator();
+      const loadOperator = jest.fn(async () => operator);
+      const json = jest.fn();
+      const line = jest.fn();
+      const failure = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator,
+        output: { json, line, failure },
+        processRef,
+      });
+
+      await command.parseAsync([
+        'node',
+        'service',
+        action,
+        ...(action === 'purge' ? ['--confirm-data-loss', 'service-demo'] : []),
+        '--json',
+      ]);
+
+      expect(loadOperator).toHaveBeenCalledTimes(1);
+      expect(operator[action]).toHaveBeenCalledTimes(1);
+      if (action === 'purge') {
+        expect(operator.purge).toHaveBeenCalledWith({
+          confirmation: 'service-demo',
+        });
+      } else {
+        expect(operator[action]).toHaveBeenCalledWith();
+      }
+      for (const otherAction of ACTIONS.filter((name) => name !== action)) {
+        expect(operator[otherAction]).not.toHaveBeenCalled();
+      }
+      expect(json).toHaveBeenCalledTimes(1);
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining(
+          action === 'status'
+            ? {
+                schemaVersion: 3,
+                kind: 'wharfie.service.status',
+                appId: 'service-demo',
+                health: 'healthy',
+                desiredConvergence: makeDesiredConvergence(),
+              }
+            : action === 'prune'
+              ? {
+                  schemaVersion: 1,
+                  kind: 'wharfie.service.release-prune',
+                  action: 'prune',
+                  appId: 'service-demo',
+                  removedCount: 1,
+                }
+              : { action, appId: 'service-demo' },
+        ),
+      );
+      expect(line).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(processRef.exitCode).toBeUndefined();
+    },
+  );
+
+  it('writes a concise human status line', async () => {
+    const operator = makeOperator();
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'status']);
+
+    expect(line).toHaveBeenCalledTimes(1);
+    expect(line).toHaveBeenCalledWith(
+      'status: healthy; wiring: managed (service-demo)',
+    );
+  });
+
+  it('writes concise human release-prune summaries', async () => {
+    const operator = makeOperator();
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'prune']);
+    expect(line).toHaveBeenLastCalledWith(
+      'prune: removed 1 unreferenced release (123 logical artifact bytes) (service-demo)',
+    );
+
+    operator.prune.mockResolvedValue(
+      makePrune({
+        resumedPruneCount: 1,
+        recoveredStagingCount: 2,
+      }),
+    );
+    await command.parseAsync(['node', 'service', 'prune']);
+    expect(line).toHaveBeenLastCalledWith(
+      'prune: removed 1 unreferenced release (123 logical artifact bytes); resumed 1 interrupted release deletion; recovered 2 interrupted staging directories (service-demo)',
+    );
+
+    operator.prune.mockResolvedValue(
+      makePrune({
+        outcome: 'nothing-to-prune',
+        scannedReleaseCount: 1,
+        removed: [],
+        removedCount: 0,
+        removedArtifactBytes: 0,
+      }),
+    );
+    await command.parseAsync(['node', 'service', 'prune']);
+    expect(line).toHaveBeenLastCalledWith(
+      'prune: nothing to prune (service-demo)',
+    );
+  });
+
+  it('writes explicit human data-purge summaries', async () => {
+    const operator = makeOperator();
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync([
+      'node',
+      'service',
+      'purge',
+      '--confirm-data-loss',
+      'service-demo',
+    ]);
+    expect(line).toHaveBeenLastCalledWith(
+      'purge: permanently removed releases and durable state (service-demo)',
+    );
+
+    operator.purge.mockResolvedValue(
+      makeResult('purge', { outcome: 'already-purged' }),
+    );
+    await command.parseAsync([
+      'node',
+      'service',
+      'purge',
+      '--confirm-data-loss',
+      'service-demo',
+    ]);
+    expect(line).toHaveBeenLastCalledWith(
+      'purge: application data already absent (service-demo)',
+    );
+  });
+
+  it('fails closed on malformed release-prune results', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => makePrune({ removedArtifactBytes: 122 }),
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schemaVersion: 1,
+        kind: 'wharfie.service.error',
+        action: 'prune',
+      }),
+    );
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('makes orphan cleanup actionable in human status output', async () => {
+    const operator = makeOperator();
+    operator.status.mockResolvedValue(
+      makeStatus({
+        health: 'degraded',
+        installation: { state: 'absent' },
+        systemd: { activeState: 'active' },
+        wiring: {
+          state: 'orphaned',
+          unitFile: 'managed',
+          selection: 'absent',
+          effectiveUnit: 'managed',
+          cleanupPending: false,
+        },
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'unknown',
+          basis: null,
+        }),
+      }),
+    );
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'status']);
+
+    expect(line).toHaveBeenCalledWith(
+      'status: degraded; wiring: orphaned; run service uninstall (service-demo)',
+    );
+  });
+
+  it('makes an in-flight activation actionable in human status output', async () => {
+    const operator = makeOperator();
+    operator.status.mockResolvedValue(
+      makeStatus({
+        health: 'degraded',
+        activation: { phase: 'QUIESCING', action: 'update' },
+        wiring: {
+          state: 'managed',
+          unitFile: 'managed',
+          selection: 'managed',
+          effectiveUnit: 'managed',
+          cleanupPending: false,
+        },
+        desiredConvergence: makeDesiredConvergence({
+          basis: 'durable-change',
+        }),
+      }),
+    );
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'status']);
+
+    expect(line).toHaveBeenCalledWith(
+      'status: degraded; wiring: managed; activation: QUIESCING; run service recover (service-demo)',
+    );
+  });
+
+  it('prioritizes activation recovery over orphan cleanup guidance', async () => {
+    const operator = makeOperator();
+    operator.status.mockResolvedValue(
+      makeStatus({
+        health: 'degraded',
+        activation: { phase: 'SELECTED', action: 'update' },
+        wiring: {
+          state: 'orphaned',
+          unitFile: 'managed',
+          selection: 'absent',
+          effectiveUnit: 'managed',
+          cleanupPending: false,
+        },
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'unknown',
+          basis: null,
+        }),
+      }),
+    );
+    const line = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'status']);
+
+    expect(line).toHaveBeenCalledWith(
+      'status: degraded; wiring: orphaned; activation: SELECTED; run service recover (service-demo)',
+    );
+  });
+
+  it.each([
+    ['authorized', 'physical-absence'],
+    ['authorized', 'durable-install'],
+    ['authorized', 'durable-change'],
+    ['authorized', 'durable-active'],
+    ['conflict', null],
+    ['unknown', null],
+  ])(
+    'accepts status V3 desired convergence %s with %s basis',
+    async (disposition, basis) => {
+      const status = makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition,
+          basis,
+        }),
+      });
+      const json = jest.fn();
+      const failure = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => ({
+          ...makeOperator(),
+          status: async () => status,
+        }),
+        output: { json, failure },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', 'status', '--json']);
+
+      expect(json).toHaveBeenCalledWith(status);
+      expect(failure).not.toHaveBeenCalled();
+      expect(processRef.exitCode).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ['legacy status version', makeStatus({ schemaVersion: 2 })],
+    ['missing proof', withoutField(makeStatus(), 'desiredConvergence')],
+    ['null proof', makeStatus({ desiredConvergence: null })],
+    [
+      'proof with an extra key',
+      makeStatus({
+        desiredConvergence: {
+          ...makeDesiredConvergence(),
+          command: 'forged',
+        },
+      }),
+    ],
+    [
+      'proof without a basis',
+      makeStatus({
+        desiredConvergence: withoutField(makeDesiredConvergence(), 'basis'),
+      }),
+    ],
+    [
+      'unsupported proof version',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ schemaVersion: 2 }),
+      }),
+    ],
+    [
+      'unsupported proof kind',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          kind: 'wharfie.service.other',
+        }),
+      }),
+    ],
+    [
+      'proof app mismatch',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ appId: 'other-app' }),
+      }),
+    ],
+    [
+      'proof unit mismatch',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          unit: 'wharfie-other-app.service',
+        }),
+      }),
+    ],
+    ['missing outer unit', withoutField(makeStatus(), 'unit')],
+    [
+      'desired release with an extra key',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: {
+            artifactId: STATUS_ARTIFACT_ID,
+            revisionId: STATUS_REVISION_ID,
+            extra: true,
+          },
+        }),
+      }),
+    ],
+    [
+      'desired release without a revision',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: { artifactId: STATUS_ARTIFACT_ID },
+        }),
+      }),
+    ],
+    [
+      'noncanonical desired artifact',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: {
+            artifactId: 'waf1_not-canonical',
+            revisionId: STATUS_REVISION_ID,
+          },
+        }),
+      }),
+    ],
+    [
+      'noncanonical desired revision',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          desired: {
+            artifactId: STATUS_ARTIFACT_ID,
+            revisionId: 'wrv1_not-canonical',
+          },
+        }),
+      }),
+    ],
+    [
+      'unsupported disposition',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'ready',
+        }),
+      }),
+    ],
+    [
+      'authorized null basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ basis: null }),
+      }),
+    ],
+    [
+      'authorized unsupported basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({ basis: 'durable-other' }),
+      }),
+    ],
+    [
+      'conflict with an authorized basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'conflict',
+          basis: 'durable-active',
+        }),
+      }),
+    ],
+    [
+      'unknown with an authorized basis',
+      makeStatus({
+        desiredConvergence: makeDesiredConvergence({
+          disposition: 'unknown',
+          basis: 'physical-absence',
+        }),
+      }),
+    ],
+  ])('rejects status V3 with %s', async (_label, status) => {
+    const json = jest.fn();
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        status: async () => status,
+      }),
+      output: { json, failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'status', '--json']);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schemaVersion: 1,
+        kind: 'wharfie.service.error',
+        action: 'status',
+      }),
+    );
+    expect(failure).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it.each(HUMAN_ACTIVATION_CASES)(
+    'writes an actionable human %s result for %s activation',
+    async (action, requestStatus, outcome, message) => {
+      const operator = makeOperator();
+      operator[action].mockResolvedValue(
+        makeResult(action, { requestStatus, outcome }),
+      );
+      const line = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => operator,
+        output: { line },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', action]);
+
+      expect(line).toHaveBeenCalledWith(message);
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
+
+  it('does not suggest recovery alone for incompatible first-install work', async () => {
+    const operator = makeOperator();
+    operator.install.mockResolvedValue(
+      makeResult('install', {
+        requestStatus: 'pending',
+        outcome: 'in-flight',
+        reason: 'incompatible-durable-work',
+        health: 'degraded',
+        activeArtifactId: null,
+        activeRevisionId: null,
+      }),
+    );
+    const line = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install']);
+
+    expect(line).toHaveBeenCalledWith(
+      'install: in-flight; request pending; settle incompatible durable work, then run service recover; or install its matching revision (service-demo)',
+    );
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('accepts a transient starting health in an activation receipt', async () => {
+    const operator = makeOperator();
+    operator.update.mockResolvedValue(
+      makeResult('update', { health: 'starting' }),
+    );
+    const line = jest.fn();
+    const failure = jest.fn();
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line, failure },
+      processRef: { exitCode: undefined },
+    });
+
+    await command.parseAsync(['node', 'service', 'update']);
+
+    expect(line).toHaveBeenCalledWith('update: target-active (service-demo)');
+    expect(failure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['source-retained', 'recover: source retained (service-demo)'],
+    ['source-restored', 'recover: source restored (service-demo)'],
+    ['absent', 'recover: absent (service-demo)'],
+  ])('accepts fulfilled recovery settlement %s', async (outcome, message) => {
+    const operator = makeOperator();
+    operator.recover.mockResolvedValue(
+      makeResult('recover', {
+        outcome,
+        ...(outcome === 'absent'
+          ? {
+              health: 'absent',
+              activeArtifactId: null,
+              activeRevisionId: null,
+              rollbackArtifactId: null,
+              rollbackRevisionId: null,
+            }
+          : {}),
+      }),
+    );
+    const line = jest.fn();
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line, failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'recover']);
+
+    expect(line).toHaveBeenCalledWith(message);
+    expect(failure).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBeUndefined();
+  });
+
+  it.each(JSON_NONFULFILLED_CASES)(
+    'emits a safe %s %s receipt as JSON and marks the request unsuccessful',
+    async (action, requestStatus, outcome, overrides) => {
+      const operator = makeOperator();
+      operator[action].mockResolvedValue(
+        makeResult(action, { requestStatus, outcome, ...overrides }),
+      );
+      const json = jest.fn();
+      const failure = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => operator,
+        output: { json, failure },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', action, '--json']);
+
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({ action, requestStatus, outcome }),
+      );
+      expect(failure).not.toHaveBeenCalled();
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
+
+  it.each([
+    [
+      'absent settlement',
+      {
+        outcome: 'absent',
+        health: 'absent',
+        activeArtifactId: null,
+        activeRevisionId: null,
+      },
+    ],
+    ['degraded target', { health: 'degraded' }],
+    ['unproven target', { activeArtifactId: null, activeRevisionId: null }],
+  ])('rejects fulfilled converge with %s', async (_label, overrides) => {
+    const operator = makeOperator();
+    operator.converge.mockResolvedValue(makeResult('converge', overrides));
+    const line = jest.fn();
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => operator,
+      output: { line, failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge']);
+
+    expect(line).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      message: expect.stringMatching(/invalid receipt/),
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it.each([
+    ['status', { schemaVersion: 1, kind: 'wharfie.service.result' }],
+    ['start', makeResult('stop')],
+    ['update', withoutField(makeResult('update'), 'requestStatus')],
+    ['update', makeResult('update', { requestStatus: 'waiting' })],
+    ['update', withoutField(makeResult('update'), 'health')],
+    ['update', makeResult('update', { health: 'unknown' })],
+    ['update', makeResult('update', { outcome: 'installed' })],
+    ['update', makeResult('update', { settledOutcome: 'target-active' })],
+    [
+      'update',
+      makeResult('update', {
+        requestStatus: 'pending',
+        outcome: 'target-active',
+      }),
+    ],
+    [
+      'update',
+      makeResult('update', {
+        requestStatus: 'refused',
+        outcome: 'source-restored',
+      }),
+    ],
+    [
+      'rollback',
+      makeResult('rollback', {
+        requestStatus: 'failed',
+        outcome: 'source-retained',
+      }),
+    ],
+    [
+      'recover',
+      makeResult('recover', {
+        requestStatus: 'fulfilled',
+        outcome: 'in-flight',
+      }),
+    ],
+    [
+      'start',
+      makeResult('start', {
+        requestStatus: 'pending',
+        outcome: 'started',
+      }),
+    ],
+    ['start', makeResult('start', { outcome: 'stopped' })],
+    ['stop', makeResult('stop', { health: 'starting' })],
+    ['purge', makeResult('purge', { health: 'healthy' })],
+    ['purge', makeResult('purge', { activeArtifactId: 'still-present' })],
+    ['update', withoutField(makeResult('update'), 'activeArtifactId')],
+    ['update', makeResult('update', { activeArtifactId: null })],
+    ['update', makeResult('update', { activeArtifactId: 42 })],
+    ['rollback', makeResult('rollback', { rollbackRevisionId: null })],
+    ['rollback', makeResult('rollback', { rollbackArtifactId: null })],
+    ['rollback', makeResult('rollback', { rollbackArtifactId: '' })],
+  ])('fails closed on a malformed %s receipt', async (action, receipt) => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        [action]: async () => receipt,
+      }),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', action]);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      message: expect.stringMatching(
+        action === 'purge' ? /purge failed/ : /invalid receipt/,
+      ),
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('prints recovery guidance only for a tagged in-flight activation JSON error', async () => {
+    const failure = jest.fn();
+    const json = jest.fn();
+    const line = jest.fn();
+    const processRef = { exitCode: undefined };
+    const activationError = Object.assign(
+      new Error('systemd user manager is unavailable\nretry required'),
+      {
+        code: 'systemd-user-service-activation-recovery-required',
+        remediation: 'Run service recover before retrying activation.',
+        secret: 'must-not-appear',
+      },
+    );
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw activationError;
+        },
+      }),
+      output: { failure, json, line },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install', '--json']);
+
+    expect(json).toHaveBeenCalledTimes(1);
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'install',
+      code: 'systemd-user-service-activation-recovery-required',
+      message: 'systemd user manager is unavailable retry required',
+      remediation: 'Run service recover before retrying activation.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(
+      'must-not-appear',
+    );
+    expect(failure).not.toHaveBeenCalled();
+    expect(line).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves only exact retry guidance for interrupted release pruning', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => {
+          throw Object.assign(
+            new Error("prune interrupted at '/private/release'\nafter rename"),
+            {
+              code: 'systemd-user-service-prune-incomplete',
+              remediation: 'Retry service prune from the exact selected SEA.',
+              secretPath: '/private/release',
+            },
+          );
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'prune',
+      code: 'systemd-user-service-prune-incomplete',
+      message:
+        'Systemd user-service release pruning was interrupted and is safe to retry.',
+      remediation: 'Retry service prune from the exact selected SEA.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(
+      '/private/release',
+    );
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves exact install-or-converge guidance for missing prune authority', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const remediation =
+      'Run service install or service converge from the exact selected SEA before retrying service prune.';
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => {
+          throw Object.assign(new Error('activation record absent'), {
+            code: 'systemd-user-service-prune-state-conflict',
+            remediation,
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'prune',
+      code: 'systemd-user-service-prune-state-conflict',
+      message:
+        'Service prune requires the exact selected SEA and coherent service state.',
+      remediation,
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('replaces untagged prune failures with a path-free public message', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        prune: async () => {
+          throw new Error(
+            "ENOENT: no such file or directory, open '/private/release/app'",
+          );
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'prune', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'prune',
+      code: 'systemd-user-service-operation-failed',
+      message: 'Systemd user service prune failed.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('/private');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves only exact retry guidance for interrupted data purge', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        purge: async () => {
+          throw Object.assign(
+            new Error(
+              "purge interrupted at '/private/application'\nafter rename",
+            ),
+            {
+              code: 'systemd-user-service-purge-incomplete',
+              remediation:
+                'Retry service purge with the same --confirm-data-loss application ID.',
+              secretPath: '/private/application',
+            },
+          );
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync([
+      'node',
+      'service',
+      'purge',
+      '--confirm-data-loss',
+      'service-demo',
+      '--json',
+    ]);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'purge',
+      code: 'systemd-user-service-purge-incomplete',
+      message:
+        'Systemd user-service purge was interrupted and is safe to retry.',
+      remediation:
+        'Retry service purge with the same --confirm-data-loss application ID.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('/private');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('passes missing purge confirmation to the safe manager boundary', async () => {
+    const json = jest.fn();
+    const purge = jest.fn(
+      async (
+        /** @type {Record<string, any> | undefined} */ _input = undefined,
+      ) => {
+        throw Object.assign(new Error('embedded app ID is service-demo'), {
+          code: 'systemd-user-service-purge-confirmation-required',
+          remediation:
+            'Repeat the embedded application ID with --confirm-data-loss.',
+        });
+      },
+    );
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({ ...makeOperator(), purge }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'purge', '--json']);
+
+    expect(purge).toHaveBeenCalledWith({ confirmation: undefined });
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'purge',
+      code: 'systemd-user-service-purge-confirmation-required',
+      message:
+        'Systemd user-service purge requires exact data-loss confirmation.',
+      remediation:
+        'Repeat the embedded application ID with --confirm-data-loss.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('prints a safe tagged human activation error with recovery guidance', async () => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        update: async () => {
+          throw Object.assign(new Error('activation interrupted\nmid-flight'), {
+            code: 'systemd-user-service-activation-recovery-required',
+            remediation: 'Run service recover before retrying activation.',
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'update']);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      message:
+        'activation interrupted mid-flight Run service recover before retrying activation.',
+    });
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('secret');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('directs an ambiguous desired-target operation back through service converge', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('desired activation interrupted'), {
+            code: 'systemd-user-service-activation-recovery-required',
+            remediation: 'Retry service converge from this exact desired SEA.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-activation-recovery-required',
+      message: 'desired activation interrupted',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('directs interrupted desired-target repair back through service converge', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('desired repair interrupted'), {
+            code: 'systemd-user-service-active-reinstall-recovery-required',
+            remediation: 'Retry service converge from this exact desired SEA.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      message: 'desired repair interrupted',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('requires direction-neutral recovery before convergence can cross a rollback', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('rollback remains in flight'), {
+            code: 'systemd-user-service-converge-rollback-recovery-required',
+            remediation:
+              'Run service recover before retrying desired-target convergence.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-converge-rollback-recovery-required',
+      message: 'rollback remains in flight',
+      remediation:
+        'Run service recover before retrying desired-target convergence.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('preserves retry guidance when exact convergence proof is lost', async () => {
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        converge: async () => {
+          throw Object.assign(new Error('exact health proof was lost'), {
+            code: 'systemd-user-service-converge-proof-required',
+            remediation: 'Retry service converge from this exact desired SEA.',
+          });
+        },
+      }),
+      output: { json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'converge', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'converge',
+      code: 'systemd-user-service-converge-proof-required',
+      message: 'exact health proof was lost',
+      remediation: 'Retry service converge from this exact desired SEA.',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('prints exact active-reinstall repair guidance as JSON', async () => {
+    const failure = jest.fn();
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('reinstall interrupted\nmid-repair'), {
+            code: 'systemd-user-service-active-reinstall-recovery-required',
+            remediation:
+              'Run service install again from the exact selected SEA to resume repair.',
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure, json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'install',
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      message: 'reinstall interrupted mid-repair',
+      remediation:
+        'Run service install again from the exact selected SEA to resume repair.',
+    });
+    expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(
+      'must-not-appear',
+    );
+    expect(failure).not.toHaveBeenCalled();
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('prints safe active-reinstall repair guidance for humans', async () => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('reinstall interrupted\nmid-repair'), {
+            code: 'systemd-user-service-active-reinstall-recovery-required',
+            remediation:
+              'Run service install again from the exact selected SEA to resume repair.',
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install']);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      code: 'systemd-user-service-active-reinstall-recovery-required',
+      message:
+        'reinstall interrupted mid-repair Run service install again from the exact selected SEA to resume repair.',
+    });
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('secret');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('does not recommend recovery for an activation preflight failure', async () => {
+    const failure = jest.fn();
+    const json = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('lingering is required'), {
+            code: 'systemd-user-service-preflight-failed',
+          });
+        },
+      }),
+      output: { failure, json },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install', '--json']);
+
+    expect(json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.service.error',
+      action: 'install',
+      code: 'systemd-user-service-preflight-failed',
+      message: 'lingering is required',
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it('sanitizes an untagged human activation preflight failure', async () => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({
+        ...makeOperator(),
+        install: async () => {
+          throw Object.assign(new Error('lingering\nis\u001brequired'), {
+            code: 'systemd-user-service-preflight-failed',
+            secret: 'must-not-appear',
+          });
+        },
+      }),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'install']);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      code: 'systemd-user-service-preflight-failed',
+      message: 'lingering is required',
+    });
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('remediation');
+    expect(failure.mock.calls[0][0]).not.toHaveProperty('secret');
+    expect(processRef.exitCode).toBe(1);
+  });
+
+  it.each([
+    [
+      'missing activation',
+      'systemd-user-service-activation-recovery-required',
+      undefined,
+    ],
+    [
+      'wrong activation',
+      'systemd-user-service-activation-recovery-required',
+      'Retry service install or service converge from the exact selected SEA.',
+    ],
+    [
+      'missing active-reinstall',
+      'systemd-user-service-active-reinstall-recovery-required',
+      undefined,
+    ],
+    [
+      'wrong active-reinstall',
+      'systemd-user-service-active-reinstall-recovery-required',
+      'Run service recover before retrying activation.',
+    ],
+    [
+      'rollback-only convergence',
+      'systemd-user-service-converge-rollback-recovery-required',
+      'Run service recover before retrying desired-target convergence.',
+    ],
+    [
+      'proof-only convergence',
+      'systemd-user-service-converge-proof-required',
+      'Retry service converge from this exact desired SEA.',
+    ],
+  ])(
+    'does not trust %s remediation on a recovery-coded error',
+    async (_label, code, remediation) => {
+      const json = jest.fn();
+      const processRef = { exitCode: undefined };
+      const command = createSystemdUserServiceCommand({
+        loadOperator: async () => ({
+          ...makeOperator(),
+          update: async () => {
+            const error = Object.assign(new Error('activation interrupted'), {
+              code,
+            });
+            if (remediation !== undefined) {
+              Object.assign(error, { remediation });
+            }
+            throw error;
+          },
+        }),
+        output: { json },
+        processRef,
+      });
+
+      await command.parseAsync(['node', 'service', 'update', '--json']);
+
+      expect(json).toHaveBeenCalledWith({
+        schemaVersion: 1,
+        kind: 'wharfie.service.error',
+        action: 'update',
+        code,
+        message: 'activation interrupted',
+      });
+      expect(processRef.exitCode).toBe(1);
+    },
+  );
+
+  it('fails closed when the implementation omits the requested method', async () => {
+    const failure = jest.fn();
+    const processRef = { exitCode: undefined };
+    const command = createSystemdUserServiceCommand({
+      loadOperator: async () => ({}),
+      output: { failure },
+      processRef,
+    });
+
+    await command.parseAsync(['node', 'service', 'restart']);
+
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(failure.mock.calls[0][0]).toMatchObject({
+      message: expect.stringMatching(/does not implement restart\(\)/),
+    });
+    expect(processRef.exitCode).toBe(1);
+  });
+});

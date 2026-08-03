@@ -1,111 +1,83 @@
-# Function + ActorSystem demos
+# Wharfie application demos
 
-These are small, drop-in examples for Wharfie's in-process `Function`,
-`ActorSystem`, and `wharfie app` CLI APIs.
+These small applications exercise the strict schemaVersion 4 authoring model:
+a developer-owned CLI, named activities, finite workflows, revision-bound UTC
+schedules, strict JSON input, and exact package targets. They intentionally do
+not expose Wharfie's internal `ActorSystem` or legacy resource-injection
+implementation as an authoring API.
 
-## Included demos
+## Included handlers
 
-### `functions/echo-event.js`
+### `apps/hello-world/activities.js`
 
-The smallest possible `Function` handler.
+The smallest activity handler. It accepts JSON `input`, reads immutable caller
+metadata from `runtime.caller.metadata`, and returns a JSON result.
 
-- takes an input event
-- reads a simple value from `context`
-- returns normalized output
+## Included applications
 
-### `functions/hello-resources.js`
+The product golden path has moved out of scratch space to the supported
+[`examples/steady-file`](../../examples/steady-file) starter.
 
-A resource-backed `Function` handler.
+### `apps/hello-world/wharfie.app.js`
 
-- writes and reads a DB record
-- sends and receives a queue message
-- writes and reads an object-storage object
-- demonstrates `context.resources.{db, queue, objectStorage}`
+The smallest manifest-syntax example. It defines a normal CLI, one named
+activity, one finite workflow, an hourly workflow schedule, and exact SEA
+targets.
 
-### `functions/inspect-context.js`
+### `apps/kitchen-sink/wharfie.app.js`
 
-A tiny `Function` handler that reports what arrived in `context`.
-
-- useful for showing how `ActorSystem.createContext()` merges system resources
-  with caller-provided overrides
-
-### `actor-systems/hello-world/wharfie.app.js`
-
-A complete `ActorSystem` app that wires together the function demos, vanilla
-runtime resources, and a packageable target for the current Node/platform.
-
-### `actor-systems/context-override/wharfie.app.js`
-
-A minimal `ActorSystem` app that demonstrates how caller-provided
-`context.resources` values are merged on top of system resources.
-
-### `actor-systems/kitchen-sink/wharfie.app.js`
-
-A supported parity fixture for the older `scratch/test.js` workflow.
-
-- uses multiple build targets
-- points at the real `scratch/functions/start.js` entrypoint
-- defines top-level `ActorSystem` resources
-- defines function-scoped runtime resources
-- carries heavyweight/native externals metadata for packaging-oriented flows
-
-Use this when you want a realistic inspection/load/invoke example. Keep using
-`hello-world` and `context-override` when you want the smallest possible demo.
-
-Packaged SEA artifacts now embed the compiled app manifest. Once you package an
-app, inspect that embedded manifest from the artifact itself with:
-
-```bash
-./dist/<artifact-name> ctl manifest
-```
-
-Packaged artifacts can also manage Linux/systemd releases without the source
-tree. The first-class artifact-side flow is:
-
-```bash
-./dist/<artifact-name> infra deploy --dry-run --json
-./dist/<artifact-name> infra status --json
-./dist/<artifact-name> infra logs --dry-run --json
-./dist/<artifact-name> infra rollback --dry-run --json
-```
+A heavier packaging fixture with multiple targets, a scheduled workflow, and
+an exact LMDB native package pin. Use it to exercise a target-specific
+dependency; use `hello-world` for the normal quick path.
 
 ## CLI usage
 
-From the repo root:
+From the repository root:
 
 ```bash
-node ./bin/wharfie app manifest ./scratch/examples/actor-systems/hello-world
+node ./examples/steady-file/local.js /absolute/path/to/artifact
+
+node ./bin/wharfie app manifest ./examples/steady-file
+
+node ./bin/wharfie ops start \
+  --dir ./examples/steady-file \
+  --json \
+  -- /absolute/path/to/artifact
+
+node ./bin/wharfie ops worker \
+  --dir ./examples/steady-file
+
+node ./bin/wharfie app manifest ./scratch/examples/apps/hello-world
 
 node ./bin/wharfie app run echo-event \
-  --dir ./scratch/examples/actor-systems/hello-world \
-  --event '{"who":"wharfie"}'
+  --dir ./scratch/examples/apps/hello-world \
+  --input '{"who":"wharfie"}'
 
-node ./bin/wharfie app run hello-resources \
-  --dir ./scratch/examples/actor-systems/hello-world \
-  --event '{"who":"wharfie"}'
+node ./bin/wharfie app package ./scratch/examples/apps/hello-world
 
-node ./bin/wharfie app package \
-  ./scratch/examples/actor-systems/hello-world
-
-node ./bin/wharfie app manifest \
-  ./scratch/examples/actor-systems/kitchen-sink
+node ./bin/wharfie app manifest ./scratch/examples/apps/kitchen-sink
 
 node ./bin/wharfie app run start \
-  --dir ./scratch/examples/actor-systems/kitchen-sink \
-  --event '{"who":"wharfie","iterations":32}'
+  --dir ./scratch/examples/apps/kitchen-sink \
+  --input '{"who":"wharfie","iterations":32}'
 ```
 
-`app package` copies built artifacts into `<app dir>/dist` by default. The tiny
-`hello-world` and `context-override` demos intentionally use a single host
-target so they stay immediately packageable without editing app source. The
-`kitchen-sink` fixture intentionally keeps multiple targets and heavyweight
-external metadata so it mirrors `scratch/test.js` more closely.
+The `--` separator marks the arguments owned by the application. `start`
+generates a fresh idempotency key when it is omitted and returns that key in
+the receipt; supply `--idempotency-key <stable-key>` when admission must be
+safe to retry after a lost response. The expert
+`--workflow <workflow-id> --input <json>` form bypasses the adapter. Starting
+work and running the resident worker remain separate operations.
 
-## Optional test coverage
+`app package` writes artifacts to `<app dir>/dist` by default. A packaged
+artifact exposes its embedded canonical manifest through:
 
-`test/cli/app/examples.test.js` exercises the demos through the existing
-`Function`, `ActorSystem`, and `loadApp()` APIs. The heavier host-native
-externals smoke test is opt-in so default CI stays fast and hermetic:
+```bash
+./dist/<artifact-name> wharfie manifest
+```
+
+The native-externals smoke test is opt-in so normal CI remains fast and
+hermetic:
 
 ```bash
 WHARFIE_RUN_NATIVE_EXTERNALS=1 TZ=UTC \

@@ -2,14 +2,99 @@ import { promises as fsp, existsSync, readFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { createId } from '../../id.js';
 import paths from '../../paths.js';
-import { CONDITION_TYPE } from '../base.js';
-import { assertTightQuery } from '../utils.js';
+import {
+  CONDITION_TYPE,
+  DB_ADAPTER_NAMES,
+  brandDBClient,
+  recordMatchesCondition,
+  transactionRequestKey,
+  transactionRequestUpdates,
+  validateTransactionWrite,
+} from '../base.js';
+import {
+  assertPortablePageAscii,
+  assertTightQuery,
+  assertTightQueryPage,
+  comparePortablePageKeys,
+} from '../utils.js';
 
 const NO_SORT = '__no_sort__';
+
+export const VANILLA_DATABASE_INTEGRITY_ERROR_CODE =
+  'vanilla-database-integrity-error';
+
+/**
+ * An existing vanilla snapshot could not be parsed as the exact persisted
+ * database layout. Opening fails before a client exists so neither read-only
+ * nor writable callers can replace the retained bytes.
+ */
+export class VanillaDatabaseIntegrityError extends Error {
+  /**
+   * @param {string} dbFilePath - Existing snapshot path.
+   * @param {{cause?: unknown}} [options] - Local parse or validation cause.
+   */
+  constructor(dbFilePath, options = {}) {
+    super(
+      `Vanilla database could not load existing snapshot '${dbFilePath}': malformed JSON or invalid persisted layout.`,
+      options,
+    );
+    this.name = 'VanillaDatabaseIntegrityError';
+    this.code = VANILLA_DATABASE_INTEGRITY_ERROR_CODE;
+  }
+}
+
+/**
+ * Require one map in the persisted JSON layout. Values nested inside a record
+ * remain arbitrary JSON; only the maps that give the database its physical
+ * table/key/record structure are constrained here.
+ * @param {unknown} value - Candidate map.
+ * @returns {Record<string, unknown>} - Valid plain JSON object.
+ */
+function requirePlainJsonObject(value) {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    (Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null)
+  ) {
+    throw new TypeError(
+      'Vanilla database persisted layout requires plain JSON object maps.',
+    );
+  }
+  return /** @type {Record<string, unknown>} */ (value);
+}
+
+/**
+ * Validate the complete physical map spine:
+ * database -> table -> primary-key bucket -> sort-key record.
+ *
+ * A record itself must be a plain object because DBClient records are maps.
+ * Its property values may contain any JSON value, including nested arrays,
+ * objects, null, booleans, numbers, and strings.
+ * @param {unknown} value - Parsed snapshot.
+ * @returns {Record<string, Record<string, Record<string, import('../base.js').DBRecord>>>} - Valid database.
+ */
+function validatePersistedDatabase(value) {
+  const database = requirePlainJsonObject(value);
+  for (const tableValue of Object.values(database)) {
+    const table = requirePlainJsonObject(tableValue);
+    for (const primaryBucketValue of Object.values(table)) {
+      const primaryBucket = requirePlainJsonObject(primaryBucketValue);
+      for (const recordValue of Object.values(primaryBucket)) {
+        requirePlainJsonObject(recordValue);
+      }
+    }
+  }
+  return /** @type {Record<string, Record<string, Record<string, import('../base.js').DBRecord>>>} */ (
+    database
+  );
+}
 
 /**
  * @typedef CreateVanillaDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
+ * @property {boolean} [readOnly] - Read an existing snapshot without accepting or persisting writes.
  */
 
 /**
@@ -30,10 +115,20 @@ const NO_SORT = '__no_sort__';
  * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createVanillaDB(options = {}) {
+  const readOnly = options.readOnly === true;
   /**
    * @type {Record<string, Record<string, Record<string, import('../base.js').DBRecord>>>}
    */
   let database = {};
+  /**
+   * The persisted JSON layout has no ordered key primitive. Build a small
+   * in-memory index lazily per live sort-key map and requested prefix so later
+   * cursor pages do not repeatedly materialize and sort an entire partition.
+   * Every mutation drops it; a transaction's cloned table naturally receives
+   * a fresh key.
+   * @type {WeakMap<object, Map<string, Array<{sortKey: string, record: import('../base.js').DBRecord}>>>}
+   */
+  let pageIndexByBucket = new WeakMap();
   const dbFilePath = options.path
     ? join(options.path, 'database.json')
     : join(paths.data, 'database.json');
@@ -42,10 +137,9 @@ export default function createVanillaDB(options = {}) {
   if (existsSync(dbFilePath)) {
     try {
       const data = readFileSync(dbFilePath, 'utf8');
-      database = JSON.parse(data) || {};
-    } catch {
-      // TODO log warning
-      database = {};
+      database = validatePersistedDatabase(JSON.parse(data));
+    } catch (cause) {
+      throw new VanillaDatabaseIntegrityError(dbFilePath, { cause });
     }
   }
 
@@ -59,6 +153,94 @@ export default function createVanillaDB(options = {}) {
   function deepClone(v) {
     if (v === undefined) return /** @type {any} */ (undefined);
     return JSON.parse(JSON.stringify(v));
+  }
+
+  /** @returns {void} - Drops stale in-memory page indexes after a write. */
+  function invalidatePageIndexes() {
+    pageIndexByBucket = new WeakMap();
+  }
+
+  /** @returns {void} - Throws when this client cannot mutate state. */
+  function assertWritable() {
+    if (readOnly) {
+      throw new Error('Vanilla DB client is read-only.');
+    }
+  }
+
+  /**
+   * Read the physical sort-key token and require that its record has not been
+   * corrupted into a different logical key by a direct update.
+   * @param {string} token - Stored sort-key token.
+   * @param {string} propertyName - Requested sort-key field.
+   * @param {import('../base.js').DBRecord} record - Stored record.
+   * @returns {string} - Exact portable sort key.
+   */
+  function assertPageIndexEntry(token, propertyName, record) {
+    const tokenPrefix = `${propertyName}=`;
+    const sortKey = assertPortablePageAscii(
+      token.slice(tokenPrefix.length),
+      'queryPage stored sort key',
+    );
+    if (!record || record[propertyName] !== sortKey) {
+      throw new Error(
+        'queryPage stored record sort key does not match its physical key',
+      );
+    }
+    return sortKey;
+  }
+
+  /**
+   * @param {Record<string, import('../base.js').DBRecord>} skMap - One primary-key bucket.
+   * @param {string} propertyName - Requested sort-key field.
+   * @param {string} prefix - Requested portable sort-key prefix.
+   * @returns {Array<{sortKey: string, record: import('../base.js').DBRecord}>} - Byte-sorted immutable index entries.
+   */
+  function getPageIndex(skMap, propertyName, prefix) {
+    let byProperty = pageIndexByBucket.get(skMap);
+    if (!byProperty) {
+      byProperty = new Map();
+      pageIndexByBucket.set(skMap, byProperty);
+    }
+    const cacheKey = `${propertyName}\u0000${prefix}`;
+    const cached = byProperty.get(cacheKey);
+    if (cached) return cached;
+
+    const tokenPrefix = `${propertyName}=${prefix}`;
+    const built = Object.entries(skMap)
+      .filter(([token]) => token.startsWith(tokenPrefix))
+      .map(([token, record]) => ({
+        sortKey: assertPageIndexEntry(token, propertyName, record),
+        record,
+      }))
+      .sort((left, right) =>
+        comparePortablePageKeys(left.sortKey, right.sortKey),
+      );
+    byProperty.set(cacheKey, built);
+    return built;
+  }
+
+  /**
+   * @param {Array<{sortKey: string}>} entries - Byte-sorted page entries.
+   * @param {string} value - Search key.
+   * @param {boolean} exclusive - Whether equal entries are skipped.
+   * @returns {number} - First matching index.
+   */
+  function findPageIndex(entries, value, exclusive) {
+    let low = 0;
+    let high = entries.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      const comparison = comparePortablePageKeys(
+        entries[middle].sortKey,
+        value,
+      );
+      if (comparison < 0 || (exclusive && comparison === 0)) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low;
   }
 
   /**
@@ -132,30 +314,22 @@ export default function createVanillaDB(options = {}) {
     let cur = record;
     for (let i = 0; i < path.length - 1; i++) {
       const seg = path[i];
-      if (cur[seg] == null || typeof cur[seg] !== 'object') cur[seg] = {};
+      if (
+        !Object.prototype.hasOwnProperty.call(cur, seg) ||
+        cur[seg] === null ||
+        typeof cur[seg] !== 'object' ||
+        Array.isArray(cur[seg])
+      ) {
+        throw new Error(`Invalid update path: ${path.join('.')}`);
+      }
       cur = cur[seg];
     }
-    cur[path[path.length - 1]] = value;
-  }
-
-  /**
-   * @param {import('../base.js').DBRecord} record - record.
-   * @param {import('../base.js').KeyCondition} condition - condition.
-   * @returns {boolean} - Result.
-   */
-  function matchesCondition(record, condition) {
-    const value = record?.[condition.propertyName];
-
-    if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
-      return (
-        typeof value === 'string' &&
-        value.startsWith(String(condition.propertyValue))
-      );
-    }
-    if (condition.conditionType === CONDITION_TYPE.EQUALS) {
-      return value === condition.propertyValue;
-    }
-    throw new Error(`invalid condition type: ${condition.conditionType}`);
+    Object.defineProperty(cur, path[path.length - 1], {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
   }
 
   /**
@@ -205,11 +379,54 @@ export default function createVanillaDB(options = {}) {
 
     let out = candidates;
     if (filters.length) {
-      out = out.filter((r) => filters.every((c) => matchesCondition(r, c)));
+      out = out.filter((r) =>
+        filters.every((c) => recordMatchesCondition(r, c)),
+      );
     }
 
     // immutability: return clones
     return out.map((r) => deepClone(r));
+  }
+
+  /**
+   * Read one bounded lexical page under a primary-key/sort-key prefix. Kept
+   * separate from query() so durable history never depends on slicing an
+   * already materialized partition.
+   * @param {import('../base.js').QueryPageParams} params - Page request.
+   * @returns {import('../base.js').QueryPageReturn} - Bounded page.
+   */
+  async function queryPage(params) {
+    const { pk, sk, limit, startAfter } = assertTightQueryPage(params);
+    const table = database[params.tableName];
+    if (!table) return { items: [] };
+    const pkTok = `${pk.propertyName}=${String(pk.propertyValue)}`;
+    const skMap = table[pkTok];
+    if (!skMap) return { items: [] };
+    const prefix = /** @type {string} */ (sk.propertyValue);
+    const candidates = getPageIndex(skMap, sk.propertyName, prefix);
+    let index =
+      startAfter === undefined
+        ? 0
+        : findPageIndex(candidates, startAfter, true);
+    /** @type {Array<{sortKey: string, record: import('../base.js').DBRecord}>} */
+    const page = [];
+    while (
+      index < candidates.length &&
+      candidates[index].sortKey.startsWith(prefix)
+    ) {
+      if (page.length === limit) break;
+      page.push(candidates[index]);
+      index += 1;
+    }
+    const items = page.map(({ record }) => deepClone(record));
+    return {
+      items,
+      ...(index < candidates.length &&
+      candidates[index].sortKey.startsWith(prefix) &&
+      page.length > 0
+        ? { nextStartAfter: page[page.length - 1].sortKey }
+        : {}),
+    };
   }
 
   /**
@@ -225,6 +442,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').PutReturn} - Result.
    */
   async function put(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
 
     const record = params.record;
@@ -236,6 +454,7 @@ export default function createVanillaDB(options = {}) {
 
     if (!table[pkTok]) table[pkTok] = {};
     table[pkTok][skTok] = deepClone(record);
+    invalidatePageIndexes();
   }
 
   /**
@@ -276,6 +495,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').UpdateReturn} - Result.
    */
   async function update(params) {
+    assertWritable();
     assertSortPair(params);
 
     const table = database[params.tableName];
@@ -291,7 +511,7 @@ export default function createVanillaDB(options = {}) {
 
     if (params.conditions?.length) {
       for (const c of params.conditions) {
-        if (!matchesCondition(existing, c)) {
+        if (!recordMatchesCondition(existing, c)) {
           const err = new Error('ConditionalCheckFailedException');
           err.name = 'ConditionalCheckFailedException';
           throw err;
@@ -319,6 +539,7 @@ export default function createVanillaDB(options = {}) {
     }
 
     table[pkTok][skTok] = next;
+    invalidatePageIndexes();
   }
 
   /**
@@ -327,6 +548,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').RemoveReturn} - Result.
    */
   async function remove(params) {
+    assertWritable();
     assertSortPair(params);
 
     const table = database[params.tableName];
@@ -340,6 +562,7 @@ export default function createVanillaDB(options = {}) {
     if (!table[pkTok]) return;
     delete table[pkTok][skTok];
     if (Object.keys(table[pkTok]).length === 0) delete table[pkTok];
+    invalidatePageIndexes();
   }
 
   /**
@@ -358,6 +581,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').BatchWriteReturn} - Result.
    */
   async function batchWrite(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
 
     const deleteRequests = Array.isArray(params.deleteRequests)
@@ -398,6 +622,104 @@ export default function createVanillaDB(options = {}) {
         if (!table[pkTok]) table[pkTok] = {};
         table[pkTok][skTok] = deepClone(record);
       });
+    invalidatePageIndexes();
+  }
+
+  /**
+   * Atomically condition-check and mutate distinct items in one table.
+   * @param {import('../base.js').TransactionWriteParams} params - params.
+   * @returns {import('../base.js').TransactionWriteReturn} - Result.
+   */
+  async function transactionWrite(params) {
+    assertWritable();
+    const requests = validateTransactionWrite(params);
+    const currentTable = database[params.tableName] || {};
+
+    /**
+     * @param {ReturnType<typeof transactionRequestKey>} key - Exact item key.
+     * @param {Record<string, Record<string, import('../base.js').DBRecord>>} table - Table snapshot.
+     * @returns {import('../base.js').DBRecord | undefined} - Record.
+     */
+    const recordAt = (key, table) => {
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      return table[pkTok]?.[skTok];
+    };
+
+    const groups = /** @type {Array<[string, any[], boolean]>} */ ([
+      ['conditionChecks', requests.conditionChecks, false],
+      ['putRequests', requests.putRequests, true],
+      ['updateRequests', requests.updateRequests, false],
+      ['deleteRequests', requests.deleteRequests, false],
+    ]);
+
+    // Evaluate every condition against the same pre-transaction snapshot.
+    for (const [, group, putRequest] of groups) {
+      for (const request of group) {
+        const key = transactionRequestKey(request, '', putRequest);
+        const existing = recordAt(key, currentTable);
+        if (
+          !(request.conditions || []).every(
+            (/** @type {import('../base.js').KeyCondition} */ condition) =>
+              recordMatchesCondition(existing, condition),
+          )
+        ) {
+          const error = new Error('ConditionalCheckFailedException');
+          error.name = 'ConditionalCheckFailedException';
+          throw error;
+        }
+      }
+    }
+
+    const nextTable = deepClone(currentTable);
+
+    for (const request of requests.deleteRequests) {
+      const key = transactionRequestKey(request, '', false);
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      if (!nextTable[pkTok]) continue;
+      delete nextTable[pkTok][skTok];
+      if (Object.keys(nextTable[pkTok]).length === 0) delete nextTable[pkTok];
+    }
+
+    for (const request of requests.putRequests) {
+      const key = transactionRequestKey(request, '', true);
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      if (!nextTable[pkTok]) nextTable[pkTok] = {};
+      nextTable[pkTok][skTok] = deepClone(request.record);
+    }
+
+    for (const request of requests.updateRequests) {
+      const key = transactionRequestKey(request, '', false);
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      const existing = recordAt(key, nextTable);
+      const next = existing
+        ? deepClone(existing)
+        : {
+            [key.keyName]: key.keyValue,
+            ...(key.sortKeyName ? { [key.sortKeyName]: key.sortKeyValue } : {}),
+          };
+      const updates = transactionRequestUpdates(request);
+      for (const update of updates) {
+        assertNonEmptyPath(update.property);
+        setPath(next, update.property, update.propertyValue);
+      }
+      if (!nextTable[pkTok]) nextTable[pkTok] = {};
+      nextTable[pkTok][skTok] = next;
+    }
+
+    database[params.tableName] = nextTable;
+    invalidatePageIndexes();
   }
 
   /**
@@ -405,6 +727,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').CloseReturn} - Result.
    */
   async function close() {
+    if (readOnly) return;
     const data = JSON.stringify(database);
     await fsp.mkdir(dbDir, { recursive: true });
 
@@ -435,13 +758,18 @@ export default function createVanillaDB(options = {}) {
     }
   }
 
-  return {
-    query,
-    batchWrite,
-    update,
-    put,
-    get,
-    remove,
-    close,
-  };
+  return brandDBClient(
+    {
+      query,
+      queryPage,
+      batchWrite,
+      transactionWrite,
+      update,
+      put,
+      get,
+      remove,
+      close,
+    },
+    DB_ADAPTER_NAMES.VANILLA,
+  );
 }

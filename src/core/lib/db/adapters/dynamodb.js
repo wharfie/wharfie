@@ -7,13 +7,29 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import BaseAWS from '../../aws/base.js';
-import { CONDITION_TYPE } from '../base.js';
-import { assertTightQuery } from '../utils.js';
+import {
+  CONDITION_TYPE,
+  DB_ADAPTER_NAMES,
+  brandDBClient,
+  transactionRequestKey,
+  transactionRequestUpdates,
+  validateTransactionWrite,
+} from '../base.js';
+import {
+  assertPortablePageAscii,
+  assertTightQuery,
+  assertTightQueryPage,
+  comparePortablePageKeys,
+} from '../utils.js';
+
+const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
 
 /**
  * Factory options for creating a DynamoDB wrapper client.
  * @typedef CreateDynamoDBOptions
  * @property {string} [region] AWS region to use. Defaults to `process.env.AWS_REGION`.
+ * @property {boolean} [readOnly] Reject every mutation before contacting DynamoDB.
+ * @property {import('@aws-sdk/client-dynamodb').DynamoDBClientConfig['credentials']} [credentials] Explicit credentials or credential provider. Defaults to the ordinary Node provider chain.
  */
 
 /**
@@ -27,10 +43,11 @@ import { assertTightQuery } from '../utils.js';
  * @param {CreateDynamoDBOptions} [options] - options.
  * @returns {import('../base.js').DBClient} - Result.
  */
-export default function createDynamoDB(
-  { region } = { region: process.env.AWS_REGION },
-) {
-  const credentials = fromNodeProviderChain();
+export default function createDynamoDB({
+  region = process.env.AWS_REGION,
+  readOnly = false,
+  credentials = fromNodeProviderChain(),
+} = {}) {
   const docClient = DynamoDBDocument.from(
     new DynamoDB({
       ...BaseAWS.config({
@@ -42,6 +59,13 @@ export default function createDynamoDB(
     { marshallOptions: { removeUndefinedValues: true } },
   );
 
+  /** @returns {void} - Throws when this client cannot mutate state. */
+  function assertWritable() {
+    if (readOnly) {
+      throw new Error('DynamoDB client is read-only.');
+    }
+  }
+
   /**
    * @param {number} attempt 0-based attempt number
    * @param {number} maxSeconds max sleep per attempt
@@ -52,6 +76,17 @@ export default function createDynamoDB(
       Math.random() * Math.min(maxSeconds, 1 * Math.pow(2, attempt)),
     );
     await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  }
+
+  /**
+   * Apply bounded millisecond jitter before retrying an in-flight transaction.
+   * @param {number} attempt 0-based attempt number
+   * @returns {Promise<void>} - Result.
+   */
+  async function sleepTransactionConflictBackoff(attempt) {
+    const maxMilliseconds = Math.min(250, 25 * Math.pow(2, attempt));
+    const milliseconds = 1 + Math.floor(Math.random() * maxMilliseconds);
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 
   /**
@@ -82,6 +117,50 @@ export default function createDynamoDB(
     }
 
     return Key;
+  }
+
+  /**
+   * Compile portable top-level write conditions for a DynamoDB expression.
+   * @param {import('../base.js').KeyCondition[]} [conditions] - conditions.
+   * @param {string} [tokenPrefix] - Token namespace.
+   * @returns {{ ConditionExpression?: string, ExpressionAttributeNames?: Record<string, string>, ExpressionAttributeValues?: Record<string, any> }} - Expression fields.
+   */
+  function compileWriteConditions(conditions = [], tokenPrefix = 'c') {
+    if (conditions.length === 0) return {};
+
+    /** @type {Record<string, string>} */
+    const ExpressionAttributeNames = {};
+    /** @type {Record<string, any>} */
+    const ExpressionAttributeValues = {};
+    const clauses = conditions.map((condition, index) => {
+      const nameToken = `#${tokenPrefix}n${index}`;
+      const valueToken = `:${tokenPrefix}v${index}`;
+      ExpressionAttributeNames[nameToken] = condition.propertyName;
+
+      if (condition.conditionType === CONDITION_TYPE.EXISTS) {
+        return `attribute_exists(${nameToken})`;
+      }
+      if (condition.conditionType === CONDITION_TYPE.NOT_EXISTS) {
+        return `attribute_not_exists(${nameToken})`;
+      }
+
+      ExpressionAttributeValues[valueToken] = condition.propertyValue;
+      if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
+        return `begins_with(${nameToken}, ${valueToken})`;
+      }
+      if (condition.conditionType === CONDITION_TYPE.EQUALS) {
+        return `${nameToken} = ${valueToken}`;
+      }
+      throw new Error(`invalid condition type: ${condition.conditionType}`);
+    });
+
+    return {
+      ConditionExpression: clauses.join(' AND '),
+      ExpressionAttributeNames,
+      ...(Object.keys(ExpressionAttributeValues).length > 0
+        ? { ExpressionAttributeValues }
+        : {}),
+    };
   }
 
   /**
@@ -185,6 +264,182 @@ export default function createDynamoDB(
     return results;
   }
 
+  /**
+   * Validate one DynamoDB page before exposing its records to the portable
+   * cursor layer. DynamoDB orders String keys by UTF-8 bytes; queryPage
+   * deliberately narrows keys to printable ASCII so every adapter can make
+   * that exact ordering promise.
+   * @param {unknown} rawItems - Provider response items.
+   * @param {string} sortKeyName - Requested sort-key field.
+   * @param {string} sortPrefix - Requested sort-key prefix.
+   * @returns {string[]} - Exact ordered sort keys for the returned items.
+   */
+  function validateDynamoPageItems(rawItems, sortKeyName, sortPrefix) {
+    if (!Array.isArray(rawItems)) {
+      throw new Error('DynamoDB queryPage returned non-array items');
+    }
+    /** @type {string[]} */
+    const sortKeys = [];
+    for (const item of rawItems) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('DynamoDB queryPage returned an invalid item');
+      }
+      const sortKey = assertPortablePageAscii(
+        item[sortKeyName],
+        'DynamoDB queryPage item sort key',
+      );
+      if (!sortKey.startsWith(sortPrefix)) {
+        throw new Error(
+          'DynamoDB queryPage returned an item outside its requested sort prefix',
+        );
+      }
+      if (
+        sortKeys.length > 0 &&
+        comparePortablePageKeys(sortKeys[sortKeys.length - 1], sortKey) >= 0
+      ) {
+        throw new Error('DynamoDB queryPage returned unordered sort keys');
+      }
+      sortKeys.push(sortKey);
+    }
+    return sortKeys;
+  }
+
+  /**
+   * Validate that a DynamoDB continuation is usable for this exact portable
+   * request. A LastEvaluatedKey is provider state, not a public cursor, and
+   * must never be silently treated as an end-of-history signal when malformed.
+   * @param {unknown} rawKey - Candidate LastEvaluatedKey.
+   * @param {import('../base.js').KeyCondition} pk - Primary-key condition.
+   * @param {import('../base.js').KeyCondition} sk - Sort-key condition.
+   * @param {string} sortPrefix - Requested sort-key prefix.
+   * @param {string[]} itemSortKeys - Sort keys from the response page.
+   * @returns {Record<string, any> | undefined} - Validated provider continuation.
+   */
+  function validateDynamoContinuation(
+    rawKey,
+    pk,
+    sk,
+    sortPrefix,
+    itemSortKeys,
+  ) {
+    if (
+      rawKey === undefined ||
+      rawKey === null ||
+      (typeof rawKey === 'object' &&
+        !Array.isArray(rawKey) &&
+        Object.keys(rawKey).length === 0)
+    ) {
+      return undefined;
+    }
+    if (!rawKey || typeof rawKey !== 'object' || Array.isArray(rawKey)) {
+      throw new Error('DynamoDB queryPage returned an invalid continuation');
+    }
+    const continuation = /** @type {Record<string, any>} */ (rawKey);
+    if (continuation[pk.propertyName] !== pk.propertyValue) {
+      throw new Error(
+        'DynamoDB queryPage continuation does not match its primary key',
+      );
+    }
+    const sortKey = assertPortablePageAscii(
+      continuation[sk.propertyName],
+      'DynamoDB queryPage continuation sort key',
+    );
+    if (!sortKey.startsWith(sortPrefix) || itemSortKeys.length === 0) {
+      throw new Error('DynamoDB queryPage returned an invalid continuation');
+    }
+    if (
+      comparePortablePageKeys(
+        itemSortKeys[itemSortKeys.length - 1],
+        sortKey,
+      ) !== 0
+    ) {
+      throw new Error(
+        'DynamoDB queryPage continuation does not match its last returned item',
+      );
+    }
+    return continuation;
+  }
+
+  /**
+   * Read exactly one provider page under a sort-key prefix. The public cursor
+   * remains the preceding sort-key value rather than DynamoDB's schema-shaped
+   * LastEvaluatedKey, keeping the DB adapter contract portable.
+   * @param {import('../base.js').QueryPageParams} params - Page request.
+   * @returns {import('../base.js').QueryPageReturn} - Bounded page.
+   */
+  async function queryPage(params) {
+    const { pk, sk, limit, startAfter } = assertTightQueryPage(params);
+    const built = buildKeyConditionExpression([pk, sk]);
+    const queryBase = {
+      TableName: params.tableName,
+      ConsistentRead: params.consistentRead ?? true,
+      ScanIndexForward: true,
+      ...built,
+    };
+    const response = await docClient.query({
+      ...queryBase,
+      // Request one extra item so the normal case can prove that a public
+      // cursor has another record without exposing a provider continuation.
+      Limit: limit + 1,
+      ...(startAfter === undefined
+        ? {}
+        : {
+            ExclusiveStartKey: {
+              [pk.propertyName]: pk.propertyValue,
+              [sk.propertyName]: startAfter,
+            },
+          }),
+    });
+    const sortPrefix = /** @type {string} */ (sk.propertyValue);
+    const responseItems = response.Items || [];
+    const responseSortKeys = validateDynamoPageItems(
+      responseItems,
+      sk.propertyName,
+      sortPrefix,
+    );
+    const continuation = validateDynamoContinuation(
+      response.LastEvaluatedKey,
+      pk,
+      sk,
+      sortPrefix,
+      responseSortKeys,
+    );
+
+    let hasNext = responseItems.length > limit;
+    if (!hasNext && continuation) {
+      // DynamoDB documents that a nonempty LastEvaluatedKey is not itself a
+      // proof that another matching item exists. Confirm the rare byte-limit
+      // edge with one bounded provider probe before emitting a public cursor.
+      const probe = await docClient.query({
+        ...queryBase,
+        Limit: 1,
+        ExclusiveStartKey: continuation,
+      });
+      const probeItems = probe.Items || [];
+      const probeSortKeys = validateDynamoPageItems(
+        probeItems,
+        sk.propertyName,
+        sortPrefix,
+      );
+      validateDynamoContinuation(
+        probe.LastEvaluatedKey,
+        pk,
+        sk,
+        sortPrefix,
+        probeSortKeys,
+      );
+      hasNext = probeItems.length > 0;
+    }
+    const items = responseItems.slice(0, limit);
+    const nextStartAfter = hasNext
+      ? responseSortKeys[items.length - 1]
+      : undefined;
+    return {
+      items,
+      ...(nextStartAfter === undefined ? {} : { nextStartAfter }),
+    };
+  }
+
   const MAX_PUT_RETRY_TIMEOUT_SECONDS = 20;
   const MAX_PUT_RETRY_ATTEMPTS = 100;
 
@@ -202,6 +457,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').PutReturn} - Result.
    */
   async function put(params) {
+    assertWritable();
     if (!params.record || typeof params.record !== 'object')
       throw new Error('record is required');
     if (
@@ -256,6 +512,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').UpdateReturn} - Result.
    */
   async function update(params) {
+    assertWritable();
     const Key = buildKey(params);
 
     /** @type {import('../base.js').UpdateDefinition[]} */
@@ -306,12 +563,20 @@ export default function createDynamoDB(
         .map((condition, i) => {
           const nameToken = nameTokenFor(condition.propertyName);
           const valueToken = `:c${i}`;
-          ExpressionAttributeValues[valueToken] = condition.propertyValue;
+
+          if (condition.conditionType === CONDITION_TYPE.EXISTS) {
+            return `attribute_exists(${nameToken})`;
+          }
+          if (condition.conditionType === CONDITION_TYPE.NOT_EXISTS) {
+            return `attribute_not_exists(${nameToken})`;
+          }
 
           if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
+            ExpressionAttributeValues[valueToken] = condition.propertyValue;
             return `begins_with(${nameToken}, ${valueToken})`;
           }
           if (condition.conditionType === CONDITION_TYPE.EQUALS) {
+            ExpressionAttributeValues[valueToken] = condition.propertyValue;
             return `${nameToken} = ${valueToken}`;
           }
           throw new Error(`invalid condition type: ${condition.conditionType}`);
@@ -353,6 +618,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').RemoveReturn} - Result.
    */
   async function remove(params) {
+    assertWritable();
     const dynamoParams = {
       TableName: params.tableName,
       Key: buildKey(params),
@@ -423,6 +689,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').BatchWriteReturn} - Result.
    */
   async function batchWrite(params) {
+    assertWritable();
     const puts = (
       Array.isArray(params.putRequests) ? params.putRequests : []
     ).filter((v) => v !== undefined && v !== null);
@@ -504,20 +771,164 @@ export default function createDynamoDB(
     }
   }
 
-  return {
-    query,
-    put,
-    update,
-    get,
-    remove,
-    batchWrite,
-    /**
-     * Close underlying resources (best-effort).
-     * DynamoDB v3 clients keep sockets; destroy() closes them.
-     * @returns {import('../base.js').CloseReturn} - Result.
-     */
-    close: async () => {
-      if (typeof docClient.destroy === 'function') docClient.destroy();
+  /**
+   * Atomically condition-check and mutate distinct items in one table using
+   * DynamoDB TransactWriteItems.
+   * @param {import('../base.js').TransactionWriteParams} params - params.
+   * @returns {import('../base.js').TransactionWriteReturn} - Result.
+   */
+  async function transactionWrite(params) {
+    assertWritable();
+    const requests = validateTransactionWrite(params);
+    /** @type {any[]} */
+    const TransactItems = [];
+
+    for (const [index, request] of requests.conditionChecks.entries()) {
+      TransactItems.push({
+        ConditionCheck: {
+          TableName: params.tableName,
+          Key: buildKey(transactionRequestKey(request, '', false)),
+          ...compileWriteConditions(request.conditions, `cc${index}`),
+        },
+      });
+    }
+
+    for (const [index, request] of requests.putRequests.entries()) {
+      TransactItems.push({
+        Put: {
+          TableName: params.tableName,
+          Item: request.record,
+          ...compileWriteConditions(request.conditions, `p${index}`),
+        },
+      });
+    }
+
+    for (const [index, request] of requests.updateRequests.entries()) {
+      const updates = transactionRequestUpdates(
+        request,
+        `updateRequests[${index}]`,
+      );
+      /** @type {Record<string, string>} */
+      const updateNames = {};
+      /** @type {Record<string, any>} */
+      const updateValues = {};
+      let nameIndex = 0;
+      const nameTokens = new Map();
+      const nameTokenFor = (/** @type {string} */ segment) => {
+        if (nameTokens.has(segment)) return nameTokens.get(segment);
+        const token = `#u${index}n${nameIndex++}`;
+        nameTokens.set(segment, token);
+        updateNames[token] = segment;
+        return token;
+      };
+      const clauses = updates.map((definition, updateIndex) => {
+        const path = definition.property.map(nameTokenFor).join('.');
+        const valueToken = `:u${index}v${updateIndex}`;
+        updateValues[valueToken] = definition.propertyValue;
+        return `${path} = ${valueToken}`;
+      });
+      const condition = compileWriteConditions(
+        request.conditions,
+        `u${index}c`,
+      );
+
+      TransactItems.push({
+        Update: {
+          TableName: params.tableName,
+          Key: buildKey(transactionRequestKey(request, '', false)),
+          UpdateExpression: `SET ${clauses.join(', ')}`,
+          ...(condition.ConditionExpression
+            ? { ConditionExpression: condition.ConditionExpression }
+            : {}),
+          ExpressionAttributeNames: {
+            ...updateNames,
+            ...(condition.ExpressionAttributeNames || {}),
+          },
+          ExpressionAttributeValues: {
+            ...updateValues,
+            ...(condition.ExpressionAttributeValues || {}),
+          },
+        },
+      });
+    }
+
+    for (const [index, request] of requests.deleteRequests.entries()) {
+      TransactItems.push({
+        Delete: {
+          TableName: params.tableName,
+          Key: buildKey(transactionRequestKey(request, '', false)),
+          ...compileWriteConditions(request.conditions, `d${index}`),
+        },
+      });
+    }
+
+    for (
+      let attempt = 0;
+      attempt < MAX_TRANSACTION_CONFLICT_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        await docClient.transactWrite({ TransactItems });
+        return;
+      } catch (error) {
+        const cancellationReasons =
+          error && typeof error === 'object' && 'CancellationReasons' in error
+            ? /** @type {{ CancellationReasons?: Array<{Code?: string}> }} */ (
+                error
+              ).CancellationReasons
+            : undefined;
+        const reasonCodes = (cancellationReasons || [])
+          .map((reason) => reason.Code)
+          .filter((code) => code && code !== 'None');
+        const onlyTransactionConflicts =
+          reasonCodes.length > 0 &&
+          reasonCodes.every((code) => code === 'TransactionConflict');
+        if (
+          error instanceof Error &&
+          error.name === 'TransactionCanceledException' &&
+          onlyTransactionConflicts &&
+          attempt + 1 < MAX_TRANSACTION_CONFLICT_ATTEMPTS
+        ) {
+          // eslint-disable-next-line no-await-in-loop
+          await sleepTransactionConflictBackoff(attempt);
+          continue;
+        }
+        if (
+          error instanceof Error &&
+          error.name === 'TransactionCanceledException' &&
+          reasonCodes.length > 0 &&
+          reasonCodes.every((code) => code === 'ConditionalCheckFailed')
+        ) {
+          const conditionalError = new Error(error.message);
+          conditionalError.name = 'ConditionalCheckFailedException';
+          throw conditionalError;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error('DynamoDB transaction conflict retry limit exceeded');
+  }
+
+  return brandDBClient(
+    {
+      query,
+      queryPage,
+      put,
+      update,
+      get,
+      remove,
+      batchWrite,
+      transactionWrite,
+      /**
+       * Close underlying resources (best-effort).
+       * DynamoDB v3 clients keep sockets; destroy() closes them.
+       * @returns {import('../base.js').CloseReturn} - Result.
+       */
+      close: async () => {
+        if (typeof docClient.destroy === 'function') docClient.destroy();
+      },
     },
-  };
+    DB_ADAPTER_NAMES.DYNAMODB,
+  );
 }

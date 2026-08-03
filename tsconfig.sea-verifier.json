@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": false,
+    "strictNullChecks": false
+  },
+  "files": [
+    "scripts/verify-aws-host-retained-storage-host-preflight-sea-linux.js",
+    "scripts/verify-package-sea.js",
+    "scripts/steady-file-preview-handoff.js",
+    "scripts/verify-steady-file-preview-target.js",
+    "scripts/verify-steady-file-systemd-linux.js",
+    "scripts/verify-systemd-user-service-linux.js",
+    "test/systemd/boot-check.js"
+  ],
+  "include": []
+}

@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "kind": "wharfie.systemd-proof.boot-receipt",
+  "observedAt": 1784584166195,
+  "bootId": "9c42b975-a2bb-48f4-8f95-f080cfb0c4e1",
+  "previousBootId": "58335403-933e-4843-b6b8-31f44c7cef7a",
+  "sessionsBeforeCheck": [],
+  "automaticStart": true,
+  "executablePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+  "status": {
+    "schemaVersion": 2,
+    "kind": "wharfie.service.status",
+    "appId": "systemd-service-proof",
+    "unit": "wharfie-systemd-service-proof.service",
+    "installation": {
+      "state": "installed",
+      "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+      "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+      "previousArtifactId": null,
+      "previousRevisionId": null
+    },
+    "systemd": {
+      "mainPid": 797,
+      "result": "success",
+      "execMainStatus": 0,
+      "loadState": "loaded",
+      "activeState": "active",
+      "subState": "running",
+      "fragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+      "dropInPaths": "",
+      "unitFileState": "enabled",
+      "needDaemonReload": false
+    },
+    "runtime": {
+      "status": "READY",
+      "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+      "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+      "generation": 3,
+      "ownerKind": "resident",
+      "ownerGeneration": 3,
+      "session": "active",
+      "processId": 797,
+      "currentOwner": true
+    },
+    "integrity": {
+      "status": "verified",
+      "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+      "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+    },
+    "wiring": {
+      "state": "managed",
+      "unitFile": "managed",
+      "selection": "managed",
+      "effectiveUnit": "managed",
+      "cleanupPending": false
+    },
+    "persistence": {
+      "linger": true,
+      "unitEnabled": true,
+      "bootEnabled": true
+    },
+    "health": "healthy",
+    "activation": {
+      "phase": "ACTIVE",
+      "action": null,
+      "desired": {
+        "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+        "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+      },
+      "selected": {
+        "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+        "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+      },
+      "rollback": null,
+      "lastOutcome": "target-active"
+    }
+  },
+  "workflow": {
+    "schemaVersion": 7,
+    "kind": "wharfie.execution-ledger.run",
+    "integrity": {
+      "verified": true
+    },
+    "run": {
+      "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+      "appId": "systemd-service-proof",
+      "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+      "trigger": {
+        "kind": "workflow",
+        "workflowId": "reboot-chain",
+        "planId": "wfp_cW1juSZdkT6BD1iM4_B5JJNPVFtNlMPYJUx1j0fO3T4"
+      },
+      "status": "RUNNING",
+      "version": 4,
+      "lastSequence": 4,
+      "createdAt": 1784584139164,
+      "updatedAt": 1784584144583
+    },
+    "invocations": [
+      {
+        "invocationId": "wfi_zJnCmsGmvg83ZNjAqnHy1NM_0ydE4Fuuslt09WuLQvI",
+        "activityId": "record-step",
+        "status": "COMPLETED",
+        "generation": 1,
+        "version": 4,
+        "lastSequence": 4,
+        "createdAt": 1784584139164,
+        "updatedAt": 1784584144583,
+        "workflow": {
+          "workflowId": "reboot-chain",
+          "planId": "wfp_cW1juSZdkT6BD1iM4_B5JJNPVFtNlMPYJUx1j0fO3T4",
+          "continuationId": "wfc_MoGuACbdLoUU-zCVxKZ0jfGiNHY_ll-eUQLwttZCA-A",
+          "stepId": "before-reboot",
+          "stepIndex": 0
+        }
+      }
+    ],
+    "attempts": [
+      {
+        "invocationId": "wfi_zJnCmsGmvg83ZNjAqnHy1NM_0ydE4Fuuslt09WuLQvI",
+        "attemptId": "wla_5GaMkET_aXuOvRq8Mw8av8XRR-rivmrJTIBeIolfHdU",
+        "status": "COMPLETED",
+        "generation": 1,
+        "version": 3,
+        "claimedAt": 1784584144511,
+        "startedAt": 1784584144526,
+        "updatedAt": 1784584144583,
+        "lastSequence": 4
+      }
+    ],
+    "effects": [],
+    "timers": [
+      {
+        "timerId": "wft_PKOsWuN9VR9JVcoWBNR9_JiYxPeH6Cbh8jI_dL3LQGE",
+        "workflowId": "reboot-chain",
+        "planId": "wfp_cW1juSZdkT6BD1iM4_B5JJNPVFtNlMPYJUx1j0fO3T4",
+        "continuationId": "wfc_4rKd84aaMmE52Jx6vXlBSOQm-VhSw4ynKXkfHjzfxp8",
+        "stepId": "cross-reboot-delay",
+        "stepIndex": 1,
+        "status": "WAITING",
+        "scheduledAt": 1784584144583,
+        "dueAt": 1784584324583,
+        "version": 1,
+        "lastSequence": 4,
+        "createdAt": 1784584144583,
+        "updatedAt": 1784584144583
+      }
+    ],
+    "signalWaits": [],
+    "signalDeliveries": [],
+    "history": [
+      {
+        "sequence": 1,
+        "type": "workflow-run-created",
+        "observedAt": 1784584139164,
+        "actor": {
+          "kind": "workflow-operator",
+          "id": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+        }
+      },
+      {
+        "sequence": 2,
+        "type": "workflow-activity-claimed",
+        "observedAt": 1784584144511,
+        "actor": {
+          "kind": "resident-workflow",
+          "id": "systemd-service-proof"
+        }
+      },
+      {
+        "sequence": 3,
+        "type": "workflow-activity-started",
+        "observedAt": 1784584144526,
+        "actor": {
+          "kind": "resident-workflow",
+          "id": "systemd-service-proof"
+        }
+      },
+      {
+        "sequence": 4,
+        "type": "workflow-activity-succeeded",
+        "observedAt": 1784584144583,
+        "actor": {
+          "kind": "resident-workflow",
+          "id": "systemd-service-proof"
+        }
+      }
+    ],
+    "workflowCursor": {
+      "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+      "appId": "systemd-service-proof",
+      "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+      "workflowId": "reboot-chain",
+      "planId": "wfp_cW1juSZdkT6BD1iM4_B5JJNPVFtNlMPYJUx1j0fO3T4",
+      "stepId": "cross-reboot-delay",
+      "stepIndex": 1,
+      "continuationId": "wfc_4rKd84aaMmE52Jx6vXlBSOQm-VhSw4ynKXkfHjzfxp8",
+      "timerId": "wft_PKOsWuN9VR9JVcoWBNR9_JiYxPeH6Cbh8jI_dL3LQGE",
+      "disposition": "TIMER_WAITING",
+      "outputs": [
+        {
+          "stepId": "before-reboot",
+          "stepIndex": 0
+        }
+      ],
+      "version": 4,
+      "lastSequence": 4,
+      "createdAt": 1784584139164,
+      "updatedAt": 1784584144583
+    }
+  }
+}

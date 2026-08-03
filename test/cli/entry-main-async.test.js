@@ -8,10 +8,13 @@ const ORIGINAL_EXIT_CODE = process.exitCode;
 const ORIGINAL_STDIN_IS_TTY = process.stdin.isTTY;
 const PATHS_MODULE = '../../src/core/lib/paths.js';
 const LOAD_APP_MODULE = '../../src/cli/app/load-app.js';
-const CONFIG_MODULE = '../../src/cli/config.js';
 const ENTRY_MODULE = '../../src/cli/entry.js';
 
 describe('src/cli/entry main', () => {
+  beforeEach(() => {
+    process.exitCode = undefined;
+  });
+
   afterEach(() => {
     jest.restoreAllMocks();
     jest.resetModules();
@@ -44,11 +47,23 @@ describe('src/cli/entry main', () => {
       };
     });
 
-    /** @type {Promise<{ manifest: { app: { name: string } } }>} */
+    /** @type {Promise<{ manifest: Record<string, any> }>} */
     const loadAppPromise = new Promise((resolve) => {
       resolveLoadApp = () => {
         events.push('action:end');
-        resolve({ manifest: { app: { name: 'test-app' } } });
+        resolve({
+          manifest: {
+            schemaVersion: 4,
+            app: { id: 'test-app' },
+            cli: {
+              entrypoint: {
+                kind: 'node',
+                path: 'cli.js',
+                export: 'main',
+              },
+            },
+          },
+        });
       };
     });
 
@@ -69,17 +84,6 @@ describe('src/cli/entry main', () => {
         events.push('action:start');
         return loadAppPromise;
       },
-    }));
-
-    await jest.unstable_mockModule(CONFIG_MODULE, () => ({
-      default: {
-        setConfig: () => {},
-        setEnvironment: () => {},
-        validate: async () => {},
-      },
-      setConfig: () => {},
-      setEnvironment: () => {},
-      validate: async () => {},
     }));
 
     const stdoutSpy = jest

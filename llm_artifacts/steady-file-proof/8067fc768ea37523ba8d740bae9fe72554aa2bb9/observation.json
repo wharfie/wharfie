@@ -1,0 +1,371 @@
+{
+  "schemaVersion": 1,
+  "kind": "wharfie.engineering-observation.steady-file-native-sea",
+  "authority": "none",
+  "authoritative": false,
+  "observedAt": "2026-07-28T18:22:35Z",
+  "validatedSource": {
+    "repositoryCommit": "8067fc768ea37523ba8d740bae9fe72554aa2bb9",
+    "branch": "agent/strict-manifest",
+    "worktreeCleanBeforeRun": true
+  },
+  "environment": {
+    "host": {
+      "product": "macOS",
+      "productVersion": "15.7",
+      "buildVersion": "24G222",
+      "kernel": "Darwin 24.6.0",
+      "architecture": "arm64"
+    },
+    "node": "24.13.1",
+    "npm": "11.12.0",
+    "lmdb": "3.4.4"
+  },
+  "nativeExecutionBoundary": {
+    "restrictedSandboxProbe": {
+      "status": "failed",
+      "underlyingDiagnostic": "Operation not permitted: Attempting to setup locks",
+      "upstreamFailureAmplifier": "LMDB's failed-open cleanup aborted with an invalid free and masked the permission error."
+    },
+    "approvedOutsideSandboxProbe": {
+      "defaultLmdbOptions": true,
+      "writeReadCloseStatus": "passed"
+    }
+  },
+  "fixture": {
+    "appId": "steady-file-demo",
+    "workflowId": "verify-stable",
+    "inputRole": "owned nonsecret regular-file fixture",
+    "inputPath": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+    "inputBytes": 95420,
+    "inputSha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+  },
+  "sourceRun": {
+    "startReceipt": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.workflow-start",
+      "appId": "steady-file-demo",
+      "runId": "wfr_346o63XiYdX6QIhWpiUlwSSSKm_TVAz5UxX3zUJ7mFk",
+      "revisionId": "wrv1_xa82JkI2Ga3-xpqlA8POkfOuyCc-ZxcRNXp2t2kB77E",
+      "workflowId": "verify-stable",
+      "idempotencyKey": "steady-file-source-native-8067fc7",
+      "reused": false,
+      "runStatus": "RUNNING",
+      "cursor": {
+        "disposition": "ACTIVITY_RUNNABLE",
+        "stepId": "baseline",
+        "stepIndex": 0
+      },
+      "nextActivation": {
+        "kind": "activity",
+        "status": "RUNNABLE"
+      }
+    },
+    "worker": {
+      "ready": true,
+      "readyMessage": "Starting resident activity worker for app steady-file-demo@wrv1_xa82JkI2Ga3-xpqlA8POkfOuyCc-ZxcRNXp2t2kB77E.",
+      "requestedStop": "SIGINT",
+      "exitCode": 0,
+      "terminalSignal": null,
+      "exitMessage": "OK Resident activity worker drained and stopped."
+    },
+    "inspection": {
+      "integrityVerified": true,
+      "status": "COMPLETED",
+      "version": 8,
+      "lastSequence": 8,
+      "timerStepId": "stability-window",
+      "timerStatus": "FIRED",
+      "historyTypes": [
+        "workflow-run-created",
+        "workflow-activity-claimed",
+        "workflow-activity-started",
+        "workflow-activity-succeeded",
+        "workflow-timer-fired",
+        "workflow-activity-claimed",
+        "workflow-activity-started",
+        "workflow-activity-succeeded"
+      ]
+    },
+    "outputReceipt": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.run-output",
+      "authority": "none",
+      "authoritative": false,
+      "disclosure": "application-sensitive-unredacted",
+      "integrity": {
+        "verified": true
+      },
+      "scope": {
+        "appId": "steady-file-demo",
+        "revisionId": "wrv1_xa82JkI2Ga3-xpqlA8POkfOuyCc-ZxcRNXp2t2kB77E",
+        "runId": "wfr_346o63XiYdX6QIhWpiUlwSSSKm_TVAz5UxX3zUJ7mFk"
+      },
+      "snapshot": {
+        "runKind": "workflow",
+        "status": "COMPLETED",
+        "version": 8,
+        "lastSequence": 8
+      },
+      "outputs": [
+        {
+          "stepId": "baseline",
+          "stepIndex": 0,
+          "value": {
+            "bytes": 95420,
+            "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+            "readStable": true,
+            "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+          }
+        },
+        {
+          "stepId": "stability-window",
+          "stepIndex": 1,
+          "value": {
+            "dueAt": 1785262584816,
+            "firedAt": 1785262585647,
+            "scheduledAt": 1785262584566
+          }
+        },
+        {
+          "stepId": "comparison",
+          "stepIndex": 2,
+          "value": {
+            "baseline": {
+              "bytes": 95420,
+              "readStable": true,
+              "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+            },
+            "current": {
+              "bytes": 95420,
+              "readStable": true,
+              "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+            },
+            "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+            "stable": true
+          }
+        }
+      ],
+      "terminal": {
+        "type": "completed",
+        "result": {
+          "baseline": {
+            "bytes": 95420,
+            "readStable": true,
+            "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+          },
+          "current": {
+            "bytes": 95420,
+            "readStable": true,
+            "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+          },
+          "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+          "stable": true
+        }
+      }
+    }
+  },
+  "package": {
+    "receipt": {
+      "schemaVersion": 1,
+      "kind": "wharfie.application.package",
+      "appId": "steady-file-demo",
+      "revisionId": "wrv1_xa82JkI2Ga3-xpqlA8POkfOuyCc-ZxcRNXp2t2kB77E",
+      "outputDir": "/private/tmp/wharfie-steady-native-sea-8067fc7/output",
+      "artifactCount": 1,
+      "artifacts": [
+        {
+          "artifactId": "waf1_95EKPK4_xoYpqSzj19BEgupcF0g1PICN-Gn-nGQUXmo",
+          "target": {
+            "nodeVersion": "24.13.1",
+            "platform": "darwin",
+            "architecture": "arm64"
+          },
+          "fileName": "steady-file-demo-sha256-f7910a3cae3fc68629a92ce3d7d04482ea5c1748353c808df869fe9c64145e6a",
+          "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/output/steady-file-demo-sha256-f7910a3cae3fc68629a92ce3d7d04482ea5c1748353c808df869fe9c64145e6a",
+          "recordPath": "/private/tmp/wharfie-steady-native-sea-8067fc7/output/steady-file-demo-sha256-f7910a3cae3fc68629a92ce3d7d04482ea5c1748353c808df869fe9c64145e6a.artifact.json",
+          "byteDigest": {
+            "algorithm": "sha256",
+            "value": "95EKPK4_xoYpqSzj19BEgupcF0g1PICN-Gn-nGQUXmo"
+          },
+          "size": 155523792
+        }
+      ]
+    },
+    "independentMeasurement": {
+      "size": 155523792,
+      "sha256Hex": "f7910a3cae3fc68629a92ce3d7d04482ea5c1748353c808df869fe9c64145e6a"
+    },
+    "relocatedCopyMeasurement": {
+      "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/relocated/steady-file-demo",
+      "sha256Hex": "f7910a3cae3fc68629a92ce3d7d04482ea5c1748353c808df869fe9c64145e6a"
+    }
+  },
+  "seaRun": {
+    "runtimePath": "/private/tmp/wharfie-steady-native-sea-8067fc7/empty-path",
+    "runtimePathEntryCount": 0,
+    "nodeAbsentFromRuntimePath": true,
+    "developerCli": {
+      "exitCode": 0,
+      "result": {
+        "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+        "stable": true,
+        "baseline": {
+          "bytes": 95420,
+          "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57",
+          "readStable": true
+        },
+        "current": {
+          "bytes": 95420,
+          "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57",
+          "readStable": true
+        }
+      }
+    },
+    "startReceipt": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.workflow-start",
+      "appId": "steady-file-demo",
+      "runId": "wfr_7ZqeEtGJzABpnEQgxlAnmXt0muYL0-J0akaf7nZhiGU",
+      "revisionId": "wrv1_xa82JkI2Ga3-xpqlA8POkfOuyCc-ZxcRNXp2t2kB77E",
+      "workflowId": "verify-stable",
+      "idempotencyKey": "steady-file-sea-native-8067fc7",
+      "reused": false,
+      "runStatus": "RUNNING",
+      "cursor": {
+        "disposition": "ACTIVITY_RUNNABLE",
+        "stepId": "baseline",
+        "stepIndex": 0
+      },
+      "nextActivation": {
+        "kind": "activity",
+        "status": "RUNNABLE"
+      }
+    },
+    "worker": {
+      "ready": true,
+      "readyMessage": "Starting resident activity worker for app steady-file-demo@wrv1_xa82JkI2Ga3-xpqlA8POkfOuyCc-ZxcRNXp2t2kB77E.",
+      "requestedStop": "SIGINT",
+      "exitCode": 0,
+      "terminalSignal": null,
+      "exitMessage": "OK Resident activity worker drained and stopped."
+    },
+    "inspection": {
+      "integrityVerified": true,
+      "status": "COMPLETED",
+      "version": 8,
+      "lastSequence": 8,
+      "timerStepId": "stability-window",
+      "timerStatus": "FIRED",
+      "historyTypes": [
+        "workflow-run-created",
+        "workflow-activity-claimed",
+        "workflow-activity-started",
+        "workflow-activity-succeeded",
+        "workflow-timer-fired",
+        "workflow-activity-claimed",
+        "workflow-activity-started",
+        "workflow-activity-succeeded"
+      ]
+    },
+    "outputReceipt": {
+      "schemaVersion": 1,
+      "kind": "wharfie.execution-ledger.run-output",
+      "authority": "none",
+      "authoritative": false,
+      "disclosure": "application-sensitive-unredacted",
+      "integrity": {
+        "verified": true
+      },
+      "scope": {
+        "appId": "steady-file-demo",
+        "revisionId": "wrv1_xa82JkI2Ga3-xpqlA8POkfOuyCc-ZxcRNXp2t2kB77E",
+        "runId": "wfr_7ZqeEtGJzABpnEQgxlAnmXt0muYL0-J0akaf7nZhiGU"
+      },
+      "snapshot": {
+        "runKind": "workflow",
+        "status": "COMPLETED",
+        "version": 8,
+        "lastSequence": 8
+      },
+      "outputs": [
+        {
+          "stepId": "baseline",
+          "stepIndex": 0,
+          "value": {
+            "bytes": 95420,
+            "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+            "readStable": true,
+            "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+          }
+        },
+        {
+          "stepId": "stability-window",
+          "stepIndex": 1,
+          "value": {
+            "dueAt": 1785262767832,
+            "firedAt": 1785262768657,
+            "scheduledAt": 1785262767582
+          }
+        },
+        {
+          "stepId": "comparison",
+          "stepIndex": 2,
+          "value": {
+            "baseline": {
+              "bytes": 95420,
+              "readStable": true,
+              "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+            },
+            "current": {
+              "bytes": 95420,
+              "readStable": true,
+              "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+            },
+            "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+            "stable": true
+          }
+        }
+      ],
+      "terminal": {
+        "type": "completed",
+        "result": {
+          "baseline": {
+            "bytes": 95420,
+            "readStable": true,
+            "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+          },
+          "current": {
+            "bytes": 95420,
+            "readStable": true,
+            "sha256": "1621c7bd9833bbf3d5dfcaa207ae531b6050c7cc975ca08525c293556291df57"
+          },
+          "path": "/private/tmp/wharfie-steady-native-sea-8067fc7/artifact.bin",
+          "stable": true
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "ownedRoot": "/private/tmp/wharfie-steady-native-sea-8067fc7",
+    "reportedSizeBeforeRemoval": "416M",
+    "allWorkersReaped": true,
+    "remainingOwnedSocketEntries": 0,
+    "rootRemoved": true,
+    "rootAbsenceConfirmed": true,
+    "boundedOutOfRootCleanup": {
+      "macOsDiagnosticReportDirectory": "~/Library/Logs/DiagnosticReports",
+      "filesCreatedByFailedSandboxProbes": [
+        "node-2026-07-28-140422.ips",
+        "node-2026-07-28-140750.ips",
+        "node-2026-07-28-140809.ips",
+        "node-2026-07-28-140932.ips",
+        "node-2026-07-28-141117.ips",
+        "node-2026-07-28-141222.ips"
+      ],
+      "removed": true,
+      "matchingReportsAbsentAfterRemoval": true
+    },
+    "availableDiskAfterRemoval": "11GiB"
+  }
+}

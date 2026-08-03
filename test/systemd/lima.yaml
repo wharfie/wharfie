@@ -1,0 +1,83 @@
+minimumLimaVersion: 2.1.0
+
+vmType: vz
+arch: default
+cpus: 4
+memory: 6GiB
+disk: 12GiB
+plain: true
+
+images:
+  - location: https://cloud-images.ubuntu.com/releases/noble/release-20260615/ubuntu-24.04-server-cloudimg-arm64.img
+    arch: aarch64
+    digest: sha256:cafa1a965b591b7c4184b484ffd8e625981a79d48f9b4ae8a4adf7b4c5ade927
+  - location: https://cloud-images.ubuntu.com/releases/noble/release-20260615/ubuntu-24.04-server-cloudimg-amd64.img
+    arch: x86_64
+    digest: sha256:5fa5b05e5ec239858c4531485d6023b0896448c2df7c63b34f8dae6ea6051a44
+
+mounts: []
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        python3 \
+        rsync \
+        util-linux \
+        xz-utils
+      rm -rf /var/lib/apt/lists/*
+
+      node_version=24.13.1
+      case "$(uname -m)" in
+        aarch64)
+          node_arch=arm64
+          node_sha256=c827d3d301e2eed1a51f36d0116b71b9e3d9e3b728f081615270ea40faac34c1
+          ;;
+        x86_64)
+          node_arch=x64
+          node_sha256=30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089
+          ;;
+        *)
+          echo "Unsupported proof architecture: $(uname -m)" >&2
+          exit 1
+          ;;
+      esac
+      node_archive="node-v${node_version}-linux-${node_arch}.tar.xz"
+      if ! /usr/local/bin/node --version 2>/dev/null | grep -qx "v${node_version}"; then
+        curl --fail --location --silent --show-error \
+          "https://nodejs.org/dist/v${node_version}/${node_archive}" \
+          --output "/tmp/${node_archive}"
+        echo "${node_sha256}  /tmp/${node_archive}" | sha256sum --check --strict
+        tar --extract --xz --file "/tmp/${node_archive}" \
+          --directory /usr/local --strip-components 1
+        rm -f "/tmp/${node_archive}"
+      fi
+      if ! /usr/local/bin/npm --version 2>/dev/null | grep -qx '11.12.0'; then
+        /usr/local/bin/npm install --global --no-audit --no-fund npm@11.12.0
+      fi
+
+      loginctl enable-linger "{{.User}}"
+
+probes:
+  - mode: readiness
+    description: exact Node and persistent systemd user manager are ready
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      test "$(/usr/local/bin/node --version)" = v24.13.1
+      test "$(/usr/local/bin/npm --version)" = 11.12.0
+      test "$(loginctl show-user "$(id -u)" --property=Linger --value)" = yes
+      systemctl --user show-environment >/dev/null
+    hint: |
+      Node 24.13.1, lingering, or the systemd user manager did not become ready.

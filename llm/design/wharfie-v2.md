@@ -1,8 +1,14 @@
 # Wharfie v2
 
-**Status:** Draft (actively iterating)  
+**Status:** Historical pre-reset design snapshot
 **Last updated:** 2026-03-27  
 **Audience:** contributors implementing the rewrite; optimized for LLM context + direct code navigation.
+
+> Superseded by [`PROJECT.md`](../../PROJECT.md),
+> [`ROADMAP.md`](../../ROADMAP.md), and the
+> [accepted architecture decisions](../../docs/architecture/decisions/README.md).
+> Code links and "repo reality" statements below describe the repository when
+> this snapshot was written and may now be stale.
 
 - Back to design index: [`README.md`](./README.md)
 - Related design note: [`wharfie-progressive-agent-application.md`](./wharfie-progressive-agent-application.md)
@@ -493,4 +499,4 @@ This checklist is intentionally aligned to the repo’s real bottlenecks.
 - [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js) shows the current artifact UX is still Wharfie-owned; v2 needs to stop making that the default for packaged CLI apps.
 - [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js) and [`src/core/lib/paths.js`](../../src/core/lib/paths.js) show why config-dir backed shared refs are a clean next step for `db`, `queue`, and `objectStorage`.
 - [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js) already provide the durable workflow/run substrate that the progressive app model should build on.
-- [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js) proves that packaging a custom CLI into a SEA artifact already works; the missing product work is routing that through the supported `wharfie app package` path.
+- [`scripts/verify-package-sea.js`](../../scripts/verify-package-sea.js) proves that the supported package can turn a developer-owned TypeScript CLI and activity into a moved SEA artifact that runs without Node on `PATH`.

@@ -9,9 +9,16 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+import { DEPENDENCY_LOCK_INPUT_FORMAT } from '../../../src/core/runtime/application-revision.js';
+import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+} from '../../../src/core/runtime/activity-protocol.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 
@@ -53,44 +60,119 @@ describe('FunctionResource bundled externals', () => {
       path.join(os.tmpdir(), 'wharfie-function-externals-'),
     );
     const entryPath = path.join(tmpRoot, 'handler.js');
+    const dependencyLockPath = path.join(tmpRoot, 'package-lock.json');
     const outputFile = path.join(tmpRoot, 'marker.txt');
     const functionName = 'bundled-native-externals';
-    const installForTarget = jest.fn(async ({ tmpBuildDir, externals }) => {
-      expect(externals).toEqual([{ name: 'fake-native', version: '1.0.0' }]);
-
-      const packageDir = path.join(tmpBuildDir, 'node_modules', 'fake-native');
-      await fsp.mkdir(packageDir, { recursive: true });
-      await fsp.writeFile(
-        path.join(packageDir, 'package.json'),
-        JSON.stringify(
-          {
-            name: 'fake-native',
+    const dependencyLockBytes = Buffer.from(
+      `${JSON.stringify({
+        name: 'function-bundled-externals-test',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': {
+            name: 'function-bundled-externals-test',
             version: '1.0.0',
-            main: 'index.js',
+            dependencies: { 'fake-native': '1.0.0' },
           },
-          null,
-          2,
-        ),
-        'utf8',
-      );
-      await fsp.writeFile(
-        path.join(packageDir, 'binding.node'),
-        'FAKE_NATIVE_BINARY\n',
-        'utf8',
-      );
-      await fsp.writeFile(
-        path.join(packageDir, 'index.js'),
-        [
-          "const fs = require('node:fs');",
-          "const path = require('node:path');",
-          'exports.writeMarker = (outputPath, who) => {',
-          "  const binding = fs.readFileSync(path.join(__dirname, 'binding.node'), 'utf8').trim();",
-          "  fs.writeFileSync(outputPath, `${binding}:${who}`, 'utf8');",
-          '};',
-        ].join('\n'),
-        'utf8',
-      );
-    });
+          'node_modules/fake-native': {
+            version: '1.0.0',
+            resolved:
+              'https://registry.npmjs.org/fake-native/-/fake-native-1.0.0.tgz',
+            integrity:
+              'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
+          },
+        },
+      })}\n`,
+      'utf8',
+    );
+    const dependencyLock = {
+      path: dependencyLockPath,
+      input: {
+        format: DEPENDENCY_LOCK_INPUT_FORMAT,
+        digest: {
+          algorithm: 'sha256',
+          value: createHash('sha256')
+            .update(dependencyLockBytes)
+            .digest('base64url'),
+        },
+      },
+    };
+    const closureDigest = {
+      algorithm: 'sha256',
+      value: createHash('sha256')
+        .update('fake-native frozen closure')
+        .digest('base64url'),
+    };
+    /** @type {string | undefined} */
+    let externalsTmpDir;
+    const installForTarget = jest.fn(
+      async ({
+        activity,
+        buildTarget,
+        tmpBuildDir,
+        dependencyLock: receivedLock,
+        externals,
+      }) => {
+        externalsTmpDir = tmpBuildDir;
+        expect(activity).toBe(functionName);
+        expect(receivedLock).toBe(dependencyLock);
+        expect(externals).toEqual([{ name: 'fake-native', version: '1.0.0' }]);
+
+        const packageDir = path.join(
+          tmpBuildDir,
+          'node_modules',
+          'fake-native',
+        );
+        await fsp.mkdir(packageDir, { recursive: true });
+        await fsp.writeFile(
+          path.join(packageDir, 'package.json'),
+          JSON.stringify(
+            {
+              name: 'fake-native',
+              version: '1.0.0',
+              main: 'index.js',
+            },
+            null,
+            2,
+          ),
+          'utf8',
+        );
+        await fsp.writeFile(
+          path.join(packageDir, 'binding.node'),
+          'FAKE_NATIVE_BINARY\n',
+          'utf8',
+        );
+        await fsp.writeFile(
+          path.join(packageDir, 'index.js'),
+          [
+            "const fs = require('node:fs');",
+            "const path = require('node:path');",
+            'exports.writeMarker = (outputPath, who) => {',
+            "  const binding = fs.readFileSync(path.join(__dirname, 'binding.node'), 'utf8').trim();",
+            "  fs.writeFileSync(outputPath, `${binding}:${who}`, 'utf8');",
+            '};',
+          ].join('\n'),
+          'utf8',
+        );
+        return {
+          dependencyLockInput: dependencyLock.input,
+          closureDigest,
+          plan: {
+            activity,
+            target: buildTarget,
+            roots: [
+              {
+                name: 'fake-native',
+                version: '1.0.0',
+                location: 'node_modules/fake-native',
+              },
+            ],
+            lock: dependencyLock.input,
+          },
+        };
+      },
+    );
 
     await fsp.writeFile(
       entryPath,
@@ -99,10 +181,12 @@ describe('FunctionResource bundled externals', () => {
         'const fakeNative = fakeNativeModule.default ?? fakeNativeModule;',
         'export async function handler(event) {',
         '  fakeNative.writeMarker(event.outputFile, event.who);',
+        '  return { written: true };',
         '}',
       ].join('\n'),
       'utf8',
     );
+    await fsp.writeFile(dependencyLockPath, dependencyLockBytes);
 
     await jest.unstable_mockModule(INSTALL_DEPS_IMPORT, () => ({
       installForTarget,
@@ -115,13 +199,15 @@ describe('FunctionResource bundled externals', () => {
 
     const resource = new FunctionResource({
       name: functionName,
+      dependencyLock,
       properties: {
         functionName,
         entrypoint: { path: entryPath, export: 'handler' },
         buildTarget: {
-          nodeVersion: process.versions.node.split('.')[0],
+          nodeVersion: process.versions.node,
           platform: process.platform,
           architecture: process.arch,
+          ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
         },
         external: [{ name: 'fake-native', version: '1.0.0' }],
       },
@@ -136,13 +222,33 @@ describe('FunctionResource bundled externals', () => {
 
       expect(assetDescription.externalsTar).toEqual(expect.any(String));
       expect(assetDescription.externalsTar.length).toBeGreaterThan(0);
-
-      await Function.run(
-        functionName,
-        { outputFile, who: 'bundle-user' },
-        { requestId: 'req-1' },
+      expect(assetDescription.externalDependencyReceipt.archiveDigest).toEqual({
+        algorithm: 'sha256',
+        value: createHash('sha256')
+          .update(Buffer.from(assetDescription.externalsTar, 'base64'))
+          .digest('base64url'),
+      });
+      expect(resource.get('externalDependencyLockInput')).toEqual(
+        dependencyLock.input,
       );
+      expect(resource.get('externalClosureDigest')).toEqual(closureDigest);
 
+      const evidence = await Function.runActivityAttempt(functionName, {
+        protocol: ACTIVITY_PROTOCOL_NAME,
+        protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+        type: 'start',
+        revisionId: `wrv1_${'A'.repeat(43)}`,
+        activityId: functionName,
+        runId: 'run-bundled-native',
+        invocationId: 'invocation-bundled-native',
+        attemptId: 'attempt-bundled-native',
+        fencingToken: 'fence-bundled-native',
+        input: { outputFile, who: 'bundle-user' },
+        caller: { metadata: { requestId: 'req-1' } },
+      });
+
+      expect(evidence.status).toBe('completed');
+      expect(evidence.terminal.result).toEqual({ written: true });
       await expect(fsp.readFile(outputFile, 'utf8')).resolves.toEqual(
         'FAKE_NATIVE_BINARY:bundle-user',
       );
@@ -150,7 +256,7 @@ describe('FunctionResource bundled externals', () => {
       expect(installForTarget).toHaveBeenCalledWith(
         expect.objectContaining({
           buildTarget: expect.objectContaining({
-            nodeVersion: process.versions.node.split('.')[0],
+            nodeVersion: process.versions.node,
             platform: process.platform,
             architecture: process.arch,
           }),
@@ -158,7 +264,11 @@ describe('FunctionResource bundled externals', () => {
           tmpBuildDir: expect.any(String),
         }),
       );
+      await expect(fsp.stat(String(externalsTmpDir))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     } finally {
+      await fsp.rm(resource.get('singleExecutableAssetPath'), { force: true });
       await fsp.rm(tmpRoot, { recursive: true, force: true });
     }
   });

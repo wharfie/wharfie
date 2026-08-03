@@ -1,92 +1,202 @@
 import { Command } from 'commander';
-import paths from '../../../lib/paths.js';
 
-import functionsCLI from './functions.js';
-import infrastructureCLI from './infrastructure.js';
-import controlCLI from './control.js';
-import stateStartCmd from './control_cmds/state_cmds/start.js';
-import {
-  BOOTSTRAP_MODE_ENV,
-  BOOTSTRAP_MODE_STATE_START,
-  resolveBootstrapInvocation,
-} from './lib/bootstrap-mode.js';
+import { createExecutionLedgerActivityLogCommand } from '../../../runtime/operator/execution-ledger-activity-log-command.js';
+import { createExecutionLedgerHistoryCommand } from '../../../runtime/operator/execution-ledger-history-command.js';
+import { createExecutionLedgerOperatorCommands } from '../../../runtime/operator/execution-ledger-operator.js';
+import { createExecutionLedgerRunOutputCommand } from '../../../runtime/operator/execution-ledger-run-output-command.js';
+import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.js';
+import { createPackagedManifestCommand } from './control_cmds/manifest.js';
+import { createPackagedMetadataCommand } from './control_cmds/metadata.js';
+import { createPackagedDeploymentCommand } from './control_cmds/deployment.js';
+import { createPackagedDurableRunCommand } from './control_cmds/run.js';
+import { createPackagedSystemdUserServiceCommand } from './control_cmds/service.js';
+import { createPackagedDurableWorkflowSignalCommand } from './control_cmds/signal.js';
+import { createPackagedDurableWorkflowStartCommand } from './control_cmds/start.js';
+import { createPackagedDurableSubmitCommand } from './control_cmds/submit.js';
+import { createPackagedDurableWorkerCommand } from './control_cmds/worker.js';
 
 /**
- *
+ * Build a fresh packaged operator program. Identity is read lazily so help and
+ * immutable metadata commands do not open application control state.
+ * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, readRunOutput?: (request: {appId: string, runId: string}) => unknown | Promise<unknown>, runOutputOutput?: Partial<import('../../../runtime/operator/execution-ledger-run-output-command.js').ExecutionLedgerRunOutputPort>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, loadDurableWorkflowStartExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, loadDeveloperCliModule?: () => Promise<Record<string, any> | null> | Record<string, any> | null, durableWorkflowStartOutput?: Partial<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, durableWorkflowSignalOutput?: Partial<import('../../../runtime/operator/durable-workflow-signal-command.js').DurableWorkflowSignalCommandOutput>, deliverWorkflowSignal?: typeof import('../../../runtime/operator/durable-workflow-signal-command.js').deliverLocalDurableWorkflowSignal, loadDurableSubmitExecution?: () => Promise<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitExecutionHandle>, durableSubmitOutput?: Partial<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitCommandOutput>, submitActivity?: import('../../../runtime/operator/durable-submit-command.js').ResidentActivitySubmit, loadDurableWorkerExecution?: () => Promise<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerExecutionHandle>, durableWorkerOutput?: Partial<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerCommandOutput>, runResidentWorker?: import('../../../runtime/operator/durable-worker-command.js').ResidentActivityWorkerRunner, loadSystemdUserServiceOperator?: () => any | Promise<any>, systemdUserServiceOutput?: Partial<import('../../../runtime/operator/systemd-user-service-command.js').SystemdUserServiceCommandOutput>, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable command providers.
+ * @returns {Command} - Packaged operator program.
  */
-async function entrypoint() {
-  const argv = process.argv;
-  let stdinData = '';
-  if (!process.stdin.isTTY) {
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => {
-      stdinData += chunk;
+export function createProgram(options = {}) {
+  const resolveExpectedIdentity =
+    options.resolveExpectedIdentity ||
+    (async () => {
+      const pair = await readEmbeddedRevisionRuntimePair();
+      return {
+        appId: pair.runtime.appId,
+        revisionId: pair.runtime.revisionId,
+      };
     });
-    process.stdin.on('end', () => {
-      process.env.STDIN_DATA = stdinData;
-    });
-  }
-  process.env.CONFIG_DIR = paths.config;
-  process.env.CONFIG_FILE_PATH = `${process.env.CONFIG_DIR}/wharfie.config`;
-  process.env.LOGGING_FORMAT = 'cli';
-  process.env.LOGGING_LEVEL = 'warn';
-
-  const bootstrapInvocation = resolveBootstrapInvocation();
-  if (bootstrapInvocation) {
-    await paths.createWharfiePaths();
-    if (bootstrapInvocation.mode !== BOOTSTRAP_MODE_STATE_START) {
-      throw new Error(
-        `Unsupported ${BOOTSTRAP_MODE_ENV}: ${bootstrapInvocation.mode}`,
-      );
-    }
-    await stateStartCmd.parseAsync(
-      [argv[0] || 'node', 'start', ...bootstrapInvocation.args],
-      { from: 'node' },
-    );
-    return;
-  }
-
-  const program = new Command();
-  program.name('wharfie').description('CLI tool for Wharfie');
-  // .version(version);ctor/resources/builds/actor-system.js
-
-  program.addCommand(functionsCLI);
-  program.addCommand(infrastructureCLI);
-  program.addCommand(controlCLI);
-
-  program.hook('preAction', async () => {
-    await paths.createWharfiePaths();
-    // await paths.createWharfiePaths();
-    // if (fs.existsSync(process.env.CONFIG_FILE_PATH)) {
-    //   try {
-    //     config.setConfig(
-    //       JSON.parse(fs.readFileSync(process.env.CONFIG_FILE_PATH, 'utf8'))
-    //     );
-    //     config.setEnvironment();
-    //   } catch (err) {
-    //     const lastArgs = process.argv.slice(-2);
-    //     if (!(lastArgs.includes('config') && lastArgs.includes('wharfie'))) {
-    //       displayFailure('Failed to load config. Run "wharfie config" to resolve.');
-    //       // eslint-disable-next-line no-process-exit
-    //       process.exit(1);
-    //     }
-    //   }
-    // }
-    // try {
-    //   await config.validate();
-    // } catch (err) {
-    //   displayFailure(err);
-    //   // eslint-disable-next-line no-process-exit
-    //   process.exit(1);
-    // }
-    // await checkForNewRelease();
+  const {
+    inspectCommand,
+    recoverCommand,
+    reconcileCommand,
+    reconcileEffectCommand,
+    retryEffectCommand,
+    cancelCommand,
+  } = createExecutionLedgerOperatorCommands({
+    resolveExpectedIdentity,
+    requireLocalOwnership: true,
+  });
+  const listCommand = createExecutionLedgerHistoryCommand({
+    async resolveIdentity() {
+      const identity = await resolveExpectedIdentity();
+      return { appId: identity.appId };
+    },
+  });
+  const logsCommand = createExecutionLedgerActivityLogCommand({
+    async resolveAppId() {
+      return (await resolveExpectedIdentity()).appId;
+    },
+  });
+  const outputCommand = createExecutionLedgerRunOutputCommand({
+    async resolveAppId() {
+      return (await resolveExpectedIdentity()).appId;
+    },
+    ...(options.readRunOutput === undefined
+      ? {}
+      : { readOutput: options.readRunOutput }),
+    ...(options.runOutputOutput === undefined
+      ? {}
+      : { output: options.runOutputOutput }),
+  });
+  const runCommand = createPackagedDurableRunCommand({
+    ...(options.loadDurableRunExecution === undefined
+      ? {}
+      : { loadExecution: options.loadDurableRunExecution }),
+    ...(options.durableRunOutput === undefined
+      ? {}
+      : { output: options.durableRunOutput }),
+    ...(options.runActivity === undefined
+      ? {}
+      : { runActivity: options.runActivity }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
+  const submitCommand = createPackagedDurableSubmitCommand({
+    ...(options.loadDurableSubmitExecution === undefined
+      ? {}
+      : { loadExecution: options.loadDurableSubmitExecution }),
+    ...(options.durableSubmitOutput === undefined
+      ? {}
+      : { output: options.durableSubmitOutput }),
+    ...(options.submitActivity === undefined
+      ? {}
+      : { submit: options.submitActivity }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
+  const startCommand = createPackagedDurableWorkflowStartCommand({
+    ...(options.loadDurableWorkflowStartExecution === undefined
+      ? {}
+      : { loadExecution: options.loadDurableWorkflowStartExecution }),
+    ...(options.durableWorkflowStartOutput === undefined
+      ? {}
+      : { output: options.durableWorkflowStartOutput }),
+    ...(options.loadDeveloperCliModule === undefined
+      ? {}
+      : { loadCliModule: options.loadDeveloperCliModule }),
+    ...(options.startWorkflow === undefined
+      ? {}
+      : { startWorkflow: options.startWorkflow }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
+  const workerCommand = createPackagedDurableWorkerCommand({
+    ...(options.loadDurableWorkerExecution === undefined
+      ? {}
+      : { loadExecution: options.loadDurableWorkerExecution }),
+    ...(options.durableWorkerOutput === undefined
+      ? {}
+      : { output: options.durableWorkerOutput }),
+    ...(options.runResidentWorker === undefined
+      ? {}
+      : { runWorker: options.runResidentWorker }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
+  const signalCommand = createPackagedDurableWorkflowSignalCommand({
+    resolveExpectedIdentity,
+    ...(options.durableWorkflowSignalOutput === undefined
+      ? {}
+      : { output: options.durableWorkflowSignalOutput }),
+    ...(options.deliverWorkflowSignal === undefined
+      ? {}
+      : { deliverSignal: options.deliverWorkflowSignal }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
+  const serviceCommand = createPackagedSystemdUserServiceCommand({
+    ...(options.loadSystemdUserServiceOperator === undefined
+      ? {}
+      : { loadOperator: options.loadSystemdUserServiceOperator }),
+    ...(options.systemdUserServiceOutput === undefined
+      ? {}
+      : { output: options.systemdUserServiceOutput }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
+  const deploymentCommand = createPackagedDeploymentCommand({
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
   });
 
-  // Show help if no command is provided
+  const program = new Command()
+    .name('wharfie')
+    .description('Wharfie operator commands for this packaged application')
+    .addCommand(createPackagedManifestCommand())
+    .addCommand(createPackagedMetadataCommand())
+    .addCommand(runCommand)
+    .addCommand(startCommand)
+    .addCommand(submitCommand)
+    .addCommand(workerCommand)
+    .addCommand(listCommand)
+    .addCommand(logsCommand)
+    .addCommand(outputCommand)
+    .addCommand(inspectCommand)
+    .addCommand(recoverCommand)
+    .addCommand(reconcileCommand)
+    .addCommand(reconcileEffectCommand)
+    .addCommand(retryEffectCommand)
+    .addCommand(cancelCommand)
+    .addCommand(signalCommand)
+    .addCommand(serviceCommand)
+    .addCommand(deploymentCommand);
+
+  return program;
+}
+
+/**
+ * Run the deliberately small public operator surface embedded in an app SEA.
+ * Runtime service bootstrap is selected through hidden environment state and
+ * does not share this public argv namespace.
+ * @param {string[]} [argv] - Node-style argv.
+ * @param {{loadDeveloperCliModule?: () => Promise<Record<string, any> | null> | Record<string, any> | null}} [options] - Packaged application seams.
+ * @returns {Promise<void>} - Resolves when the command completes.
+ */
+async function entrypoint(argv = process.argv, options = {}) {
+  const program = createProgram({
+    ...(options.loadDeveloperCliModule === undefined
+      ? {}
+      : { loadDeveloperCliModule: options.loadDeveloperCliModule }),
+  });
+
   if (!argv.slice(2).length) {
-    await program.outputHelp();
+    program.outputHelp();
     return;
   }
+
   await program.parseAsync(argv);
 }
 

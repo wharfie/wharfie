@@ -1,0 +1,359 @@
+{
+  "schemaVersion": 1,
+  "kind": "wharfie.steady-file-systemd-proof.prepare",
+  "commit": "08cc64fb8e9e1370d6488aa65ba12bc6c8866482",
+  "preparedAt": 1785277600853,
+  "verifierProcessId": 7882,
+  "appId": "steady-file-demo",
+  "workflowId": "verify-stable",
+  "input": {
+    "path": "/var/tmp/wharfie-systemd-proof/artifact.tar",
+    "bytes": 43,
+    "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e"
+  },
+  "package": {
+    "name": "@wharfie/wharfie",
+    "version": "0.0.15",
+    "tarballSha256": "b21eaf73c5cca91ef2aff55d42c5e6cc326066898a55ecbc2c0a6f0a5ef8b9b0",
+    "packedFileCount": 284
+  },
+  "artifacts": {
+    "source": {
+      "artifactPath": "/var/tmp/wharfie-systemd-proof/dist/source/steady-file-demo-sha256-767e475a8fd0d9d7539321cd62abc4669d7b5355f5a1222375e8149adc336cb2",
+      "artifactId": "waf1_dn5HWo_Q2ddTkyHNYqvEZp17U1X1oSIjdegUmtwzbLI",
+      "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw",
+      "byteDigest": {
+        "algorithm": "sha256",
+        "value": "dn5HWo_Q2ddTkyHNYqvEZp17U1X1oSIjdegUmtwzbLI"
+      },
+      "size": 161352832,
+      "target": {
+        "nodeVersion": "24.13.1",
+        "platform": "linux",
+        "architecture": "arm64",
+        "libc": "glibc"
+      },
+      "sha256": "767e475a8fd0d9d7539321cd62abc4669d7b5355f5a1222375e8149adc336cb2"
+    },
+    "target": {
+      "artifactPath": "/var/tmp/wharfie-systemd-proof/dist/target/steady-file-demo-sha256-259218b646d7424b3c70fe3eac2832488c23efe923854f86f872b950691171e7",
+      "artifactId": "waf1_JZIYtkbXQks8cP4-rCgySIwj7-kjhU-G-HK5UGkRcec",
+      "revisionId": "wrv1_cFRsZ6l4aDkVQQWVEXYHXP6TtnInl2PtiV0zLsTiU88",
+      "byteDigest": {
+        "algorithm": "sha256",
+        "value": "JZIYtkbXQks8cP4-rCgySIwj7-kjhU-G-HK5UGkRcec"
+      },
+      "size": 161352832,
+      "target": {
+        "nodeVersion": "24.13.1",
+        "platform": "linux",
+        "architecture": "arm64",
+        "libc": "glibc"
+      },
+      "sha256": "259218b646d7424b3c70fe3eac2832488c23efe923854f86f872b950691171e7"
+    }
+  },
+  "authoredSourceFiles": {
+    "activities.js": "7c89f0b42c2f386a5ff90fda8a8f452844487cb91b148d9a8a112bc4532ca44e",
+    "cli.js": "b1e5c651cbc3e0975fa52c0e3c493735438bca7d7ad7b7dc0df50ad4c7b488da",
+    "file-stability.js": "aea7ef97d9d4ca0cc49946edbba08199566c1914109eec9c73bc91031975bd36",
+    "local.js": "84f54fc7a4a47c8afe903c0713163ed6c0a893312a5771fa4f412cc975d57619",
+    "wharfie.app.js": "e322872e6b629a18c4d9a8d805b2cd57a321d7a2f5796b8e6bffe4481bb9801b"
+  },
+  "targetMutation": {
+    "path": "file-stability.js",
+    "from": "export const STABILITY_WINDOW_MS = 250;",
+    "to": "export const STABILITY_WINDOW_MS = 500;",
+    "beforeSha256": "aea7ef97d9d4ca0cc49946edbba08199566c1914109eec9c73bc91031975bd36",
+    "afterSha256": "0f7cae471fddd9775a8f3c4b5cd76515c52716c23f98c42b386d55e2bbd0e2d2"
+  },
+  "toolchain": {
+    "node": "24.13.1",
+    "npm": "11.12.0"
+  },
+  "ordinary": {
+    "source": {
+      "path": "/var/tmp/wharfie-systemd-proof/artifact.tar",
+      "stable": true,
+      "baseline": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      },
+      "current": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      }
+    },
+    "packagedSource": {
+      "path": "/var/tmp/wharfie-systemd-proof/artifact.tar",
+      "stable": true,
+      "baseline": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      },
+      "current": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      }
+    },
+    "packagedTarget": {
+      "path": "/var/tmp/wharfie-systemd-proof/artifact.tar",
+      "stable": true,
+      "baseline": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      },
+      "current": {
+        "bytes": 43,
+        "sha256": "9dc7460f95748e98f7c96a9604071b519a91e13801de1653ae30d298b616218e",
+        "readStable": true
+      }
+    },
+    "nodeAbsentFromPackagedPath": true
+  },
+  "start": {
+    "schemaVersion": 1,
+    "kind": "wharfie.execution-ledger.workflow-start",
+    "appId": "steady-file-demo",
+    "runId": "wfr_YUlf5nVBBR9HcwvC-EkZdC8vxaqWMuZidn6B7T9-mcc",
+    "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw",
+    "workflowId": "verify-stable",
+    "idempotencyKey": "manual-78484ddd-ce16-4185-9456-624508e9cdc6",
+    "reused": false,
+    "runStatus": "RUNNING",
+    "cursor": {
+      "disposition": "ACTIVITY_RUNNABLE",
+      "stepId": "baseline",
+      "stepIndex": 0
+    },
+    "nextActivation": {
+      "kind": "activity",
+      "status": "RUNNABLE"
+    }
+  },
+  "pending": {
+    "schemaVersion": 8,
+    "kind": "wharfie.execution-ledger.run",
+    "integrity": {
+      "verified": true
+    },
+    "run": {
+      "runId": "wfr_YUlf5nVBBR9HcwvC-EkZdC8vxaqWMuZidn6B7T9-mcc",
+      "appId": "steady-file-demo",
+      "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw",
+      "trigger": {
+        "kind": "workflow",
+        "workflowId": "verify-stable",
+        "planId": "wfp_k596LNDgeXw4cr3dht1CbK3Pnpd7iC6gMggh80t0azk"
+      },
+      "status": "RUNNING",
+      "version": 1,
+      "lastSequence": 1,
+      "createdAt": 1785277581413,
+      "updatedAt": 1785277581413
+    },
+    "invocations": [
+      {
+        "invocationId": "wfi_IbAtfA7BpVAjy1u4Yaa90foLWJQ9ZUF5COUDMxl4K1Y",
+        "activityId": "capture",
+        "status": "RUNNABLE",
+        "generation": 0,
+        "version": 1,
+        "lastSequence": 1,
+        "createdAt": 1785277581413,
+        "updatedAt": 1785277581413,
+        "workflow": {
+          "workflowId": "verify-stable",
+          "planId": "wfp_k596LNDgeXw4cr3dht1CbK3Pnpd7iC6gMggh80t0azk",
+          "continuationId": "wfc_YQB_hsmov4O1mSO4fVj8r2Nm9TOtTRDjqSApt9L8-WM",
+          "stepId": "baseline",
+          "stepIndex": 0
+        }
+      }
+    ],
+    "attempts": [],
+    "effects": [],
+    "timers": [],
+    "signalWaits": [],
+    "signalDeliveries": [],
+    "history": [
+      {
+        "sequence": 1,
+        "type": "workflow-run-created",
+        "observedAt": 1785277581413,
+        "actor": {
+          "kind": "workflow-operator",
+          "id": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw"
+        }
+      }
+    ],
+    "workflowCursor": {
+      "runId": "wfr_YUlf5nVBBR9HcwvC-EkZdC8vxaqWMuZidn6B7T9-mcc",
+      "appId": "steady-file-demo",
+      "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw",
+      "workflowId": "verify-stable",
+      "planId": "wfp_k596LNDgeXw4cr3dht1CbK3Pnpd7iC6gMggh80t0azk",
+      "stepId": "baseline",
+      "stepIndex": 0,
+      "continuationId": "wfc_YQB_hsmov4O1mSO4fVj8r2Nm9TOtTRDjqSApt9L8-WM",
+      "invocationId": "wfi_IbAtfA7BpVAjy1u4Yaa90foLWJQ9ZUF5COUDMxl4K1Y",
+      "disposition": "ACTIVITY_RUNNABLE",
+      "outputs": [],
+      "version": 1,
+      "lastSequence": 1,
+      "createdAt": 1785277581413,
+      "updatedAt": 1785277581413
+    }
+  },
+  "pendingHistory": {
+    "schemaVersion": 1,
+    "kind": "wharfie.execution-ledger.run-page",
+    "authority": "none",
+    "authoritative": false,
+    "integrity": {
+      "verified": true
+    },
+    "scope": {
+      "appId": "steady-file-demo"
+    },
+    "items": [
+      {
+        "runId": "wfr_YUlf5nVBBR9HcwvC-EkZdC8vxaqWMuZidn6B7T9-mcc",
+        "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw",
+        "kind": "workflow",
+        "status": "RUNNING",
+        "version": 1,
+        "lastSequence": 1,
+        "createdAt": 1785277581413,
+        "updatedAt": 1785277581413
+      }
+    ],
+    "nextCursor": null
+  },
+  "service": {
+    "beforeStart": {
+      "schemaVersion": 3,
+      "kind": "wharfie.service.status",
+      "appId": "steady-file-demo",
+      "unit": "wharfie-steady-file-demo.service",
+      "installation": {
+        "state": "absent"
+      },
+      "systemd": {
+        "mainPid": 0,
+        "result": "success",
+        "execMainStatus": 0,
+        "loadState": "not-found",
+        "activeState": "inactive",
+        "subState": "dead",
+        "fragmentPath": "",
+        "dropInPaths": "",
+        "unitFileState": "",
+        "needDaemonReload": false
+      },
+      "runtime": null,
+      "wiring": {
+        "state": "absent",
+        "unitFile": "absent",
+        "selection": "absent",
+        "effectiveUnit": "absent",
+        "cleanupPending": false
+      },
+      "health": "absent",
+      "activation": null,
+      "desiredConvergence": {
+        "schemaVersion": 1,
+        "kind": "wharfie.service.desired-convergence",
+        "appId": "steady-file-demo",
+        "unit": "wharfie-steady-file-demo.service",
+        "desired": {
+          "artifactId": "waf1_dn5HWo_Q2ddTkyHNYqvEZp17U1X1oSIjdegUmtwzbLI",
+          "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw"
+        },
+        "disposition": "authorized",
+        "basis": "physical-absence"
+      }
+    },
+    "afterStart": {
+      "schemaVersion": 3,
+      "kind": "wharfie.service.status",
+      "appId": "steady-file-demo",
+      "unit": "wharfie-steady-file-demo.service",
+      "installation": {
+        "state": "absent"
+      },
+      "systemd": {
+        "mainPid": 0,
+        "result": "success",
+        "execMainStatus": 0,
+        "loadState": "not-found",
+        "activeState": "inactive",
+        "subState": "dead",
+        "fragmentPath": "",
+        "dropInPaths": "",
+        "unitFileState": "",
+        "needDaemonReload": false
+      },
+      "runtime": null,
+      "wiring": {
+        "state": "absent",
+        "unitFile": "absent",
+        "selection": "absent",
+        "effectiveUnit": "absent",
+        "cleanupPending": false
+      },
+      "health": "absent",
+      "activation": null,
+      "desiredConvergence": {
+        "schemaVersion": 1,
+        "kind": "wharfie.service.desired-convergence",
+        "appId": "steady-file-demo",
+        "unit": "wharfie-steady-file-demo.service",
+        "desired": {
+          "artifactId": "waf1_dn5HWo_Q2ddTkyHNYqvEZp17U1X1oSIjdegUmtwzbLI",
+          "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw"
+        },
+        "disposition": "authorized",
+        "basis": "physical-absence"
+      }
+    },
+    "privateStartStorage": {
+      "dataRoot": "0700",
+      "applicationsRoot": "0700",
+      "appRoot": "0700",
+      "stateRoot": "0700",
+      "controlPath": "0700",
+      "lmdbRoot": "0700",
+      "payloadPath": "0700"
+    },
+    "install": {
+      "schemaVersion": 1,
+      "kind": "wharfie.service.result",
+      "action": "install",
+      "requestStatus": "fulfilled",
+      "appId": "steady-file-demo",
+      "outcome": "target-active",
+      "unit": "wharfie-steady-file-demo.service",
+      "health": "healthy",
+      "activeArtifactId": "waf1_dn5HWo_Q2ddTkyHNYqvEZp17U1X1oSIjdegUmtwzbLI",
+      "activeRevisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw",
+      "rollbackArtifactId": null,
+      "rollbackRevisionId": null,
+      "reason": null,
+      "blockingWork": null
+    },
+    "installed": {
+      "artifactId": "waf1_dn5HWo_Q2ddTkyHNYqvEZp17U1X1oSIjdegUmtwzbLI",
+      "revisionId": "wrv1_2DVc0_W6QppfFBYjXUsKyMrM4jJ_0qXWnJQQHNrb7dw",
+      "processId": 8288,
+      "generation": 1,
+      "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/steady-file-demo/releases/waf1_dn5HWo_Q2ddTkyHNYqvEZp17U1X1oSIjdegUmtwzbLI/app",
+      "releaseSha256": "767e475a8fd0d9d7539321cd62abc4669d7b5355f5a1222375e8149adc336cb2"
+    }
+  }
+}

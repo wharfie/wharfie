@@ -1,32 +1,24 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
-import { createOperationsTable } from '../../src/core/lib/db/tables/operations.js';
-import Resource from '../../src/core/lib/graph/resource.js';
 import {
   closeDB,
-  resolveOperationsTableName,
+  createControlDBClient,
+  resolveControlAdapterName,
+  resolveExecutionLedgerTableName,
+  resolveExecutionPayloadPath,
+  resolveExecutionPayloadStoreId,
+  resolveLedgerServiceSessionPath,
   resolveStateAdapterName,
 } from '../../src/core/lib/config/db.js';
-import {
-  __setMockState as __resetOperationsStore,
-  getOperationsStore,
-} from '../../src/core/lib/db/operations/store.js';
 import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../src/core/lib/db/state/store.js';
 
 describe('Unified DB config', () => {
   afterEach(async () => {
-    // Ensure we never leak a shared singleton between tests.
-    try {
-      await closeDB();
-    } finally {
-      __resetOperationsStore();
-    }
+    await closeDB();
   });
 
   test('state adapter selection never infers DynamoDB from AWS env vars', async () => {
@@ -44,64 +36,136 @@ describe('Unified DB config', () => {
     );
   });
 
-  test('operations table factory requires an explicit tableName', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'wharfie-ops-table-'));
-    const db = createVanillaDB({ path: dir });
-    try {
-      expect(() => createOperationsTable({ db })).toThrow(/tableName/i);
-    } finally {
-      await db.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test('control store has isolated test defaults and durable local defaults', async () => {
+    await withEnv(
+      {
+        NODE_ENV: 'test',
+        AWS_REGION: 'us-east-1',
+        AWS_EXECUTION_ENV: 'AWS_Lambda_nodejs22.x',
+        WHARFIE_CONTROL_ADAPTER: undefined,
+        WHARFIE_CONTROL_PATH: undefined,
+        WHARFIE_EXECUTION_LEDGER_TABLE: undefined,
+      },
+      async () => {
+        expect(resolveControlAdapterName()).toBe('vanilla');
+        expect(resolveExecutionLedgerTableName()).toBe(
+          'wharfie-execution-ledger-v10',
+        );
+
+        const first = await createControlDBClient();
+        const second = await createControlDBClient();
+        try {
+          await first.put({
+            tableName: 'isolation-probe',
+            keyName: 'id',
+            record: { id: 'only-in-first' },
+          });
+          expect(
+            await second.get({
+              tableName: 'isolation-probe',
+              keyName: 'id',
+              keyValue: 'only-in-first',
+            }),
+          ).toBeUndefined();
+        } finally {
+          await first.close();
+          await second.close();
+        }
+      },
+    );
+
+    await withEnv(
+      {
+        NODE_ENV: 'development',
+        AWS_REGION: 'us-east-1',
+        AWS_EXECUTION_ENV: 'AWS_Lambda_nodejs22.x',
+        WHARFIE_CONTROL_ADAPTER: undefined,
+      },
+      async () => {
+        expect(resolveControlAdapterName()).toBe('lmdb');
+      },
+    );
   });
 
-  test('operations store resolves table name at call time and isolates tables', async () => {
-    await withEnv({ OPERATIONS_TABLE: 'ops-a' }, async () => {
-      expect(resolveOperationsTableName()).toBe('ops-a');
-
-      const storeA = await getOperationsStore();
-      const r1 = makeResource('r1');
-      await storeA.putResource(r1);
-
-      const foundA = await storeA.getResource('r1');
-      expect(foundA?.id).toBe('r1');
-
-      // Flip env var AFTER the module is already imported.
-      await withEnv({ OPERATIONS_TABLE: 'ops-b' }, async () => {
-        expect(resolveOperationsTableName()).toBe('ops-b');
-
-        const storeB = await getOperationsStore();
-        const foundB = await storeB.getResource('r1');
-        expect(foundB).toBe(null);
-
-        const r2 = makeResource('r2');
-        await storeB.putResource(r2);
-
-        const foundA2 = await storeA.getResource('r2');
-        expect(foundA2).toBe(null);
-      });
+  test('control store honors explicit adapter selection', async () => {
+    await withEnv({ WHARFIE_CONTROL_ADAPTER: 'LMDB' }, async () => {
+      expect(resolveControlAdapterName()).toBe('lmdb');
+    });
+    await withEnv({ WHARFIE_CONTROL_ADAPTER: 'dynamodb' }, async () => {
+      expect(resolveControlAdapterName()).toBe('dynamodb');
+    });
+    await withEnv({ WHARFIE_CONTROL_ADAPTER: 'vanilla' }, async () => {
+      expect(resolveControlAdapterName()).toBe('vanilla');
     });
   });
-});
 
-/**
- * @param {string} id
- */
-function makeResource(id) {
-  return new Resource({
-    id,
-    region: 'us-east-1',
-    athena_workgroup: 'primary',
-    daemon_config: {
-      Role: 'arn:aws:iam::123456789012:role/test',
-    },
-    resource_properties: {},
-    // @ts-ignore
-    source_properties: { name: 'src' },
-    // @ts-ignore
-    destination_properties: { name: 'dst' },
+  test('execution ledger table names resolve independently at call time', async () => {
+    await withEnv(
+      { WHARFIE_EXECUTION_LEDGER_TABLE: ' ledger-a ' },
+      async () => {
+        expect(resolveExecutionLedgerTableName()).toBe('ledger-a');
+        await withEnv(
+          { WHARFIE_EXECUTION_LEDGER_TABLE: 'ledger-b' },
+          async () => {
+            expect(resolveExecutionLedgerTableName()).toBe('ledger-b');
+          },
+        );
+      },
+    );
   });
-}
+
+  test('execution payload storage is independently configurable and stable per root', async () => {
+    const controlPath = join(tmpdir(), 'wharfie-control-payload-config');
+    await withEnv(
+      {
+        WHARFIE_CONTROL_PATH: controlPath,
+        WHARFIE_EXECUTION_PAYLOAD_PATH: undefined,
+        WHARFIE_EXECUTION_PAYLOAD_STORE_ID: undefined,
+      },
+      async () => {
+        const payloadPath = resolveExecutionPayloadPath();
+        expect(payloadPath).toBe(join(controlPath, 'execution-payloads'));
+        expect(resolveExecutionPayloadStoreId(payloadPath)).toMatch(
+          /^payload-[a-f0-9]{55}$/,
+        );
+        expect(resolveExecutionPayloadStoreId(payloadPath)).toBe(
+          resolveExecutionPayloadStoreId(payloadPath),
+        );
+      },
+    );
+    await withEnv(
+      {
+        WHARFIE_EXECUTION_PAYLOAD_PATH: ' /tmp/ignored ',
+        WHARFIE_EXECUTION_PAYLOAD_STORE_ID: 'portable-payload-store',
+      },
+      async () => {
+        expect(resolveExecutionPayloadPath()).toBe('/tmp/ignored');
+        expect(resolveExecutionPayloadStoreId()).toBe('portable-payload-store');
+      },
+    );
+  });
+
+  test('ledger-service sessions share the configured local control namespace', async () => {
+    const controlPath = join(tmpdir(), 'wharfie-control-service-config');
+    await withEnv(
+      {
+        WHARFIE_CONTROL_PATH: controlPath,
+        WHARFIE_LEDGER_SERVICE_SESSION_PATH: undefined,
+      },
+      async () => {
+        expect(resolveLedgerServiceSessionPath()).toBe(
+          join(controlPath, 'ledger-service-sessions'),
+        );
+      },
+    );
+    await withEnv(
+      { WHARFIE_LEDGER_SERVICE_SESSION_PATH: ' /tmp/ledger-sessions ' },
+      async () => {
+        expect(resolveLedgerServiceSessionPath()).toBe('/tmp/ledger-sessions');
+      },
+    );
+  });
+});
 
 /**
  * Temporarily applies env var overrides for the duration of the callback.

@@ -30,8 +30,8 @@ Repo-specific constraints you must obey
 - Lint command is: eslint . AND prettier --check "{*,**/*}.{js,json}"
 - Typecheck is strict tsc with allowJs+checkJs; use JSDoc types for anything non-trivial.
 - Tests run via Jest with Node ESM support (--experimental-vm-modules) and TZ=UTC.
-- CI runs: npm run lint, npm run test, npm run typecheck.
-- Node target is 24.13.1 (.nvmrc / package.json engines). Use Node 24.13.1 + npm 11.10.0 if available in the environment.
+- CI runs `npm run test:ci`, which covers lint, strict type checking, Jest, and npm package-content verification.
+- Node target is 24.13.1 (.nvmrc / package.json engines). Use Node 24.13.1 + npm 11.12.0 if available in the environment.
 
 Mandatory workflow
 

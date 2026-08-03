@@ -1,0 +1,2663 @@
+{
+  "schemaVersion": 2,
+  "kind": "wharfie.systemd-proof.complete",
+  "commit": "939e0f251db97189d9f003048570bd29cabc5165",
+  "completedAt": 1784584651106,
+  "appId": "systemd-service-proof",
+  "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+  "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+  "artifact": {
+    "byteDigest": {
+      "algorithm": "sha256",
+      "value": "O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8"
+    },
+    "size": 145624192,
+    "target": {
+      "nodeVersion": "24.13.1",
+      "platform": "linux",
+      "architecture": "arm64",
+      "libc": "glibc"
+    },
+    "sha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f"
+  },
+  "package": {
+    "name": "@wharfie/wharfie",
+    "version": "0.0.15",
+    "tarballSha256": "9d5a73a4ee5f25b8e19312d20b954ff9de953f679da81eacfb7d4aea5efaf9a6",
+    "packedFileCount": 147
+  },
+  "toolchain": {
+    "node": "24.13.1",
+    "npm": "11.12.0"
+  },
+  "runId": "wfr_q4sJgm_ddBXSC1bAxdpI5wgZFoTjsdEtHrW3OI5-cxk",
+  "boot": {
+    "before": "58335403-933e-4843-b6b8-31f44c7cef7a",
+    "after": "9c42b975-a2bb-48f4-8f95-f080cfb0c4e1",
+    "powerCycle": "forced-stop-start",
+    "sessionsBeforeCheck": [],
+    "automaticStart": true,
+    "processId": 797,
+    "generation": 3
+  },
+  "crashReplacement": {
+    "before": {
+      "processId": 8200,
+      "generation": 1
+    },
+    "after": {
+      "processId": 8356,
+      "generation": 2
+    }
+  },
+  "activation": {
+    "artifacts": {
+      "source": {
+        "artifactPath": "/var/tmp/wharfie-systemd-proof/dist/source/systemd-service-proof-sha256-3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+        "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+        "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+        "byteDigest": {
+          "algorithm": "sha256",
+          "value": "O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8"
+        },
+        "size": 145624192,
+        "target": {
+          "nodeVersion": "24.13.1",
+          "platform": "linux",
+          "architecture": "arm64",
+          "libc": "glibc"
+        },
+        "sha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f"
+      },
+      "target": {
+        "artifactPath": "/var/tmp/wharfie-systemd-proof/dist/target/systemd-service-proof-sha256-a40316b732bc6c8b05222ebc568c3e229b5e15130a835c2166f7801000947529",
+        "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+        "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+        "byteDigest": {
+          "algorithm": "sha256",
+          "value": "pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk"
+        },
+        "size": 145624192,
+        "target": {
+          "nodeVersion": "24.13.1",
+          "platform": "linux",
+          "architecture": "arm64",
+          "libc": "glibc"
+        },
+        "sha256": "a40316b732bc6c8b05222ebc568c3e229b5e15130a835c2166f7801000947529"
+      },
+      "failingTarget": {
+        "artifactPath": "/var/tmp/wharfie-systemd-proof/dist/failing-target/systemd-service-proof-sha256-e85f4841f6584963b68cc2335a064213b4f33e2be60f667efd3d9112741f6e13",
+        "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+        "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ",
+        "byteDigest": {
+          "algorithm": "sha256",
+          "value": "6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM"
+        },
+        "size": 145624192,
+        "target": {
+          "nodeVersion": "24.13.1",
+          "platform": "linux",
+          "architecture": "arm64",
+          "libc": "glibc"
+        },
+        "sha256": "e85f4841f6584963b68cc2335a064213b4f33e2be60f667efd3d9112741f6e13"
+      }
+    },
+    "faultInjection": {
+      "kind": "clean-resident-exit-before-ready",
+      "sourceSuffix": "src/core/runtime/services/ledger-service-command.js",
+      "pristineSha256": "8813216117ae3da088ba4c97e67177276e24b7b11baa8b01eff1d07237d81b6e",
+      "injectedSha256": "e1beb8f7f9e9bb8d36d10479158d0cf3bd2987b4ae641d1429bb6f13a22c9d25",
+      "injectionSha256": "db7d6133ebccc2e5754b574866406449d775e876941a2f1ec02f795ff92756da",
+      "expectedExitStatus": 0,
+      "expectedSystemdResult": "success"
+    },
+    "before": {
+      "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+      "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+      "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+      "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+      "processId": 797,
+      "generation": 3,
+      "lastOutcome": "target-active"
+    },
+    "update": {
+      "expectedCaseCount": 5,
+      "observedCaseCount": 5,
+      "cases": [
+        {
+          "mode": "forward",
+          "action": "update",
+          "writeNumber": 1,
+          "phase": "QUIESCING",
+          "activation": {
+            "recordVersion": 6,
+            "selectionGeneration": 1,
+            "phase": "QUIESCING",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": null,
+            "transition": {
+              "transitionId": "wlat_iD-uukKkXNTFBeYV-cZtSEqmWNYfHKr7Bz81EEn9-SQ",
+              "action": "update",
+              "sourceRecordVersion": 5,
+              "sourceSelectionGeneration": 1,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "startedAt": 1784584331486
+            },
+            "lastTransition": {
+              "transitionId": "wlat_3XvwMYO2JHw4l1UprV1gU0YK8BDXtyKF9BdLkZdUtl0",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": null
+            },
+            "systemd": {
+              "MainPID": "797",
+              "Result": "success",
+              "ExecMainCode": "0",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "active",
+              "SubState": "running",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app"
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 1,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 5,
+            "selectionGeneration": 1,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": null,
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_3XvwMYO2JHw4l1UprV1gU0YK8BDXtyKF9BdLkZdUtl0",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "activeRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "rollbackArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "rollbackRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk/app",
+              "releaseSha256": "a40316b732bc6c8b05222ebc568c3e229b5e15130a835c2166f7801000947529",
+              "processId": 1651,
+              "generation": 4,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 10,
+              "selectionGeneration": 2,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "desired": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_iD-uukKkXNTFBeYV-cZtSEqmWNYfHKr7Bz81EEn9-SQ",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "update",
+          "writeNumber": 2,
+          "phase": "QUIESCENT",
+          "activation": {
+            "recordVersion": 17,
+            "selectionGeneration": 3,
+            "phase": "QUIESCENT",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": {
+              "transitionId": "wlat_HVxhzoezP_SkGBtMN4604LHZ_j3XbX5BhTU23a_OkGI",
+              "action": "update",
+              "sourceRecordVersion": 15,
+              "sourceSelectionGeneration": 3,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "startedAt": 1784584354589
+            },
+            "lastTransition": {
+              "transitionId": "wlat_UGuQzkXIq7ZXdfyJw8eL49Li84ofasm0ymD8h5j3spo",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 3,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 15,
+            "selectionGeneration": 3,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_UGuQzkXIq7ZXdfyJw8eL49Li84ofasm0ymD8h5j3spo",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "activeRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "rollbackArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "rollbackRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk/app",
+              "releaseSha256": "a40316b732bc6c8b05222ebc568c3e229b5e15130a835c2166f7801000947529",
+              "processId": 1886,
+              "generation": 6,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 20,
+              "selectionGeneration": 4,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "desired": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_HVxhzoezP_SkGBtMN4604LHZ_j3XbX5BhTU23a_OkGI",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "update",
+          "writeNumber": 3,
+          "phase": "SELECTED",
+          "activation": {
+            "recordVersion": 28,
+            "selectionGeneration": 6,
+            "phase": "SELECTED",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": {
+              "transitionId": "wlat_iadtQOrvCTpjKl8-4mgCxRh58j2rHUvFi5NjSaoSKxE",
+              "action": "update",
+              "sourceRecordVersion": 25,
+              "sourceSelectionGeneration": 5,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "startedAt": 1784584377631
+            },
+            "lastTransition": {
+              "transitionId": "wlat_REn41SCU0WOyCM4wrdijqvCW5FExhpG8BNR-7pZ1qlw",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "previous": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 5,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 25,
+            "selectionGeneration": 5,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_REn41SCU0WOyCM4wrdijqvCW5FExhpG8BNR-7pZ1qlw",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "activeRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "rollbackArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "rollbackRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk/app",
+              "releaseSha256": "a40316b732bc6c8b05222ebc568c3e229b5e15130a835c2166f7801000947529",
+              "processId": 2121,
+              "generation": 8,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 30,
+              "selectionGeneration": 6,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "desired": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_iadtQOrvCTpjKl8-4mgCxRh58j2rHUvFi5NjSaoSKxE",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "update",
+          "writeNumber": 4,
+          "phase": "ACTIVATING",
+          "activation": {
+            "recordVersion": 39,
+            "selectionGeneration": 8,
+            "phase": "ACTIVATING",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": {
+              "transitionId": "wlat_MXxxNdeKJZ0XvD1ZCgHQDL9TgJQ5avR2MoDVQePLmV0",
+              "action": "update",
+              "sourceRecordVersion": 35,
+              "sourceSelectionGeneration": 7,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "startedAt": 1784584400831
+            },
+            "lastTransition": {
+              "transitionId": "wlat_siASfugXMPzuMP1-AnmP-j2ibth2i5UtvQQxrQXPm6o",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "previous": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 7,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 35,
+            "selectionGeneration": 7,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_siASfugXMPzuMP1-AnmP-j2ibth2i5UtvQQxrQXPm6o",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "activeRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "rollbackArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "rollbackRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk/app",
+              "releaseSha256": "a40316b732bc6c8b05222ebc568c3e229b5e15130a835c2166f7801000947529",
+              "processId": 2356,
+              "generation": 10,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 40,
+              "selectionGeneration": 8,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "desired": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_MXxxNdeKJZ0XvD1ZCgHQDL9TgJQ5avR2MoDVQePLmV0",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "update",
+          "writeNumber": 5,
+          "phase": "ACTIVE",
+          "activation": {
+            "recordVersion": 50,
+            "selectionGeneration": 10,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_iKRj5WEnKE7Le8akRFrQvJEpXM8Rery_D07SY8q-cCs",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "previous": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              }
+            },
+            "systemd": {
+              "MainPID": "2577",
+              "Result": "success",
+              "ExecMainCode": "0",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "active",
+              "SubState": "running",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk/app"
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 9,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 45,
+            "selectionGeneration": 9,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_7KAs3Twoo99SCZtwhaucO17kNQAY4wSCvDGZtNbbc60",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "activeRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "rollbackArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "rollbackRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk/app",
+              "releaseSha256": "a40316b732bc6c8b05222ebc568c3e229b5e15130a835c2166f7801000947529",
+              "processId": 2577,
+              "generation": 12,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 50,
+              "selectionGeneration": 10,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "desired": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_iKRj5WEnKE7Le8akRFrQvJEpXM8Rery_D07SY8q-cCs",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": true
+          }
+        }
+      ]
+    },
+    "rollback": {
+      "expectedCaseCount": 5,
+      "observedCaseCount": 5,
+      "cases": [
+        {
+          "mode": "forward",
+          "action": "rollback",
+          "writeNumber": 1,
+          "phase": "QUIESCING",
+          "activation": {
+            "recordVersion": 51,
+            "selectionGeneration": 10,
+            "phase": "QUIESCING",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": {
+              "transitionId": "wlat_VQkVIehrSCOJVtZFqcQF3eoViz1cRvvUd50cEfQqUsY",
+              "action": "rollback",
+              "sourceRecordVersion": 50,
+              "sourceSelectionGeneration": 10,
+              "source": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "target": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "startedAt": 1784584436638
+            },
+            "lastTransition": {
+              "transitionId": "wlat_iKRj5WEnKE7Le8akRFrQvJEpXM8Rery_D07SY8q-cCs",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "previous": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              }
+            },
+            "systemd": {
+              "MainPID": "2577",
+              "Result": "success",
+              "ExecMainCode": "0",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "active",
+              "SubState": "running",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk/app"
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 1,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 50,
+            "selectionGeneration": 10,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_iKRj5WEnKE7Le8akRFrQvJEpXM8Rery_D07SY8q-cCs",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 2722,
+              "generation": 13,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 55,
+              "selectionGeneration": 11,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_VQkVIehrSCOJVtZFqcQF3eoViz1cRvvUd50cEfQqUsY",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "rollback",
+          "writeNumber": 2,
+          "phase": "QUIESCENT",
+          "activation": {
+            "recordVersion": 62,
+            "selectionGeneration": 12,
+            "phase": "QUIESCENT",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": {
+              "transitionId": "wlat_cZG5l6rBfyUSj5jYE_fthpb-wcRDd1yQ7rQOzy5sZJA",
+              "action": "rollback",
+              "sourceRecordVersion": 60,
+              "sourceSelectionGeneration": 12,
+              "source": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "target": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "startedAt": 1784584459722
+            },
+            "lastTransition": {
+              "transitionId": "wlat_gV06Q-eiS_DiTzn73V49yOb9xfP7dwAb7LBlF3MNkU0",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "previous": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 3,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 60,
+            "selectionGeneration": 12,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_gV06Q-eiS_DiTzn73V49yOb9xfP7dwAb7LBlF3MNkU0",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 2960,
+              "generation": 15,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 65,
+              "selectionGeneration": 13,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_cZG5l6rBfyUSj5jYE_fthpb-wcRDd1yQ7rQOzy5sZJA",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "rollback",
+          "writeNumber": 3,
+          "phase": "SELECTED",
+          "activation": {
+            "recordVersion": 73,
+            "selectionGeneration": 15,
+            "phase": "SELECTED",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": {
+              "transitionId": "wlat_dhIw0GdCtxZj8lbexo-bRMQZwBmApbGkYK8bE115M84",
+              "action": "rollback",
+              "sourceRecordVersion": 70,
+              "sourceSelectionGeneration": 14,
+              "source": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "target": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "startedAt": 1784584483285
+            },
+            "lastTransition": {
+              "transitionId": "wlat_9_2pWLE8KS9dGw5w-epk2cNfz-GULfn3mYQBp0TYS5M",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 5,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 70,
+            "selectionGeneration": 14,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_9_2pWLE8KS9dGw5w-epk2cNfz-GULfn3mYQBp0TYS5M",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 3196,
+              "generation": 17,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 75,
+              "selectionGeneration": 15,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_dhIw0GdCtxZj8lbexo-bRMQZwBmApbGkYK8bE115M84",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "rollback",
+          "writeNumber": 4,
+          "phase": "ACTIVATING",
+          "activation": {
+            "recordVersion": 84,
+            "selectionGeneration": 17,
+            "phase": "ACTIVATING",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": {
+              "transitionId": "wlat_NVEMHdUdEclb2s06RQqls9KrSrn-9MX8tN3Tqih8XzQ",
+              "action": "rollback",
+              "sourceRecordVersion": 80,
+              "sourceSelectionGeneration": 16,
+              "source": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "target": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "startedAt": 1784584506847
+            },
+            "lastTransition": {
+              "transitionId": "wlat_9xZEdYtxTYq5M2TRAS7Jvi5EpFlIuQOPbhAY5e6zLos",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 7,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 80,
+            "selectionGeneration": 16,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_9xZEdYtxTYq5M2TRAS7Jvi5EpFlIuQOPbhAY5e6zLos",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 3436,
+              "generation": 19,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 85,
+              "selectionGeneration": 17,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_NVEMHdUdEclb2s06RQqls9KrSrn-9MX8tN3Tqih8XzQ",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "forward",
+          "action": "rollback",
+          "writeNumber": 5,
+          "phase": "ACTIVE",
+          "activation": {
+            "recordVersion": 95,
+            "selectionGeneration": 19,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_ocD_rq_AZ7Q614A5FSpVPTjJkVqaUCHCHtuwRqyOwyA",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              }
+            },
+            "systemd": {
+              "MainPID": "3657",
+              "Result": "success",
+              "ExecMainCode": "0",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "active",
+              "SubState": "running",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app"
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 9,
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "baseline": {
+            "recordVersion": 90,
+            "selectionGeneration": 18,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "desired": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_dulmoVPSgngabL-VmMQzFfX1mGwx6-2-exNTGBVWY8w",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "target-active",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 3657,
+              "generation": 21,
+              "lastOutcome": "target-active"
+            },
+            "activation": {
+              "recordVersion": 95,
+              "selectionGeneration": 19,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_ocD_rq_AZ7Q614A5FSpVPTjJkVqaUCHCHtuwRqyOwyA",
+                "outcome": "target-active"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": true
+          }
+        }
+      ]
+    },
+    "restoration": {
+      "expectedCaseCount": 5,
+      "observedCaseCount": 5,
+      "cases": [
+        {
+          "mode": "restore",
+          "action": "update",
+          "writeNumber": 5,
+          "phase": "QUIESCING",
+          "activation": {
+            "recordVersion": 100,
+            "selectionGeneration": 20,
+            "phase": "QUIESCING",
+            "selected": {
+              "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+              "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": {
+              "transitionId": "wlat_DaV1iXpLAx4MsujRp1V0nfFmUbqLspoOen66htTAE-0",
+              "action": "update",
+              "sourceRecordVersion": 95,
+              "sourceSelectionGeneration": 19,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+                "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+              },
+              "startedAt": 1784584544545
+            },
+            "lastTransition": {
+              "transitionId": "wlat_ocD_rq_AZ7Q614A5FSpVPTjJkVqaUCHCHtuwRqyOwyA",
+              "outcome": "target-active"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+                "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+              },
+              "previous": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 9,
+          "cleanExit": {
+            "MainPID": "0",
+            "Result": "success",
+            "ExecMainCode": "1",
+            "ExecMainStatus": "0",
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+            "DropInPaths": "",
+            "UnitFileState": "enabled",
+            "NeedDaemonReload": "no"
+          },
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "embeddedFault": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/runtime/services/ledger-service-command.js",
+            "sourceSha256": "e1beb8f7f9e9bb8d36d10479158d0cf3bd2987b4ae641d1429bb6f13a22c9d25",
+            "originalLine": 160,
+            "originalColumn": 4,
+            "generatedLine": 1293,
+            "generatedColumn": 86790
+          },
+          "baseline": {
+            "recordVersion": 95,
+            "selectionGeneration": 19,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_ocD_rq_AZ7Q614A5FSpVPTjJkVqaUCHCHtuwRqyOwyA",
+              "outcome": "target-active"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "source-restored",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 3863,
+              "generation": 22,
+              "lastOutcome": "source-restored"
+            },
+            "activation": {
+              "recordVersion": 104,
+              "selectionGeneration": 21,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_DaV1iXpLAx4MsujRp1V0nfFmUbqLspoOen66htTAE-0",
+                "outcome": "source-restored"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "restore",
+          "action": "update",
+          "writeNumber": 6,
+          "phase": "QUIESCENT",
+          "activation": {
+            "recordVersion": 110,
+            "selectionGeneration": 22,
+            "phase": "QUIESCENT",
+            "selected": {
+              "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+              "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": {
+              "transitionId": "wlat_x1w3Df0tfim9TZpdqwnLO2UzrCqbmrTx1bAnVM4Obng",
+              "action": "update",
+              "sourceRecordVersion": 104,
+              "sourceSelectionGeneration": 21,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+                "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+              },
+              "startedAt": 1784584561476
+            },
+            "lastTransition": {
+              "transitionId": "wlat_DaV1iXpLAx4MsujRp1V0nfFmUbqLspoOen66htTAE-0",
+              "outcome": "source-restored"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+                "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+              },
+              "previous": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 11,
+          "cleanExit": {
+            "MainPID": "0",
+            "Result": "success",
+            "ExecMainCode": "1",
+            "ExecMainStatus": "0",
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+            "DropInPaths": "",
+            "UnitFileState": "enabled",
+            "NeedDaemonReload": "no"
+          },
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "embeddedFault": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/runtime/services/ledger-service-command.js",
+            "sourceSha256": "e1beb8f7f9e9bb8d36d10479158d0cf3bd2987b4ae641d1429bb6f13a22c9d25",
+            "originalLine": 160,
+            "originalColumn": 4,
+            "generatedLine": 1293,
+            "generatedColumn": 86790
+          },
+          "baseline": {
+            "recordVersion": 104,
+            "selectionGeneration": 21,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_DaV1iXpLAx4MsujRp1V0nfFmUbqLspoOen66htTAE-0",
+              "outcome": "source-restored"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "source-restored",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 4028,
+              "generation": 23,
+              "lastOutcome": "source-restored"
+            },
+            "activation": {
+              "recordVersion": 113,
+              "selectionGeneration": 23,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_x1w3Df0tfim9TZpdqwnLO2UzrCqbmrTx1bAnVM4Obng",
+                "outcome": "source-restored"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "restore",
+          "action": "update",
+          "writeNumber": 7,
+          "phase": "SELECTED",
+          "activation": {
+            "recordVersion": 120,
+            "selectionGeneration": 25,
+            "phase": "SELECTED",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": {
+              "transitionId": "wlat_Lqc0HVaVAjJdZjG0igukcYNGBUAbzZjpcwlCNJA0q2c",
+              "action": "update",
+              "sourceRecordVersion": 113,
+              "sourceSelectionGeneration": 23,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+                "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+              },
+              "startedAt": 1784584578406
+            },
+            "lastTransition": {
+              "transitionId": "wlat_x1w3Df0tfim9TZpdqwnLO2UzrCqbmrTx1bAnVM4Obng",
+              "outcome": "source-restored"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 13,
+          "cleanExit": {
+            "MainPID": "0",
+            "Result": "success",
+            "ExecMainCode": "1",
+            "ExecMainStatus": "0",
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+            "DropInPaths": "",
+            "UnitFileState": "enabled",
+            "NeedDaemonReload": "no"
+          },
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "embeddedFault": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/runtime/services/ledger-service-command.js",
+            "sourceSha256": "e1beb8f7f9e9bb8d36d10479158d0cf3bd2987b4ae641d1429bb6f13a22c9d25",
+            "originalLine": 160,
+            "originalColumn": 4,
+            "generatedLine": 1293,
+            "generatedColumn": 86790
+          },
+          "baseline": {
+            "recordVersion": 113,
+            "selectionGeneration": 23,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_x1w3Df0tfim9TZpdqwnLO2UzrCqbmrTx1bAnVM4Obng",
+              "outcome": "source-restored"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "source-restored",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 4193,
+              "generation": 24,
+              "lastOutcome": "source-restored"
+            },
+            "activation": {
+              "recordVersion": 122,
+              "selectionGeneration": 25,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_Lqc0HVaVAjJdZjG0igukcYNGBUAbzZjpcwlCNJA0q2c",
+                "outcome": "source-restored"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "restore",
+          "action": "update",
+          "writeNumber": 8,
+          "phase": "ACTIVATING",
+          "activation": {
+            "recordVersion": 130,
+            "selectionGeneration": 27,
+            "phase": "ACTIVATING",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": {
+              "transitionId": "wlat__Od4dmHIKene_7boceJMRkbyFd-jSMQQ-FdaVxBi444",
+              "action": "update",
+              "sourceRecordVersion": 122,
+              "sourceSelectionGeneration": 25,
+              "source": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "target": {
+                "artifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+                "revisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ"
+              },
+              "startedAt": 1784584595434
+            },
+            "lastTransition": {
+              "transitionId": "wlat_Lqc0HVaVAjJdZjG0igukcYNGBUAbzZjpcwlCNJA0q2c",
+              "outcome": "source-restored"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              }
+            },
+            "systemd": {
+              "MainPID": "0",
+              "Result": "success",
+              "ExecMainCode": "1",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "inactive",
+              "SubState": "dead",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": null
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 15,
+          "cleanExit": {
+            "MainPID": "0",
+            "Result": "success",
+            "ExecMainCode": "1",
+            "ExecMainStatus": "0",
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+            "DropInPaths": "",
+            "UnitFileState": "enabled",
+            "NeedDaemonReload": "no"
+          },
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "embeddedFault": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/runtime/services/ledger-service-command.js",
+            "sourceSha256": "e1beb8f7f9e9bb8d36d10479158d0cf3bd2987b4ae641d1429bb6f13a22c9d25",
+            "originalLine": 160,
+            "originalColumn": 4,
+            "generatedLine": 1293,
+            "generatedColumn": 86790
+          },
+          "baseline": {
+            "recordVersion": 122,
+            "selectionGeneration": 25,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_Lqc0HVaVAjJdZjG0igukcYNGBUAbzZjpcwlCNJA0q2c",
+              "outcome": "source-restored"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "source-restored",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 4358,
+              "generation": 25,
+              "lastOutcome": "source-restored"
+            },
+            "activation": {
+              "recordVersion": 131,
+              "selectionGeneration": 27,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat__Od4dmHIKene_7boceJMRkbyFd-jSMQQ-FdaVxBi444",
+                "outcome": "source-restored"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": false
+          }
+        },
+        {
+          "mode": "restore",
+          "action": "update",
+          "writeNumber": 9,
+          "phase": "ACTIVE",
+          "activation": {
+            "recordVersion": 140,
+            "selectionGeneration": 29,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat_HhaV6F0iMTzN9YKYIWspftXcHTCeZDrKeui_t3tuSCI",
+              "outcome": "source-restored"
+            }
+          },
+          "physical": {
+            "selector": "releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+            "installation": {
+              "state": "installed",
+              "current": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "previous": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              }
+            },
+            "systemd": {
+              "MainPID": "4509",
+              "Result": "success",
+              "ExecMainCode": "0",
+              "ExecMainStatus": "0",
+              "LoadState": "loaded",
+              "ActiveState": "active",
+              "SubState": "running",
+              "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+              "DropInPaths": "",
+              "UnitFileState": "enabled",
+              "NeedDaemonReload": "no"
+            },
+            "executablePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app"
+          },
+          "processExit": {
+            "code": null,
+            "signal": "SIGKILL"
+          },
+          "observedPauseCount": 17,
+          "cleanExit": {
+            "MainPID": "0",
+            "Result": "success",
+            "ExecMainCode": "1",
+            "ExecMainStatus": "0",
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "FragmentPath": "/home/josephvandrunen.guest/.config/systemd/user/wharfie-systemd-service-proof.service",
+            "DropInPaths": "",
+            "UnitFileState": "enabled",
+            "NeedDaemonReload": "no"
+          },
+          "breakpoint": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/lib/db/tables/local-application-activation.js",
+            "sourceSha256": "04132ad62d3bc531121eb83206854d1f75e8b9036d9243943089ca7e16ed24f6",
+            "originalLine": 711,
+            "originalColumn": 4,
+            "generatedLine": 27,
+            "generatedColumn": 39236
+          },
+          "embeddedFault": {
+            "retainedLocationCount": 2,
+            "sourceSuffix": "src/core/runtime/services/ledger-service-command.js",
+            "sourceSha256": "e1beb8f7f9e9bb8d36d10479158d0cf3bd2987b4ae641d1429bb6f13a22c9d25",
+            "originalLine": 160,
+            "originalColumn": 4,
+            "generatedLine": 1293,
+            "generatedColumn": 86790
+          },
+          "baseline": {
+            "recordVersion": 131,
+            "selectionGeneration": 27,
+            "phase": "ACTIVE",
+            "selected": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "desired": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+            },
+            "rollbackCandidate": {
+              "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+            },
+            "transition": null,
+            "lastTransition": {
+              "transitionId": "wlat__Od4dmHIKene_7boceJMRkbyFd-jSMQQ-FdaVxBi444",
+              "outcome": "source-restored"
+            }
+          },
+          "recovery": {
+            "receipt": {
+              "schemaVersion": 1,
+              "kind": "wharfie.service.result",
+              "action": "recover",
+              "requestStatus": "fulfilled",
+              "appId": "systemd-service-proof",
+              "outcome": "source-restored",
+              "unit": "wharfie-systemd-service-proof.service",
+              "health": "healthy",
+              "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+              "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+              "reason": null,
+              "blockingWork": null
+            },
+            "active": {
+              "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+              "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+              "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+              "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+              "processId": 4509,
+              "generation": 26,
+              "lastOutcome": "source-restored"
+            },
+            "activation": {
+              "recordVersion": 140,
+              "selectionGeneration": 29,
+              "phase": "ACTIVE",
+              "selected": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "desired": {
+                "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+                "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI"
+              },
+              "rollbackCandidate": {
+                "artifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+                "revisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk"
+              },
+              "transition": null,
+              "lastTransition": {
+                "transitionId": "wlat_HhaV6F0iMTzN9YKYIWspftXcHTCeZDrKeui_t3tuSCI",
+                "outcome": "source-restored"
+              }
+            },
+            "durableUnchangedAfterResponseLoss": true
+          }
+        }
+      ]
+    },
+    "crashCaseCount": 15,
+    "ambiguousRollbackResponse": {
+      "killedAfterActiveCommit": true,
+      "writeNumber": 5,
+      "durableUnchangedAfterRecovery": true,
+      "staleRetry": {
+        "status": 1,
+        "stdout": "{\"schemaVersion\":1,\"kind\":\"wharfie.service.error\",\"action\":\"rollback\",\"code\":\"systemd-user-service-operation-failed\",\"message\":\"Systemd rollback must be invoked by the exact currently selected release; use service recover after an ambiguous rollback response.\"}\n",
+        "stderr": "",
+        "durableUnchanged": true
+      },
+      "active": {
+        "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+        "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+        "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+        "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+        "processId": 3657,
+        "generation": 21,
+        "lastOutcome": "target-active"
+      }
+    },
+    "sourceRestoration": {
+      "failedTargetArtifactId": "waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM",
+      "failedTargetRevisionId": "wrv1_V15QpaGprQI8dDMYbhOH-IejSf-nf-UEO7i5CIIPFqQ",
+      "failedTargetReleasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_6F9IQfZYSWO2jMIzWgZCE7TzPivmD2Z-_T2REnQfbhM/app",
+      "failedTargetReleaseSha256": "e85f4841f6584963b68cc2335a064213b4f33e2be60f667efd3d9112741f6e13",
+      "receipt": {
+        "schemaVersion": 1,
+        "kind": "wharfie.service.result",
+        "action": "update",
+        "requestStatus": "failed",
+        "appId": "systemd-service-proof",
+        "outcome": "source-restored",
+        "unit": "wharfie-systemd-service-proof.service",
+        "health": "healthy",
+        "activeArtifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+        "activeRevisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+        "rollbackArtifactId": "waf1_pAMWtzK8bIsFIi68Vow-IpteFRMKg1whZveAEACUdSk",
+        "rollbackRevisionId": "wrv1_PYnzlNP_7Vfvzw4oiQlWaWQGxxTmMjI7lwmIRQVFdWk",
+        "reason": null,
+        "blockingWork": null
+      },
+      "active": {
+        "artifactId": "waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8",
+        "revisionId": "wrv1_37FNubGRfCODUnNoNCY0z31s9mGvhBIlP0r9UfC76TI",
+        "releasePath": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases/waf1_O42Q8s9_wa4tSuU1SargPSCbWtz7TMFOTh-Q_ZQWgR8/app",
+        "releaseSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+        "processId": 4672,
+        "generation": 27,
+        "lastOutcome": "source-restored"
+      }
+    }
+  },
+  "gracefulRestart": {
+    "beforeProcessId": 4672,
+    "afterProcessId": 4760,
+    "beforeGeneration": 27,
+    "afterGeneration": 28
+  },
+  "stopStart": {
+    "stoppedHealth": "stopped",
+    "processId": 4844,
+    "generation": 29
+  },
+  "workflow": {
+    "status": "COMPLETED",
+    "disposition": "COMPLETED",
+    "timerStatus": "FIRED",
+    "timerId": "wft_PKOsWuN9VR9JVcoWBNR9_JiYxPeH6Cbh8jI_dL3LQGE",
+    "scheduledAt": 1784584144583,
+    "dueAt": 1784584324583,
+    "firedAt": 1784584324776,
+    "signalStatus": "CONSUMED",
+    "markerEntries": [
+      {
+        "schemaVersion": 1,
+        "kind": "wharfie.systemd-proof.activity-entry",
+        "stepIndex": 0,
+        "bootId": "58335403-933e-4843-b6b8-31f44c7cef7a",
+        "processId": 8200
+      },
+      {
+        "schemaVersion": 1,
+        "kind": "wharfie.systemd-proof.activity-entry",
+        "stepIndex": 1,
+        "bootId": "9c42b975-a2bb-48f4-8f95-f080cfb0c4e1",
+        "processId": 797
+      }
+    ]
+  },
+  "uninstall": {
+    "status": "uninstalled",
+    "preserved": {
+      "releases": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/releases",
+      "state": "/home/josephvandrunen.guest/.local/share/wharfie-nodejs/applications/systemd-service-proof/state"
+    },
+    "inspectableAfterUninstall": true,
+    "release": {
+      "artifactSha256": "3b8d90f2cf7fc1ae2d4ae53549aae03d209b5adcfb4cc14e4e1f90fd9416811f",
+      "recordSha256": "b14f96b708bdbdfb02fd153b68260ec95e1b9d8ccae5e08c640f2799753803b6"
+    },
+    "systemd": {
+      "show": {
+        "MainPID": "0",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "FragmentPath": "",
+        "DropInPaths": "",
+        "UnitFileState": ""
+      },
+      "isActive": {
+        "status": 4,
+        "output": "inactive"
+      },
+      "isEnabled": {
+        "status": 4,
+        "output": "not-found"
+      }
+    }
+  }
+}

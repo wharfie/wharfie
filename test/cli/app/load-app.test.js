@@ -1,560 +1,573 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fsp } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadApp } from '../../../src/cli/app/load-app.js';
 
-const helloResourcesPath = fileURLToPath(
-  new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
-);
-const actorSystemPath = fileURLToPath(
-  new URL(
-    '../../../src/core/resources/builds/actor-system.js',
-    import.meta.url,
-  ),
-);
-const actorSystemUrl = pathToFileURL(actorSystemPath).href;
-const functionPath = fileURLToPath(
-  new URL('../../../src/core/resources/builds/function.js', import.meta.url),
-);
-const functionUrl = pathToFileURL(functionPath).href;
+/** @typedef {(source: any) => void} SourceMutation */
+/** @typedef {[string, SourceMutation, RegExp]} InvalidSourceCase */
+/** @typedef {[string, (dir: string) => string, RegExp]} InvalidEntrypointCase */
+/** @typedef {[string, string, RegExp]} InvalidModuleCase */
+
+/** @returns {any} */
+function makeValidSource() {
+  return {
+    schemaVersion: 4,
+    app: { id: 'portable-app' },
+    cli: {
+      entrypoint: {
+        kind: 'node',
+        path: './src/cli.js',
+        export: 'main',
+      },
+      durable: {
+        workflow: 'greet-later',
+        export: 'toDurableInput',
+      },
+    },
+    targets: [
+      {
+        nodeVersion: '24.13.1',
+        platform: 'linux',
+        architecture: 'arm64',
+        libc: 'glibc',
+      },
+    ],
+    activities: {
+      greet: {
+        entrypoint: {
+          kind: 'node',
+          path: './src/greet.js',
+          export: 'greet',
+        },
+        externalPackages: [
+          { name: 'zeta-package', version: '2.0.0' },
+          { name: 'alpha-package', version: '1.2.3' },
+        ],
+      },
+    },
+    workflows: {
+      'greet-later': {
+        steps: [
+          {
+            id: 'greet',
+            kind: 'activity',
+            activity: 'greet',
+            input: { kind: 'workflow-input' },
+          },
+          { id: 'pause', kind: 'timer', delayMs: 1_000 },
+          { id: 'approved', kind: 'signal' },
+          {
+            id: 'greet-again',
+            kind: 'activity',
+            activity: 'greet',
+            input: { kind: 'step-output', step: 'approved' },
+          },
+        ],
+      },
+    },
+  };
+}
 
 describe('Wharfie app loader', () => {
-  it('loads a plain object export and compiles internal and public manifests', async () => {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-'));
+  /** @type {string} */
+  let appDir;
+  /** @type {string[]} */
+  let cleanupDirs;
 
-    await fsp.writeFile(
-      path.join(dir, 'package.json'),
-      JSON.stringify({ type: 'module' }),
-    );
-
-    await fsp.writeFile(
-      path.join(dir, 'wharfie.app.js'),
-      `
-        const runtimeObjectStorage = {
-          close() {},
-          putObject() {},
-        };
-
-        export default {
-          name: 'plain-object-app',
-          cli: {
-            entrypoint: './workflow-handler.js',
-          },
-          targets: [
-            {
-              nodeVersion: '24',
-              platform: 'linux',
-              architecture: 'x64',
-              ignored: () => 'ignored',
-            },
-          ],
-          resources: {
-            db: {
-              adapter: 'vanilla',
-              helper: () => 'ignored',
-              options: { beta: 2, alpha: 1 },
-            },
-            queue: { adapter: 'vanilla', options: { path: '.queue' } },
-            objectStorage: runtimeObjectStorage,
-          },
-          workflows: {
-            helloPipeline: {
-              actions: [
-                { id: 'start', type: 'START' },
-                {
-                  id: 'invoke-hello',
-                  type: 'INVOKE_FUNCTION',
-                  activity: 'hello-resources',
-                  inputs: { who: 'workflow-user' },
-                  placement: { mode: 'local' },
-                  retry: { max_attempts: 2 },
-                  prerequisites: ['start'],
-                },
-                {
-                  id: 'finish',
-                  type: 'FINISH',
-                  dependencies: ['invoke-hello'],
-                },
-              ],
-            },
-          },
-          scheduler: {
-            triggers: [
-              { activity: 'hello-resources', cron: '* * * * *' },
-              { activity: 'hello-resources', cron: '*/5 * * * *' },
-            ],
-          },
-          activities: {
-            'hello-resources': {
-              entrypoint: {
-                path: ${JSON.stringify(helloResourcesPath)},
-                export: 'helloResources',
-                debug: () => 'ignored',
-              },
-              external: ['lmdb', '@duckdb/node-api'],
-              environmentVariables: {
-                BETA: '2',
-                ALPHA: '1',
-                OMIT: 1,
-              },
-              resources: {
-                db: {
-                  adapter: 'vanilla',
-                  options: { zed: 1, alpha: 2 },
-                },
-                objectStorage: runtimeObjectStorage,
-              },
-            },
-          },
-        };
-      `,
-    );
-
-    const { manifest, publicManifest } = await loadApp({ dir });
-    expect(manifest).toEqual({
-      app: { name: 'plain-object-app' },
-      cli: {
-        entrypoint: path.join(dir, 'workflow-handler.js'),
-      },
-      targets: [
-        {
-          nodeVersion: '24',
-          platform: 'linux',
-          architecture: 'x64',
-        },
-      ],
-      capabilities: {
-        db: {
-          adapter: 'vanilla',
-          options: { alpha: 1, beta: 2 },
-        },
-        queue: {
-          adapter: 'vanilla',
-          options: { path: '.queue' },
-        },
-      },
-      resources: {
-        db: {
-          adapter: 'vanilla',
-          options: { alpha: 1, beta: 2 },
-        },
-        queue: {
-          adapter: 'vanilla',
-          options: { path: '.queue' },
-        },
-      },
-      functions: [
-        {
-          name: 'hello-resources',
-          entrypoint: {
-            path: helloResourcesPath,
-            export: 'helloResources',
-          },
-          external: [
-            { name: 'lmdb', version: expect.any(String) },
-            { name: '@duckdb/node-api', version: expect.any(String) },
-          ],
-          environmentVariables: {
-            ALPHA: '1',
-            BETA: '2',
-            OMIT: '1',
-          },
-          resources: {
-            db: {
-              adapter: 'vanilla',
-              options: { alpha: 2, zed: 1 },
-            },
-          },
-        },
-      ],
-      workflows: [
-        {
-          name: 'helloPipeline',
-          type: 'PIPELINE',
-          actions: [
-            {
-              id: 'start',
-              type: 'START',
-            },
-            {
-              id: 'invoke-hello',
-              type: 'INVOKE_FUNCTION',
-              functionName: 'hello-resources',
-              inputs: { who: 'workflow-user' },
-              placement: { mode: 'local' },
-              retry: { max_attempts: 2 },
-              dependsOn: ['start'],
-            },
-            {
-              id: 'finish',
-              type: 'FINISH',
-              dependsOn: ['invoke-hello'],
-            },
-          ],
-        },
-      ],
-      scheduler: {
-        triggers: [
-          { actor: 'hello-resources', cron: '* * * * *' },
-          { actor: 'hello-resources', cron: '*/5 * * * *' },
-        ],
-      },
-    });
-    expect(publicManifest).toEqual({
-      app: { name: 'plain-object-app' },
-      cli: {
-        entrypoint: path.join(dir, 'workflow-handler.js'),
-      },
-      targets: [
-        {
-          nodeVersion: '24',
-          platform: 'linux',
-          architecture: 'x64',
-        },
-      ],
-      resources: {
-        db: {
-          adapter: 'vanilla',
-          options: { alpha: 1, beta: 2 },
-        },
-        queue: {
-          adapter: 'vanilla',
-          options: { path: '.queue' },
-        },
-      },
-      activities: {
-        'hello-resources': {
-          entrypoint: {
-            path: helloResourcesPath,
-            export: 'helloResources',
-          },
-          external: [
-            { name: 'lmdb', version: expect.any(String) },
-            { name: '@duckdb/node-api', version: expect.any(String) },
-          ],
-          environmentVariables: {
-            ALPHA: '1',
-            BETA: '2',
-            OMIT: '1',
-          },
-          resources: {
-            db: {
-              adapter: 'vanilla',
-              options: { alpha: 2, zed: 1 },
-            },
-          },
-        },
-      },
-      workflows: [
-        {
-          name: 'helloPipeline',
-          type: 'PIPELINE',
-          actions: [
-            {
-              id: 'start',
-              type: 'START',
-            },
-            {
-              id: 'invoke-hello',
-              type: 'INVOKE_FUNCTION',
-              activity: 'hello-resources',
-              inputs: { who: 'workflow-user' },
-              placement: { mode: 'local' },
-              retry: { max_attempts: 2 },
-              dependsOn: ['start'],
-            },
-            {
-              id: 'finish',
-              type: 'FINISH',
-              dependsOn: ['invoke-hello'],
-            },
-          ],
-        },
-      ],
-      scheduler: {
-        triggers: [
-          { activity: 'hello-resources', cron: '* * * * *' },
-          { activity: 'hello-resources', cron: '*/5 * * * *' },
-        ],
-      },
-    });
-    expect(JSON.parse(JSON.stringify(manifest))).toEqual(manifest);
-    expect(JSON.parse(JSON.stringify(publicManifest))).toEqual(publicManifest);
-    if (
-      !manifest.capabilities?.db ||
-      !manifest.functions?.[0]?.environmentVariables ||
-      !publicManifest.activities?.['hello-resources']?.environmentVariables
-    ) {
-      throw new Error(
-        'Expected manifest capabilities/functions and public manifest activities to be defined.',
-      );
-    }
-    expect(Object.keys(manifest.capabilities.db.options)).toEqual([
-      'alpha',
-      'beta',
-    ]);
-    expect(Object.keys(manifest.functions[0].environmentVariables)).toEqual([
-      'ALPHA',
-      'BETA',
-      'OMIT',
-    ]);
-    expect(
-      Object.keys(
-        publicManifest.activities['hello-resources'].environmentVariables,
+  beforeEach(async () => {
+    appDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-v4-'));
+    cleanupDirs = [appDir];
+    await fsp.mkdir(path.join(appDir, 'src'));
+    await Promise.all([
+      fsp.writeFile(
+        path.join(appDir, 'package.json'),
+        JSON.stringify({ type: 'module' }),
       ),
-    ).toEqual(['ALPHA', 'BETA', 'OMIT']);
+      fsp.writeFile(
+        path.join(appDir, 'src', 'cli.js'),
+        'export function main() {}\nexport function toDurableInput() { return {}; }\n',
+      ),
+      fsp.writeFile(
+        path.join(appDir, 'src', 'greet.js'),
+        'export function greet() {}\n',
+      ),
+    ]);
   });
 
-  it('rejects legacy plain-object functions authoring fields', async () => {
-    const dir = await fsp.mkdtemp(
-      path.join(os.tmpdir(), 'wharfie-app-legacy-'),
-    );
-
-    await fsp.writeFile(
-      path.join(dir, 'package.json'),
-      JSON.stringify({ type: 'module' }),
-    );
-
-    await fsp.writeFile(
-      path.join(dir, 'wharfie.app.js'),
-      `
-        export default {
-          name: 'legacy-plain-object-app',
-          functions: [
-            {
-              name: 'hello-resources',
-              entrypoint: {
-                path: ${JSON.stringify(helloResourcesPath)},
-                export: 'helloResources',
-              },
-            },
-          ],
-        };
-      `,
-    );
-
-    await expect(loadApp({ dir })).rejects.toThrow(
-      /activities instead of functions/i,
+  afterEach(async () => {
+    await Promise.all(
+      cleanupDirs.map((dir) => fsp.rm(dir, { recursive: true, force: true })),
     );
   });
 
-  it('loads an ActorSystem export and preserves function/workflow definitions in the manifest', async () => {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-'));
+  /** @param {string} sourceText */
+  async function writeModule(sourceText) {
+    await fsp.writeFile(path.join(appDir, 'wharfie.app.js'), sourceText);
+  }
 
-    await fsp.writeFile(
-      path.join(dir, 'package.json'),
-      JSON.stringify({ type: 'module' }),
+  /** @param {any} source */
+  async function loadSource(source) {
+    await writeModule(
+      'export default ' + JSON.stringify(source, null, 2) + ';\n',
     );
+    return loadApp({ dir: appDir });
+  }
 
-    await fsp.writeFile(
-      path.join(dir, 'wharfie.app.js'),
-      `
-        import ActorSystem from ${JSON.stringify(actorSystemUrl)};
-        import Function from ${JSON.stringify(functionUrl)};
-
-        const runtimeQueue = {
-          sendMessage() {},
-        };
-
-        export default new ActorSystem({
-          name: 'actor-system-app',
-          functions: [
-            new Function({
-              name: 'hello-resources',
-              entrypoint: {
-                path: ${JSON.stringify(helloResourcesPath)},
-                export: 'helloResources',
-              },
-              properties: {
-                external: ['lmdb'],
-                environmentVariables: {
-                  MODE: 'test',
-                },
-                resources: {
-                  db: {
-                    adapter: 'vanilla',
-                    options: { beta: 2, alpha: 1, path: '.fn-db' },
-                  },
-                  queue: runtimeQueue,
-                },
-              },
-            }),
-          ],
-          properties: {
-            targets: [
-              {
-                nodeVersion: () => '24',
-                platform: () => 'linux',
-                architecture: () => 'x64',
-              },
-            ],
-            resources: {
-              db: {
-                adapter: 'vanilla',
-                options: { beta: 2, alpha: 1, path: '.wharfie' },
-              },
-              queue: runtimeQueue,
-            },
-            workflows: [
-              {
-                name: 'actorPipeline',
-                type: 'pipeline',
-                actions: [
-                  { id: 'workflow-start', type: 'START' },
-                  {
-                    id: 'invoke-actor',
-                    type: 'INVOKE_FUNCTION',
-                    function_name: 'hello-resources',
-                    placement: { mode: 'local' },
-                    retry: { maxAttempts: 3 },
-                    dependsOn: ['workflow-start'],
-                  },
-                  {
-                    id: 'workflow-finish',
-                    type: 'FINISH',
-                    dependsOn: ['invoke-actor'],
-                  },
-                ],
-              },
-            ],
-            scheduler: {
-              triggers: [{ actor: 'hello-resources', cron: '0 * * * *' }],
-            },
-          },
-        });
-      `,
-    );
-
-    const { manifest } = await loadApp({ dir });
-    expect(manifest).toEqual({
-      app: { name: 'actor-system-app' },
-      targets: [
-        {
-          nodeVersion: '24',
-          platform: 'linux',
-          architecture: 'x64',
-        },
-      ],
-      capabilities: {
-        db: {
-          adapter: 'vanilla',
-          options: { alpha: 1, beta: 2, path: '.wharfie' },
-        },
-      },
-      resources: {
-        db: {
-          adapter: 'vanilla',
-          options: { alpha: 1, beta: 2, path: '.wharfie' },
-        },
-      },
-      functions: [
-        {
-          name: 'hello-resources',
+  it('compiles a strict source definition into one canonical v4 manifest', async () => {
+    await expect(loadSource(makeValidSource())).resolves.toEqual({
+      appDir,
+      manifest: {
+        schemaVersion: 4,
+        app: { id: 'portable-app' },
+        cli: {
           entrypoint: {
-            path: helloResourcesPath,
-            export: 'helloResources',
+            kind: 'node',
+            path: 'src/cli.js',
+            export: 'main',
           },
-          external: [{ name: 'lmdb', version: expect.any(String) }],
-          environmentVariables: {
-            MODE: 'test',
-          },
-          resources: {
-            db: {
-              adapter: 'vanilla',
-              options: { alpha: 1, beta: 2, path: '.fn-db' },
-            },
+          durable: {
+            workflow: 'greet-later',
+            export: 'toDurableInput',
           },
         },
-      ],
-      workflows: [
-        {
-          name: 'actorPipeline',
-          type: 'PIPELINE',
-          actions: [
-            {
-              id: 'workflow-start',
-              type: 'START',
+        targets: [
+          {
+            nodeVersion: '24.13.1',
+            platform: 'linux',
+            architecture: 'arm64',
+            libc: 'glibc',
+          },
+        ],
+        activities: {
+          greet: {
+            entrypoint: {
+              kind: 'node',
+              path: 'src/greet.js',
+              export: 'greet',
             },
-            {
-              id: 'invoke-actor',
-              type: 'INVOKE_FUNCTION',
-              functionName: 'hello-resources',
-              placement: { mode: 'local' },
-              retry: { maxAttempts: 3 },
-              dependsOn: ['workflow-start'],
-            },
-            {
-              id: 'workflow-finish',
-              type: 'FINISH',
-              dependsOn: ['invoke-actor'],
-            },
-          ],
+            externalPackages: [
+              { name: 'alpha-package', version: '1.2.3' },
+              { name: 'zeta-package', version: '2.0.0' },
+            ],
+          },
         },
-      ],
-      scheduler: {
-        triggers: [{ actor: 'hello-resources', cron: '0 * * * *' }],
-      },
-    });
-    expect(JSON.parse(JSON.stringify(manifest))).toEqual(manifest);
-  });
-
-  it('re-loads ActorSystem exports with requestedTargetSelectors before manifest compilation', async () => {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-'));
-
-    await fsp.writeFile(
-      path.join(dir, 'package.json'),
-      JSON.stringify({ type: 'module' }),
-    );
-
-    await fsp.writeFile(
-      path.join(dir, 'wharfie.app.js'),
-      `
-        import ActorSystem from ${JSON.stringify(actorSystemUrl)};
-
-        export default new ActorSystem({
-          name: 'target-filter-app',
-          properties: {
-            targets: [
+        workflows: {
+          'greet-later': {
+            steps: [
               {
-                nodeVersion: '24',
-                platform: 'linux',
-                architecture: 'x64',
+                id: 'greet',
+                kind: 'activity',
+                activity: 'greet',
+                input: { kind: 'workflow-input' },
               },
+              { id: 'pause', kind: 'timer', delayMs: 1_000 },
+              { id: 'approved', kind: 'signal' },
               {
-                nodeVersion: '24',
-                platform: 'linux',
-                architecture: 'arm64',
+                id: 'greet-again',
+                kind: 'activity',
+                activity: 'greet',
+                input: { kind: 'step-output', step: 'approved' },
               },
             ],
-            resources: {},
           },
-        });
-      `,
-    );
-
-    const filtered = await loadApp({
-      dir,
-      requestedTargetSelectors: ['node24-linux-arm64'],
+        },
+      },
     });
+  });
 
-    expect(filtered.manifest.targets).toEqual([
-      {
-        nodeVersion: '24',
-        platform: 'linux',
-        architecture: 'arm64',
+  it('keeps the durable CLI handoff optional', async () => {
+    const source = makeValidSource();
+    delete source.cli.durable;
+
+    const loaded = await loadSource(source);
+
+    expect(loaded.manifest.cli).toEqual({
+      entrypoint: {
+        kind: 'node',
+        path: 'src/cli.js',
+        export: 'main',
       },
+    });
+  });
+
+  it('orders external packages deterministically without using the host locale', async () => {
+    const source = makeValidSource();
+    source.activities.greet.externalPackages = [
+      { name: 'a_b', version: '1.0.0' },
+      { name: 'ab', version: '1.0.0' },
+      { name: 'a.b', version: '1.0.0' },
+      { name: 'a-b', version: '1.0.0' },
+    ];
+
+    const loaded = await loadSource(source);
+
+    expect(loaded.manifest.activities.greet.externalPackages).toEqual([
+      { name: 'a-b', version: '1.0.0' },
+      { name: 'a.b', version: '1.0.0' },
+      { name: 'a_b', version: '1.0.0' },
+      { name: 'ab', version: '1.0.0' },
     ]);
-    expect(filtered.appExport.get('targets')).toEqual([
-      {
-        nodeVersion: '24',
-        platform: 'linux',
-        architecture: 'arm64',
+  });
+
+  /** @type {InvalidSourceCase[]} */
+  const invalidSourceCases = [
+    [
+      'a missing schemaVersion',
+      (source) => {
+        delete source.schemaVersion;
       },
-    ]);
+      /schemaVersion must be the integer 4/i,
+    ],
+    [
+      'a wrong schemaVersion',
+      (source) => {
+        source.schemaVersion = 3;
+      },
+      /schemaVersion must be the integer 4/i,
+    ],
+    [
+      'an unknown top-level key',
+      (source) => {
+        source.debug = true;
+      },
+      /app\.debug is not supported/i,
+    ],
+    [
+      'an unknown nested key',
+      (source) => {
+        source.cli.entrypoint.timeout = 100;
+      },
+      /app\.cli\.entrypoint\.timeout is not supported/i,
+    ],
+    [
+      'the legacy top-level name field',
+      (source) => {
+        delete source.app;
+        source.name = 'portable-app';
+      },
+      /app\.name is not supported/i,
+    ],
+    [
+      'the legacy functions field',
+      (source) => {
+        source.functions = [];
+      },
+      /app\.functions is not supported/i,
+    ],
+    [
+      'the legacy capabilities field',
+      (source) => {
+        source.capabilities = {};
+      },
+      /app\.capabilities is not supported/i,
+    ],
+    [
+      'the legacy properties field',
+      (source) => {
+        source.properties = {};
+      },
+      /app\.properties is not supported/i,
+    ],
+    [
+      'the removed top-level resources field',
+      (source) => {
+        source.resources = { db: { adapter: 'vanilla' } };
+      },
+      /app\.resources is not supported/i,
+    ],
+    [
+      'the removed activity resources field',
+      (source) => {
+        source.activities.greet.resources = {
+          queue: { adapter: 'vanilla' },
+        };
+      },
+      /app\.activities\.greet\.resources is not supported/i,
+    ],
+    [
+      'an empty workflow map',
+      (source) => {
+        source.workflows = {};
+      },
+      /manifest\.workflows must not be empty/i,
+    ],
+    [
+      'an unknown workflow field',
+      (source) => {
+        source.workflows['greet-later'].retry = { attempts: 2 };
+      },
+      /workflows\.greet-later must contain exactly steps/i,
+    ],
+    [
+      'a workflow activity that is not declared',
+      (source) => {
+        source.workflows['greet-later'].steps[0].activity = 'missing';
+      },
+      /steps\[0\]\.activity must reference an activity declared by this manifest/i,
+    ],
+    [
+      'a forward workflow output reference',
+      (source) => {
+        source.workflows['greet-later'].steps[0].input = {
+          kind: 'step-output',
+          step: 'approved',
+        };
+      },
+      /steps\[0\]\.input\.step must reference an earlier step/i,
+    ],
+    [
+      'a duplicate workflow step ID',
+      (source) => {
+        source.workflows['greet-later'].steps[1].id = 'greet';
+      },
+      /steps\[1\]\.id duplicates an earlier workflow step/i,
+    ],
+    [
+      'a scheduler before a reviewed durable contract exists',
+      (source) => {
+        source.scheduler = {};
+      },
+      /app\.scheduler is not supported/i,
+    ],
+    [
+      'an invalid app ID',
+      (source) => {
+        source.app.id = 'portable_app';
+      },
+      /app\.id must be a canonical logical ID/i,
+    ],
+    [
+      'an app ID that would require trimming',
+      (source) => {
+        source.app.id = ' portable-app ';
+      },
+      /app\.id must be a canonical logical ID/i,
+    ],
+    [
+      'an activity ID that would require trimming',
+      (source) => {
+        source.activities[' greet '] = source.activities.greet;
+        delete source.activities.greet;
+      },
+      /activities\. greet .*canonical logical ID/i,
+    ],
+    [
+      'a non-object CLI entrypoint',
+      (source) => {
+        source.cli.entrypoint = './src/cli.js';
+      },
+      /app\.cli\.entrypoint must be a plain object/i,
+    ],
+    [
+      'a non-Node CLI entrypoint',
+      (source) => {
+        source.cli.entrypoint.kind = 'wasm';
+      },
+      /app\.cli\.entrypoint\.kind must be 'node'/i,
+    ],
+    [
+      'a non-canonical entrypoint export',
+      (source) => {
+        source.cli.entrypoint.export = ' main ';
+      },
+      /entrypoint\.export must be a nonempty canonical string/i,
+    ],
+    [
+      'a non-object durable CLI handoff',
+      (source) => {
+        source.cli.durable = 'greet-later';
+      },
+      /app\.cli\.durable must be a plain object/i,
+    ],
+    [
+      'an unknown durable CLI handoff field',
+      (source) => {
+        source.cli.durable.input = {};
+      },
+      /app\.cli\.durable\.input is not supported by schemaVersion 4/i,
+    ],
+    [
+      'a missing durable CLI workflow',
+      (source) => {
+        delete source.cli.durable.workflow;
+      },
+      /app\.cli\.durable\.workflow must be a canonical logical ID/i,
+    ],
+    [
+      'a non-canonical durable CLI workflow',
+      (source) => {
+        source.cli.durable.workflow = ' greet-later ';
+      },
+      /app\.cli\.durable\.workflow must be a canonical logical ID/i,
+    ],
+    [
+      'a non-canonical durable CLI export',
+      (source) => {
+        source.cli.durable.export = ' toDurableInput ';
+      },
+      /app\.cli\.durable\.export must be a nonempty canonical string/i,
+    ],
+    [
+      'a missing durable CLI export',
+      (source) => {
+        delete source.cli.durable.export;
+      },
+      /app\.cli\.durable\.export must be a nonempty canonical string/i,
+    ],
+    [
+      'a durable CLI workflow that is not declared',
+      (source) => {
+        source.cli.durable.workflow = 'missing';
+      },
+      /manifest\.cli\.durable\.workflow must reference a workflow declared by this manifest/i,
+    ],
+    [
+      'a target with a non-exact Node version',
+      (source) => {
+        source.targets[0].nodeVersion = '24';
+      },
+      /nodeVersion must be an exact canonical semantic version/i,
+    ],
+    [
+      'a Linux target without glibc',
+      (source) => {
+        delete source.targets[0].libc;
+      },
+      /libc must be 'glibc' for Linux/i,
+    ],
+    [
+      'a duplicate target',
+      (source) => {
+        source.targets.push({ ...source.targets[0] });
+      },
+      /duplicates an earlier target/i,
+    ],
+    [
+      'a ranged external package version',
+      (source) => {
+        source.activities.greet.externalPackages[0].version = '^2.0.0';
+      },
+      /version must be an exact canonical semantic version/i,
+    ],
+    [
+      'a duplicate external package',
+      (source) => {
+        source.activities.greet.externalPackages = [
+          { name: 'same-package', version: '1.0.0' },
+          { name: 'same-package', version: '1.0.0' },
+        ];
+      },
+      /unique packages sorted by name/i,
+    ],
+  ];
+
+  it.each(invalidSourceCases)('rejects %s', async (_name, mutate, pattern) => {
+    const source = makeValidSource();
+    mutate(source);
+    await expect(loadSource(source)).rejects.toThrow(pattern);
+  });
+
+  /** @type {InvalidEntrypointCase[]} */
+  const invalidEntrypointCases = [
+    [
+      'an absolute entrypoint',
+      (dir) => path.join(dir, 'src', 'cli.js'),
+      /canonical '\.\/'-prefixed app-relative path/i,
+    ],
+    [
+      'an entrypoint with a parent escape',
+      () => './../outside.js',
+      /without dot segments/i,
+    ],
+    [
+      'a missing entrypoint',
+      () => './src/missing.js',
+      /must reference an existing file/i,
+    ],
+  ];
+
+  it.each(invalidEntrypointCases)(
+    'rejects %s',
+    async (_name, makeEntrypoint, pattern) => {
+      const source = makeValidSource();
+      source.cli.entrypoint.path = makeEntrypoint(appDir);
+      await expect(loadSource(source)).rejects.toThrow(pattern);
+    },
+  );
+
+  it('rejects an entrypoint that escapes through a symbolic link', async () => {
+    const outsideDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-app-outside-'),
+    );
+    cleanupDirs.push(outsideDir);
+    const outsidePath = path.join(outsideDir, 'outside.js');
+    await fsp.writeFile(outsidePath, 'export function main() {}\n');
+    await fsp.symlink(outsidePath, path.join(appDir, 'src', 'escape.js'));
+
+    const source = makeValidSource();
+    source.cli.entrypoint.path = './src/escape.js';
+
+    await expect(loadSource(source)).rejects.toThrow(
+      /must not escape.*through a symbolic link/i,
+    );
+  });
+
+  /** @type {InvalidModuleCase[]} */
+  const invalidModuleCases = [
+    [
+      'an ActorSystem or other class instance',
+      'class ActorSystem {} export default new ActorSystem();\n',
+      /default export must be a JSON object/i,
+    ],
+    [
+      'a named export without a default export',
+      'export const app = ' + JSON.stringify(makeValidSource()) + ';\n',
+      /must default-export one schemaVersion 4 app definition/i,
+    ],
+    [
+      'a non-JSON value',
+      'const app = ' +
+        JSON.stringify(makeValidSource()) +
+        '; app.activities.greet.externalPackages[0].version = () => "computed"; export default app;\n',
+      /contains an unsupported function value/i,
+    ],
+  ];
+
+  it.each(invalidModuleCases)(
+    'rejects %s',
+    async (_name, sourceText, pattern) => {
+      await writeModule(sourceText);
+      await expect(loadApp({ dir: appDir })).rejects.toThrow(pattern);
+    },
+  );
+
+  it('rejects removed resources without rendering nested secrets', async () => {
+    const secret = 'secret-sentinel-that-must-not-leak';
+    const source = makeValidSource();
+    source.resources = {
+      db: {
+        adapter: 'vanilla',
+        options: {
+          path: 'https://runtime-user:' + secret + '@example.com/db',
+        },
+      },
+    };
+
+    let thrown;
+    try {
+      await loadSource(source);
+    } catch (error) {
+      thrown = error;
+    }
+
+    if (!(thrown instanceof Error)) {
+      throw new Error('Expected loadApp to reject the inline secret.');
+    }
+    expect(thrown.message).toMatch(/app\.resources is not supported/i);
+    expect(thrown.message).not.toContain(secret);
   });
 });

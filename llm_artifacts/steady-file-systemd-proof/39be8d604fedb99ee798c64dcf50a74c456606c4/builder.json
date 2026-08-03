@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "kind": "wharfie.steady-file-preview.builder",
+  "commit": "39be8d604fedb99ee798c64dcf50a74c456606c4",
+  "builtAt": 1785337951864,
+  "builderProcessId": 7896,
+  "builderMachineId": "c68b1b4800e642d68ecc86f0a13b04c8",
+  "toolchain": {
+    "node": "24.13.1",
+    "npm": "11.12.0"
+  },
+  "handoff": {
+    "sha256": "df84b5bdf46703d33a26d0a58cf9ed4e6c7a715f493071bbaee37ab17916d2cd",
+    "files": {
+      "source/app": {
+        "kind": "regular",
+        "size": 161483904,
+        "sha256": "d19d7a50b391ba6c0782cda40606a370e93109a7666d3f487bb5b10591d26388"
+      },
+      "source/artifact-record.json": {
+        "kind": "regular",
+        "size": 1796,
+        "sha256": "1f8e244bcaa1b53a104bcf3ef02d5671d2af74ab591d332689061168d2cbf85b"
+      },
+      "target/app": {
+        "kind": "regular",
+        "size": 161483904,
+        "sha256": "ee24addb90950addd4c00d5664978518282dfd67c604fbbfde1902a7a2eedfa0"
+      },
+      "target/artifact-record.json": {
+        "kind": "regular",
+        "size": 1796,
+        "sha256": "9e67bc4c2b7eee2f6e94a61ec2d5f43bdb02e610f31f18fdf04e65f3271ff4cf"
+      },
+      "handoff.json": {
+        "kind": "regular",
+        "size": 2698,
+        "sha256": "df84b5bdf46703d33a26d0a58cf9ed4e6c7a715f493071bbaee37ab17916d2cd"
+      },
+      "SHA256SUMS": {
+        "kind": "regular",
+        "size": 421,
+        "sha256": "10beaf8633a665986c6486849fb648d2b70bcc5b8a329a1d3d2fb6923e2d064e"
+      }
+    }
+  },
+  "ordinaryEquivalent": true
+}

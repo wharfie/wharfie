@@ -19,8 +19,8 @@ Your job
 2) Read the Wharfie manifest/docs and the code that defines the current app model.
 3) Inspect the target workspace and understand its existing CLI, modules, config, and tests.
 4) Choose the smallest Wharfie app shape that solves the task now.
-5) Implement a manifest-first app with a developer-owned CLI and named activities.
-6) Keep external API integrations as ordinary modules; use Wharfie runtime resources only for `db`, `queue`, and `objectStorage`.
+5) Implement a manifest-first app with a developer-owned CLI, adding named activities, workflows, and meaningful schedules only as needed.
+6) Keep external API integrations as ordinary environment-configured modules; do not declare manifest resources.
 7) Add or update tests.
 8) Validate the target workspace and any Wharfie changes you made.
 9) Return changed-file zips and diffs.
@@ -31,69 +31,100 @@ Hard requirements
 - Prefer the smallest coherent near-term app wedge.
 - Do not refactor Wharfie core unless the target app is blocked by a verified framework gap.
 - If you must change Wharfie core, keep it minimal, add tests in Wharfie, and explain exactly why the app could not be expressed with the existing contract.
-- Do not force `ActorSystem` when a plain-object `wharfie.app.js` export is enough.
+- Author only the default-exported plain-object v4 manifest. `ActorSystem` is internal implementation material, not a public app-authoring API.
 - Preserve the developer-owned CLI surface. Wharfie should not take over help output, argv semantics, stdio, or exit codes.
 - Model machine-invoked work as named `activities`.
-- Use explicit adapters when you use `resources`; do not rely on ambient cloud inference.
+- Do not declare application or activity `resources`; use only the finite host-mediated `runtime.effects` catalog where its documented semantics fit.
 - Keep tests hermetic: mock Datadog/OpenAI/GitHub/etc, no AWS calls, no real package downloads, no live network.
 - Be honest about validation status. Do not claim checks passed unless the command actually finished successfully.
 
 App-model rules you must obey
-- The public app contract is code in `wharfie.app.js`.
-- Prefer this shape:
+- The public app contract is the default export of `wharfie.app.js`.
+- Use this strict, versioned shape:
 
 ```js
-export default {
-  name: 'my-app',
+import { defineApp } from '@wharfie/wharfie/app';
+
+export default defineApp({
+  schemaVersion: 4,
+  app: { id: 'my-app' },
   cli: {
-    entrypoint: './src/cli.js',
-    export: 'main',
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.js',
+      export: 'main',
+    },
   },
   activities: {
     collect: {
-      entrypoint: './src/activities/collect.js',
-      export: 'run',
-    },
-  },
-  resources: {
-    db: { adapter: 'vanilla' },
-    queue: { adapter: 'vanilla' },
-    objectStorage: { adapter: 'vanilla' },
-  },
-  scheduler: {
-    triggers: [{ activity: 'collect', cron: '0 * * * *' }],
-  },
-  workflows: {
-    nightly: {
-      actions: [
-        { id: 'collect', type: 'ACTIVITY', activity: 'collect' },
+      entrypoint: {
+        kind: 'node',
+        path: './src/activities/collect.js',
+        export: 'run',
+      },
+      externalPackages: [
+        { name: 'sharp', version: '0.34.4' },
       ],
     },
   },
-  targets: [{ nodeVersion: '24', platform: 'linux', architecture: 'x64' }],
-};
+  workflows: {
+    collect: {
+      steps: [
+        {
+          id: 'collect',
+          kind: 'activity',
+          activity: 'collect',
+          input: { kind: 'workflow-input' },
+        },
+      ],
+    },
+  },
+  schedules: {
+    hourly: {
+      cron: '0 * * * *',
+      workflow: 'collect',
+      input: { source: 'hourly' },
+      missed: 'latest',
+      overlap: 'allow',
+    },
+  },
+  targets: [
+    {
+      nodeVersion: '24.13.1',
+      platform: 'linux',
+      architecture: 'x64',
+      libc: 'glibc',
+    },
+  ],
+});
 ```
 
-- `cli` is the human surface.
-- `activities` are the machine surface used by `wharfie app run`, scheduler triggers, queue messages, and workflows.
-- `resources` are only for Wharfie runtime capabilities: `db`, `queue`, `objectStorage`.
+- `schemaVersion: 4`, `app.id`, and `cli` are required. `activities`, `workflows`, and `schedules` are optional so a normal CLI can become durable progressively; each declared map must be nonempty.
+- `cli` is the human surface and its entrypoint must contain exact `kind`, `path`, and `export` fields.
+- When ordinary CLI arguments should start one default workflow, add exact `cli.durable: { workflow, export }`. The named export lives on the CLI entrypoint module, receives a frozen `readonly string[]` without Node argv, and must purely validate/project those arguments into bounded JSON workflow input. Share its parser with the ordinary CLI and do not perform work or external mutations in the adapter.
+- `activities` are the optional machine surface used by `wharfie app run` and durable ledger invocations.
+- `workflows` contain one to 64 ordered `activity`, `timer`, or `signal` steps with explicit revision-bound inputs.
+- `schedules` target workflows only. Each carries static JSON input, a canonical five-field UTC cron expression, `missed: 'latest'`, and `overlap: 'allow'`. Each cron field is only `*` or a strictly ascending comma-separated numeric set; do not use ranges, steps, names, macros, seconds, timezones, or Sunday alias `7`.
+- A manifest may declare at most 128 schedules in 1 MiB, each static schedule input is limited to 256 KiB, and the resident fails closed instead of partially evaluating a catch-up window longer than 527,040 minutes (366 days).
+- Application- and activity-level `resources` are unknown fields. The initial managed-effect catalog is exposed through `runtime.effects`, not manifest adapters.
 - External services like Datadog, OpenAI, GitHub, Slack, etc. are normal modules and environment-backed clients inside your app, not new Wharfie capability kinds.
-- Add `scheduler` only when the task needs cron-driven work.
-- Add `workflows` only when the task truly needs a multi-step DAG with persisted resumability.
-- Keep the first version useful as a plain CLI even if schedules or workflows may come later.
+- Activity `externalPackages` entries must be unique lowercase npm registry `{ name, version }` objects, sorted by name and pinned to exact published semantic versions. Do not use ranges, tags, URLs, bare strings, or ambient resolution.
+- App and activity IDs must match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and contain at most 63 ASCII bytes. Never trim, case-fold, or rewrite an ID.
+- The compiler rejects unknown fields and compatibility aliases. Do not author `name`, `ActorSystem`, `properties`, `functions`, `capabilities`, `resources`, direct activity schedules, packaging assets, signing credentials, or build secrets in the v4 manifest.
+- Keep the developer-owned CLI useful, then express durable work as finite workflows and add workflow-only schedules only for meaningful recurrence.
 
 Design heuristics
 - First ask: what is the atomic user-visible job?
 - Turn that job into one or more named activities with stable verbs.
 - Then decide what CLI commands call those activities.
-- Only then decide whether the app needs `queue`/`db`/`objectStorage`, scheduler, or workflow state.
-- Prefer names like `bundleRepo`, `collectRumWindow`, `buildPromptContext`, `summarizeRum`, and `syncArtifacts` over generic names like `run`, `execute`, or `process`.
+- Only then decide whether a supported `runtime.effects` operation is required.
+- Prefer kebab IDs like `bundle-repo`, `collect-rum-window`, `build-prompt-context`, `summarize-rum`, and `sync-artifacts` over generic names like `run`, `execute`, or `process`.
 - Default progression:
-  1. CLI only
-  2. CLI + activities
-  3. add explicit resources
-  4. add scheduler
-  5. add workflow DAG
+  1. developer-owned CLI
+  2. named activities sharing the same domain modules
+  3. finite workflows
+  4. workflow-only UTC schedules
+  5. portable SEA when distribution is required
 - Packaging is optional unless the task explicitly needs a distributable artifact.
 
 A) Reconstruct the Wharfie reference repo
@@ -125,20 +156,22 @@ B) Read Wharfie before implementing the app
 
 Always read these Wharfie files first:
 - `README.md`
-- `llm/design/README.md`
-- `llm/design/wharfie-progressive-agent-application.md`
-- `llm/design/wharfie-v2.md`
-- `apps/wharfie-v1/wharfie.app.js`
+- `PROJECT.md`
+- `ROADMAP.md`
+- `docs/architecture/decisions/README.md`
+- `src/app.d.ts`
+- `scripts/verify-package-sea.js`
 - `src/cli/app/load-app.js`
 - `src/cli/app/local-app.js`
 - `src/cli/cmds/app_cmds/manifest.js`
 - `src/cli/cmds/app_cmds/run.js`
 - `src/cli/cmds/app_cmds/package.js`
-- `src/core/runtime/resources.js`
-- `src/core/runtime/services/scheduler-service.js`
-- `src/core/runtime/services/node-agent.js`
-- `src/core/lib/graph/index.js`
-- `src/core/lib/db/tables/operations.js`
+- `src/core/runtime/activity-protocol.js`
+- `src/core/runtime/activity-attempt.js`
+- `src/core/runtime/app-runs.js`
+- `src/core/runtime/manual-ledger-run.js`
+- `src/core/lib/db/tables/execution-ledger.js`
+- `src/core/runtime/services/ledger-service.js`
 - `test/cli/app/load-app.test.js`
 - `test/cli/app/examples.test.js`
 
@@ -148,8 +181,8 @@ What you should take away from the Wharfie repo:
 - keep the developer-owned CLI front and center
 - express machine-facing units as `activities`
 - use `wharfie app manifest`, `wharfie app run`, and `wharfie app package` as the authoring funnel
-- use built-in runtime capabilities rather than inventing new core capability types
-- keep progression smooth: CLI -> scheduled/evented app -> workflow-backed app
+- do not declare manifest resources; the current activity protocol intentionally has no resource-injection contract
+- keep the current progression smooth: CLI -> activities -> workflows and schedules -> portable SEA -> durable runs
 
 C) Prepare the target workspace
 
@@ -194,22 +227,23 @@ For the task I give you:
 2. Name the near-term app wedge:
    - CLI only
    - CLI + activities
-   - CLI + activities + scheduler
    - CLI + activities + workflow
+   - CLI + scheduled workflow
+   - CLI + activities + scheduled workflow
+   - packaged CLI + activities + scheduled workflow
 3. Identify the smallest correct set of files to modify.
-4. Decide whether the app should be a plain-object `wharfie.app.js` export or an `ActorSystem`.
-   - Default: plain object.
-   - Use `ActorSystem` only when the task genuinely needs lower-level build/runtime behavior that the plain-object contract cannot express.
+4. Create or update the default-exported plain-object `wharfie.app.js` v4 manifest. Do not expose `ActorSystem` as an alternative.
 5. Implement the developer-owned CLI entrypoint.
 6. Implement shared domain modules for the actual business logic.
 7. Implement named activities that call those same domain modules.
 8. Wire the app manifest:
-   - `name`
+   - `schemaVersion: 4`
+   - `app.id`
    - `cli`
-   - `activities`
-   - `resources` only if needed
-   - `scheduler` only if needed
-   - `workflows` only if needed
+   - `cli.durable` only when ordinary application arguments should project into one declared workflow
+   - `activities` only if needed
+   - a nonempty finite `workflows` map only if needed
+   - a nonempty workflow-only `schedules` map only for meaningful recurrence
    - `targets` only if packaging is in scope
 9. Add or update tests.
 10. Validate.
@@ -275,16 +309,17 @@ J) Example framing for common apps
 
 For a repo-bundling app:
 - keep the CLI as the public product
-- use activities like `bundleRepo`, `assembleBundle`, and `verifyBundle`
+- use activity IDs like `bundle-repo`, `assemble-bundle`, and `verify-bundle`
 - keep git/fs/tar logic in normal modules
-- only add `objectStorage` or `queue` if remote storage or background work is actually needed
+- use a finite workflow for a multi-step durable bundle operation
+- add a schedule only when the app has meaningful unattended recurrence; never invent an inert schedule
 
 For a Datadog RUM -> ChatGPT app:
 - keep Datadog/OpenAI clients as normal modules with explicit env config
-- use activities like `collectRumWindow`, `buildPromptContext`, and `summarizeRum`
-- add `db` only if you need persisted run state or resumability
-- add `scheduler` only if you need periodic collection
-- add a workflow only if the multi-step pipeline must be resumable and inspectable
+- use activity IDs like `collect-rum-window`, `build-prompt-context`, and `summarize-rum`
+- use `runtime.effects` only if a documented managed effect supplies the needed durable operation
+- express the multi-step durable pipeline as a finite workflow
+- if periodic collection is required, schedule that workflow with static JSON input and a canonical UTC cron expression
 
 Task:
 [PASTE YOUR WHARFIE APP IMPLEMENTATION TASK HERE]

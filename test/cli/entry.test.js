@@ -1,7 +1,6 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +35,30 @@ function collectOutput(result) {
   return `${result.stdout ?? ''}${result.stderr ?? ''}`;
 }
 
+/**
+ * Collect a Commander tree in stable depth-first order.
+ * @param {Command} root - Program or command group root.
+ * @returns {Command[]} - Root plus every descendant.
+ */
+function collectCommandTree(root) {
+  return [
+    root,
+    ...root.commands.flatMap((command) => collectCommandTree(command)),
+  ];
+}
+
+/**
+ * Require every child in a Commander tree to name its actual owning parent.
+ * @param {Command} root - Program or command group root.
+ * @returns {void}
+ */
+function expectExactCommandParents(root) {
+  for (const child of root.commands) {
+    expect(child.parent).toBe(root);
+    expectExactCommandParents(child);
+  }
+}
+
 describe('CLI entrypoint', () => {
   test('prints top-level help and only lists the supported command surface', () => {
     const result = runCli(['--help']);
@@ -43,13 +66,13 @@ describe('CLI entrypoint', () => {
 
     expect(result.status).toBe(0);
     expect(output).toMatch(/Usage: wharfie/i);
-    expect(output).toMatch(/config/);
-    expect(output).toMatch(/init/);
     expect(output).toMatch(/app/);
     expect(output).toMatch(/ops/);
-    expect(output).toMatch(/list/);
-    expect(output).toMatch(/build-self/);
-    expect(output).not.toMatch(/^\s+deployment\b/m);
+    expect(output).not.toMatch(/build-self/);
+    expect(output).not.toMatch(/^\s+config\b/m);
+    expect(output).not.toMatch(/^\s+init\b/m);
+    expect(output).not.toMatch(/^\s+list\b/m);
+    expect(output).toMatch(/^\s+deployment\b/m);
     expect(output).not.toMatch(/^\s+project\b/m);
     expect(output).not.toMatch(/^\s+utils\b/m);
   });
@@ -62,108 +85,129 @@ describe('CLI entrypoint', () => {
     expect(output).toMatch(/Usage: wharfie/i);
   });
 
-  test('prints command help for config without crashing the ESM boot path', () => {
-    const result = runCli(['config', '--help']);
-    const output = collectOutput(result);
+  test('registers the supported top-level commands', () => {
+    const program = createProgram();
 
-    expect(result.status).toBe(0);
-    expect(output).toMatch(/Set up Wharfie configuration/i);
+    expect(program.commands.map((command) => command.name())).toEqual([
+      'app',
+      'ops',
+      'deployment',
+    ]);
   });
 
-  test('reports build-self as disabled under jest', () => {
-    const result = runCli(['build-self']);
-    const output = collectOutput(result);
+  test('builds fully isolated source command trees with exact parents', () => {
+    const firstProgram = createProgram();
+    const secondProgram = createProgram();
+    const firstTree = collectCommandTree(firstProgram);
+    const secondTree = collectCommandTree(secondProgram);
+    const firstCommands = new Set(firstTree);
+    const firstApp = firstProgram.commands.find(
+      (command) => command.name() === 'app',
+    );
+    const secondApp = secondProgram.commands.find(
+      (command) => command.name() === 'app',
+    );
+    const deployment = firstProgram.commands.find(
+      (command) => command.name() === 'deployment',
+    );
+    const secondDeployment = secondProgram.commands.find(
+      (command) => command.name() === 'deployment',
+    );
 
-    expect(result.status).toBe(1);
-    expect(output).toMatch(/build-self is disabled under jest/i);
+    expect(secondTree.map((command) => command.name())).toEqual(
+      firstTree.map((command) => command.name()),
+    );
+    expect(secondTree.every((command) => !firstCommands.has(command))).toBe(
+      true,
+    );
+    expectExactCommandParents(firstProgram);
+    expectExactCommandParents(secondProgram);
+    expect(firstApp?.description()).toBe(
+      'Local application manifest, execution, and packaging commands',
+    );
+    expect(secondApp).not.toBe(firstApp);
+    expect(deployment).toBeDefined();
+    expect(deployment?.commands.map((command) => command.name())).toEqual([
+      'plan',
+      'apply',
+      'inspect',
+      'reconcile',
+      'destroy',
+    ]);
+    expect(secondDeployment).toBeDefined();
+    expect(secondDeployment).not.toBe(deployment);
+    expect(deployment?.parent).toBe(firstProgram);
+    expect(secondDeployment?.parent).toBe(secondProgram);
   });
 
-  test('lets config run without pre-validating an existing Wharfie config', async () => {
+  test('keeps source hooks, config, mutation, and parsing bound to their owning root', async () => {
+    /** @type {string[]} */
+    const calls = [];
     const originalConfigDir = process.env.CONFIG_DIR;
-    const originalConfigFilePath = process.env.CONFIG_FILE_PATH;
-    const validate = jest.fn(async () => {});
-    const releaseChecker = jest.fn(async () => false);
-    const failureReporter = jest.fn();
-    let configActionRan = false;
+    const firstConfig = path.join(process.cwd(), '.wharfie-first-config');
+    const secondConfig = path.join(process.cwd(), '.wharfie-second-config');
+    const firstProgram = createProgram({
+      pathsModule: {
+        config: firstConfig,
+        createWharfiePaths: async () => {
+          calls.push('first-paths');
+        },
+      },
+    });
+    const firstApp = firstProgram.commands.find(
+      (command) => command.name() === 'app',
+    );
+    if (!firstApp) throw new Error('First source app command is missing.');
+    firstApp.addCommand(
+      new Command('ownership-probe').action(() => {
+        calls.push(`first-action:${process.env.CONFIG_DIR}`);
+      }),
+    );
+
+    const secondProgram = createProgram({
+      pathsModule: {
+        config: secondConfig,
+        createWharfiePaths: async () => {
+          calls.push('second-paths');
+        },
+      },
+    });
+    const secondApp = secondProgram.commands.find(
+      (command) => command.name() === 'app',
+    );
 
     try {
-      const program = createProgram({
-        argv: ['node', 'wharfie', 'config'],
-        fsModule: {
-          existsSync: () => false,
-          readFileSync: () => {
-            throw new Error('readFileSync should not be called for config');
-          },
-        },
-        pathsModule: {
-          config: '/tmp/wharfie-config',
-          createWharfiePaths: async () => {},
-        },
-        configHelpers: {
-          setConfig: jest.fn(),
-          setEnvironment: jest.fn(),
-          validate,
-        },
-        releaseChecker,
-        failureReporter,
-      });
+      expect(
+        secondApp?.commands.some(
+          (command) => command.name() === 'ownership-probe',
+        ),
+      ).toBe(false);
+      await firstProgram.parseAsync([
+        'node',
+        'wharfie',
+        'app',
+        'ownership-probe',
+      ]);
 
-      const configCommand = program.commands.find(
-        (command) => command.name() === 'config',
-      );
-
-      if (!configCommand) {
-        throw new Error('Expected config command to be registered');
-      }
-
-      configCommand.action(async () => {
-        configActionRan = true;
-        expect(process.env.CONFIG_DIR).toBe('/tmp/wharfie-config');
-        expect(process.env.CONFIG_FILE_PATH).toBe(
-          '/tmp/wharfie-config/wharfie.config',
-        );
-      });
-
-      await program.parseAsync(['node', 'wharfie', 'config']);
-
-      expect(configActionRan).toBe(true);
-      expect(validate).not.toHaveBeenCalled();
-      expect(releaseChecker).not.toHaveBeenCalled();
-      expect(failureReporter).not.toHaveBeenCalled();
+      expect(calls).toEqual(['first-paths', `first-action:${firstConfig}`]);
+      expect(process.env.CONFIG_DIR).toBe(firstConfig);
+      expect(firstApp.parent).toBe(firstProgram);
+      expect(secondApp?.parent).toBe(secondProgram);
     } finally {
       if (originalConfigDir === undefined) {
         delete process.env.CONFIG_DIR;
       } else {
         process.env.CONFIG_DIR = originalConfigDir;
       }
-
-      if (originalConfigFilePath === undefined) {
-        delete process.env.CONFIG_FILE_PATH;
-      } else {
-        process.env.CONFIG_FILE_PATH = originalConfigFilePath;
-      }
     }
-  });
-
-  test('registers the supported top-level commands', () => {
-    const program = createProgram();
-
-    expect(program.commands.map((command) => command.name())).toEqual([
-      'config',
-      'list',
-      'ops',
-      'app',
-      'build-self',
-      'init',
-    ]);
   });
 
   test('awaits async preAction work before parseAsync resolves', async () => {
     /** @type {string[]} */
     const order = [];
+    const originalConfigDir = process.env.CONFIG_DIR;
 
     const program = createProgram({
-      argv: ['node', 'wharfie', 'probe'],
       pathsModule: {
         config: path.join(process.cwd(), '.wharfie-test-config'),
         createWharfiePaths: async () => {
@@ -171,38 +215,29 @@ describe('CLI entrypoint', () => {
           order.push('paths');
         },
       },
-      configHelpers: {
-        setConfig: jest.fn(),
-        setEnvironment: jest.fn(),
-        validate: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          order.push('validate');
-        },
-      },
-      releaseChecker: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        order.push('release');
-        return false;
-      },
-      failureReporter: jest.fn(),
     });
 
     program.addCommand(
       new Command('probe').action(async () => {
+        expect(process.env.CONFIG_DIR).toBe(
+          path.join(process.cwd(), '.wharfie-test-config'),
+        );
         await new Promise((resolve) => setTimeout(resolve, 5));
         order.push('action');
       }),
     );
 
-    await program.parseAsync(['node', 'wharfie', 'probe']);
-    order.push('after-parse');
+    try {
+      await program.parseAsync(['node', 'wharfie', 'probe']);
+      order.push('after-parse');
 
-    expect(order).toEqual([
-      'paths',
-      'validate',
-      'release',
-      'action',
-      'after-parse',
-    ]);
+      expect(order).toEqual(['paths', 'action', 'after-parse']);
+    } finally {
+      if (originalConfigDir === undefined) {
+        delete process.env.CONFIG_DIR;
+      } else {
+        process.env.CONFIG_DIR = originalConfigDir;
+      }
+    }
   });
 });

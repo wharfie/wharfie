@@ -6,10 +6,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createMockedDynamoDB } from '../../helpers/db-adapters.js';
+
 const VANILLA_DB_IMPORT = '../../../src/core/lib/db/adapters/vanilla.js';
 const LMDB_DB_IMPORT = '../../../src/core/lib/db/adapters/lmdb.js';
-const DYNAMO_DB_IMPORT = '../../../src/core/lib/db/adapters/dynamodb.js';
-const RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
 
 /**
  * @returns {string} - Result.
@@ -59,6 +59,493 @@ function fieldEquals(propertyName, propertyValue) {
     propertyName,
     propertyValue,
   };
+}
+
+/**
+ * @param {import('../../../src/core/lib/db/base.js').ConditionTypeEnum} conditionType - conditionType.
+ * @param {string} propertyName - propertyName.
+ * @param {any} [propertyValue] - propertyValue.
+ * @returns {import('../../../src/core/lib/db/base.js').KeyCondition} - Result.
+ */
+function fieldCondition(conditionType, propertyName, propertyValue) {
+  return {
+    conditionType,
+    propertyName,
+    ...(propertyValue === undefined ? {} : { propertyValue }),
+  };
+}
+
+/**
+ * @param {import('../../../src/core/lib/db/base.js').DBClient} db - DB adapter.
+ * @returns {Promise<void>} - Result.
+ */
+async function expectTransactionWriteContract(db) {
+  const tableName = 'transaction-items';
+  await db.batchWrite({
+    tableName,
+    putRequests: [
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'account', sk: 'state', status: 'open', count: 1 },
+      },
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'guard', sk: 'state', status: 'ready' },
+      },
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'obsolete', sk: 'state', status: 'old' },
+      },
+    ],
+  });
+
+  await db.transactionWrite({
+    tableName,
+    conditionChecks: [
+      {
+        keyName: 'pk',
+        keyValue: 'guard',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [fieldEquals('status', 'ready')],
+      },
+    ],
+    putRequests: [
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'created', sk: 'state', status: 'new' },
+        conditions: [fieldCondition('NOT_EXISTS', 'pk')],
+      },
+    ],
+    updateRequests: [
+      {
+        keyName: 'pk',
+        keyValue: 'account',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [
+          fieldCondition('EXISTS', 'status'),
+          fieldEquals('status', 'open'),
+        ],
+        updates: [
+          { property: ['status'], propertyValue: 'closed' },
+          { property: ['count'], propertyValue: 2 },
+        ],
+      },
+    ],
+    deleteRequests: [
+      {
+        keyName: 'pk',
+        keyValue: 'obsolete',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [fieldCondition('EXISTS', 'pk')],
+      },
+    ],
+  });
+
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'account',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toEqual({
+    pk: 'account',
+    sk: 'state',
+    status: 'closed',
+    count: 2,
+  });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'created',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toEqual({ pk: 'created', sk: 'state', status: 'new' });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'obsolete',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toBeUndefined();
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      putRequests: [
+        {
+          keyName: 'pk',
+          sortKeyName: 'sk',
+          record: { pk: 'must-not-exist', sk: 'state' },
+        },
+      ],
+      updateRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [fieldEquals('status', 'open')],
+          updates: [{ property: ['count'], propertyValue: 999 }],
+        },
+      ],
+      deleteRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'guard',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+        },
+      ],
+    }),
+  ).rejects.toThrow(/ConditionalCheckFailed/i);
+
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'must-not-exist',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toBeUndefined();
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'account',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toMatchObject({ count: 2 });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'guard',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toMatchObject({ status: 'ready' });
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'guard',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [fieldCondition('EXISTS', 'pk')],
+        },
+      ],
+      deleteRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'guard',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+        },
+      ],
+    }),
+  ).rejects.toThrow(/target an item more than once/i);
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: Array.from({ length: 101 }, (_, index) => ({
+        keyName: 'pk',
+        keyValue: `limit-${index}`,
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [fieldCondition('NOT_EXISTS', 'pk')],
+      })),
+    }),
+  ).rejects.toThrow(/between 1 and 100 items/i);
+
+  await db.transactionWrite({
+    tableName,
+    updateRequests: [
+      {
+        keyName: 'pk',
+        keyValue: 'upserted',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        updates: [{ property: ['status'], propertyValue: 'created' }],
+      },
+    ],
+  });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'upserted',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toEqual({ pk: 'upserted', sk: 'state', status: 'created' });
+
+  const invalidUpdateRequests = [
+    {
+      updates: [{ property: ['pk'], propertyValue: 'changed' }],
+      message: /key field/i,
+    },
+    {
+      updates: [
+        { property: ['data'], propertyValue: {} },
+        { property: ['data', 'status'], propertyValue: 'changed' },
+      ],
+      message: /duplicate or overlapping paths/i,
+    },
+    {
+      updates: [
+        { property: ['status'], propertyValue: 'one' },
+        { property: ['status'], propertyValue: 'two' },
+      ],
+      message: /duplicate or overlapping paths/i,
+    },
+    {
+      updates: [{ property: [''], propertyValue: 'changed' }],
+      message: /nonempty string path/i,
+    },
+    {
+      updates: [{ property: ['status'], propertyValue: undefined }],
+      message: /must not be undefined/i,
+    },
+  ];
+  for (const invalid of invalidUpdateRequests) {
+    // eslint-disable-next-line no-await-in-loop
+    await expect(
+      db.transactionWrite({
+        tableName,
+        updateRequests: [
+          {
+            keyName: 'pk',
+            keyValue: 'account',
+            sortKeyName: 'sk',
+            sortKeyValue: 'state',
+            updates: invalid.updates,
+          },
+        ],
+      }),
+      // @ts-ignore - table-driven regex assertion.
+    ).rejects.toThrow(invalid.message);
+  }
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      updateRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          updates: [{ property: ['missing', 'child'], propertyValue: 'value' }],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/invalid update path/i);
+  await expect(
+    db.transactionWrite({
+      tableName,
+      updateRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          updates: [{ property: ['status', 'child'], propertyValue: 'value' }],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/invalid update path/i);
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [
+            fieldEquals('status', /** @type {any} */ ({ bad: true })),
+          ],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/portable JSON primitive/i);
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [fieldCondition('BEGINS_WITH', 'missing', '')],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/ConditionalCheckFailed/i);
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [
+            fieldCondition('EQUALS', 'count', /** @type {any} */ ('2')),
+          ],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/ConditionalCheckFailed/i);
+}
+
+/**
+ * @param {import('../../../src/core/lib/db/base.js').DBClient} db - Adapter under test.
+ * @param {{tableName?: string, primaryKeyName?: string, sortKeyName?: string}} [options] - Optional physical key schema.
+ * @returns {Promise<void>} - Resolves after validating the bounded page contract.
+ */
+async function expectQueryPageContract(
+  db,
+  { tableName = 'paged-items', primaryKeyName = 'pk', sortKeyName = 'sk' } = {},
+) {
+  for (const sk of ['directory/a', 'directory/b', 'directory/c']) {
+    await db.put({
+      tableName,
+      keyName: primaryKeyName,
+      sortKeyName,
+      record: {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: sk,
+        value: sk.slice(-1),
+      },
+    });
+  }
+
+  const first = await db.queryPage({
+    tableName,
+    consistentRead: true,
+    keyConditions: [
+      keyEquals('PRIMARY', primaryKeyName, 'service'),
+      beginsWith('SORT', sortKeyName, 'directory/'),
+    ],
+    limit: 2,
+  });
+  expect(first).toEqual({
+    items: [
+      {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: 'directory/a',
+        value: 'a',
+      },
+      {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: 'directory/b',
+        value: 'b',
+      },
+    ],
+    nextStartAfter: 'directory/b',
+  });
+
+  const second = await db.queryPage({
+    tableName,
+    consistentRead: true,
+    keyConditions: [
+      keyEquals('PRIMARY', primaryKeyName, 'service'),
+      beginsWith('SORT', sortKeyName, 'directory/'),
+    ],
+    limit: 2,
+    startAfter: first.nextStartAfter,
+  });
+  expect(second).toEqual({
+    items: [
+      {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: 'directory/c',
+        value: 'c',
+      },
+    ],
+  });
+
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'service'),
+        beginsWith('SORT', sortKeyName, 'directory/'),
+        fieldEquals('value', 'a'),
+      ],
+      limit: 2,
+    }),
+  ).rejects.toThrow(/does not support non-key filters/i);
+
+  await db.put({
+    tableName,
+    keyName: primaryKeyName,
+    sortKeyName,
+    record: {
+      [primaryKeyName]: 'non-ascii',
+      [sortKeyName]: 'directory/é',
+      value: 'bad',
+    },
+  });
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'non-ascii'),
+        beginsWith('SORT', sortKeyName, 'directory/'),
+      ],
+      limit: 1,
+    }),
+  ).rejects.toThrow(/ASCII/i);
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'service'),
+        beginsWith('SORT', sortKeyName, 'directory/é'),
+      ],
+      limit: 1,
+    }),
+  ).rejects.toThrow(/ASCII/i);
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'service'),
+        beginsWith('SORT', sortKeyName, 'directory/'),
+      ],
+      limit: 1,
+      startAfter: 'other-directory/a',
+    }),
+  ).rejects.toThrow(/SORT prefix/i);
 }
 
 /**
@@ -300,6 +787,20 @@ function runLocalDBContract(adapter) {
         }),
       ).toBeUndefined();
     });
+
+    test('supports atomic conditional transactionWrite semantics', async () => {
+      expect.hasAssertions();
+      tmpDir = makeTmpDir();
+      db = await adapter.create(tmpDir);
+      await expectTransactionWriteContract(db);
+    });
+
+    test('supports bounded lexical query pages', async () => {
+      expect.hasAssertions();
+      tmpDir = makeTmpDir();
+      db = await adapter.create(tmpDir);
+      await expectQueryPageContract(db);
+    });
   });
 }
 
@@ -308,55 +809,207 @@ runLocalDBContract({
   create: createVanillaDB,
 });
 
+describe('dynamodb transactionWrite contract', () => {
+  test('uses an atomic conditional TransactWrite operation', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      await expectTransactionWriteContract(db);
+      expect(fakeDocClient.__calls).toEqual({
+        batchWrite: 1,
+        transactWrite: 7,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('supports bounded lexical query pages', async () => {
+    expect.hasAssertions();
+    const { db } = await createMockedDynamoDB();
+    try {
+      await expectQueryPageContract(db);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('supports bounded pages for an explicitly configured non-default schema', async () => {
+    expect.hasAssertions();
+    const { db } = await createMockedDynamoDB({
+      tableSchemas: {
+        'custom-paged-items': ['customer', 'timestamp'],
+      },
+    });
+    try {
+      await expectQueryPageContract(db, {
+        tableName: 'custom-paged-items',
+        primaryKeyName: 'customer',
+        sortKeyName: 'timestamp',
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('probes an ambiguous provider continuation before exposing a public cursor', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      for (const sk of ['directory/a', 'directory/b', 'directory/c']) {
+        await db.put({
+          tableName: 'ambiguous-provider-page',
+          keyName: 'pk',
+          sortKeyName: 'sk',
+          record: { pk: 'service', sk },
+        });
+      }
+      fakeDocClient.__queueQueryResponses([
+        {
+          Items: [
+            { pk: 'service', sk: 'directory/a' },
+            { pk: 'service', sk: 'directory/b' },
+          ],
+          // Simulates DynamoDB hitting its byte cap at exactly the requested
+          // count: a nonempty LEK alone is not proof of another item.
+          LastEvaluatedKey: { pk: 'service', sk: 'directory/b' },
+        },
+        {
+          Items: [{ pk: 'service', sk: 'directory/c' }],
+        },
+      ]);
+
+      await expect(
+        db.queryPage({
+          tableName: 'ambiguous-provider-page',
+          consistentRead: true,
+          keyConditions: [
+            keyEquals('PRIMARY', 'pk', 'service'),
+            beginsWith('SORT', 'sk', 'directory/'),
+          ],
+          limit: 2,
+        }),
+      ).resolves.toEqual({
+        items: [
+          { pk: 'service', sk: 'directory/a' },
+          { pk: 'service', sk: 'directory/b' },
+        ],
+        nextStartAfter: 'directory/b',
+      });
+      expect(
+        fakeDocClient.__queryCalls.map((request) => ({
+          Limit: request.Limit,
+          ScanIndexForward: request.ScanIndexForward,
+          ExclusiveStartKey: request.ExclusiveStartKey,
+        })),
+      ).toEqual([
+        { Limit: 3, ScanIndexForward: true, ExclusiveStartKey: undefined },
+        {
+          Limit: 1,
+          ScanIndexForward: true,
+          ExclusiveStartKey: { pk: 'service', sk: 'directory/b' },
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('treats an empty provider continuation key as terminal', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      fakeDocClient.__queueQueryResponses([
+        {
+          Items: [
+            { pk: 'service', sk: 'directory/a' },
+            { pk: 'service', sk: 'directory/b' },
+          ],
+          LastEvaluatedKey: {},
+        },
+      ]);
+      await expect(
+        db.queryPage({
+          tableName: 'terminal-empty-key',
+          consistentRead: true,
+          keyConditions: [
+            keyEquals('PRIMARY', 'pk', 'service'),
+            beginsWith('SORT', 'sk', 'directory/'),
+          ],
+          limit: 2,
+        }),
+      ).resolves.toEqual({
+        items: [
+          { pk: 'service', sk: 'directory/a' },
+          { pk: 'service', sk: 'directory/b' },
+        ],
+      });
+      expect(fakeDocClient.__queryCalls).toHaveLength(1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('does not normalize systemic transaction cancellation as a condition race', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      const systemic = /** @type {any} */ (
+        new Error('transaction conflict and throttling')
+      );
+      systemic.name = 'TransactionCanceledException';
+      systemic.CancellationReasons = [
+        { Code: 'ConditionalCheckFailed' },
+        { Code: 'TransactionConflict' },
+      ];
+      fakeDocClient.__failNextTransaction(systemic);
+
+      await expect(
+        db.transactionWrite({
+          tableName: 'systemic-cancellation',
+          putRequests: [
+            {
+              keyName: 'pk',
+              record: { pk: 'one', status: 'pending' },
+            },
+          ],
+        }),
+      ).rejects.toBe(systemic);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('retries a transient DynamoDB transaction conflict', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      const conflict = /** @type {any} */ (
+        new Error('transient transaction conflict')
+      );
+      conflict.name = 'TransactionCanceledException';
+      conflict.CancellationReasons = [{ Code: 'TransactionConflict' }];
+      fakeDocClient.__failNextTransaction(conflict);
+
+      await db.transactionWrite({
+        tableName: 'transient-conflict',
+        putRequests: [
+          {
+            keyName: 'pk',
+            record: { pk: 'one', status: 'committed' },
+          },
+        ],
+      });
+      await expect(
+        db.get({
+          tableName: 'transient-conflict',
+          keyName: 'pk',
+          keyValue: 'one',
+        }),
+      ).resolves.toMatchObject({ status: 'committed' });
+      expect(fakeDocClient.__calls.transactWrite).toBe(2);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
 runLocalDBContract({
   name: 'lmdb',
   create: createLMDBDB,
-});
-
-describe('db adapter wiring', () => {
-  afterEach(() => {
-    jest.resetModules();
-    jest.restoreAllMocks();
-  });
-
-  test('createActorSystemResources wires the dynamodb adapter without AWS calls', async () => {
-    const close = jest.fn(async () => {});
-    const factory = jest.fn((options = {}) => ({
-      query: jest.fn(async () => []),
-      put: jest.fn(async () => {}),
-      update: jest.fn(async () => {}),
-      get: jest.fn(async () => undefined),
-      remove: jest.fn(async () => {}),
-      batchWrite: jest.fn(async () => {}),
-      close,
-      options,
-    }));
-
-    jest.resetModules();
-    jest.unstable_mockModule(DYNAMO_DB_IMPORT, () => ({
-      default: factory,
-    }));
-
-    const { createActorSystemResources } = await import(RESOURCES_IMPORT);
-    const { resources, close: closeResources } =
-      await createActorSystemResources({
-        db: {
-          adapter: 'dynamodb',
-          options: {
-            region: 'us-east-1',
-            endpoint: 'http://localhost:8000',
-          },
-        },
-      });
-
-    expect(factory).toHaveBeenCalledWith({
-      region: 'us-east-1',
-      endpoint: 'http://localhost:8000',
-    });
-    expect(typeof resources.db?.get).toBe('function');
-
-    await closeResources();
-
-    expect(close).toHaveBeenCalledTimes(1);
-  });
 });

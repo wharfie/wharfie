@@ -2,8 +2,8 @@
   "compilerOptions": {
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "target": "ES2021",
-    "lib": ["ES2021", "dom"],
+    "target": "ES2023",
+    "lib": ["ES2023", "dom"],
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -11,22 +11,32 @@
     "checkJs": true,
     "noEmit": true,
     "resolveJsonModule": true,
-    "skipLibCheck": true,
-    "types": ["jest", "node"]
+    "skipLibCheck": false,
+    "types": ["node"]
   },
   "include": [
+    "src/app.d.ts",
+    "src/deployment-profile.js",
+    "src/deployment-profile.d.ts",
     "src/core/**/*.js",
-    "test/cli/**/*.js",
-    "test/runtime/**/*.js",
-    "test/graph/**/*.js",
-    "test/db/**/*.js",
-    "test/fixtures/actors/**/*.js",
+    "src/cli/**/*.js",
+    "examples/**/*.js",
+    "scripts/aws-host-retained-storage-host-preflight.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-artifact-record.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-build.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-bundle.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-delivery.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-linux-proof.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-linux-docker-readiness.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-package.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-publish.js",
+    "scripts/aws-host-retained-storage-host-preflight-sea-source.js",
+    "scripts/collect-aws-host-retained-storage-preflight-linux.js",
+    "scripts/package-verification.js",
+    "scripts/inspect-aws-host-retained-storage-host-preflight-sea-linux-docker-readiness.js",
+    "scripts/run-aws-host-retained-storage-host-preflight-sea-linux-docker.js",
+    "scripts/sea-inspector.js",
+    "scripts/verify-package-contents.js",
     "types/**/*.d.ts"
-  ],
-  "exclude": [
-    "src/core/udf_entrypoint.js",
-    "src/core/resources/aws/**",
-    "src/core/resources/records/**",
-    "test/legacy/**"
   ]
 }

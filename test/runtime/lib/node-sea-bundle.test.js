@@ -42,6 +42,62 @@ describe('src/core/lib/node-sea.js', () => {
   });
 
   it(
+    'rejects source-only core build work cleanly under SEA-style CommonJS replacements',
+    async () => {
+      const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'wharfie-sea-core-'));
+      const outfile = path.join(tmpDir, 'bundle.cjs');
+
+      try {
+        await build({
+          stdin: {
+            contents: [
+              "import { getCoreLmdbDependencyLock } from './src/core/resources/builds/core-runtime-dependencies.js';",
+              'getCoreLmdbDependencyLock()\n',
+              '  .then(() => { process.exitCode = 1; })',
+              '  .catch((error) => { console.log(error.message); });',
+            ].join('\n'),
+            resolveDir: repoRoot,
+            sourcefile: 'index.js',
+          },
+          outfile,
+          bundle: true,
+          platform: 'node',
+          minify: true,
+          keepNames: false,
+          sourcemap: false,
+          target: `node${process.versions.node}`,
+          logLevel: 'silent',
+          external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'lmdb'],
+          define: {
+            __WILLEM_BUILD_RECONCILE_TERMINATOR: '1',
+            'import.meta.url': '__filename',
+            'import.meta.dirname': '__dirname',
+          },
+        });
+
+        const result = spawnSync(process.execPath, [outfile], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+        });
+
+        if (result.status !== 0) {
+          throw new Error(
+            `Bundled core build module exited ${String(result.status)}: ${result.stderr || result.error?.message || 'no diagnostic'}`,
+          );
+        }
+        expect(result.status).toBe(0);
+        expect(result.stderr).toBe('');
+        expect(result.stdout).toBe(
+          'This packaged Wharfie runtime cannot resolve source core dependency build assets.\n',
+        );
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+    CLI_BUNDLE_TEST_TIMEOUT_MS,
+  );
+
+  it(
     'boots the bundled CLI entry with SEA-style CommonJS import.meta replacements',
     async () => {
       const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'wharfie-sea-cli-'));
@@ -71,12 +127,7 @@ describe('src/core/lib/node-sea.js', () => {
           sourcemap: false,
           target: `node${process.versions.node}`,
           logLevel: 'silent',
-          external: [
-            'esbuild',
-            'node-gyp/bin/node-gyp.js',
-            'lmdb',
-            '@duckdb/node-api',
-          ],
+          external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'lmdb'],
           define: {
             __WILLEM_BUILD_RECONCILE_TERMINATOR: '1',
             'import.meta.url': '__filename',
@@ -93,11 +144,18 @@ describe('src/core/lib/node-sea.js', () => {
           },
         });
 
+        if (result.status !== 0) {
+          throw new Error(
+            `Bundled CLI exited ${String(result.status)}: ${result.stderr || result.error?.message || 'no diagnostic'}`,
+          );
+        }
         expect(result.status).toBe(0);
         expect(result.stderr).toBe('');
         expect(result.stdout).toContain('Usage: wharfie');
-        expect(result.stdout).toContain('build-self');
-        expect(result.stdout).toContain('init');
+        expect(result.stdout).toContain('app');
+        expect(result.stdout).toContain('ops');
+        expect(result.stdout).not.toContain('build-self');
+        expect(result.stdout).not.toContain('init');
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

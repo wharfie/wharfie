@@ -1,14 +1,15 @@
 {
   "name": "@wharfie/wharfie",
-  "version": "0.0.14",
-  "description": "",
+  "version": "0.0.15",
+  "description": "Experimental toolkit for building TypeScript CLIs and packaging them as portable Node SEA executables",
+  "private": true,
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/wharfie/wharfie.git"
   },
   "author": "",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/wharfie/wharfie/issues"
   },
@@ -16,46 +17,74 @@
     "wharfie": "./bin/wharfie"
   },
   "homepage": "https://github.com/wharfie/wharfie#readme",
-  "engineStrict": true,
+  "packageManager": "npm@11.12.0",
   "engines": {
-    "node": "24.13.1",
-    "npm": "11.12.0"
+    "node": "24.13.1"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.13.1",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "11.12.0",
+      "onFail": "error"
+    }
   },
   "main": "./src/cli/entry.js",
+  "exports": {
+    ".": "./src/cli/entry.js",
+    "./app": {
+      "types": "./src/app.d.ts",
+      "import": "./src/app.js",
+      "default": "./src/app.js"
+    },
+    "./deployment-profile": {
+      "types": "./src/deployment-profile.d.ts",
+      "import": "./src/deployment-profile.js",
+      "default": "./src/deployment-profile.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "README.md",
     "bin/",
-    "apps/wharfie-v1/wharfie.app.js",
+    "src/app.js",
+    "src/app.d.ts",
+    "src/deployment-profile.js",
+    "src/deployment-profile.d.ts",
     "src/core/**",
-    "src/cli/entry.js",
-    "src/cli/config.js",
-    "src/cli/input.js",
-    "src/cli/upgrade.js",
-    "src/cli/app/**",
-    "src/cli/assets/**",
-    "src/cli/output/**",
-    "src/cli/cmds/app.js",
-    "src/cli/cmds/app_cmds/**",
-    "src/cli/cmds/build_self.js",
-    "src/cli/cmds/config.js",
-    "src/cli/cmds/init.js",
-    "src/cli/cmds/list.js",
-    "src/cli/cmds/operation-rows.js",
-    "src/cli/cmds/operations-store.js",
-    "src/cli/cmds/ops.js",
-    "src/cli/cmds/ops_cmds/**",
-    "src/cli/project/project_structure_examples/**"
+    "src/cli/**",
+    "examples/README.md",
+    "examples/steady-file/"
   ],
   "scripts": {
-    "typecheck": "tsc",
-    "test:js": "TZ=UTC node ./test/run-jest.js --silent --coverage",
+    "typecheck": "npm run typecheck:source && npm run typecheck:app && npm run typecheck:test && npm run typecheck:sea-verifier",
+    "typecheck:source": "tsc -p tsconfig.json",
+    "typecheck:app": "tsc -p tsconfig.app-implementation.json",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "typecheck:sea-verifier": "tsc -p tsconfig.sea-verifier.json",
+    "test:js": "TZ=UTC node ./test/run-jest.js --silent",
     "test:update": "TZ=UTC node ./test/run-jest.js --silent --updateSnapshot",
-    "test": "TZ=UTC node ./test/run-jest.js --silent --coverage",
-    "test:ci": "npm run lint && npm run typecheck && npm run test",
-    "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
+    "test": "TZ=UTC node ./test/run-jest.js --silent",
+    "test:coverage": "TZ=UTC node ./test/run-jest.js --silent --coverage",
+    "test:ci": "npm run lint && npm run typecheck && npm run test:coverage && npm run verify:package && npm run audit:prod",
+    "test:native": "WHARFIE_RUN_NATIVE_EXTERNALS=1 TZ=UTC node ./test/run-jest.js --silent --runInBand test/cli/app/kitchen-sink-native-externals.test.js",
+    "test:full": "npm run test:ci && npm run test:native && npm run verify:package:sea",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
+    "lint:js": "eslint --max-warnings=0 . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
-    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
-    "build:wharfie-v1": "node ./apps/wharfie-v1/wharfie.app.js"
+    "lint:fix": "eslint --max-warnings=0 --fix . && prettier --write \"{*,**/*}.{js,json}\"",
+    "verify:package": "node ./scripts/verify-package-contents.js",
+    "verify:package:sea": "node ./scripts/verify-package-sea.js",
+    "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
+    "verify:steady-file:systemd:lima": "./scripts/run-steady-file-preview-lima.sh",
+    "verify:host:retained-storage:preflight": "node ./scripts/collect-aws-host-retained-storage-preflight-linux.js",
+    "verify:host:retained-storage:preflight:sea:linux:docker:readiness": "node ./scripts/inspect-aws-host-retained-storage-host-preflight-sea-linux-docker-readiness.js",
+    "verify:host:retained-storage:preflight:sea:linux:docker": "node ./scripts/run-aws-host-retained-storage-host-preflight-sea-linux-docker.js",
+    "package:host:retained-storage:preflight:sea": "node ./scripts/aws-host-retained-storage-host-preflight-sea-package.js"
   },
   "prettier": {
     "singleQuote": true,
@@ -63,19 +92,19 @@
   },
   "jest": {
     "collectCoverageFrom": [
-      "src/core/runtime/**/*.js",
-      "src/core/resources/builds/**/*.js",
-      "src/core/lib/code-execution/**/*.js"
+      "src/**/*.js"
     ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 70,
+        "functions": 80,
+        "lines": 75,
+        "statements": 75
+      }
+    },
     "testEnvironment": "node",
-    "modulePathIgnorePatterns": [
-      "<rootDir>/mock/builds/"
-    ],
     "testMatch": [
-      "<rootDir>/test/cli/**/*.test.js",
-      "<rootDir>/test/runtime/**/*.test.js",
-      "<rootDir>/test/graph/**/*.test.js",
-      "<rootDir>/test/db/**/*.test.js"
+      "<rootDir>/test/**/*.test.js"
     ]
   },
   "eslintConfig": {
@@ -100,9 +129,6 @@
     "ignorePatterns": [
       "dist/",
       "tmp/",
-      "docs/",
-      "src/cli/",
-      "test/",
       "scratch/",
       "coverage/"
     ],
@@ -115,11 +141,23 @@
           "jest"
         ],
         "extends": [
-          "plugin:jest/all"
+          "plugin:jest/recommended"
         ],
         "rules": {
           "jest/max-expects": 0,
-          "jest/no-conditional-in-test": 0
+          "jest/no-conditional-in-test": 0,
+          "jest/no-conditional-expect": 0,
+          "jest/no-standalone-expect": 0,
+          "import/namespace": 0,
+          "import/no-dynamic-require": 0,
+          "jsdoc/no-undefined-types": 0,
+          "jsdoc/require-jsdoc": 0,
+          "jsdoc/require-param": 0,
+          "jsdoc/require-param-description": 0,
+          "jsdoc/require-returns": 0,
+          "jsdoc/require-returns-description": 0,
+          "jsdoc/tag-lines": 0,
+          "n/no-process-exit": 0
         }
       }
     ],
@@ -127,7 +165,6 @@
       "plugin:jsdoc/recommended",
       "plugin:n/recommended",
       "plugin:import/recommended",
-      "plugin:import/typescript",
       "eslint-config-standard",
       "prettier"
     ],
@@ -136,9 +173,6 @@
         "mode": "typescript"
       },
       "import/resolver": {
-        "typescript": {
-          "project": "./tsconfig.json"
-        },
         "node": {
           "extensions": [
             ".js",
@@ -158,122 +192,57 @@
         {
           "definedTypes": [
             "Iterable",
-            "AsyncIterable"
+            "AsyncIterable",
+            "NodeJS"
           ]
         }
       ]
     }
   },
-  "lint-staged": {
-    "*.js": [
-      "prettier --write \"{*,**/*}.{js,json}\"",
-      "git add"
-    ]
-  },
-  "husky": {
-    "hooks": {
-      "pre-commit": "lint-staged"
-    }
-  },
   "devDependencies": {
     "@babel/eslint-parser": "^7.28.5",
     "@babel/plugin-syntax-import-attributes": "^7.27.1",
-    "@jest/globals": "^30.2.0",
-    "@types/aws-lambda": "^8.10.71",
-    "@types/bluebird": "^3.5.36",
-    "@types/cli-progress": "^3.11.6",
+    "@jest/globals": "^30.4.1",
     "@types/diff": "^5.2.1",
-    "@types/inquirer": "^8.0.7",
-    "@types/jest": "^29.5.14",
-    "@types/js-yaml": "^4.0.9",
+    "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
     "@types/npmcli__arborist": "^6.3.1",
-    "@types/uuid": "^8.3.0",
-    "@types/yargs": "^17.0.33",
-    "@typescript-eslint/parser": "^8.46.3",
-    "@typescript-eslint/utils": "^8.49.0",
-    "aws-sdk-client-mock": "^3.0.0",
-    "aws-sdk-client-mock-jest": "^3.0.0",
     "eslint": "^8.45.0",
     "eslint-config-prettier": "^8.8.0",
     "eslint-config-standard": "^17.1.0",
-    "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-jest": "^29.2.1",
     "eslint-plugin-jsdoc": "^44.0.0",
     "eslint-plugin-n": "^16.0.0",
-    "husky": "^3.1.0",
-    "jest": "^29.7.0",
-    "lint-staged": "^9.4.3",
-    "nock": "^13.1.3",
+    "jest": "^30.4.2",
     "prettier": "^3.7.4",
-    "traverse": "^0.6.7",
     "typescript": "^5.0.4"
   },
   "dependencies": {
-    "@aws-sdk/client-application-auto-scaling": "^3.556.0",
-    "@aws-sdk/client-athena": "^3.363.0",
-    "@aws-sdk/client-cloudformation": "^3.363.0",
-    "@aws-sdk/client-cloudwatch": "^3.363.0",
-    "@aws-sdk/client-cloudwatch-events": "^3.554.0",
-    "@aws-sdk/client-dynamodb": "^3.363.0",
-    "@aws-sdk/client-firehose": "^3.540.0",
-    "@aws-sdk/client-glue": "^3.363.0",
-    "@aws-sdk/client-iam": "^3.540.0",
-    "@aws-sdk/client-lambda": "^3.536.0",
-    "@aws-sdk/client-s3": "^3.363.0",
-    "@aws-sdk/client-sns": "^3.363.0",
-    "@aws-sdk/client-sqs": "^3.363.0",
-    "@aws-sdk/client-sts": "^3.363.0",
-    "@aws-sdk/credential-provider-node": "^3.734.0",
-    "@aws-sdk/credential-providers": "^3.363.0",
-    "@aws-sdk/lib-dynamodb": "^3.365.0",
-    "@aws-sdk/s3-request-presigner": "^3.910.0",
-    "@aws-sdk/util-dynamodb": "^3.658.1",
-    "@duckdb/node-api": "^1.4.2-r.1",
-    "@grpc/grpc-js": "^1.14.3",
-    "@npmcli/arborist": "^9.1.4",
+    "@aws-sdk/client-dynamodb": "^3.1090.0",
+    "@aws-sdk/client-ec2": "^3.1091.0",
+    "@aws-sdk/client-iam": "^3.1092.0",
+    "@aws-sdk/client-s3": "^3.1091.0",
+    "@aws-sdk/client-ssm": "^3.1091.0",
+    "@aws-sdk/client-sts": "^3.1091.0",
+    "@aws-sdk/credential-providers": "^3.1090.0",
+    "@aws-sdk/lib-dynamodb": "^3.1090.0",
+    "@babel/parser": "^7.28.5",
+    "@npmcli/arborist": "^9.9.0",
     "@paralleldrive/cuid2": "^2.2.2",
     "@smithy/util-retry": "^3.0.3",
-    "acorn": "^8.15.0",
-    "acorn-walk": "^8.3.4",
-    "apache-arrow": "^12.0.1",
-    "bpkg": "^0.9.2",
     "chalk": "^4.1.0",
-    "cli-progress": "^3.12.0",
-    "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
-    "corestore": "^7.4.7",
-    "death": "^1.1.0",
-    "detect-libc": "^2.1.2",
     "diff": "^5.2.0",
     "env-paths": "^2.2.1",
     "es-toolkit": "^1.13.1",
     "esbuild": "0.25.1",
-    "flatted": "^3.3.1",
-    "hyparquet": "^1.8.4",
-    "hyparquet-compressors": "^1.0.0",
-    "hyperbee": "^2.26.5",
-    "hypercore": "^11.16.1",
-    "hyperdht": "^6.23.0",
-    "hyperswarm": "^4.15.1",
-    "inquirer": "^8.2.0",
-    "joi": "^17.9.1",
-    "js-yaml": "^4.1.0",
     "jszip": "^3.10.1",
-    "lexe": "^0.1.0-alpha.6",
     "lmdb": "^3.4.0",
-    "node-sql-parser": "^5.3.0",
-    "node-ssh": "^13.2.1",
-    "package-up": "^5.0.0",
-    "pacote": "^21.0.3",
-    "parcel": "^2.14.4",
-    "pkg-up": "^3.1.0",
+    "pacote": "^21.5.1",
     "postject": "^1.0.0-alpha.6",
     "semver": "^7.6.3",
     "source-map-support": "^0.5.21",
-    "sshpk": "^1.18.0",
-    "tar": "^7.4.3",
-    "uuid": "^11.1.0"
+    "tar": "^7.5.20"
   }
 }

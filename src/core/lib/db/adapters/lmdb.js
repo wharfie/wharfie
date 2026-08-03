@@ -1,16 +1,140 @@
-import { open } from 'lmdb';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import paths from '../../paths.js';
-import { CONDITION_TYPE } from '../base.js';
-import { assertTightQuery } from '../utils.js';
+import { getLmdbModule } from '../../lmdb-module.js';
+import {
+  CONDITION_TYPE,
+  DB_ADAPTER_NAMES,
+  brandDBClient,
+  recordMatchesCondition,
+  transactionRequestKey,
+  transactionRequestUpdates,
+  validateTransactionWrite,
+} from '../base.js';
+import {
+  assertPortablePageAscii,
+  assertTightQuery,
+  assertTightQueryPage,
+} from '../utils.js';
 
 const NO_SORT = '__no_sort__';
 const SEP = '\u001f';
 
 /**
+ * Node-lmdb's root `close()` closes its whole native environment, including
+ * every named table opened from it. A local-store reader can therefore not
+ * open and close an independent root for the same local volume while a
+ * resident writer is live in this process. Keep compatible facades on one
+ * root and close physical resources only after the final facade releases.
+ *
+ * A writable facade may host a read-only facade because this adapter enforces
+ * read-only mutation guards itself. The inverse is deliberately refused: an
+ * existing native read-only environment must never become a writer.
+ * @typedef {{env: any, openedReadOnly: boolean, references: number, closing: boolean, tables: Map<string, any>}} SharedLmdbEnvironment
+ */
+
+/** @type {Map<string, SharedLmdbEnvironment>} */
+const sharedLmdbEnvironments = new Map();
+
+/** A read-only lookup cannot find an existing LMDB volume or named table. */
+export class LMDBReadOnlyStoreNotFoundError extends Error {
+  /** @param {string} message - Safe operator-facing diagnostic. */
+  constructor(message) {
+    super(message);
+    this.name = 'LMDBReadOnlyStoreNotFoundError';
+    this.code = 'WHARFIE_READ_ONLY_STORE_NOT_FOUND';
+  }
+}
+
+/**
+ * Acquire this process's sole compatible root environment for one canonical
+ * LMDB volume.
+ * @param {string} dbRoot - Canonical local LMDB directory.
+ * @param {boolean} readOnly - Whether this facade must remain read-only.
+ * @returns {SharedLmdbEnvironment} - Shared root and named-table registry.
+ */
+function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
+  const existing = sharedLmdbEnvironments.get(dbRoot);
+  if (existing) {
+    if (existing.closing) {
+      throw new Error(
+        `Cannot open an LMDB facade while the prior environment is closing for '${dbRoot}'. Retry after close completes.`,
+      );
+    }
+    if (!readOnly && existing.openedReadOnly) {
+      throw new Error(
+        `Cannot open a writable LMDB facade while a read-only environment is live for '${dbRoot}'. Close the read-only facade first.`,
+      );
+    }
+    existing.references += 1;
+    return existing;
+  }
+
+  // Disable event-turn batching to reduce the chance of background commit
+  // scheduling keeping Jest or a short-lived operator process alive.
+  const previousUmask =
+    !readOnly && process.platform !== 'win32' ? process.umask(0o077) : null;
+  let env;
+  try {
+    // LMDB creates data.mdb and lock.mdb synchronously with a fixed 0664
+    // request. Narrow the process umask around only that native open so the
+    // durable files are private even under a group-writable login umask.
+    env = getLmdbModule().open({
+      path: dbRoot,
+      readOnly,
+      eventTurnBatching: false,
+      commitDelay: 0,
+      // Encoding defaults to msgpack; we store plain JSON-ish objects.
+    });
+  } finally {
+    if (previousUmask !== null) process.umask(previousUmask);
+  }
+  const shared = {
+    env,
+    openedReadOnly: readOnly,
+    references: 1,
+    closing: false,
+    tables: new Map(),
+  };
+  sharedLmdbEnvironments.set(dbRoot, shared);
+  return shared;
+}
+
+/**
+ * Release one facade and physically close native resources only after the
+ * final compatible facade is gone.
+ * @param {string} dbRoot - Canonical local LMDB directory.
+ * @param {SharedLmdbEnvironment} shared - Held root environment.
+ * @returns {Promise<void>} - Resolves once the final close finishes.
+ */
+async function releaseSharedLmdbEnvironment(dbRoot, shared) {
+  shared.references -= 1;
+  if (shared.references > 0) return;
+  if (shared.references < 0) {
+    throw new Error(`LMDB environment reference underflow for '${dbRoot}'.`);
+  }
+  shared.closing = true;
+  try {
+    // If anything in the future uses async writes, make sure they're fully
+    // committed/flushed before named tables or their root are closed.
+    if (shared.env?.committed) await shared.env.committed;
+    if (shared.env?.flushed) await shared.env.flushed;
+    for (const table of shared.tables.values()) {
+      if (table && typeof table.close === 'function') await table.close();
+    }
+    shared.tables.clear();
+    if (typeof shared.env?.close === 'function') await shared.env.close();
+  } finally {
+    if (sharedLmdbEnvironments.get(dbRoot) === shared) {
+      sharedLmdbEnvironments.delete(dbRoot);
+    }
+  }
+}
+
+/**
  * @typedef CreateLMDBDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
+ * @property {boolean} [readOnly] - Open an existing local volume without creating tables or accepting writes.
  */
 
 /**
@@ -28,31 +152,70 @@ const SEP = '\u001f';
  * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createLMDB(options = {}) {
-  const dbRoot = options.path
-    ? join(options.path, 'lmdb')
-    : join(paths.data, 'lmdb');
-  mkdirSync(dbRoot, { recursive: true });
+  const dbRoot = resolve(
+    options.path ? join(options.path, 'lmdb') : join(paths.data, 'lmdb'),
+  );
+  const readOnly = options.readOnly === true;
+  if (readOnly) {
+    let stats;
+    try {
+      stats = lstatSync(dbRoot);
+    } catch (error) {
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      throw new LMDBReadOnlyStoreNotFoundError(
+        `LMDB read-only local volume does not exist at '${dbRoot}'.${detail}`,
+      );
+    }
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error(
+        `LMDB read-only local volume must be a non-symbolic-link directory: '${dbRoot}'.`,
+      );
+    }
+  } else {
+    // A writable local store is durable application state, not a shared cache.
+    // Pin every newly created path component private even when the caller's
+    // login shell uses a group-writable umask. Packaged work admitted before
+    // service installation must remain acceptable to the service manager's
+    // ownership and permission checks.
+    mkdirSync(dbRoot, { recursive: true, mode: 0o700 });
+  }
 
-  // Disable event-turn batching to reduce the chance of background commit scheduling
-  // keeping Jest alive (especially if someone accidentally uses async put/remove).
-  const env = open({
-    path: dbRoot,
-    eventTurnBatching: false,
-    commitDelay: 0,
-    // encoding defaults to msgpack; we store plain JSON-ish objects.
-  });
+  const shared = acquireSharedLmdbEnvironment(dbRoot, readOnly);
+  const env = shared.env;
+  const tables = shared.tables;
+  let closed = false;
+  /** @type {Promise<void> | undefined} */
+  let closePromise;
 
-  /** @type {Map<string, any>} */
-  const tables = new Map();
+  /** @returns {void} */
+  function assertOpen() {
+    if (closed) throw new Error('LMDB client is closed.');
+  }
+
+  /** @returns {void} */
+  function assertWritable() {
+    assertOpen();
+    if (readOnly) throw new Error('LMDB client is read-only.');
+  }
 
   /**
    * @param {string} tableName - tableName.
    * @returns {any} - Result.
    */
   function ensureTable(tableName) {
+    assertOpen();
     let t = tables.get(tableName);
     if (!t) {
-      t = env.openDB({ name: tableName });
+      const opened = env.openDB({ name: tableName, create: !readOnly });
+      if (!opened) {
+        if (readOnly) {
+          throw new LMDBReadOnlyStoreNotFoundError(
+            `LMDB read-only table '${tableName}' is not ready in the existing local volume.`,
+          );
+        }
+        throw new Error(`LMDB could not open table '${tableName}'.`);
+      }
+      t = opened;
       tables.set(tableName, t);
     }
     return t;
@@ -118,7 +281,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} pk -
+   * @param {import('../base.js').KeyCondition} pk - condition.
    * @returns {string} - Result.
    */
   function pkTokenFromCondition(pk) {
@@ -126,7 +289,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} sk -
+   * @param {import('../base.js').KeyCondition} sk - condition.
    * @returns {string} - Result.
    */
   function skPrefixFromCondition(sk) {
@@ -160,39 +323,32 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DBRecord | null | undefined} record - record.
-   * @param {string | any[]} path - path.
+   * @param {import('../base.js').DBRecord} record - record.
+   * @param {string[]} path - path.
    * @param {any} value - value.
+   * @returns {void} - Result.
    */
   function setPath(record, path, value) {
     /** @type {any} */
     let cur = record;
     for (let i = 0; i < path.length - 1; i++) {
       const seg = path[i];
-      if (cur[seg] == null || typeof cur[seg] !== 'object') cur[seg] = {};
+      if (
+        !Object.prototype.hasOwnProperty.call(cur, seg) ||
+        cur[seg] === null ||
+        typeof cur[seg] !== 'object' ||
+        Array.isArray(cur[seg])
+      ) {
+        throw new Error(`Invalid update path: ${path.join('.')}`);
+      }
       cur = cur[seg];
     }
-    cur[path[path.length - 1]] = value;
-  }
-
-  /**
-   * @param {{ [x: string]: any; }} record -
-   * @param {{ conditionType: any; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} condition -
-   * @returns {boolean} - Result.
-   */
-  function matchesCondition(record, condition) {
-    const value = record?.[condition.propertyName];
-
-    if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
-      return (
-        typeof value === 'string' &&
-        value.startsWith(String(condition.propertyValue))
-      );
-    }
-    if (condition.conditionType === CONDITION_TYPE.EQUALS) {
-      return value === condition.propertyValue;
-    }
-    throw new Error(`invalid condition type: ${condition.conditionType}`);
+    Object.defineProperty(cur, path[path.length - 1], {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
   }
 
   /**
@@ -210,7 +366,10 @@ export default function createLMDB(options = {}) {
       const skTok = skPrefixFromCondition(sk);
       const row = table.get(makeKey(pkTok, skTok));
       if (!row) return [];
-      if (filters.length && !filters.every((c) => matchesCondition(row, c)))
+      if (
+        filters.length &&
+        !filters.every((c) => recordMatchesCondition(row, c))
+      )
         return [];
       return row ? [deepClone(row)] : [];
     }
@@ -232,7 +391,7 @@ export default function createLMDB(options = {}) {
       if (filters.length === 0) {
         out.push(deepClone(value));
       } else {
-        if (filters.every((c) => matchesCondition(value, c)))
+        if (filters.every((c) => recordMatchesCondition(value, c)))
           out.push(deepClone(value));
       }
     }
@@ -241,10 +400,64 @@ export default function createLMDB(options = {}) {
   }
 
   /**
+   * Read one bounded, lexically ordered page under a sort-key prefix. This is
+   * intentionally separate from query(): callers that need history cannot
+   * accidentally materialize an unbounded partition first.
+   * @param {import('../base.js').QueryPageParams} params - Page request.
+   * @returns {import('../base.js').QueryPageReturn} - Bounded page.
+   */
+  async function queryPage(params) {
+    const { pk, sk, limit, startAfter } = assertTightQueryPage(params);
+    const table = ensureTable(params.tableName);
+    const pkTok = pkTokenFromCondition(pk);
+    const basePrefix = makePrefix(pkTok);
+    const scanPrefix = `${basePrefix}${skPrefixFromCondition(sk)}`;
+    const startKey =
+      startAfter === undefined
+        ? scanPrefix
+        : makeKey(pkTok, `${sk.propertyName}=${startAfter}`);
+    /** @type {import('../base.js').DBRecord[]} */
+    const items = [];
+    let hasNext = false;
+    let lastSortKey;
+
+    // Do not invent an end sentinel: a generic Unicode suffix can sort after
+    // U+FFFF. The portable page contract constrains its keys to ASCII, and a
+    // prefix break keeps this iterator exact even if older rows are wider.
+    for (const { key, value } of table.getRange({ start: startKey })) {
+      if (!key.startsWith(scanPrefix)) break;
+      if (startAfter !== undefined && key === startKey) continue;
+      if (items.length === limit) {
+        hasNext = true;
+        break;
+      }
+      const tokenPrefix = `${sk.propertyName}=`;
+      const physicalSortToken = key.slice(basePrefix.length);
+      const sortKey = assertPortablePageAscii(
+        physicalSortToken.slice(tokenPrefix.length),
+        'queryPage stored sort key',
+      );
+      if (!value || value[sk.propertyName] !== sortKey) {
+        throw new Error(
+          'queryPage stored record sort key does not match its physical key',
+        );
+      }
+      items.push(deepClone(value));
+      lastSortKey = sortKey;
+    }
+
+    return {
+      items,
+      ...(hasNext && items.length > 0 ? { nextStartAfter: lastSortKey } : {}),
+    };
+  }
+
+  /**
    * Put (insert/overwrite) an item.
    * @param {import('../base.js').PutParams} params - params.
    */
   async function put(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
     const record = params.record;
     if (!record || typeof record !== 'object')
@@ -283,6 +496,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').UpdateParams} params - params.
    */
   async function update(params) {
+    assertWritable();
     assertSortPair(params);
     const table = ensureTable(params.tableName);
 
@@ -299,7 +513,7 @@ export default function createLMDB(options = {}) {
 
       if (params.conditions?.length) {
         for (const c of params.conditions) {
-          if (!matchesCondition(existing, c)) {
+          if (!recordMatchesCondition(existing, c)) {
             const err = new Error('ConditionalCheckFailedException');
             err.name = 'ConditionalCheckFailedException';
             throw err;
@@ -337,6 +551,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').RemoveParams} params - params.
    */
   async function remove(params) {
+    assertWritable();
     assertSortPair(params);
     const table = ensureTable(params.tableName);
 
@@ -353,6 +568,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').BatchWriteParams} params - params.
    */
   async function batchWrite(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
 
     const deleteRequests = Array.isArray(params.deleteRequests)
@@ -391,28 +607,106 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * Close underlying resources.
+   * Atomically condition-check and mutate distinct items in one table.
+   * @param {import('../base.js').TransactionWriteParams} params - params.
    */
-  async function close() {
-    // If anything in the future uses async writes, make sure they're fully committed/flushed.
-    if (env?.committed) await env.committed;
-    if (env?.flushed) await env.flushed;
+  async function transactionWrite(params) {
+    assertWritable();
+    const requests = validateTransactionWrite(params);
+    const table = ensureTable(params.tableName);
 
-    for (const db of tables.values()) {
-      if (typeof db.close === 'function') await db.close();
-    }
-    tables.clear();
+    /**
+     * @param {ReturnType<typeof transactionRequestKey>} key - Exact item key.
+     * @returns {string} - LMDB key.
+     */
+    const dbKey = (key) =>
+      makeKey(
+        `${key.keyName}=${key.keyValue}`,
+        key.sortKeyName ? `${key.sortKeyName}=${key.sortKeyValue}` : NO_SORT,
+      );
 
-    if (typeof env.close === 'function') await env.close();
+    table.transactionSync(() => {
+      const groups = /** @type {Array<[any[], boolean]>} */ ([
+        [requests.conditionChecks, false],
+        [requests.putRequests, true],
+        [requests.updateRequests, false],
+        [requests.deleteRequests, false],
+      ]);
+
+      // Read and check all conditions before applying any mutation.
+      for (const [group, putRequest] of groups) {
+        for (const request of group) {
+          const key = transactionRequestKey(request, '', putRequest);
+          const existing = table.get(dbKey(key));
+          if (
+            !(request.conditions || []).every(
+              (/** @type {import('../base.js').KeyCondition} */ condition) =>
+                recordMatchesCondition(existing, condition),
+            )
+          ) {
+            const error = new Error('ConditionalCheckFailedException');
+            error.name = 'ConditionalCheckFailedException';
+            throw error;
+          }
+        }
+      }
+
+      for (const request of requests.deleteRequests) {
+        const key = transactionRequestKey(request, '', false);
+        table.removeSync(dbKey(key));
+      }
+
+      for (const request of requests.putRequests) {
+        const key = transactionRequestKey(request, '', true);
+        table.putSync(dbKey(key), deepClone(request.record));
+      }
+
+      for (const request of requests.updateRequests) {
+        const key = transactionRequestKey(request, '', false);
+        const existing = table.get(dbKey(key));
+        const next = existing
+          ? deepClone(existing)
+          : {
+              [key.keyName]: key.keyValue,
+              ...(key.sortKeyName
+                ? { [key.sortKeyName]: key.sortKeyValue }
+                : {}),
+            };
+        const updates = transactionRequestUpdates(request);
+        for (const update of updates) {
+          assertNonEmptyPath(update.property);
+          setPath(next, update.property, update.propertyValue);
+        }
+        table.putSync(dbKey(key), next);
+      }
+    });
   }
 
-  return {
-    query,
-    batchWrite,
-    update,
-    put,
-    get,
-    remove,
-    close,
-  };
+  /**
+   * Release this facade. The shared root stays live until every compatible
+   * local facade closes, so an inspector cannot tear down a resident writer.
+   * @returns {Promise<void>} - Resolves once this facade releases its root.
+   */
+  function close() {
+    if (!closePromise) {
+      closed = true;
+      closePromise = releaseSharedLmdbEnvironment(dbRoot, shared);
+    }
+    return closePromise;
+  }
+
+  return brandDBClient(
+    {
+      query,
+      queryPage,
+      batchWrite,
+      transactionWrite,
+      update,
+      put,
+      get,
+      remove,
+      close,
+    },
+    DB_ADAPTER_NAMES.LMDB,
+  );
 }

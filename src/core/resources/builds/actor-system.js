@@ -1,11 +1,16 @@
 import BuildResourceGroup from './build-resource-group.js';
 import NodeBinary from './node-binary.js';
 import BuildResource from './build-resource.js';
+import CoreRuntimeDependenciesResource from './core-runtime-dependencies.js';
 import FunctionResource from './function-resource.js';
 import SeaBuild from './sea-build.js';
 import MacOSBinarySignature from './macos-binary-signature.js';
-import cli from './actor-system-cli/index.js';
-import { createActorSystemResources } from '../../runtime/resources.js';
+import {
+  getMacOSSigningCredentials,
+  setMacOSSigningCredentials,
+} from './lib/macos-signing-credentials.js';
+import { assertCoreRuntimeDependencyTargetSupported } from './lib/core-runtime-dependency-asset.js';
+import operatorCli from './actor-system-cli/index.js';
 import { withResourceScope } from '../resource-scope.js';
 import { createResourceScope } from '../runtime-config.js';
 
@@ -25,7 +30,7 @@ const actorSystemDir =
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
  * @typedef {import('node:process')['arch']} TargetArch
- * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
+ * @typedef {'glibc'|'musl'} TargetLibc
  */
 
 /**
@@ -37,25 +42,10 @@ const actorSystemDir =
  */
 
 /**
- * @typedef ActorSystemResourceSpecObject
- * @property {string} adapter - adapter.
- * @property {Object<string, any>} [options] - options.
- */
-
-/**
- * @typedef ActorSystemResourcesSpec
- * @property {string|ActorSystemResourceSpecObject|any} [db] - db.
- * @property {string|ActorSystemResourceSpecObject|any} [queue] - queue.
- * @property {string|ActorSystemResourceSpecObject|any} [objectStorage] - objectStorage.
- */
-
-/**
  * @typedef WharfieActorSystemProperties
  * @property {BuildTarget[] | function(): BuildTarget[]} targets - targets.
- * @property {ActorSystemResourcesSpec} [resources] - resources.
  * @property {import('./function.js').default[]} [functions] - functions.
- * @property {any[]} [workflows] - Serializable workflow definitions.
- * @property {{ entrypoint: string }} [cli] - CLI entrypoint config.
+ * @property {{ entrypoint: string, export?: string }} [cli] - CLI entrypoint config.
  */
 
 /**
@@ -98,15 +88,24 @@ function resolveBuildTarget(target) {
     return null;
   }
 
+  const normalizedPlatform = String(platformValue).trim().toLowerCase();
+  const normalizedArchitecture = String(architectureValue).trim().toLowerCase();
+
   /** @type {ResolvedBuildTarget} */
   const resolved = {
-    nodeVersion: String(nodeVersionValue),
-    platform: /** @type {TargetPlatform} */ (String(platformValue)),
-    architecture: /** @type {TargetArch} */ (String(architectureValue)),
+    nodeVersion: String(nodeVersionValue).trim().replace(/^v/, ''),
+    platform: /** @type {TargetPlatform} */ (normalizedPlatform),
+    architecture: /** @type {TargetArch} */ (normalizedArchitecture),
   };
 
-  if (libcValue) {
-    resolved.libc = /** @type {TargetLibc} */ (String(libcValue));
+  if (normalizedPlatform === 'linux') {
+    resolved.libc = /** @type {TargetLibc} */ (
+      libcValue ? String(libcValue).trim().toLowerCase() : 'glibc'
+    );
+  } else if (libcValue) {
+    resolved.libc = /** @type {TargetLibc} */ (
+      String(libcValue).trim().toLowerCase()
+    );
   }
 
   return resolved;
@@ -142,9 +141,29 @@ function buildTargetSelector(target) {
 }
 
 /**
+ * @param {NodeBinary} nodeBinary - nodeBinary.
+ * @param {string | function(): string} configuredVersion - configuredVersion.
+ * @returns {string} - Result.
+ */
+function resolveNodeBinaryVersion(nodeBinary, configuredVersion) {
+  const exactVersion = nodeBinary.has('exactVersion')
+    ? nodeBinary.get('exactVersion')
+    : '';
+  const candidate =
+    typeof exactVersion === 'string' && exactVersion.trim()
+      ? exactVersion.trim()
+      : typeof configuredVersion === 'function'
+        ? configuredVersion()
+        : configuredVersion;
+
+  return String(candidate).replace(/^v/, '');
+}
+
+/**
  * @typedef WharfieActorSystemOptions
  * @property {string} name - name.
  * @property {import('./function.js').default[]} [functions] - functions.
+ * @property {{ certificateBase64?: string, certificatePassword?: string, keychainPassword?: string }} [macosSigningCredentials] - Ephemeral macOS signing credentials.
  * @property {string} [parent] - parent.
  * @property {import('../reconcilable.js').default.Status} [status] - status.
  * @property {WharfieActorSystemProperties & import('../../actors/typedefs.js').SharedProperties} properties - properties.
@@ -153,6 +172,7 @@ function buildTargetSelector(target) {
  * @property {any} [stateDB] - Compatibility alias for the scoped state store.
  * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
  * @property {import('../runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
+ * @property {{ path: string, input: import('../../runtime/application-revision.js').LockedInputDescriptor }} [dependencyLock] - Transient sealed dependency lock for target packaging.
  */
 
 class ActorSystem extends BuildResourceGroup {
@@ -167,17 +187,32 @@ class ActorSystem extends BuildResourceGroup {
     resources,
     dependsOn,
     functions = [],
+    macosSigningCredentials,
     stateDB,
     emitter,
     runtime,
+    dependencyLock,
   }) {
-    const propertiesWithDefaults = Object.assign(
-      {},
-      ActorSystem.DefaultProperties,
-      properties,
+    if (
+      properties &&
+      Object.prototype.hasOwnProperty.call(properties, 'resources')
+    ) {
+      throw new TypeError(
+        `ActorSystem '${name}' no longer supports properties.resources.`,
+      );
+    }
+    const propertiesWithDefaults = /** @type {Record<string, any>} */ (
+      Object.assign({}, ActorSystem.DefaultProperties, properties)
     );
+    delete propertiesWithDefaults.macosCertBase64;
+    delete propertiesWithDefaults.macosCertPassword;
+    delete propertiesWithDefaults.macosKeychainPassword;
+    delete propertiesWithDefaults.macosSigningCredentials;
     const requestedTargetSelectors =
       ActorSystem.getRequestedBuildTargetSelectors();
+    propertiesWithDefaults.targets = ActorSystem.resolveBuildTargets(
+      propertiesWithDefaults.targets,
+    );
     if (requestedTargetSelectors) {
       propertiesWithDefaults.targets = ActorSystem.filterBuildTargets(
         propertiesWithDefaults.targets,
@@ -196,8 +231,8 @@ class ActorSystem extends BuildResourceGroup {
       runtime,
     });
     this.functions = functions;
-    /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
-    this._runtimeResourcesPromise = null;
+    this._dependencyLock = dependencyLock;
+    setMacOSSigningCredentials(this, macosSigningCredentials);
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(
       withResourceScope(createResourceScope(this.getRuntimeConfig()), () =>
@@ -206,6 +241,22 @@ class ActorSystem extends BuildResourceGroup {
     );
     // @ts-ignore
     global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
+  }
+
+  /**
+   * @param {{ certificateBase64?: string, certificatePassword?: string, keychainPassword?: string }} credentials - credentials.
+   * @returns {this} - Actor system.
+   */
+  setMacOSSigningCredentials(credentials) {
+    setMacOSSigningCredentials(this, credentials);
+    return this;
+  }
+
+  /**
+   * @returns {Readonly<{ certificateBase64: string, certificatePassword: string, keychainPassword: string }>} - credentials.
+   */
+  getMacOSSigningCredentials() {
+    return getMacOSSigningCredentials(this);
   }
 
   async initializeEnvironment() {
@@ -220,93 +271,8 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   /**
-   * Lazily create and cache runtime resources from `properties.resources`.
-   * @returns {Promise<{ resources: any, close: () => Promise<void> }>} -
-   */
-  async _ensureRuntimeResources() {
-    if (this._runtimeResourcesPromise) return this._runtimeResourcesPromise;
-
-    const specs = /** @type {any} */ (this.get('resources', {}));
-    this._runtimeResourcesPromise = createActorSystemResources(specs);
-    return this._runtimeResourcesPromise;
-  }
-
-  /**
-   * Get the instantiated runtime resources for this ActorSystem.
-   * @returns {Promise<any>} - Result.
-   */
-  async getRuntimeResources() {
-    const { resources } = await this._ensureRuntimeResources();
-    return resources;
-  }
-
-  /**
-   * Build a context object for actor invocation.
-   *
-   * - `context.resources` is always present (may be empty).
-   * - caller-provided `context.resources` overrides ActorSystem resources.
-   * @param {any} [context] - context.
-   * @returns {Promise<any>} - Result.
-   */
-  async createContext(context = {}) {
-    const systemResources = await this.getRuntimeResources();
-    const overrideResources =
-      context?.resources && typeof context.resources === 'object'
-        ? context.resources
-        : {};
-    return {
-      ...context,
-      resources: {
-        ...(systemResources || {}),
-        ...(overrideResources || {}),
-      },
-    };
-  }
-
-  /**
-   * Invoke an actor function by name with runtime resources injected onto `context.resources`.
-   * @param {string} functionName - functionName.
-   * @param {any} [event] - event.
-   * @param {any} [context] - context.
-   * @returns {Promise<any>} - Result.
-   */
-  async invoke(functionName, event = {}, context = {}) {
-    const fn = this.functions.find((f) => f.name === functionName);
-    if (!fn) {
-      const available = this.functions.map((f) => f.name).join(', ');
-      throw new Error(
-        `Unknown function '${functionName}'. Available: ${available || '(none)'}`,
-      );
-    }
-    const systemResources = await this.getRuntimeResources();
-    return await fn.fn(event, context, {
-      baseResources: systemResources,
-    });
-  }
-
-  /**
-   * Close all cached runtime resources (best-effort).
-   * @returns {Promise<void>} - Result.
-   */
-  async closeRuntimeResources() {
-    if (this._runtimeResourcesPromise) {
-      const { close } = await this._ensureRuntimeResources();
-      await close();
-      this._runtimeResourcesPromise = null;
-    }
-
-    await Promise.all(
-      this.functions.map((fn) =>
-        typeof fn.closeRuntimeResources === 'function'
-          ? fn.closeRuntimeResources()
-          : Promise.resolve(),
-      ),
-    );
-  }
-
-  /**
    * @param {string|undefined} parent - parent.
-   * @param {BuildTarget} target - target.
+   * @param {ResolvedBuildTarget} target - target.
    * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} - Result.
    */
   _defineTargetResources(
@@ -324,6 +290,24 @@ class ActorSystem extends BuildResourceGroup {
         architecture,
       },
     });
+    const resolvedPlatform = /** @type {'darwin'|'linux'|'win32'} */ (platform);
+    const resolvedArchitecture = /** @type {'arm64'|'x64'} */ (architecture);
+    const resolvedLibc = /** @type {'glibc'} */ (libc);
+    /** @returns {import('../../runtime/build-target.js').BuildTarget} - Exact resolved target. */
+    const buildTarget = () => ({
+      nodeVersion: resolveNodeBinaryVersion(node_binary, nodeVersion),
+      platform: resolvedPlatform,
+      architecture: resolvedArchitecture,
+      ...(platform === 'linux' ? { libc: resolvedLibc } : {}),
+    });
+    const coreRuntimeDependencies = new CoreRuntimeDependenciesResource({
+      name: `${this.name}-core-runtime-dependencies-${nodeVersion}-${platform}-${architecture}`,
+      parent,
+      dependsOn: [node_binary],
+      properties: {
+        buildTarget,
+      },
+    });
     const targetFunctions = this.functions.map(
       (/** @type {import('./function.js').default} */ func) => {
         return new FunctionResource({
@@ -334,26 +318,27 @@ class ActorSystem extends BuildResourceGroup {
             functionName: func.name,
             entrypoint: func.entrypoint,
             ...func.properties,
-            buildTarget: () => ({
-              nodeVersion: node_binary.get('exactVersion').slice(1),
-              platform,
-              architecture,
-              libc,
-            }),
+            buildTarget,
           },
+          dependencyLock: this._dependencyLock,
         });
       },
     );
     const build = new SeaBuild({
       name: `${this.name}-build-${nodeVersion}-${platform}-${architecture}`,
       parent,
-      dependsOn: [node_binary, ...targetFunctions],
+      dependsOn: [node_binary, coreRuntimeDependencies, ...targetFunctions],
       properties: {
         entryCode: () => {
           const developerCliEntrypoint =
             typeof this.get('cli', {})?.entrypoint === 'string' &&
             this.get('cli', {}).entrypoint
               ? path.resolve(this.get('cli', {}).entrypoint)
+              : null;
+          const developerCliExportName =
+            typeof this.get('cli', {})?.export === 'string' &&
+            this.get('cli', {}).export
+              ? this.get('cli', {}).export
               : null;
           const packagedAppEntryPath = path.resolve(
             actorSystemDir,
@@ -364,91 +349,118 @@ class ActorSystem extends BuildResourceGroup {
             'actor-system-cli',
             'index.js',
           );
-          const runtimeStartPath = path.resolve(
+          const runtimeLedgerServicePath = path.resolve(
             actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'start.js',
+            '..',
+            '..',
+            'runtime',
+            'services',
+            'ledger-service-command.js',
           );
-          const runtimeDbPath = path.resolve(
+          const packagedAppStoragePath = path.resolve(
             actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'serve_cmds',
-            'db.js',
+            '..',
+            '..',
+            'runtime',
+            'packaged-app-storage.js',
           );
-          const runtimeQueuePath = path.resolve(
+          const localAppStorageContextPath = path.resolve(
             actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'serve_cmds',
-            'queue.js',
+            '..',
+            '..',
+            'lib',
+            'config',
+            'local-app-storage-context.js',
           );
-          const runtimeLambdaPath = path.resolve(
-            actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'serve_cmds',
-            'lambda.js',
-          );
-          const developerImport = developerCliEntrypoint
-            ? `import * as developerCliModule from ${JSON.stringify(
+          const developerCliLoader = developerCliEntrypoint
+            ? `const loadDeveloperCliModule = () => import(${JSON.stringify(
                 developerCliEntrypoint,
-              )};`
-            : 'const developerCliModule = null;';
+              )});`
+            : 'const loadDeveloperCliModule = null;';
 
           return `
               import sourceMapSupport from 'source-map-support';
+              import { preparePackagedCoreRuntimeDependencies } from ${JSON.stringify(
+                path.resolve(
+                  actorSystemDir,
+                  '..',
+                  '..',
+                  'runtime',
+                  'core-runtime-dependencies.js',
+                ),
+              )};
               import { runPackagedApp } from ${JSON.stringify(
                 packagedAppEntryPath,
               )};
-              ${developerImport}
-              import runtimeCli from ${JSON.stringify(runtimeCliPath)};
-              import startCmd from ${JSON.stringify(runtimeStartPath)};
-              import serveDbCmd from ${JSON.stringify(runtimeDbPath)};
-              import serveQueueCmd from ${JSON.stringify(runtimeQueuePath)};
-              import serveLambdaCmd from ${JSON.stringify(runtimeLambdaPath)};
+              import { resolvePackagedAppStorage } from ${JSON.stringify(
+                packagedAppStoragePath,
+              )};
+              import { withLocalAppStorageLayout } from ${JSON.stringify(
+                localAppStorageContextPath,
+              )};
+              import runtimeOperatorCli from ${JSON.stringify(runtimeCliPath)};
+              import ledgerServiceCmd from ${JSON.stringify(
+                runtimeLedgerServicePath,
+              )};
+              ${developerCliLoader}
               (async () => {
-                console.time('overall');
                 sourceMapSupport.install();
-                await runPackagedApp({
-                  developerCliModule,
-                  runtimeModules: {
-                    cli: runtimeCli,
-                    start: startCmd,
-                    'serve-db': serveDbCmd,
-                    'serve-queue': serveQueueCmd,
-                    'serve-lambda': serveLambdaCmd,
-                  },
+                await preparePackagedCoreRuntimeDependencies();
+                const packagedAppStorage = await resolvePackagedAppStorage();
+                await withLocalAppStorageLayout(packagedAppStorage, async () => {
+                  await runPackagedApp({
+                    loadDeveloperCliModule,
+                    ${
+                      developerCliExportName
+                        ? `cliExportName: ${JSON.stringify(developerCliExportName)},`
+                        : ''
+                    }
+                    runtimeModules: {
+                      operatorCli: runtimeOperatorCli,
+                      'ledger-service': ledgerServiceCmd,
+                    },
+                  });
                 });
-                console.timeEnd('overall');
               })();
           `;
         },
         resolveDir: () => path.dirname(actorSystemDir),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
-        nodeVersion: () => node_binary.get('exactVersion').slice(1),
+        nodeVersion: () => resolveNodeBinaryVersion(node_binary, nodeVersion),
         platform,
         architecture,
+        ...(libc ? { libc } : {}),
         environmentVariables: () => {
           return {};
         },
         assets: () => {
-          return targetFunctions.reduce(
+          const activityAssets = targetFunctions.reduce(
             (
               /** @type {{ [x: string]: string; }} */ acc,
               /** @type {import('./function-resource.js').default} */ func,
             ) => {
-              acc[
-                func.name.replace(
-                  `-${nodeVersion}-${platform}-${architecture}`,
-                  '',
-                )
-              ] = func.get('singleExecutableAssetPath');
+              acc[String(func.get('functionName'))] = func.get(
+                'singleExecutableAssetPath',
+              );
+              return acc;
+            },
+            {},
+          );
+          return {
+            ...activityAssets,
+            ...coreRuntimeDependencies.get('assets', {}),
+          };
+        },
+        assetDigests: () => coreRuntimeDependencies.get('assetDigests', {}),
+        functionAssetDigests: () => {
+          return targetFunctions.reduce(
+            (
+              /** @type {{ [x: string]: import('../../runtime/application-revision.js').Sha256Digest; }} */ acc,
+              /** @type {import('./function-resource.js').default} */ func,
+            ) => {
+              acc[String(func.get('functionName'))] = func.get(
+                'singleExecutableAssetDigest',
+              );
               return acc;
             },
             {},
@@ -457,17 +469,20 @@ class ActorSystem extends BuildResourceGroup {
       },
     });
     /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
-    resources.push(node_binary, build, ...targetFunctions);
+    resources.push(
+      node_binary,
+      coreRuntimeDependencies,
+      build,
+      ...targetFunctions,
+    );
     if (platform === 'darwin') {
       const macosBinarySignature = new MacOSBinarySignature({
         name: `${this.name}-macos-binary-signature-${nodeVersion}-${platform}-${architecture}`,
         parent,
         dependsOn: [build],
+        credentials: () => this.getMacOSSigningCredentials(),
         properties: {
           binaryPath: () => build.get('binaryPath'),
-          macosCertBase64: this.get('macosCertBase64'),
-          macosCertPassword: this.get('macosCertPassword'),
-          macosKeychainPassword: this.get('macosKeychainPassword'),
         },
       });
       resources.push(macosBinarySignature);
@@ -482,9 +497,11 @@ class ActorSystem extends BuildResourceGroup {
   defineActorSystemResources(parent) {
     /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
     const resources = [];
-    this.get('targets', []).forEach((/** @type {BuildTarget} */ target) => {
-      resources.push(...this._defineTargetResources(parent, target));
-    });
+    this.get('targets', []).forEach(
+      (/** @type {ResolvedBuildTarget} */ target) => {
+        resources.push(...this._defineTargetResources(parent, target));
+      },
+    );
     return resources;
   }
 
@@ -497,7 +514,9 @@ class ActorSystem extends BuildResourceGroup {
    * @returns {ResolvedBuildTarget[]} - Result.
    */
   static resolveBuildTargets(targets) {
-    return resolveConfiguredTargets(targets);
+    return resolveConfiguredTargets(targets).map((target) =>
+      assertCoreRuntimeDependencyTargetSupported(target, 'ActorSystem target'),
+    );
   }
 
   /**
@@ -575,36 +594,11 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   async run() {
-    await cli();
-    //   if (process.argv.length <= 2) {
-    //     // this should spin up polling actor/workqueues
-    //     console.log('starting system');
-
-    //     const controller = new AbortController();
-    //     const { signal } = controller;
-    //     const child = fork('start', ['hello'], { signal });
-    //     child.on('error', (err) => {
-    //       // This will be called with err being an AbortError if the controller aborts
-    //     });
-    //     const [exitCode] = await once(child, 'exit');
-    //     console.log('exited with ', exitCode);
-    //     // c
-    //     // controller.abort();
-    //   } else {
-    //     // assume that we are passing some work to a specific function
-    //     const binary = process.argv[0];
-    //     const filteredArgs = process.argv.filter((arg) => arg !== binary);
-    //     console.log(filteredArgs);
-    //     const functionName = filteredArgs[0];
-    //     console.log(`running function ${functionName}`);
-    //     const func = this.functionMap.get(functionName);
-    //     await func.run(filteredArgs[1], { context: 'foo' });
-    //   }
+    await operatorCli();
   }
 }
 ActorSystem.DefaultProperties = {
   functions: [],
-  resources: {},
 };
 /** @type {string[] | null} */
 ActorSystem.RequestedBuildTargetSelectors = null;

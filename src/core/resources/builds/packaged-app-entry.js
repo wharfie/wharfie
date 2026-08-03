@@ -1,22 +1,17 @@
-import {
-  BOOTSTRAP_MODE_STATE_START,
-  resolveBootstrapInvocation,
-} from './actor-system-cli/lib/bootstrap-mode.js';
-
-const INTERNAL_COMMANDS = new Set(['ctl', 'func', 'infra']);
+/**
+ * The one top-level word reserved by packaged applications for Wharfie-owned
+ * operator commands. All other argv belongs to the application.
+ */
+export const OPERATOR_NAMESPACE = 'wharfie';
 
 /**
  * @param {string | undefined} value - value.
  * @param {string} label - label.
  * @returns {string[]} - Result.
  */
-export function parseBootstrapArgs(
-  value = typeof process.env.WHARFIE_BOOTSTRAP_ARGS === 'string'
-    ? process.env.WHARFIE_BOOTSTRAP_ARGS
-    : process.env.WHARFIE_RUNTIME_ARGS,
-  label = typeof process.env.WHARFIE_BOOTSTRAP_ARGS === 'string'
-    ? 'WHARFIE_BOOTSTRAP_ARGS'
-    : 'WHARFIE_RUNTIME_ARGS',
+export function parseRuntimeArgs(
+  value = process.env.WHARFIE_RUNTIME_ARGS,
+  label = 'WHARFIE_RUNTIME_ARGS',
 ) {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!raw) {
@@ -28,19 +23,20 @@ export function parseBootstrapArgs(
     throw new Error(`${label} must be a JSON array of strings.`);
   }
 
-  return parsed.map((candidate) => String(candidate));
+  if (parsed.some((candidate) => typeof candidate !== 'string')) {
+    throw new Error(`${label} must be a JSON array of strings.`);
+  }
+
+  return parsed;
 }
 
 /**
  * @param {Record<string, string | undefined>} [environment] - environment.
  * @returns {'cli' | 'runtime'} - Result.
  */
-export function getBootstrapMode(environment = process.env) {
-  if (resolveBootstrapInvocation(environment)) {
-    return 'runtime';
-  }
-
-  return environment.WHARFIE_RUNTIME_COMMAND || environment.WHARFIE_RUNTIME_ARGS
+export function getDispatchMode(environment = process.env) {
+  const runtimeCommand = environment.WHARFIE_RUNTIME_COMMAND;
+  return typeof runtimeCommand === 'string' && runtimeCommand.trim()
     ? 'runtime'
     : 'cli';
 }
@@ -50,27 +46,18 @@ export function getBootstrapMode(environment = process.env) {
  * @returns {string} - Result.
  */
 export function getRuntimeCommand(environment = process.env) {
-  const bootstrapInvocation = resolveBootstrapInvocation(environment);
   const runtimeCommand =
     typeof environment.WHARFIE_RUNTIME_COMMAND === 'string'
       ? environment.WHARFIE_RUNTIME_COMMAND.trim()
       : '';
 
-  if (bootstrapInvocation) {
-    if (bootstrapInvocation.mode === BOOTSTRAP_MODE_STATE_START) {
-      return 'start';
-    }
-
-    if (bootstrapInvocation.mode === 'runtime') {
-      return runtimeCommand || 'start';
-    }
-
+  if (!runtimeCommand) {
     throw new Error(
-      `Unsupported packaged bootstrap mode '${bootstrapInvocation.mode}'.`,
+      'Packaged runtime dispatch requires WHARFIE_RUNTIME_COMMAND.',
     );
   }
 
-  return runtimeCommand || 'start';
+  return runtimeCommand;
 }
 
 /**
@@ -78,19 +65,7 @@ export function getRuntimeCommand(environment = process.env) {
  * @returns {string[]} - Result.
  */
 function getRuntimeArgs(environment = process.env) {
-  const bootstrapInvocation = resolveBootstrapInvocation(environment);
-  if (bootstrapInvocation) {
-    if (bootstrapInvocation.mode === 'runtime') {
-      const runtimeArgsValue = environment.WHARFIE_RUNTIME_ARGS;
-      return typeof runtimeArgsValue === 'string' && runtimeArgsValue.trim()
-        ? parseBootstrapArgs(runtimeArgsValue, 'WHARFIE_RUNTIME_ARGS')
-        : bootstrapInvocation.args;
-    }
-
-    return bootstrapInvocation.args;
-  }
-
-  return parseBootstrapArgs(
+  return parseRuntimeArgs(
     environment.WHARFIE_RUNTIME_ARGS,
     'WHARFIE_RUNTIME_ARGS',
   );
@@ -104,19 +79,22 @@ function getRuntimeArgs(environment = process.env) {
 function resolveCliHandler(moduleLike, cliExportName) {
   const candidate = moduleLike || {};
 
-  if (
-    typeof cliExportName === 'string' &&
-    cliExportName.trim() &&
-    candidate &&
-    typeof candidate === 'object'
-  ) {
-    const explicit = candidate[cliExportName];
+  if (typeof cliExportName === 'string' && cliExportName.trim()) {
+    const requestedExport = cliExportName.trim();
+    const explicit =
+      candidate && typeof candidate === 'object'
+        ? candidate[requestedExport]
+        : undefined;
     if (explicit && typeof explicit.parseAsync === 'function') {
       return { kind: 'command', value: explicit };
     }
     if (typeof explicit === 'function') {
       return { kind: 'function', value: explicit.bind(candidate) };
     }
+
+    throw new Error(
+      `cli.export '${requestedExport}' was requested, but that export is not a callable function or Commander command.`,
+    );
   }
 
   const candidates = [
@@ -140,7 +118,7 @@ function resolveCliHandler(moduleLike, cliExportName) {
 
 /**
  * @param {Record<string, any> | null | undefined} moduleLike - moduleLike.
- * @param {{ cliExportName?: string, argv?: string[] }} [options] - options.
+ * @param {{ cliExportName?: string, argv?: string[], context?: unknown }} [options] - options.
  * @returns {Promise<void>} - Result.
  */
 export async function runDeveloperCli(moduleLike, options = {}) {
@@ -158,7 +136,28 @@ export async function runDeveloperCli(moduleLike, options = {}) {
     return;
   }
 
+  if (Object.prototype.hasOwnProperty.call(options, 'context')) {
+    await handler.value(argv, options.context);
+    return;
+  }
   await handler.value(argv);
+}
+
+/**
+ * @param {string[]} argv - Packaged application argv.
+ * @returns {boolean} - Whether this is an explicit operator invocation.
+ */
+export function isOperatorInvocation(argv) {
+  return argv[2] === OPERATOR_NAMESPACE;
+}
+
+/**
+ * Remove the reserved namespace before handing argv to the operator CLI.
+ * @param {string[]} argv - Packaged application argv.
+ * @returns {string[]} - Node-style argv for the operator CLI.
+ */
+export function getOperatorArgv(argv) {
+  return [argv[0] || 'node', argv[1] || 'wharfie-app', ...argv.slice(3)];
 }
 
 /**
@@ -192,40 +191,54 @@ export async function runRuntimeBootstrap(runtimeModules, options = {}) {
 }
 
 /**
- * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, argv?: string[] }} [options] - options.
+ * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, loadDeveloperCliModule?: function(): Promise<Record<string, any> | null> | Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, argv?: string[] }} [options] - options.
  * @returns {Promise<void>} - Result.
  */
 export async function runPackagedApp(options = {}) {
   const argv = Array.isArray(options.argv) ? options.argv : process.argv;
-  const args = argv.slice(2);
   const runtimeModules = options.runtimeModules || {};
 
-  if (getBootstrapMode() === 'runtime') {
+  if (getDispatchMode() === 'runtime') {
     await runRuntimeBootstrap(runtimeModules, { argv });
     return;
   }
 
-  if (args.length > 0 && INTERNAL_COMMANDS.has(String(args[0] || '').trim())) {
-    const internalCli = runtimeModules.cli;
-    if (typeof internalCli === 'function') {
-      await internalCli(argv);
-      return;
+  if (isOperatorInvocation(argv)) {
+    if (!runtimeModules.operatorCli) {
+      throw new Error(
+        `Packaged app does not include the Wharfie operator CLI requested by '${OPERATOR_NAMESPACE}'.`,
+      );
     }
-    if (internalCli && typeof internalCli.parseAsync === 'function') {
-      await internalCli.parseAsync(argv);
-      return;
-    }
+
+    await runDeveloperCli(
+      { default: runtimeModules.operatorCli },
+      {
+        argv: getOperatorArgv(argv),
+        context: {
+          loadDeveloperCliModule: options.loadDeveloperCliModule,
+        },
+      },
+    );
+    return;
   }
 
-  const developerCliModule = options.developerCliModule ?? options.cliModule;
-  if (!developerCliModule) {
-    throw new Error('Packaged app is missing cli.entrypoint.');
+  const developerCliModule =
+    options.developerCliModule ??
+    options.cliModule ??
+    (typeof options.loadDeveloperCliModule === 'function'
+      ? await options.loadDeveloperCliModule()
+      : null);
+  if (developerCliModule) {
+    await runDeveloperCli(developerCliModule, {
+      cliExportName: options.cliExportName,
+      argv,
+    });
+    return;
   }
 
-  await runDeveloperCli(developerCliModule, {
-    cliExportName: options.cliExportName,
-    argv,
-  });
+  throw new Error(
+    `Packaged app is missing cli.entrypoint. Wharfie operator commands must be invoked as '<app> ${OPERATOR_NAMESPACE} <command>'.`,
+  );
 }
 
 export default runPackagedApp;

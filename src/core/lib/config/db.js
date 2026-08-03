@@ -1,13 +1,16 @@
-import { join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import paths from '../paths.js';
+import { getLocalAppStorageLayout } from './local-app-storage-context.js';
 
 /**
  * Centralized DB configuration for Wharfie core runtime.
  *
  * This module is intentionally the only place in `src/core/lib` that reads
  * Wharfie DB-related environment variables (adapter selection, local paths,
- * and the Operations table name).
+ * durable roots, and fixed runtime table names).
  */
 
 /**
@@ -77,16 +80,203 @@ export function resolveStateAdapterName() {
 }
 
 /**
- * Resolve the Operations table name.
+ * Resolve the durable control-store adapter independently from application and
+ * actor-state resources.
  *
- * This is intentionally resolved at call-time (not import-time) so tests and
- * runtimes can safely override env vars between uses.
+ * Tests default to isolated vanilla stores. Normal local execution defaults to
+ * LMDB so acknowledged control-state transitions survive process termination.
+ * `vanilla` remains an explicit test/diagnostic option, but it is not crash
+ * durable because it flushes only when the client closes.
+ * @returns {DBAdapterName} - Result.
+ */
+export function resolveControlAdapterName() {
+  const explicit = process.env.WHARFIE_CONTROL_ADAPTER;
+  if (explicit) {
+    return normalizeAdapterName(explicit, 'WHARFIE_CONTROL_ADAPTER');
+  }
+
+  if (getLocalAppStorageLayout()) return 'lmdb';
+  return process.env.NODE_ENV === 'test' ? 'vanilla' : 'lmdb';
+}
+
+/**
+ * Resolve the application data-store adapter independently from execution
+ * control state and the legacy actor-state store.
+ *
+ * Application state is a durable product surface, so normal local execution
+ * defaults to LMDB. Tests receive isolated vanilla stores unless they opt in
+ * to a production adapter explicitly. Ambient AWS variables and the general
+ * DB adapter never redirect application data into a cloud account.
+ * @returns {DBAdapterName} - Canonical adapter name.
+ */
+export function resolveApplicationStateAdapterName() {
+  const explicit = process.env.WHARFIE_APPLICATION_STATE_ADAPTER;
+  if (explicit) {
+    return normalizeAdapterName(explicit, 'WHARFIE_APPLICATION_STATE_ADAPTER');
+  }
+
+  if (getLocalAppStorageLayout()) return 'lmdb';
+  return process.env.NODE_ENV === 'test' ? 'vanilla' : 'lmdb';
+}
+
+/**
+ * Resolve one local control-store root. Test defaults are unique but are not
+ * created until a writable adapter opens them, so read-only missing lookups do
+ * not leave filesystem state behind.
+ * @returns {string} - Local control-store root.
+ */
+export function resolveControlStorePath() {
+  const configured = process.env.WHARFIE_CONTROL_PATH;
+  if (typeof configured === 'string' && configured.trim()) {
+    return configured.trim();
+  }
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.controlPath;
+  if (process.env.NODE_ENV === 'test') {
+    return join(tmpdir(), `wharfie-control-${randomUUID()}`);
+  }
+  return join(paths.data, 'control');
+}
+
+/**
+ * Resolve the dedicated application-state root. Merely resolving the path
+ * never creates it, which lets read-only probes fail without materializing a
+ * missing local store.
+ * @returns {string} - Local application-state root.
+ */
+export function resolveApplicationStateStorePath() {
+  const configured = process.env.WHARFIE_APPLICATION_STATE_PATH;
+  if (typeof configured === 'string' && configured.trim()) {
+    return configured.trim();
+  }
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.applicationStatePath;
+  if (process.env.NODE_ENV === 'test') {
+    return join(tmpdir(), `wharfie-application-state-${randomUUID()}`);
+  }
+  return join(paths.data, 'application-state');
+}
+
+/** The sole physical table owned by the v2 application-state contract. */
+export const APPLICATION_STATE_TABLE_NAME = 'wharfie-application-state-v2';
+
+/**
+ * Resolve the fixed application-state table. It intentionally has no
+ * environment override: destination routing belongs to Wharfie's finite
+ * host-owned catalog, not component input or ambient process configuration.
+ * @returns {'wharfie-application-state-v2'} - Fixed table name.
+ */
+export function resolveApplicationStateTableName() {
+  return APPLICATION_STATE_TABLE_NAME;
+}
+
+/**
+ * Resolve the append-only execution-ledger table name. DynamoDB needs its
+ * distinct `run_id`/`sort_key` physical schema, while local adapters can
+ * safely share the control-store path under this explicit table name.
  * @returns {string} - Result.
  */
-export function resolveOperationsTableName() {
-  const name = process.env.OPERATIONS_TABLE;
+export function resolveExecutionLedgerTableName() {
+  const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
   if (name && String(name).trim()) return String(name).trim();
-  throw new Error('OPERATIONS_TABLE env var is required');
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.executionLedgerTable;
+  return 'wharfie-execution-ledger-v10';
+}
+
+/**
+ * Resolve the immutable local execution-payload root. The v10 ledger writes
+ * content before it appends a reference to the control store, so the default
+ * lives beside that local control store when one is configured.  A future
+ * shared payload provider can keep the same reference contract without
+ * changing the ledger records.
+ * @param {string} [resolvedControlPath] - Already-resolved command-local control root.
+ * @returns {string} - Local payload-store root.
+ */
+export function resolveExecutionPayloadPath(resolvedControlPath) {
+  const configured = process.env.WHARFIE_EXECUTION_PAYLOAD_PATH;
+  if (configured && String(configured).trim()) {
+    return String(configured).trim();
+  }
+
+  const controlPath =
+    resolvedControlPath ||
+    (typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
+    process.env.WHARFIE_CONTROL_PATH.trim()
+      ? process.env.WHARFIE_CONTROL_PATH.trim()
+      : undefined);
+  if (controlPath) return join(controlPath, 'execution-payloads');
+
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.payloadPath;
+
+  if (process.env.NODE_ENV === 'test') {
+    return join(mkTempDir('wharfie-execution-payload-'), 'payloads');
+  }
+
+  return join(paths.data, 'control', 'execution-payloads');
+}
+
+/**
+ * Resolve a stable logical identity for the configured local payload store.
+ * The full filesystem path is never placed in durable references; a
+ * path-derived digest gives local stores distinct identities while preserving
+ * a compact portable descriptor. Operators moving a store intact can pin an
+ * explicit identity with WHARFIE_EXECUTION_PAYLOAD_STORE_ID.
+ * @param {string} [payloadPath] - Resolved payload-store root.
+ * @returns {string} - Canonical local store identity.
+ */
+export function resolveExecutionPayloadStoreId(
+  payloadPath = resolveExecutionPayloadPath(),
+) {
+  const configured = process.env.WHARFIE_EXECUTION_PAYLOAD_STORE_ID;
+  if (configured && String(configured).trim()) {
+    return String(configured).trim();
+  }
+  const digest = createHash('sha256')
+    .update(resolve(payloadPath), 'utf8')
+    .digest('hex');
+  // `payload-` plus 55 hex characters is the 63-character logical-ID limit.
+  return `payload-${digest.slice(0, 55)}`;
+}
+
+/**
+ * Resolve the logical local namespace used for process-held ledger-service
+ * sessions.
+ *
+ * A session socket is not durable control state and is deliberately separate
+ * from the ledger's immutable payload root. Keeping its default beside the
+ * configured control path makes a locally restarted artifact use the same
+ * ownership namespace without putting a filesystem path into durable records.
+ * The session implementation hashes this value into a short ephemeral socket
+ * location so long macOS control paths cannot exceed Unix-domain socket path
+ * limits. The session itself is only a same-local-OS-principal exclusion
+ * primitive; it is never a distributed coordinator lease.
+ * @param {string} [resolvedControlPath] - Already-resolved command-local control root.
+ * @returns {string} - Logical ledger-service session namespace.
+ */
+export function resolveLedgerServiceSessionPath(resolvedControlPath) {
+  const configured = process.env.WHARFIE_LEDGER_SERVICE_SESSION_PATH;
+  if (configured && String(configured).trim()) {
+    return String(configured).trim();
+  }
+
+  const controlPath =
+    resolvedControlPath ||
+    (typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
+    process.env.WHARFIE_CONTROL_PATH.trim()
+      ? process.env.WHARFIE_CONTROL_PATH.trim()
+      : undefined);
+  if (controlPath) return join(controlPath, 'ledger-service-sessions');
+
+  const localAppStorage = getLocalAppStorageLayout();
+  if (localAppStorage) return localAppStorage.sessionPath;
+
+  if (process.env.NODE_ENV === 'test') {
+    return join(mkTempDir('wharfie-ledger-service-session-'), 'sessions');
+  }
+
+  return join(paths.data, 'control', 'ledger-service-sessions');
 }
 
 /**
@@ -124,6 +314,114 @@ export async function createDBClient(adapterName = resolveDBAdapterName()) {
   }
 
   return createVanillaDB({ path: process.env.WHARFIE_DB_PATH });
+}
+
+/**
+ * Create the dedicated durable control-store DB client.
+ * @param {DBAdapterName} [adapterName] - Explicit adapter override.
+ * @param {{readOnly?: boolean, path?: string}} [options] - Access mode and already-resolved local root.
+ * @returns {Promise<import('../db/base.js').DBClient>} - Result.
+ */
+export async function createControlDBClient(
+  adapterName = resolveControlAdapterName(),
+  options = {},
+) {
+  if (adapterName === 'dynamodb') {
+    const { default: createDynamoDB } =
+      await import('../db/adapters/dynamodb.js');
+    return createDynamoDB({
+      region: process.env.AWS_REGION,
+      readOnly: options.readOnly === true,
+    });
+  }
+
+  const controlPath = options.path || resolveControlStorePath();
+
+  if (adapterName === 'lmdb') {
+    const { default: createLMDB } = await import('../db/adapters/lmdb.js');
+    return createLMDB({
+      path: controlPath,
+      readOnly: options.readOnly === true,
+    });
+  }
+
+  // Explicit vanilla is useful for tests and diagnostics, but is not crash
+  // durable: its disk snapshot is written only from close().
+  const { default: createVanillaDB } =
+    await import('../db/adapters/vanilla.js');
+  return createVanillaDB({
+    path: controlPath,
+    readOnly: options.readOnly === true,
+  });
+}
+
+/**
+ * Create a client for the dedicated application data store.
+ *
+ * This uses the same provider-neutral DB contract as control state, but a
+ * separate root and fixed table ensure application mutations can never share
+ * the execution-ledger namespace accidentally. In a SEA, the LMDB adapter
+ * resolves from Wharfie's single verified core-runtime dependency closure.
+ * @param {DBAdapterName} [adapterName] - Explicit adapter override.
+ * @param {{readOnly?: boolean, path?: string}} [options] - Access mode and already-resolved local root.
+ * @returns {Promise<import('../db/base.js').DBClient>} - Dedicated client.
+ */
+export async function createApplicationStateDBClient(
+  adapterName = resolveApplicationStateAdapterName(),
+  options = {},
+) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('Application-state DB options must be an object.');
+  }
+  const allowedOptionKeys = new Set(['path', 'readOnly']);
+  for (const key of Object.keys(options)) {
+    if (!allowedOptionKeys.has(key)) {
+      throw new TypeError(
+        `Application-state DB option '${key}' is not supported.`,
+      );
+    }
+  }
+  if (options.readOnly !== undefined && typeof options.readOnly !== 'boolean') {
+    throw new TypeError('Application-state DB readOnly must be a boolean.');
+  }
+  if (
+    options.path !== undefined &&
+    (typeof options.path !== 'string' || !options.path.trim())
+  ) {
+    throw new TypeError(
+      'Application-state DB path must be a non-empty string.',
+    );
+  }
+
+  const normalizedAdapter = normalizeAdapterName(
+    adapterName,
+    'application-state adapter',
+  );
+  const storePath =
+    typeof options.path === 'string'
+      ? options.path.trim()
+      : resolveApplicationStateStorePath();
+  const readOnly = options.readOnly === true;
+
+  if (normalizedAdapter === 'dynamodb') {
+    const { default: createDynamoDB } =
+      await import('../db/adapters/dynamodb.js');
+    return createDynamoDB({
+      region: process.env.AWS_REGION,
+      readOnly,
+    });
+  }
+
+  if (normalizedAdapter === 'lmdb') {
+    const { default: createLMDB } = await import('../db/adapters/lmdb.js');
+    return createLMDB({ path: storePath, readOnly });
+  }
+
+  // Vanilla is an explicit test/diagnostic implementation. A read-only open
+  // never writes its in-memory view or creates the resolved root on close.
+  const { default: createVanillaDB } =
+    await import('../db/adapters/vanilla.js');
+  return createVanillaDB({ path: storePath, readOnly });
 }
 
 /**
@@ -210,10 +508,21 @@ export async function closeDB() {
 }
 
 export default {
+  APPLICATION_STATE_TABLE_NAME,
   resolveDBAdapterName,
   resolveStateAdapterName,
-  resolveOperationsTableName,
+  resolveControlAdapterName,
+  resolveApplicationStateAdapterName,
+  resolveControlStorePath,
+  resolveApplicationStateStorePath,
+  resolveApplicationStateTableName,
+  resolveExecutionLedgerTableName,
+  resolveExecutionPayloadPath,
+  resolveExecutionPayloadStoreId,
+  resolveLedgerServiceSessionPath,
   createDBClient,
+  createControlDBClient,
+  createApplicationStateDBClient,
   createStateDBClient,
   getDB,
   resetDB,
