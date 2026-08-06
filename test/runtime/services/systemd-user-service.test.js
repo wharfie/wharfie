@@ -107,16 +107,28 @@ describe('systemd user service contract', () => {
       'WorkingDirectory=/srv/wharfie data%%$/applications/example-app/state',
     );
     expect(unit).toContain(
+      'Environment="WHARFIE_DATA_ROOT=/srv/wharfie data%%$"',
+    );
+    expect(unit).toContain(
       'Environment="WHARFIE_RUNTIME_COMMAND=ledger-service"',
     );
     expect(unit).toContain('Environment="WHARFIE_RUNTIME_ARGS=[]"');
-    expect(unit).toContain('Environment="WHARFIE_EXECUTION_PAYLOAD_STORE_ID="');
-    expect(unit).toContain(
-      'Environment="WHARFIE_EXECUTION_LEDGER_TABLE=wharfie-execution-ledger-v10"',
-    );
-    expect(unit).toContain(
-      'Environment="WHARFIE_CONTROL_PATH=/srv/wharfie data%%$/applications/example-app/state/control"',
-    );
+    for (const name of [
+      'WHARFIE_APPLICATION_STATE_ADAPTER',
+      'WHARFIE_APPLICATION_STATE_PATH',
+      'WHARFIE_CONTROL_ADAPTER',
+      'WHARFIE_CONTROL_PATH',
+      'WHARFIE_DB_ADAPTER',
+      'WHARFIE_DB_PATH',
+      'WHARFIE_EXECUTION_LEDGER_TABLE',
+      'WHARFIE_EXECUTION_PAYLOAD_PATH',
+      'WHARFIE_EXECUTION_PAYLOAD_STORE_ID',
+      'WHARFIE_LEDGER_SERVICE_SESSION_PATH',
+      'WHARFIE_STATE_ADAPTER',
+      'WHARFIE_STATE_DB_PATH',
+    ]) {
+      expect(unit).not.toContain(`Environment="${name}=`);
+    }
     expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('KillSignal=SIGTERM');
     expect(unit).toContain('KillMode=mixed');

@@ -38,6 +38,7 @@ import {
   getManifestActivityNames,
   invokeManifestActivity,
 } from '../../core/runtime/app-runs.js';
+import { getHostBuildTarget } from '../../core/runtime/host-build-target.js';
 
 import { prepareApplicationRevision } from './compile-application-revision.js';
 import { createArtifactProvenance } from './artifact-provenance.js';
@@ -97,6 +98,7 @@ import {
  * @property {string} [outputDir] - outputDir.
  * @property {string[]} [targetFilters] - targetFilters.
  * @property {LocalAppBuildConfig} [build] - Ephemeral build request; never embedded in the app manifest.
+ * @property {(progress: {phase: 'resolve'|'prepare'|'build'|'download'|'publish', message: string}) => unknown} [onProgress] - Optional human-facing package phase observer.
  */
 
 /**
@@ -141,6 +143,43 @@ function isObjectRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+/**
+ * @param {PackageLocalAppOptions} options - Package request.
+ * @param {'resolve'|'prepare'|'build'|'download'|'publish'} phase - Stable package phase.
+ * @param {string} message - Human-facing progress message.
+ * @returns {void}
+ */
+function reportPackageProgress(options, phase, message) {
+  if (typeof options.onProgress !== 'function') return;
+  options.onProgress(
+    Object.freeze({
+      phase,
+      message,
+    }),
+  );
+}
+
+/**
+ * @param {PackageLocalAppOptions} options - Package request.
+ * @returns {((progress: {version: string, downloadedBytes: number, totalBytes: number|null}) => void) | undefined} - Focused Node download observer.
+ */
+function createNodeDownloadProgressObserver(options) {
+  if (typeof options.onProgress !== 'function') return undefined;
+  return (progress) => {
+    const downloadedMiB = (progress.downloadedBytes / (1024 * 1024)).toFixed(1);
+    const size =
+      progress.totalBytes === null
+        ? `${downloadedMiB} MiB`
+        : `${downloadedMiB}/${(progress.totalBytes / (1024 * 1024)).toFixed(
+            1,
+          )} MiB`;
+    reportPackageProgress(
+      options,
+      'download',
+      `Downloading Node ${progress.version} (${size})`,
+    );
+  };
+}
 /**
  * @param {string | undefined} input - input.
  * @param {string} label - label.
@@ -378,7 +417,7 @@ function assertPortableManifestContract(manifest) {
 }
 
 /**
- * @param {{ appDir: string, manifest: any, dependencyLock: { path: string, input: import('../../core/runtime/application-revision.js').LockedInputDescriptor } }} loaded - loaded.
+ * @param {{ appDir: string, manifest: any, dependencyLock: { path: string, input: import('../../core/runtime/application-revision.js').LockedInputDescriptor }, nodeDownloadProgress?: (progress: {version: string, downloadedBytes: number, totalBytes: number|null}) => unknown }} loaded - loaded.
  * @returns {ActorSystem} - Result.
  */
 function toPackageableActorSystem(loaded) {
@@ -421,6 +460,7 @@ function toPackageableActorSystem(loaded) {
     functions,
     properties,
     dependencyLock: loaded.dependencyLock,
+    nodeDownloadProgress: loaded.nodeDownloadProgress,
   });
 }
 
@@ -1297,26 +1337,35 @@ export async function runLocalApp(options) {
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
 export async function packageLocalApp(options) {
+  reportPackageProgress(
+    options,
+    'resolve',
+    'Resolving application and build target',
+  );
   const loaded = await loadApp({ dir: options.dir });
   const manifest = cloneJson(loaded.manifest);
 
-  const availableTargets = Array.isArray(manifest.targets)
+  const targetFilters = Array.isArray(options.targetFilters)
+    ? options.targetFilters
+    : [];
+  let availableTargets = Array.isArray(manifest.targets)
     ? manifest.targets
     : [];
   if (availableTargets.length === 0) {
-    throw new Error(
-      'App has no build targets. Define targets in wharfie.app.js before packaging.',
-    );
+    if (targetFilters.length > 0) {
+      throw new Error(
+        'App has no declared build targets, so --target cannot select one. Remove --target to package this host, or define targets in wharfie.app.js.',
+      );
+    }
+    availableTargets = [getHostBuildTarget()];
   }
 
-  const selectedTargets = selectTargets(
-    availableTargets,
-    options.targetFilters,
-  ).map((target) =>
-    assertSupportedSeaTarget({
-      ...target,
-      nodeVersion: assertSeaNodeVersionCompatible(target.nodeVersion),
-    }),
+  const selectedTargets = selectTargets(availableTargets, targetFilters).map(
+    (target) =>
+      assertSupportedSeaTarget({
+        ...target,
+        nodeVersion: assertSeaNodeVersionCompatible(target.nodeVersion),
+      }),
   );
   if (selectedTargets.length === 0) {
     throw new Error('No targets matched the requested package filter.');
@@ -1332,6 +1381,11 @@ export async function packageLocalApp(options) {
 
   assertPortableManifestContract(manifest);
 
+  reportPackageProgress(
+    options,
+    'prepare',
+    `Preparing ${manifest.app.id} for ${selectedTargets.map((target) => getTargetAliases(target)[4]).join(', ')}`,
+  );
   const outputDir = path.resolve(
     options.outputDir || path.join(options.dir, 'dist'),
   );
@@ -1357,6 +1411,7 @@ export async function packageLocalApp(options) {
       appDir: preparedRevision.appDir,
       manifest: preparedRevision.manifest,
       dependencyLock: preparedRevision.dependencyLock,
+      nodeDownloadProgress: createNodeDownloadProgressObserver(options),
     });
     applyPackagingSigningConfig(actorSystem, options.build);
     applyTargetSelection(actorSystem, selectedTargets);
@@ -1389,6 +1444,7 @@ export async function packageLocalApp(options) {
       await actorSystem.initializeEnvironment();
     }
     await preparedRevision.verifyRuntime();
+    reportPackageProgress(options, 'build', 'Building executable artifacts');
     manifestAssets = await attachEmbeddedManifestAssets(
       builds,
       revision,
@@ -1403,6 +1459,7 @@ export async function packageLocalApp(options) {
       );
     }
 
+    reportPackageProgress(options, 'publish', 'Publishing verified artifacts');
     artifactTransaction = await stagePackageArtifacts({
       builds,
       appName: manifest.app.id,
@@ -1451,6 +1508,7 @@ export async function packageLocalApp(options) {
   );
   const cleanupResults = await Promise.allSettled([
     preparedRevision.cleanup(),
+    removePackageOwnedSeaBuildOutputs(builds),
     ...manifestAssets.map((asset) => asset.cleanup()),
     ...functionAssetPaths.map((assetPath) =>
       fsp.rm(assetPath, { force: true }),

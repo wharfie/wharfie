@@ -116,13 +116,16 @@ hidden runtime can execute. The layout is carried as process-local async
 bootstrap context rather than hidden environment mutation. Installing a
 service adds supervision and immutable releases around those same state paths;
 it does not move, copy, or select a second ledger. Explicit foreground storage
-overrides remain available, but service management refuses them unless every
-durable route exactly matches the fixed resident layout.
+uses the single `WHARFIE_DATA_ROOT` authority; service management derives its
+resident layout from that active packaged context. An explicit operator/test
+`dataRoot` is accepted only when it agrees, and legacy per-store redirects
+remain rejected.
 
-The packaged layout uses an account-stable data root that does not move with
-invocation-specific `XDG_DATA_HOME` or `HOME`. On Linux it is fixed below the
-service account's `~/.local/share/wharfie-nodejs`, using the home directory
-recorded for that operating-system account:
+Without `WHARFIE_DATA_ROOT`, the packaged layout uses an account-stable data
+root that does not move with invocation-specific `XDG_DATA_HOME` or `HOME`.
+On Linux the default is below the service account's
+`~/.local/share/wharfie-nodejs`, using the home directory recorded for that
+operating-system account:
 
 ```text
 <wharfie-data>/applications/<appId>/
@@ -292,16 +295,9 @@ Wants=network-online.target
 Type=exec
 ExecStart=<wharfie-data>/applications/<appId>/current/app
 WorkingDirectory=<wharfie-data>/applications/<appId>/state
+Environment=WHARFIE_DATA_ROOT=<wharfie-data>
 Environment=WHARFIE_RUNTIME_COMMAND=ledger-service
 Environment=WHARFIE_RUNTIME_ARGS=[]
-Environment=WHARFIE_CONTROL_ADAPTER=lmdb
-Environment=WHARFIE_CONTROL_PATH=<wharfie-data>/applications/<appId>/state/control
-Environment=WHARFIE_EXECUTION_PAYLOAD_PATH=<wharfie-data>/applications/<appId>/state/control/execution-payloads
-Environment=WHARFIE_EXECUTION_PAYLOAD_STORE_ID=
-Environment=WHARFIE_EXECUTION_LEDGER_TABLE=wharfie-execution-ledger-v10
-Environment=WHARFIE_APPLICATION_STATE_ADAPTER=lmdb
-Environment=WHARFIE_APPLICATION_STATE_PATH=<wharfie-data>/applications/<appId>/state/application-state
-Environment=WHARFIE_LEDGER_SERVICE_SESSION_PATH=<wharfie-data>/applications/<appId>/state/control/ledger-service-sessions
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGTERM
@@ -315,19 +311,21 @@ WantedBy=default.target
 ```
 
 The rendered unit uses systemd argument semantics directly; Wharfie never
-constructs a shell command. The installer does not persist credentials or
-caller-supplied environment values. Runtime dispatch arguments and the local
-payload-store identity are explicitly reset so ambient user-manager values
-cannot redirect the resident bootstrap. Other ambient environment remains an
+constructs a shell command. The installer persists only the active
+`WHARFIE_DATA_ROOT` storage authority and the fixed runtime dispatch
+settings; it does not persist credentials or arbitrary caller-supplied
+environment values. Installation refuses an explicit root that disagrees with
+the packaged process's active root. Other ambient environment remains an
 operating-system property, and authored code runs with the invoking user's
 ordinary authority. A future deployment/runtime-identity contract may narrow
 that authority, but this user-service slice does not pretend to provide that
 isolation.
 
-The explicit LMDB control, payload, application-state, and logical session
-paths remain stable across service restarts, artifact reinstallation, and
+The single data root deterministically derives the LMDB control, payload,
+application-state, and logical-session paths. Those paths remain stable across
+foreground commands, service restarts, artifact reinstallation, and
 uninstallation/reinstallation. They do not depend on the service process's
-working directory or on mutable ambient path defaults. The process working
+working directory or mutable XDG and shell-home values. The process working
 directory is the private `state/` root.
 
 ### Systemd liveness and ledger readiness remain distinct

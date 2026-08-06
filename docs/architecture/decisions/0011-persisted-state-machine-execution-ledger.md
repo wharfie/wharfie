@@ -1,6 +1,6 @@
 # 0011 — Persisted state-machine execution ledger
 
-**Status:** Accepted · **Date:** 2026-07-17
+**Status:** Accepted, amended 2026-08-01 · **Date:** 2026-07-17
 
 ## Context
 
@@ -358,7 +358,8 @@ After ownership is claimed, the service records `STARTING` → `READY` →
 the old pathname may remain), does not fabricate `STOPPED`, and lets one later
 owner conditionally replace the absent session with a new endpoint and higher
 generation. On the same local LMDB control volume, mutating source `wharfie ops
-run`, packaged `<app> wharfie run`, recovery, and reconciliation acquire that
+run`, packaged `<app> wharfie activity run`, recovery, and
+reconciliation acquire that
 same ownership fence and refuse to race a resident service; read-only
 inspection does not.
 
@@ -385,14 +386,28 @@ access, `STARTED` built-in application-state siblings are probed read-only, and
 the exact set plus stopped attempt settle atomically. That path exposes neither
 authored activity execution nor the normal adapter catalog.
 
-Foreground activity origination also shares one core host. The installed
-source command supplies one sealed prepared revision; the packaged command
-supplies only its validated embedded manifest and revision/runtime pair. Both
-derive the V7 manual run from app identity plus the caller's idempotency key and
-use the same claim, `STARTED`, managed-effect, framed-attempt, terminal,
-cancellation, and cleanup path. Unlike source-free operator transitions,
-packaged execution authority is exact-revision scoped: an artifact cannot
-override its app, revision, source directory, run ID, attempt, or fence.
+Foreground direct activity origination also shares one core host. The installed
+form is `wharfie ops run`; the packaged form is `<app> wharfie activity run`.
+The source command supplies one sealed prepared revision, while the packaged
+command supplies only its validated embedded manifest and revision/runtime
+pair. Both derive the V7 manual run from app identity plus the caller's
+idempotency key and use the same claim, `STARTED`, managed-effect,
+framed-attempt, terminal, cancellation, and cleanup path. Packaged execution
+authority is exact-revision scoped: an artifact cannot override its app,
+revision, source directory, run ID, attempt, or fence.
+
+The packaged top-level `<app> wharfie run --name <stable-name> --
+<application-args>` is a distinct foreground durable-workflow composition. It
+requires the manifest's default durable CLI handoff, uses the stable name as
+the workflow idempotency key, projects ordinary application arguments, and
+starts or reopens that exact run. It temporarily enters the resident worker
+when no owner is active, follows an existing matching resident otherwise, and
+polls verified logical output and inspection state through terminal completion.
+Repeating the same command reports committed outputs as retained rather than
+running those steps again. `SIGINT` or `SIGTERM` drains the foreground host
+without recording durable cancellation and prints the exact resume command.
+Packaged `start` remains admission-only, and `worker` remains the explicit
+long-lived resident.
 
 Exact-run inspection, confirmed recovery, evidence-backed reconciliation, and
 current-owner cancellation share one core implementation between the installed

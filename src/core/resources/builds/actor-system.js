@@ -173,6 +173,7 @@ function resolveNodeBinaryVersion(nodeBinary, configuredVersion) {
  * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
  * @property {import('../runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  * @property {{ path: string, input: import('../../runtime/application-revision.js').LockedInputDescriptor }} [dependencyLock] - Transient sealed dependency lock for target packaging.
+ * @property {(progress: {version: string, downloadedBytes: number, totalBytes: number|null}) => unknown} [nodeDownloadProgress] - Optional throttled Node archive progress observer.
  */
 
 class ActorSystem extends BuildResourceGroup {
@@ -192,6 +193,7 @@ class ActorSystem extends BuildResourceGroup {
     emitter,
     runtime,
     dependencyLock,
+    nodeDownloadProgress,
   }) {
     if (
       properties &&
@@ -232,6 +234,10 @@ class ActorSystem extends BuildResourceGroup {
     });
     this.functions = functions;
     this._dependencyLock = dependencyLock;
+    this._nodeDownloadProgress =
+      typeof nodeDownloadProgress === 'function'
+        ? nodeDownloadProgress
+        : undefined;
     setMacOSSigningCredentials(this, macosSigningCredentials);
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(
@@ -284,6 +290,7 @@ class ActorSystem extends BuildResourceGroup {
     const node_binary = new NodeBinary({
       name: `${this.name}-node-binary-${nodeVersion}-${platform}-${architecture}`,
       parent,
+      onDownloadProgress: this._nodeDownloadProgress,
       properties: {
         version: nodeVersion,
         platform,
@@ -405,11 +412,11 @@ class ActorSystem extends BuildResourceGroup {
               ${developerCliLoader}
               (async () => {
                 sourceMapSupport.install();
-                await preparePackagedCoreRuntimeDependencies();
                 const packagedAppStorage = await resolvePackagedAppStorage();
                 await withLocalAppStorageLayout(packagedAppStorage, async () => {
                   await runPackagedApp({
                     loadDeveloperCliModule,
+                    prepareRuntime: preparePackagedCoreRuntimeDependencies,
                     ${
                       developerCliExportName
                         ? `cliExportName: ${JSON.stringify(developerCliExportName)},`

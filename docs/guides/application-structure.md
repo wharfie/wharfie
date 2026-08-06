@@ -2,20 +2,41 @@
 
 A Wharfie application is a normal TypeScript or JavaScript CLI plus a small
 `wharfie.app.js` manifest. Wharfie does not impose a generated project tree.
-A minimal application can look like this:
+Inside an ESM npm project where `@wharfie/wharfie` is installed, the smallest
+application-specific surface is two files:
 
 ```text
 my-app/
-├── package.json
-├── wharfie.app.js
-└── src/
-    ├── cli.js
-    └── activities/
-        └── sync.js
+├── hello.js
+└── wharfie.app.js
 ```
 
-The manifest points at the developer-owned CLI and names any work that should
-be available as a durable activity:
+`hello.js` is ordinary application code:
+
+```js
+export function main(argv = process.argv) {
+  process.stdout.write(`Hello, ${argv[2] || 'world'}!\n`);
+}
+```
+
+The manifest points at that developer-owned CLI:
+
+```js
+import { defineApp } from '@wharfie/wharfie/app';
+
+export default defineApp({
+  id: 'hello-world',
+  main: './hello.js',
+});
+```
+
+`defineApp()` expands only the mechanical v4 fields. No second Wharfie-only
+entrypoint, target matrix, activity, workflow, or schedule is required.
+
+## Expanded application
+
+When work needs to be durable, the same manifest can name activities,
+workflows, schedules, and package targets:
 
 ```js
 export default {
@@ -73,9 +94,11 @@ export default {
 };
 ```
 
-`schemaVersion`, `app`, and `cli` are required. `activities`, `workflows`,
-`schedules`, and `targets` are optional, although every declared map and the
-packaging target list must be nonempty. All entrypoints currently use
+`schemaVersion`, `app`, and `cli` are required in the expanded v4 object;
+the compact `defineApp({ id, main })` form supplies them mechanically.
+`activities`, `workflows`, `schedules`, and `targets` are optional,
+although every declared map and the packaging target list must be nonempty.
+All entrypoints currently use
 `{ kind: 'node', path, export }`; both `path` and the named `export` are
 required.
 

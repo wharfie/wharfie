@@ -11,15 +11,205 @@ const SOURCE_REVISION_COMPILER_PATH =
  * @typedef {{kind: 'prepared-source', prepared: import('./cli/app/compile-application-revision.js').PreparedApplicationRevision} | {kind: 'embedded', manifest: any, embeddedRevision: import('./core/resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair}} RuntimeExecution
  */
 
+const APP_SHORTHAND_KEYS = new Set([
+  'id',
+  'main',
+  'durable',
+  'activityModule',
+  'targets',
+  'activities',
+  'workflows',
+  'schedules',
+]);
+const APP_SHORTHAND_ACTIVITY_KEYS = new Set([
+  'path',
+  'export',
+  'externalPackages',
+]);
+const CONVENTIONAL_EXPORT_NAME_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+
 /**
- * Preserve a manifest's literal TypeScript shape while checking it against the
- * public Wharfie application contract.
- * @template T
- * @param {T} definition - Application definition.
- * @returns {T} - The unchanged application definition.
+ * @param {unknown} value - Candidate plain data object.
+ * @returns {value is Record<string, any>} - Whether the value is plain data.
+ */
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * @param {Record<string, any>} value - Shorthand object to inspect.
+ * @param {Set<string>} allowedKeys - Exact supported property names.
+ * @param {string} valuePath - Human-readable authoring path.
+ * @returns {void} - Returns after exact plain-property validation.
+ */
+function assertShorthandKeys(value, allowedKeys, valuePath) {
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      typeof key !== 'string' ||
+      !allowedKeys.has(key) ||
+      !descriptor?.enumerable ||
+      !('value' in descriptor)
+    ) {
+      const propertyPath =
+        typeof key === 'string' ? `${valuePath}.${key}` : valuePath;
+      throw new TypeError(
+        `${propertyPath} is not supported by defineApp shorthand.`,
+      );
+    }
+  }
+}
+
+/**
+ * Expand the deliberately small source shorthand into the strict v4 source
+ * manifest shape. Fully explicit manifests remain unchanged by identity.
+ * @param {any} definition - Full v4 source manifest or source shorthand.
+ * @returns {any} - The original full manifest or one expanded v4 source manifest.
  */
 export function defineApp(definition) {
-  return definition;
+  if (
+    !isPlainObject(definition) ||
+    ['schemaVersion', 'app', 'cli'].some((key) =>
+      Object.prototype.hasOwnProperty.call(definition, key),
+    )
+  ) {
+    return definition;
+  }
+
+  assertShorthandKeys(definition, APP_SHORTHAND_KEYS, 'defineApp');
+  if (
+    !Object.prototype.hasOwnProperty.call(definition, 'id') ||
+    !Object.prototype.hasOwnProperty.call(definition, 'main')
+  ) {
+    throw new TypeError('defineApp shorthand requires id and main.');
+  }
+  const hasActivityModule = Object.prototype.hasOwnProperty.call(
+    definition,
+    'activityModule',
+  );
+  const hasActivities = Object.prototype.hasOwnProperty.call(
+    definition,
+    'activities',
+  );
+  if (
+    hasActivityModule &&
+    (!hasActivities ||
+      (isPlainObject(definition.activities) &&
+        Object.keys(definition.activities).length === 0))
+  ) {
+    throw new TypeError(
+      'defineApp.activityModule requires at least one declared activity.',
+    );
+  }
+
+  const cli = {
+    entrypoint: {
+      kind: 'node',
+      path: definition.main,
+      export: 'main',
+    },
+    ...(Object.prototype.hasOwnProperty.call(definition, 'durable')
+      ? {
+          durable: {
+            workflow: definition.durable,
+            export: 'toDurableInput',
+          },
+        }
+      : {}),
+  };
+  /** @type {Record<string, any>} */
+  const expanded = {
+    schemaVersion: 4,
+    app: { id: definition.id },
+    cli,
+    ...(Object.prototype.hasOwnProperty.call(definition, 'targets')
+      ? { targets: definition.targets }
+      : {}),
+  };
+
+  if (Object.prototype.hasOwnProperty.call(definition, 'activities')) {
+    if (!isPlainObject(definition.activities)) {
+      throw new TypeError('defineApp.activities must be a plain object.');
+    }
+    expanded.activities = {};
+    for (const [activityId, activity] of Object.entries(
+      definition.activities,
+    )) {
+      if (!isPlainObject(activity)) {
+        throw new TypeError(
+          `defineApp.activities.${activityId} must be a plain object.`,
+        );
+      }
+      assertShorthandKeys(
+        activity,
+        APP_SHORTHAND_ACTIVITY_KEYS,
+        `defineApp.activities.${activityId}`,
+      );
+      const hasEntrypointPath = Object.prototype.hasOwnProperty.call(
+        activity,
+        'path',
+      );
+      if (
+        hasEntrypointPath &&
+        (typeof activity.path !== 'string' || activity.path.length === 0)
+      ) {
+        throw new TypeError(
+          `defineApp.activities.${activityId}.path must be a nonempty string when provided.`,
+        );
+      }
+      const entrypointPath = hasEntrypointPath
+        ? activity.path
+        : definition.activityModule;
+      if (typeof entrypointPath !== 'string' || entrypointPath.length === 0) {
+        throw new TypeError(
+          `defineApp.activities.${activityId} requires path or defineApp.activityModule.`,
+        );
+      }
+      const hasExportName = Object.prototype.hasOwnProperty.call(
+        activity,
+        'export',
+      );
+      if (
+        hasExportName &&
+        (typeof activity.export !== 'string' || activity.export.length === 0)
+      ) {
+        throw new TypeError(
+          `defineApp.activities.${activityId}.export must be a nonempty string when provided.`,
+        );
+      }
+      const exportName = hasExportName
+        ? activity.export
+        : CONVENTIONAL_EXPORT_NAME_PATTERN.test(activityId)
+          ? activityId
+          : undefined;
+      if (exportName === undefined) {
+        throw new TypeError(
+          `defineApp.activities.${activityId}.export is required when the activity ID is not a JavaScript export name.`,
+        );
+      }
+      expanded.activities[activityId] = {
+        entrypoint: {
+          kind: 'node',
+          path: entrypointPath,
+          export: exportName,
+        },
+        ...(Object.prototype.hasOwnProperty.call(activity, 'externalPackages')
+          ? { externalPackages: activity.externalPackages }
+          : {}),
+      };
+    }
+  }
+
+  for (const key of ['workflows', 'schedules']) {
+    if (Object.prototype.hasOwnProperty.call(definition, key)) {
+      expanded[key] = definition[key];
+    }
+  }
+  return expanded;
 }
 
 /**

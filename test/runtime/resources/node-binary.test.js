@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { c } from 'tar';
 
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
@@ -41,9 +42,13 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function makeLinuxBinary() {
+/**
+ * @param {(progress: {version: string, downloadedBytes: number, totalBytes: number|null}) => unknown} [onDownloadProgress]
+ */
+function makeLinuxBinary(onDownloadProgress) {
   return new NodeBinary({
     name: 'node-linux',
+    onDownloadProgress,
     properties: {
       version: '24.13.1',
       platform: 'linux',
@@ -149,6 +154,49 @@ describe('NodeBinary', () => {
     ];
 
     await expect(makeLinuxBinary().getExactVersion()).resolves.toBe('v24.13.1');
+  });
+
+  it('reports bounded byte progress while streaming a Node archive', async () => {
+    setLinuxVersionMetadata();
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-node-download-progress-'),
+    );
+    const destinationPath = path.join(tmpRoot, 'node.tar.gz');
+    const chunks = Array.from({ length: 5 }, () => Buffer.alloc(600 * 1024));
+    const totalBytes = chunks.reduce((total, chunk) => total + chunk.length, 0);
+    const onDownloadProgress = jest.fn();
+    const binary = makeLinuxBinary(onDownloadProgress);
+    const response = /** @type {import('node:http').IncomingMessage} */ (
+      Object.assign(Readable.from(chunks), {
+        statusCode: 200,
+        headers: {
+          'content-type': 'application/gzip',
+          'content-length': String(totalBytes),
+        },
+      })
+    );
+    jest.spyOn(binary, 'requestUrl').mockResolvedValue(response);
+
+    try {
+      await binary.downloadUrlToFile(
+        'https://nodejs.org/node.tar.gz',
+        destinationPath,
+      );
+
+      await expect(fsp.stat(destinationPath)).resolves.toMatchObject({
+        size: totalBytes,
+      });
+      expect(
+        onDownloadProgress.mock.calls.map(([progress]) => progress),
+      ).toEqual([
+        { version: TEST_VERSION, downloadedBytes: 0, totalBytes },
+        { version: TEST_VERSION, downloadedBytes: 1_228_800, totalBytes },
+        { version: TEST_VERSION, downloadedBytes: 2_457_600, totalBytes },
+        { version: TEST_VERSION, downloadedBytes: 3_072_000, totalBytes },
+      ]);
+    } finally {
+      await fsp.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it('extracts a local unix node archive without downloading anything', async () => {

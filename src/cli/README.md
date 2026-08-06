@@ -18,6 +18,27 @@ by the current cursor is accepted; `early-signal`, `unexpected-signal`, and
 `late-signal` are durable, exactly replayable rejections rather than entries in
 an early-signal inbox. Reusing a delivery ID with changed contents conflicts.
 
+A packaged application with `cli.durable` exposes
+`<app> wharfie run --name <stable-name> -- <application-args>` as the foreground
+durable-workflow path. The stable name is the workflow's idempotency key; repeat
+the same command to reopen the same run. The command temporarily hosts the exact
+revision when no resident is active, follows a matching resident when one is
+already active, reports committed or retained steps and the persisted timer,
+and waits for verified terminal output. `SIGINT` or `SIGTERM` drains that
+foreground host without cancelling durable work and prints the exact resume
+command. Packaged `start` remains admission-only, and `worker` remains the
+explicit long-lived resident. Expert direct activity execution moved to
+`<app> wharfie activity run`; its source equivalent remains `wharfie ops run`.
+
+Packaged dispatch resolves one app-scoped storage layout before entrypoint
+selection. Ordinary application argv does not prepare Wharfie's native durable
+runtime; only the reserved operator and private-runtime paths do so lazily. An
+explicit foreground root uses the single `WHARFIE_DATA_ROOT` environment
+variable and cannot be combined with the retired per-store overrides. The
+systemd service pins the same variable to the active packaged layout. Without
+an explicit root, packaged storage uses the stable operating-system account
+default.
+
 With `--json`, source and packaged durable operations emit the same
 schema-versioned camelCase receipt for the same immutable decision:
 `wharfie.execution-ledger.activity-run`,
@@ -32,11 +53,22 @@ Failed/blocked/in-progress runs, rejected signals, and unknown-run refusals
 still emit their receipt before exiting nonzero; failures before a durable
 decision or explicit absence emit no JSON document.
 
-Source `wharfie app package` also has a stable machine boundary. Success emits
-exactly one schema-version 1 `wharfie.application.package` JSON receipt, pretty
-by default or compact with `--no-pretty`. It binds the application and revision
-to a canonical target-sorted artifact list containing content identity,
-target, digest, size, and immediate local executable/sidecar paths. It does not
+Source `wharfie app package` defaults to a human handoff. It reports resolution,
+preparation, build, download when needed, and publication phases on stderr, then
+prints the exact artifact target, path, size, and actionable `Next:` step on
+stdout. Matching POSIX hosts receive a copy-pasteable command; Windows gets a
+safe shell-neutral instruction because cmd.exe and PowerShell quote differently.
+
+When the manifest declares no targets and the user supplies no filter, packaging
+infers the exact compatible host target from the running Node version, platform,
+architecture, and glibc on Linux. `--target` still selects from an explicit
+manifest target matrix; it does not invent a cross-target matrix.
+
+`--json` emits exactly one schema-version 1 `wharfie.application.package` JSON
+receipt, pretty by default or compact with `--no-pretty`. It binds application
+and revision to a canonical target-sorted artifact list containing content
+identity, target, digest, size, and immediate local executable/sidecar paths. It
+does not
 serialize the complete internal revision or artifact records and does not
 grant deployment authority. The receipt is a projection of the package
 operation's prior final-byte and canonical sidecar/owning-revision record
@@ -44,11 +76,11 @@ association; it is not independent verification, and its paths are local
 discovery conveniences. Packaged and selected-artifact consumer boundaries
 separately verify the executable's embedded revision/runtime metadata.
 
-During packaging, ordinary manifest/build writes and Wharfie-owned build-tool
-output are routed to stderr so stdout remains the receipt. Authored code is
-trusted rather than sandboxed; deliberately writing directly to file
-descriptor 1 or leaving stdout-producing work unawaited violates this command
-contract.
+During packaging, all modes reserve stdout for the selected final human summary
+or JSON document. Ordinary manifest/build writes and Wharfie-owned build-tool
+output are routed to stderr. Authored code is trusted rather than sandboxed;
+deliberately bypassing those streams or leaving stdout-producing work unawaited
+violates the command contract.
 
 Discover retained durable runs with
 `wharfie ops list [--dir <app-dir>] [--limit <1..100>] [--cursor <opaque>] [--json]`

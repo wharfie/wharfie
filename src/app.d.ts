@@ -228,6 +228,173 @@ export type WharfieAppDefinition = WharfieAppDefinitionBase & {
   schemaVersion: 4;
 };
 
+/** One activity entrypoint in the compact source-authoring form. */
+export interface AppActivityShorthand {
+  /** Overrides the shared activity module for this activity. */
+  path?: string;
+  /** Defaults to the logical activity ID only when that ID is a JS export name. */
+  export?: string;
+  externalPackages?: readonly ExternalPackage[];
+}
+
+/**
+ * Compact source-only application authoring. Logical durable identities remain
+ * explicit; defineApp expands only mechanical v4 and Node entrypoint fields.
+ */
+export interface WharfieAppShorthand {
+  id: LogicalId;
+  /** Node module whose conventional `main` export implements the ordinary CLI. */
+  main: string;
+  /** Workflow handed ordinary arguments through conventional `toDurableInput`. */
+  durable?: LogicalId;
+  /** Shared Node module path for activities that omit their own path. */
+  activityModule?: string;
+  targets?: readonly AppTarget[];
+  activities?: Readonly<Record<LogicalId, AppActivityShorthand>>;
+  workflows?: Readonly<Record<LogicalId, WorkflowDefinition>>;
+  schedules?: Readonly<Record<LogicalId, WorkflowScheduleDefinition>>;
+}
+
+type ExpandedShorthandActivity<
+  App extends WharfieAppShorthand,
+  Id extends PropertyKey,
+  Activity extends AppActivityShorthand,
+> = {
+  readonly entrypoint: {
+    readonly kind: 'node';
+    readonly path: Activity extends { readonly path: infer Path extends string }
+      ? Path
+      : App extends { readonly activityModule: infer Path extends string }
+        ? Path
+        : string;
+    readonly export: Activity extends {
+      readonly export: infer Export extends string;
+    }
+      ? Export
+      : Id extends string
+        ? Id
+        : string;
+  };
+} & (Activity extends { readonly externalPackages: infer Packages }
+  ? { readonly externalPackages: Packages }
+  : unknown);
+
+type ExpandedShorthandActivities<App extends WharfieAppShorthand> =
+  App extends {
+    readonly activities: infer Activities extends Readonly<
+      Record<string, AppActivityShorthand>
+    >;
+  }
+    ? {
+        readonly activities: {
+          readonly [Id in keyof Activities]: ExpandedShorthandActivity<
+            App,
+            Id,
+            Activities[Id]
+          >;
+        };
+      }
+    : unknown;
+
+type ShorthandDurableReferencesDeclaredWorkflow<Actual> = Actual extends {
+  readonly durable: infer Durable;
+}
+  ? Actual extends { readonly workflows: infer Workflows }
+    ? Durable extends keyof Workflows
+      ? unknown
+      : never
+    : never
+  : unknown;
+
+type ShorthandActivityModuleRequiresActivities<Actual> = Actual extends {
+  readonly activityModule: unknown;
+}
+  ? Actual extends { readonly activities: Readonly<Record<string, any>> }
+    ? unknown
+    : never
+  : unknown;
+
+type ShorthandActivitiesHaveValidPresentStrings<Actual> = Actual extends {
+  readonly activities: infer Activities extends Readonly<Record<string, any>>;
+}
+  ? {
+      [Id in keyof Activities]:
+        | ('path' extends keyof Activities[Id]
+            ? Activities[Id] extends { readonly path: string }
+              ? never
+              : Id
+            : never)
+        | ('export' extends keyof Activities[Id]
+            ? Activities[Id] extends { readonly export: string }
+              ? never
+              : Id
+            : never);
+    }[keyof Activities] extends never
+    ? unknown
+    : never
+  : unknown;
+
+type ShorthandActivitiesHavePaths<Actual> = Actual extends {
+  readonly activities: infer Activities extends Readonly<Record<string, any>>;
+}
+  ? Actual extends { readonly activityModule: string }
+    ? unknown
+    : {
+          [Id in keyof Activities]: Activities[Id] extends {
+            readonly path: string;
+          }
+            ? never
+            : Id;
+        }[keyof Activities] extends never
+      ? unknown
+      : never
+  : unknown;
+
+type ShorthandActivitiesHaveExports<Actual> = Actual extends {
+  readonly activities: infer Activities extends Readonly<Record<string, any>>;
+}
+  ? {
+      [Id in keyof Activities]: Id extends string
+        ? Id extends `${string}-${string}`
+          ? Activities[Id] extends { readonly export: string }
+            ? never
+            : Id
+          : never
+        : Id;
+    }[keyof Activities] extends never
+    ? unknown
+    : never
+  : unknown;
+
+/** The exact explicit v4 source shape returned for compact authoring. */
+export type ExpandedWharfieAppShorthand<App extends WharfieAppShorthand> = {
+  readonly schemaVersion: 4;
+  readonly app: { readonly id: App['id'] };
+  readonly cli: {
+    readonly entrypoint: {
+      readonly kind: 'node';
+      readonly path: App['main'];
+      readonly export: 'main';
+    };
+  } & (App extends { readonly durable: infer Workflow extends string }
+    ? {
+        readonly durable: {
+          readonly workflow: Workflow;
+          readonly export: 'toDurableInput';
+        };
+      }
+    : unknown);
+} & (App extends { readonly targets: infer Targets }
+  ? { readonly targets: Targets }
+  : unknown) &
+  ExpandedShorthandActivities<App> &
+  (App extends { readonly workflows: infer Workflows }
+    ? { readonly workflows: Workflows }
+    : unknown) &
+  (App extends { readonly schedules: infer Schedules }
+    ? { readonly schedules: Schedules }
+    : unknown);
+
 type StrictShape<Actual, Shape> = Shape extends unknown
   ? Actual extends Shape
     ? Shape extends readonly (infer ShapeItem)[]
@@ -293,6 +460,20 @@ export declare function defineApp<const App>(
     ScheduleReferencesDeclaredWorkflow<App> &
     DurableCliReferencesDeclaredWorkflow<App>,
 ): App;
+
+export declare function defineApp<const App extends WharfieAppShorthand>(
+  definition: App &
+    StrictShape<App, WharfieAppShorthand> &
+    NonEmptyWhenDeclared<App, 'activities'> &
+    NonEmptyWhenDeclared<App, 'workflows'> &
+    NonEmptyWhenDeclared<App, 'schedules'> &
+    ScheduleReferencesDeclaredWorkflow<App> &
+    ShorthandDurableReferencesDeclaredWorkflow<App> &
+    ShorthandActivityModuleRequiresActivities<App> &
+    ShorthandActivitiesHaveValidPresentStrings<App> &
+    ShorthandActivitiesHavePaths<App> &
+    ShorthandActivitiesHaveExports<App>,
+): ExpandedWharfieAppShorthand<App>;
 
 export declare function invokeActivity<
   Result extends JsonValue = JsonValue,

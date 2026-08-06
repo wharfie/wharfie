@@ -1,6 +1,6 @@
 # 0030 — Versioned application-package receipt
 
-**Status:** Accepted · **Date:** 2026-07-27
+**Status:** Accepted, amended 2026-08-01 · **Date:** 2026-07-27
 
 ## Context
 
@@ -28,8 +28,8 @@ policy, or independent artifact verification.
 ### Keep the internal result; project a public receipt
 
 `packageLocalApp()` continues to return its rich internal result. The source
-package command alone projects that successful result into this schema-version
-1 JSON document:
+package command projects that successful result when `--json` selects this
+schema-version 1 document:
 
 ```json
 {
@@ -65,6 +65,18 @@ The public receipt deliberately omits the complete application revision,
 artifact record, provenance, embedded inputs, build graph, and publication
 internals. It repeats only the byte identity and target fields needed to
 identify and invoke a freshly published local artifact.
+
+### A targetless manifest means this host
+
+When the manifest omits `targets` and the caller supplies no `--target` filter,
+packaging selects the exact compatible host target: the running Node version,
+platform, architecture, and glibc on Linux. The common local package path no
+longer requires a build matrix whose only member restates the current machine.
+
+A public `--target` filter still selects from targets declared by the manifest.
+Combining a filter with a targetless manifest fails with guidance to remove the
+filter or declare the intended matrix; Wharfie does not infer a cross-target
+request from a filter.
 
 ### The projection is strict and deterministic
 
@@ -117,20 +129,28 @@ are local discovery conveniences for the process and filesystem that performed
 packaging. They are not portable references, durable deployment authority, or
 safe substitutes for byte verification.
 
-### JSON remains the only package-command output
+### Human-first output and stable JSON machine mode
 
-`wharfie app package` continues to emit JSON by default. `--json` remains an
-explicit spelling of that behavior, while `--no-pretty` emits the same one
-document compactly. A successful invocation writes exactly one receipt.
-Packaging or projection failure writes no partial receipt.
+By default, `wharfie app package` reports its resolution, preparation, build,
+download when needed, and publication phases as human diagnostics. Its final
+human summary names every exact target, executable size, and absolute artifact
+path, then prints an actionable `Next:` step. Matching POSIX hosts receive a
+copy-pasteable command; Windows receives a shell-neutral instruction because
+cmd.exe and PowerShell have different quoting rules. For a durable application,
+that command includes the foreground `wharfie run --name first-run --` handoff.
 
-While packaging runs, Wharfie reserves its process stdout for that final
-document. Ordinary in-process writes through `process.stdout` and
-Wharfie-owned build-subprocess output are routed to stderr as diagnostics.
-Application source and build extensions are trusted code, not sandboxed code:
-code that deliberately bypasses the streams or starts its own
-stdout-inheriting subprocess, or leaves stdout-producing work unawaited after
-packaging settles, violates the package-command contract.
+`--json` selects the unchanged schema-version 1 machine document. It is pretty
+by default; `--no-pretty` makes that same JSON document compact. A successful
+JSON invocation writes exactly one receipt. Packaging or projection failure
+writes no partial document.
+
+While packaging runs, both modes reserve process stdout for the selected final
+human summary or JSON document. Ordinary in-process writes through
+`process.stdout` and Wharfie-owned build-subprocess output are routed to stderr
+as diagnostics. Application source and build extensions are trusted code:
+code that bypasses the streams, starts its own stdout-inheriting subprocess, or
+leaves stdout-producing work unawaited after packaging settles violates the
+package-command contract.
 
 The receipt intentionally does not say whether each immutable destination was
 newly created or already contained the exact same bytes and sidecar. Repeated
@@ -138,8 +158,11 @@ successful publication projects the same semantic receipt.
 
 ## Consequences
 
-- Humans, scripts, and coding agents receive one small stable document from
-  local source packaging instead of an internal object graph.
+- Humans receive an immediate artifact handoff and exact next command without
+  interpreting an internal object graph.
+- Scripts and coding agents request the small stable receipt with `--json`.
+- A targetless manifest gives the common local path one exact host artifact;
+  explicit target matrices continue to express cross-target intent.
 - Deployment internals keep their existing fresh-generation authority; no
   path or serialized receipt gains it.
 - Adding a target, artifact, revision, or internal result field cannot silently
@@ -156,8 +179,8 @@ successful publication projects the same semantic receipt.
 - independently rehashing the output files during receipt projection;
 - claiming reproducible SEA bytes or cross-host target executability;
 - exposing complete artifact provenance in command output;
-- adding a human table mode, publication event journal, or `created`/`reused`
-  outcome; and
+- adding a publication event journal or `created`/`reused` outcome to either
+  output mode; and
 - changing selected-SEA deployment authority or packaged operator commands.
 
 ## Rejected alternatives

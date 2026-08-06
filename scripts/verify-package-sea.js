@@ -150,6 +150,32 @@ const SEA_SCHEDULE_MARKER_DIRECTORY = 'scheduled-workflow-markers';
 const SEA_SCHEDULE_PROOF_CRON =
   '0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58 * * * *';
 const SEA_WORKFLOW_ACTIVITY_ID = 'workflow-step';
+const SEA_EXECUTION_LEDGER_TABLE = 'wharfie-execution-ledger-v10';
+
+/**
+ * Independently derive the packaged app's sealed local-storage layout. Every
+ * relocated SEA receives only the public data-root authority; the host-side
+ * verifier uses these derived paths to seed and inspect the same stores.
+ * @param {{appId: string, root: string}} options - App identity and isolated proof root.
+ * @returns {Readonly<Record<string, string>>} - Canonical packaged storage paths.
+ */
+function createVerifierPackagedStorageLayout(options) {
+  assert.ok(
+    path.isAbsolute(options.root),
+    'SEA verifier root must be absolute',
+  );
+  const dataRoot = path.join(options.root, 'wharfie-data');
+  const stateRoot = path.join(dataRoot, 'applications', options.appId, 'state');
+  const controlPath = path.join(stateRoot, 'control');
+  return Object.freeze({
+    dataRoot,
+    controlPath,
+    payloadPath: path.join(controlPath, 'execution-payloads'),
+    sessionPath: path.join(controlPath, 'ledger-service-sessions'),
+    applicationStatePath: path.join(stateRoot, 'application-state'),
+    tableName: SEA_EXECUTION_LEDGER_TABLE,
+  });
+}
 const SEA_CRASH_CASES = Object.freeze([
   {
     boundary: 'request-payload-published',
@@ -3701,22 +3727,22 @@ async function verifyRelocatedSeaCrashMatrix(options) {
   };
   for (const scenario of SEA_CRASH_CASES) {
     const caseRoot = path.join(options.root, scenario.boundary);
-    const controlPath = path.join(caseRoot, 'control');
-    const payloadPath = path.join(controlPath, 'execution-payloads');
-    const sessionPath = path.join(caseRoot, 'sessions');
-    const applicationStatePath = path.join(caseRoot, 'application-state');
+    const {
+      dataRoot,
+      controlPath,
+      payloadPath,
+      sessionPath,
+      applicationStatePath,
+      tableName,
+    } = createVerifierPackagedStorageLayout({
+      appId: options.appId,
+      root: caseRoot,
+    });
     const markerPath = path.join(caseRoot, 'user-continuation.json');
-    const tableName = 'wharfie-package-sea-crash-matrix';
     mkdirSync(caseRoot, { recursive: true, mode: 0o700 });
     const environment = {
       ...options.cleanEnvironment,
-      WHARFIE_CONTROL_ADAPTER: 'lmdb',
-      WHARFIE_CONTROL_PATH: controlPath,
-      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-      WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
-      WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
-      WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-      WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+      WHARFIE_DATA_ROOT: dataRoot,
     };
     const fixture = await createInstalledExecutionLedgerFixture({
       installedPackageRoot: options.installedPackageRoot,
@@ -3758,6 +3784,7 @@ async function verifyRelocatedSeaCrashMatrix(options) {
     };
     const runArgs = [
       'wharfie',
+      'activity',
       'run',
       '--activity',
       'persist-once',
@@ -4096,25 +4123,25 @@ async function verifyRelocatedSeaMixedSettlementCrashMatrix(options) {
   };
   for (const scenario of SEA_MIXED_SETTLEMENT_CRASH_CASES) {
     const caseRoot = path.join(options.root, scenario.boundary);
-    const controlPath = path.join(caseRoot, 'control');
-    const payloadPath = path.join(controlPath, 'execution-payloads');
-    const sessionPath = path.join(caseRoot, 'sessions');
-    const applicationStatePath = path.join(caseRoot, 'application-state');
+    const {
+      dataRoot,
+      controlPath,
+      payloadPath,
+      sessionPath,
+      applicationStatePath,
+      tableName,
+    } = createVerifierPackagedStorageLayout({
+      appId: options.appId,
+      root: caseRoot,
+    });
     const markerPath = path.join(
       caseRoot,
       'authored-marker-must-not-exist.json',
     );
-    const tableName = 'wharfie-package-sea-mixed-settlement-crash-matrix';
     mkdirSync(caseRoot, { recursive: true, mode: 0o700 });
     const environment = {
       ...options.cleanEnvironment,
-      WHARFIE_CONTROL_ADAPTER: 'lmdb',
-      WHARFIE_CONTROL_PATH: controlPath,
-      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-      WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
-      WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
-      WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-      WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+      WHARFIE_DATA_ROOT: dataRoot,
     };
     const fixture = await createInstalledExecutionLedgerFixture({
       installedPackageRoot: options.installedPackageRoot,
@@ -4492,12 +4519,18 @@ async function verifyRelocatedSeaMixedSettlementCrashMatrix(options) {
  */
 async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
   const caseRoot = options.root;
-  const controlPath = path.join(caseRoot, 'control');
-  const payloadPath = path.join(controlPath, 'execution-payloads');
-  const sessionPath = path.join(caseRoot, 'sessions');
-  const applicationStatePath = path.join(caseRoot, 'application-state');
+  const {
+    dataRoot,
+    controlPath,
+    payloadPath,
+    sessionPath,
+    applicationStatePath,
+    tableName,
+  } = createVerifierPackagedStorageLayout({
+    appId: options.appId,
+    root: caseRoot,
+  });
   const markerPath = path.join(caseRoot, 'authored-activity-must-not-run.json');
-  const tableName = 'wharfie-package-sea-effect-reconciliation-crash-matrix';
   const packagedActor = {
     kind: 'packaged-operator',
     id: options.revisionId,
@@ -4506,13 +4539,7 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
   mkdirSync(caseRoot, { recursive: true, mode: 0o700 });
   const environment = {
     ...options.cleanEnvironment,
-    WHARFIE_CONTROL_ADAPTER: 'lmdb',
-    WHARFIE_CONTROL_PATH: controlPath,
-    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
-    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
-    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+    WHARFIE_DATA_ROOT: dataRoot,
   };
   const fixture = await createInstalledExecutionLedgerFixture({
     installedPackageRoot: options.installedPackageRoot,
@@ -6268,15 +6295,21 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
     ] of SEA_SUCCESSOR_CRASH_CASES.entries()) {
       const caseId = `case-${scenarioIndex + 1}`;
       const caseRoot = path.join(options.root, scenario.boundary);
-      const controlPath = path.join(caseRoot, 'control');
-      const payloadPath = path.join(controlPath, 'execution-payloads');
-      const sessionPath = path.join(caseRoot, 'sessions');
-      const applicationStatePath = path.join(caseRoot, 'application-state');
+      const {
+        dataRoot,
+        controlPath,
+        payloadPath,
+        sessionPath,
+        applicationStatePath,
+        tableName,
+      } = createVerifierPackagedStorageLayout({
+        appId: options.appId,
+        root: caseRoot,
+      });
       const markerPath = path.join(
         caseRoot,
         'authored-activity-must-not-run.json',
       );
-      const tableName = `wharfie-package-sea-${scenario.boundary}`;
       const packagedActor = {
         kind: 'packaged-operator',
         id: options.revisionId,
@@ -6291,13 +6324,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
       mkdirSync(caseRoot, { recursive: true, mode: 0o700 });
       const environment = {
         ...options.cleanEnvironment,
-        WHARFIE_CONTROL_ADAPTER: 'lmdb',
-        WHARFIE_CONTROL_PATH: controlPath,
-        WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-        WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
-        WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
-        WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-        WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+        WHARFIE_DATA_ROOT: dataRoot,
       };
       const fixture = await createInstalledExecutionLedgerFixture({
         installedPackageRoot: options.installedPackageRoot,
@@ -7336,22 +7363,22 @@ function workflowReadySummary(items) {
  */
 async function createRelocatedSeaWorkflowCase(options, boundary) {
   const caseRoot = path.join(options.root, boundary);
-  const controlPath = path.join(caseRoot, 'control');
-  const payloadPath = path.join(controlPath, 'execution-payloads');
-  const sessionPath = path.join(caseRoot, 'sessions');
-  const applicationStatePath = path.join(caseRoot, 'application-state');
+  const {
+    dataRoot,
+    controlPath,
+    payloadPath,
+    sessionPath,
+    applicationStatePath,
+    tableName,
+  } = createVerifierPackagedStorageLayout({
+    appId: options.appId,
+    root: caseRoot,
+  });
   const markerDirectory = path.join(caseRoot, 'workflow-markers');
-  const tableName = 'wharfie-package-sea-workflow-crash-matrix';
   mkdirSync(markerDirectory, { recursive: true, mode: 0o700 });
   const environment = {
     ...options.cleanEnvironment,
-    WHARFIE_CONTROL_ADAPTER: 'lmdb',
-    WHARFIE_CONTROL_PATH: controlPath,
-    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
-    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
-    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+    WHARFIE_DATA_ROOT: dataRoot,
   };
   const fixture = await createInstalledExecutionLedgerFixture({
     installedPackageRoot: options.installedPackageRoot,
@@ -7450,6 +7477,7 @@ async function createRelocatedSeaWorkflowCase(options, boundary) {
     payloadPath,
     sessionPath,
     applicationStatePath,
+    tableName,
     markerDirectory,
     environment,
     fixture,
@@ -7722,22 +7750,22 @@ async function assertCompletedSeaWorkflow(
 async function verifyRelocatedSeaTimerSignalWorkflow(options) {
   rmSync(options.root, { recursive: true, force: true });
   mkdirSync(options.root, { recursive: true, mode: 0o700 });
-  const controlPath = path.join(options.root, 'control');
-  const payloadPath = path.join(controlPath, 'execution-payloads');
-  const sessionPath = path.join(options.root, 'sessions');
-  const applicationStatePath = path.join(options.root, 'application-state');
+  const {
+    dataRoot,
+    controlPath,
+    payloadPath,
+    sessionPath,
+    applicationStatePath,
+    tableName,
+  } = createVerifierPackagedStorageLayout({
+    appId: options.appId,
+    root: options.root,
+  });
   const markerDirectory = path.join(options.root, 'workflow-markers');
-  const tableName = 'wharfie-package-sea-timer-signal-workflow';
   mkdirSync(markerDirectory, { recursive: true, mode: 0o700 });
   const environment = {
     ...options.cleanEnvironment,
-    WHARFIE_CONTROL_ADAPTER: 'lmdb',
-    WHARFIE_CONTROL_PATH: controlPath,
-    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
-    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
-    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+    WHARFIE_DATA_ROOT: dataRoot,
   };
   const fixture = await createInstalledExecutionLedgerFixture({
     installedPackageRoot: options.installedPackageRoot,
@@ -8118,26 +8146,25 @@ async function verifyRelocatedSeaScheduleRestartProof(options) {
     'linux',
     'the relocated SEA schedule/restart proof is Linux-only',
   );
-  const controlPath = path.join(options.root, 'control');
-  const payloadPath = path.join(controlPath, 'execution-payloads');
-  const sessionPath = path.join(options.root, 'sessions');
-  const applicationStatePath = path.join(options.root, 'application-state');
+  const {
+    dataRoot,
+    controlPath,
+    payloadPath,
+    applicationStatePath,
+    tableName,
+  } = createVerifierPackagedStorageLayout({
+    appId: options.appId,
+    root: options.root,
+  });
   const markerDirectory = path.join(
     options.root,
     SEA_SCHEDULE_MARKER_DIRECTORY,
   );
   const markerPath = path.join(markerDirectory, '1.json');
   const dispatchLogPath = path.join(options.root, 'workflow-dispatch.jsonl');
-  const tableName = 'wharfie-package-sea-schedule-restart-proof';
   const environment = {
     ...options.cleanEnvironment,
-    WHARFIE_CONTROL_ADAPTER: 'lmdb',
-    WHARFIE_CONTROL_PATH: controlPath,
-    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
-    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
-    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+    WHARFIE_DATA_ROOT: dataRoot,
     WHARFIE_SEA_VERIFIER_WORKFLOW_DISPATCH_LOG: dispatchLogPath,
   };
   const lifecycle = await createInstalledLedgerLifecycleObserver({
@@ -8444,6 +8471,7 @@ async function packageAndVerifyRelocatedSeaScheduleRestart(options) {
           options.appDirectory,
           '--output-dir',
           outputDirectory,
+          '--json',
           '--no-pretty',
         ],
         {
@@ -8549,8 +8577,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
         ...process.env,
         WHARFIE_CONTROL_ADAPTER: 'lmdb',
         WHARFIE_CONTROL_PATH: cross.controlPath,
-        WHARFIE_EXECUTION_LEDGER_TABLE:
-          cross.environment.WHARFIE_EXECUTION_LEDGER_TABLE,
+        WHARFIE_EXECUTION_LEDGER_TABLE: cross.tableName,
         WHARFIE_EXECUTION_PAYLOAD_PATH: cross.payloadPath,
         WHARFIE_LEDGER_SERVICE_SESSION_PATH: cross.sessionPath,
         WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
@@ -9783,6 +9810,7 @@ export default defineApp({
       appDirectory,
       '--output-dir',
       outputDirectory,
+      '--json',
       '--no-pretty',
     ],
     { cwd: appDirectory, capture: true },
@@ -10203,22 +10231,21 @@ export default defineApp({
     JSON.parse(JSON.stringify(packagedAuthority.revision.contract.schedules)),
   );
 
-  const controlPath = path.join(cleanRunDirectory, 'resident-control');
-  const sessionPath = path.join(cleanRunDirectory, 'resident-sessions');
-  const payloadPath = path.join(controlPath, 'execution-payloads');
-  const applicationStatePath = path.join(
-    cleanRunDirectory,
-    'application-state',
-  );
-  const activeRecoveryProbePath = path.join(
-    cleanRunDirectory,
-    'active-recovery-probe-must-remain-absent',
-  );
+  const {
+    dataRoot,
+    controlPath,
+    payloadPath,
+    sessionPath,
+    applicationStatePath,
+    tableName: ledgerTableName,
+  } = createVerifierPackagedStorageLayout({
+    appId: embeddedManifest.app.id,
+    root: cleanRunDirectory,
+  });
   const residentActivityDispatchMarkerPath = path.join(
     cleanRunDirectory,
     'resident-activity-dispatch-must-remain-absent.json',
   );
-  const ledgerTableName = 'wharfie-package-sea-ledger-service';
   const lifecycleObserver = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot,
     controlPath,
@@ -10226,6 +10253,10 @@ export default defineApp({
     appId: embeddedManifest.app.id,
   });
   const operatorEnvironment = {
+    ...cleanEnvironment,
+    WHARFIE_DATA_ROOT: dataRoot,
+  };
+  const sourceOperatorEnvironment = {
     ...cleanEnvironment,
     WHARFIE_CONTROL_ADAPTER: 'lmdb',
     WHARFIE_CONTROL_PATH: controlPath,
@@ -10279,6 +10310,7 @@ export default defineApp({
   };
   const durableRunArgs = [
     'wharfie',
+    'activity',
     'run',
     '--activity',
     'persist-once',
@@ -10793,6 +10825,7 @@ export default defineApp({
         fixture: sourceEffectBatch,
         command: process.execPath,
         operatorPrefix: [wharfieBin, 'ops'],
+        environment: sourceOperatorEnvironment,
         actor: { kind: 'local', id: 'cli' },
       },
       {
@@ -10800,6 +10833,7 @@ export default defineApp({
         fixture: seaEffectBatch,
         command: cleanArtifactPath,
         operatorPrefix: ['wharfie'],
+        environment: operatorEnvironment,
         actor: {
           kind: 'packaged-operator',
           id: packagedRevisionId,
@@ -10851,7 +10885,7 @@ export default defineApp({
       {
         cwd: cleanRunDirectory,
         capture: true,
-        env: operatorEnvironment,
+        env: sourceOperatorEnvironment,
       },
     ).stdout.trim();
     const packagedInspectionText = runCommand(
@@ -10896,7 +10930,7 @@ export default defineApp({
         {
           cwd: cleanRunDirectory,
           capture: true,
-          env: operatorEnvironment,
+          env: sourceOperatorEnvironment,
         },
       ).stdout.trim();
       const seaEffectInspectionText = runCommand(
@@ -10957,7 +10991,7 @@ export default defineApp({
         {
           cwd: cleanRunDirectory,
           capture: true,
-          env: operatorEnvironment,
+          env: sourceOperatorEnvironment,
         },
       ).stdout,
     );
@@ -11133,10 +11167,6 @@ export default defineApp({
         await ledgerFixture.readRun(target.fixture.runId),
       );
     }
-    const activeRecoveryEnvironment = {
-      ...operatorEnvironment,
-      WHARFIE_APPLICATION_STATE_PATH: activeRecoveryProbePath,
-    };
     for (const target of effectRecoveryTargets) {
       const refused = spawnSync(
         target.command,
@@ -11151,7 +11181,7 @@ export default defineApp({
         {
           cwd: cleanRunDirectory,
           encoding: 'utf8',
-          env: activeRecoveryEnvironment,
+          env: target.environment,
         },
       );
       if (refused.error) throw refused.error;
@@ -11163,11 +11193,6 @@ export default defineApp({
         `${target.label} recovery did not refuse the active owner`,
       );
     }
-    assert.equal(
-      existsSync(activeRecoveryProbePath),
-      false,
-      'active-owner refusal probed or materialized application state',
-    );
     for (const target of effectRecoveryTargets) {
       assert.deepEqual(
         await ledgerFixture.readRun(target.fixture.runId),
@@ -11380,7 +11405,7 @@ export default defineApp({
         {
           cwd: cleanRunDirectory,
           capture: true,
-          env: operatorEnvironment,
+          env: target.environment,
         },
       ).stdout.trim();
       assertManagedEffectBatchRecoveryView(recoveryText, target.fixture, {

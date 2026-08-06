@@ -191,14 +191,19 @@ export async function runRuntimeBootstrap(runtimeModules, options = {}) {
 }
 
 /**
- * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, loadDeveloperCliModule?: function(): Promise<Record<string, any> | null> | Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, argv?: string[] }} [options] - options.
+ * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, loadDeveloperCliModule?: function(): Promise<Record<string, any> | null> | Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, prepareRuntime?: function(): Promise<void> | void, argv?: string[] }} [options] - options.
  * @returns {Promise<void>} - Result.
  */
 export async function runPackagedApp(options = {}) {
   const argv = Array.isArray(options.argv) ? options.argv : process.argv;
   const runtimeModules = options.runtimeModules || {};
+  const prepareRuntime =
+    typeof options.prepareRuntime === 'function'
+      ? options.prepareRuntime
+      : async () => {};
 
   if (getDispatchMode() === 'runtime') {
+    await prepareRuntime();
     await runRuntimeBootstrap(runtimeModules, { argv });
     return;
   }
@@ -210,6 +215,7 @@ export async function runPackagedApp(options = {}) {
       );
     }
 
+    await prepareRuntime();
     await runDeveloperCli(
       { default: runtimeModules.operatorCli },
       {

@@ -27,6 +27,21 @@ import { resolvePackagedAppStorage } from '../../src/core/runtime/packaged-app-s
 
 const DATA_ROOT = '/var/lib/wharfie-nodejs';
 
+const LEGACY_STORAGE_OVERRIDE_NAMES = Object.freeze([
+  'WHARFIE_APPLICATION_STATE_ADAPTER',
+  'WHARFIE_APPLICATION_STATE_PATH',
+  'WHARFIE_CONTROL_ADAPTER',
+  'WHARFIE_CONTROL_PATH',
+  'WHARFIE_DB_ADAPTER',
+  'WHARFIE_DB_PATH',
+  'WHARFIE_EXECUTION_LEDGER_TABLE',
+  'WHARFIE_EXECUTION_PAYLOAD_PATH',
+  'WHARFIE_EXECUTION_PAYLOAD_STORE_ID',
+  'WHARFIE_LEDGER_SERVICE_SESSION_PATH',
+  'WHARFIE_STATE_ADAPTER',
+  'WHARFIE_STATE_DB_PATH',
+]);
+
 describe('local packaged app storage', () => {
   it('derives one immutable app-scoped durable layout', () => {
     const layout = createLocalAppStorageLayout({
@@ -69,11 +84,119 @@ describe('local packaged app storage', () => {
     expect(process.env).toEqual(environmentBefore);
   });
 
+  it('derives every packaged store from one validated foreground data-root override', async () => {
+    const foregroundRoot = '/tmp/wharfie-foreground';
+    const layout = await resolvePackagedAppStorage({
+      environment: { WHARFIE_DATA_ROOT: foregroundRoot },
+      readEmbeddedRevisionRuntimePair: async () => ({
+        runtime: { appId: 'storage-demo' },
+      }),
+    });
+
+    expect(layout).toMatchObject({
+      dataRoot: foregroundRoot,
+      appRoot: `${foregroundRoot}/applications/storage-demo`,
+      controlPath: `${foregroundRoot}/applications/storage-demo/state/control`,
+      payloadPath: `${foregroundRoot}/applications/storage-demo/state/control/execution-payloads`,
+      applicationStatePath: `${foregroundRoot}/applications/storage-demo/state/application-state`,
+      sessionPath: `${foregroundRoot}/applications/storage-demo/state/control/ledger-service-sessions`,
+    });
+  });
+
+  it.each(LEGACY_STORAGE_OVERRIDE_NAMES)(
+    'rejects legacy packaged override %s even without a custom data root',
+    async (name) => {
+      await expect(
+        resolvePackagedAppStorage({
+          environment: {
+            [name]: 'configured',
+          },
+          readEmbeddedRevisionRuntimePair: async () => ({
+            runtime: { appId: 'storage-demo' },
+          }),
+        }),
+      ).rejects.toThrow(new RegExp(`Legacy Wharfie.*${name}`));
+    },
+  );
+
+  it('lists every conflicting legacy storage environment name', async () => {
+    await expect(
+      resolvePackagedAppStorage({
+        environment: {
+          WHARFIE_DATA_ROOT: '/tmp/wharfie-foreground',
+          WHARFIE_CONTROL_PATH: '/tmp/legacy-control',
+          WHARFIE_APPLICATION_STATE_PATH: '/tmp/legacy-application',
+        },
+        readEmbeddedRevisionRuntimePair: async () => ({
+          runtime: { appId: 'storage-demo' },
+        }),
+      }),
+    ).rejects.toThrow(
+      /WHARFIE_APPLICATION_STATE_PATH, WHARFIE_CONTROL_PATH\. Unset/,
+    );
+  });
+
+  it('rejects legacy overrides with an explicit bootstrap data root', async () => {
+    await expect(
+      resolvePackagedAppStorage({
+        dataRoot: DATA_ROOT,
+        environment: { WHARFIE_CONTROL_PATH: '/tmp/legacy-control' },
+        readEmbeddedRevisionRuntimePair: async () => ({
+          runtime: { appId: 'storage-demo' },
+        }),
+      }),
+    ).rejects.toThrow(/Legacy Wharfie.*WHARFIE_CONTROL_PATH/);
+  });
+
+  it.each(['relative/data', '/tmp/../redirect', '', '/tmp/bad\nroot'])(
+    'rejects an unsafe foreground data-root override %#',
+    async (dataRoot) => {
+      await expect(
+        resolvePackagedAppStorage({
+          environment: { WHARFIE_DATA_ROOT: dataRoot },
+          readEmbeddedRevisionRuntimePair: async () => ({
+            runtime: { appId: 'storage-demo' },
+          }),
+        }),
+      ).rejects.toThrow(/canonical absolute path/);
+    },
+  );
+
+  it('requires an explicit bootstrap root to agree before reading embedded identity', async () => {
+    let readIdentity = false;
+    await expect(
+      resolvePackagedAppStorage({
+        dataRoot: DATA_ROOT,
+        environment: { WHARFIE_DATA_ROOT: '/tmp/foreground-data' },
+        readEmbeddedRevisionRuntimePair: async () => {
+          readIdentity = true;
+          return { runtime: { appId: 'storage-demo' } };
+        },
+      }),
+    ).rejects.toThrow(
+      /dataRoot must agree with active WHARFIE_DATA_ROOT packaged storage authority/,
+    );
+    expect(readIdentity).toBe(false);
+  });
+
+  it('accepts an explicit bootstrap root that agrees with the active authority', async () => {
+    const layout = await resolvePackagedAppStorage({
+      dataRoot: DATA_ROOT,
+      environment: { WHARFIE_DATA_ROOT: DATA_ROOT },
+      readEmbeddedRevisionRuntimePair: async () => ({
+        runtime: { appId: 'storage-demo' },
+      }),
+    });
+
+    expect(layout.dataRoot).toBe(DATA_ROOT);
+  });
+
   it('anchors packaged storage to the account instead of ambient XDG or HOME values', async () => {
     await withEnvironment(
       {
         HOME: '/tmp/invocation-home',
         XDG_DATA_HOME: '/tmp/invocation-data',
+        WHARFIE_DATA_ROOT: undefined,
       },
       async () => {
         const accountHome = '/home/service-user';

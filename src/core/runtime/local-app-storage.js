@@ -7,6 +7,7 @@ import process from 'node:process';
 import { assertLogicalId } from './logical-id.js';
 
 export const LOCAL_APP_EXECUTION_LEDGER_TABLE = 'wharfie-execution-ledger-v10';
+export const LOCAL_APP_DATA_ROOT_ENVIRONMENT_VARIABLE = 'WHARFIE_DATA_ROOT';
 
 /**
  * @param {unknown} value - Candidate absolute path.

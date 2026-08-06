@@ -25,11 +25,12 @@ import { createLocalExecutionPayloadStore } from '../../lib/payload-store/local.
 import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
 import { assertApplicationRevisionId } from '../application-revision.js';
 import { assertArtifactId } from '../artifact-record.js';
-import { resolveStableLocalAppDataRoot } from '../local-app-storage.js';
+import { LOCAL_APP_DATA_ROOT_ENVIRONMENT_VARIABLE } from '../local-app-storage.js';
 import {
   getRunningExecutablePath,
   inspectArtifactBytes,
 } from '../packaged-artifact.js';
+import { LEGACY_PACKAGED_STORAGE_ENVIRONMENT_VARIABLES } from '../packaged-app-storage.js';
 import { probeLocalServiceSession } from '../local-service-session.js';
 import {
   LinuxAbstractOperationLockBusyError,
@@ -2399,8 +2400,8 @@ function defaultPayloadStoreId(payloadPath) {
 }
 
 /**
- * Refuse service management unless the packaged bootstrap and every explicit
- * durable-storage override agree with the fixed resident layout. This turns a
+ * Refuse service management unless the resident layout and every explicit
+ * override agree with the active packaged storage authority. This turns a
  * silent split-ledger failure into an actionable boundary error.
  * @param {Readonly<Record<string, string>>} layout - Derived systemd service layout.
  * @param {Readonly<Record<string, string>> | undefined} packagedStorage - Active packaged bootstrap authority.
@@ -2426,30 +2427,23 @@ function assertSharedPackagedStorage(layout, packagedStorage, environment) {
     );
   }
 
-  const expected = Object.freeze({
-    WHARFIE_CONTROL_ADAPTER: 'lmdb',
-    WHARFIE_CONTROL_PATH: layout.controlPath,
-    WHARFIE_EXECUTION_PAYLOAD_PATH: layout.payloadPath,
-    WHARFIE_EXECUTION_PAYLOAD_STORE_ID: defaultPayloadStoreId(
-      layout.payloadPath,
-    ),
-    WHARFIE_EXECUTION_LEDGER_TABLE: layout.executionLedgerTable,
-    WHARFIE_LEDGER_SERVICE_SESSION_PATH: layout.sessionPath,
-    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
-    WHARFIE_APPLICATION_STATE_PATH: layout.applicationStatePath,
-  });
-  for (const [name, expectedValue] of Object.entries(expected)) {
-    const raw = environment[name];
-    if (typeof raw !== 'string' || !raw.trim()) continue;
-    const actual = raw.trim();
-    const matches = name.endsWith('_ADAPTER')
-      ? actual.toLowerCase() === expectedValue
-      : actual === expectedValue;
-    if (!matches) {
-      throw new Error(
-        `${name} redirects packaged commands away from the fixed systemd service storage.`,
-      );
-    }
+  const legacyNames = LEGACY_PACKAGED_STORAGE_ENVIRONMENT_VARIABLES.filter(
+    (name) => environment[name] !== undefined,
+  );
+  if (legacyNames.length > 0) {
+    throw new Error(
+      `Legacy Wharfie storage overrides are not supported for packaged service management: ${legacyNames.join(', ')}.`,
+    );
+  }
+  const environmentDataRoot =
+    environment[LOCAL_APP_DATA_ROOT_ENVIRONMENT_VARIABLE];
+  if (
+    environmentDataRoot !== undefined &&
+    environmentDataRoot !== layout.dataRoot
+  ) {
+    throw new Error(
+      `${LOCAL_APP_DATA_ROOT_ENVIRONMENT_VARIABLE} disagrees with active packaged storage authority.`,
+    );
   }
 }
 
@@ -2470,9 +2464,7 @@ export function createSystemdUserServiceOperator(options = {}) {
   const getHomeDirectory =
     options.getHomeDirectory || (() => userInfo().homedir);
   const homeDirectory = getHomeDirectory();
-  const dataRoot =
-    options.dataRoot ??
-    resolveStableLocalAppDataRoot({ platform, homeDirectory });
+  const explicitDataRoot = options.dataRoot;
   const configRoot = options.configRoot ?? path.join(homeDirectory, '.config');
   const fsOps = options.fsOps || fsp;
   const readPackagedStorage =
@@ -2584,13 +2576,27 @@ export function createSystemdUserServiceOperator(options = {}) {
         'Packaged artifact target does not match the running Linux host process.',
       );
     }
+    const packagedStorage = readPackagedStorage();
+    if (!packagedStorage) {
+      throw new Error(
+        'Systemd user-service management requires packaged app storage context.',
+      );
+    }
+    if (
+      explicitDataRoot !== undefined &&
+      explicitDataRoot !== packagedStorage.dataRoot
+    ) {
+      throw new Error(
+        'Explicit systemd user-service dataRoot disagrees with active packaged storage authority.',
+      );
+    }
     const uid = Number(getUid());
     const layout = createSystemdUserServiceLayout({
       appId: pair.runtime.appId,
-      dataRoot,
+      dataRoot: explicitDataRoot ?? packagedStorage.dataRoot,
       configRoot,
     });
-    assertSharedPackagedStorage(layout, readPackagedStorage(), environment);
+    assertSharedPackagedStorage(layout, packagedStorage, environment);
     return {
       pair,
       uid,
