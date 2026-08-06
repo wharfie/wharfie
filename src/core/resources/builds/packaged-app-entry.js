@@ -1,8 +1,18 @@
+import { requireAwsProvider as defaultRequireAwsProvider } from '../../runtime/aws-provider-module.js';
+
 /**
  * The one top-level word reserved by packaged applications for Wharfie-owned
  * operator commands. All other argv belongs to the application.
  */
 export const OPERATOR_NAMESPACE = 'wharfie';
+
+const AWS_DEPLOYMENT_OPERATIONS = new Set([
+  'plan',
+  'apply',
+  'inspect',
+  'reconcile',
+  'destroy',
+]);
 
 /**
  * @param {string | undefined} value - value.
@@ -161,6 +171,23 @@ export function getOperatorArgv(argv) {
 }
 
 /**
+ * Detect a real AWS deployment leaf before packaged runtime preparation. Help,
+ * an omitted leaf, and unknown commands stay provider-free so Commander can
+ * explain the surface without an installed companion.
+ * @param {string[]} argv - Packaged application argv.
+ * @returns {boolean} - Whether argv selects one of the five AWS operations.
+ */
+export function isAwsDeploymentOperationInvocation(argv) {
+  const operatorArgs = argv.slice(3);
+  return (
+    operatorArgs[0] === 'deployment' &&
+    AWS_DEPLOYMENT_OPERATIONS.has(operatorArgs[1]) &&
+    !operatorArgs.includes('--help') &&
+    !operatorArgs.includes('-h')
+  );
+}
+
+/**
  * @param {Record<string, any>} runtimeModules - runtimeModules.
  * @param {{ argv?: string[] }} [options] - options.
  * @returns {Promise<void>} - Result.
@@ -191,7 +218,7 @@ export async function runRuntimeBootstrap(runtimeModules, options = {}) {
 }
 
 /**
- * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, loadDeveloperCliModule?: function(): Promise<Record<string, any> | null> | Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, prepareRuntime?: function(): Promise<void> | void, argv?: string[] }} [options] - options.
+ * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, loadDeveloperCliModule?: function(): Promise<Record<string, any> | null> | Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, prepareRuntime?: function(): Promise<void> | void, requireAwsProvider?: function(): Promise<void>, argv?: string[] }} [options] - options.
  * @returns {Promise<void>} - Result.
  */
 export async function runPackagedApp(options = {}) {
@@ -201,6 +228,10 @@ export async function runPackagedApp(options = {}) {
     typeof options.prepareRuntime === 'function'
       ? options.prepareRuntime
       : async () => {};
+  const requireAwsProvider =
+    typeof options.requireAwsProvider === 'function'
+      ? options.requireAwsProvider
+      : defaultRequireAwsProvider;
 
   if (getDispatchMode() === 'runtime') {
     await prepareRuntime();
@@ -215,6 +246,7 @@ export async function runPackagedApp(options = {}) {
       );
     }
 
+    if (isAwsDeploymentOperationInvocation(argv)) await requireAwsProvider();
     await prepareRuntime();
     await runDeveloperCli(
       { default: runtimeModules.operatorCli },

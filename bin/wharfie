@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { main } from '../src/cli/entry.js';
+import { AwsProviderUnavailableError } from '../src/core/runtime/aws-provider-module.js';
 
 main(process.argv).catch((err) => {
   // eslint-disable-next-line no-console
-  console.error(err);
+  console.error(err instanceof AwsProviderUnavailableError ? err.message : err);
   process.exitCode = 1;
 });

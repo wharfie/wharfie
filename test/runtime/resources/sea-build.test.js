@@ -299,7 +299,7 @@ describe('SeaBuild', () => {
     }
   });
 
-  it('resolves entryCode once and uses the same captured string for bundling and evidence', async () => {
+  it('resolves entryCode once and records the provider-prepared string handed to bundling', async () => {
     jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
       execFile: jest.fn(),
       spawn: jest.fn(),
@@ -318,7 +318,19 @@ describe('SeaBuild', () => {
       path.join(os.tmpdir(), 'wharfie-sea-entry-capture-'),
     );
     const sourceBinary = path.join(tmpRoot, 'source-node');
-    const capturedEntry = 'process.stdout.write("captured");\n';
+    const capturedEntry = [
+      'import runtimeOperatorCli from \x27./operator.js\x27;',
+      'const ledgerServiceCmd = {};',
+      'async function runPackagedApp() {}',
+      '(async () => {',
+      '  await runPackagedApp({',
+      '    runtimeModules: {',
+      '      operatorCli: runtimeOperatorCli,',
+      '      \x27ledger-service\x27: ledgerServiceCmd,',
+      '    },',
+      '  });',
+      '})();',
+    ].join('\n');
     const resolveEntryCode = jest.fn(() => capturedEntry);
     await fsp.writeFile(sourceBinary, 'node-binary', 'utf8');
     SeaBuild.BUILD_DIR = path.join(tmpRoot, 'builds');
@@ -347,8 +359,18 @@ describe('SeaBuild', () => {
       const evidence = build.getSuccessfulBuildEvidence(artifactBytes);
 
       expect(resolveEntryCode).toHaveBeenCalledTimes(1);
-      expect(esbuild).toHaveBeenCalledWith(expect.any(String), capturedEntry);
-      expect(evidence.entryCode).toEqual(evidenceFor(capturedEntry));
+      const transformedEntry = esbuild.mock.calls[0]?.[1];
+      if (typeof transformedEntry !== 'string') {
+        throw new TypeError('Expected the prepared entry handed to esbuild.');
+      }
+      expect(transformedEntry).not.toBe(capturedEntry);
+      expect(transformedEntry).toContain('wharfieEmbeddedAwsProvider');
+      expect(transformedEntry).toContain('registerWharfieEmbeddedAwsProvider');
+      expect(esbuild).toHaveBeenCalledWith(
+        expect.any(String),
+        transformedEntry,
+      );
+      expect(evidence.entryCode).toEqual(evidenceFor(transformedEntry));
     } finally {
       SeaBuild.BUILD_DIR = originalBuildDir;
       SeaBuild.BINARIES_DIR = originalBinariesDir;

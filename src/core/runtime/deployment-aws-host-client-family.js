@@ -1,9 +1,6 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param, jsdoc/require-param-description, jsdoc/require-returns, jsdoc/require-returns-description -- This boundary owns one exact host-only SDK lifetime behind the V67 and V70 adapters. */
 
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
+import { getRegisteredAwsProviderBindings } from './aws-provider-module.js';
 
 import BaseAWS from '../lib/aws/base.js';
 import { createAwsSingleNodeHostActivationAuthorityAdapter } from './deployment-aws-host-activation-authority.js';
@@ -17,6 +14,11 @@ import {
   assertDeploymentInstanceId,
   validateProviderScope,
 } from './deployment-provider-scope.js';
+
+/** @typedef {import('@aws-sdk/client-sts').STSClient} AwsSTSClient */
+/** @typedef {import('@aws-sdk/client-dynamodb').DynamoDBClient} AwsDynamoDBClient */
+/** @typedef {import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient} AwsDynamoDBDocumentClient */
+/** @typedef {import('@aws-sdk/client-s3').S3Client} AwsS3Client */
 
 const OPEN_OPTIONS_KEYS = new Set(['providerScope', 'deploymentInstanceId']);
 const SUPPORTED_PARTITION = 'aws';
@@ -167,18 +169,23 @@ function discardCapability(capability, receiver) {
  */
 export function openAwsSingleNodeHostClientFamily(options) {
   const { providerScope, deploymentInstanceId } = validateOpenOptions(options);
+  const awsBindings = getRegisteredAwsProviderBindings();
+  const { DynamoDBClient } = awsBindings.clientDynamoDB;
+  const { DynamoDBDocumentClient, GetCommand } = awsBindings.libDynamoDB;
+  const { GetObjectCommand, S3Client } = awsBindings.clientS3;
+  const { GetCallerIdentityCommand, STSClient } = awsBindings.clientSTS;
   const lifetimeAbortController = new AbortController();
   /** @type {Set<Promise<unknown>>} */
   const activeSends = new Set();
   /** @type {Set<Readonly<{abort: () => void}>>} */
   const activeS3Bodies = new Set();
-  /** @type {STSClient|undefined} */
+  /** @type {AwsSTSClient|undefined} */
   let sts;
-  /** @type {DynamoDBClient|undefined} */
+  /** @type {AwsDynamoDBClient|undefined} */
   let dynamo;
-  /** @type {DynamoDBDocumentClient|undefined} */
+  /** @type {AwsDynamoDBDocumentClient|undefined} */
   let dynamoDocument;
-  /** @type {S3Client|undefined} */
+  /** @type {AwsS3Client|undefined} */
   let s3;
   /** @type {Function|undefined} */
   let destroySts;
@@ -239,7 +246,7 @@ export function openAwsSingleNodeHostClientFamily(options) {
       throw new TypeError(INITIALIZATION_ERROR);
     }
     sts = new STSClient({
-      ...BaseAWS.config({ maxAttempts: 1 }),
+      ...BaseAWS.config({ maxAttempts: 1 }, awsBindings),
       maxAttempts: 1,
       region: providerScope.region,
       endpoint: `https://sts.${providerScope.region}.amazonaws.com`,
@@ -256,7 +263,7 @@ export function openAwsSingleNodeHostClientFamily(options) {
     }
 
     dynamo = new DynamoDBClient({
-      ...BaseAWS.config({ maxAttempts: 1 }),
+      ...BaseAWS.config({ maxAttempts: 1 }, awsBindings),
       maxAttempts: 1,
       region: providerScope.region,
       endpoint: `https://dynamodb.${providerScope.region}.amazonaws.com`,
@@ -286,7 +293,7 @@ export function openAwsSingleNodeHostClientFamily(options) {
     }
 
     s3 = new S3Client({
-      ...BaseAWS.config({ maxAttempts: 1 }),
+      ...BaseAWS.config({ maxAttempts: 1 }, awsBindings),
       maxAttempts: 1,
       region: providerScope.region,
       endpoint: `https://s3.${providerScope.region}.amazonaws.com`,
@@ -977,21 +984,21 @@ export function openAwsSingleNodeHostClientFamily(options) {
           Promise.resolve().then(() =>
             Reflect.apply(
               /** @type {Function} */ (destroyS3),
-              /** @type {S3Client} */ (s3),
+              /** @type {AwsS3Client} */ (s3),
               [],
             ),
           ),
           Promise.resolve().then(() =>
             Reflect.apply(
               /** @type {Function} */ (destroySts),
-              /** @type {STSClient} */ (sts),
+              /** @type {AwsSTSClient} */ (sts),
               [],
             ),
           ),
           Promise.resolve().then(() =>
             Reflect.apply(
               /** @type {Function} */ (destroyDynamo),
-              /** @type {DynamoDBClient} */ (dynamo),
+              /** @type {AwsDynamoDBClient} */ (dynamo),
               [],
             ),
           ),

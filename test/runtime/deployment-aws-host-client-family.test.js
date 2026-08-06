@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 
+import { createAwsProviderModule } from '../helpers/aws-provider.js';
+
 import { getAwsSingleNodeHostActivationIntentId } from '../../src/core/runtime/deployment-aws-host-activation.js';
 import { createAwsSingleNodeHostActivationRequest } from '../../src/core/runtime/deployment-aws-host-agent-contract.js';
 import { createAwsSingleNodeHostActivationAuthorityRecord } from '../../src/core/runtime/deployment-aws-host-activation-authority-contract.js';
@@ -46,6 +48,9 @@ const documentClientFrom = jest.fn();
 const S3Client = jest.fn();
 /** @type {jest.Mock<(input: AnyRecord) => AnyRecord>} */
 const GetObjectCommand = jest.fn();
+const DynamoDBDocumentClient = Object.assign(jest.fn(), {
+  from: documentClientFrom,
+});
 
 /** @type {AnyRecord[]} */
 let rawClients;
@@ -108,13 +113,24 @@ jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => ({
   DynamoDBClient,
 }));
 jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
-  DynamoDBDocumentClient: Object.freeze({ from: documentClientFrom }),
+  DynamoDBDocumentClient,
   GetCommand,
 }));
 jest.unstable_mockModule('@aws-sdk/client-s3', () => ({
   GetObjectCommand,
   S3Client,
 }));
+
+const { registerAwsProviderModule } =
+  await import('../../src/core/runtime/aws-provider-module.js');
+registerAwsProviderModule(
+  createAwsProviderModule({
+    clientDynamoDB: { DynamoDBClient },
+    clientS3: { GetObjectCommand, S3Client },
+    clientSTS: { GetCallerIdentityCommand, STSClient },
+    libDynamoDB: { DynamoDBDocumentClient, GetCommand },
+  }),
+);
 
 const {
   AwsSingleNodeHostArtifactReadError,

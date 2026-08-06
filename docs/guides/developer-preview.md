@@ -24,9 +24,8 @@ The proof creates a builder VM, installs the repository tarball into a clean
 consumer, packages revisions A and B, and copies an exact checksummed six-file
 handoff to the host. It deletes the builder before creating a separate target
 VM with no Node, npm, repository mount, or container runtime. Two distinct host
-controller processes then prepare unfinished durable work and return to
-observe and complete it before exercising update, rollback, uninstall, prune,
-and purge.
+controller processes then prepare unfinished durable work and return to observe
+and complete it before exercising update, rollback, uninstall, prune, and purge.
 
 Builder and target VMs run sequentially. The proof keeps its Lima home and
 cache inside one owned temporary directory and removes the VMs, cache, package
@@ -39,8 +38,7 @@ before Lima creates a VM or downloads an image.
 The accepted commit is `39be8d604fedb99ee798c64dcf50a74c456606c4`;
 its [receipt directory](../../llm_artifacts/steady-file-systemd-proof/39be8d604fedb99ee798c64dcf50a74c456606c4/)
 and [checkpoint](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
-are retained. The command remains a reusable regression gate for later
-commits.
+are retained. The command remains a reusable regression gate for later commits.
 
 ## Create the Wharfie handoff
 
@@ -50,18 +48,26 @@ using the exact Node and npm versions in `package.json`:
 ```bash
 npm ci
 npm run verify:package
+npm run verify:provider-boundary
 mkdir -p /absolute/path/to/wharfie-handoff
 npm pack --ignore-scripts \
   --pack-destination /absolute/path/to/wharfie-handoff
+npm pack --workspace @wharfie/aws --ignore-scripts \
+  --pack-destination /absolute/path/to/wharfie-handoff
 ```
 
-`verify:package` creates and removes its own temporary tarball and npm cache.
-The final `npm pack` command creates the intentional handoff artifact only in
-the explicit directory.
+The commands create two intentional handoff artifacts:
+
+- `wharfie-wharfie-0.0.15.tgz` is the provider-free core builder.
+- `wharfie-aws-0.0.15.tgz` is the version-matched AWS companion.
+
+The verification commands create and remove their own temporary tarballs, npm
+caches, clean consumers, and relocated SEA proof. The final `npm pack` commands
+write only to the explicit handoff directory.
 
 ## Build from the installed starter
 
-In a clean builder workspace:
+In a clean builder workspace, install core without bypassing package scripts:
 
 ```bash
 npm init -y
@@ -79,6 +85,23 @@ node ./steady-file/local.js /absolute/path/to/artifact.tar
   --output-dir ./dist \
   --json
 ```
+
+This core-only path creates a provider-free SEA. If the application must expose
+working AWS deployment operations, install both handoff artifacts before
+packaging:
+
+```bash
+npm install --no-audit --no-fund \
+  /absolute/path/to/wharfie-handoff/wharfie-wharfie-0.0.15.tgz \
+  /absolute/path/to/wharfie-handoff/wharfie-aws-0.0.15.tgz
+```
+
+Wharfie accepts only the exact matching companion and embeds it into the
+generated app. The finished executable remains relocatable and does not need
+the builder's `node_modules`. Omitting the companion keeps the AWS SDK graph
+out of the SEA. It permanently seals deployment operations unavailable while
+leaving deployment help available. Adding a companion beside that executable
+later cannot change its packaged capability decision.
 
 Use `node24.13.1-linux-arm64-glibc` for an arm64 target. The package receipt
 names the generated executable and its content-addressed verification record.

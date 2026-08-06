@@ -6,10 +6,23 @@ import {
   prepareAwsRunningSeaPlan,
   reconcileAwsRunningSeaDeployment,
 } from '../../../../runtime/deployment-aws-lifecycle.js';
+import { requireAwsProvider } from '../../../../runtime/aws-provider-module.js';
 import {
   createDeploymentCommand,
   snapshotDeploymentOperationOverrides,
 } from '../../../../runtime/operator/deployment-command.js';
+
+/**
+ * Require the fixed provider before a packaged AWS operation can mutate state.
+ * @param {Function} operation - Existing operation implementation.
+ * @returns {(input: Record<string, any>) => Promise<any>} - Guarded operation.
+ */
+function withAwsProvider(operation) {
+  return async (input) => {
+    await requireAwsProvider();
+    return operation(input);
+  };
+}
 
 /**
  * Create a fresh deployment parent for the SEA's reserved operator namespace.
@@ -22,12 +35,15 @@ export function createPackagedDeploymentCommand(options = {}) {
   const supplied = snapshotDeploymentOperationOverrides(options.operations);
   return createDeploymentCommand({
     operations: {
-      prepare: supplied.prepare ?? prepareAwsRunningSeaPlan,
-      apply: supplied.apply ?? applyAwsRunningSea,
-      applyPrepared: supplied.applyPrepared ?? applyAwsPreparedRunningSeaPlan,
-      inspect: supplied.inspect ?? inspectAwsDeployment,
-      reconcile: supplied.reconcile ?? reconcileAwsRunningSeaDeployment,
-      destroy: supplied.destroy ?? destroyAwsDeployment,
+      prepare: supplied.prepare ?? withAwsProvider(prepareAwsRunningSeaPlan),
+      apply: supplied.apply ?? withAwsProvider(applyAwsRunningSea),
+      applyPrepared:
+        supplied.applyPrepared ??
+        withAwsProvider(applyAwsPreparedRunningSeaPlan),
+      inspect: supplied.inspect ?? withAwsProvider(inspectAwsDeployment),
+      reconcile:
+        supplied.reconcile ?? withAwsProvider(reconcileAwsRunningSeaDeployment),
+      destroy: supplied.destroy ?? withAwsProvider(destroyAwsDeployment),
     },
     ...(options.output === undefined ? {} : { output: options.output }),
     ...(options.processRef === undefined

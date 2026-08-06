@@ -3,6 +3,7 @@
 
 import { describe, expect, it, jest } from '@jest/globals';
 
+import { createAwsProviderModule } from '../helpers/aws-provider.js';
 import { createFakeDocClient } from '../helpers/db-adapters.js';
 
 describe('dynamodb read-only observer mode', () => {
@@ -19,10 +20,18 @@ describe('dynamodb read-only observer mode', () => {
       TableName: 'runs',
       Item: { pk: 'service', sk: 'run/b', status: 'ready' },
     });
+    const DynamoDBDocument = Object.assign(jest.fn(), {
+      from: () => fakeDocClient,
+    });
     jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
-      DynamoDBDocument: { from: () => fakeDocClient },
+      DynamoDBDocument,
     }));
 
+    const { registerAwsProviderModule } =
+      await import('../../src/core/runtime/aws-provider-module.js');
+    registerAwsProviderModule(
+      createAwsProviderModule({ libDynamoDB: { DynamoDBDocument } }),
+    );
     const { createControlDBClient } =
       await import('../../src/core/lib/config/db.js');
     const db = await createControlDBClient('dynamodb', { readOnly: true });

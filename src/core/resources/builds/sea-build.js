@@ -8,7 +8,7 @@ import {
   existsSync,
   writeFileSync,
 } from 'node:fs';
-import { build as _build } from '../../lib/esbuild.js';
+import { build as _build, withEmbeddedAwsProvider } from '../../lib/esbuild.js';
 import paths from '../../lib/paths.js';
 import { runCmd, execFile } from '../../lib/cmd.js';
 import { inject } from 'postject';
@@ -694,9 +694,20 @@ class SeaBuild extends BaseResource {
     try {
       await promises.mkdir(tmpBuildDir, { mode: 0o700, recursive: true });
       await promises.chmod(tmpBuildDir, 0o700);
-      const entryCode = this.get('entryCode');
-      if (typeof entryCode !== 'string') {
+      const rawEntryCode = this.get('entryCode');
+      if (typeof rawEntryCode !== 'string') {
         throw new TypeError('SEA build entryCode must resolve to a string.');
+      }
+      const preparedBuildOptions = await withEmbeddedAwsProvider({
+        stdin: {
+          contents: rawEntryCode,
+          resolveDir: this.get('resolveDir'),
+          sourcefile: 'index.js',
+        },
+      });
+      const entryCode = preparedBuildOptions.stdin?.contents;
+      if (typeof entryCode !== 'string') {
+        throw new TypeError('SEA build prepared entryCode must be a string.');
       }
       const entryCodeBytes = Buffer.from(entryCode, 'utf8');
       const entryCodeEvidence = {
