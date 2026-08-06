@@ -1,12 +1,13 @@
 # Magnetic first-run experience
 
-**Status:** Implementation candidate · **Last updated:** 2026-08-05
+**Status:** Versioned release candidate · **Last updated:** 2026-08-06
 
 This note defines Wharfie's north-star promise as a concrete first-run
-experience. The authoring, packaging, storage, and foreground-resume surfaces
-described here are implemented. An external dogfood project exercises the
-journey, but release acceptance remains open until the starter and its complete
-harness are versioned here and run against the published preview package.
+experience. The authoring, packaging, storage, and foreground-resume surfaces,
+canonical starter, and complete copied-starter harness are versioned here. The
+repository gate runs them against Wharfie's packed npm tarball. Release
+acceptance remains open until that same gate passes against the published
+preview package.
 
 ## The product moment
 
@@ -176,25 +177,30 @@ pinned Wharfie package:
 6. Interrupt the foreground process before the timer becomes due.
 7. Repeat the exact command with the same artifact and data root.
 8. Observe the greeting complete without the first step running twice.
-9. Inspect the retained terminal result from a later process.
+9. Read and verify the retained terminal result from a later process with the
+   explicit sensitive-output command.
 
 The harness is evidence for the experience, not part of the application users
 must understand.
 
-**Prototype evidence (2026-08-01, Darwin arm64):** the external harness passed
-the ordinary, packaging, relocation, interruption, exact-resume, completion,
-and redacted-inspection path against a checksum-pinned working-tree package.
-It inferred `node24.13.1-darwin-arm64`, packaged in 8.3 seconds, produced one
-119.0 MiB artifact, and launched the relocated ordinary CLI in 1.414 seconds
-with Node absent from `PATH` and no durable-runtime extraction. After
-`SIGKILL`, the same artifact, data root, command, run identity, preparation
-attempt, timer identity, and deadline were retained. Repeating the exact
-command completed `wait` and `say-hello`; later-process inspection proved
-one `prepare` invocation and one physical attempt. The complete disposable
-run took under 30 seconds and cleaned up its state. This is useful
-implementation evidence, not the acceptance above: the harness is not yet in
-this repository and it does not yet perform the final later-process
-retained-output read.
+**Versioned candidate gate:** `npm run verify:magnetic-first-run` packs
+Wharfie, copies only `examples/hello-world` into a temporary workspace,
+installs that tarball rather than linking a source checkout, and invokes the
+starter's `npm run demo -- Ada`. The demo begins with the root two-field
+manifest, packages the separate durable showcase, relocates one artifact,
+hides the disposable copied builder and its installed dependencies, runs with
+Node absent from `PATH`, kills the first foreground process with
+`SIGKILL`, repeats the exact artifact/name/arguments/data-root command, proves
+one physical preparation attempt and the original timer, and finally runs
+`wharfie output --confirm-sensitive-output --json` from a later process to
+verify `Hello, Ada!` as the retained terminal result. CI runs this gate in its
+own visible job.
+
+The 2026-08-06 versioned gate passed on Darwin arm64 against the locally
+packed 0.0.15 candidate. Installation added 205 packages, packaging took 9.7
+seconds and produced one 148.5 MiB artifact, and the relocated ordinary CLI
+started in 1.764 seconds. The earlier 2026-08-01 external prototype established
+the 119.0 MiB baseline before the final magnetic runtime slice.
 
 ## Dogfood baseline
 
@@ -209,17 +215,20 @@ private-package tarball and exact Node/npm pins were visible setup concerns,
 and the canonical application demonstrated packaging but not Wharfie's durable
 continuity.
 
-The 2026-08-01 implementation candidate addresses the product-side friction:
+The versioned implementation candidate addresses the product-side friction:
 compact `defineApp()` authoring, automatic exact-host targeting for a
 targetless manifest, human-first package output with an unchanged `--json`
 receipt, lazy native-runtime preparation for ordinary argv, one
 `WHARFIE_DATA_ROOT`, and the repeatable packaged
-`wharfie run --name <name> -- <args>` foreground workflow. The external
-hello-world showcase exercises that path with the measurements above.
+`wharfie run --name <name> -- <args>` foreground workflow. The consumer starter
+accepts Node 24.13.1 or newer within Node 24 without pinning an npm patch. The
+canonical app, polished showcase, hidden harness, and explicitly noncanonical
+playground now have separate in-repository boundaries.
 
-The prototype is an **A- / 9 out of 10 candidate**: the beginner path preserves
-the small application and adds the polished interruption-and-resumption moment
-without exposing the harness machinery. It earns that grade as a shipped
-experience only after the versioned gate passes against the published preview.
-The other main first-run objection is weight: 202 installed npm packages
-(about 138 MB) and a 119 MiB executable.
+The versioned path is an **A- / 9 out of 10 release candidate**: the beginner
+path preserves the small application and adds the polished
+interruption-and-resumption moment without presenting harness machinery as
+application architecture. It earns that grade as a shipped experience only
+after the same gate passes against the published preview.
+The other main first-run objection is weight: this candidate installed 205 npm
+packages and produced a 148.5 MiB Darwin executable.

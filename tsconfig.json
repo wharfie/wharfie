@@ -37,6 +37,11 @@
     "scripts/run-aws-host-retained-storage-host-preflight-sea-linux-docker.js",
     "scripts/sea-inspector.js",
     "scripts/verify-package-contents.js",
+    "scripts/verify-magnetic-first-run.js",
     "types/**/*.d.ts"
+  ],
+  "exclude": [
+    "examples/hello-world/scripts/demo.js",
+    "examples/hello-world/**/wharfie.app.js"
   ]
 }

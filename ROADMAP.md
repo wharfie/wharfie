@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-01
+**Last updated:** 2026-08-06
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -97,13 +97,14 @@ teaching sequence for this outcome. A deliberately tiny canonical application
 answers "What is a Wharfie application?" A separate polished showcase answers
 "Why Wharfie?" by packaging ordinary JavaScript, interrupting durable work after
 one committed step, and resuming it from the standalone artifact without
-repeating that step. An external prototype exercises that path in under
-30 seconds on Darwin arm64, including relocated Node-absent execution and an
-abrupt process kill. Release acceptance remains open until the starter and
-complete retained-output gate are versioned here and run against the published
-preview. The target remains one obvious journey that finishes in under two
-minutes after prerequisites, with experimental machinery outside the beginner
-path.
+repeating that step. The versioned copied-starter gate hides its disposable
+builder, then exercises relocation, Node-absent execution, abrupt process
+death, exact-command resumption, and a later-process verified output read
+against Wharfie's packed npm tarball.
+Release acceptance remains open until the same gate passes against the
+published preview. The target remains one obvious journey that finishes in
+under two minutes after prerequisites, with experimental machinery outside the
+beginner path.
 
 ### What is already concrete
 
@@ -132,10 +133,10 @@ path.
 
 ### Work next
 
-1. Version the magnetic copied starter and complete harness as a release
-   regression gate.
-2. Reduce the beginner-path weight: the current install expands to 202 npm
-   packages (about 138 MB) and the Darwin arm64 artifact is 119 MiB.
+1. Run the versioned magnetic copied-starter gate against the published
+   preview package.
+2. Reduce the beginner-path weight: the versioned gate currently installs 205
+   npm packages and produces a 148.5 MiB Darwin arm64 artifact.
 3. Keep the split builder/clean-target `steady-file` acceptance proof as the
    regression gate for this outcome.
 4. Preserve the irreducible canonical hello-world app and keep failure probes,

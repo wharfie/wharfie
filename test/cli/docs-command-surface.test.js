@@ -102,6 +102,80 @@ function expectCommandShape(
 }
 
 describe('docs command surface', () => {
+  it('keeps the magnetic copied starter small, separated, and release-gated', async () => {
+    const [
+      rootMetadataSource,
+      starterMetadataSource,
+      starterReadme,
+      canonicalManifest,
+      demoSource,
+      verificationSource,
+      playgroundReadme,
+      quickstart,
+      workflow,
+    ] = await Promise.all(
+      [
+        'package.json',
+        'examples/hello-world/package.json',
+        'examples/hello-world/README.md',
+        'examples/hello-world/app/wharfie.app.js',
+        'examples/hello-world/scripts/demo.js',
+        'scripts/verify-magnetic-first-run.js',
+        'examples/hello-world/playground/README.md',
+        'docs/guides/quickstart.md',
+        '.github/workflows/ci.yml',
+      ].map((relativePath) =>
+        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ),
+    );
+    const rootMetadata = JSON.parse(rootMetadataSource);
+    const starterMetadata = JSON.parse(starterMetadataSource);
+
+    expect(starterMetadata.devDependencies['@wharfie/wharfie']).toBe(
+      rootMetadata.version,
+    );
+    expect(starterMetadata.engines).toEqual({ node: '>=24.13.1 <25' });
+    expect(starterMetadata).not.toHaveProperty('packageManager');
+    expect(starterMetadata.scripts.demo).toBe('node ./scripts/demo.js');
+    expect(rootMetadata.scripts['verify:magnetic-first-run']).toBe(
+      'node ./scripts/verify-magnetic-first-run.js',
+    );
+    expect(rootMetadata.files).toContain('examples/hello-world/');
+    expect(canonicalManifest.trim()).toBe(
+      [
+        "import { defineApp } from '@wharfie/wharfie/app';",
+        '',
+        'export default defineApp({',
+        "  id: 'hello-world',",
+        "  main: './hello.js',",
+        '});',
+      ].join('\n'),
+    );
+    expect(starterReadme.indexOf('npm run demo -- Ada')).toBeLessThan(
+      starterReadme.indexOf('npm run hello -- Ada'),
+    );
+    expect(demoSource).toContain('canonicalAppRoot');
+    expect(demoSource).toContain('showcaseAppRoot');
+    expect(demoSource).toContain('hideDisposableAcceptanceBuilder');
+    expect(demoSource).toContain('createArtifactEnvironment');
+    expect(verificationSource).toContain(
+      'WHARFIE_MAGNETIC_ACCEPTANCE_BUILDER_ROOT: starterRoot',
+    );
+    expect(verificationSource).toContain(
+      ": ['install', '--no-audit', '--no-fund'];",
+    );
+    expect(demoSource).toContain("'--confirm-sensitive-output'");
+    expect(demoSource).toContain(
+      'Later process verified the retained terminal output',
+    );
+    expect(demoSource).not.toContain('/Users/');
+    expect(demoSource).not.toContain('file:');
+    expect(playgroundReadme).toContain('not onboarding');
+    expect(quickstart).toContain('npm run verify:magnetic-first-run');
+    expect(workflow).toContain('magnetic-first-run:');
+    expect(workflow).toContain('npm run verify:magnetic-first-run');
+  });
+
   it('keeps the runtime app API aligned with its declared public exports', async () => {
     const runtimeModule = await import('../../src/app.js');
 

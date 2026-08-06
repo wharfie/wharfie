@@ -1,0 +1,20 @@
+{
+  "name": "wharfie-hello-world-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.13.1 <25"
+  },
+  "scripts": {
+    "hello": "node ./app/local.js",
+    "test": "node --test ./test/hello.test.js ./showcase/resumable-hello/test/hello.test.js",
+    "demo": "node ./scripts/demo.js",
+    "wharfie": "wharfie",
+    "manifest": "wharfie app manifest ./app",
+    "package": "wharfie app package ./app --output-dir ./dist"
+  },
+  "devDependencies": {
+    "@wharfie/wharfie": "0.0.15"
+  }
+}

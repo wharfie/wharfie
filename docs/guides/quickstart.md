@@ -18,17 +18,28 @@ Use the exact Node version in `package.json#engines` and the npm version in
 the project reset. The examples below use `wharfie` as shorthand for
 `node ./bin/wharfie` from the repository root.
 
-The [magnetic first-run](../product/magnetic-first-run.md) defines the intended
-shortest product journey. Until its canonical starter is versioned here, the
-[single-host developer preview](./developer-preview.md) is the runnable,
-advanced walkthrough. It packages an SEA and exercises a durable
-activity/timer/activity workflow. The longer
-[golden-path guide](./golden-path.md) records the current command and evidence
-boundaries. A clean Ubuntu walkthrough proves the same-host packaged service
-lifecycle, and the
-[accepted split builder/clean-target proof](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
-closes the preview milestone with unfinished work at caller exit, explicit
-purge, and complete cleanup.
+## Run the magnetic starter
+
+The versioned [hello-world starter](../../examples/hello-world/README.md) is the
+shortest product journey. Its repository gate packs the current Wharfie package,
+copies only the starter into a temporary workspace, installs that tarball, and
+runs the complete ordinary-CLI, package, relocate, `SIGKILL`, exact-resume, and
+later-process output proof:
+
+```bash
+npm run verify:magnetic-first-run
+```
+
+The copied starter's first supported journey is `npm install` followed by
+`npm run demo -- Ada` on Node 24.13.1 or newer within Node 24; it does not pin
+an npm patch. That published-package journey remains a release acceptance
+condition until the preview exists; the repository command above tests the
+same files and harness against the locally packed candidate, then hides the
+disposable builder before relocated execution.
+
+The advanced [single-host developer preview](./developer-preview.md) and
+[golden-path guide](./golden-path.md) cover service lifecycle and operator
+boundaries after this first run.
 
 ## Create an app
 

@@ -1,0 +1,204 @@
+import assert from 'node:assert/strict';
+import {
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { x as extractTarball } from 'tar';
+
+import {
+  createPackageTarball,
+  NPM_COMMAND,
+  readJson,
+  REPO_ROOT,
+  runCommand,
+} from './package-verification.js';
+
+const PROOF_PREFIX = 'wharfie-magnetic-first-run-';
+const PACKAGE_NAME = '@wharfie/wharfie';
+
+/**
+ * @returns {string | null} - Exact published package spec, or null for the
+ * current working-tree tarball.
+ */
+function parsePackageSpec() {
+  const args = process.argv.slice(2);
+  if (args.length === 0) return null;
+  if (args.length !== 2 || args[0] !== '--package') {
+    throw new TypeError(
+      'Usage: node scripts/verify-magnetic-first-run.js [--package @wharfie/wharfie@<exact-version>]',
+    );
+  }
+  return args[1];
+}
+
+/**
+ * @param {string} root - Candidate proof root.
+ */
+function removeProofRoot(root) {
+  const resolved = path.resolve(root);
+  assert.equal(path.dirname(resolved), path.resolve(os.tmpdir()));
+  assert.ok(path.basename(resolved).startsWith(PROOF_PREFIX));
+  rmSync(resolved, { recursive: true, force: true });
+}
+
+/**
+ * @param {string} packageSpec - Exact published package spec.
+ * @param {string} root - Disposable proof root.
+ * @param {string} npmCache - Isolated npm cache.
+ * @returns {{manifest: Record<string, any>, tarballPath: string}} - Packed
+ * published dependency.
+ */
+function packPublishedDependency(packageSpec, root, npmCache) {
+  const { stdout } = runCommand(
+    NPM_COMMAND,
+    [
+      'pack',
+      '--json',
+      '--ignore-scripts',
+      '--pack-destination',
+      root,
+      packageSpec,
+    ],
+    {
+      cwd: root,
+      capture: true,
+      env: {
+        ...process.env,
+        npm_config_cache: npmCache,
+        npm_config_update_notifier: 'false',
+      },
+    },
+  );
+  const results = JSON.parse(stdout);
+  assert.ok(Array.isArray(results) && results.length === 1);
+  const manifest = results[0];
+  return {
+    manifest,
+    tarballPath: path.join(root, manifest.filename),
+  };
+}
+
+const packageSpec = parsePackageSpec();
+const packageMetadata = readJson(path.join(REPO_ROOT, 'package.json'));
+const exactPublishedSpec = `${PACKAGE_NAME}@${packageMetadata.version}`;
+if (packageSpec !== null && packageSpec !== exactPublishedSpec) {
+  throw new TypeError(
+    `Magnetic acceptance requires the exact package spec ${exactPublishedSpec}.`,
+  );
+}
+
+const proofRoot = mkdtempSync(path.join(os.tmpdir(), PROOF_PREFIX));
+const unpackedRoot = path.join(proofRoot, 'unpacked-package');
+const starterRoot = path.join(proofRoot, 'hello-world');
+const npmCache = path.join(proofRoot, 'npm-cache');
+let localPackage;
+
+try {
+  const packed =
+    packageSpec === null
+      ? (localPackage = createPackageTarball())
+      : packPublishedDependency(packageSpec, proofRoot, npmCache);
+  assert.equal(packed.manifest.name, PACKAGE_NAME);
+  assert.equal(packed.manifest.version, packageMetadata.version);
+  assert.equal(lstatSync(packed.tarballPath).isFile(), true);
+
+  mkdirSync(unpackedRoot);
+  await extractTarball({
+    cwd: unpackedRoot,
+    file: packed.tarballPath,
+    strict: true,
+  });
+  const packedStarterRoot = path.join(
+    unpackedRoot,
+    'package',
+    'examples',
+    'hello-world',
+  );
+  cpSync(packedStarterRoot, starterRoot, {
+    recursive: true,
+    errorOnExist: true,
+    force: false,
+  });
+
+  const starterMetadataPath = path.join(starterRoot, 'package.json');
+  const starterMetadataBefore = readFileSync(starterMetadataPath, 'utf8');
+  const starterMetadata = JSON.parse(starterMetadataBefore);
+  assert.equal(
+    starterMetadata.devDependencies?.[PACKAGE_NAME],
+    packageMetadata.version,
+    'the copied starter must pin the exact Wharfie preview version',
+  );
+
+  const installArgs =
+    packageSpec === null
+      ? [
+          'install',
+          '--no-audit',
+          '--no-fund',
+          '--no-save',
+          '--package-lock=false',
+          packed.tarballPath,
+        ]
+      : ['install', '--no-audit', '--no-fund'];
+  process.stdout.write(
+    packageSpec === null
+      ? `Installing ${PACKAGE_NAME}@${packageMetadata.version} from one packed tarball\n`
+      : `Running the copied starter's npm install for ${packageSpec}\n`,
+  );
+  runCommand(NPM_COMMAND, installArgs, {
+    cwd: starterRoot,
+    env: {
+      ...process.env,
+      npm_config_cache: npmCache,
+      npm_config_update_notifier: 'false',
+    },
+  });
+  assert.equal(
+    readFileSync(starterMetadataPath, 'utf8'),
+    starterMetadataBefore,
+    'acceptance installation must not rewrite the copied starter',
+  );
+
+  const installedPackageRoot = path.join(
+    starterRoot,
+    'node_modules',
+    '@wharfie',
+    'wharfie',
+  );
+  const installedMetadata = readJson(
+    path.join(installedPackageRoot, 'package.json'),
+  );
+  assert.equal(installedMetadata.name, PACKAGE_NAME);
+  assert.equal(installedMetadata.version, packageMetadata.version);
+  assert.ok(
+    realpathSync(installedPackageRoot).startsWith(
+      `${realpathSync(starterRoot)}${path.sep}`,
+    ),
+    'the starter resolved Wharfie outside its copied workspace',
+  );
+
+  process.stdout.write('Running the copied magnetic starter\n');
+  runCommand(NPM_COMMAND, ['run', 'demo', '--', 'Ada'], {
+    cwd: starterRoot,
+    env: {
+      ...process.env,
+      NODE_PATH: undefined,
+      WHARFIE_MAGNETIC_ACCEPTANCE_BUILDER_ROOT: starterRoot,
+      npm_config_cache: npmCache,
+      npm_config_update_notifier: 'false',
+    },
+  });
+  process.stdout.write(
+    `Verified magnetic first run with ${packed.manifest.filename}\n`,
+  );
+} finally {
+  localPackage?.cleanup();
+  removeProofRoot(proofRoot);
+}

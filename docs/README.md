@@ -12,21 +12,21 @@ without an architectural rewrite.
 The project is being reset around that goal. Wharfie v1's Athena and table
 framework is no longer part of the product, and breaking changes are expected.
 
-The implementation candidate in the
+The versioned
 [magnetic first-run experience](./product/magnetic-first-run.md) turns that
-product promise into a concrete two-minute teaching sequence: a
+product promise into a concrete two-minute teaching sequence: a complete
 `defineApp({ id, main })` ordinary CLI first, followed by one visible durable
-interruption and repeat-to-resume. An external prototype proves relocation,
-Node-absent execution, `SIGKILL`, and exact-command resumption; release
-acceptance remains open until the complete starter and later-process output
-check are versioned here and run against the published preview.
+interruption and repeat-to-resume. Its copied-starter gate proves relocation,
+builder-source unavailability, Node-absent execution, `SIGKILL`, exact-command
+resumption, and a later-process verified output read against Wharfie's packed
+npm tarball. Release acceptance remains open until the same gate passes against
+the published preview.
 
-The shortest concrete walkthrough is the
-[single-host developer preview](./guides/developer-preview.md): install a
-verified package tarball in a clean builder workspace, copy the supported
-starter, package it as an SEA, and promote that artifact to a Linux service.
-The longer [steady-file golden path](./guides/golden-path.md) covers the full
-source and operator surface.
+The deeper
+[single-host developer preview](./guides/developer-preview.md) installs the
+`steady-file` artifact as a Linux service and exercises its lifecycle. The
+longer [steady-file golden path](./guides/golden-path.md) covers the full source
+and operator surface.
 Contributors should use the
 [development validation guide](./guides/development-validation.md) for the
 authoritative clean-install gates and the exact scope and exit condition of

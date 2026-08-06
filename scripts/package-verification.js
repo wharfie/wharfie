@@ -18,6 +18,19 @@ export const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 export const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const REQUIRED_PREVIEW_FILES = Object.freeze([
   'examples/README.md',
+  'examples/hello-world/README.md',
+  'examples/hello-world/app/hello.js',
+  'examples/hello-world/app/local.js',
+  'examples/hello-world/app/wharfie.app.js',
+  'examples/hello-world/package.json',
+  'examples/hello-world/playground/README.md',
+  'examples/hello-world/scripts/demo.js',
+  'examples/hello-world/showcase/resumable-hello/README.md',
+  'examples/hello-world/showcase/resumable-hello/app/hello.js',
+  'examples/hello-world/showcase/resumable-hello/app/local.js',
+  'examples/hello-world/showcase/resumable-hello/app/wharfie.app.js',
+  'examples/hello-world/showcase/resumable-hello/test/hello.test.js',
+  'examples/hello-world/test/hello.test.js',
   'examples/steady-file/README.md',
   'examples/steady-file/activities.js',
   'examples/steady-file/cli.js',
@@ -196,6 +209,25 @@ export function assertPackageContents(manifest) {
     private: true,
     type: 'module',
   });
+  const helloMetadata = readJson(
+    path.join(REPO_ROOT, 'examples', 'hello-world', 'package.json'),
+  );
+  assert.equal(helloMetadata.name, 'wharfie-hello-world-demo');
+  assert.equal(helloMetadata.version, '0.0.0');
+  assert.equal(helloMetadata.private, true);
+  assert.equal(helloMetadata.type, 'module');
+  assert.deepEqual(helloMetadata.engines, { node: '>=24.13.1 <25' });
+  assert.equal(
+    Object.hasOwn(helloMetadata, 'packageManager'),
+    false,
+    'the consumer starter must not require an exact npm patch',
+  );
+  assert.equal(
+    helloMetadata.devDependencies?.['@wharfie/wharfie'],
+    packageMetadata.version,
+    'magnetic starter must pin the exact Wharfie package version',
+  );
+  assert.equal(helloMetadata.scripts?.demo, 'node ./scripts/demo.js');
 
   for (const relativePath of [
     'apps/wharfie-v1',

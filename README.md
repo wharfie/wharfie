@@ -26,27 +26,31 @@ The product goal is continuity:
 
 No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes cluster, or hosted orchestration service should be required on the target machine.
 
-The shortest product-level walkthrough is the
-[single-host developer preview](docs/guides/developer-preview.md). Its
+The shortest product moment is now versioned in
+[the hello-world starter](examples/hello-world/README.md). It begins with the
+complete `defineApp({ id, main })` application, then packages a separate
+resumable greeting, kills its foreground durable run, repeats the identical
+command, and verifies the retained terminal result from a later process. The
+repository gate copies that starter and installs only Wharfie's packed npm
+tarball, then hides the copied builder before relocated execution:
+
+```bash
+npm run verify:magnetic-first-run
+```
+
+This is release-candidate evidence, not a published-install claim; final
+acceptance still requires the same gate to pass against the published preview.
+The deeper [single-host developer preview](docs/guides/developer-preview.md)
+and its
 [accepted split builder/clean-target checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md)
-is the strongest current product evidence: unfinished durable work crosses an
-initiating-controller exit on a clean no-Node target. Its result remains
-inspectable through update, rollback, and uninstall; explicit purge then removes
-the application root and completes proof-owned cleanup. The full
-[steady-file golden path](docs/guides/golden-path.md) covers a useful local file
-comparison CLI, the same logic carried through two observations separated by a
-durable timer and a portable control-store reopen, and a verified retained
-result. Its hermetic proof stops before native LMDB, SEA construction, systemd,
-and cloud execution. A separate
-[checksummed Darwin observation](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md)
-runs the source LMDB resident and generated SEA. A
-[checksummed disposable-Ubuntu arm64 walkthrough](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md)
-now joins the literal source and packaged CLI, default durable start, systemd
-install, later-process history/output reads, meaningful update, rollback,
-uninstall, and VM cleanup with Node absent from the packaged command `PATH`.
-The separate
-[service-substrate proof](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
-covers crash and reboot recovery with a purpose-built fixture.
+cover service installation, unfinished work across controller exit, update,
+rollback, uninstall, purge, and proof-owned cleanup. The full
+[steady-file golden path](docs/guides/golden-path.md) covers the corresponding
+application and operator boundaries. Separate
+[Darwin SEA](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md),
+[Ubuntu systemd](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md),
+and [service-substrate](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
+proofs retain the deeper native, crash, and reboot evidence.
 
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service
