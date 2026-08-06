@@ -58,6 +58,7 @@
     "src/core/**",
     "src/cli/**",
     "examples/README.md",
+    "examples/hello-world/",
     "examples/steady-file/"
   ],
   "scripts": {
@@ -78,6 +79,7 @@
     "lint": "npm run lint:js",
     "lint:fix": "eslint --max-warnings=0 --fix . && prettier --write \"{*,**/*}.{js,json}\"",
     "verify:package": "node ./scripts/verify-package-contents.js",
+    "verify:magnetic-first-run": "node ./scripts/verify-magnetic-first-run.js",
     "verify:package:sea": "node ./scripts/verify-package-sea.js",
     "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
     "verify:steady-file:systemd:lima": "./scripts/run-steady-file-preview-lima.sh",
@@ -133,6 +135,23 @@
       "coverage/"
     ],
     "overrides": [
+      {
+        "files": [
+          "examples/hello-world/**"
+        ],
+        "rules": {
+          "jsdoc/require-jsdoc": 0
+        }
+      },
+      {
+        "files": [
+          "examples/hello-world/**/wharfie.app.js"
+        ],
+        "rules": {
+          "import/no-unresolved": 0,
+          "n/no-missing-import": 0
+        }
+      },
       {
         "files": [
           "test/**"

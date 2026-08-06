@@ -27,3 +27,18 @@ jobs:
         # Keep portability evidence visible when another validation gate fails.
         if: ${{ always() }}
         run: npm run verify:package:sea
+
+  magnetic-first-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: 'package.json'
+      - name: install pinned npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: verify copied starter against packed Wharfie
+        run: npm run verify:magnetic-first-run
