@@ -12,6 +12,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import JSZip from 'jszip';
 import { extract as _extract } from 'tar';
@@ -99,13 +100,21 @@ function createAtomicTemporaryPath(finalPath) {
  * @property {import('../reconcilable.js').default.Status} [status] - status.
  * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  * @property {NodeBinaryProperties & import('../../actors/typedefs.js').SharedProperties} properties - properties.
+ * @property {(progress: {version: string, downloadedBytes: number, totalBytes: number|null}) => unknown} [onDownloadProgress] - Optional throttled archive download observer.
  */
 
 class NodeBinary extends BaseResource {
   /**
    * @param {NodeBinaryOptions} options - options.
    */
-  constructor({ name, parent, status, dependsOn, properties }) {
+  constructor({
+    name,
+    parent,
+    status,
+    dependsOn,
+    properties,
+    onDownloadProgress,
+  }) {
     const propertiesWithDefaults = Object.assign(
       {
         version: '23',
@@ -119,6 +128,8 @@ class NodeBinary extends BaseResource {
       dependsOn,
       properties: propertiesWithDefaults,
     });
+    this.onDownloadProgress =
+      typeof onDownloadProgress === 'function' ? onDownloadProgress : undefined;
   }
 
   /**
@@ -360,10 +371,59 @@ class NodeBinary extends BaseResource {
       throw new Error(`Unexpected content-type '${contentType}' from ${url}`);
     }
 
+    const reportProgress = this.onDownloadProgress;
+    if (!reportProgress) {
+      await pipeline(
+        response,
+        createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 }),
+      );
+      return;
+    }
+
+    const contentLengthHeader = response.headers['content-length'];
+    const parsedContentLength = Number(
+      Array.isArray(contentLengthHeader)
+        ? contentLengthHeader[0]
+        : contentLengthHeader,
+    );
+    const totalBytes =
+      Number.isSafeInteger(parsedContentLength) && parsedContentLength >= 0
+        ? parsedContentLength
+        : null;
+    const version = await this.getExactVersion();
+    let downloadedBytes = 0;
+    let lastReportedBytes = 0;
+    const reportInterval = totalBytes
+      ? Math.max(1024 * 1024, Math.ceil(totalBytes / 10))
+      : 5 * 1024 * 1024;
+    reportProgress({ version, downloadedBytes, totalBytes });
+    const progressStream = new Transform({
+      transform(chunk, _encoding, callback) {
+        downloadedBytes += chunk.length;
+        const complete = totalBytes !== null && downloadedBytes >= totalBytes;
+        try {
+          if (
+            complete ||
+            downloadedBytes - lastReportedBytes >= reportInterval
+          ) {
+            lastReportedBytes = downloadedBytes;
+            reportProgress({ version, downloadedBytes, totalBytes });
+          }
+          callback(null, chunk);
+        } catch (error) {
+          callback(/** @type {Error} */ (error));
+        }
+      },
+    });
+
     await pipeline(
       response,
+      progressStream,
       createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 }),
     );
+    if (downloadedBytes !== lastReportedBytes) {
+      reportProgress({ version, downloadedBytes, totalBytes });
+    }
   }
 
   /**

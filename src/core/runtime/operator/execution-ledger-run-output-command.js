@@ -280,7 +280,7 @@ function projectTerminal(value, status, runKind) {
  * @param {{appId: string, runId: string}} request - Exact requested scope.
  * @returns {{scope: Record<string, any>, snapshot: Record<string, any>, outputs: Record<string, any>[], terminal: Record<string, any> | null}} - Strict public data.
  */
-function projectRunOutput(raw, request) {
+export function projectExecutionLedgerRunOutput(raw, request) {
   const value = cloneBoundedJsonObject(
     raw,
     EXECUTION_LEDGER_RUN_OUTPUT_MAX_BYTES,
@@ -479,7 +479,7 @@ export function createExecutionLedgerRunOutputCommand(options) {
         });
         const raw = await readOutput(request);
         if (raw === null) throw new TypeError(INVALID_OUTPUT);
-        const projected = projectRunOutput(raw, request);
+        const projected = projectExecutionLedgerRunOutput(raw, request);
         const publicOutput = deepFreezeJson(
           cloneBoundedJsonObject(
             {

@@ -179,6 +179,59 @@ describe('Wharfie app loader', () => {
     });
   });
 
+  it('loads defineApp shorthand through the unchanged strict v4 compiler', async () => {
+    const appApiUrl = new URL('../../../src/app.js', import.meta.url).href;
+    await writeModule(`
+      import { defineApp } from ${JSON.stringify(appApiUrl)};
+      export default defineApp({
+        id: 'shorthand-source',
+        main: './src/cli.js',
+        durable: 'greet-later',
+        activityModule: './src/greet.js',
+        activities: { greet: {} },
+        workflows: {
+          'greet-later': {
+            steps: [{
+              id: 'greet',
+              kind: 'activity',
+              activity: 'greet',
+              input: { kind: 'workflow-input' },
+            }],
+          },
+        },
+      });
+    `);
+
+    await expect(loadApp({ dir: appDir })).resolves.toEqual({
+      appDir,
+      manifest: {
+        schemaVersion: 4,
+        app: { id: 'shorthand-source' },
+        cli: {
+          entrypoint: { kind: 'node', path: 'src/cli.js', export: 'main' },
+          durable: { workflow: 'greet-later', export: 'toDurableInput' },
+        },
+        activities: {
+          greet: {
+            entrypoint: { kind: 'node', path: 'src/greet.js', export: 'greet' },
+          },
+        },
+        workflows: {
+          'greet-later': {
+            steps: [
+              {
+                id: 'greet',
+                kind: 'activity',
+                activity: 'greet',
+                input: { kind: 'workflow-input' },
+              },
+            ],
+          },
+        },
+      },
+    });
+  });
+
   it('keeps the durable CLI handoff optional', async () => {
     const source = makeValidSource();
     delete source.cli.durable;

@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-07-29
+**Last updated:** 2026-08-01
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -25,10 +25,12 @@ to the intended experience.
 
 The repository has substantial foundations:
 
-- a TypeScript/Node application and operator model with strict manifests and
-  immutable revisions;
+- a TypeScript/Node application and operator model with strict manifests,
+  immutable revisions, and a compact `defineApp({ id, main })` authoring path;
 - Node SEA packaging with content-addressed receipts and a reserved packaged
   operator namespace;
+- exact compatible-host inference for targetless manifests, with a human-first
+  package handoff by default and the unchanged v1 receipt behind `--json`;
 - a durable run, invocation, attempt, effect, workflow, timer, signal, and
   schedule ledger;
 - an opt-in per-application coordinator-authority kernel co-located with that
@@ -39,6 +41,11 @@ The repository has substantial foundations:
   effect semantics;
 - source and packaged commands for durable submission, workers, history,
   redacted inspection, confirmed logs, and confirmed logical output;
+- a named packaged foreground workflow command that can be interrupted and
+  resumed by repeating the same invocation, while direct packaged activity
+  execution lives under `activity run`;
+- one `WHARFIE_DATA_ROOT` for every packaged durable store and lazy native
+  runtime preparation that keeps ordinary application argv on the light path;
 - the `steady-file` golden-path application and a hermetic proof of ordinary
   CLI execution, sealed source preparation, durable activity/timer/activity
   continuation across a control-store reopen, and verified retained output,
@@ -82,6 +89,22 @@ started as a persistent service, given durable work, restarted, inspected, and
 updated without being rewritten around a hosted orchestrator, containers, or a
 second application architecture.
 
+### Experience quality bar
+
+The implemented surface in the
+[magnetic first-run experience](docs/product/magnetic-first-run.md) defines the
+teaching sequence for this outcome. A deliberately tiny canonical application
+answers "What is a Wharfie application?" A separate polished showcase answers
+"Why Wharfie?" by packaging ordinary JavaScript, interrupting durable work after
+one committed step, and resuming it from the standalone artifact without
+repeating that step. An external prototype exercises that path in under
+30 seconds on Darwin arm64, including relocated Node-absent execution and an
+abrupt process kill. Release acceptance remains open until the starter and
+complete retained-output gate are versioned here and run against the published
+preview. The target remains one obvious journey that finishes in under two
+minutes after prerequisites, with experimental machinery outside the beginner
+path.
+
 ### What is already concrete
 
 - Authored argv remains application-owned; `<app> wharfie <command>` is the
@@ -92,6 +115,15 @@ second application architecture.
 - A manifest can name one default durable workflow and a pure CLI-argument
   adapter, so the happy path does not require a workflow ID or handwritten
   JSON input.
+- `defineApp({ id, main })` expands the smallest ordinary CLI into the strict v4
+  manifest while the explicit form remains available.
+- A targetless package request selects one exact host artifact and defaults to
+  a human phase/target/path/size/`Next:` handoff; scripts opt into `--json`.
+- Packaged `wharfie run --name <name> -- <args>` starts or reopens the default
+  durable workflow, hosts or follows it in the foreground, and drains without
+  cancellation on interruption. Direct activity execution is `activity run`.
+- Packaged storage derives from one `WHARFIE_DATA_ROOT`, and ordinary argv
+  avoids native durable-runtime preparation.
 - Packaged artifacts can run without Node on the target command path.
 - The local service lifecycle supports install, converge, restart, update,
   rollback, recover, status, prune, and uninstall.
@@ -100,12 +132,15 @@ second application architecture.
 
 ### Work next
 
-1. Keep the split builder/clean-target `steady-file` acceptance proof as the
+1. Version the magnetic copied starter and complete harness as a release
+   regression gate.
+2. Reduce the beginner-path weight: the current install expands to 202 npm
+   packages (about 138 MB) and the Darwin arm64 artifact is 119 MiB.
+3. Keep the split builder/clean-target `steady-file` acceptance proof as the
    regression gate for this outcome.
-2. Carrying a returned run ID was visible friction but did not block the
-   sequence. Change discovery or app-scope ergonomics only when real use
-   demands it.
-3. Add schedule, application state, broader workflow behavior, or more
+4. Preserve the irreducible canonical hello-world app and keep failure probes,
+   provenance mechanics, and experiments in the labeled playground.
+5. Add schedule, application state, broader workflow behavior, or more
    single-host service surface only when a concrete application needs it.
 
 ### Exit evidence

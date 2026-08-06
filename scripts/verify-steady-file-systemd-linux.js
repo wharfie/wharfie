@@ -626,6 +626,7 @@ function packageSteadyFileArtifacts() {
         outputDirectory,
         '--target',
         target,
+        '--json',
         '--no-pretty',
       ],
       { cwd: consumerRoot, env: process.env, timeoutMs: 600_000 },

@@ -6,7 +6,7 @@ import path from 'node:path';
 import WharfieFunction from '../resources/builds/function.js';
 import FunctionResource from '../resources/builds/function-resource.js';
 import { validateAppManifest } from './app-manifest.js';
-import { getBuildTargetId, validateBuildTarget } from './build-target.js';
+import { getBuildTargetId } from './build-target.js';
 import {
   compareCanonicalStrings,
   sortCanonicalJsonValue,
@@ -23,6 +23,7 @@ import {
 } from './activity-protocol.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
+import { getHostBuildTarget } from './host-build-target.js';
 import { validateEmbeddedRevisionRuntimePair } from '../resources/builds/lib/revision-runtime-assets.js';
 
 /**
@@ -86,43 +87,7 @@ function hasSameCanonicalJson(left, right) {
  * @returns {{ nodeVersion: string, platform: 'darwin'|'linux'|'win32', architecture: 'arm64'|'x64', libc?: 'glibc' }} - Exact canonical host target.
  */
 export function getHostSourceBuildTarget(overrides = {}) {
-  const nodeVersion = overrides.nodeVersion ?? process.versions.node;
-  const platform = overrides.platform ?? process.platform;
-  const architecture = overrides.architecture ?? process.arch;
-  let glibcVersionRuntime;
-
-  if (platform === 'linux') {
-    if (
-      Object.prototype.hasOwnProperty.call(overrides, 'glibcVersionRuntime')
-    ) {
-      glibcVersionRuntime = overrides.glibcVersionRuntime;
-    } else {
-      try {
-        const report = /** @type {any} */ (process.report?.getReport?.());
-        glibcVersionRuntime = report?.header?.glibcVersionRuntime;
-      } catch {
-        glibcVersionRuntime = undefined;
-      }
-    }
-    if (
-      typeof glibcVersionRuntime !== 'string' ||
-      !glibcVersionRuntime.trim()
-    ) {
-      throw new Error(
-        'Source external execution on Linux requires a positively identified glibc host; musl and unknown libc hosts are not supported.',
-      );
-    }
-  }
-
-  return validateBuildTarget(
-    {
-      nodeVersion,
-      platform,
-      architecture,
-      ...(platform === 'linux' ? { libc: 'glibc' } : {}),
-    },
-    'source host target',
-  );
+  return getHostBuildTarget(overrides);
 }
 
 /**

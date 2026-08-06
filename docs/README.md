@@ -12,6 +12,15 @@ without an architectural rewrite.
 The project is being reset around that goal. Wharfie v1's Athena and table
 framework is no longer part of the product, and breaking changes are expected.
 
+The implementation candidate in the
+[magnetic first-run experience](./product/magnetic-first-run.md) turns that
+product promise into a concrete two-minute teaching sequence: a
+`defineApp({ id, main })` ordinary CLI first, followed by one visible durable
+interruption and repeat-to-resume. An external prototype proves relocation,
+Node-absent execution, `SIGKILL`, and exact-command resumption; release
+acceptance remains open until the complete starter and later-process output
+check are versioned here and run against the published preview.
+
 The shortest concrete walkthrough is the
 [single-host developer preview](./guides/developer-preview.md): install a
 verified package tarball in a clean builder workspace, copy the supported
@@ -27,7 +36,8 @@ each deliberate exclusion.
 
 1. Write and run a normal TypeScript or JavaScript CLI locally.
 2. Declare named activities that can be run and observed durably.
-3. Package the application as a Node SEA executable for a specific target.
+3. Package the application as a Node SEA executable for this host or an
+   explicit target.
 4. Promote that executable to a persistent single-node service.
 5. Enroll more trusted nodes when placement or recovery requires them.
 
@@ -77,6 +87,23 @@ activity/timer/signal workflow plans. Source `wharfie ops signal` and packaged
 caller-stable delivery ID. The shared exact-run inspection, confirmed recovery,
 cancellation, and evidence-reconciliation commands understand the redacted
 activation-aware workflow cursor.
+For an application with a default durable CLI handoff, packaged top-level
+`<app> wharfie run --name <stable-name> -- <application-args>` starts or reopens
+the named workflow. It temporarily hosts the worker when no resident is active,
+follows an existing matching resident otherwise, and reports verified retained
+output through completion. Interruption drains without cancelling durable work
+and prints the exact command to repeat. Packaged `start` remains admission-only,
+and `worker` remains the long-lived resident; expert direct activity execution
+has moved to `<app> wharfie activity run`.
+
+All packaged stores derive from one app-scoped layout. A foreground caller can
+set the single absolute `WHARFIE_DATA_ROOT`; combining it with legacy split-store
+overrides fails closed, and the systemd service pins that same variable to its
+active packaged layout. Without an explicit root, packaged storage uses the
+stable operating-system account default. Ordinary application argv also skips
+native durable-runtime preparation, which is lazy on the reserved
+Wharfie/private path.
+
 The separate source/packaged `logs` command can disclose one exact physical
 attempt's fully verified retained log prefix after explicit sensitive-output
 confirmation. Its raw schema is deliberately non-authoritative and
@@ -127,20 +154,30 @@ wharfie ops signal --run-id <run-id> --signal <signal-step-id> \
 wharfie app package ./path/to/app
 ```
 
-The package command writes one schema-version 1
-`wharfie.application.package` JSON receipt. Its target-sorted `artifacts`
+For a targetless manifest with no filter, the package command infers the exact
+compatible host target from the running Node version, platform, architecture,
+and glibc on Linux. Its default human output reports build phases, exact target,
+artifact path, size, and an actionable `Next:` step. Matching POSIX hosts get
+a copy-pasteable command; Windows gets a shell-neutral instruction.
+
+`--json` writes the unchanged schema-version 1
+`wharfie.application.package` machine receipt. Its target-sorted `artifacts`
 contain the content-addressed identity, exact target, digest, size, and
 immediate local executable and sidecar paths. It omits the full internal
 revision and artifact records. Those paths and the receipt provide local
 discovery, not authority: the executable bytes, canonical sidecar, and embedded
 revision association must still verify together.
 
-The packaged equivalents are `<app> wharfie submit ...`, `<app> wharfie start
-...`, `<app> wharfie worker`, and `<app> wharfie signal ...`; they are bound to
-the manifest and revision embedded in that artifact and do not accept `--dir`.
+The packaged namespace includes `<app> wharfie run --name <name> -- <args>`,
+`<app> wharfie activity run ...`, `<app> wharfie submit ...`, `<app> wharfie
+start ...`, `<app> wharfie worker`, and `<app> wharfie signal ...`. These
+commands are bound to the manifest and revision embedded in that artifact and
+do not accept `--dir`.
+
 Signal delivery accepts only the current wait. `early-signal`,
 `unexpected-signal`, and `late-signal` are durable, exactly replayable
-rejections rather than a buffered inbox. Exact-run `inspect --json` emits the shared schema-v8 redacted trigger,
+rejections rather than a buffered inbox. Exact-run `inspect --json` emits the
+shared schema-v8 redacted trigger,
 activation-aware cursor, timer, signal-wait, and signal-delivery lifecycle;
 confirmed `recover` and evidence-backed `reconcile` use the same safe view.
 

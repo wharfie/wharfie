@@ -18,27 +18,45 @@ Use the exact Node version in `package.json#engines` and the npm version in
 the project reset. The examples below use `wharfie` as shorthand for
 `node ./bin/wharfie` from the repository root.
 
-For the shortest supported product walkthrough, start with the
-[single-host developer preview](./developer-preview.md). Its installed starter
-runs as an ordinary CLI, packages as an SEA, and uses the same fingerprinting
-logic in a durable activity/timer/activity workflow. The longer
+The [magnetic first-run](../product/magnetic-first-run.md) defines the intended
+shortest product journey. Until its canonical starter is versioned here, the
+[single-host developer preview](./developer-preview.md) is the runnable,
+advanced walkthrough. It packages an SEA and exercises a durable
+activity/timer/activity workflow. The longer
 [golden-path guide](./golden-path.md) records the current command and evidence
-boundaries. A clean Ubuntu walkthrough already proves the same-host packaged
-service lifecycle, and the
+boundaries. A clean Ubuntu walkthrough proves the same-host packaged service
+lifecycle, and the
 [accepted split builder/clean-target proof](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md)
 closes the preview milestone with unfinished work at caller exit, explicit
 purge, and complete cleanup.
 
 ## Create an app
 
-Create a `wharfie.app.js` beside your TypeScript or JavaScript sources. The
-manifest identifies the developer-owned CLI, named activities, workflows,
-schedules, and package targets. Its default export must be a plain object using
-the exact v4 schema; unknown or malformed fields are errors. Wharfie does not
-require a generated project tree. See [Application
-Structure](./application-structure.md) for a minimal layout. The
-`@wharfie/wharfie/app` subpath ships TypeScript declarations for the manifest
-helper and activity invocation API.
+Create an ordinary module with a named `main` export:
+
+```js
+export function main(argv = process.argv) {
+  process.stdout.write(`Hello, ${argv[2] || 'world'}!\n`);
+}
+```
+
+Then point a `wharfie.app.js` manifest at it:
+
+```js
+import { defineApp } from '@wharfie/wharfie/app';
+
+export default defineApp({
+  id: 'hello-world',
+  main: './hello.js',
+});
+```
+
+That is the complete beginner-facing manifest. `defineApp()` expands the
+mechanical boilerplate into the strict v4 contract, while unknown or malformed
+fields still fail closed. Wharfie does not require a generated project tree.
+See [Application Structure](./application-structure.md) for the minimal layout.
+The `@wharfie/wharfie/app` subpath ships TypeScript declarations for this
+helper and the activity invocation API.
 
 Activity definitions do not accept `environmentVariables`. Current local
 execution has no per-activity environment boundary, and portable artifacts must
@@ -46,7 +64,9 @@ not embed per-activity environment values in manifests. Supply runtime
 configuration to the process environment until Wharfie has first-class portable
 configuration and secret references.
 
-Every Node entrypoint declares its export explicitly:
+When the application needs named activities, workflows, schedules, or
+cross-target packaging, use the expanded v4 shape. Every Node entrypoint then
+declares its export explicitly:
 
 ```js
 import { defineApp } from '@wharfie/wharfie/app';
@@ -382,10 +402,14 @@ The unit location is fixed to the account's `~/.config/systemd/user`; custom
 `XDG_CONFIG_HOME` topology is rejected, installation verifies the live
 manager's search path, and unit-name mutations require an exact, non-stale
 effective fragment without drop-ins. Packaged durable state is likewise fixed
-to the operating-system account's data root rather than ambient
-`XDG_DATA_HOME` or `HOME`. Uninstall disables the unit and removes the
-executable selector while preserving immutable releases, ledger data, payloads,
-and application state. It retains both an installation identity tombstone and
+to one root rather than ambient `XDG_DATA_HOME` or `HOME`. By default that
+is the operating-system account's stable data root. Set
+`WHARFIE_DATA_ROOT` to a canonical absolute path to choose an explicit root;
+use that same value for every foreground and service-management invocation,
+and the generated unit pins it for the resident. Retired per-store overrides
+are rejected. Uninstall disables the unit and removes the executable selector
+while preserving immutable releases, ledger data, payloads, and application
+state. It retains both an installation identity tombstone and
 the durable `ACTIVE` selection, rollback candidate, and same-revision run
 admission. Run `service install` again from that same selected SEA to rehydrate
 the service without changing activation record version or selection generation.
@@ -780,8 +804,16 @@ commands keep their smaller request default.
 
 ## Package the app
 
-Packaging requires at least one target. Targets use a complete Node version
-and one supported platform/architecture pair:
+For the shortest local path, omit `targets`: packaging selects the exact host
+target and prints a concise result with an actionable next step. On POSIX hosts
+that step is a copy-pasteable command; Windows output stays shell-neutral:
+
+```bash
+wharfie app package ./path/to/app
+```
+
+Declare targets when producing artifacts for other machines. Targets use a
+complete Node version and one supported platform/architecture pair:
 
 ```js
 targets: [
@@ -796,23 +828,24 @@ targets: [
 
 ```bash
 wharfie app package ./path/to/app --target linux-x64 \
-  --no-pretty > package-receipt.json
+  --json --no-pretty > package-receipt.json
 ```
 
 Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
 
-Success writes exactly one schema-version 1
-`wharfie.application.package` JSON receipt. Its `artifacts` are sorted by exact
-target and include each content-addressed artifact ID, target, SHA-256 digest,
-byte size, local executable path, and adjacent artifact-record path. The full
-application revision and artifact provenance records remain out of command
-output.
+By default, success writes a human summary. With `--json`, it writes exactly
+one schema-version 1 `wharfie.application.package` JSON receipt. Its
+`artifacts` are sorted by exact target and include each content-addressed
+artifact ID, target, SHA-256 digest, byte size, local executable path, and
+adjacent artifact-record path. The full application revision and artifact
+provenance records remain out of command output.
 
-Ordinary manifest/build diagnostics and Wharfie-owned build-tool output go to
-stderr, leaving redirected stdout as only the receipt. App code is trusted and
-not sandboxed; authored code that deliberately writes directly to file
-descriptor 1 or leaves stdout-producing work unawaited violates this command
+With `--json`, ordinary manifest/build diagnostics and Wharfie-owned
+build-tool output go to stderr, leaving redirected stdout as only the receipt.
+App code is trusted and not sandboxed; authored code that deliberately writes
+directly to file descriptor 1 or leaves stdout-producing work unawaited
+violates this command
 contract.
 
 For an immediate handoff on the matching Linux/systemd host where packaging

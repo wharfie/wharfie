@@ -578,6 +578,7 @@ describe('packaged application dispatch', () => {
   it('honors the private ledger-service runtime command and arguments', async () => {
     const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
     const parseAsync = jest.fn(async (_argv, _options) => undefined);
+    const prepareRuntime = jest.fn(async () => undefined);
     const loadDeveloperCliModule = jest.fn(async () => ({
       default: jest.fn(),
     }));
@@ -590,6 +591,7 @@ describe('packaged application dispatch', () => {
       runtimeModules: {
         'ledger-service': { parseAsync },
       },
+      prepareRuntime,
       argv: ['node', 'wharfie-artifact'],
     });
 
@@ -598,6 +600,7 @@ describe('packaged application dispatch', () => {
       { from: 'node' },
     );
     expect(loadDeveloperCliModule).not.toHaveBeenCalled();
+    expect(prepareRuntime).toHaveBeenCalledTimes(1);
   });
 
   it('does not let retired bootstrap variables hijack application argv', async () => {
@@ -736,13 +739,15 @@ describe('packaged application dispatch', () => {
     const loadDeveloperCliModule = jest.fn(async () => ({
       default: developerCli,
     }));
+    const prepareRuntime = jest.fn(async () => undefined);
     const argv = ['node', 'wharfie-artifact', 'serve'];
     clearRuntimeEnvironment();
 
-    await runPackagedApp({ loadDeveloperCliModule, argv });
+    await runPackagedApp({ loadDeveloperCliModule, prepareRuntime, argv });
 
     expect(loadDeveloperCliModule).toHaveBeenCalledTimes(1);
     expect(developerCli).toHaveBeenCalledWith(argv);
+    expect(prepareRuntime).not.toHaveBeenCalled();
   });
 
   it('isolates developer CLI loader failures from runtime and operator dispatch', async () => {

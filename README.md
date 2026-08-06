@@ -51,11 +51,18 @@ covers crash and reboot recovery with a purpose-built fixture.
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service
 startup uses a private environment-selected runtime command instead of
-consuming public commands.
+consuming public commands. Ordinary argv also avoids preparing Wharfie's native
+durable runtime; native preparation is lazy and occurs only for the reserved
+operator or private-runtime path.
 
-Successful `wharfie app package` now emits one strict schema-version 1
-`wharfie.application.package` receipt. It binds the application and revision
-to a target-sorted list of content-addressed SEA identities, byte digests,
+For a targetless manifest, `wharfie app package` now infers the exact compatible
+host target from the running Node version, platform, architecture, and glibc on
+Linux. Its default output is a human handoff: build phases, target, artifact
+path, size, and an actionable `Next:` step. Matching POSIX hosts receive an
+exact shell command; Windows avoids pretending cmd.exe and PowerShell share
+quoting rules. Machine callers opt into the unchanged
+strict schema-version 1 `wharfie.application.package` receipt with `--json`.
+That target-sorted receipt binds content-addressed SEA identities, byte digests,
 sizes, and immediate local artifact/sidecar paths without exposing the full
 internal revision or provenance records. The receipt and its paths are
 discovery data, not artifact authority; verification still depends on the SEA
@@ -86,11 +93,18 @@ one frozen target dependency closure instead of ambient `node_modules` or a
 newly resolved npm tree. Exact-run inspection, confirmed recovery, and
 authenticated current-owner cancellation use one shared source/SEA operator
 layer; packaged commands bind authority to their embedded application identity.
-Source `wharfie ops run` and packaged `<app> wharfie run` now also use one
+Source `wharfie ops run` and packaged `<app> wharfie activity run` use one
 durable activity host. The source adapter supplies a sealed prepared revision;
 the packaged adapter accepts only its cross-checked embedded manifest and
 revision/runtime pair and exposes no source-directory override. Operator and
 private runtime dispatch choose their path before authored CLI code is loaded.
+The packaged top-level `<app> wharfie run --name <stable-name> --
+<application-args>` is instead the foreground durable-workflow path. The stable
+name selects one run, so repeating the same command resumes it, reports retained
+steps without rerunning them, and follows its verified output to completion.
+`SIGINT` and `SIGTERM` drain the foreground host without cancelling durable
+work and print the exact resume command. Packaged `start` remains
+admission-only, and `worker` remains the explicit long-lived resident.
 
 That host now supports durable submission separately from execution. Source
 `wharfie ops submit` and packaged `<app> wharfie submit` persist an exact
@@ -807,7 +821,22 @@ public command surface. Older material under `llm/design/` can be stale.
 ## Current application contract
 
 A source application is a default-exported plain object in `wharfie.app.js`.
-The v4 boundary is deliberately small and strict:
+For the smallest ordinary CLI, `defineApp()` expands this shorthand into the
+strict v4 contract:
+
+```js
+import { defineApp } from '@wharfie/wharfie/app';
+
+export default defineApp({
+  id: 'hello-world',
+  main: './hello.js',
+});
+```
+
+The shorthand also supports one default durable workflow, a shared
+activity module, activities, workflows, schedules, and optional package
+targets. Authors who need the complete surface can supply the fully explicit v4
+shape; `defineApp()` preserves that object unchanged:
 
 ```js
 import { defineApp } from '@wharfie/wharfie/app';
@@ -928,6 +957,9 @@ A packaged application exposes the same operations without a source-directory
 override:
 
 ```bash
+<app> wharfie run --name greet-ada -- Ada
+<app> wharfie activity run --activity greet \
+  --idempotency-key <stable-key> --input '{"name":"Ada"}'
 <app> wharfie submit --activity greet \
   --idempotency-key <stable-key> --input '{"name":"Ada"}'
 <app> wharfie start -- <application-args>
@@ -937,6 +969,22 @@ override:
 <app> wharfie signal --run-id <run-id> --signal <signal-step-id> \
   --delivery-id <stable-delivery-id> --payload '{"approved":true}'
 ```
+
+Top-level `run` is the shortest interactive durable path. It starts or reopens
+the app's declared default workflow, temporarily hosts it when no resident is
+active, follows an existing resident when one is active, and waits for verified
+terminal output. Repeat the same name and application arguments to resume the
+same run. Interrupting the foreground host drains it without creating a durable
+cancellation decision and prints the exact command to resume. Expert direct
+activity execution now lives under `activity run`.
+
+Every packaged path derives its stores from one app-scoped layout. Set the one
+`WHARFIE_DATA_ROOT` environment variable to an absolute directory when a
+foreground invocation needs an explicit root. It cannot be combined with the
+retired per-store environment overrides. A systemd-managed service pins that
+same variable to the active packaged layout, so foreground and resident
+execution keep using the custom root. Without an explicit root, packaged
+storage uses the stable operating-system account default.
 
 `submit` and `start` are durable and do not require a live worker; the worker
 remains a separate resident process. For an application with `cli.durable`,
@@ -1230,8 +1278,10 @@ are deliberately deferred until private runtime extraction has a tested ACL and
 reparse-point design. Moved Darwin SEAs and the clean hosted-Linux verifier
 exercise a real LMDB dependency with Node absent from `PATH`.
 
-Packaged core native dependencies are always extracted into a fresh private
-root; they are never reused as a mutable cache. Normal exit removes that root.
+Ordinary packaged application argv does not prepare Wharfie's core native
+dependencies. Reserved operator and private-runtime paths prepare them lazily
+in a fresh private root; they are never reused as a mutable cache. Normal exit
+removes that root.
 After `SIGKILL`, a successor verifies the same UID/host/boot/process authority
 and removes only roots whose owner is positively dead, with fixed inspection
 and removal budgets. Foreign or uncertain claims are retained, and a large

@@ -115,7 +115,7 @@ function resolveIdempotencyKey(value) {
  * @param {() => Promise<T>} operation - Admission and start operation.
  * @returns {Promise<T>} - Operation result.
  */
-async function withOperatorStdoutReserved(operation) {
+export async function withOperatorStdoutReserved(operation) {
   const originalStdoutWrite = process.stdout.write;
   const stderrWrite = process.stderr.write;
   /** @type {StreamWrite} */
@@ -181,7 +181,7 @@ async function verifyPreparedSourceRuntime(execution) {
  * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, moduleLike: Record<string, any> | null, exportName: string, appArgs: string[]}} options - Adapter invocation.
  * @returns {Promise<any>} - Bounded JSON workflow input.
  */
-async function projectVerifiedDurableCliInput(options) {
+export async function projectVerifiedDurableCliInput(options) {
   let projected;
   let projectionFailed = false;
   /** @type {unknown} */

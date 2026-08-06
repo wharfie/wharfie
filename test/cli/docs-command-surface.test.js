@@ -378,6 +378,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie app package ./path/to/app --target linux-x64',
     );
+    expect(quickstart).toContain('--json --no-pretty > package-receipt.json');
     expect(quickstart).toContain('package-receipt.json');
     expect(quickstart).toContain('receipt.artifactCount');
     expect(quickstart).toContain('receipt.artifacts[0].path');
@@ -569,6 +570,27 @@ describe('docs command surface', () => {
 
     const packagedOperator = createPackagedOperatorProgram();
     expect(packagedOperator.name()).toBe('wharfie');
+    expectCommandShape(findCommand(packagedOperator, 'run'), {
+      name: 'run',
+      arguments: [{ name: 'appArgs', required: false, variadic: true }],
+      options: ['--name'],
+      requiredOptions: ['--name'],
+    });
+    const packagedActivity = findCommand(packagedOperator, 'activity');
+    expectCommandShape(packagedActivity, {
+      name: 'activity',
+      options: [],
+    });
+    expectCommandShape(findCommand(packagedActivity, 'run'), {
+      name: 'run',
+      options: [
+        '--activity',
+        '--input',
+        '--caller-metadata',
+        '--idempotency-key',
+        '--json',
+      ],
+    });
     expectCommandShape(findCommand(packagedOperator, 'start'), {
       name: 'start',
       arguments: [{ name: 'appArgs', required: false, variadic: true }],

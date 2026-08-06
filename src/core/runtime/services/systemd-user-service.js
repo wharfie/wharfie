@@ -10,6 +10,7 @@ import {
 import { validateBuildTarget } from '../build-target.js';
 import { cloneJsonObject } from '../json-value.js';
 import {
+  LOCAL_APP_DATA_ROOT_ENVIRONMENT_VARIABLE,
   LOCAL_APP_EXECUTION_LEDGER_TABLE,
   createLocalAppStorageLayout,
 } from '../local-app-storage.js';
@@ -254,25 +255,12 @@ export function createSystemdUserServiceUnit(input) {
     'Type=exec',
     `ExecStart=${quoteSystemdExecWord(layout.currentArtifact)}`,
     `WorkingDirectory=${systemdPathSetting(layout.stateRoot)}`,
+    environmentDirective(
+      LOCAL_APP_DATA_ROOT_ENVIRONMENT_VARIABLE,
+      layout.dataRoot,
+    ),
     environmentDirective('WHARFIE_RUNTIME_COMMAND', 'ledger-service'),
     environmentDirective('WHARFIE_RUNTIME_ARGS', '[]'),
-    environmentDirective('WHARFIE_CONTROL_ADAPTER', 'lmdb'),
-    environmentDirective('WHARFIE_CONTROL_PATH', layout.controlPath),
-    environmentDirective('WHARFIE_EXECUTION_PAYLOAD_PATH', layout.payloadPath),
-    environmentDirective('WHARFIE_EXECUTION_PAYLOAD_STORE_ID', ''),
-    environmentDirective(
-      'WHARFIE_EXECUTION_LEDGER_TABLE',
-      layout.executionLedgerTable,
-    ),
-    environmentDirective(
-      'WHARFIE_LEDGER_SERVICE_SESSION_PATH',
-      layout.sessionPath,
-    ),
-    environmentDirective('WHARFIE_APPLICATION_STATE_ADAPTER', 'lmdb'),
-    environmentDirective(
-      'WHARFIE_APPLICATION_STATE_PATH',
-      layout.applicationStatePath,
-    ),
     'Restart=on-failure',
     'RestartSec=5s',
     'KillSignal=SIGTERM',

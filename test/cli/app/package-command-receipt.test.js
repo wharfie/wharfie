@@ -31,6 +31,11 @@ const DARWIN_TARGET = Object.freeze({
   platform: 'darwin',
   architecture: 'arm64',
 });
+const WINDOWS_TARGET = Object.freeze({
+  nodeVersion: '24.13.1',
+  platform: 'win32',
+  architecture: 'x64',
+});
 
 /** @template T @param {T} value @returns {T} */
 function clone(value) {
@@ -42,8 +47,11 @@ function digest(value) {
   return { algorithm: 'sha256', value: sha256Base64Url(value) };
 }
 
-/** @param {string} [salt] */
-function makeRevision(salt = 'primary') {
+/**
+ * @param {string} [salt]
+ * @param {boolean} [durable]
+ */
+function makeRevision(salt = 'primary', durable = false) {
   return createApplicationRevision({
     contract: {
       schemaVersion: 4,
@@ -54,6 +62,14 @@ function makeRevision(salt = 'primary') {
           path: 'src/cli.js',
           export: 'main',
         },
+        ...(durable
+          ? {
+              durable: {
+                workflow: 'serve-once',
+                export: 'toDurableInput',
+              },
+            }
+          : {}),
       },
       activities: {
         serve: {
@@ -64,6 +80,22 @@ function makeRevision(salt = 'primary') {
           },
         },
       },
+      ...(durable
+        ? {
+            workflows: {
+              'serve-once': {
+                steps: [
+                  {
+                    id: 'serve',
+                    kind: 'activity',
+                    activity: 'serve',
+                    input: { kind: 'workflow-input' },
+                  },
+                ],
+              },
+            },
+          }
+        : {}),
     },
     inputs: {
       source: {
@@ -111,8 +143,9 @@ function makeProvenance(revision, target) {
  * @param {ReturnType<typeof makeRevision>} revision
  * @param {{nodeVersion: string, platform: string, architecture: string, libc?: string}} target
  * @param {string} contents
+ * @param {string} [outputDir]
  */
-function makeArtifact(revision, target, contents) {
+function makeArtifact(revision, target, contents, outputDir = OUTPUT_DIR) {
   const bytes = Buffer.from(contents, 'utf8');
   const record = createArtifactRecord({
     bytes,
@@ -125,7 +158,7 @@ function makeArtifact(revision, target, contents) {
     target: record.target,
     byteDigest: record.byteDigest,
   });
-  const artifactPath = path.join(OUTPUT_DIR, fileName);
+  const artifactPath = path.join(outputDir, fileName);
 
   return {
     fileName,
@@ -140,17 +173,26 @@ function makeArtifact(revision, target, contents) {
   };
 }
 
-/** @returns {any} */
-function makePackageResult() {
-  const revision = makeRevision();
+/**
+ * @param {boolean} [durable]
+ * @param {string} [outputDir]
+ * @returns {any}
+ */
+function makePackageResult(durable = false, outputDir = OUTPUT_DIR) {
+  const revision = makeRevision('primary', durable);
   return {
     app: { id: APP_ID },
     revision,
     targets: [clone(LINUX_TARGET), clone(DARWIN_TARGET)],
-    outputDir: OUTPUT_DIR,
+    outputDir,
     artifacts: [
-      makeArtifact(revision, LINUX_TARGET, 'linux executable bytes'),
-      makeArtifact(revision, DARWIN_TARGET, 'darwin executable bytes'),
+      makeArtifact(revision, LINUX_TARGET, 'linux executable bytes', outputDir),
+      makeArtifact(
+        revision,
+        DARWIN_TARGET,
+        'darwin executable bytes',
+        outputDir,
+      ),
     ],
   };
 }
@@ -494,6 +536,12 @@ describe('application package command receipt', () => {
     },
     {
       label: 'compact JSON',
+      args: ['fixture-app', '--json', '--no-pretty'],
+      targetFilters: [],
+      pretty: false,
+    },
+    {
+      label: 'backward-compatible compact JSON from bare --no-pretty',
       args: ['fixture-app', '--no-pretty'],
       targetFilters: [],
       pretty: false,
@@ -504,9 +552,13 @@ describe('application package command receipt', () => {
       async (/** @type {Record<string, any>} */ _options) => result,
     );
     const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const readHostTarget = jest.fn(() => {
+      throw new Error('JSON output must not inspect the command host.');
+    });
     const command = createPackageCommand({
       packageApplication,
       writeOutput,
+      readHostTarget,
     });
 
     await command.parseAsync(testCase.args, { from: 'user' });
@@ -518,6 +570,7 @@ describe('application package command receipt', () => {
       targetFilters: testCase.targetFilters,
     });
     expect(writeOutput).toHaveBeenCalledTimes(1);
+    expect(readHostTarget).not.toHaveBeenCalled();
     const output = writeOutput.mock.calls[0][0];
     expect(output.endsWith('\n')).toBe(true);
     expect(JSON.parse(output)).toEqual(createApplicationPackageReceipt(result));
@@ -525,5 +578,163 @@ describe('application package command receipt', () => {
     if (!testCase.pretty) {
       expect(output.slice(0, -1)).not.toContain('\n');
     }
+  });
+  it('writes a concise human summary and durable next command by default', async () => {
+    const result = makePackageResult(true);
+    const packageApplication = jest.fn(
+      async (/** @type {Record<string, any>} */ options) => {
+        options.onProgress({
+          phase: 'build',
+          message: 'Building executable artifacts',
+        });
+        return result;
+      },
+    );
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const writeDiagnostic = jest.fn(
+      (/** @type {string} */ _value) => undefined,
+    );
+    const command = createPackageCommand({
+      packageApplication,
+      writeOutput,
+      writeDiagnostic,
+      readHostTarget: () => ({ ...LINUX_TARGET, nodeVersion: '99.0.0' }),
+    });
+
+    await command.parseAsync(['fixture-app'], { from: 'user' });
+
+    expect(packageApplication).toHaveBeenCalledWith({
+      dir: 'fixture-app',
+      outputDir: undefined,
+      targetFilters: [],
+      onProgress: expect.any(Function),
+    });
+    expect(writeDiagnostic).toHaveBeenCalledWith(
+      '  Building executable artifacts\n',
+    );
+    expect(writeOutput).toHaveBeenCalledTimes(1);
+    const output = writeOutput.mock.calls[0][0];
+    expect(output).toContain(`✓ Packaged ${APP_ID} (2 artifacts)\n`);
+    expect(output).toContain('node24.13.1-linux-x64-glibc');
+    expect(output).toContain('node24.13.1-darwin-arm64');
+    expect(output).toContain(OUTPUT_DIR);
+    expect(output).toMatch(/Next: .* wharfie run --name first-run --\n$/);
+    expect(() => JSON.parse(output)).toThrow();
+  });
+
+  it('hands a non-durable app directly to its packaged artifact', async () => {
+    const result = makePackageResult();
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const command = createPackageCommand({
+      packageApplication: async () => result,
+      writeOutput,
+      readHostTarget: () => ({ ...LINUX_TARGET, nodeVersion: '99.0.0' }),
+    });
+
+    await command.parseAsync(['fixture-app'], { from: 'user' });
+
+    const output = writeOutput.mock.calls[0][0];
+    const nextLine = output
+      .split(String.fromCharCode(10))
+      .find((line) => line.startsWith('Next:'));
+    expect(nextLine).toBe('Next: ' + result.artifacts[0].path);
+    expect(nextLine).not.toContain(' wharfie ');
+  });
+
+  it('keeps printable artifact paths as copy-pasteable shell commands', async () => {
+    const outputDir = path.join(os.tmpdir(), "wharfie package joe's");
+    const result = makePackageResult(true, outputDir);
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const command = createPackageCommand({
+      packageApplication: async () => result,
+      writeOutput,
+      readHostTarget: () => ({ ...LINUX_TARGET, nodeVersion: '99.0.0' }),
+    });
+
+    await command.parseAsync(['fixture-app'], { from: 'user' });
+
+    const output = writeOutput.mock.calls[0][0];
+    const nextLine = output
+      .split(String.fromCharCode(10))
+      .find((line) => line.startsWith('Next:'));
+    const shellApostrophe = "'" + String.fromCharCode(92) + "''";
+    const expectedPath =
+      "'" + result.artifacts[0].path.replaceAll("'", shellApostrophe) + "'";
+    expect(nextLine).toBe(
+      'Next: ' + expectedPath + ' wharfie run --name first-run --',
+    );
+  });
+
+  it('renders control-bearing paths inert and omits a false shell command', async () => {
+    const escape = String.fromCharCode(0x1b);
+    const lineFeed = String.fromCharCode(10);
+    const bidiOverride = String.fromCharCode(0x202e);
+    const outputDir = path.join(
+      os.tmpdir(),
+      'wharfie-package-' + escape + '[31m-' + lineFeed + '-' + bidiOverride,
+    );
+    const result = makePackageResult(true, outputDir);
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const command = createPackageCommand({
+      packageApplication: async () => result,
+      writeOutput,
+      readHostTarget: () => ({ ...LINUX_TARGET, nodeVersion: '99.0.0' }),
+    });
+
+    await command.parseAsync(['fixture-app'], { from: 'user' });
+
+    const output = writeOutput.mock.calls[0][0];
+    const slash = String.fromCharCode(92);
+    expect(output).not.toContain(escape);
+    expect(output).not.toContain(bidiOverride);
+    expect(output).toContain(slash + 'u001b');
+    expect(output).toContain(slash + 'n');
+    expect(output).toContain(slash + 'u202e');
+    expect(output).toContain('path (JSON): "');
+    expect(output.split(lineFeed)).toHaveLength(7);
+
+    const nextLine = output
+      .split(lineFeed)
+      .find((line) => line.startsWith('Next:'));
+    expect(nextLine).toContain('shell command omitted');
+    expect(nextLine).toContain('--json');
+    expect(nextLine).not.toContain('wharfie run');
+  });
+
+  it('does not render POSIX quoting as a Windows shell command', async () => {
+    const revision = makeRevision();
+    const outputDir = path.join(os.tmpdir(), 'Wharfie Windows Package');
+    const artifact = makeArtifact(
+      revision,
+      WINDOWS_TARGET,
+      'windows executable bytes',
+      outputDir,
+    );
+    const result = {
+      app: { id: APP_ID },
+      revision,
+      targets: [clone(WINDOWS_TARGET)],
+      outputDir,
+      artifacts: [artifact],
+    };
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const command = createPackageCommand({
+      packageApplication: async () => result,
+      writeOutput,
+      readHostTarget: () => ({
+        ...WINDOWS_TARGET,
+        nodeVersion: '99.0.0',
+      }),
+    });
+
+    await command.parseAsync(['fixture-app'], { from: 'user' });
+
+    const output = writeOutput.mock.calls[0][0];
+    expect(output).toContain(artifact.path);
+    expect(output).toContain(
+      'Next: invoke the artifact shown above from your Windows shell;',
+    );
+    expect(output).toContain('cmd.exe and PowerShell');
+    expect(output).not.toContain(`Next: '${artifact.path}'`);
   });
 });

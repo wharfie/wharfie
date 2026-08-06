@@ -74,7 +74,7 @@ async function createTestControlDBClient(adapterName, options) {
 }
 
 /**
- * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'null'|'stopped'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, useProductionControlDB?: boolean, fsOps?: typeof fsp, inspectArtifactBytes?: typeof inspectArtifactBytes, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
+ * @param {{artifactBytes?: Buffer, target?: Readonly<Record<string, string>>, linger?: boolean, runtimeMode?: 'matching'|'null'|'stopped'|'unavailable'|'wrong-artifact'|'wrong-revision'|'stale-session'|'wrong-process'|'starting', systemdMode?: 'normal'|'failed', platform?: string, uid?: number, filesystemUid?: number, environment?: Record<string, string | undefined>, packagedStorage?: boolean, packagedDataRoot?: string, operatorDataRoot?: string, useExplicitDataRoot?: boolean, managerUnitPaths?: string[], managerDiscoversUnitPathAfterReload?: boolean, managerFragmentPath?: string, unitInitiallyUnknown?: boolean, deriveConfigRoot?: boolean, deriveDataRoot?: boolean, useDefaultXdgConfigHome?: boolean, retainActiveWhenUnitMissingOnReload?: boolean, useProductionControlDB?: boolean, fsOps?: typeof fsp, inspectArtifactBytes?: typeof inspectArtifactBytes, listRuns?: (input: Record<string, any>) => Promise<Record<string, any>>}} [options] - Harness overrides.
  * @returns {Promise<Record<string, any>>} - Isolated manager harness.
  */
 async function createHarness(options = {}) {
@@ -90,12 +90,20 @@ async function createHarness(options = {}) {
   );
   const sourceArtifact = await inspectArtifactBytes(artifactPath);
   const homeDirectory = path.join(root, 'account-home');
-  const dataRoot = options.deriveDataRoot
-    ? path.join(homeDirectory, '.local', 'share', 'wharfie-nodejs')
-    : path.join(root, 'data');
   const configRoot = options.deriveConfigRoot
     ? path.join(homeDirectory, '.config')
     : path.join(root, 'config');
+  const environment =
+    options.environment ||
+    (options.useDefaultXdgConfigHome
+      ? { XDG_CONFIG_HOME: `${configRoot}/` }
+      : {});
+  const dataRoot =
+    options.packagedDataRoot ??
+    environment.WHARFIE_DATA_ROOT ??
+    (options.deriveDataRoot
+      ? path.join(homeDirectory, '.local', 'share', 'wharfie-nodejs')
+      : path.join(root, 'data'));
   const layout = createSystemdUserServiceLayout({
     appId: APP_ID,
     dataRoot,
@@ -386,16 +394,16 @@ async function createHarness(options = {}) {
       architecture: target.architecture,
       nodeVersion: target.nodeVersion,
       artifactPath,
-      ...(options.deriveDataRoot ? {} : { dataRoot }),
+      ...(options.useExplicitDataRoot
+        ? { dataRoot }
+        : options.operatorDataRoot !== undefined
+          ? { dataRoot: options.operatorDataRoot }
+          : {}),
       ...(options.deriveConfigRoot ? {} : { configRoot }),
       ...(options.deriveConfigRoot || options.deriveDataRoot
         ? { getHomeDirectory: () => homeDirectory }
         : {}),
-      environment:
-        options.environment ||
-        (options.useDefaultXdgConfigHome
-          ? { XDG_CONFIG_HOME: `${configRoot}/` }
-          : {}),
+      environment,
       getLocalAppStorageLayout: () =>
         options.packagedStorage === false
           ? undefined
@@ -446,6 +454,7 @@ async function createHarness(options = {}) {
     artifactPath,
     dataRoot,
     configRoot,
+    environment,
     layout,
     state,
     calls,
@@ -2345,9 +2354,104 @@ describe('systemd user service manager', () => {
     });
 
     await expect(harness.operator.install()).rejects.toThrow(
-      /WHARFIE_CONTROL_PATH redirects packaged commands/,
+      /Legacy Wharfie storage overrides.*WHARFIE_CONTROL_PATH/,
     );
     expect(harness.calls).toEqual([]);
+  });
+
+  it('keeps the complete service lifecycle under a custom packaged data root', async () => {
+    const customParent = await fsp.mkdtemp(
+      path.join(tmpdir(), 'wharfie-custom-packaged-root-'),
+    );
+    roots.push(customParent);
+    const customDataRoot = path.join(customParent, 'durable');
+    const harness = await createHarness({
+      packagedDataRoot: customDataRoot,
+      environment: { WHARFIE_DATA_ROOT: customDataRoot },
+    });
+
+    expect(harness.layout.dataRoot).toBe(customDataRoot);
+    for (const storagePath of [
+      harness.layout.serviceRoot,
+      harness.layout.stateRoot,
+      harness.layout.controlPath,
+      harness.layout.payloadPath,
+      harness.layout.applicationStatePath,
+      harness.layout.sessionPath,
+      harness.layout.releasesRoot,
+      harness.layout.installationPath,
+    ]) {
+      expect(storagePath.startsWith(`${customDataRoot}${path.sep}`)).toBe(true);
+    }
+
+    await expect(harness.operator.status()).resolves.toMatchObject({
+      health: 'absent',
+    });
+    await expect(harness.operator.install()).resolves.toMatchObject({
+      health: 'healthy',
+    });
+    await expect(harness.operator.converge()).resolves.toMatchObject({
+      health: 'healthy',
+    });
+    await expect(harness.operator.restart()).resolves.toMatchObject({
+      health: 'healthy',
+    });
+    await expect(
+      fsp.readFile(harness.layout.unitPath, 'utf8'),
+    ).resolves.toContain(`Environment="WHARFIE_DATA_ROOT=${customDataRoot}"`);
+
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+    await expect(harness.operator.update()).resolves.toMatchObject({
+      health: 'healthy',
+    });
+    await expect(harness.operator.prune()).resolves.toMatchObject({
+      outcome: 'nothing-to-prune',
+    });
+    await expect(harness.operator.rollback()).resolves.toMatchObject({
+      health: 'healthy',
+    });
+    await expect(harness.operator.recover()).resolves.toMatchObject({
+      health: 'healthy',
+    });
+
+    await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v1');
+    await expect(harness.operator.uninstall()).resolves.toMatchObject({
+      health: 'absent',
+    });
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).resolves.toMatchObject({
+      outcome: 'purged',
+    });
+    await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('accepts an explicit service data root only when it agrees with packaged storage', async () => {
+    const agreeing = await createHarness({ useExplicitDataRoot: true });
+    await expect(agreeing.operator.status()).resolves.toMatchObject({
+      health: 'absent',
+    });
+
+    const conflictParent = await fsp.mkdtemp(
+      path.join(tmpdir(), 'wharfie-conflicting-packaged-root-'),
+    );
+    roots.push(conflictParent);
+    const conflictingDataRoot = path.join(conflictParent, 'must-not-exist');
+    const conflicting = await createHarness({
+      operatorDataRoot: conflictingDataRoot,
+    });
+    await expect(conflicting.operator.install()).rejects.toThrow(
+      /Explicit systemd user-service dataRoot disagrees with active packaged storage authority/,
+    );
+    expect(conflicting.calls).toEqual([]);
+    await expect(
+      fsp.stat(conflicting.layout.serviceRoot),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fsp.stat(conflictingDataRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('is idempotent for the same verified release', async () => {

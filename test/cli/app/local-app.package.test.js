@@ -137,6 +137,38 @@ async function writeTransactionalPackageApp(
 }
 
 /**
+ * @param {string} dir - App directory.
+ * @param {string} appName - App name.
+ */
+async function writeTargetlessPackageApp(dir, appName) {
+  await fsp.mkdir(path.join(dir, 'src'), { recursive: true });
+  await Promise.all([
+    fsp.writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: appName, private: true, type: 'module' }),
+      'utf8',
+    ),
+    fsp.writeFile(
+      path.join(dir, 'src', 'cli.js'),
+      'export default async function cli() {}\n',
+      'utf8',
+    ),
+    fsp.writeFile(
+      path.join(dir, 'wharfie.app.js'),
+      `export default {
+  schemaVersion: 4,
+  app: { id: ${JSON.stringify(appName)} },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
+};
+`,
+      'utf8',
+    ),
+  ]);
+}
+
+/**
  * @param {string[]} chunks - Captured UTF-8 output.
  * @returns {typeof process.stdout.write} - Stream write replacement.
  */
@@ -362,6 +394,129 @@ afterEach(() => {
 });
 
 describe('packageLocalApp', () => {
+  it('infers one exact host target when a manifest omits targets', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-host-target-package-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+    /** @type {Array<{phase: string, message: string}>} */
+    const progress = [];
+
+    try {
+      await writeTargetlessPackageApp(dir, 'host-target-package');
+      jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+        /** @this {ActorSystem} */ async function () {
+          const buildDir = path.join(dir, '.fake-builds');
+          const nodeBinary = this.getResources().find(
+            (resource) => resource instanceof NodeBinary,
+          );
+          const downloadProgress = nodeBinary?.onDownloadProgress;
+          expect(downloadProgress).toEqual(expect.any(Function));
+          if (typeof downloadProgress !== 'function') {
+            throw new Error('Node download progress observer was not wired.');
+          }
+          downloadProgress({
+            version: `v${process.versions.node}`,
+            downloadedBytes: 1024 * 1024,
+            totalBytes: 2 * 1024 * 1024,
+          });
+          await prepareMockArtifactProvenance(this, buildDir);
+
+          const builds = this.getResources().filter(
+            (resource) => resource instanceof SeaBuild,
+          );
+          expect(builds).toHaveLength(1);
+          for (const resource of builds) {
+            const target = {
+              nodeVersion: String(resource.get('nodeVersion')),
+              platform: String(resource.get('platform')),
+              architecture: String(resource.get('architecture')),
+              ...(resource.has('libc')
+                ? { libc: String(resource.get('libc')) }
+                : {}),
+            };
+            expect(target).toEqual(currentTarget);
+            const binaryPath = path.join(buildDir, resource.name);
+            await fsp.writeFile(binaryPath, 'host target bytes', 'utf8');
+            resource._setUNSAFE('binaryPath', binaryPath);
+          }
+        },
+      );
+
+      const result = await packageLocalApp({
+        dir,
+        outputDir,
+        onProgress: (event) => progress.push(event),
+      });
+
+      expect(result.targets).toEqual([currentTarget]);
+      expect(result.artifacts).toHaveLength(1);
+      expect(result.artifacts[0].target).toEqual(currentTarget);
+      expect(result.revision.contract).not.toHaveProperty('targets');
+      expect(progress.map((event) => event.phase)).toEqual([
+        'resolve',
+        'prepare',
+        'build',
+        'download',
+        'publish',
+      ]);
+      expect(progress[3].message).toBe(
+        `Downloading Node v${process.versions.node} (1.0/2.0 MiB)`,
+      );
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires declared targets when a public target filter is supplied', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-targetless-filter-package-'),
+    );
+
+    try {
+      await writeTargetlessPackageApp(dir, 'targetless-filter-package');
+      await expect(
+        packageLocalApp({
+          dir,
+          targetFilters: [getTargetSelector(currentTarget)],
+        }),
+      ).rejects.toThrow(/no declared build targets/i);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects targetless Linux packaging on an unknown libc before builds start', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-targetless-unknown-libc-package-'),
+    );
+    const platformDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      'platform',
+    );
+    const reconcile = jest.spyOn(ActorSystem.prototype, 'reconcile');
+    jest
+      .spyOn(process.report, 'getReport')
+      .mockReturnValue(/** @type {any} */ ({ header: {} }));
+    Object.defineProperty(process, 'platform', {
+      ...platformDescriptor,
+      value: 'linux',
+    });
+
+    try {
+      await writeTargetlessPackageApp(dir, 'targetless-unknown-libc-package');
+      await expect(packageLocalApp({ dir })).rejects.toThrow(
+        /positively identified glibc.*musl.*unknown/i,
+      );
+      expect(reconcile).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, 'platform', platformDescriptor);
+      }
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reserves command stdout for one receipt while authored setup writes diagnostics', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-package-command-stdout-'),
@@ -419,7 +574,7 @@ describe('packageLocalApp', () => {
 
       try {
         await createPackageCommand().parseAsync(
-          [dir, '--output-dir', outputDir, '--no-pretty'],
+          [dir, '--output-dir', outputDir, '--json', '--no-pretty'],
           { from: 'user' },
         );
       } finally {
@@ -619,11 +774,12 @@ describe('packageLocalApp', () => {
             expect(entryCode).toContain('const loadDeveloperCliModule = () =>');
             expect(entryCode).toContain('loadDeveloperCliModule,');
             expect(entryCode).not.toContain('await loadDeveloperCliModule()');
-            expect(
-              entryCode.indexOf(
-                'await preparePackagedCoreRuntimeDependencies()',
-              ),
-            ).toBeLessThan(entryCode.indexOf('await runPackagedApp({'));
+            expect(entryCode).toContain(
+              'prepareRuntime: preparePackagedCoreRuntimeDependencies',
+            );
+            expect(entryCode).not.toContain(
+              'await preparePackagedCoreRuntimeDependencies()',
+            );
             expect(entryCode).toContain(
               'const packagedAppStorage = await resolvePackagedAppStorage()',
             );
@@ -1741,12 +1897,16 @@ try {
     }
   });
 
-  it('leaves existing outputs untouched and removes staging when a staged artifact write fails', async () => {
+  it('removes package-owned SEA outputs when staged artifact writing fails', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-package-copy-transaction-'),
     );
     const outputDir = path.join(dir, 'dist');
     const appName = 'copy-transaction-demo';
+    const ownedBinariesDir = path.join(dir, 'actor-binaries');
+    const originalBinariesDir = SeaBuild.BINARIES_DIR;
+    /** @type {string[]} */
+    const ownedBinaryPaths = [];
     const targets = [
       {
         nodeVersion: process.versions.node,
@@ -1770,6 +1930,8 @@ try {
     );
 
     try {
+      SeaBuild.BINARIES_DIR = ownedBinariesDir;
+      await fsp.mkdir(ownedBinariesDir, { recursive: true });
       await writeTransactionalPackageApp(dir, appName, targets);
       await fsp.mkdir(outputDir, { recursive: true });
       await fsp.writeFile(previousOutput, 'previous-artifact', 'utf8');
@@ -1781,9 +1943,10 @@ try {
           let index = 0;
           for (const resource of this.getResources()) {
             if (!(resource instanceof SeaBuild)) continue;
-            const sourcePath = path.join(buildDir, `binary-${index}`);
+            const sourcePath = path.join(ownedBinariesDir, `binary-${index}`);
             await fsp.writeFile(sourcePath, `new-artifact-${index}`, 'utf8');
             resource._setUNSAFE('binaryPath', sourcePath);
+            ownedBinaryPaths.push(sourcePath);
             index += 1;
           }
         },
@@ -1818,7 +1981,12 @@ try {
       expect(await fsp.readdir(outputDir)).toEqual([
         path.basename(previousOutput),
       ]);
+      expect(ownedBinaryPaths).toHaveLength(2);
+      for (const ownedBinaryPath of ownedBinaryPaths) {
+        expect(existsSync(ownedBinaryPath)).toBe(false);
+      }
     } finally {
+      SeaBuild.BINARIES_DIR = originalBinariesDir;
       await fsp.rm(dir, { recursive: true, force: true });
     }
   });

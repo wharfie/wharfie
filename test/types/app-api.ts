@@ -20,6 +20,117 @@ const cliOnlyApp = defineApp({
 const cliOnlySchemaVersion: 4 = cliOnlyApp.schemaVersion;
 void cliOnlySchemaVersion;
 
+const shorthandApp = defineApp({
+  id: 'shorthand-app',
+  main: './src/cli.ts',
+  durable: 'greet-later',
+  activityModule: './src/activities.ts',
+  activities: {
+    prepare: {},
+    'say-hello': { export: 'sayHello' },
+    finish: { path: './src/finish.ts' },
+  },
+  workflows: {
+    'greet-later': {
+      steps: [{ id: 'ready', kind: 'signal' }],
+    },
+  },
+});
+const shorthandSchemaVersion: 4 = shorthandApp.schemaVersion;
+const shorthandId: 'shorthand-app' = shorthandApp.app.id;
+const shorthandMainPath: './src/cli.ts' = shorthandApp.cli.entrypoint.path;
+const shorthandMainExport: 'main' = shorthandApp.cli.entrypoint.export;
+const shorthandDurableWorkflow: 'greet-later' =
+  shorthandApp.cli.durable.workflow;
+const shorthandDurableExport: 'toDurableInput' =
+  shorthandApp.cli.durable.export;
+const shorthandSharedActivityPath: './src/activities.ts' =
+  shorthandApp.activities.prepare.entrypoint.path;
+const shorthandDefaultActivityExport: 'prepare' =
+  shorthandApp.activities.prepare.entrypoint.export;
+const shorthandExplicitActivityExport: 'sayHello' =
+  shorthandApp.activities['say-hello'].entrypoint.export;
+const shorthandOverrideActivityPath: './src/finish.ts' =
+  shorthandApp.activities.finish.entrypoint.path;
+void shorthandSchemaVersion;
+void shorthandId;
+void shorthandMainPath;
+void shorthandMainExport;
+void shorthandDurableWorkflow;
+void shorthandDurableExport;
+void shorthandSharedActivityPath;
+void shorthandDefaultActivityExport;
+void shorthandExplicitActivityExport;
+void shorthandOverrideActivityPath;
+
+const shorthandActivityModuleWithoutActivities = {
+  id: 'unused-activity-module',
+  main: './src/cli.ts',
+  activityModule: './src/activities.ts',
+} as const;
+// @ts-expect-error A shared activityModule requires nonempty activities.
+defineApp(shorthandActivityModuleWithoutActivities);
+
+const shorthandActivityModuleWithEmptyActivities = {
+  id: 'empty-shared-activities',
+  main: './src/cli.ts',
+  activityModule: './src/activities.ts',
+  activities: {},
+} as const;
+// @ts-expect-error A shared activityModule requires nonempty activities.
+defineApp(shorthandActivityModuleWithEmptyActivities);
+
+const shorthandWithUndefinedActivityPath = {
+  id: 'undefined-activity-path',
+  main: './src/cli.ts',
+  activityModule: './src/activities.ts',
+  activities: { greet: { path: undefined } },
+} as const;
+// @ts-expect-error A present activity path must be a string.
+defineApp(shorthandWithUndefinedActivityPath);
+
+const shorthandWithUndefinedActivityExport = {
+  id: 'undefined-activity-export',
+  main: './src/cli.ts',
+  activityModule: './src/activities.ts',
+  activities: { greet: { export: undefined } },
+} as const;
+// @ts-expect-error A present activity export must be a string.
+defineApp(shorthandWithUndefinedActivityExport);
+
+const shorthandWithoutActivityPath = {
+  id: 'missing-activity-path',
+  main: './src/cli.ts',
+  activities: { greet: {} },
+} as const;
+// @ts-expect-error Activities need their own path or one shared activityModule.
+defineApp(shorthandWithoutActivityPath);
+
+const shorthandWithoutExplicitExport = {
+  id: 'missing-activity-export',
+  main: './src/cli.ts',
+  activityModule: './src/activities.ts',
+  activities: { 'say-hello': {} },
+} as const;
+// @ts-expect-error Hyphenated logical IDs are not conventional JavaScript export names.
+defineApp(shorthandWithoutExplicitExport);
+
+const shorthandDurableWithoutWorkflow = {
+  id: 'missing-shorthand-workflow',
+  main: './src/cli.ts',
+  durable: 'missing',
+} as const;
+// @ts-expect-error A shorthand durable handoff requires its explicitly named workflow.
+defineApp(shorthandDurableWithoutWorkflow);
+
+const shorthandWithExtraKey = {
+  id: 'extra-shorthand-key',
+  main: './src/cli.ts',
+  description: 'unsupported',
+} as const;
+// @ts-expect-error Shorthand accepts only its exact supported source fields.
+defineApp(shorthandWithExtraKey);
+
 const emptyWorkflowMapApp = {
   schemaVersion: 4,
   app: { id: 'empty-workflow-map' },
