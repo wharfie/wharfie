@@ -2,6 +2,7 @@ import { promises as fsp } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { AWS_PROVIDER_EMBEDDING_POLICY } from '../../core/lib/esbuild.js';
 import { validateApplicationRevision } from '../../core/runtime/application-revision.js';
 import {
   getBuildTargetId,
@@ -158,6 +159,7 @@ export async function packageSingleNodeSelfDeployableApp(options) {
       ...createSharedPackageOptions(options),
       outputDir: privateOutputDir,
       targetOverrides: [SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET],
+      awsProviderEmbeddingPolicy: AWS_PROVIDER_EMBEDDING_POLICY.PROVIDER_FREE,
     });
     const deployment = validateDeploymentPackageResult(deploymentPackage);
     payload = await createSingleNodeDeploymentPayloadAssets({
@@ -176,6 +178,8 @@ export async function packageSingleNodeSelfDeployableApp(options) {
         assetDigests: payload.assetDigests,
       },
       expectedRevisionId: deployment.revision.revisionId,
+      awsProviderEmbeddingPolicy:
+        AWS_PROVIDER_EMBEDDING_POLICY.EMBED_IF_AVAILABLE,
     });
     const operatorRevision = validateApplicationRevision(
       operatorPackage.revision,

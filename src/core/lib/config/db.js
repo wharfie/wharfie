@@ -288,15 +288,29 @@ function mkTempDir(prefix) {
 }
 
 /**
+ * Create the fixed provider-backed DynamoDB adapter only after the explicit
+ * companion package has loaded.
+ * @param {Record<string, any>} options - DynamoDB adapter options.
+ * @returns {Promise<import('../db/base.js').DBClient>} - Provider-backed client.
+ */
+async function createDynamoDBClient(options) {
+  const [{ default: createDynamoDB }, { loadAwsProviderBindings }] =
+    await Promise.all([
+      import('../db/adapters/dynamodb.js'),
+      import('../../runtime/aws-provider-module.js'),
+    ]);
+  const bindings = await loadAwsProviderBindings();
+  return createDynamoDB(options, bindings);
+}
+
+/**
  * Create a new DB client based on the resolved general adapter.
  * @param {DBAdapterName} [adapterName] - adapterName.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 export async function createDBClient(adapterName = resolveDBAdapterName()) {
   if (adapterName === 'dynamodb') {
-    const { default: createDynamoDB } =
-      await import('../db/adapters/dynamodb.js');
-    return createDynamoDB({ region: process.env.AWS_REGION });
+    return createDynamoDBClient({ region: process.env.AWS_REGION });
   }
 
   if (adapterName === 'lmdb') {
@@ -327,9 +341,7 @@ export async function createControlDBClient(
   options = {},
 ) {
   if (adapterName === 'dynamodb') {
-    const { default: createDynamoDB } =
-      await import('../db/adapters/dynamodb.js');
-    return createDynamoDB({
+    return createDynamoDBClient({
       region: process.env.AWS_REGION,
       readOnly: options.readOnly === true,
     });
@@ -404,9 +416,7 @@ export async function createApplicationStateDBClient(
   const readOnly = options.readOnly === true;
 
   if (normalizedAdapter === 'dynamodb') {
-    const { default: createDynamoDB } =
-      await import('../db/adapters/dynamodb.js');
-    return createDynamoDB({
+    return createDynamoDBClient({
       region: process.env.AWS_REGION,
       readOnly,
     });
@@ -433,9 +443,7 @@ export async function createStateDBClient(
   adapterName = resolveStateAdapterName(),
 ) {
   if (adapterName === 'dynamodb') {
-    const { default: createDynamoDB } =
-      await import('../db/adapters/dynamodb.js');
-    return createDynamoDB({ region: process.env.AWS_REGION });
+    return createDynamoDBClient({ region: process.env.AWS_REGION });
   }
 
   if (adapterName === 'lmdb') {

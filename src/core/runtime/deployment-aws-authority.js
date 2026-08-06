@@ -1,73 +1,16 @@
 /* eslint-disable jsdoc/require-param, jsdoc/require-returns, jsdoc/require-returns-description -- Compact internal boundary helpers keep their complete types inline. */
 
-import { DynamoDB } from '@aws-sdk/client-dynamodb';
-import {
-  AssociateRouteTableCommand,
-  AttachInternetGatewayCommand,
-  AttachVolumeCommand,
-  CreateInternetGatewayCommand,
-  CreateRouteCommand,
-  CreateRouteTableCommand,
-  CreateSecurityGroupCommand,
-  CreateSubnetCommand,
-  CreateVpcCommand,
-  CreateVolumeCommand,
-  DeleteInternetGatewayCommand,
-  DeleteRouteCommand,
-  DeleteRouteTableCommand,
-  DeleteSecurityGroupCommand,
-  DeleteSubnetCommand,
-  DeleteVpcCommand,
-  DescribeAvailabilityZonesCommand,
-  DescribeImagesCommand,
-  DescribeInstanceCreditSpecificationsCommand,
-  DescribeInstanceAttributeCommand,
-  DescribeInstancesCommand,
-  DescribeInternetGatewaysCommand,
-  DescribeInstanceTypeOfferingsCommand,
-  DescribeRouteTablesCommand,
-  DescribeSecurityGroupsCommand,
-  DescribeSubnetsCommand,
-  DescribeVpcAttributeCommand,
-  DescribeVpcsCommand,
-  DescribeVolumesCommand,
-  DisassociateRouteTableCommand,
-  DetachInternetGatewayCommand,
-  DetachVolumeCommand,
-  EC2Client,
-  GetEbsDefaultKmsKeyIdCommand,
-  ModifyInstanceAttributeCommand,
-  RunInstancesCommand,
-  StartInstancesCommand,
-  TerminateInstancesCommand,
-} from '@aws-sdk/client-ec2';
-import {
-  AddRoleToInstanceProfileCommand,
-  CreateInstanceProfileCommand,
-  CreateRoleCommand,
-  DeleteInstanceProfileCommand,
-  DeleteRoleCommand,
-  DeleteRolePolicyCommand,
-  GetInstanceProfileCommand,
-  GetRoleCommand,
-  GetRolePolicyCommand,
-  IAMClient,
-  ListAttachedRolePoliciesCommand,
-  ListInstanceProfilesForRoleCommand,
-  ListInstanceProfileTagsCommand,
-  ListRolePoliciesCommand,
-  ListRoleTagsCommand,
-  PutRolePolicyCommand,
-  RemoveRoleFromInstanceProfileCommand,
-} from '@aws-sdk/client-iam';
-import { S3 } from '@aws-sdk/client-s3';
-import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
-import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-
 import BaseAWS from '../lib/aws/base.js';
 import createDynamoDBAdapter from '../lib/db/adapters/dynamodb.js';
 import { createAwsProviderScope } from './deployment-provider-scope.js';
+import { loadAwsProviderBindings } from './aws-provider-module.js';
+
+/** @typedef {import('@aws-sdk/client-dynamodb').DynamoDB} DynamoDB */
+/** @typedef {import('@aws-sdk/client-ec2').EC2Client} EC2Client */
+/** @typedef {import('@aws-sdk/client-iam').IAMClient} IAMClient */
+/** @typedef {import('@aws-sdk/client-s3').S3} S3 */
+/** @typedef {import('@aws-sdk/client-ssm').SSMClient} SSMClient */
+/** @typedef {import('@aws-sdk/client-sts').STSClient} STSClient */
 
 const AWS_REGION_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)+$/;
 const AWS_ACCOUNT_ID_PATTERN = /^[0-9]{12}$/;
@@ -767,6 +710,71 @@ function scopeFromCallerIdentity(value, region) {
  */
 export async function createAwsDeploymentAuthority(options) {
   const region = readCanonicalRegion(options);
+  const bindings = await loadAwsProviderBindings();
+  const { DynamoDB } = bindings.clientDynamoDB;
+  const {
+    AssociateRouteTableCommand,
+    AttachInternetGatewayCommand,
+    AttachVolumeCommand,
+    CreateInternetGatewayCommand,
+    CreateRouteCommand,
+    CreateRouteTableCommand,
+    CreateSecurityGroupCommand,
+    CreateSubnetCommand,
+    CreateVpcCommand,
+    CreateVolumeCommand,
+    DeleteInternetGatewayCommand,
+    DeleteRouteCommand,
+    DeleteRouteTableCommand,
+    DeleteSecurityGroupCommand,
+    DeleteSubnetCommand,
+    DeleteVpcCommand,
+    DescribeAvailabilityZonesCommand,
+    DescribeImagesCommand,
+    DescribeInstanceCreditSpecificationsCommand,
+    DescribeInstanceAttributeCommand,
+    DescribeInstancesCommand,
+    DescribeInternetGatewaysCommand,
+    DescribeInstanceTypeOfferingsCommand,
+    DescribeRouteTablesCommand,
+    DescribeSecurityGroupsCommand,
+    DescribeSubnetsCommand,
+    DescribeVpcAttributeCommand,
+    DescribeVpcsCommand,
+    DescribeVolumesCommand,
+    DisassociateRouteTableCommand,
+    DetachInternetGatewayCommand,
+    DetachVolumeCommand,
+    EC2Client,
+    GetEbsDefaultKmsKeyIdCommand,
+    ModifyInstanceAttributeCommand,
+    RunInstancesCommand,
+    StartInstancesCommand,
+    TerminateInstancesCommand,
+  } = bindings.clientEC2;
+  const {
+    AddRoleToInstanceProfileCommand,
+    CreateInstanceProfileCommand,
+    CreateRoleCommand,
+    DeleteInstanceProfileCommand,
+    DeleteRoleCommand,
+    DeleteRolePolicyCommand,
+    GetInstanceProfileCommand,
+    GetRoleCommand,
+    GetRolePolicyCommand,
+    IAMClient,
+    ListAttachedRolePoliciesCommand,
+    ListInstanceProfilesForRoleCommand,
+    ListInstanceProfileTagsCommand,
+    ListRolePoliciesCommand,
+    ListRoleTagsCommand,
+    PutRolePolicyCommand,
+    RemoveRoleFromInstanceProfileCommand,
+  } = bindings.clientIAM;
+  const { S3 } = bindings.clientS3;
+  const { GetParameterCommand, SSMClient } = bindings.clientSSM;
+  const { GetCallerIdentityCommand, STSClient } = bindings.clientSTS;
+  const { fromNodeProviderChain } = bindings.credentialProviders;
   let resolvedCredentials;
   try {
     const provider = fromNodeProviderChain({ clientConfig: { region } });
@@ -786,7 +794,7 @@ export async function createAwsDeploymentAuthority(options) {
   let sts;
   try {
     sts = new STSClient({
-      ...BaseAWS.config(),
+      ...BaseAWS.config({}, bindings),
       region,
       credentials,
     });
@@ -844,11 +852,14 @@ export async function createAwsDeploymentAuthority(options) {
       throw new TypeError('AWS deployment DynamoDB options are invalid.');
     }
     try {
-      return createDynamoDBAdapter({
-        region,
-        credentials,
-        readOnly: dbOptions.readOnly ?? false,
-      });
+      return createDynamoDBAdapter(
+        {
+          region,
+          credentials,
+          readOnly: dbOptions.readOnly ?? false,
+        },
+        bindings,
+      );
     } catch {
       throw new Error(DYNAMODB_CREATION_ERROR);
     }
@@ -861,7 +872,7 @@ export async function createAwsDeploymentAuthority(options) {
     let client;
     try {
       client = new DynamoDB({
-        ...BaseAWS.config(),
+        ...BaseAWS.config({}, bindings),
         region,
         credentials,
       });
@@ -914,7 +925,7 @@ export async function createAwsDeploymentAuthority(options) {
     let client;
     try {
       client = new S3({
-        ...BaseAWS.config(),
+        ...BaseAWS.config({}, bindings),
         region,
         credentials,
       });
@@ -1025,7 +1036,7 @@ export async function createAwsDeploymentAuthority(options) {
         // Conditional copy and exact-version deletion settle only through the
         // driver's explicit readback. Hidden SDK retries must not multiply one
         // authorized effect.
-        ...BaseAWS.config({ maxAttempts: 1 }),
+        ...BaseAWS.config({ maxAttempts: 1 }, bindings),
         region,
         credentials,
       });
@@ -1093,12 +1104,12 @@ export async function createAwsDeploymentAuthority(options) {
     let ec2;
     try {
       ssm = new SSMClient({
-        ...BaseAWS.config(),
+        ...BaseAWS.config({}, bindings),
         region,
         credentials,
       });
       ec2 = new EC2Client({
-        ...BaseAWS.config(),
+        ...BaseAWS.config({}, bindings),
         region,
         credentials,
       });
@@ -1186,7 +1197,7 @@ export async function createAwsDeploymentAuthority(options) {
     let client;
     try {
       client = new EC2Client({
-        ...BaseAWS.config(),
+        ...BaseAWS.config({}, bindings),
         region,
         credentials,
       });
@@ -1241,7 +1252,7 @@ export async function createAwsDeploymentAuthority(options) {
       client = new EC2Client({
         // Node mutations use explicit provider recovery identities. Keep SDK
         // transport retries from hiding an ambiguous launch or termination.
-        ...BaseAWS.config({ maxAttempts: 1 }),
+        ...BaseAWS.config({ maxAttempts: 1 }, bindings),
         region,
         credentials,
       });
@@ -1315,7 +1326,7 @@ export async function createAwsDeploymentAuthority(options) {
         // Attachment mutations have no provider idempotency token. Perform one
         // SDK attempt, then let the driver recover solely from exact dual
         // instance/volume readback.
-        ...BaseAWS.config({ maxAttempts: 1 }),
+        ...BaseAWS.config({ maxAttempts: 1 }, bindings),
         region,
         credentials,
       });
@@ -1382,7 +1393,7 @@ export async function createAwsDeploymentAuthority(options) {
         // Keep SDK transport retries from multiplying one authorized effect.
         // A driver may supply its own provider token where supported, but every
         // driver owns explicit recovery through exact readback.
-        ...BaseAWS.config({ maxAttempts: 1 }),
+        ...BaseAWS.config({ maxAttempts: 1 }, bindings),
         region,
         credentials,
       });
@@ -1500,12 +1511,12 @@ export async function createAwsDeploymentAuthority(options) {
         // IAM mutations do not carry provider idempotency tokens. Recovery is
         // explicit exact readback, so transport retries must not duplicate one
         // authorized effect.
-        ...BaseAWS.config({ maxAttempts: 1 }),
+        ...BaseAWS.config({ maxAttempts: 1 }, bindings),
         region,
         credentials,
       });
       ec2Client = new EC2Client({
-        ...BaseAWS.config({ maxAttempts: 1 }),
+        ...BaseAWS.config({ maxAttempts: 1 }, bindings),
         region,
         credentials,
       });

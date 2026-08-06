@@ -399,6 +399,17 @@ afterEach(() => {
 });
 
 describe('packageLocalApp', () => {
+  it('rejects an invalid internal AWS provider policy before package preparation', async () => {
+    await expect(
+      packageLocalApp(
+        /** @type {any} */ ({
+          dir: '/provider-policy-must-not-be-read',
+          awsProviderEmbeddingPolicy: 'ambient',
+        }),
+      ),
+    ).rejects.toThrow('AWS provider embedding policy is invalid.');
+  });
+
   it('isolates package reconciliation from ambient actor state', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-package-state-isolation-'),
@@ -478,6 +489,8 @@ describe('packageLocalApp', () => {
     const outputDir = path.join(dir, 'dist');
     /** @type {Array<{phase: string, message: string}>} */
     const progress = [];
+    /** @type {string[]} */
+    const observedProviderPolicies = [];
 
     try {
       await writeTargetlessPackageApp(dir, 'host-target-package');
@@ -504,6 +517,9 @@ describe('packageLocalApp', () => {
           );
           expect(builds).toHaveLength(1);
           for (const resource of builds) {
+            observedProviderPolicies.push(
+              resource.get('awsProviderEmbeddingPolicy'),
+            );
             const target = {
               nodeVersion: String(resource.get('nodeVersion')),
               platform: String(resource.get('platform')),
@@ -546,10 +562,15 @@ describe('packageLocalApp', () => {
         dir,
         outputDir: path.join(dir, 'override-dist'),
         targetOverrides: [currentTarget],
+        awsProviderEmbeddingPolicy: 'embed-if-available',
         onProgress: (event) => progress.push(event),
       });
       expect(overridden.targets).toEqual([currentTarget]);
       expect(overridden.artifacts).toHaveLength(1);
+      expect(observedProviderPolicies).toEqual([
+        'provider-free',
+        'embed-if-available',
+      ]);
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
     }

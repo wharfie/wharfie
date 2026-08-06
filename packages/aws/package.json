@@ -1,0 +1,47 @@
+{
+  "name": "@wharfie/aws",
+  "version": "0.0.15",
+  "description": "Version-matched AWS deployment companion for Wharfie",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wharfie/wharfie.git",
+    "directory": "packages/aws"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "24.13.1"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "src/"
+  ],
+  "peerDependencies": {
+    "@wharfie/wharfie": "0.0.15"
+  },
+  "peerDependenciesMeta": {
+    "@wharfie/wharfie": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1090.0",
+    "@aws-sdk/client-ec2": "3.1091.0",
+    "@aws-sdk/client-iam": "3.1092.0",
+    "@aws-sdk/client-s3": "3.1091.0",
+    "@aws-sdk/client-ssm": "3.1091.0",
+    "@aws-sdk/client-sts": "3.1091.0",
+    "@aws-sdk/credential-providers": "3.1090.0",
+    "@aws-sdk/lib-dynamodb": "3.1090.0",
+    "@smithy/util-retry": "3.0.11"
+  }
+}

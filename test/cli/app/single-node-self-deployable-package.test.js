@@ -178,6 +178,7 @@ describe('packageSingleNodeSelfDeployableApp', () => {
       dir: '/app',
       outputDir: privateOutput,
       targetOverrides: [SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET],
+      awsProviderEmbeddingPolicy: 'provider-free',
       build,
       onProgress,
     });
@@ -197,6 +198,7 @@ describe('packageSingleNodeSelfDeployableApp', () => {
         assetDigests: payload.assetDigests,
       },
       expectedRevisionId: revision.revisionId,
+      awsProviderEmbeddingPolicy: 'embed-if-available',
     });
     expect(result.deploymentPayload).toBe(payload.manifest);
     expect(result.revision.revisionId).toBe(revision.revisionId);
@@ -255,11 +257,13 @@ describe('packageSingleNodeSelfDeployableApp', () => {
       dir: '/app',
       outputDir: privateOutput,
       targetOverrides: [SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET],
+      awsProviderEmbeddingPolicy: 'provider-free',
     });
     expect(packageLocalApp.mock.calls[1][0]).toEqual({
       dir: '/app',
       frameworkAssets: expect.any(Object),
       expectedRevisionId: revision.revisionId,
+      awsProviderEmbeddingPolicy: 'embed-if-available',
     });
     expect(packageLocalApp.mock.calls[1][0]).not.toHaveProperty(
       'targetFilters',

@@ -9,7 +9,11 @@ import {
   realpathSync,
   writeFileSync,
 } from 'node:fs';
-import { build as _build } from '../../lib/esbuild.js';
+import {
+  AWS_PROVIDER_EMBEDDING_POLICY,
+  build as _build,
+  withEmbeddedAwsProvider,
+} from '../../lib/esbuild.js';
 import paths from '../../lib/paths.js';
 import { runCmd, execFile } from '../../lib/cmd.js';
 import { inject } from 'postject';
@@ -946,6 +950,7 @@ async function captureNodeArchiveEvidence(
  * @typedef SeaBuildProperties
  * @property {string | function(): string} entryCode - entryCode.
  * @property {string | function(): string} resolveDir - resolveDir.
+ * @property {'provider-free'|'embed-if-available'} [awsProviderEmbeddingPolicy] - Explicit fixed-provider capability for this SEA generation.
  * @property {string} [sourceMapApplicationRoot] - Private immutable application source root canonicalized out of inline SEA maps.
  * @property {string | function(): string} nodeBinaryPath - nodeBinaryPath.
  * @property {string | function(): string} nodeVersion - Exact Node.js target version; must match the builder runtime.
@@ -1112,9 +1117,28 @@ class SeaBuild extends BaseResource {
     try {
       await promises.mkdir(tmpBuildDir, { mode: 0o700, recursive: true });
       await promises.chmod(tmpBuildDir, 0o700);
-      const entryCode = this.get('entryCode');
-      if (typeof entryCode !== 'string') {
+      const rawEntryCode = this.get('entryCode');
+      if (typeof rawEntryCode !== 'string') {
         throw new TypeError('SEA build entryCode must resolve to a string.');
+      }
+      const preparedBuildOptions = await withEmbeddedAwsProvider(
+        {
+          stdin: {
+            contents: rawEntryCode,
+            resolveDir: this.get('resolveDir'),
+            sourcefile: 'index.js',
+          },
+        },
+        {
+          embeddingPolicy: this.get(
+            'awsProviderEmbeddingPolicy',
+            AWS_PROVIDER_EMBEDDING_POLICY.PROVIDER_FREE,
+          ),
+        },
+      );
+      const entryCode = preparedBuildOptions.stdin?.contents;
+      if (typeof entryCode !== 'string') {
+        throw new TypeError('SEA build prepared entryCode must be a string.');
       }
       const entryCodeBytes = Buffer.from(entryCode, 'utf8');
       const entryCodeEvidence = {

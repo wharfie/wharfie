@@ -21,6 +21,7 @@
     "src/core/**/*.js",
     "src/cli/**/*.js",
     "examples/**/*.js",
+    "packages/aws/**/*.js",
     "scripts/aws-host-retained-storage-host-preflight.js",
     "scripts/aws-host-retained-storage-host-preflight-sea-artifact-record.js",
     "scripts/aws-host-retained-storage-host-preflight-sea-build.js",
@@ -38,6 +39,8 @@
     "scripts/sea-inspector.js",
     "scripts/verify-package-contents.js",
     "scripts/verify-magnetic-first-run.js",
+    "scripts/verify-provider-boundary.js",
+    "scripts/verify-provider-free-sea.js",
     "types/**/*.d.ts"
   ],
   "exclude": [

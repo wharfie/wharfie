@@ -39,22 +39,57 @@ and any default coverage output in one owned OS-temporary root and removes it
 after success, failure, or a child signal. Use `npm run test:coverage` when
 coverage is wanted explicitly. The clean-install path `npm run test:ci` invokes
 that coverage run, along with lint and type checks, package-tarball
-verification, and a production dependency audit. Native LMDB and generated-SEA
-proofs are separate because they exercise host file-locking and platform
-packaging behavior.
+verification, the provider-boundary receipt, and a production dependency audit.
+Native LMDB and generated-SEA proofs are separate because they exercise host
+file-locking and platform packaging behavior.
 
-Local `app` and `ops` commands do not require cloud credentials or global
-Wharfie configuration. The source CLI now also mounts an experimental
-AWS-oriented `deployment` group using the operator's ordinary AWS credential
-chain. It does not accept or persist credentials in the app manifest,
-DeploymentProfileV2, plan, or artifact.
+## AWS deployment companion
+
+The core `@wharfie/wharfie` production install deliberately contains no AWS SDK
+or Smithy packages. Local `app` and `ops` commands, AWS-provider-free application
+builds, and deployment help need only the core package. AWS deployment
+operations use the one version-matched `@wharfie/aws` companion. A source
+checkout receives it through `npm ci`; a clean tarball consumer installs the
+matching companion tarball next to the core tarball. Neither package is
+registry-published in this developer preview.
+
+If the companion is absent, malformed, or version-incompatible, a deployment
+operation stops before Wharfie creates or mutates local state or contacts AWS and prints
+one matching-version install instruction. The companion exposes an exact,
+validated set of AWS constructors and functions; it is not a generic provider
+or plugin API.
+
+Application packaging follows the same explicit boundary:
+
+- Ordinary `wharfie app package` output is always AWS-provider-free, even when the
+  companion is installed in the builder.
+- The private Linux payload created by `--self-deployable` is also always
+  AWS-provider-free, so its digest does not depend on the outer operator's cloud
+  capability.
+- Only the outer `--self-deployable` operator may embed AWS. With the exact
+  companion installed beside core, the builder validates and embeds it. With
+  core only, the outer executable remains fully usable for Hetzner and is
+  sealed AWS-free: placing a companion beside it later cannot add AWS support.
+  Neither form resolves `node_modules` at runtime.
+
+Build provenance observes the prepared entry after this decision, followed by
+the bundled JavaScript, SEA blob, and final executable bytes. Therefore provider
+embedding changes the outer operator's recorded entry-code evidence and
+downstream artifact digests. It does not change the logical application
+revision or the nested Linux payload digest. `npm run verify:provider-boundary`
+exercises both clean installs, keeps the canonical core install within its
+dependency and 85 MiB limits, and runs a provider-enabled SEA after hiding its
+source install and clearing `PATH`.
+
+The source CLI mounts the experimental `deployment` group. These commands use
+the operator's ordinary AWS credential chain. They do not accept or persist
+credentials in the app manifest, DeploymentProfileV2, plan, or artifact.
 
 Deployment profiles are canonical `wpr2` operator-input JSON documents supplied
 with `--profile`; they remain separate from `wharfie.app.js`. Authors create
 them with the supported `@wharfie/wharfie/deployment-profile` Node subpath.
 Source plan and direct apply package and durably pre-stage a selected SEA;
 source prepared-plan apply and reconcile consume exact durable staged evidence.
-
 `wharfie app package --self-deployable` creates an application SEA whose
 packaged deployment surface has AWS and Hetzner `preview`, `apply`, `status`,
 `update`, `recover`, `exec`, and `destroy`:
@@ -84,6 +119,14 @@ SEA may reconverge current and abandon the target before a later update.
 Destroy reads only embedded app identity plus exact durable local deployment
 authority. Its journal supplies the bound provider and location, so destroy
 accepts no provider, region, or location selector.
+
+The companion gate follows durable provider authority rather than the whole
+deployment command. AWS preview/apply requires it before embedded payload
+reads. AWS status and destroy require it only after the local journal identifies
+AWS and before provider observation or mutation. Recover requires it for AWS
+apply phases and AWS destruction, but not for active release repair/restore or
+an already destroyed journal. Update and exec are provider-neutral. Help and
+every Hetzner path remain available without the companion.
 
 The AWS path requires suitable default-VPC public-network prerequisites;
 Hetzner uses its public network and Wharfie creates no private network. Destroy

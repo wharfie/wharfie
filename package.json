@@ -18,6 +18,9 @@
   },
   "homepage": "https://github.com/wharfie/wharfie#readme",
   "packageManager": "npm@11.12.0",
+  "workspaces": [
+    "packages/aws"
+  ],
   "engines": {
     "node": "24.13.1"
   },
@@ -78,7 +81,7 @@
     "test:update": "TZ=UTC node ./test/run-jest.js --silent --updateSnapshot",
     "test": "TZ=UTC node ./test/run-jest.js --silent",
     "test:coverage": "TZ=UTC node ./test/run-jest.js --silent --coverage",
-    "test:ci": "npm run lint && npm run typecheck && npm run test:coverage && npm run verify:package && npm run audit:prod",
+    "test:ci": "npm run lint && npm run typecheck && npm run test:coverage && npm run verify:package && npm run verify:provider-boundary && npm run audit:prod",
     "test:native": "WHARFIE_RUN_NATIVE_EXTERNALS=1 TZ=UTC node ./test/run-jest.js --silent --runInBand test/cli/app/kitchen-sink-native-externals.test.js",
     "test:full": "npm run test:ci && npm run test:native && npm run verify:package:sea",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
@@ -87,6 +90,7 @@
     "lint:fix": "eslint --max-warnings=0 --fix . && prettier --write \"{*,**/*}.{js,json}\"",
     "verify:package": "node ./scripts/verify-package-contents.js",
     "verify:magnetic-first-run": "node ./scripts/verify-magnetic-first-run.js",
+    "verify:provider-boundary": "node ./scripts/verify-provider-boundary.js",
     "verify:package:sea": "node ./scripts/verify-package-sea.js",
     "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
     "verify:steady-file:systemd:lima": "./scripts/run-steady-file-preview-lima.sh",
@@ -226,6 +230,7 @@
     }
   },
   "devDependencies": {
+    "@wharfie/aws": "0.0.15",
     "@babel/eslint-parser": "^7.28.5",
     "@babel/plugin-syntax-import-attributes": "^7.27.1",
     "@jest/globals": "^30.4.1",
@@ -244,19 +249,18 @@
     "prettier": "^3.7.4",
     "typescript": "^5.0.4"
   },
+  "peerDependencies": {
+    "@wharfie/aws": "0.0.15"
+  },
+  "peerDependenciesMeta": {
+    "@wharfie/aws": {
+      "optional": true
+    }
+  },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.1090.0",
-    "@aws-sdk/client-ec2": "^3.1091.0",
-    "@aws-sdk/client-iam": "^3.1092.0",
-    "@aws-sdk/client-s3": "^3.1091.0",
-    "@aws-sdk/client-ssm": "^3.1091.0",
-    "@aws-sdk/client-sts": "^3.1091.0",
-    "@aws-sdk/credential-providers": "^3.1090.0",
-    "@aws-sdk/lib-dynamodb": "^3.1090.0",
     "@babel/parser": "^7.28.5",
     "@npmcli/arborist": "^9.9.0",
     "@paralleldrive/cuid2": "^2.2.2",
-    "@smithy/util-retry": "^3.0.3",
     "chalk": "^4.1.0",
     "commander": "^12.1.0",
     "diff": "^5.2.0",

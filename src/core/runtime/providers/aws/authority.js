@@ -1,24 +1,7 @@
 /* eslint-disable jsdoc/valid-types, jsdoc/require-param-description, jsdoc/require-returns, jsdoc/require-returns-description -- The narrow injected AWS SDK boundary keeps its complete port protocol beside the implementation. */
 
-import {
-  DescribeImagesCommand,
-  DescribeInstanceAttributeCommand,
-  DescribeInstanceCreditSpecificationsCommand,
-  DescribeInstanceTypeOfferingsCommand,
-  DescribeInstancesCommand,
-  DescribeInternetGatewaysCommand,
-  DescribeNetworkAclsCommand,
-  DescribeRouteTablesCommand,
-  DescribeSecurityGroupsCommand,
-  DescribeSubnetsCommand,
-  DescribeVolumesCommand,
-  DescribeVpcsCommand,
-  EC2Client,
-} from '@aws-sdk/client-ec2';
-import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-
 import BaseAWS from '../../../lib/aws/base.js';
+import { loadAwsProviderBindings } from '../../aws-provider-module.js';
 import {
   createAwsProviderScope,
   validateProviderScope,
@@ -443,45 +426,71 @@ function sdkPort(sdk, commands) {
   return Object.freeze(result);
 }
 
-const productionOpen = createAwsSingleNodeReadAuthorityFactory({
-  async resolveCredentials(/** @type {{region: string}} */ value) {
-    return await fromNodeProviderChain({
-      clientConfig: { region: value.region },
-    })();
-  },
-  createStsClient(/** @type {Record<string, any>} */ value) {
-    const sdk = new STSClient({
-      ...BaseAWS.config({ maxAttempts: 3 }),
-      region: value.region,
-      credentials: value.credentials,
-    });
-    return sdkPort(sdk, {
-      getCallerIdentity: GetCallerIdentityCommand,
-    });
-  },
-  createEc2Client(/** @type {Record<string, any>} */ value) {
-    const sdk = new EC2Client({
-      ...BaseAWS.config({ maxAttempts: 3 }),
-      region: value.region,
-      credentials: value.credentials,
-    });
-    return sdkPort(sdk, {
-      describeImages: DescribeImagesCommand,
-      describeInstanceAttribute: DescribeInstanceAttributeCommand,
-      describeInstanceCreditSpecifications:
-        DescribeInstanceCreditSpecificationsCommand,
-      describeInstanceTypeOfferings: DescribeInstanceTypeOfferingsCommand,
-      describeInstances: DescribeInstancesCommand,
-      describeInternetGateways: DescribeInternetGatewaysCommand,
-      describeNetworkAcls: DescribeNetworkAclsCommand,
-      describeRouteTables: DescribeRouteTablesCommand,
-      describeSecurityGroups: DescribeSecurityGroupsCommand,
-      describeSubnets: DescribeSubnetsCommand,
-      describeVolumes: DescribeVolumesCommand,
-      describeVpcs: DescribeVpcsCommand,
-    });
-  },
-});
+/**
+ * Bind the production authority only after the version-matched companion has
+ * supplied and validated its SDK namespaces.
+ * @param {import('../../aws-provider-module.js').AwsSdkBindings} bindings - Fixed provider bindings.
+ * @returns {(options: unknown) => Promise<Readonly<Record<string, any>>>} - Production authority opener.
+ */
+function createProductionOpen(bindings) {
+  const {
+    DescribeImagesCommand,
+    DescribeInstanceAttributeCommand,
+    DescribeInstanceCreditSpecificationsCommand,
+    DescribeInstanceTypeOfferingsCommand,
+    DescribeInstancesCommand,
+    DescribeInternetGatewaysCommand,
+    DescribeNetworkAclsCommand,
+    DescribeRouteTablesCommand,
+    DescribeSecurityGroupsCommand,
+    DescribeSubnetsCommand,
+    DescribeVolumesCommand,
+    DescribeVpcsCommand,
+    EC2Client,
+  } = bindings.clientEC2;
+  const { GetCallerIdentityCommand, STSClient } = bindings.clientSTS;
+  const { fromNodeProviderChain } = bindings.credentialProviders;
+
+  return createAwsSingleNodeReadAuthorityFactory({
+    async resolveCredentials(/** @type {{region: string}} */ value) {
+      return await fromNodeProviderChain({
+        clientConfig: { region: value.region },
+      })();
+    },
+    createStsClient(/** @type {Record<string, any>} */ value) {
+      const sdk = new STSClient({
+        ...BaseAWS.config({ maxAttempts: 3 }, bindings),
+        region: value.region,
+        credentials: value.credentials,
+      });
+      return sdkPort(sdk, {
+        getCallerIdentity: GetCallerIdentityCommand,
+      });
+    },
+    createEc2Client(/** @type {Record<string, any>} */ value) {
+      const sdk = new EC2Client({
+        ...BaseAWS.config({ maxAttempts: 3 }, bindings),
+        region: value.region,
+        credentials: value.credentials,
+      });
+      return sdkPort(sdk, {
+        describeImages: DescribeImagesCommand,
+        describeInstanceAttribute: DescribeInstanceAttributeCommand,
+        describeInstanceCreditSpecifications:
+          DescribeInstanceCreditSpecificationsCommand,
+        describeInstanceTypeOfferings: DescribeInstanceTypeOfferingsCommand,
+        describeInstances: DescribeInstancesCommand,
+        describeInternetGateways: DescribeInternetGatewaysCommand,
+        describeNetworkAcls: DescribeNetworkAclsCommand,
+        describeRouteTables: DescribeRouteTablesCommand,
+        describeSecurityGroups: DescribeSecurityGroupsCommand,
+        describeSubnets: DescribeSubnetsCommand,
+        describeVolumes: DescribeVolumesCommand,
+        describeVpcs: DescribeVpcsCommand,
+      });
+    },
+  });
+}
 
 /**
  * Open the production read authority through the ordinary Node AWS credential
@@ -490,7 +499,8 @@ const productionOpen = createAwsSingleNodeReadAuthorityFactory({
  * @returns {Promise<Readonly<Record<string, any>>>}
  */
 export async function createAwsSingleNodeReadAuthority(options) {
-  return await productionOpen(options);
+  const bindings = await loadAwsProviderBindings();
+  return await createProductionOpen(bindings)(options);
 }
 
 export default {

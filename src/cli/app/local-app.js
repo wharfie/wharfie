@@ -26,6 +26,7 @@ import FunctionResource from '../../core/resources/builds/function-resource.js';
 import CoreRuntimeDependenciesResource from '../../core/resources/builds/core-runtime-dependencies.js';
 import { assertSeaNodeVersionCompatible } from '../../core/resources/builds/lib/sea-node-version.js';
 import { withResourceScope } from '../../core/resources/resource-scope.js';
+import { AWS_PROVIDER_EMBEDDING_POLICY } from '../../core/lib/esbuild.js';
 import { WHARFIE_VERSION } from '../../core/lib/version.js';
 import { validateAppManifest } from '../../core/runtime/app-manifest.js';
 import { sortCanonicalJsonValue } from '../../core/runtime/canonical-order.js';
@@ -143,6 +144,7 @@ const PACKAGE_BUILD_STATE_STORE = Object.freeze({
  * @property {(progress: {phase: 'resolve'|'prepare'|'build'|'download'|'publish', message: string}) => unknown} [onProgress] - Optional human-facing package phase observer.
  * @property {SingleNodeDeploymentFrameworkAssets} [frameworkAssets] - Internal, exact deployment payload assets attached after revision preparation.
  * @property {string} [expectedRevisionId] - Internal revision fence checked before build publication.
+ * @property {'provider-free'|'embed-if-available'} [awsProviderEmbeddingPolicy] - Internal SEA capability policy; ordinary packages default provider-free.
  */
 
 /**
@@ -618,6 +620,22 @@ function getSeaBuildResources(actorSystem) {
   return actorSystem
     .getResources()
     .filter((resource) => resource instanceof SeaBuild);
+}
+
+/**
+ * Admit the closed internal provider capability before package preparation.
+ * @param {unknown} value - Candidate package policy.
+ * @returns {'provider-free'|'embed-if-available'} - Exact SEA build policy.
+ */
+function validateAwsProviderEmbeddingPolicy(value) {
+  const policy = value ?? AWS_PROVIDER_EMBEDDING_POLICY.PROVIDER_FREE;
+  if (
+    policy !== AWS_PROVIDER_EMBEDDING_POLICY.PROVIDER_FREE &&
+    policy !== AWS_PROVIDER_EMBEDDING_POLICY.EMBED_IF_AVAILABLE
+  ) {
+    throw new TypeError('AWS provider embedding policy is invalid.');
+  }
+  return policy;
 }
 
 /**
@@ -1530,6 +1548,9 @@ export async function runLocalApp(options) {
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
 export async function packageLocalApp(options) {
+  const awsProviderEmbeddingPolicy = validateAwsProviderEmbeddingPolicy(
+    options.awsProviderEmbeddingPolicy,
+  );
   reportPackageProgress(
     options,
     'resolve',
@@ -1651,6 +1672,9 @@ export async function packageLocalApp(options) {
   }
 
   const builds = getSeaBuildResources(actorSystem);
+  for (const build of builds) {
+    build._setUNSAFE('awsProviderEmbeddingPolicy', awsProviderEmbeddingPolicy);
+  }
 
   /** @type {Array<{ cleanup: () => Promise<void> }>} */
   let manifestAssets = [];
