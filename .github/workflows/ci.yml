@@ -6,23 +6,35 @@ on:
   pull_request:
     branches: ['master']
 
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - name: setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version-file: 'package.json'
+          persist-credentials: false
+      - name: setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
       - name: install pinned npm
         # setup-node's npm cache probe runs before this step. The Node
         # distribution's bundled npm is intentionally rejected by the exact
         # devEngines pin, so bootstrap from outside the repository first.
         working-directory: ${{ runner.temp }}
-        run: npm install --global "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
       - run: npm ci
       - run: npm run test:ci
+      - name: verify preview release contract
+        run: npm run verify:release:preview
       - name: verify packed install and real Linux SEA
         # Keep portability evidence visible when another validation gate fails.
         if: ${{ always() }}
@@ -30,15 +42,114 @@ jobs:
 
   magnetic-first-run:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - name: setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version-file: 'package.json'
+          persist-credentials: false
+      - name: setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
       - name: install pinned npm
         working-directory: ${{ runner.temp }}
-        run: npm install --global "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
       - run: npm ci
       - name: verify copied starter against packed Wharfie
         run: npm run verify:magnetic-first-run
+
+  preview-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup exact candidate-pack Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned pack-only npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - name: pack candidate without a root dependency install
+        run: |
+          mkdir -p "$RUNNER_TEMP/wharfie-preview-candidate"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/wharfie-preview-candidate"
+      - name: pack AWS companion handoff without a root dependency install
+        working-directory: packages/aws
+        run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/wharfie-preview-candidate"
+      - name: retain clean npm candidate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-preview-npm-candidate
+          path: ${{ runner.temp }}/wharfie-preview-candidate/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  preview-self-host:
+    needs: preview-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup exact preview build Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned contributor npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: download clean npm candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-preview-npm-candidate
+          path: ${{ runner.temp }}/wharfie-preview-candidate
+      - name: build and smoke-test the clean-installed Wharfie SEA
+        run: >-
+          npm run build:release:preview --
+          --tag "v$(node --print "require('./package.json').version")"
+          --output-dir "$RUNNER_TEMP/wharfie-preview-release"
+      - name: verify the release used the no-root-install candidate bytes
+        run: |
+          version="$(node --print "require('./package.json').version")"
+          cmp \
+            "$RUNNER_TEMP/wharfie-preview-candidate/wharfie-wharfie-${version}.tgz" \
+            "$RUNNER_TEMP/wharfie-preview-release/wharfie-wharfie-${version}.tgz"
+          cmp \
+            "$RUNNER_TEMP/wharfie-preview-candidate/wharfie-aws-${version}.tgz" \
+            "$RUNNER_TEMP/wharfie-preview-release/wharfie-aws-${version}.tgz"
+
+  preview-consumer:
+    needs: preview-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24.13.1', '24.x']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup supported consumer Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          package-manager-cache: false
+      - name: download no-root-install npm candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-preview-npm-candidate
+          path: ${{ runner.temp }}/wharfie-preview-candidate
+      - name: install candidate and run the complete magnetic demo
+        run: >-
+          node ./scripts/verify-preview-consumer.js
+          --candidate-tarball
+          "$RUNNER_TEMP/wharfie-preview-candidate/wharfie-wharfie-$(node --print "require('./package.json').version").tgz"

@@ -1545,9 +1545,10 @@ export async function runLocalApp(options) {
 
 /**
  * @param {PackageLocalAppOptions} options - options.
+ * @param {{dependencyLockPath?: string, runtimeRoot?: string, trustInstalledRuntimeGraph?: boolean}} [preparation] - Internal revision-preparation authority.
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
-export async function packageLocalApp(options) {
+async function packageLocalAppInternal(options, preparation = {}) {
   const awsProviderEmbeddingPolicy = validateAwsProviderEmbeddingPolicy(
     options.awsProviderEmbeddingPolicy,
   );
@@ -1632,6 +1633,15 @@ export async function packageLocalApp(options) {
     appDir: loaded.appDir,
     manifest: loaded.manifest,
     outputDir,
+    ...(typeof preparation.dependencyLockPath === 'string'
+      ? { dependencyLockPath: preparation.dependencyLockPath }
+      : {}),
+    ...(typeof preparation.runtimeRoot === 'string'
+      ? { runtimeRoot: preparation.runtimeRoot }
+      : {}),
+    ...(preparation.trustInstalledRuntimeGraph === true
+      ? { trustInstalledRuntimeGraph: true }
+      : {}),
     assets: packagingAssets,
   });
   const { revision } = preparedRevision;
@@ -1807,4 +1817,23 @@ export async function packageLocalApp(options) {
   }
 
   return /** @type {PackageLocalAppResult} */ (packageResult);
+}
+
+/**
+ * Package an ordinary authored application through the strict portable graph.
+ * @param {PackageLocalAppOptions} options - Package request.
+ * @returns {Promise<PackageLocalAppResult>} - Result.
+ */
+export async function packageLocalApp(options) {
+  return await packageLocalAppInternal(options);
+}
+
+/**
+ * Package a framework-owned application with explicit revision preparation.
+ * @param {PackageLocalAppOptions} options - Package request.
+ * @param {{dependencyLockPath: string, runtimeRoot: string, trustInstalledRuntimeGraph: true}} preparation - Narrow framework authority.
+ * @returns {Promise<PackageLocalAppResult>} - Result.
+ */
+export async function packageFrameworkOwnedApp(options, preparation) {
+  return await packageLocalAppInternal(options, preparation);
 }

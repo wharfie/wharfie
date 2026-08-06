@@ -1,11 +1,13 @@
 # Development validation
 
-Wharfie's merge authority starts from a clean checkout with the exact Node and
-npm versions in `package.json`:
+Wharfie's merge authority starts from a clean checkout with the exact Node pin
+in `.nvmrc`/`package.json#devEngines` and npm pin in
+`package.json#packageManager`:
 
-1. GitHub Actions runs `npm ci`, `npm run test:ci`, and the separate
-   `npm run verify:package:sea` Linux portability proof. The SEA step uses
-   `always()` so its result remains visible when another gate fails.
+1. GitHub Actions runs `npm ci`, `npm run test:ci`, the preview release dry run,
+   and the separate `npm run verify:package:sea` Linux portability proof. The
+   SEA step uses `always()` so its result remains visible when another gate
+   fails.
 2. RWX independently clones the proposed commit, runs `npm ci`, and runs lint,
    the ordinary test suite, and all four TypeScript programs.
 3. `test:ci` means lint, all four TypeScript programs, coverage thresholds,

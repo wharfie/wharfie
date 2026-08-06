@@ -42,8 +42,9 @@ are retained. The command remains a reusable regression gate for later commits.
 
 ## Create the Wharfie handoff
 
-The preview remains intentionally unpublished. From a Wharfie source checkout
-using the exact Node and npm versions in `package.json`:
+The same clean-install path used by a tagged preview can be exercised without
+publishing anything. From a Wharfie source checkout using the exact contributor
+Node and npm versions:
 
 ```bash
 npm ci

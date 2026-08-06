@@ -40,6 +40,7 @@ const EMBEDDED_AUTHORITY_MESSAGE =
   'Embedded revision metadata is only available inside a packaged SEA artifact.';
 const DEPENDENCY_PACKAGE_BUDGET = 170;
 const INSTALLED_LOGICAL_BYTE_BUDGET = 85 * 1024 * 1024;
+const CANONICAL_NPM_REGISTRY = 'https://registry.npmjs.org';
 const DEPLOYMENT_INSTANCE_ID = `wdi1_${'A'.repeat(43)}`;
 const PACKAGED_DEPLOYMENT_ID = 'provider-boundary';
 const ENTRYPOINTS = Object.freeze({
@@ -86,7 +87,13 @@ function dependencyPackageCount(directory, env) {
   const listed = runCommand(
     NPM_COMMAND,
     ['ls', '--omit=dev', '--all', '--parseable'],
-    { cwd: directory, env, capture: true },
+    {
+      cwd: directory,
+      env,
+      capture: true,
+      timeoutMs: 120_000,
+      killSignal: 'SIGKILL',
+    },
   ).stdout;
   return Math.max(0, listed.split(/\r?\n/u).filter(Boolean).length - 1);
 }
@@ -163,9 +170,13 @@ function createAwsProviderTarball(directory) {
     {
       cwd: REPO_ROOT,
       capture: true,
+      timeoutMs: 120_000,
+      killSignal: 'SIGKILL',
       env: {
         ...process.env,
         npm_config_cache: path.join(directory, 'npm-cache'),
+        npm_config_ignore_scripts: 'true',
+        npm_config_registry: CANONICAL_NPM_REGISTRY,
       },
     },
   );
@@ -441,6 +452,8 @@ try {
     XDG_DATA_HOME: path.join(runtimeDirectory, 'data'),
     XDG_STATE_HOME: path.join(runtimeDirectory, 'state'),
     npm_config_cache: path.join(packaged.directory, 'npm-cache'),
+    npm_config_ignore_scripts: 'true',
+    npm_config_registry: CANONICAL_NPM_REGISTRY,
   };
   delete runtimeEnvironment.CONFIG_DIR;
 
@@ -461,8 +474,21 @@ try {
 
   runCommand(
     NPM_COMMAND,
-    ['install', '--omit=dev', '--no-audit', '--no-fund', packaged.tarballPath],
-    { cwd: consumerDirectory, env: runtimeEnvironment },
+    [
+      'install',
+      '--ignore-scripts',
+      '--omit=dev',
+      '--no-audit',
+      '--no-fund',
+      `--registry=${CANONICAL_NPM_REGISTRY}`,
+      packaged.tarballPath,
+    ],
+    {
+      cwd: consumerDirectory,
+      env: runtimeEnvironment,
+      timeoutMs: 240_000,
+      killSignal: 'SIGKILL',
+    },
   );
   const nodeModules = path.join(consumerDirectory, 'node_modules');
   assert.equal(existsSync(path.join(nodeModules, '@aws-sdk')), false);
@@ -571,13 +597,20 @@ try {
     NPM_COMMAND,
     [
       'install',
+      '--ignore-scripts',
       '--omit=dev',
       '--no-audit',
       '--no-fund',
+      `--registry=${CANONICAL_NPM_REGISTRY}`,
       packaged.tarballPath,
       providerPackage.tarballPath,
     ],
-    { cwd: providerConsumerDirectory, env: providerEnvironment },
+    {
+      cwd: providerConsumerDirectory,
+      env: providerEnvironment,
+      timeoutMs: 240_000,
+      killSignal: 'SIGKILL',
+    },
   );
   const providerNodeModules = path.join(
     providerConsumerDirectory,
@@ -607,7 +640,7 @@ try {
     providerMetadata.peerDependencies['@wharfie/wharfie'],
     providerMetadata.version,
   );
-  assert.equal(providerMetadata.private, undefined);
+  assert.equal(providerMetadata.private, false);
   assert.equal(providerMetadata.publishConfig.access, 'public');
   assert.equal(providerMetadata.engines.node, coreMetadata.engines.node);
   assert.ok(

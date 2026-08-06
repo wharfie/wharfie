@@ -40,6 +40,19 @@ const REQUIRED_PREVIEW_FILES = Object.freeze([
   'examples/steady-file/package.json',
   'examples/steady-file/wharfie.app.js',
 ]);
+const REQUIRED_RELEASE_FILES = Object.freeze(['wharfie.app.js']);
+const FORBIDDEN_RELEASE_LIFECYCLE_SCRIPTS = Object.freeze([
+  'preinstall',
+  'install',
+  'postinstall',
+  'prepublish',
+  'prepublishOnly',
+  'prepack',
+  'prepare',
+  'postpack',
+  'publish',
+  'postpublish',
+]);
 
 /**
  * @param {string} filePath - JSON file to read.
@@ -147,9 +160,12 @@ function requiredRuntimeFiles() {
     'src/app.d.ts',
     'src/deployment-profile.js',
     'src/deployment-profile.d.ts',
+    'src/single-node-deployment.js',
+    'src/single-node-deployment.d.ts',
     ...coreFiles,
     ...cliFiles,
     ...REQUIRED_PREVIEW_FILES,
+    ...REQUIRED_RELEASE_FILES,
   ];
 }
 
@@ -195,21 +211,35 @@ export function assertPackageContents(manifest) {
   assert.equal(packageMetadata.license, 'Apache-2.0');
   assert.equal(
     packageMetadata.private,
-    true,
-    'the developer preview is a tarball handoff, not a registry release',
+    false,
+    'the package must remain publishable for the guarded preview release',
   );
-  assert.equal(packageMetadata.exports?.['./app']?.types, './src/app.d.ts');
-  assert.equal(packageMetadata.exports?.['./app']?.import, './src/app.js');
-  assert.deepEqual(packageMetadata.exports?.['./deployment-profile'], {
-    types: './src/deployment-profile.d.ts',
-    import: './src/deployment-profile.js',
-    default: './src/deployment-profile.js',
+  assert.equal(packageMetadata.engines?.node, '>=24.13.1 <25');
+  assert.deepEqual(packageMetadata.bin, { wharfie: './bin/wharfie' });
+  assert.deepEqual(packageMetadata.exports, {
+    '.': './src/cli/entry.js',
+    './app': {
+      types: './src/app.d.ts',
+      import: './src/app.js',
+      default: './src/app.js',
+    },
+    './deployment-profile': {
+      types: './src/deployment-profile.d.ts',
+      import: './src/deployment-profile.js',
+      default: './src/deployment-profile.js',
+    },
+    './single-node-deployment': {
+      types: './src/single-node-deployment.d.ts',
+      import: './src/single-node-deployment.js',
+      default: './src/single-node-deployment.js',
+    },
+    './package.json': './package.json',
   });
   assert.match(packageMetadata.packageManager, /^npm@\d+\.\d+\.\d+$/);
   assert.deepEqual(packageMetadata.devEngines, {
     runtime: {
       name: 'node',
-      version: packageMetadata.engines.node,
+      version: '24.13.1',
       onFail: 'error',
     },
     packageManager: {
@@ -218,6 +248,62 @@ export function assertPackageContents(manifest) {
       onFail: 'error',
     },
   });
+  assert.deepEqual(packageMetadata.publishConfig, {
+    access: 'public',
+    tag: 'preview-candidate',
+    provenance: true,
+  });
+  assert.deepEqual(packageMetadata.repository, {
+    type: 'git',
+    url: 'git+https://github.com/wharfie/wharfie.git',
+  });
+  assert.equal(
+    packageMetadata.peerDependencies?.['@wharfie/aws'],
+    packageMetadata.version,
+  );
+  assert.deepEqual(packageMetadata.peerDependenciesMeta?.['@wharfie/aws'], {
+    optional: true,
+  });
+  const awsMetadata = readJson(
+    path.join(REPO_ROOT, 'packages', 'aws', 'package.json'),
+  );
+  assert.equal(awsMetadata.name, '@wharfie/aws');
+  assert.equal(awsMetadata.version, packageMetadata.version);
+  assert.equal(awsMetadata.private, false);
+  assert.equal(awsMetadata.license, packageMetadata.license);
+  assert.deepEqual(awsMetadata.repository, {
+    ...packageMetadata.repository,
+    directory: 'packages/aws',
+  });
+  assert.deepEqual(awsMetadata.publishConfig, { access: 'public' });
+  assert.deepEqual(awsMetadata.engines, packageMetadata.engines);
+  assert.equal(
+    awsMetadata.peerDependencies?.['@wharfie/wharfie'],
+    packageMetadata.version,
+  );
+  assert.deepEqual(awsMetadata.peerDependenciesMeta?.['@wharfie/wharfie'], {
+    optional: true,
+  });
+  for (const { label, metadata } of [
+    { label: 'Release package', metadata: packageMetadata },
+    { label: 'AWS companion package', metadata: awsMetadata },
+  ]) {
+    for (const scriptName of FORBIDDEN_RELEASE_LIFECYCLE_SCRIPTS) {
+      assert.equal(
+        metadata.scripts?.[scriptName],
+        undefined,
+        `${label} must not define the ${scriptName} lifecycle script.`,
+      );
+    }
+  }
+  assert.equal(
+    packageMetadata.scripts?.['verify:release:preview'],
+    'node ./scripts/build-preview-release.js --check',
+  );
+  assert.equal(
+    packageMetadata.scripts?.['build:release:preview'],
+    'node ./scripts/build-preview-release.js',
+  );
   assert.equal(
     Object.hasOwn(packageMetadata.engines || {}, 'npm'),
     false,
@@ -296,6 +382,8 @@ export function createPackageTarball() {
       {
         cwd: REPO_ROOT,
         capture: true,
+        timeoutMs: 120_000,
+        killSignal: 'SIGKILL',
         env: {
           ...process.env,
           npm_config_cache: path.join(directory, 'npm-cache'),

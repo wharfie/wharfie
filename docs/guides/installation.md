@@ -1,7 +1,22 @@
 # Installation
 
 Wharfie is experimental and is not ready for production use. There is no
-release-ready binary installer. Run the current code from a source checkout:
+stable release-ready binary installer. Tagged previews are deliberately kept
+off npm's `latest` channel. After the first preview completes reviewed
+promotion, install the Node-hosted CLI explicitly from that channel:
+
+```bash
+npm install --save-dev @wharfie/wharfie@preview
+npx wharfie --help
+```
+
+The `preview` tag moves only after the matching registry bytes and provenance
+have passed the release proof and a maintainer has approved promotion.
+
+The exact preview package and provider-free Linux x64 glibc standalone builder
+binary release contract is documented in
+[Preview releases](./preview-release.md). A source checkout remains the
+authoritative fallback:
 
 ```bash
 git clone https://github.com/wharfie/wharfie.git
@@ -10,15 +25,16 @@ npm ci
 node ./bin/wharfie --help
 ```
 
-Use the exact Node version declared in `package.json#engines` and the npm version
-declared in `package.json#packageManager`.
+Consumers must use the Node range declared in `package.json#engines`.
+Contributors use the exact Node version in `.nvmrc` and the npm version declared
+in `package.json#packageManager`.
 
 Wharfie's builder currently runs through Node from a source checkout or a
 locally packed npm tarball. The abandoned v1 source, documentation site, and
-self-hosting app prototype have been retired; registry publication remains
-deliberately disabled. No standalone builder binary is published. Generated
-application SEAs are the portable deliverable and do not require Node on the
-target machine.
+self-hosting app prototype have been retired. Preview publication is guarded
+and never targets `latest`; the sealed provider-free standalone Wharfie binary
+is currently Linux x64 glibc only. Generated application SEAs remain the
+portable application deliverable and do not require Node on the target machine.
 
 The shortest packaged candidate is the
 [magnetic hello-world starter](../../examples/hello-world/README.md). Its
@@ -50,14 +66,16 @@ or Smithy packages. Local `app` and `ops` commands, AWS-provider-free applicatio
 builds, and deployment help need only the core package. AWS deployment
 operations use the one version-matched `@wharfie/aws` companion. A source
 checkout receives it through `npm ci`; a clean tarball consumer installs the
-matching companion tarball next to the core tarball. Neither package is
-registry-published in this developer preview.
+matching companion tarball next to core. Tagged previews quarantine core on
+npm before registry proof and reviewed promotion to the `preview` channel.
+They attach the checksummed companion tarball to the matching GitHub
+prerelease; the preview workflow does not publish the companion to npm.
 
 If the companion is absent, malformed, or version-incompatible, a deployment
-operation stops before Wharfie creates or mutates local state or contacts AWS and prints
-one matching-version install instruction. The companion exposes an exact,
-validated set of AWS constructors and functions; it is not a generic provider
-or plugin API.
+operation stops before Wharfie creates or mutates local state or contacts AWS,
+and prints one matching-version install instruction. The companion exposes an
+exact, validated set of AWS constructors and functions; it is not a generic
+provider or plugin API.
 
 Application packaging follows the same explicit boundary:
 

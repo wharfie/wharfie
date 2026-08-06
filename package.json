@@ -2,7 +2,7 @@
   "name": "@wharfie/wharfie",
   "version": "0.0.15",
   "description": "Experimental toolkit for building TypeScript CLIs and packaging them as portable Node SEA executables",
-  "private": true,
+  "private": false,
   "type": "module",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
     "packages/aws"
   ],
   "engines": {
-    "node": "24.13.1"
+    "node": ">=24.13.1 <25"
   },
   "devEngines": {
     "runtime": {
@@ -58,6 +58,7 @@
   },
   "files": [
     "README.md",
+    "wharfie.app.js",
     "bin/",
     "src/app.js",
     "src/app.d.ts",
@@ -92,12 +93,19 @@
     "verify:magnetic-first-run": "node ./scripts/verify-magnetic-first-run.js",
     "verify:provider-boundary": "node ./scripts/verify-provider-boundary.js",
     "verify:package:sea": "node ./scripts/verify-package-sea.js",
+    "verify:release:preview": "node ./scripts/build-preview-release.js --check",
+    "build:release:preview": "node ./scripts/build-preview-release.js",
     "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
     "verify:steady-file:systemd:lima": "./scripts/run-steady-file-preview-lima.sh",
     "verify:host:retained-storage:preflight": "node ./scripts/collect-aws-host-retained-storage-preflight-linux.js",
     "verify:host:retained-storage:preflight:sea:linux:docker:readiness": "node ./scripts/inspect-aws-host-retained-storage-host-preflight-sea-linux-docker-readiness.js",
     "verify:host:retained-storage:preflight:sea:linux:docker": "node ./scripts/run-aws-host-retained-storage-host-preflight-sea-linux-docker.js",
     "package:host:retained-storage:preflight:sea": "node ./scripts/aws-host-retained-storage-host-preflight-sea-package.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "preview-candidate",
+    "provenance": true
   },
   "prettier": {
     "singleQuote": true,

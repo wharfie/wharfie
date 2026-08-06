@@ -24,6 +24,7 @@ import {
 
 const PROOF_PREFIX = 'wharfie-magnetic-first-run-';
 const PACKAGE_NAME = '@wharfie/wharfie';
+const CANONICAL_NPM_REGISTRY = 'https://registry.npmjs.org';
 const DEPENDENCY_PACKAGE_BUDGET = 170;
 const INSTALLED_LOGICAL_BYTE_BUDGET = 85 * 1024 * 1024;
 
@@ -54,6 +55,8 @@ function dependencyPackageCount(directory, env) {
     cwd: directory,
     env,
     capture: true,
+    timeoutMs: 60_000,
+    killSignal: 'SIGKILL',
   }).stdout;
   return Math.max(0, listed.split(/\r?\n/u).filter(Boolean).length - 1);
 }
@@ -97,6 +100,7 @@ function packPublishedDependency(packageSpec, root, npmCache) {
       'pack',
       '--json',
       '--ignore-scripts',
+      `--registry=${CANONICAL_NPM_REGISTRY}`,
       '--pack-destination',
       root,
       packageSpec,
@@ -104,6 +108,8 @@ function packPublishedDependency(packageSpec, root, npmCache) {
     {
       cwd: root,
       capture: true,
+      timeoutMs: 240_000,
+      killSignal: 'SIGKILL',
       env: {
         ...process.env,
         npm_config_cache: npmCache,
@@ -175,16 +181,26 @@ try {
     packageSpec === null
       ? [
           'install',
+          '--ignore-scripts',
           '--no-audit',
           '--no-fund',
           '--no-save',
           '--package-lock=false',
+          `--registry=${CANONICAL_NPM_REGISTRY}`,
           packed.tarballPath,
         ]
-      : ['install', '--no-audit', '--no-fund'];
+      : [
+          'install',
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+          `--registry=${CANONICAL_NPM_REGISTRY}`,
+        ];
   const installEnvironment = {
     ...process.env,
     npm_config_cache: npmCache,
+    npm_config_ignore_scripts: 'true',
+    npm_config_registry: CANONICAL_NPM_REGISTRY,
     npm_config_update_notifier: 'false',
   };
   process.stdout.write(
@@ -195,6 +211,8 @@ try {
   runCommand(NPM_COMMAND, installArgs, {
     cwd: starterRoot,
     env: installEnvironment,
+    timeoutMs: 240_000,
+    killSignal: 'SIGKILL',
   });
   assert.equal(
     readFileSync(starterMetadataPath, 'utf8'),
@@ -252,8 +270,12 @@ try {
       NODE_PATH: undefined,
       WHARFIE_MAGNETIC_ACCEPTANCE_BUILDER_ROOT: starterRoot,
       npm_config_cache: npmCache,
+      npm_config_ignore_scripts: 'true',
+      npm_config_registry: CANONICAL_NPM_REGISTRY,
       npm_config_update_notifier: 'false',
     },
+    timeoutMs: 360_000,
+    killSignal: 'SIGKILL',
   });
   process.stdout.write(
     `${JSON.stringify(

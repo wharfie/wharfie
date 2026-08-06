@@ -201,6 +201,53 @@ describe('compileApplicationRevision', () => {
     ).rejects.toThrow(/outside the immutable app snapshot/i);
   });
 
+  it('keeps installed-runtime graph authority narrow and explicit', async () => {
+    const appDir = await makeAppFixture();
+    const runtimeRoot = await makeRuntimeFixture();
+
+    await expect(
+      prepareApplicationRevision({
+        appDir,
+        manifest: makeManifest(),
+        runtimeRoot,
+        trustInstalledRuntimeGraph: true,
+      }),
+    ).rejects.toThrow(/application and runtime roots to match/i);
+    await expect(
+      prepareApplicationRevision({
+        appDir,
+        manifest: makeManifest(),
+        runtimeRoot: appDir,
+        trustInstalledRuntimeGraph: true,
+      }),
+    ).rejects.toThrow(/explicit dependency lock/i);
+    await expect(fsp.stat(path.join(appDir, '.wharfie'))).rejects.toMatchObject(
+      {
+        code: 'ENOENT',
+      },
+    );
+
+    const lockPath = path.join(appDir, 'package-lock.json');
+    await Promise.all([
+      fsp.writeFile(
+        lockPath,
+        JSON.stringify({ lockfileVersion: 3, packages: {} }),
+      ),
+      fsp.writeFile(
+        path.join(appDir, 'src', 'cli.js'),
+        'export async function main(input) { return import(input.moduleName); }\n',
+      ),
+    ]);
+    const prepared = await prepareApplicationRevision({
+      appDir,
+      manifest: makeManifest(),
+      runtimeRoot: appDir,
+      dependencyLockPath: lockPath,
+      trustInstalledRuntimeGraph: true,
+    });
+    await prepared.cleanup();
+  });
+
   it.each([
     {
       name: 'dynamic import',

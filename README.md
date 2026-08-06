@@ -42,8 +42,8 @@ tarball, then hides the copied builder before relocated execution:
 npm run verify:magnetic-first-run
 ```
 
-Run both the repository gate and the copied-starter journey with exactly Node
-24.13.1, matching the installed Wharfie package's declared engine.
+The repository gate uses the exact contributor Node 24.13.1 pin. Published
+consumers may use the declared `>=24.13.1 <25` Node range.
 
 The locally packed release-candidate gate now passes this exact flow, including
 retained coordinator inspection and explicit confirmed takeover-and-release.
@@ -292,8 +292,11 @@ Multi-host leases and heartbeats are still later work. Exact-attempt historical
 log retrieval and explicitly confirmed exact-run logical output snapshots are
 available; ordinary inspection remains redacted, and live tail, search,
 redaction, and exactly-once display remain absent.
-The npm package remains deliberately private. It is not ready for
-production use.
+The npm package enters npm only through the guarded preview release path:
+automation quarantines one immutable candidate, and reviewed promotion moves
+the `preview` channel. It is not ready for production use, and preview
+publication never targets `latest`; the tag build also produces an attested,
+provider-free Node-free Linux x64 glibc CLI.
 
 The first provider deployment authority is now defined. A strict AWS-shaped
 one-node profile now resolves one schema-V6, `wap6` content-addressed provider
