@@ -138,6 +138,7 @@ const PACKAGE_BUILD_STATE_STORE = Object.freeze({
  * @property {string} dir - dir.
  * @property {string} [outputDir] - outputDir.
  * @property {string[]} [targetFilters] - targetFilters.
+ * @property {PackageArtifactTarget[]} [targetOverrides] - Internal exact targets that bypass manifest target declaration and public filter selection.
  * @property {LocalAppBuildConfig} [build] - Ephemeral build request; never embedded in the app manifest.
  * @property {(progress: {phase: 'resolve'|'prepare'|'build'|'download'|'publish', message: string}) => unknown} [onProgress] - Optional human-facing package phase observer.
  * @property {SingleNodeDeploymentFrameworkAssets} [frameworkAssets] - Internal, exact deployment payload assets attached after revision preparation.
@@ -1540,9 +1541,26 @@ export async function packageLocalApp(options) {
   const targetFilters = Array.isArray(options.targetFilters)
     ? options.targetFilters
     : [];
-  let availableTargets = Array.isArray(manifest.targets)
-    ? manifest.targets
-    : [];
+  if (
+    options.targetOverrides !== undefined &&
+    (!Array.isArray(options.targetOverrides) ||
+      options.targetOverrides.length === 0)
+  ) {
+    throw new TypeError(
+      'Internal package targetOverrides must be a nonempty array when provided.',
+    );
+  }
+  if (options.targetOverrides !== undefined && targetFilters.length > 0) {
+    throw new TypeError(
+      'Internal package targetOverrides cannot be combined with targetFilters.',
+    );
+  }
+
+  let availableTargets = Array.isArray(options.targetOverrides)
+    ? options.targetOverrides
+    : Array.isArray(manifest.targets)
+      ? manifest.targets
+      : [];
   if (availableTargets.length === 0) {
     if (targetFilters.length > 0) {
       throw new Error(

@@ -50,24 +50,35 @@ describe('SeaBuild', () => {
     jest.restoreAllMocks();
   });
 
-  it('disables source maps for activity and SEA bundles', async () => {
+  it('keeps activity maps out while emitting inline SEA inspector maps', async () => {
+    const inlineMap = Buffer.from(
+      JSON.stringify({
+        version: 3,
+        sources: ['index.js'],
+        sourcesContent: ['void 0;'],
+        mappings: '',
+      }),
+    ).toString('base64');
     const buildBundle = jest.fn(
       /** @param {Record<string, any>} _options */
       async (_options) => ({
         errors: [],
         warnings: [],
-        outputFiles: [{ text: 'bundled-code' }],
+        outputFiles: [
+          {
+            text: `bundled-code\n//# sourceMappingURL=data:application/json;base64,${inlineMap}\n`,
+          },
+        ],
       }),
     );
     jest.unstable_mockModule('../../../src/core/lib/esbuild.js', () => ({
       build: buildBundle,
     }));
 
-    const [{ default: FunctionResource }, { default: SeaBuild }] =
-      await Promise.all([
-        import('../../../src/core/resources/builds/function-resource.js'),
-        import('../../../src/core/resources/builds/sea-build.js'),
-      ]);
+    const { default: FunctionResource } =
+      await import('../../../src/core/resources/builds/function-resource.js');
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
     const buildTarget =
       /** @type {import('../../../src/core/runtime/build-target.js').BuildTarget} */ ({
         nodeVersion: process.versions.node,
@@ -98,18 +109,141 @@ describe('SeaBuild', () => {
       },
     });
 
-    await functionResource.esbuild();
-    await seaBuild.esbuild(path.join(os.tmpdir(), 'source-map-policy-build'));
+    const seaBuildDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'source-map-policy-build-'),
+    );
+    try {
+      await functionResource.esbuild();
+      await seaBuild.esbuild(seaBuildDir);
 
-    expect(buildBundle).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ sourcemap: false }),
-    );
-    expect(buildBundle).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ sourcemap: false }),
-    );
+      expect(buildBundle).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ sourcemap: false }),
+      );
+      expect(buildBundle).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ sourcemap: 'inline', write: false }),
+      );
+    } finally {
+      await fsp.rm(seaBuildDir, { recursive: true, force: true });
+    }
   });
+
+  it('canonicalizes private snapshot paths without weakening inspector source binding', async () => {
+    const { default: ActorSystem } =
+      await import('../../../src/core/resources/builds/actor-system.js');
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const inspector = await import('../../../scripts/sea-inspector.js');
+    /** @type {string[]} */
+    const roots = [];
+    /** @param {string} label */
+    const buildOnce = async (label) => {
+      const root = await fsp.mkdtemp(
+        path.join(os.tmpdir(), `wharfie-inline-map-${label}-`),
+      );
+      roots.push(root);
+      const snapshotRoot = path.join(root, `revision-${label}`);
+      const appDir = path.join(snapshotRoot, 'app');
+      const buildDir = path.join(root, 'nodejs', 'builds', 'build-fixed');
+      await Promise.all([
+        fsp.mkdir(path.join(appDir, 'src'), { recursive: true }),
+        fsp.mkdir(buildDir, { recursive: true }),
+      ]);
+      const cliPath = path.join(appDir, 'src', 'cli.js');
+      const dependencyLockPath = path.join(snapshotRoot, 'package-lock.json');
+      await Promise.all([
+        fsp.writeFile(
+          cliPath,
+          'export default function cli() { return "same"; }\n',
+        ),
+        fsp.writeFile(dependencyLockPath, '{}\n'),
+      ]);
+      const system = new ActorSystem({
+        name: 'inline-map-reproducibility',
+        properties: {
+          cli: { entrypoint: cliPath, export: 'default' },
+          targets: [
+            {
+              nodeVersion: process.versions.node,
+              platform: process.platform,
+              architecture: process.arch,
+              ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+            },
+          ],
+        },
+        dependencyLock: {
+          path: dependencyLockPath,
+          input: {
+            format: 'test-dependency-lock',
+            digest: {
+              algorithm: 'sha256',
+              value: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+            },
+          },
+        },
+      });
+      const sea = system
+        .getResources()
+        .find((resource) => resource instanceof SeaBuild);
+      if (!(sea instanceof SeaBuild)) {
+        throw new Error('Expected one SEA build resource.');
+      }
+      await sea.esbuild(buildDir);
+      const bundle = await fsp.readFile(
+        path.join(buildDir, 'esbundle.js'),
+        'utf8',
+      );
+      const match = bundle.match(
+        /sourceMappingURL=data:application\/json;base64,([^\n]+)/,
+      );
+      if (!match) throw new Error('Expected one inline SEA source map.');
+      return {
+        bundle,
+        sourceMap: JSON.parse(Buffer.from(match[1], 'base64').toString('utf8')),
+      };
+    };
+
+    try {
+      const [left, right] = await Promise.all([
+        buildOnce('alpha'),
+        buildOnce('beta'),
+      ]);
+      expect(left.bundle).toBe(right.bundle);
+      const appSourceIndex = left.sourceMap.sources.indexOf(
+        'wharfie-app/src/cli.js',
+      );
+      expect(appSourceIndex).toBeGreaterThanOrEqual(0);
+      expect(left.sourceMap.sourceRoot).toBeUndefined();
+      expect(left.sourceMap.sourcesContent[appSourceIndex]).toBe(
+        'export default function cli() { return "same"; }\n',
+      );
+      expect(JSON.stringify(left.sourceMap)).not.toMatch(
+        /wharfie-inline-map-|revision-(?:alpha|beta)/,
+      );
+      const packagedAppEntryPath = path.resolve(
+        'src/core/resources/builds/packaged-app-entry.js',
+      );
+      const packagedAppEntry = await fsp.readFile(packagedAppEntryPath, 'utf8');
+      expect(
+        inspector.resolveSourceMapAnchor(left.sourceMap, {
+          sourceSuffix: 'src/core/resources/builds/packaged-app-entry.js',
+          anchor: 'await runDeveloperCli(developerCliModule, {',
+          expectedSourceContent: packagedAppEntry,
+        }),
+      ).toEqual(
+        expect.objectContaining({
+          source: expect.stringMatching(
+            /src\/core\/resources\/builds\/packaged-app-entry\.js$/,
+          ),
+        }),
+      );
+    } finally {
+      await Promise.all(
+        roots.map((root) => fsp.rm(root, { recursive: true, force: true })),
+      );
+    }
+  }, 15_000);
 
   it('fails instead of writing a non-SEA script fallback when builder Node lacks SEA support', async () => {
     jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({

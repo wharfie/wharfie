@@ -31,10 +31,11 @@ npm run verify:magnetic-first-run
 ```
 
 The copied starter's first supported journey is `npm install` followed by
-`npm run demo -- Ada` on Node 24.13.1 or newer within Node 24; it does not pin
-an npm patch. That published-package journey remains a release acceptance
-condition until the preview exists; the repository command above tests the
-same files and harness against the locally packed candidate, then hides the
+`npm run demo -- Ada` from the starter directory. Use exactly Node 24.13.1,
+matching the installed Wharfie package's declared engine; the starter does not
+pin an npm patch. That published-package journey remains a release acceptance
+condition until the preview exists; the repository command above tests the same
+files and harness against the locally packed candidate, then hides the
 disposable builder before relocated execution.
 
 The advanced [single-host developer preview](./developer-preview.md) and
@@ -291,6 +292,36 @@ activation kind, and activation lifecycle fields. It does not echo inputs or
 internal payload references. Run-level cancellation is available after the
 workflow has been created.
 
+## Run a packaged workflow in the foreground
+
+When the manifest declares `cli.durable`, the packaged top-level `run` command
+is the shortest interactive durable path:
+
+```bash
+<app> wharfie run --name greet-ada -- Ada
+```
+
+`--name` is required and is the stable identity used to reopen the run. The
+arguments after `--` are application arguments; Wharfie maps them through the
+manifest's durable adapter, temporarily hosts the exact revision when no
+resident is active, and otherwise follows the matching resident. Repeating the
+same artifact, name, arguments, and data root resumes the same run and reports
+retained steps without rerunning them. `SIGINT` and `SIGTERM` drain the
+foreground host without recording durable cancellation, print the exact resume
+command, and exit with 130 and 143 respectively. Packaged `start` remains
+admission-only, and packaged `worker` remains the explicit long-lived resident.
+
+Direct packaged activity execution is now nested under `activity`:
+
+```bash
+<app> wharfie activity run --activity greet \
+  --idempotency-key <stable-key> --input '{"name":"Ada"}'
+```
+
+The source equivalent remains `wharfie ops run`. The old packaged
+`<app> wharfie run --activity ...` form is not supported because top-level
+`run` now owns the named default-workflow handoff.
+
 ## Deliver the current workflow signal
 
 When inspection shows that the cursor is waiting for a signal step, deliver
@@ -418,9 +449,11 @@ is the operating-system account's stable data root. Set
 `WHARFIE_DATA_ROOT` to a canonical absolute path to choose an explicit root;
 use that same value for every foreground and service-management invocation,
 and the generated unit pins it for the resident. Retired per-store overrides
-are rejected. Uninstall disables the unit and removes the executable selector
-while preserving immutable releases, ledger data, payloads, and application
-state. It retains both an installation identity tombstone and
+are rejected for every packaged invocation, even when `WHARFIE_DATA_ROOT` is
+unset. Wharfie does not automatically migrate a legacy split-store layout.
+Uninstall disables the unit and removes the executable selector while preserving
+immutable releases, ledger data, payloads, and application state. It retains
+both an installation identity tombstone and
 the durable `ACTIVE` selection, rollback candidate, and same-revision run
 admission. Run `service install` again from that same selected SEA to rehydrate
 the service without changing activation record version or selection generation.
@@ -429,6 +462,11 @@ When the tombstone proves an intentional uninstall, `service install` or
 exact retained source before entering the ordinary durable update. If the
 receipt disappears without that tombstone, the operation fails closed and the
 exact selected SEA must run `service install` to repair it.
+
+This environment variable selects packaged execution and service storage only.
+Self-deployable cloud commands keep their local deployment journal under the
+separate `--data-root` option, or the deployment command's stable default, and
+do not consult `WHARFIE_DATA_ROOT` for that authority.
 
 Use `service prune` separately when accumulated local release copies should be
 removed. It is accepted only from the exact selected SEA with settled `ACTIVE`
@@ -816,8 +854,9 @@ commands keep their smaller request default.
 ## Package the app
 
 For the shortest local path, omit `targets`: packaging selects the exact host
-target and prints a concise result with an actionable next step. On POSIX hosts
-that step is a copy-pasteable command; Windows output stays shell-neutral:
+target and prints a concise result with an actionable next step. Production SEA
+packaging currently supports macOS and glibc Linux; Windows target requests are
+rejected. On a matching supported host, that step is a copy-pasteable command:
 
 ```bash
 wharfie app package ./path/to/app
@@ -837,6 +876,10 @@ targets: [
 ],
 ```
 
+`--target` filters only a matrix declared in the manifest. Combining it with a
+targetless manifest is rejected; remove the filter for this-host packaging or
+declare every intended cross-target entry explicitly.
+
 ```bash
 wharfie app package ./path/to/app --target linux-x64 \
   --json --no-pretty > package-receipt.json
@@ -853,6 +896,10 @@ one schema-version 1 `wharfie.application.package` JSON receipt. Its
 artifact ID, target, SHA-256 digest, byte size, local executable path, and
 adjacent artifact-record path. The full application revision and artifact
 provenance records remain out of command output.
+
+Use `--json --no-pretty` for compact machine output. Bare `--no-pretty` still
+implies JSON for compatibility with reset-era callers, but new scripts should
+select `--json` explicitly rather than depend on that bridge.
 
 With `--json`, ordinary manifest/build diagnostics and Wharfie-owned
 build-tool output go to stderr, leaving redirected stdout as only the receipt.
@@ -882,6 +929,21 @@ Wharfie still verifies the executable bytes, canonical `.artifact.json`
 sidecar, and embedded revision association at the boundaries that consume
 them. Repeating an exact package operation may create or reuse the immutable
 destination; the receipt deliberately makes no `created` or `reused` claim.
+
+### Reset-era migration summary
+
+- Unflagged `app package` output is for humans. Add `--json` anywhere a script
+  parses or redirects the package receipt.
+- A targetless manifest means the exact current host. `--target` no longer
+  invents a cross-target request; declare a target matrix before filtering it.
+- Packaged direct activity execution moved from `wharfie run --activity` to
+  `wharfie activity run --activity`. Top-level `run` now requires `--name` and
+  a declared default durable workflow.
+- Replace every legacy packaged execution/service per-store override with one
+  canonical absolute `WHARFIE_DATA_ROOT`, use the same value for foreground and
+  service commands, and do not expect a legacy layout to be discovered;
+  Wharfie performs no automatic split-store migration. Continue to pass the
+  separate `--data-root` when reopening a self-deployable cloud journal.
 
 ## Try the experimental deployment lifecycle
 
@@ -1015,7 +1077,9 @@ access, mode, and deployment identity remain journal-bound. Invoke
 update, while the committed-current SEA can reconverge current and abandon a
 failed target before a later update. A third release cannot replace an
 unresolved transition. `deployment exec` runs only the committed current
-artifact and fails closed if the guest advanced before local settlement.
+artifact and fails closed if the guest advanced before local settlement. Its
+argv may be ordinary application arguments or the artifact's reserved
+`wharfie ...` operator namespace; it is not a remote shell.
 
 Destroy authenticates only the embedded app identity and uses the exact
 deployment instance plus durable local authority without decoding the large

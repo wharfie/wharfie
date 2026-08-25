@@ -34,10 +34,11 @@ Packaged dispatch resolves one app-scoped storage layout before entrypoint
 selection. Ordinary application argv does not prepare Wharfie's native durable
 runtime; only the reserved operator and private-runtime paths do so lazily. An
 explicit foreground root uses the single `WHARFIE_DATA_ROOT` environment
-variable and cannot be combined with the retired per-store overrides. The
-systemd service pins the same variable to the active packaged layout. Without
-an explicit root, packaged storage uses the stable operating-system account
-default.
+variable and must be a canonical absolute path. Retired per-store overrides are
+rejected for every packaged invocation, even when `WHARFIE_DATA_ROOT` is unset,
+and Wharfie performs no automatic split-store migration. The systemd service
+pins the same variable to the active packaged layout. Without an explicit root,
+packaged storage uses the stable operating-system account default.
 
 With `--json`, source and packaged durable operations emit the same
 schema-versioned camelCase receipt for the same immutable decision:
@@ -75,6 +76,12 @@ operation's prior final-byte and canonical sidecar/owning-revision record
 association; it is not independent verification, and its paths are local
 discovery conveniences. Packaged and selected-artifact consumer boundaries
 separately verify the executable's embedded revision/runtime metadata.
+
+For compatibility, bare `--no-pretty` still implies compact JSON. New machine
+callers should use `--json --no-pretty` explicitly. Likewise, the former
+packaged `<app> wharfie run --activity ...` shape is no longer a direct-activity
+alias: use `<app> wharfie activity run --activity ...`; reserve top-level `run`
+for the required `--name` default-workflow handoff.
 
 During packaging, all modes reserve stdout for the selected final human summary
 or JSON document. Ordinary manifest/build writes and Wharfie-owned build-tool

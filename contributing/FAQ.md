@@ -19,10 +19,14 @@ working foundations for loading manifests, invoking activities locally,
 persisting an append-only manual run → invocation → attempt ledger,
 inspecting/recovering exact runs from source or a packaged artifact, asking an
 exact live owner to cancel a foreground run, packaging target-specific Node SEA
-executables, and driving bounded AWS and Hetzner single-node deployment
-lifecycles. Both providers have completed a live packaged
-apply/activate/adopt/restart/destroy slice with healthy guest service and
-independently verified Wharfie-owned resource cleanup. The broader
+executables, resuming a named default workflow with packaged `wharfie run`, and
+driving bounded AWS and Hetzner single-node deployment lifecycles. Direct
+packaged activity execution is `wharfie activity run`; packaged execution and
+service stores derive from one `WHARFIE_DATA_ROOT`, while self-deployable cloud
+commands select their separate deployment journal with `--data-root`. Both
+providers have completed a live packaged apply/activate/adopt/restart/destroy
+slice with healthy guest service and independently verified Wharfie-owned
+resource cleanup. The broader
 [ADR 0035](../docs/architecture/decisions/0035-two-provider-single-node-self-deployment.md)
 acceptance proof remains partial; the
 [two-provider checkpoint](../llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md)
@@ -54,21 +58,24 @@ not part of the current product, and no backward compatibility is promised.
 
 ## Is Wharfie a general cloud infrastructure-as-code tool?
 
-No. The experimental deployment commands use the operator's normal AWS
-credential chain to preview and create the fixed substrate required by Wharfie
-capabilities, such as a node, durable control state, or artifact storage.
-Provider-native application infrastructure remains application code or
-external IaC.
+No. The legacy source deployment lifecycle and the packaged AWS lifecycle use
+the operator's normal AWS credential chain. The packaged Hetzner lifecycle
+instead reads ambient `HCLOUD_TOKEN`. Credentials are never accepted as command
+arguments. These commands preview and create only the fixed substrate required
+by Wharfie capabilities, such as a node, durable control state, or artifact
+storage. Provider-native application infrastructure remains application code
+or external IaC.
 
-The command tree has exactly five leaves: `plan`, `apply`, `inspect`,
-`reconcile`, and `destroy`. Plan and direct apply take a canonical
-DeploymentProfileV2 JSON file through `--profile`; that operator document is
-outside the app manifest and contains no credentials. Source plan and direct
-apply package and pre-stage a selected SEA; source prepared apply and reconcile
-use durable staged evidence. Packaged plan, apply, and non-destroy reconcile
-prove their running SEA and do not accept `--dir` or `--output-dir`; active
-destroy recovery remains durable-only. This is an experimental operator
-surface, not a clean-account or service-readiness claim.
+The legacy AWS-oriented source command tree has exactly five leaves: `plan`,
+`apply`, `inspect`, `reconcile`, and `destroy`. Plan and direct apply take a
+canonical DeploymentProfileV2 JSON file through `--profile`; that operator
+document is outside the app manifest and contains no credentials. Source plan
+and direct apply package and pre-stage a selected SEA; source prepared apply and
+reconcile use durable staged evidence. A `--self-deployable` SEA instead exposes
+AWS and Hetzner `preview`, `apply`, `status`, `update`, `recover`, `exec`, and
+`destroy`; packaged `inspect` and `reconcile` are not exposed. This remains an
+experimental operator surface with a partial broader ADR 0035 acceptance
+artifact.
 
 ## Does Wharfie require a hosted control plane?
 

@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   constants as fsConstants,
   promises,
   existsSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { build as _build } from '../../lib/esbuild.js';
@@ -39,6 +40,8 @@ const NODE_SEA_SENTINEL_FUSE = Buffer.from(
 const FILE_SEQUENCE_SCAN_CHUNK_SIZE = 1024 * 1024;
 const FUSE_MARKER_GENERATION_ATTEMPTS = 16;
 const FUSE_MARKER_DOMAIN = 'wharfie.sea.nested-fuse-mask.v1\0';
+const INLINE_SOURCE_MAP_PATTERN =
+  /(\/\/# sourceMappingURL=data:application\/json;base64,)([A-Za-z0-9+/=]+)(\r?\n)?$/;
 
 /**
  * Render one sealed build input as a canonical path relative to the private
@@ -59,6 +62,112 @@ function toSeaConfigPath(buildDir, filePath) {
     throw new Error('SEA config path must name a file inside its build tree.');
   }
   return relativePath.split(sep).join('/');
+}
+
+/**
+ * Replace the private revision-snapshot root in an inline bundle source map
+ * with a stable logical application root. Real authored sourcesContent and all
+ * mappings remain byte-for-byte unchanged; only the synthetic entry source,
+ * whose imports contain private absolute paths, is omitted. Inspector proofs
+ * therefore retain their exact source binding without making the SEA depend
+ * on a random snapshot directory name.
+ * @param {string} bundle - Bundled JavaScript with one inline source map.
+ * @param {string} outputPath - Absolute generated bundle path.
+ * @param {string} entryCode - Synthetic SEA entry source containing private import paths.
+ * @param {string | undefined} applicationSourceRoot - Private immutable app snapshot root.
+ * @returns {string} - Bundle with canonical source names.
+ */
+function canonicalizeInlineSourceMap(
+  bundle,
+  outputPath,
+  entryCode,
+  applicationSourceRoot,
+) {
+  const match = bundle.match(INLINE_SOURCE_MAP_PATTERN);
+  if (!match) {
+    throw new Error(
+      'SEA bundle must contain one terminal inline source map for canonicalization.',
+    );
+  }
+  /** @type {Record<string, any>} */
+  let sourceMap;
+  try {
+    sourceMap = JSON.parse(Buffer.from(match[2], 'base64').toString('utf8'));
+  } catch (error) {
+    throw new Error('SEA bundle contains an invalid inline source map.', {
+      cause: error,
+    });
+  }
+  if (
+    !sourceMap ||
+    typeof sourceMap !== 'object' ||
+    Array.isArray(sourceMap) ||
+    !Array.isArray(sourceMap.sources) ||
+    sourceMap.sources.some(
+      (/** @type {unknown} */ source) => typeof source !== 'string',
+    ) ||
+    !Array.isArray(sourceMap.sourcesContent) ||
+    sourceMap.sourcesContent.length !== sourceMap.sources.length ||
+    sourceMap.sourcesContent.some(
+      (/** @type {unknown} */ content) =>
+        content !== null && typeof content !== 'string',
+    ) ||
+    (sourceMap.sourceRoot !== undefined && sourceMap.sourceRoot !== '')
+  ) {
+    throw new Error(
+      'SEA bundle inline source map has invalid embedded sources.',
+    );
+  }
+  const entrySourceIndexes = sourceMap.sourcesContent.reduce(
+    (
+      /** @type {number[]} */ indexes,
+      /** @type {string | null} */ content,
+      /** @type {number} */ index,
+    ) => {
+      if (content === entryCode) indexes.push(index);
+      return indexes;
+    },
+    /** @type {number[]} */ ([]),
+  );
+  if (entrySourceIndexes.length !== 1) {
+    throw new Error(
+      `SEA bundle source map resolved ${entrySourceIndexes.length} synthetic entry sources; expected 1.`,
+    );
+  }
+  sourceMap.sourcesContent[entrySourceIndexes[0]] = null;
+  if (applicationSourceRoot) {
+    const canonicalRoot = realpathSync(resolve(applicationSourceRoot));
+    const sourceBase = dirname(outputPath);
+    let canonicalized = 0;
+    sourceMap.sources = sourceMap.sources.map(
+      (/** @type {string} */ source) => {
+        const absoluteSource = resolve(sourceBase, source);
+        const relativeSource = relative(canonicalRoot, absoluteSource);
+        if (
+          relativeSource === '' ||
+          isAbsolute(relativeSource) ||
+          relativeSource === '..' ||
+          relativeSource.startsWith(`..${sep}`)
+        ) {
+          return source;
+        }
+        canonicalized += 1;
+        return `wharfie-app/${relativeSource.split(sep).join('/')}`;
+      },
+    );
+    if (canonicalized === 0) {
+      throw new Error(
+        'SEA bundle source map did not contain its immutable application snapshot.',
+      );
+    }
+  }
+  const encoded = Buffer.from(JSON.stringify(sourceMap), 'utf8').toString(
+    'base64',
+  );
+  return bundle.replace(
+    INLINE_SOURCE_MAP_PATTERN,
+    `${match[1]}${encoded}${match[3] || ''}`,
+  );
 }
 
 /**
@@ -837,6 +946,7 @@ async function captureNodeArchiveEvidence(
  * @typedef SeaBuildProperties
  * @property {string | function(): string} entryCode - entryCode.
  * @property {string | function(): string} resolveDir - resolveDir.
+ * @property {string} [sourceMapApplicationRoot] - Private immutable application source root canonicalized out of inline SEA maps.
  * @property {string | function(): string} nodeBinaryPath - nodeBinaryPath.
  * @property {string | function(): string} nodeVersion - Exact Node.js target version; must match the builder runtime.
  * @property {TargetPlatform | function(): TargetPlatform} platform - platform.
@@ -1189,7 +1299,7 @@ class SeaBuild extends BaseResource {
     if (typeof entryCode !== 'string') {
       throw new TypeError('SEA build entryCode must resolve to a string.');
     }
-    const { errors, warnings } = await _build({
+    const { outputFiles, errors, warnings } = await _build({
       stdin: {
         contents: entryCode,
         resolveDir: this.get('resolveDir'),
@@ -1199,11 +1309,12 @@ class SeaBuild extends BaseResource {
         '.worker.js': 'text',
       },
       outfile: outputPath,
+      write: false,
       bundle: true,
       platform: 'node',
       minify: true,
       keepNames: false,
-      sourcemap: false,
+      sourcemap: 'inline',
       target: `node${nodeVersion}`,
       logLevel: 'silent',
       external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'lmdb'],
@@ -1224,6 +1335,16 @@ class SeaBuild extends BaseResource {
     if (warnings.length > 0) {
       console.warn(warnings);
     }
+    if (!outputFiles || outputFiles.length !== 1) {
+      throw new Error('SEA JavaScript bundle output was not as expected.');
+    }
+    const bundle = canonicalizeInlineSourceMap(
+      outputFiles[0].text,
+      outputPath,
+      entryCode,
+      this.get('sourceMapApplicationRoot'),
+    );
+    await promises.writeFile(outputPath, bundle, { mode: 0o600 });
     this.set('codeBundlePath', outputPath);
   }
 

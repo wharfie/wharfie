@@ -38,6 +38,9 @@ tarball, then hides the copied builder before relocated execution:
 npm run verify:magnetic-first-run
 ```
 
+Run both the repository gate and the copied-starter journey with exactly Node
+24.13.1, matching the installed Wharfie package's declared engine.
+
 This is release-candidate evidence, not a published-install claim; final
 acceptance still requires the same gate to pass against the published preview.
 The deeper [single-host developer preview](docs/guides/developer-preview.md)
@@ -61,16 +64,27 @@ operator or private-runtime path.
 
 For a targetless manifest, `wharfie app package` now infers the exact compatible
 host target from the running Node version, platform, architecture, and glibc on
-Linux. Its default output is a human handoff: build phases, target, artifact
-path, size, and an actionable `Next:` step. Matching POSIX hosts receive an
-exact shell command; Windows avoids pretending cmd.exe and PowerShell share
-quoting rules. Machine callers opt into the unchanged
+Linux. Production SEA packaging currently supports macOS and glibc Linux;
+Windows target requests are rejected. Its default output is a human handoff:
+build phases, target, artifact path, size, and an actionable `Next:` step. A
+matching supported host receives an exact shell command. Machine callers opt
+into the unchanged
 strict schema-version 1 `wharfie.application.package` receipt with `--json`.
 That target-sorted receipt binds content-addressed SEA identities, byte digests,
 sizes, and immediate local artifact/sidecar paths without exposing the full
 internal revision or provenance records. The receipt and its paths are
 discovery data, not artifact authority; verification still depends on the SEA
 bytes, canonical sidecar, and embedded revision association.
+
+Reset-era callers must account for that human-first default: scripts that parse
+or redirect package output should pass `--json`, or `--json --no-pretty` for one
+compact line. Bare `--no-pretty` still implies JSON only as a compatibility
+bridge; new automation should select `--json` explicitly. A targetless manifest
+means "package this exact host," so `--target` is accepted only when the
+manifest declares the matrix it filters. Packaged direct activity execution
+moved from `<app> wharfie run --activity ...` to `<app> wharfie activity run
+--activity ...`; top-level `run` now names and resumes the declared default
+durable workflow.
 
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
@@ -669,12 +683,14 @@ the pending choice. A stable active deployment is repaired toward its
 committed release, and an already destroyed deployment is a no-op. See the
 [packaged deployment update and recovery checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-update-recovery.md).
 
-`deployment exec` invokes ordinary application argv only on the committed
-current release. If an update reached the guest but local settlement was
-interrupted, exec fails closed until `deployment recover` settles the journal.
-Remote convergence retains at most the committed current, journal rollback,
-and in-flight target wrapper artifacts and removes older content-addressed
-wrappers through exact argv operations.
+`deployment exec` invokes argv on the committed current release. The argv may
+be ordinary application arguments or the artifact's reserved `wharfie ...`
+operator namespace; exec is not a remote shell and accepts no shell command
+string. If an update reached the guest but local settlement was interrupted,
+exec fails closed until `deployment recover` settles the journal. Remote
+convergence retains at most the committed current, journal rollback, and
+in-flight target wrapper artifacts and removes older content-addressed wrappers
+through exact argv operations.
 
 Destroy reads only the embedded app identity plus the exact durable journal
 under the selected data root; it does not decode the embedded Linux payload.
@@ -1072,13 +1088,21 @@ same run. Interrupting the foreground host drains it without creating a durable
 cancellation decision and prints the exact command to resume. Expert direct
 activity execution now lives under `activity run`.
 
-Every packaged path derives its stores from one app-scoped layout. Set the one
-`WHARFIE_DATA_ROOT` environment variable to an absolute directory when a
-foreground invocation needs an explicit root. It cannot be combined with the
-retired per-store environment overrides. A systemd-managed service pins that
-same variable to the active packaged layout, so foreground and resident
-execution keep using the custom root. Without an explicit root, packaged
-storage uses the stable operating-system account default.
+Packaged execution and service paths derive their stores from one app-scoped
+layout. Set the one `WHARFIE_DATA_ROOT` environment variable to a canonical absolute
+directory when a foreground invocation needs an explicit root.
+Retired per-store environment overrides are rejected for every packaged
+invocation, even when `WHARFIE_DATA_ROOT` is unset. A systemd-managed service
+pins that same variable to the active packaged layout, so foreground and
+resident execution keep using the custom root. Without an explicit root,
+packaged execution and service storage uses the stable operating-system account
+default. Wharfie does not automatically migrate a legacy split-store layout.
+
+Self-deployable cloud commands do not use `WHARFIE_DATA_ROOT` as deployment
+authority. Their local deployment journal is selected independently with
+`--data-root`, or with the deployment command's stable default when that option
+is omitted. Pass the same `--data-root` to every command that reopens that
+journal.
 
 `submit` and `start` are durable and do not require a live worker; the worker
 remains a separate resident process. For an application with `cli.durable`,

@@ -540,6 +540,38 @@ describe('packageLocalApp', () => {
       expect(progress[3].message).toBe(
         `Downloading Node v${process.versions.node} (1.0/2.0 MiB)`,
       );
+
+      progress.length = 0;
+      const overridden = await packageLocalApp({
+        dir,
+        outputDir: path.join(dir, 'override-dist'),
+        targetOverrides: [currentTarget],
+        onProgress: (event) => progress.push(event),
+      });
+      expect(overridden.targets).toEqual([currentTarget]);
+      expect(overridden.artifacts).toHaveLength(1);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps internal exact target overrides closed from public target filters', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-package-target-overrides-'),
+    );
+
+    try {
+      await writeTargetlessPackageApp(dir, 'target-override-boundary');
+      await expect(
+        packageLocalApp({ dir, targetOverrides: [] }),
+      ).rejects.toThrow(/targetOverrides must be a nonempty array/);
+      await expect(
+        packageLocalApp({
+          dir,
+          targetOverrides: [currentTarget],
+          targetFilters: [getTargetSelector(currentTarget)],
+        }),
+      ).rejects.toThrow(/cannot be combined with targetFilters/);
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
     }

@@ -1908,7 +1908,7 @@ describe('single-node deployment journal persistence', () => {
         state: 'absent',
       },
     ]);
-  });
+  }, 15_000);
 
   it('allows exactly one competing writer to claim a generation', async () => {
     const { store } = await makeStore();

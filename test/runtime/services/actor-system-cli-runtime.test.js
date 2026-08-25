@@ -112,7 +112,7 @@ describe('packaged application dispatch', () => {
     expect(help).not.toMatch(/\bctl\b/);
   });
 
-  it('mounts only self-deployable preview, apply, status, and destroy without replacing flat ledger commands', async () => {
+  it('mounts only self-deployable deployment commands without replacing flat ledger commands', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
     const program = createProgram();
     const deployment = program.commands.find(
@@ -126,7 +126,15 @@ describe('packaged application dispatch', () => {
         /** @param {import('commander').Command} command */
         (command) => command.name(),
       ),
-    ).toEqual(['preview', 'apply', 'status', 'destroy']);
+    ).toEqual([
+      'preview',
+      'apply',
+      'status',
+      'update',
+      'recover',
+      'exec',
+      'destroy',
+    ]);
     expect(
       program.commands.filter(
         /** @param {import('commander').Command} command */

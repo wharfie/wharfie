@@ -494,6 +494,43 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('receipt.artifactCount');
     expect(quickstart).toContain('receipt.artifacts[0].path');
     expect(quickstart).toContain('"$artifact_path" wharfie service converge');
+    expect(quickstart).toContain('Bare `--no-pretty` still\nimplies JSON');
+    expect(quickstart).toContain(
+      '`--target` filters only a matrix declared in the manifest',
+    );
+  });
+
+  it('documents the reset-era packaged command and storage migration', async () => {
+    const [readme, quickstart, cliReadme, storageDecision, packageDecision] =
+      await Promise.all(
+        [
+          'README.md',
+          'docs/guides/quickstart.md',
+          'src/cli/README.md',
+          'docs/architecture/decisions/0020-systemd-user-service-lifecycle.md',
+          'docs/architecture/decisions/0030-versioned-application-package-receipt.md',
+        ].map((relativePath) =>
+          fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+        ),
+      );
+
+    expect(quickstart).toContain('<app> wharfie run --name greet-ada -- Ada');
+    expect(quickstart).toContain('<app> wharfie activity run --activity greet');
+    expect(quickstart).toContain('exit with 130 and 143 respectively');
+    expect(quickstart).not.toMatch(/^<app> wharfie run --activity/m);
+
+    for (const document of [readme, quickstart, cliReadme, packageDecision]) {
+      expect(document).toContain('--json --no-pretty');
+      expect(document).toMatch(/bare `--no-pretty`/i);
+      expect(document).toMatch(/compatibility/);
+    }
+
+    for (const document of [readme, quickstart, cliReadme, storageDecision]) {
+      expect(document).toContain('WHARFIE_DATA_ROOT');
+      expect(document).toMatch(/canonical absolute/);
+      expect(document).toMatch(/legacy|retired/);
+      expect(document).toMatch(/no automatic|does not automatically/);
+    }
   });
 
   it('keeps the single-host developer preview on the packaged command surface', async () => {

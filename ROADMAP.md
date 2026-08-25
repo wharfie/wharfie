@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-06
+**Last updated:** 2026-08-24
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -68,11 +68,12 @@ The repository has substantial foundations:
   update, rollback, failed-target restoration, history/output reads,
   uninstall, prune, and host cleanup; and
 - packaged AWS and Hetzner single-node read-only preview and status plus
-  apply/exec/destroy commands, recoverable provider mutations, automated
-  recovery proofs, and live packaged apply/activate/adopt/restart/destroy
-  proofs with independent owned-resource cleanup. Journal-bound `exec` reaches
-  only the exact active remote application through pinned SSH, although that
-  command has not yet received a new live-provider proof.
+  apply/update/recover/exec/destroy commands, recoverable provider mutations,
+  automated recovery proofs, and live packaged
+  apply/activate/adopt/restart/destroy proofs with independent owned-resource
+  cleanup. Journal-bound `exec` reaches only the exact active remote application
+  through pinned SSH, although that command has not yet received a new
+  live-provider proof.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -371,7 +372,9 @@ sequence and proof-owned cleanup.
 The single-host preview is closed. The coordinator-authority kernel remains
 complete but intentionally unbound; production authority binding and
 coordinator replacement are now the active Outcome 2 work. Provider-certified
-leases, multi-node placement, and cloud fulfillment remain later slices.
+leases and multi-node placement remain later slices. Outcome 3 has a bounded
+two-provider lifecycle proof, while its complete redacted acceptance harness,
+retained-data capability, and journal epoch rollover remain open.
 
 ## Explicitly not now
 

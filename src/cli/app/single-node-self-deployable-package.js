@@ -16,6 +16,7 @@ const PACKAGE_OPTION_NAMES = new Set([
   'dir',
   'outputDir',
   'targetFilters',
+  'onProgress',
 ]);
 
 export const SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET = Object.freeze(
@@ -36,6 +37,7 @@ export const SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET = Object.freeze(
  * @property {string} [outputDir] - Public operator artifact directory.
  * @property {string[]} [targetFilters] - Requested operator artifact targets.
  * @property {import('./local-app.js').LocalAppBuildConfig} [build] - Ephemeral package build configuration.
+ * @property {import('./local-app.js').PackageLocalAppOptions['onProgress']} [onProgress] - Optional human-facing package phase observer.
  */
 
 /**
@@ -76,6 +78,9 @@ function createSharedPackageOptions(options) {
       ? { outputDir: options.outputDir }
       : {}),
     ...(options.build !== undefined ? { build: options.build } : {}),
+    ...(options.onProgress !== undefined
+      ? { onProgress: options.onProgress }
+      : {}),
   };
 }
 
@@ -152,9 +157,7 @@ export async function packageSingleNodeSelfDeployableApp(options) {
     const deploymentPackage = await packageLocalApp({
       ...createSharedPackageOptions(options),
       outputDir: privateOutputDir,
-      targetFilters: [
-        `node${SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET.nodeVersion}-linux-x64-glibc`,
-      ],
+      targetOverrides: [SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET],
     });
     const deployment = validateDeploymentPackageResult(deploymentPackage);
     payload = await createSingleNodeDeploymentPayloadAssets({

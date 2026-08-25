@@ -20,11 +20,18 @@ deliberately disabled. No standalone builder binary is published. Generated
 application SEAs are the portable deliverable and do not require Node on the
 target machine.
 
-The bounded tarball-based workflow for the completed developer preview is the
-[single-host developer preview](./developer-preview.md). The tarball includes
-the supported `examples/steady-file` starter and can be installed into a clean
-builder workspace without using the checkout as application runtime authority.
-Its accepted split builder/clean-target run is recorded in the
+The shortest packaged candidate is the
+[magnetic hello-world starter](../../examples/hello-world/README.md). Its
+repository gate copies only that starter, installs Wharfie's freshly packed npm
+tarball, hides the disposable builder, and proves relocated Node-absent
+execution plus named durable resumption. This remains release-candidate evidence
+until the same gate passes against a published preview.
+
+The deeper tarball-based workflow for the completed service preview is the
+[single-host developer preview](./developer-preview.md). The tarball also
+includes the supported `examples/steady-file` starter and can be installed into
+a clean builder workspace without using the checkout as application runtime
+authority. Its accepted split builder/clean-target run is recorded in the
 [checksummed checkpoint](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md).
 
 Ordinary `npm test` is coverage-free. The runner places its default Jest cache

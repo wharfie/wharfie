@@ -164,19 +164,22 @@ describe('packageSingleNodeSelfDeployableApp', () => {
     createSingleNodeDeploymentPayloadAssets.mockResolvedValueOnce(payload);
 
     const build = { assets: { prompt: './prompt.txt' } };
+    const onProgress = jest.fn();
     const result = await packageSingleNodeSelfDeployableApp({
       dir: '/app',
       outputDir: publicOutput,
       targetFilters: ['darwin-arm64'],
       build,
+      onProgress,
     });
 
     expect(packageLocalApp).toHaveBeenCalledTimes(2);
     expect(packageLocalApp.mock.calls[0][0]).toEqual({
       dir: '/app',
       outputDir: privateOutput,
-      targetFilters: [`node${process.versions.node}-linux-x64-glibc`],
+      targetOverrides: [SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET],
       build,
+      onProgress,
     });
     expect(createSingleNodeDeploymentPayloadAssets).toHaveBeenCalledWith({
       artifactPath: path.join(String(privateOutput), 'deployment-sea'),
@@ -188,6 +191,7 @@ describe('packageSingleNodeSelfDeployableApp', () => {
       outputDir: publicOutput,
       targetFilters: ['darwin-arm64'],
       build,
+      onProgress,
       frameworkAssets: {
         assets: payload.assets,
         assetDigests: payload.assetDigests,
@@ -246,6 +250,20 @@ describe('packageSingleNodeSelfDeployableApp', () => {
     await expect(
       packageSingleNodeSelfDeployableApp({ dir: '/app' }),
     ).rejects.toThrow('operator package failed');
+
+    expect(packageLocalApp.mock.calls[0][0]).toEqual({
+      dir: '/app',
+      outputDir: privateOutput,
+      targetOverrides: [SINGLE_NODE_DEPLOYMENT_PACKAGE_TARGET],
+    });
+    expect(packageLocalApp.mock.calls[1][0]).toEqual({
+      dir: '/app',
+      frameworkAssets: expect.any(Object),
+      expectedRevisionId: revision.revisionId,
+    });
+    expect(packageLocalApp.mock.calls[1][0]).not.toHaveProperty(
+      'targetFilters',
+    );
 
     expect(payloadCleanup).toHaveBeenCalledTimes(1);
     expect(existsSync(String(privateOutput))).toBe(false);

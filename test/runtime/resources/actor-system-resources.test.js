@@ -245,6 +245,33 @@ describe('ActorSystem build graph', () => {
     expect(entryCode).not.toContain('sourceMapSupport');
   });
 
+  it('defers packaged native-runtime preparation to the packaged dispatcher', () => {
+    const system = new ActorSystem({
+      name: 'lazy-native-runtime-system',
+      properties: {
+        targets: [
+          {
+            nodeVersion: process.versions.node,
+            platform: 'linux',
+            architecture: 'arm64',
+          },
+        ],
+      },
+    });
+    const build = system
+      .getResources()
+      .find((resource) => resource instanceof SeaBuild);
+    const entryCode = build?.get('entryCode');
+
+    expect(typeof entryCode).toBe('string');
+    expect(entryCode).not.toContain(
+      'await preparePackagedCoreRuntimeDependencies()',
+    );
+    expect(entryCode).toContain(
+      'prepareRuntime: preparePackagedCoreRuntimeDependencies',
+    );
+  });
+
   it('rejects Windows targets before defining a core-runtime SEA build', () => {
     expect(
       () =>
