@@ -9877,22 +9877,24 @@ export default defineApp({
       env: cleanEnvironment,
     },
   ).stdout;
-  assert.match(deploymentHelp, /\bplan\b/);
+  assert.match(deploymentHelp, /\bpreview\b/);
   assert.match(deploymentHelp, /\bapply\b/);
-  assert.match(deploymentHelp, /\binspect\b/);
-  assert.match(deploymentHelp, /\breconcile\b/);
+  assert.match(deploymentHelp, /\bstatus\b/);
+  assert.match(deploymentHelp, /\bupdate\b/);
+  assert.match(deploymentHelp, /\brecover\b/);
+  assert.match(deploymentHelp, /\bexec\b/);
   assert.match(deploymentHelp, /\bdestroy\b/);
-  const deploymentPlanHelp = runCommand(
+  const deploymentPreviewHelp = runCommand(
     cleanArtifactPath,
-    ['wharfie', 'deployment', 'plan', '--help'],
+    ['wharfie', 'deployment', 'preview', '--help'],
     {
       cwd: cleanRunDirectory,
       capture: true,
       env: cleanEnvironment,
     },
   ).stdout;
-  assert.doesNotMatch(deploymentPlanHelp, /--dir\b/);
-  assert.doesNotMatch(deploymentPlanHelp, /--output-dir\b/);
+  assert.doesNotMatch(deploymentPreviewHelp, /--dir\b/);
+  assert.doesNotMatch(deploymentPreviewHelp, /--output-dir\b/);
   const serviceStatus = spawnSync(
     cleanArtifactPath,
     ['wharfie', 'service', 'status', '--json'],

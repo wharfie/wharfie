@@ -35,6 +35,10 @@ import {
   validateBuildTarget,
 } from '../../core/runtime/build-target.js';
 import {
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME,
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME,
+} from '../../core/runtime/single-node-deployment-payload.js';
+import {
   compareCanonicalStrings,
   sortCanonicalJsonValue,
 } from '../../core/runtime/canonical-order.js';
@@ -55,6 +59,12 @@ const TOOLCHAIN_PACKAGE_NAMES = Object.freeze([
   'semver',
   'tar',
 ]);
+const SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES = Object.freeze(
+  [
+    SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME,
+    SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME,
+  ].sort(),
+);
 
 /**
  * Load one known package manifest through a literal specifier so the package
@@ -140,14 +150,56 @@ function digestBytes(bytes) {
 }
 
 /**
+ * Accept only the exact deployment payload digest pair. The generation check
+ * below then binds this evidence to bytes SeaBuild actually sealed.
+ * @param {unknown} value - Candidate framework digest evidence.
+ * @returns {Record<string, import('../../core/runtime/application-revision.js').Sha256Digest>} - Canonical digest mapping.
+ */
+function validateSingleNodeDeploymentFrameworkAssetDigests(value) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(
+      'SEA framework asset evidence must be the exact single-node deployment payload digest pair.',
+    );
+  }
+  const names = Object.keys(value).sort(compareCanonicalStrings);
+  if (
+    names.length !== SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES.length ||
+    names.some(
+      (name, index) =>
+        name !== SINGLE_NODE_DEPLOYMENT_FRAMEWORK_ASSET_NAMES[index],
+    )
+  ) {
+    throw new TypeError(
+      'SEA framework asset evidence must contain only the exact single-node deployment payload digest pair.',
+    );
+  }
+  return Object.fromEntries(
+    names.map((name) => [
+      name,
+      validateSha256Digest(
+        /** @type {Record<string, any>} */ (value)[name],
+        `SEA framework asset '${name}' digest`,
+      ),
+    ]),
+  );
+}
+
+/**
  * Cross-check every behavior-bearing SEA asset against the immutable revision
  * and deterministic reserved metadata encodings.
  * @param {Record<string, any>} generation - Successful build generation.
  * @param {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Owning revision.
  * @param {import('../../core/runtime/build-target.js').BuildTarget} target - Artifact target.
+ * @param {unknown} frameworkAssetDigests - Exact framework-owned asset digest evidence.
  * @returns {void}
  */
-function validateGenerationAssets(generation, revision, target) {
+function validateGenerationAssets(
+  generation,
+  revision,
+  target,
+  frameworkAssetDigests,
+) {
   const actualAssets = generation.assets;
   if (
     !actualAssets ||
@@ -167,6 +219,8 @@ function validateGenerationAssets(generation, revision, target) {
     revisionId: revision.revisionId,
     target,
   };
+  const validatedFrameworkAssetDigests =
+    validateSingleNodeDeploymentFrameworkAssetDigests(frameworkAssetDigests);
   /** @type {Record<string, import('../../core/runtime/application-revision.js').Sha256Digest>} */
   const expectedAssets = {
     ...Object.fromEntries(
@@ -182,9 +236,22 @@ function validateGenerationAssets(generation, revision, target) {
       `${stringifyEmbeddedArtifactRuntime(runtime, { pretty: true })}\n`,
     ),
   };
+  for (const [name, digest] of Object.entries(validatedFrameworkAssetDigests)) {
+    if (Object.hasOwn(expectedAssets, name)) {
+      throw new Error(
+        `SEA framework asset '${name}' collides with revision or reserved metadata.`,
+      );
+    }
+    expectedAssets[name] = digest;
+  }
   for (const [activity, evidence] of Object.entries(
     generation.functionAssets || {},
   )) {
+    if (Object.hasOwn(validatedFrameworkAssetDigests, activity)) {
+      throw new Error(
+        `SEA framework asset '${activity}' collides with an activity asset.`,
+      );
+    }
     expectedAssets[activity] = validateSha256Digest(
       evidence.assetDigest,
       `Activity '${activity}' sealed asset digest`,
@@ -209,6 +276,20 @@ function validateGenerationAssets(generation, revision, target) {
     if (getBuildTargetId(coreManifest.target) !== getBuildTargetId(target)) {
       throw new Error(
         'SEA core runtime dependency evidence does not match the artifact target.',
+      );
+    }
+    if (
+      Object.hasOwn(
+        validatedFrameworkAssetDigests,
+        CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+      ) ||
+      Object.hasOwn(
+        validatedFrameworkAssetDigests,
+        coreManifest.archive.assetName,
+      )
+    ) {
+      throw new Error(
+        'SEA framework assets collide with core runtime dependency content.',
       );
     }
     expectedAssets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME] =
@@ -888,7 +969,7 @@ function getArtifactSigning(actorSystem, build, target) {
 
 /**
  * Construct truthful package-time provenance from reconciled build resources.
- * @param {{build: any, actorSystem: any, revision: unknown, builderVersion: string, artifactBytes: Buffer | Uint8Array}} options - Packaging inputs.
+ * @param {{build: any, actorSystem: any, revision: unknown, builderVersion: string, artifactBytes: Buffer | Uint8Array, frameworkAssetDigests?: unknown}} options - Packaging inputs.
  * @returns {Promise<import('../../core/runtime/artifact-record.js').ArtifactProvenance>} - Validated artifact provenance.
  */
 export async function createArtifactProvenance({
@@ -897,6 +978,7 @@ export async function createArtifactProvenance({
   revision,
   builderVersion,
   artifactBytes,
+  frameworkAssetDigests,
 }) {
   const validatedRevision = validateApplicationRevision(
     revision,
@@ -909,7 +991,12 @@ export async function createArtifactProvenance({
     );
   }
   const generation = build.getSuccessfulBuildEvidence(artifactBytes);
-  validateGenerationAssets(generation, validatedRevision, target);
+  validateGenerationAssets(
+    generation,
+    validatedRevision,
+    target,
+    frameworkAssetDigests,
+  );
   const signing = getArtifactSigning(actorSystem, build, target);
   if (!hasSameCanonicalJson(signing, generation.signing)) {
     throw new Error(

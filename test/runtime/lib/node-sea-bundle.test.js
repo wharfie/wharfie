@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -14,12 +14,51 @@ const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const CLI_BUNDLE_TEST_TIMEOUT_MS = 20_000;
 
 describe('src/core/lib/node-sea.js', () => {
+  it('exposes Node-owned raw SEA asset bytes without copying', async () => {
+    const originalGetBuiltinModule = process.getBuiltinModule;
+    const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const getRawAsset = jest.fn((/** @type {string} */ _name) => bytes);
+
+    try {
+      process.getBuiltinModule = () =>
+        /** @type {any} */ ({
+          getRawAsset,
+        });
+      const module = await import(
+        `../../../src/core/lib/node-sea.js?raw-asset=${String(Date.now())}`
+      );
+
+      expect(module.getRawAsset('payload')).toBe(bytes);
+      expect(getRawAsset).toHaveBeenCalledWith('payload');
+    } finally {
+      process.getBuiltinModule = originalGetBuiltinModule;
+    }
+  });
+
+  it('fails closed when raw SEA asset access is unavailable', async () => {
+    const originalGetBuiltinModule = process.getBuiltinModule;
+
+    try {
+      process.getBuiltinModule = () => /** @type {any} */ ({});
+      const module = await import(
+        `../../../src/core/lib/node-sea.js?missing-raw-asset=${String(Date.now())}`
+      );
+
+      expect(() => module.getRawAsset('payload')).toThrow(
+        'node:sea raw asset access is unavailable in this runtime',
+      );
+    } finally {
+      process.getBuiltinModule = originalGetBuiltinModule;
+    }
+  });
+
   it('bundles into CommonJS output without top-level-await errors', async () => {
     const result = await build({
       stdin: {
         contents: [
-          "import { getAsset, isSea } from './src/core/lib/node-sea.js';",
+          "import { getAsset, getRawAsset, isSea } from './src/core/lib/node-sea.js';",
           'void getAsset;',
+          'void getRawAsset;',
           'console.log(typeof isSea);',
         ].join('\n'),
         resolveDir: repoRoot,

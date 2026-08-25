@@ -144,6 +144,10 @@ by default; `--no-pretty` makes that same JSON document compact. A successful
 JSON invocation writes exactly one receipt. Packaging or projection failure
 writes no partial document.
 
+During the reset, bare `--no-pretty` remains a compatibility bridge that implies
+`--json`. It is not the preferred machine contract: new scripts and updated
+examples use `--json --no-pretty` so their output selection remains explicit.
+
 While packaging runs, both modes reserve process stdout for the selected final
 human summary or JSON document. Ordinary in-process writes through
 `process.stdout` and Wharfie-owned build-subprocess output are routed to stderr
@@ -161,6 +165,8 @@ successful publication projects the same semantic receipt.
 - Humans receive an immediate artifact handoff and exact next command without
   interpreting an internal object graph.
 - Scripts and coding agents request the small stable receipt with `--json`.
+- Existing callers that relied on unflagged JSON must add `--json`; callers that
+  relied on bare `--no-pretty` should migrate to `--json --no-pretty`.
 - A targetless manifest gives the common local path one exact host artifact;
   explicit target matrices continue to express cross-target intent.
 - Deployment internals keep their existing fresh-generation authority; no

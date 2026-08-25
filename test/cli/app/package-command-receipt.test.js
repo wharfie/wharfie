@@ -737,4 +737,100 @@ describe('application package command receipt', () => {
     expect(output).toContain('cmd.exe and PowerShell');
     expect(output).not.toContain(`Next: '${artifact.path}'`);
   });
+  it('selects self-deployable packaging without changing the public receipt', async () => {
+    const result = makePackageResult();
+    const packageApplication = jest.fn(
+      async (/** @type {Record<string, any>} */ _options) => result,
+    );
+    const packageSelfDeployableApplication = jest.fn(
+      async (/** @type {Record<string, any>} */ _options) => ({
+        ...result,
+        deploymentPayload: {
+          kind: 'singleNodeDeploymentPayload',
+          payloadId: 'private-payload-authority',
+        },
+      }),
+    );
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const command = createPackageCommand({
+      packageApplication,
+      packageSelfDeployableApplication,
+      writeOutput,
+    });
+
+    await command.parseAsync(
+      [
+        'fixture-app',
+        '--self-deployable',
+        '--json',
+        '--target',
+        'darwin-arm64',
+        '--no-pretty',
+      ],
+      { from: 'user' },
+    );
+
+    expect(packageApplication).not.toHaveBeenCalled();
+    expect(packageSelfDeployableApplication).toHaveBeenCalledTimes(1);
+    expect(packageSelfDeployableApplication).toHaveBeenCalledWith({
+      dir: 'fixture-app',
+      outputDir: undefined,
+      targetFilters: ['darwin-arm64'],
+    });
+    expect(JSON.parse(writeOutput.mock.calls[0][0])).toEqual(
+      createApplicationPackageReceipt(result),
+    );
+    expect(writeOutput.mock.calls[0][0]).not.toContain(
+      'private-payload-authority',
+    );
+  });
+
+  it('keeps human progress and the host-safe handoff for self-deployable packaging', async () => {
+    const result = makePackageResult(true);
+    const packageApplication = jest.fn(async () => result);
+    const packageSelfDeployableApplication = jest.fn(
+      async (/** @type {Record<string, any>} */ options) => {
+        options.onProgress({
+          phase: 'build',
+          message: 'Building self-deployable executable artifacts',
+        });
+        return {
+          ...result,
+          deploymentPayload: {
+            kind: 'singleNodeDeploymentPayload',
+            payloadId: 'private-payload-authority',
+          },
+        };
+      },
+    );
+    const writeOutput = jest.fn((/** @type {string} */ _value) => undefined);
+    const writeDiagnostic = jest.fn(
+      (/** @type {string} */ _value) => undefined,
+    );
+    const command = createPackageCommand({
+      packageApplication,
+      packageSelfDeployableApplication,
+      writeOutput,
+      writeDiagnostic,
+      readHostTarget: () => ({ ...LINUX_TARGET, nodeVersion: '99.0.0' }),
+    });
+
+    await command.parseAsync(['fixture-app', '--self-deployable'], {
+      from: 'user',
+    });
+
+    expect(packageApplication).not.toHaveBeenCalled();
+    expect(packageSelfDeployableApplication).toHaveBeenCalledWith({
+      dir: 'fixture-app',
+      outputDir: undefined,
+      targetFilters: [],
+      onProgress: expect.any(Function),
+    });
+    expect(writeDiagnostic).toHaveBeenCalledWith(
+      '  Building self-deployable executable artifacts\n',
+    );
+    const output = writeOutput.mock.calls[0][0];
+    expect(output).toMatch(/Next: .* wharfie run --name first-run --\n$/);
+    expect(output).not.toContain('private-payload-authority');
+  });
 });

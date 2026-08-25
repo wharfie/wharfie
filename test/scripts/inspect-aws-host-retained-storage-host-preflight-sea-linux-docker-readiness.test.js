@@ -855,7 +855,7 @@ function expectExactTrace(trace, scenario, expectedContainerInspections) {
 }
 
 beforeAll(async () => {
-  testRoot = await fsp.mkdtemp(TEST_ROOT_PREFIX);
+  testRoot = await fsp.realpath(await fsp.mkdtemp(TEST_ROOT_PREFIX));
   fixtureRoot = path.join(testRoot, 'readiness-fixtures');
 });
 

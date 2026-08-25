@@ -391,6 +391,9 @@ describe('embedded app manifest asset helpers', () => {
 
       jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
         isSea: () => true,
+        getRawAsset: (/** @type {string} */ name) => {
+          throw new Error(`Unexpected raw asset request: ${name}`);
+        },
         getAsset: async (/** @type {string} */ name) => {
           if (!seaAssets.has(name)) {
             throw new Error(`Unexpected asset request: ${name}`);

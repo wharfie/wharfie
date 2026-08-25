@@ -20,11 +20,18 @@ deliberately disabled. No standalone builder binary is published. Generated
 application SEAs are the portable deliverable and do not require Node on the
 target machine.
 
-The bounded tarball-based workflow for the completed developer preview is the
-[single-host developer preview](./developer-preview.md). The tarball includes
-the supported `examples/steady-file` starter and can be installed into a clean
-builder workspace without using the checkout as application runtime authority.
-Its accepted split builder/clean-target run is recorded in the
+The shortest packaged candidate is the
+[magnetic hello-world starter](../../examples/hello-world/README.md). Its
+repository gate copies only that starter, installs Wharfie's freshly packed npm
+tarball, hides the disposable builder, and proves relocated Node-absent
+execution plus named durable resumption. This remains release-candidate evidence
+until the same gate passes against a published preview.
+
+The deeper tarball-based workflow for the completed service preview is the
+[single-host developer preview](./developer-preview.md). The tarball also
+includes the supported `examples/steady-file` starter and can be installed into
+a clean builder workspace without using the checkout as application runtime
+authority. Its accepted split builder/clean-target run is recorded in the
 [checksummed checkpoint](../../llm/checkpoints/2026-07-29-single-host-developer-preview.md).
 
 Ordinary `npm test` is coverage-free. The runner places its default Jest cache
@@ -38,23 +45,56 @@ packaging behavior.
 
 Local `app` and `ops` commands do not require cloud credentials or global
 Wharfie configuration. The source CLI now also mounts an experimental
-`deployment` group, and generated application SEAs mount the same group at
-`<app> wharfie deployment ...`. These commands use the operator's ordinary AWS
-credential chain. They do not accept or persist credentials in the app
-manifest, DeploymentProfileV2, plan, or artifact.
+AWS-oriented `deployment` group using the operator's ordinary AWS credential
+chain. It does not accept or persist credentials in the app manifest,
+DeploymentProfileV2, plan, or artifact.
 
 Deployment profiles are canonical `wpr2` operator-input JSON documents supplied
 with `--profile`; they remain separate from `wharfie.app.js`. Authors create
 them with the supported `@wharfie/wharfie/deployment-profile` Node subpath.
 Source plan and direct apply package and durably pre-stage a selected SEA;
 source prepared-plan apply and reconcile consume exact durable staged evidence.
-Packaged plan, direct apply, prepared-plan apply, and non-destroy reconcile
-instead validate the SEA running the command. Source and packaged plan JSON are
-not interchangeable. Active destroy recovery remains durable-only.
-Packaged commands accept neither source `--dir` nor `--output-dir`. This command
-surface has focused automated evidence but no clean-account lifecycle proof or
-complete service-readiness claim. Wharfie provisions only its fixed capability
-substrate and is not a general infrastructure-as-code system.
+
+`wharfie app package --self-deployable` creates an application SEA whose
+packaged deployment surface has AWS and Hetzner `preview`, `apply`, `status`,
+`update`, `recover`, `exec`, and `destroy`:
+
+```text
+<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
+<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
+<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
+```
+
+AWS preview/apply requires a region and uses the ordinary credential chain;
+Hetzner preview/apply requires a location and reads ambient `HCLOUD_TOKEN`.
+Credentials are never CLI arguments. Use a dedicated Hetzner project for this
+preview because its token is project-wide. Preview performs only provider
+identity/describe/list queries and a side-effect-free local journal read; it
+creates neither local state nor cloud resources. Status derives provider scope
+from the exact journal and joins that local evidence with an exact provider
+observation and the pinned guest's packaged `service status`. It creates or
+mutates neither local nor remote state and is app-bound rather than bound to
+the current outer SEA revision. Update activates the invoking SEA's exact
+embedded Linux release while retaining committed current authority until
+settlement. Recover resumes only the exact apply, update/repair, or destroy
+frontier selected by the journal; during a failed update, the committed-current
+SEA may reconverge current and abandon the target before a later update.
+Destroy reads only embedded app identity plus exact durable local deployment
+authority. Its journal supplies the bound provider and location, so destroy
+accepts no provider, region, or location selector.
+
+The AWS path requires suitable default-VPC public-network prerequisites;
+Hetzner uses its public network and Wharfie creates no private network. Destroy
+removes the bounded resources Wharfie created, including the node and its
+root-disk data. Packaged `deployment inspect` and `deployment reconcile` are
+not exposed yet.
+The AWS path has completed a live packaged apply/activate/adopt/restart/destroy
+slice and independently verified cleanup. The Hetzner path has current-contract
+automated lifecycle coverage and completed the equivalent live slice in
+`fsn1`. Wharfie provisions only its fixed capability substrate and is not a
+general infrastructure-as-code system.
 
 See the [Quickstart](./quickstart.md) for the working local and experimental
 deployment command surfaces.

@@ -75,16 +75,24 @@ mental model.
 
 ## Target journey
 
-A fresh checkout or copied starter should expose one obvious path:
+A repository checkout exposes its acceptance gate from the repository root:
+
+```bash
+npm ci
+npm run verify:magnetic-first-run
+```
+
+A copied or published starter exposes its product journey from the starter
+directory:
 
 ```bash
 npm install
 npm run demo
 ```
 
-The repository-level `demo` command may orchestrate the product commands, but
-it must make those commands and their results visible. An illustrative
-transcript is:
+Both paths require exactly Node 24.13.1. The starter-level `demo` command may
+orchestrate the product commands, but it must make those commands and their
+results visible. An illustrative transcript is:
 
 ```text
   Resolving application and build target
@@ -132,15 +140,19 @@ development machine.
   Wharfie.
 - The first durable handoff uses ordinary application arguments rather than
   requiring the user to construct workflow JSON or repeat internal IDs.
-- One `WHARFIE_DATA_ROOT` keeps every packaged durable store under the same
-  explicit root.
+- One `WHARFIE_DATA_ROOT` keeps packaged execution and service stores under the
+  same explicit root. Self-deployable cloud commands select their separate
+  deployment journal with `--data-root`.
 
 ### Make the artifact feel approachable
 
-- Packaging reports what it is doing, where the artifact was written, its
-  target and size, and the exact next command to run.
+- Packaging reports what it is doing, where the artifact was written, and its
+  target and size. A matching supported macOS or glibc Linux host receives the
+  exact next command. Windows SEA packaging is rejected until its runtime
+  extraction boundary is supported.
 - Human handoff is the package default; the stable v1 machine receipt is
-  explicitly selected with `--json`.
+  explicitly selected with `--json`. Compact callers use `--json --no-pretty`;
+  bare `--no-pretty` implies JSON only as a compatibility bridge.
 - The demo proves that the artifact works outside its source tree without an
   ambient Node installation or sibling Wharfie checkout.
 - Ordinary artifact argv does not pay the native durable-runtime preparation
@@ -221,7 +233,8 @@ targetless manifest, human-first package output with an unchanged `--json`
 receipt, lazy native-runtime preparation for ordinary argv, one
 `WHARFIE_DATA_ROOT`, and the repeatable packaged
 `wharfie run --name <name> -- <args>` foreground workflow. The consumer starter
-accepts Node 24.13.1 or newer within Node 24 without pinning an npm patch. The
+requires exactly Node 24.13.1, matching the installed Wharfie package's engine,
+without pinning an npm patch. The
 canonical app, polished showcase, hidden harness, and explicitly noncanonical
 playground now have separate in-repository boundaries.
 

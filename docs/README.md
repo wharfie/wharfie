@@ -20,7 +20,8 @@ interruption and repeat-to-resume. Its copied-starter gate proves relocation,
 builder-source unavailability, Node-absent execution, `SIGKILL`, exact-command
 resumption, and a later-process verified output read against Wharfie's packed
 npm tarball. Release acceptance remains open until the same gate passes against
-the published preview.
+the published preview. Both the repository gate and copied-starter journey use
+exactly Node 24.13.1, matching the installed Wharfie package's declared engine.
 
 The deeper
 [single-host developer preview](./guides/developer-preview.md) installs the
@@ -96,12 +97,16 @@ and prints the exact command to repeat. Packaged `start` remains admission-only,
 and `worker` remains the long-lived resident; expert direct activity execution
 has moved to `<app> wharfie activity run`.
 
-All packaged stores derive from one app-scoped layout. A foreground caller can
-set the single absolute `WHARFIE_DATA_ROOT`; combining it with legacy split-store
-overrides fails closed, and the systemd service pins that same variable to its
-active packaged layout. Without an explicit root, packaged storage uses the
-stable operating-system account default. Ordinary application argv also skips
-native durable-runtime preparation, which is lazy on the reserved
+Packaged execution and service stores derive from one app-scoped layout. A
+foreground caller can set the single canonical absolute `WHARFIE_DATA_ROOT`;
+legacy split-store overrides are rejected for every packaged invocation, and
+the systemd service pins that same variable to its active packaged layout.
+Without an explicit root, those stores use the stable operating-system account
+default. Wharfie does not automatically migrate a legacy split-store layout.
+Self-deployable cloud commands select their separate local deployment journal
+with `--data-root` or the deployment command's stable default;
+`WHARFIE_DATA_ROOT` does not redirect that authority. Ordinary application argv
+also skips native durable-runtime preparation, which is lazy on the reserved
 Wharfie/private path.
 
 The separate source/packaged `logs` command can disclose one exact physical
@@ -135,9 +140,9 @@ source before it requests the normal durable update; unexplained missing
 projection state still requires the exact selected SEA. Workflow cancellation
 has durable cursor authority and
 active-owner delivery. Branches, an early-signal inbox, managed-effect workflow
-successors, schedules, complete provider-backed deployment, multi-host
-leases/heartbeats, and the trusted-node mesh remain roadmap work; Wharfie is
-not production ready.
+successors, schedule pause/resume controls, complete two-provider acceptance,
+multi-host leases/heartbeats, and the trusted-node mesh remain roadmap work;
+Wharfie is not production ready.
 
 ## Start locally
 
@@ -156,9 +161,10 @@ wharfie app package ./path/to/app
 
 For a targetless manifest with no filter, the package command infers the exact
 compatible host target from the running Node version, platform, architecture,
-and glibc on Linux. Its default human output reports build phases, exact target,
-artifact path, size, and an actionable `Next:` step. Matching POSIX hosts get
-a copy-pasteable command; Windows gets a shell-neutral instruction.
+and glibc on Linux. Production SEA packaging currently supports macOS and glibc
+Linux; Windows target requests are rejected. Its default human output reports
+build phases, exact target, artifact path, size, and an actionable `Next:` step.
+A matching supported host gets a copy-pasteable command.
 
 `--json` writes the unchanged schema-version 1
 `wharfie.application.package` machine receipt. Its target-sorted `artifacts`
@@ -166,7 +172,9 @@ contain the content-addressed identity, exact target, digest, size, and
 immediate local executable and sidecar paths. It omits the full internal
 revision and artifact records. Those paths and the receipt provide local
 discovery, not authority: the executable bytes, canonical sidecar, and embedded
-revision association must still verify together.
+revision association must still verify together. Use `--json --no-pretty` for
+compact machine output. Bare `--no-pretty` implies JSON only as a compatibility
+bridge; new callers should always request `--json` explicitly.
 
 The packaged namespace includes `<app> wharfie run --name <name> -- <args>`,
 `<app> wharfie activity run ...`, `<app> wharfie submit ...`, `<app> wharfie
@@ -192,19 +200,14 @@ wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-
 wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
 ```
 
-These are the only five deployment leaves. A canonical DeploymentProfileV2 is
-operator input outside the manifest, and the commands use the ordinary AWS
-credential chain without serializing credentials. Source plan/direct apply
-package and durably pre-stage a selected SEA; source `apply --plan` and
-reconcile consume exact durable staged evidence. Generated SEAs mount the same
-leaves at `<app> wharfie deployment ...`, accept neither `--dir` nor
-`--output-dir`, and use the running SEA for plan, apply, and non-destroy
-reconcile authority. Active destroy recovery remains durable-only.
-The supported `@wharfie/wharfie/deployment-profile` Node authoring API creates
-the canonical profile and its `wpr2` identity. Source plan JSON is reusable
-only on source `apply --plan`; packaged plan JSON is reusable only from the
-exact matching SEA. Their artifact-authority envelopes intentionally do not
-cross surfaces.
+These are the only five leaves on the legacy AWS-oriented source surface. A
+canonical DeploymentProfileV2 is operator input outside the manifest, and the
+commands use the ordinary AWS credential chain without serializing credentials.
+Source plan/direct apply package and durably pre-stage a selected SEA; source
+`apply --plan` and reconcile consume exact durable staged evidence. The
+supported `@wharfie/wharfie/deployment-profile` Node authoring API creates the
+canonical profile and its `wpr2` identity. Source plan JSON is reusable only on
+source `apply --plan`.
 Plan requires an explicit control policy because source planning may package,
 stage, and create bootstrap control state. Direct apply defaults to `bootstrap`;
 prepared apply, inspect, reconcile, and destroy default to `require-active`.
@@ -212,56 +215,26 @@ Source `apply --plan` rejects `--dir` and `--output-dir`. Scalar selectors may
 be supplied only once. An operation that returns a correlated but still-active
 head fails as incomplete rather than being reported as successful.
 
-The command surface is not a clean-account or deployed-service-readiness
-claim. The strict content-addressed privileged-host request/receipt contract
-and its pure injected durable activation kernel are now defined. Its first
-concrete adapter now proves the live STS runtime identity from the exact EC2
-role session; provider uncertainty remains bounded and redacted. One owned
-host-only AWS lifetime now supplies rotating credentials through a fixed IPv4
-IMDSv2 token flow, pins the commercial regional STS, DynamoDB, and S3
-endpoints and one-attempt policy, cancels and drains active work and S3
-response bodies, and exposes only the identity, activation-authority, and
-artifact-read adapters.
-One production persistence boundary now supplies the V66 four-method store,
-deployment lock, bounded retention, fence-aware inspection, and draining close.
-It requires Linux with real and effective UID 0, fixes state beneath
-`/var/lib/wharfie/host-activation/v1/<deploymentInstanceId>`, and accepts no
-caller redirection of that root. Initialization now fsyncs the authenticated
-record-bearing directory before reading, so predecessor rename ambiguity
-cannot escape through process-local poison. The inspection `authority` field
-classifies only the durable local fence relationship. Independently, the
-controller now publishes one complete V65 request at a stable DynamoDB key
-only while its exact all-settled head remains current and after fresh
-managed-artifact evidence. The host strongly reads that request first and
-current head last for selector resolution and every V66 authorization purpose.
-The concrete artifact adapter reads only that request's explicit S3 VersionId
-under `s3:GetObjectVersion`, verifies the complete managed-object envelope and
-bytes, and atomically publishes an immutable fixed-path SEA. Exact final
-readback and authenticated full-chain fsync recover rename and process-response
-ambiguity without persisting opaque VersionId or ETag values in evidence.
-The fixed `wharfie-runtime` account, root-owned launcher, Status V3 desired
-convergence proof, and fail-closed service-repair authorization are now
-concrete. Retained application/control storage now has exact contracts, a
-closed Linux inspection observer, one shared two-mount gate, recoverable
-deactivation authority, an immutable format-history contract, and an
-authenticated host-lock-scoped journal. Integration with real V66/V69
-persistence proves that a synthetic stable blank-media observation may durably
-publish only the non-destructive `prepared` prerequisite after a definite
-attempt, fresh dispatch authorization, and current local fence; it deliberately
-remains pending and cannot format or claim settlement. A separate
-repository-only preflight now double-reads and fingerprints fixed AL2023 OS,
-configuration, and tool paths without executing a command or accepting a
-filesystem path, and without touching a device, calling AWS, or publishing raw
-configuration bytes. Its receipt is non-authoritative and has not run on a live
-host. A separate expiring provider experiment now double-reads an exact pinned
-AMI, selected experiment-tagged instance, root volume, evidence volume, and
-attachment through mutation-incapable injected SSM/EC2 facades. Its receipt is also
-non-authoritative, has not run against live AWS, and is not yet joined to the
-host fingerprint.
-Selector delivery, destructive formatting and exact-profile verification,
-mounting, control-storage convergence, health publication, production host
-assembly, deactivation execution, and a clean-account provider lifecycle proof
-remain unfinished.
+An SEA built with `wharfie app package --self-deployable` exposes a different,
+narrow provider-neutral lifecycle: AWS and Hetzner `preview`, `apply`, `status`,
+`update`, `recover`, `exec`, and `destroy`. It does not expose packaged
+`deployment inspect` or `deployment reconcile`. AWS uses the ordinary credential
+chain; Hetzner reads ambient `HCLOUD_TOKEN`; neither accepts credentials as
+arguments. Preview is point-in-time and read-only. Status derives provider scope
+from the exact local journal, and update/recover/exec/destroy accept no provider
+or placement selector because that authority is already journal-bound.
+
+Both providers completed a live packaged apply/activate/adopt/restart/destroy
+slice with healthy guest service and independently verified cleanup of the
+resources Wharfie owned. Separate live preview proofs and focused automated
+status, update, recovery, and exec evidence preserve the narrower command
+claims; journal-bound exec has not yet received a fresh live-provider proof.
+The node root disk currently holds application and control data, so destroy is
+data-destructive. The broader
+[ADR 0035](./architecture/decisions/0035-two-provider-single-node-self-deployment.md)
+acceptance artifact remains partial; the
+[two-provider checkpoint](../llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md)
+records the live boundary and cleanup evidence.
 
 The shipped source top-level CLI contains `app`, `ops`, and experimental
 `deployment`. Continue with the
@@ -273,9 +246,18 @@ record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritativ
 contract, delivery sequence, design constraints, and historical cleanup
 evidence.
 
-The latest accepted product handoff is the [single-host developer preview
-checkpoint](../llm/checkpoints/2026-07-29-single-host-developer-preview.md).
-Its prior checkpoint lineage is recorded there.
+The current beginner handoff is the versioned magnetic release candidate; its
+published-preview acceptance remains open. The latest accepted deeper local
+handoff is the [single-host developer preview
+checkpoint](../llm/checkpoints/2026-07-29-single-host-developer-preview.md), and
+the bounded cloud evidence is recorded in the two-provider checkpoint above.
+
+## Historical implementation lineage
+
+The remaining notes preserve precursor implementation boundaries and their
+checkpoint lineage. Statements about unfinished work describe those dated
+boundaries; the current public command surface and proof status are summarized
+above and in the roadmap.
 
 One CLI-free lifetime now composes the fixed retained controls, durable store,
 artifact stager, complete V57 provider, and controller. It exposes read-only

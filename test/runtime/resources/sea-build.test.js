@@ -22,6 +22,10 @@ import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-orde
 const CHILD_PROCESS_IMPORT = 'node:child_process';
 const MISMATCHED_NODE_VERSION =
   process.versions.node === '0.0.0' ? '0.0.1' : '0.0.0';
+const NODE_SEA_SENTINEL_FUSE = Buffer.from(
+  'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
+  'ascii',
+);
 
 /** @param {string} value @returns {{digest: import('../../../src/core/runtime/application-revision.js').Sha256Digest, size: number}} */
 const evidenceFor = (value) => ({
@@ -41,9 +45,205 @@ const emptySeaEvidence = () => ({
 
 describe('SeaBuild', () => {
   afterEach(() => {
+    jest.unstable_unmockModule('../../../src/core/lib/esbuild.js');
     jest.resetModules();
     jest.restoreAllMocks();
   });
+
+  it('keeps activity maps out while emitting inline SEA inspector maps', async () => {
+    const inlineMap = Buffer.from(
+      JSON.stringify({
+        version: 3,
+        sources: ['index.js'],
+        sourcesContent: ['void 0;'],
+        mappings: '',
+      }),
+    ).toString('base64');
+    const buildBundle = jest.fn(
+      /** @param {Record<string, any>} _options */
+      async (_options) => ({
+        errors: [],
+        warnings: [],
+        outputFiles: [
+          {
+            text: `bundled-code\n//# sourceMappingURL=data:application/json;base64,${inlineMap}\n`,
+          },
+        ],
+      }),
+    );
+    jest.unstable_mockModule('../../../src/core/lib/esbuild.js', () => ({
+      build: buildBundle,
+    }));
+
+    const { default: FunctionResource } =
+      await import('../../../src/core/resources/builds/function-resource.js');
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const buildTarget =
+      /** @type {import('../../../src/core/runtime/build-target.js').BuildTarget} */ ({
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+      });
+    const functionResource = new FunctionResource({
+      name: 'source-map-policy-activity',
+      properties: {
+        functionName: 'source-map-policy-activity',
+        entrypoint: {
+          path: path.join(process.cwd(), 'activity.js'),
+          export: 'default',
+        },
+        buildTarget,
+      },
+    });
+    const seaBuild = new SeaBuild({
+      name: 'source-map-policy-sea',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: process.execPath,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+      },
+    });
+
+    const seaBuildDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'source-map-policy-build-'),
+    );
+    try {
+      await functionResource.esbuild();
+      await seaBuild.esbuild(seaBuildDir);
+
+      expect(buildBundle).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ sourcemap: false }),
+      );
+      expect(buildBundle).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ sourcemap: 'inline', write: false }),
+      );
+    } finally {
+      await fsp.rm(seaBuildDir, { recursive: true, force: true });
+    }
+  });
+
+  it('canonicalizes private snapshot paths without weakening inspector source binding', async () => {
+    const { default: ActorSystem } =
+      await import('../../../src/core/resources/builds/actor-system.js');
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const inspector = await import('../../../scripts/sea-inspector.js');
+    /** @type {string[]} */
+    const roots = [];
+    /** @param {string} label */
+    const buildOnce = async (label) => {
+      const root = await fsp.mkdtemp(
+        path.join(os.tmpdir(), `wharfie-inline-map-${label}-`),
+      );
+      roots.push(root);
+      const snapshotRoot = path.join(root, `revision-${label}`);
+      const appDir = path.join(snapshotRoot, 'app');
+      const buildDir = path.join(root, 'nodejs', 'builds', 'build-fixed');
+      await Promise.all([
+        fsp.mkdir(path.join(appDir, 'src'), { recursive: true }),
+        fsp.mkdir(buildDir, { recursive: true }),
+      ]);
+      const cliPath = path.join(appDir, 'src', 'cli.js');
+      const dependencyLockPath = path.join(snapshotRoot, 'package-lock.json');
+      await Promise.all([
+        fsp.writeFile(
+          cliPath,
+          'export default function cli() { return "same"; }\n',
+        ),
+        fsp.writeFile(dependencyLockPath, '{}\n'),
+      ]);
+      const system = new ActorSystem({
+        name: 'inline-map-reproducibility',
+        properties: {
+          cli: { entrypoint: cliPath, export: 'default' },
+          targets: [
+            {
+              nodeVersion: process.versions.node,
+              platform: process.platform,
+              architecture: process.arch,
+              ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+            },
+          ],
+        },
+        dependencyLock: {
+          path: dependencyLockPath,
+          input: {
+            format: 'test-dependency-lock',
+            digest: {
+              algorithm: 'sha256',
+              value: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+            },
+          },
+        },
+      });
+      const sea = system
+        .getResources()
+        .find((resource) => resource instanceof SeaBuild);
+      if (!(sea instanceof SeaBuild)) {
+        throw new Error('Expected one SEA build resource.');
+      }
+      await sea.esbuild(buildDir);
+      const bundle = await fsp.readFile(
+        path.join(buildDir, 'esbundle.js'),
+        'utf8',
+      );
+      const match = bundle.match(
+        /sourceMappingURL=data:application\/json;base64,([^\n]+)/,
+      );
+      if (!match) throw new Error('Expected one inline SEA source map.');
+      return {
+        bundle,
+        sourceMap: JSON.parse(Buffer.from(match[1], 'base64').toString('utf8')),
+      };
+    };
+
+    try {
+      const [left, right] = await Promise.all([
+        buildOnce('alpha'),
+        buildOnce('beta'),
+      ]);
+      expect(left.bundle).toBe(right.bundle);
+      const appSourceIndex = left.sourceMap.sources.indexOf(
+        'wharfie-app/src/cli.js',
+      );
+      expect(appSourceIndex).toBeGreaterThanOrEqual(0);
+      expect(left.sourceMap.sourceRoot).toBeUndefined();
+      expect(left.sourceMap.sourcesContent[appSourceIndex]).toBe(
+        'export default function cli() { return "same"; }\n',
+      );
+      expect(JSON.stringify(left.sourceMap)).not.toMatch(
+        /wharfie-inline-map-|revision-(?:alpha|beta)/,
+      );
+      const packagedAppEntryPath = path.resolve(
+        'src/core/resources/builds/packaged-app-entry.js',
+      );
+      const packagedAppEntry = await fsp.readFile(packagedAppEntryPath, 'utf8');
+      expect(
+        inspector.resolveSourceMapAnchor(left.sourceMap, {
+          sourceSuffix: 'src/core/resources/builds/packaged-app-entry.js',
+          anchor: 'await runDeveloperCli(developerCliModule, {',
+          expectedSourceContent: packagedAppEntry,
+        }),
+      ).toEqual(
+        expect.objectContaining({
+          source: expect.stringMatching(
+            /src\/core\/resources\/builds\/packaged-app-entry\.js$/,
+          ),
+        }),
+      );
+    } finally {
+      await Promise.all(
+        roots.map((root) => fsp.rm(root, { recursive: true, force: true })),
+      );
+    }
+  }, 15_000);
 
   it('fails instead of writing a non-SEA script fallback when builder Node lacks SEA support', async () => {
     jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
@@ -109,7 +309,7 @@ describe('SeaBuild', () => {
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
-  it('disables inherited execution arguments while allowing explicit runtime options', async () => {
+  it('uses a path-independent SEA config and disables inherited execution arguments', async () => {
     const generatedBlob = Buffer.from('generated-sea-blob', 'utf8');
     /** @type {Record<string, any> | undefined} */
     let observedConfig;
@@ -117,14 +317,17 @@ describe('SeaBuild', () => {
       /**
        * @param {string} _file
        * @param {string[]} args
-       * @param {Record<string, any>} _options
+       * @param {Record<string, any>} options
        * @param {boolean} _rejectOnStderr
        */
-      async (_file, args, _options, _rejectOnStderr) => {
-        const configPath = args[2];
+      async (_file, args, options, _rejectOnStderr) => {
+        const configPath = path.resolve(options.cwd, args[2]);
         const parsedConfig = JSON.parse(await fsp.readFile(configPath, 'utf8'));
         observedConfig = parsedConfig;
-        await fsp.writeFile(parsedConfig.output, generatedBlob);
+        await fsp.writeFile(
+          path.resolve(options.cwd, parsedConfig.output),
+          generatedBlob,
+        );
       },
     );
     const inject = jest.fn(
@@ -158,11 +361,13 @@ describe('SeaBuild', () => {
     );
     const buildDir = path.join(tmpRoot, 'build');
     const nodeBinaryPath = path.join(tmpRoot, 'node');
+    const sourceAssetPath = path.join(tmpRoot, 'source.asset');
     const codeBundle = Buffer.from('void 0;\n', 'utf8');
     await fsp.mkdir(buildDir, { mode: 0o700 });
     await Promise.all([
       fsp.writeFile(path.join(buildDir, 'esbundle.js'), codeBundle),
       fsp.writeFile(nodeBinaryPath, 'node-binary', 'utf8'),
+      fsp.writeFile(sourceAssetPath, 'portable-asset', 'utf8'),
     ]);
     const build = new SeaBuild({
       name: 'closed-exec-argv',
@@ -174,6 +379,7 @@ describe('SeaBuild', () => {
         platform: process.platform,
         architecture: process.arch,
         ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+        assets: { portable: sourceAssetPath },
       },
     });
 
@@ -181,20 +387,17 @@ describe('SeaBuild', () => {
       const evidence = await build.seaBuild(buildDir, nodeBinaryPath);
 
       expect(observedConfig).toMatchObject({
-        main: path.join(buildDir, 'esbundle.js'),
-        output: path.join(buildDir, 'sea.blob'),
+        main: 'esbundle.js',
+        output: 'sea.blob',
         execArgv: [],
         execArgvExtension: 'cli',
-        assets: {},
+        assets: { portable: 'assets/00000000.asset' },
       });
+      expect(JSON.stringify(observedConfig)).not.toContain(tmpRoot);
       expect(execFile).toHaveBeenCalledWith(
         process.execPath,
-        [
-          '--no-warnings',
-          '--experimental-sea-config',
-          path.join(buildDir, 'sea-config.json'),
-        ],
-        {},
+        ['--no-warnings', '--experimental-sea-config', 'sea-config.json'],
+        { cwd: buildDir },
         true,
       );
       expect(inject).toHaveBeenCalledWith(
@@ -230,6 +433,225 @@ describe('SeaBuild', () => {
       await fsp.rm(tmpRoot, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    ['linux', 1, false],
+    ['linux', 3, true],
+    ['darwin', 1, false],
+    ['darwin', 3, false],
+  ])(
+    'masks and positionally restores nested Node fuses for %s injection (count %i)',
+    async (platform, nestedFuseCount, straddlesScanBoundary) => {
+      const targetPlatform = /** @type {'linux'|'darwin'} */ (platform);
+      const generatedBlob = Buffer.from(
+        [
+          'blob-prefix',
+          ...Array.from(
+            { length: nestedFuseCount },
+            (_, index) =>
+              `${NODE_SEA_SENTINEL_FUSE.toString('ascii')}:1:nested-${index}`,
+          ),
+          'blob-suffix',
+        ].join('|'),
+        'ascii',
+      );
+      const codeBundle = Buffer.from('void 0;\n', 'utf8');
+      const outerBinaryCore = Buffer.from(
+        `binary-prefix|${NODE_SEA_SENTINEL_FUSE.toString(
+          'ascii',
+        )}:0|binary-suffix`,
+        'ascii',
+      );
+      const sectionPrefix = Buffer.from('|postject-resource|', 'ascii');
+      const firstGeneratedFuseOffset = generatedBlob.indexOf(
+        NODE_SEA_SENTINEL_FUSE,
+      );
+      const boundaryPaddingLength = straddlesScanBoundary
+        ? 1024 * 1024 -
+          Math.floor(NODE_SEA_SENTINEL_FUSE.length / 2) -
+          outerBinaryCore.length -
+          sectionPrefix.length -
+          firstGeneratedFuseOffset
+        : 0;
+      const outerBinary = Buffer.concat([
+        Buffer.alloc(boundaryPaddingLength, 'x'),
+        outerBinaryCore,
+      ]);
+      /** @type {Buffer[]} */
+      const observedInjectionBlobs = [];
+      const execFile = jest.fn(
+        /**
+         * @param {string} _file
+         * @param {string[]} args
+         * @param {Record<string, any>} options
+         */
+        async (_file, args, options) => {
+          const config = JSON.parse(
+            await fsp.readFile(path.resolve(options.cwd, args[2]), 'utf8'),
+          );
+          await fsp.writeFile(
+            path.resolve(options.cwd, config.output),
+            generatedBlob,
+          );
+        },
+      );
+      const runCmd = jest.fn();
+      const inject = jest.fn(
+        /**
+         * Simulate postject's relevant contract: place the resource in the
+         * executable, require one exact outer fuse name, and flip its :0.
+         * @param {string} binaryPath
+         * @param {string} _resourceName
+         * @param {Buffer} resourceData
+         * @param {Record<string, any>} _options
+         */
+        async (binaryPath, _resourceName, resourceData, _options) => {
+          observedInjectionBlobs.push(Buffer.from(resourceData));
+          const executable = Buffer.concat([
+            await fsp.readFile(binaryPath),
+            sectionPrefix,
+            resourceData,
+          ]);
+          const firstFuse = executable.indexOf(NODE_SEA_SENTINEL_FUSE);
+          expect(firstFuse).not.toBe(-1);
+          expect(executable.lastIndexOf(NODE_SEA_SENTINEL_FUSE)).toBe(
+            firstFuse,
+          );
+          const colonOffset = firstFuse + NODE_SEA_SENTINEL_FUSE.length;
+          expect(executable[colonOffset]).toBe(':'.charCodeAt(0));
+          expect(executable[colonOffset + 1]).toBe('0'.charCodeAt(0));
+          executable[colonOffset + 1] = '1'.charCodeAt(0);
+          await fsp.writeFile(binaryPath, executable);
+        },
+      );
+      jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+        execFile: jest.fn(),
+        spawn: jest.fn(),
+        spawnSync: jest.fn(() => ({
+          stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+          stderr: '',
+          status: 0,
+        })),
+      }));
+      jest.unstable_mockModule('../../../src/core/lib/cmd.js', () => ({
+        execFile,
+        runCmd,
+      }));
+      jest.unstable_mockModule('postject', () => ({ inject }));
+
+      const { default: SeaBuild } =
+        await import('../../../src/core/resources/builds/sea-build.js');
+      const tmpRoot = await fsp.mkdtemp(
+        path.join(os.tmpdir(), `wharfie-sea-nested-fuse-${platform}-`),
+      );
+      const buildDir = path.join(tmpRoot, 'build');
+      const nodeBinaryPath = path.join(tmpRoot, 'node');
+      await fsp.mkdir(buildDir, { mode: 0o700 });
+      await Promise.all([
+        fsp.writeFile(path.join(buildDir, 'esbundle.js'), codeBundle),
+        fsp.writeFile(nodeBinaryPath, outerBinary),
+      ]);
+      const build = new SeaBuild({
+        name: `nested-fuse-${platform}-${nestedFuseCount}`,
+        properties: {
+          entryCode: codeBundle.toString('utf8'),
+          resolveDir: tmpRoot,
+          nodeBinaryPath,
+          nodeVersion: process.versions.node,
+          platform: targetPlatform,
+          architecture: 'x64',
+          ...(platform === 'linux' ? { libc: 'glibc' } : {}),
+        },
+      });
+
+      try {
+        const evidence = await build.seaBuild(buildDir, nodeBinaryPath);
+
+        if (!observedInjectionBlobs[0]) {
+          throw new Error('postject did not receive an injection blob');
+        }
+        const injectedBlob = observedInjectionBlobs[0];
+        expect(injectedBlob).toHaveLength(generatedBlob.length);
+        expect(injectedBlob.indexOf(NODE_SEA_SENTINEL_FUSE)).toBe(-1);
+        const firstNestedOffset = generatedBlob.indexOf(NODE_SEA_SENTINEL_FUSE);
+        const marker = injectedBlob.subarray(
+          firstNestedOffset,
+          firstNestedOffset + NODE_SEA_SENTINEL_FUSE.length,
+        );
+        expect(marker.toString('ascii')).toMatch(/^WHARFIE_SEA_MASK_/);
+        const reconstructedBlob = Buffer.from(injectedBlob);
+        let nestedOffset = firstNestedOffset;
+        let observedNestedFuseCount = 0;
+        while (nestedOffset !== -1) {
+          expect(
+            injectedBlob.subarray(nestedOffset, nestedOffset + marker.length),
+          ).toEqual(marker);
+          NODE_SEA_SENTINEL_FUSE.copy(reconstructedBlob, nestedOffset);
+          observedNestedFuseCount += 1;
+          nestedOffset = generatedBlob.indexOf(
+            NODE_SEA_SENTINEL_FUSE,
+            nestedOffset + NODE_SEA_SENTINEL_FUSE.length,
+          );
+        }
+        expect(observedNestedFuseCount).toBe(nestedFuseCount);
+        expect(reconstructedBlob).toEqual(generatedBlob);
+
+        const handledOuterBinary = Buffer.from(outerBinary);
+        const outerFuseOffset = handledOuterBinary.indexOf(
+          NODE_SEA_SENTINEL_FUSE,
+        );
+        handledOuterBinary[
+          outerFuseOffset + NODE_SEA_SENTINEL_FUSE.length + 1
+        ] = '1'.charCodeAt(0);
+        await expect(fsp.readFile(nodeBinaryPath)).resolves.toEqual(
+          Buffer.concat([handledOuterBinary, sectionPrefix, generatedBlob]),
+        );
+        expect(inject).toHaveBeenCalledWith(
+          nodeBinaryPath,
+          'NODE_SEA_BLOB',
+          expect.any(Buffer),
+          {
+            sentinelFuse: NODE_SEA_SENTINEL_FUSE.toString('ascii'),
+            ...(platform === 'darwin' ? { machoSegmentName: 'NODE_SEA' } : {}),
+          },
+        );
+        if (platform === 'darwin') {
+          expect(runCmd).toHaveBeenCalledWith('codesign', [
+            '--remove-signature',
+            nodeBinaryPath,
+          ]);
+        } else {
+          expect(runCmd).not.toHaveBeenCalled();
+        }
+        expect(evidence.seaBlobEvidence).toEqual({
+          digest: {
+            algorithm: 'sha256',
+            value: createHash('sha256')
+              .update(generatedBlob)
+              .digest('base64url'),
+          },
+          size: generatedBlob.length,
+        });
+        await expect(
+          fsp.readFile(path.join(buildDir, 'sea.blob')),
+        ).resolves.toEqual(generatedBlob);
+
+        const repeatedBuildDir = path.join(tmpRoot, 'repeated-build');
+        const repeatedNodeBinaryPath = path.join(tmpRoot, 'repeated-node');
+        await fsp.mkdir(repeatedBuildDir, { mode: 0o700 });
+        await Promise.all([
+          fsp.writeFile(path.join(repeatedBuildDir, 'esbundle.js'), codeBundle),
+          fsp.writeFile(repeatedNodeBinaryPath, outerBinary),
+        ]);
+        await build.seaBuild(repeatedBuildDir, repeatedNodeBinaryPath);
+
+        expect(observedInjectionBlobs).toHaveLength(2);
+        expect(observedInjectionBlobs[1]).toEqual(injectedBlob);
+      } finally {
+        await fsp.rm(tmpRoot, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     ['success', false],

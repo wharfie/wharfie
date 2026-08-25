@@ -31,10 +31,11 @@ npm run verify:magnetic-first-run
 ```
 
 The copied starter's first supported journey is `npm install` followed by
-`npm run demo -- Ada` on Node 24.13.1 or newer within Node 24; it does not pin
-an npm patch. That published-package journey remains a release acceptance
-condition until the preview exists; the repository command above tests the
-same files and harness against the locally packed candidate, then hides the
+`npm run demo -- Ada` from the starter directory. Use exactly Node 24.13.1,
+matching the installed Wharfie package's declared engine; the starter does not
+pin an npm patch. That published-package journey remains a release acceptance
+condition until the preview exists; the repository command above tests the same
+files and harness against the locally packed candidate, then hides the
 disposable builder before relocated execution.
 
 The advanced [single-host developer preview](./developer-preview.md) and
@@ -291,6 +292,36 @@ activation kind, and activation lifecycle fields. It does not echo inputs or
 internal payload references. Run-level cancellation is available after the
 workflow has been created.
 
+## Run a packaged workflow in the foreground
+
+When the manifest declares `cli.durable`, the packaged top-level `run` command
+is the shortest interactive durable path:
+
+```bash
+<app> wharfie run --name greet-ada -- Ada
+```
+
+`--name` is required and is the stable identity used to reopen the run. The
+arguments after `--` are application arguments; Wharfie maps them through the
+manifest's durable adapter, temporarily hosts the exact revision when no
+resident is active, and otherwise follows the matching resident. Repeating the
+same artifact, name, arguments, and data root resumes the same run and reports
+retained steps without rerunning them. `SIGINT` and `SIGTERM` drain the
+foreground host without recording durable cancellation, print the exact resume
+command, and exit with 130 and 143 respectively. Packaged `start` remains
+admission-only, and packaged `worker` remains the explicit long-lived resident.
+
+Direct packaged activity execution is now nested under `activity`:
+
+```bash
+<app> wharfie activity run --activity greet \
+  --idempotency-key <stable-key> --input '{"name":"Ada"}'
+```
+
+The source equivalent remains `wharfie ops run`. The old packaged
+`<app> wharfie run --activity ...` form is not supported because top-level
+`run` now owns the named default-workflow handoff.
+
 ## Deliver the current workflow signal
 
 When inspection shows that the cursor is waiting for a signal step, deliver
@@ -418,9 +449,11 @@ is the operating-system account's stable data root. Set
 `WHARFIE_DATA_ROOT` to a canonical absolute path to choose an explicit root;
 use that same value for every foreground and service-management invocation,
 and the generated unit pins it for the resident. Retired per-store overrides
-are rejected. Uninstall disables the unit and removes the executable selector
-while preserving immutable releases, ledger data, payloads, and application
-state. It retains both an installation identity tombstone and
+are rejected for every packaged invocation, even when `WHARFIE_DATA_ROOT` is
+unset. Wharfie does not automatically migrate a legacy split-store layout.
+Uninstall disables the unit and removes the executable selector while preserving
+immutable releases, ledger data, payloads, and application state. It retains
+both an installation identity tombstone and
 the durable `ACTIVE` selection, rollback candidate, and same-revision run
 admission. Run `service install` again from that same selected SEA to rehydrate
 the service without changing activation record version or selection generation.
@@ -429,6 +462,11 @@ When the tombstone proves an intentional uninstall, `service install` or
 exact retained source before entering the ordinary durable update. If the
 receipt disappears without that tombstone, the operation fails closed and the
 exact selected SEA must run `service install` to repair it.
+
+This environment variable selects packaged execution and service storage only.
+Self-deployable cloud commands keep their local deployment journal under the
+separate `--data-root` option, or the deployment command's stable default, and
+do not consult `WHARFIE_DATA_ROOT` for that authority.
 
 Use `service prune` separately when accumulated local release copies should be
 removed. It is accepted only from the exact selected SEA with settled `ACTIVE`
@@ -816,8 +854,9 @@ commands keep their smaller request default.
 ## Package the app
 
 For the shortest local path, omit `targets`: packaging selects the exact host
-target and prints a concise result with an actionable next step. On POSIX hosts
-that step is a copy-pasteable command; Windows output stays shell-neutral:
+target and prints a concise result with an actionable next step. Production SEA
+packaging currently supports macOS and glibc Linux; Windows target requests are
+rejected. On a matching supported host, that step is a copy-pasteable command:
 
 ```bash
 wharfie app package ./path/to/app
@@ -837,6 +876,10 @@ targets: [
 ],
 ```
 
+`--target` filters only a matrix declared in the manifest. Combining it with a
+targetless manifest is rejected; remove the filter for this-host packaging or
+declare every intended cross-target entry explicitly.
+
 ```bash
 wharfie app package ./path/to/app --target linux-x64 \
   --json --no-pretty > package-receipt.json
@@ -844,6 +887,8 @@ wharfie app package ./path/to/app --target linux-x64 \
 
 Packaging creates target-specific Node SEA executables. Target machines do not
 need a preinstalled Node runtime, container runtime, or hosted Wharfie service.
+Add `--self-deployable` when the operator SEA should carry an authenticated
+Linux x64 glibc SEA for the packaged deployment command.
 
 By default, success writes a human summary. With `--json`, it writes exactly
 one schema-version 1 `wharfie.application.package` JSON receipt. Its
@@ -851,6 +896,10 @@ one schema-version 1 `wharfie.application.package` JSON receipt. Its
 artifact ID, target, SHA-256 digest, byte size, local executable path, and
 adjacent artifact-record path. The full application revision and artifact
 provenance records remain out of command output.
+
+Use `--json --no-pretty` for compact machine output. Bare `--no-pretty` still
+implies JSON for compatibility with reset-era callers, but new scripts should
+select `--json` explicitly rather than depend on that bridge.
 
 With `--json`, ordinary manifest/build diagnostics and Wharfie-owned
 build-tool output go to stderr, leaving redirected stdout as only the receipt.
@@ -881,13 +930,27 @@ sidecar, and embedded revision association at the boundaries that consume
 them. Repeating an exact package operation may create or reuse the immutable
 destination; the receipt deliberately makes no `created` or `reused` claim.
 
+### Reset-era migration summary
+
+- Unflagged `app package` output is for humans. Add `--json` anywhere a script
+  parses or redirects the package receipt.
+- A targetless manifest means the exact current host. `--target` no longer
+  invents a cross-target request; declare a target matrix before filtering it.
+- Packaged direct activity execution moved from `wharfie run --activity` to
+  `wharfie activity run --activity`. Top-level `run` now requires `--name` and
+  a declared default durable workflow.
+- Replace every legacy packaged execution/service per-store override with one
+  canonical absolute `WHARFIE_DATA_ROOT`, use the same value for foreground and
+  service commands, and do not expect a legacy layout to be discovered;
+  Wharfie performs no automatic split-store migration. Continue to pass the
+  separate `--data-root` when reopening a self-deployable cloud journal.
+
 ## Try the experimental deployment lifecycle
 
 Provider-backed deployment is now mounted, but it is still an experimental
-operator surface with focused automated evidence. It has not completed a
-clean-account lifecycle proof and does not yet establish that the deployed
-resident service is ready. The command tree has exactly five leaves: `plan`,
-`apply`, `inspect`, `reconcile`, and `destroy`.
+operator surface with focused automated evidence. The legacy source command
+tree has five AWS-oriented leaves: `plan`, `apply`, `inspect`, `reconcile`, and
+`destroy`.
 
 Plan and direct apply take a canonical DeploymentProfileV2 (`wpr2`) JSON
 document. The profile binds the app, Linux target, fixed single-node mode, AWS
@@ -948,11 +1011,9 @@ package, stage, and create bootstrap control state. Direct apply defaults to
 `require-active`. Use `plan --json` to retain the complete reusable document;
 pass that document alone to `apply --plan` on the same command surface. Source
 plan JSON contains exact durable staged-artifact evidence and is accepted only
-by source `apply --plan`. Packaged plan JSON omits that evidence, is accepted
-only by an exact matching SEA's `apply --plan`, and cannot be moved to the
-source surface. The prepared-plan form cannot be combined with a positional
-deployment, `--profile`, `--dir`, or `--output-dir`. Supply scalar selectors
-such as profile, plan, region, policy, and source paths at most once.
+by source `apply --plan`. The prepared-plan form cannot be combined with a
+positional deployment, `--profile`, `--dir`, or `--output-dir`. Supply scalar
+selectors such as profile, plan, region, policy, and source paths at most once.
 
 Source plan and direct apply freshly package the selected target and durably
 pre-stage its exact SEA before returning. Source `apply --plan` later validates
@@ -961,27 +1022,90 @@ that happens to run the CLI. Source reconcile likewise reloads and validates
 the exact durable stage instead of treating that Node process as artifact
 authority.
 
-The packaged executable exposes the same five leaves. Its direct grammar omits
-the source-only directory options:
+An executable built with `wharfie app package --self-deployable` instead
+exposes narrow AWS and Hetzner deployment commands:
 
 ```text
-<app> wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--json]
-<app> wharfie deployment apply <deployment> --profile <canonical-profile.json> [--control-policy <policy>] [--json]
-<app> wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
-<app> wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-<app> wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
-<app> wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
+<app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
+<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
+<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
 ```
 
-Packaged plan, both apply forms, and non-destroy reconcile validate the SEA that
-is actually running the command; no artifact-path override is accepted.
-Inspection and destroy use durable deployment identity and provider evidence
-instead of historical local artifact bytes, so recovery of an active destroy
-also remains executable-independent. `reconcile` does not silently take over
-ambiguous in-flight work: use `--confirm-coordinator-stopped` only when the
-prior coordinator is known unable to continue. A valid returned head that
-still carries an active operation is reported as an incomplete nonzero result;
-inspect it before deciding whether confirmed recovery is safe.
+The command authenticates its embedded revision and Linux deployment SEA,
+creates the fixed small single-node systemd-user intent, and applies or
+recovers it through durable local authority. Repeat `--allow-ssh-from` for each
+operator IPv4 `/32`. AWS preview/apply requires `--region`; Hetzner
+preview/apply requires `--location`. Supplying the other provider's selector is
+rejected.
+
+Credentials are never CLI arguments. AWS uses the ordinary credential chain;
+Hetzner reads `HCLOUD_TOKEN` from the ambient process. Receipts and human
+output omit credentials. Use a dedicated Hetzner project for this preview
+because its token is project-wide.
+
+Preview authenticates the same embedded desired state but never prepares the
+data root, takes the operation lock, generates deployment secrets, or calls a
+provider mutation. It performs only AWS identity/describe or Hetzner list
+queries and a side-effect-free read of any existing local journal. The
+redacted JSON receipt distinguishes referenced infrastructure from the three
+managed resource roles and reports the semantic steps apply would evaluate.
+It is a point-in-time diagnostic: apply re-plans provider state and persists
+its exact generated identities before mutation. AWS reports its exact
+account/partition/region scope; Hetzner validates its project-scoped token but
+the API does not expose the project identity.
+
+Status is also read-only, but starts from one exact durable deployment journal
+instead of desired input. It derives the provider and scope from that journal,
+joins it with an exact provider observation and the pinned guest's packaged
+`service status`, and reports one current disposition. Status accepts no
+`--provider`, `--region`, or `--location`; use the same `--data-root` used for
+apply. It creates no missing local state and mutates neither cloud resources
+nor the guest. Its authority is bound to the embedded app identity, not to the
+outer SEA's current revision, so a newer SEA for the same application can
+inspect an older journal-bound deployment.
+
+Invoke `deployment update` through the new SEA. Its authenticated embedded
+Linux payload is the only new release authority; provider, placement, machine,
+access, mode, and deployment identity remain journal-bound. Invoke
+`deployment recover` after interruption. The target SEA resumes a pending
+update, while the committed-current SEA can reconverge current and abandon a
+failed target before a later update. A third release cannot replace an
+unresolved transition. `deployment exec` runs only the committed current
+artifact and fails closed if the guest advanced before local settlement. Its
+argv may be ordinary application arguments or the artifact's reserved
+`wharfie ...` operator namespace; it is not a remote shell.
+
+Destroy authenticates only the embedded app identity and uses the exact
+deployment instance plus durable local authority without decoding the large
+embedded Linux payload. The journal supplies the provider and the AWS region
+or Hetzner location selected by apply. Destroy therefore accepts no provider,
+region, or location selector; pass the same `--data-root` used for apply if the
+default stable root is not being used.
+
+This experimental slice assumes provider networking already exists. AWS needs
+one available default VPC with a usable default subnet that assigns public IPv4
+addresses, has address and instance-type capacity, and has working internet
+route, gateway, and network-ACL evidence. Hetzner uses its public network in
+the selected location; Wharfie does not create a private network.
+
+AWS apply owns one security group, EC2 instance, and encrypted root EBS volume.
+Hetzner apply owns one firewall, primary IPv4, and server. Application and
+control data currently live on the node's root disk. Destroy removes these
+owned resources and permanently deletes that root-disk data; it does not
+retain an application data volume.
+
+Packaged `deployment inspect` and `deployment reconcile` are not exposed yet.
+Focused automated tests cover both provider coordinators. The AWS path
+completed a live packaged apply/activate/adopt/restart/destroy slice with
+independently verified cleanup in `us-east-2` on 2026-07-29. Hetzner completed
+the equivalent live slice in `fsn1`, including second-process adoption without
+replacement and independently verified cleanup.
 
 The v4 manifest exposes the bounded plain-data workflow and UTC schedule
 definitions above. Its public start and operator commands handle activity,

@@ -1,6 +1,6 @@
 # 0020 — Linux systemd user-service lifecycle
 
-**Status:** Accepted · **Date:** 2026-07-20
+**Status:** Accepted, amended 2026-08-06 · **Date:** 2026-07-20
 
 ## Context
 
@@ -43,7 +43,8 @@ system unit, or provide a cross-principal command bridge in this slice.
 Installation requires all of the following:
 
 - Linux and a usable systemd user manager;
-- canonical absolute XDG data/config locations chosen by the invoking UID;
+- a canonical account home/config location and, when supplied, one canonical
+  absolute packaged data root chosen by the invoking UID;
 - the exact packaged SEA being installed to match the host target; and
 - systemd lingering already enabled for the invoking UID.
 
@@ -68,6 +69,7 @@ The initial packaged operator surface is:
 <app> wharfie service restart
 <app> wharfie service status
 <app> wharfie service uninstall
+<app> wharfie service purge --confirm-data-loss <appId>
 ```
 
 Each command supports the repository's human-readable output convention and a
@@ -139,6 +141,14 @@ operating-system account:
       ledger-service-sessions/
     application-state/
 ```
+
+Every retired split-store override is rejected whenever it is set, whether or
+not `WHARFIE_DATA_ROOT` is present. That includes the former control,
+execution-payload, ledger-table, ledger-session, application-state, database,
+and state adapter/path/store variables. Wharfie performs no automatic migration
+from those layouts, and state under them is not discovered through the new root.
+Any retained experimental data needs a separate, explicitly validated migration
+procedure.
 
 The unit is written below the service account's stable home directory, not an
 invocation-specific `XDG_CONFIG_HOME`:
@@ -478,13 +488,14 @@ release pruning.
 - `Restart=on-failure` can replace a failed process, while durable ledger
   recovery still decides what work is safe to resume. Systemd restart never
   turns ambiguous begun activity into safe replay.
-- Journald owns process stdout/stderr retention for this slice. A stable public
-  logs protocol remains future work.
+- Journald owns generic resident-process stdout/stderr retention for this slice.
+  Wharfie's separate verified activity-log command does not claim to replace a
+  public resident log stream.
 - Uninstall is intentionally not destroy. Durable control and application data
   plus the selected/rollback release pair survive. Explicit `service prune`
-  may remove only verified unreferenced local release copies; every other
-  destructive data lifecycle still requires a future contract or direct
-  operator action.
+  may remove only verified unreferenced local release copies; the separate
+  typed-confirmation `service purge` removes one exact uninstalled app tree
+  through its own retry-safe tombstone contract.
 - Install verifies the live manager's exact unit search path before staging
   service state and verifies the loaded effective fragment, empty drop-ins,
   and a non-stale manager cache before enablement. Stop and uninstall enforce

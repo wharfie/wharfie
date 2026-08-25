@@ -295,7 +295,7 @@ class FunctionResource extends BuildResource {
       format: 'cjs',
       minify: true,
       keepNames: false,
-      sourcemap: 'inline',
+      sourcemap: false,
       target: `node${inputs.buildTarget.nodeVersion}`,
       logLevel: 'silent',
       external: inputs.external.length

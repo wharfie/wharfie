@@ -668,8 +668,10 @@ describe('AWS retained-storage host preflight SEA Linux guest verifier', () => {
   });
 
   it('proves a checkout module is one real regular file beneath the checkout', async () => {
-    const root = await fsp.mkdtemp(
-      path.join(os.tmpdir(), 'wharfie-guest-module-boundary-'),
+    const root = await fsp.realpath(
+      await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-guest-module-boundary-'),
+      ),
     );
     try {
       const checkoutRoot = path.join(root, 'checkout');
@@ -734,8 +736,10 @@ describe('AWS retained-storage host preflight SEA Linux guest verifier', () => {
   });
 
   it('refuses a relocated-artifact parent symlink and copies only beneath the owned root', async () => {
-    const root = await fsp.mkdtemp(
-      path.join(os.tmpdir(), 'wharfie-guest-relocation-boundary-'),
+    const root = await fsp.realpath(
+      await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-guest-relocation-boundary-'),
+      ),
     );
     try {
       const ownedRoot = path.join(root, 'owned');

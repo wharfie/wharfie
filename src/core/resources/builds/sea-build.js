@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   constants as fsConstants,
   promises,
   existsSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { build as _build } from '../../lib/esbuild.js';
@@ -32,6 +33,142 @@ const LIEF_SECTION_NAME_WARNING =
   "Can't find string offset for section name '.note";
 const WHARFIE_PUBLIC_APP_SPECIFIER = '@wharfie/wharfie/app';
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
+const NODE_SEA_SENTINEL_FUSE = Buffer.from(
+  'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
+  'ascii',
+);
+const FILE_SEQUENCE_SCAN_CHUNK_SIZE = 1024 * 1024;
+const FUSE_MARKER_GENERATION_ATTEMPTS = 16;
+const FUSE_MARKER_DOMAIN = 'wharfie.sea.nested-fuse-mask.v1\0';
+const INLINE_SOURCE_MAP_PATTERN =
+  /(\/\/# sourceMappingURL=data:application\/json;base64,)([A-Za-z0-9+/=]+)(\r?\n)?$/;
+
+/**
+ * Render one sealed build input as a canonical path relative to the private
+ * build directory. Node embeds its SEA config paths in the generated blob, so
+ * absolute temporary paths would make otherwise identical builds differ.
+ * @param {string} buildDir - Private SEA build directory.
+ * @param {string} filePath - Path known to be inside the build directory.
+ * @returns {string} - Slash-separated path relative to buildDir.
+ */
+function toSeaConfigPath(buildDir, filePath) {
+  const relativePath = relative(resolve(buildDir), resolve(filePath));
+  if (
+    relativePath.length === 0 ||
+    isAbsolute(relativePath) ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${sep}`)
+  ) {
+    throw new Error('SEA config path must name a file inside its build tree.');
+  }
+  return relativePath.split(sep).join('/');
+}
+
+/**
+ * Replace the private revision-snapshot root in an inline bundle source map
+ * with a stable logical application root. Real authored sourcesContent and all
+ * mappings remain byte-for-byte unchanged; only the synthetic entry source,
+ * whose imports contain private absolute paths, is omitted. Inspector proofs
+ * therefore retain their exact source binding without making the SEA depend
+ * on a random snapshot directory name.
+ * @param {string} bundle - Bundled JavaScript with one inline source map.
+ * @param {string} outputPath - Absolute generated bundle path.
+ * @param {string} entryCode - Synthetic SEA entry source containing private import paths.
+ * @param {string | undefined} applicationSourceRoot - Private immutable app snapshot root.
+ * @returns {string} - Bundle with canonical source names.
+ */
+function canonicalizeInlineSourceMap(
+  bundle,
+  outputPath,
+  entryCode,
+  applicationSourceRoot,
+) {
+  const match = bundle.match(INLINE_SOURCE_MAP_PATTERN);
+  if (!match) {
+    throw new Error(
+      'SEA bundle must contain one terminal inline source map for canonicalization.',
+    );
+  }
+  /** @type {Record<string, any>} */
+  let sourceMap;
+  try {
+    sourceMap = JSON.parse(Buffer.from(match[2], 'base64').toString('utf8'));
+  } catch (error) {
+    throw new Error('SEA bundle contains an invalid inline source map.', {
+      cause: error,
+    });
+  }
+  if (
+    !sourceMap ||
+    typeof sourceMap !== 'object' ||
+    Array.isArray(sourceMap) ||
+    !Array.isArray(sourceMap.sources) ||
+    sourceMap.sources.some(
+      (/** @type {unknown} */ source) => typeof source !== 'string',
+    ) ||
+    !Array.isArray(sourceMap.sourcesContent) ||
+    sourceMap.sourcesContent.length !== sourceMap.sources.length ||
+    sourceMap.sourcesContent.some(
+      (/** @type {unknown} */ content) =>
+        content !== null && typeof content !== 'string',
+    ) ||
+    (sourceMap.sourceRoot !== undefined && sourceMap.sourceRoot !== '')
+  ) {
+    throw new Error(
+      'SEA bundle inline source map has invalid embedded sources.',
+    );
+  }
+  const entrySourceIndexes = sourceMap.sourcesContent.reduce(
+    (
+      /** @type {number[]} */ indexes,
+      /** @type {string | null} */ content,
+      /** @type {number} */ index,
+    ) => {
+      if (content === entryCode) indexes.push(index);
+      return indexes;
+    },
+    /** @type {number[]} */ ([]),
+  );
+  if (entrySourceIndexes.length !== 1) {
+    throw new Error(
+      `SEA bundle source map resolved ${entrySourceIndexes.length} synthetic entry sources; expected 1.`,
+    );
+  }
+  sourceMap.sourcesContent[entrySourceIndexes[0]] = null;
+  if (applicationSourceRoot) {
+    const canonicalRoot = realpathSync(resolve(applicationSourceRoot));
+    const sourceBase = dirname(outputPath);
+    let canonicalized = 0;
+    sourceMap.sources = sourceMap.sources.map(
+      (/** @type {string} */ source) => {
+        const absoluteSource = resolve(sourceBase, source);
+        const relativeSource = relative(canonicalRoot, absoluteSource);
+        if (
+          relativeSource === '' ||
+          isAbsolute(relativeSource) ||
+          relativeSource === '..' ||
+          relativeSource.startsWith(`..${sep}`)
+        ) {
+          return source;
+        }
+        canonicalized += 1;
+        return `wharfie-app/${relativeSource.split(sep).join('/')}`;
+      },
+    );
+    if (canonicalized === 0) {
+      throw new Error(
+        'SEA bundle source map did not contain its immutable application snapshot.',
+      );
+    }
+  }
+  const encoded = Buffer.from(JSON.stringify(sourceMap), 'utf8').toString(
+    'base64',
+  );
+  return bundle.replace(
+    INLINE_SOURCE_MAP_PATTERN,
+    `${match[1]}${encoded}${match[3] || ''}`,
+  );
+}
 
 /**
  * Resolve the source-tree public app API only when a nested build is actually
@@ -104,6 +241,286 @@ function observeBytes(bytes) {
     },
     size: snapshot.length,
   };
+}
+
+/**
+ * Find non-overlapping byte-sequence offsets without loading the complete file.
+ * The overlap retains only one needle less than a complete match, so matches
+ * spanning adjacent read chunks are observed exactly once.
+ * @param {import('node:fs/promises').FileHandle} fileHandle - Open file.
+ * @param {Buffer} needle - Non-empty byte sequence.
+ * @returns {Promise<number[]>} - Exact sequence offsets.
+ */
+async function findFileSequenceOffsets(fileHandle, needle) {
+  if (needle.length === 0) {
+    throw new TypeError('File sequence needle must not be empty.');
+  }
+  const offsets = [];
+  const readBuffer = Buffer.allocUnsafe(FILE_SEQUENCE_SCAN_CHUNK_SIZE);
+  let carry = Buffer.alloc(0);
+  let fileOffset = 0;
+
+  while (true) {
+    const { bytesRead } = await fileHandle.read(
+      readBuffer,
+      0,
+      readBuffer.length,
+      fileOffset,
+    );
+    if (bytesRead === 0) break;
+    const chunk = readBuffer.subarray(0, bytesRead);
+    const searchable =
+      carry.length === 0 ? chunk : Buffer.concat([carry, chunk]);
+    const searchableOffset = fileOffset - carry.length;
+    let searchOffset = 0;
+    while (true) {
+      const matchOffset = searchable.indexOf(needle, searchOffset);
+      if (matchOffset === -1) break;
+      offsets.push(searchableOffset + matchOffset);
+      searchOffset = matchOffset + needle.length;
+    }
+    const carryLength = Math.min(needle.length - 1, searchable.length);
+    carry = Buffer.from(searchable.subarray(searchable.length - carryLength));
+    fileOffset += bytesRead;
+  }
+  return offsets;
+}
+
+/**
+ * Determine whether a regular file already contains a byte sequence.
+ * @param {string} filePath - File path.
+ * @param {Buffer} needle - Non-empty byte sequence.
+ * @returns {Promise<boolean>} - Whether the sequence occurs.
+ */
+async function fileContainsSequence(filePath, needle) {
+  const fileHandle = await promises.open(filePath, 'r');
+  try {
+    const stats = await fileHandle.stat();
+    if (!stats.isFile()) {
+      throw new Error(
+        `SEA injection target is not a regular file: ${filePath}`,
+      );
+    }
+    return (await findFileSequenceOffsets(fileHandle, needle)).length > 0;
+  } finally {
+    await fileHandle.close();
+  }
+}
+
+/**
+ * Create a deterministic same-length marker absent from both inputs to an
+ * injection. The marker is ASCII so failures remain diagnosable in binary
+ * inspection.
+ * @param {string} nodeBinaryPath - Pre-injection Node executable.
+ * @param {Buffer} blobData - Original SEA blob.
+ * @returns {Promise<Buffer>} - Collision-free marker.
+ */
+async function createCollisionFreeFuseMarker(nodeBinaryPath, blobData) {
+  const blobDigest = createHash('sha256').update(blobData).digest();
+  for (
+    let attempt = 0;
+    attempt < FUSE_MARKER_GENERATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    const attemptBytes = Buffer.allocUnsafe(4);
+    attemptBytes.writeUInt32BE(attempt);
+    const markerDigest = createHash('sha256')
+      .update(FUSE_MARKER_DOMAIN, 'utf8')
+      .update(blobDigest)
+      .update(attemptBytes)
+      .digest('base64url');
+    const marker = Buffer.from(
+      `WHARFIE_SEA_MASK_${markerDigest}`.slice(
+        0,
+        NODE_SEA_SENTINEL_FUSE.length,
+      ),
+      'ascii',
+    );
+    if (
+      marker.length === NODE_SEA_SENTINEL_FUSE.length &&
+      blobData.indexOf(marker) === -1 &&
+      !(await fileContainsSequence(nodeBinaryPath, marker))
+    ) {
+      return marker;
+    }
+  }
+  throw new Error('Could not create a collision-free nested SEA fuse marker.');
+}
+
+/**
+ * Replace every non-overlapping needle occurrence with same-length bytes.
+ * @param {Buffer} source - Immutable source bytes.
+ * @param {Buffer} needle - Bytes to replace.
+ * @param {Buffer} replacement - Same-length replacement.
+ * @returns {{bytes: Buffer, count: number}} - New bytes and replacement count.
+ */
+function replaceBufferSequence(source, needle, replacement) {
+  if (needle.length === 0 || needle.length !== replacement.length) {
+    throw new TypeError(
+      'SEA fuse replacement requires non-empty, same-length byte sequences.',
+    );
+  }
+  const bytes = Buffer.from(source);
+  let count = 0;
+  let searchOffset = 0;
+  while (true) {
+    const matchOffset = bytes.indexOf(needle, searchOffset);
+    if (matchOffset === -1) break;
+    replacement.copy(bytes, matchOffset);
+    count += 1;
+    searchOffset = matchOffset + needle.length;
+  }
+  return { bytes, count };
+}
+
+/**
+ * Compare one exact file region with expected bytes without loading the
+ * complete executable.
+ * @param {import('node:fs/promises').FileHandle} fileHandle - Open file.
+ * @param {number} start - Region start.
+ * @param {Buffer} expected - Exact expected bytes.
+ * @returns {Promise<boolean>} - Whether the region matches.
+ */
+async function fileRegionEquals(fileHandle, start, expected) {
+  if (!Number.isSafeInteger(start) || start < 0) return false;
+  const stats = await fileHandle.stat();
+  if (start + expected.length > stats.size) return false;
+  const readBuffer = Buffer.allocUnsafe(
+    Math.min(FILE_SEQUENCE_SCAN_CHUNK_SIZE, Math.max(1, expected.length)),
+  );
+  let consumed = 0;
+  while (consumed < expected.length) {
+    const length = Math.min(readBuffer.length, expected.length - consumed);
+    const { bytesRead } = await fileHandle.read(
+      readBuffer,
+      0,
+      length,
+      start + consumed,
+    );
+    if (
+      bytesRead !== length ||
+      !readBuffer
+        .subarray(0, bytesRead)
+        .equals(expected.subarray(consumed, consumed + bytesRead))
+    ) {
+      return false;
+    }
+    consumed += bytesRead;
+  }
+  return true;
+}
+
+/**
+ * Find non-overlapping byte-sequence offsets in a buffer.
+ * @param {Buffer} source - Bytes to inspect.
+ * @param {Buffer} needle - Non-empty sequence.
+ * @returns {number[]} - Exact sequence offsets.
+ */
+function findBufferSequenceOffsets(source, needle) {
+  if (needle.length === 0) {
+    throw new TypeError('Buffer sequence needle must not be empty.');
+  }
+  const offsets = [];
+  let searchOffset = 0;
+  while (true) {
+    const matchOffset = source.indexOf(needle, searchOffset);
+    if (matchOffset === -1) break;
+    offsets.push(matchOffset);
+    searchOffset = matchOffset + needle.length;
+  }
+  return offsets;
+}
+
+/**
+ * Restore masked nested SEA fuse names in-place after postject has flipped the
+ * one outer Node fuse. Restoration is restricted to tracked offsets inside
+ * the one exact injected blob; no global marker replacement is permitted.
+ * @param {string} binaryPath - Injected executable.
+ * @param {Buffer} marker - Same-length masked fuse marker.
+ * @param {Buffer} maskedBlob - Exact immutable bytes handed to postject.
+ * @param {Buffer} originalBlob - Exact original SEA blob.
+ * @param {number[]} nestedFuseOffsets - Fuse offsets inside originalBlob.
+ * @returns {Promise<void>}
+ */
+async function restoreNestedSeaFuses(
+  binaryPath,
+  marker,
+  maskedBlob,
+  originalBlob,
+  nestedFuseOffsets,
+) {
+  const fileHandle = await promises.open(binaryPath, 'r+');
+  try {
+    const markerOffsets = await findFileSequenceOffsets(fileHandle, marker);
+    if (markerOffsets.length !== nestedFuseOffsets.length) {
+      throw new Error(
+        `Injected SEA contains ${markerOffsets.length} nested fuse markers; expected ${nestedFuseOffsets.length}.`,
+      );
+    }
+    const firstNestedOffset = nestedFuseOffsets[0];
+    const candidateStarts = [
+      ...new Set(
+        markerOffsets
+          .map((markerOffset) => markerOffset - firstNestedOffset)
+          .filter((start) => start >= 0),
+      ),
+    ];
+    const matchingStarts = [];
+    for (const candidateStart of candidateStarts) {
+      if (await fileRegionEquals(fileHandle, candidateStart, maskedBlob)) {
+        matchingStarts.push(candidateStart);
+      }
+    }
+    if (matchingStarts.length !== 1) {
+      throw new Error(
+        `Injected SEA contains ${matchingStarts.length} exact masked blob occurrences; expected 1.`,
+      );
+    }
+    const blobStart = matchingStarts[0];
+    const trackedMarkerOffsets = nestedFuseOffsets.map(
+      (nestedOffset) => blobStart + nestedOffset,
+    );
+    if (
+      trackedMarkerOffsets.some(
+        (trackedOffset, index) => trackedOffset !== markerOffsets[index],
+      )
+    ) {
+      throw new Error(
+        'Injected SEA fuse markers do not match their tracked blob offsets.',
+      );
+    }
+    for (const markerOffset of trackedMarkerOffsets) {
+      const { bytesWritten } = await fileHandle.write(
+        NODE_SEA_SENTINEL_FUSE,
+        0,
+        NODE_SEA_SENTINEL_FUSE.length,
+        markerOffset,
+      );
+      if (bytesWritten !== NODE_SEA_SENTINEL_FUSE.length) {
+        throw new Error('Could not completely restore a nested SEA fuse.');
+      }
+    }
+    await fileHandle.sync();
+    if ((await findFileSequenceOffsets(fileHandle, marker)).length !== 0) {
+      throw new Error('Injected SEA still contains a nested fuse marker.');
+    }
+    if (!(await fileRegionEquals(fileHandle, blobStart, originalBlob))) {
+      throw new Error(
+        'Injected SEA resource bytes do not match the original nested blob.',
+      );
+    }
+    if (
+      (await findFileSequenceOffsets(fileHandle, NODE_SEA_SENTINEL_FUSE))
+        .length !==
+      nestedFuseOffsets.length + 1
+    ) {
+      throw new Error(
+        'Injected SEA does not contain one outer and the exact restored nested fuse set.',
+      );
+    }
+  } finally {
+    await fileHandle.close();
+  }
 }
 
 /**
@@ -529,6 +946,7 @@ async function captureNodeArchiveEvidence(
  * @typedef SeaBuildProperties
  * @property {string | function(): string} entryCode - entryCode.
  * @property {string | function(): string} resolveDir - resolveDir.
+ * @property {string} [sourceMapApplicationRoot] - Private immutable application source root canonicalized out of inline SEA maps.
  * @property {string | function(): string} nodeBinaryPath - nodeBinaryPath.
  * @property {string | function(): string} nodeVersion - Exact Node.js target version; must match the builder runtime.
  * @property {TargetPlatform | function(): TargetPlatform} platform - platform.
@@ -881,7 +1299,7 @@ class SeaBuild extends BaseResource {
     if (typeof entryCode !== 'string') {
       throw new TypeError('SEA build entryCode must resolve to a string.');
     }
-    const { errors, warnings } = await _build({
+    const { outputFiles, errors, warnings } = await _build({
       stdin: {
         contents: entryCode,
         resolveDir: this.get('resolveDir'),
@@ -891,6 +1309,7 @@ class SeaBuild extends BaseResource {
         '.worker.js': 'text',
       },
       outfile: outputPath,
+      write: false,
       bundle: true,
       platform: 'node',
       minify: true,
@@ -916,6 +1335,16 @@ class SeaBuild extends BaseResource {
     if (warnings.length > 0) {
       console.warn(warnings);
     }
+    if (!outputFiles || outputFiles.length !== 1) {
+      throw new Error('SEA JavaScript bundle output was not as expected.');
+    }
+    const bundle = canonicalizeInlineSourceMap(
+      outputFiles[0].text,
+      outputPath,
+      entryCode,
+      this.get('sourceMapApplicationRoot'),
+    );
+    await promises.writeFile(outputPath, bundle, { mode: 0o600 });
     this.set('codeBundlePath', outputPath);
   }
 
@@ -1117,14 +1546,19 @@ class SeaBuild extends BaseResource {
     const preparedAssets = await this._prepareSeaAssetsWithEvidence(buildDir);
     const assets = preparedAssets.assets;
     const seaConfig = {
-      main: join(buildDir, 'esbundle.js'),
-      output: blobPath,
+      main: toSeaConfigPath(buildDir, codeBundlePath),
+      output: toSeaConfigPath(buildDir, blobPath),
       disableExperimentalSEAWarning: true,
       useSnapshot: false,
       useCodeCache: false,
       execArgv: [],
       execArgvExtension: 'cli',
-      assets,
+      assets: Object.fromEntries(
+        Object.entries(assets).map(([name, assetPath]) => [
+          name,
+          toSeaConfigPath(buildDir, assetPath),
+        ]),
+      ),
     };
 
     writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
@@ -1137,8 +1571,12 @@ class SeaBuild extends BaseResource {
     }
     await execFile(
       process.execPath,
-      ['--no-warnings', '--experimental-sea-config', seaConfigPath],
-      {},
+      [
+        '--no-warnings',
+        '--experimental-sea-config',
+        toSeaConfigPath(buildDir, seaConfigPath),
+      ],
+      { cwd: buildDir },
       true,
     );
     const codeBundleAfter = await readStableRegularFile(
@@ -1158,22 +1596,49 @@ class SeaBuild extends BaseResource {
       throw new Error('SEA blob must not be empty.');
     }
     const seaBlobEvidence = freezeJsonSnapshot(observeBytes(blobData));
-    const injectionBlob = Buffer.from(blobData);
-    // base64 encoded fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
-    // see https://github.com/nodejs/postject/issues/92#issuecomment-2283508514
+    const nestedFuseOffsets = findBufferSequenceOffsets(
+      blobData,
+      NODE_SEA_SENTINEL_FUSE,
+    );
+    const nestedFuseCount = nestedFuseOffsets.length;
+    const nestedFuseMarker =
+      nestedFuseCount === 0
+        ? null
+        : await createCollisionFreeFuseMarker(nodeBinaryPath, blobData);
+    const injectionBlob =
+      nestedFuseMarker === null
+        ? Buffer.from(blobData)
+        : replaceBufferSequence(
+            blobData,
+            NODE_SEA_SENTINEL_FUSE,
+            nestedFuseMarker,
+          ).bytes;
+    const injectionBlobSnapshot = Buffer.from(injectionBlob);
+    if (
+      nestedFuseCount > 0 &&
+      injectionBlob.indexOf(NODE_SEA_SENTINEL_FUSE) !== -1
+    ) {
+      throw new Error('Masked SEA blob still contains a nested Node fuse.');
+    }
     await _withSuppressedPostjectWarnings(async () => {
       await inject(nodeBinaryPath, 'NODE_SEA_BLOB', injectionBlob, {
-        sentinelFuse: Buffer.from(
-          'Tk9ERV9TRUFfRlVTRV9mY2U2ODBhYjJjYzQ2N2I2ZTA3MmI4YjVkZjE5OTZiMg==',
-          'base64',
-        ).toString(),
+        sentinelFuse: NODE_SEA_SENTINEL_FUSE.toString('ascii'),
         ...(this.get('platform') === 'darwin'
           ? { machoSegmentName: 'NODE_SEA' }
           : {}),
       });
     });
-    if (!injectionBlob.equals(blobData)) {
+    if (!injectionBlob.equals(injectionBlobSnapshot)) {
       throw new Error('SEA blob changed while it was being injected.');
+    }
+    if (nestedFuseMarker !== null) {
+      await restoreNestedSeaFuses(
+        nodeBinaryPath,
+        nestedFuseMarker,
+        injectionBlobSnapshot,
+        blobData,
+        nestedFuseOffsets,
+      );
     }
     return {
       codeBundleEvidence: freezeJsonSnapshot(observeBytes(codeBundleBefore)),

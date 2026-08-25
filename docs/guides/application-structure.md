@@ -33,6 +33,27 @@ export default defineApp({
 `defineApp()` expands only the mechanical v4 fields. No second Wharfie-only
 entrypoint, target matrix, activity, workflow, or schedule is required.
 
+The compact form follows explicit conventions instead of inventing hidden
+behavior:
+
+- `main` is the module path and that module exports `main` for ordinary argv;
+- optional `durable: '<workflow-id>'` selects the default workflow and uses the
+  conventional `toDurableInput` export from the same CLI module;
+- optional `activityModule` supplies a fallback module path for activities that
+  omit `path`; every activity may still override `path`, and an omitted
+  `export` defaults to the activity ID only when that ID is a valid JavaScript
+  export name;
+- shorthand activity entries use only `path`, `export`, and
+  `externalPackages`; `defineApp()` expands them into the full Node entrypoint
+  shape; and
+- `workflows`, `schedules`, and `targets` keep the same strict data contracts as
+  the expanded manifest. `activityModule` requires a nonempty `activities` map,
+  but it remains valid when every declared activity supplies its own `path`.
+
+Omitting `targets` means the package command selects this exact compatible
+host. `--target` filters only an explicitly declared target matrix; it does not
+turn a targetless manifest into a cross-build request.
+
 ## Expanded application
 
 When work needs to be durable, the same manifest can name activities,
@@ -237,4 +258,6 @@ remain available only through the closed `runtime.effects` contract.
 
 Use `wharfie app manifest ./path/to/app` to inspect the compiled manifest,
 `wharfie app run sync --dir ./path/to/app` to invoke an activity locally, and
-`wharfie app package ./path/to/app` to create a portable executable.
+`wharfie app package ./path/to/app` to create a portable executable. Packaging
+prints a human handoff by default; automation requests the stable package
+receipt with `--json` and compact JSON with `--json --no-pretty`.

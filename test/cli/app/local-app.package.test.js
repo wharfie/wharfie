@@ -32,12 +32,17 @@ import {
   stringifyCoreRuntimeDependencyManifest,
 } from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
 import { digestFrozenDependencyClosurePlan } from '../../../src/core/resources/builds/lib/frozen-dependency-closure-plan.js';
+import {
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME,
+  SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME,
+} from '../../../src/core/runtime/single-node-deployment-payload.js';
 import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
 import CoreRuntimeDependenciesResource from '../../../src/core/resources/builds/core-runtime-dependencies.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
 import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
 import SeaBuild from '../../../src/core/resources/builds/sea-build.js';
+import ambientActorStateStore from '../../../src/core/lib/db/state/store.js';
 import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import {
   cleanupIsolatedAuthoredAppFixtures,
@@ -394,6 +399,78 @@ afterEach(() => {
 });
 
 describe('packageLocalApp', () => {
+  it('isolates package reconciliation from ambient actor state', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-package-state-isolation-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+    const ambientStateAccess = new Error(
+      'package reconciliation accessed ambient actor state',
+    );
+    const ambientStateSpies = [
+      jest
+        .spyOn(ambientActorStateStore, 'putResource')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'putResourceStatus')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'getResource')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'getResourceStatus')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'getResources')
+        .mockRejectedValue(ambientStateAccess),
+      jest
+        .spyOn(ambientActorStateStore, 'deleteResource')
+        .mockRejectedValue(ambientStateAccess),
+    ];
+
+    try {
+      await writeTransactionalPackageApp(dir, 'package-state-isolation', [
+        currentTarget,
+      ]);
+      jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+        /** @this {ActorSystem} */ async function () {
+          const packageStateStore = this.getStateDB();
+          expect(packageStateStore).not.toBe(ambientActorStateStore);
+          await packageStateStore.putResource(this);
+          await packageStateStore.putResourceStatus(this);
+          expect(await packageStateStore.getResource(this)).toBeUndefined();
+          expect(
+            await packageStateStore.getResourceStatus(this),
+          ).toBeUndefined();
+          expect(
+            await packageStateStore.getResources(this.getName(), 'SeaBuild'),
+          ).toEqual([]);
+          await packageStateStore.deleteResource(this);
+
+          const buildDir = path.join(dir, '.fake-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
+          for (const resource of this.getResources()) {
+            expect(resource.getStateDB()).toBe(packageStateStore);
+            if (!(resource instanceof SeaBuild)) continue;
+            const binaryPath = path.join(buildDir, resource.name);
+            await fsp.writeFile(binaryPath, 'isolated package bytes', 'utf8');
+            resource._setUNSAFE('binaryPath', binaryPath);
+          }
+        },
+      );
+
+      const result = await packageLocalApp({ dir, outputDir });
+
+      expect(result.artifacts).toHaveLength(1);
+      expect(existsSync(result.artifacts[0].path)).toBe(true);
+      for (const spy of ambientStateSpies) {
+        expect(spy).not.toHaveBeenCalled();
+      }
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('infers one exact host target when a manifest omits targets', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-host-target-package-'),
@@ -463,6 +540,38 @@ describe('packageLocalApp', () => {
       expect(progress[3].message).toBe(
         `Downloading Node v${process.versions.node} (1.0/2.0 MiB)`,
       );
+
+      progress.length = 0;
+      const overridden = await packageLocalApp({
+        dir,
+        outputDir: path.join(dir, 'override-dist'),
+        targetOverrides: [currentTarget],
+        onProgress: (event) => progress.push(event),
+      });
+      expect(overridden.targets).toEqual([currentTarget]);
+      expect(overridden.artifacts).toHaveLength(1);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps internal exact target overrides closed from public target filters', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-package-target-overrides-'),
+    );
+
+    try {
+      await writeTargetlessPackageApp(dir, 'target-override-boundary');
+      await expect(
+        packageLocalApp({ dir, targetOverrides: [] }),
+      ).rejects.toThrow(/targetOverrides must be a nonempty array/);
+      await expect(
+        packageLocalApp({
+          dir,
+          targetOverrides: [currentTarget],
+          targetFilters: [getTargetSelector(currentTarget)],
+        }),
+      ).rejects.toThrow(/cannot be combined with targetFilters/);
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
     }
@@ -1467,6 +1576,11 @@ try {
 
   it.each([
     ['hello', './src/activity.js', /reserved for Wharfie runtime content/i],
+    [
+      SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME,
+      './src/activity.js',
+      /reserved for Wharfie runtime content/i,
+    ],
     ['branding', './missing-branding.txt', /does not exist/i],
   ])(
     'rejects invalid packaging asset %s before building',
@@ -1538,6 +1652,109 @@ try {
       }
     },
   );
+
+  it('attaches the exact deployment payload after revision preparation and seals its digest evidence', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-framework-assets-package-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+    const payloadDir = path.join(dir, 'payload');
+    const manifestPath = path.join(payloadDir, 'manifest.json');
+    const seaPath = path.join(payloadDir, 'app-sea');
+    const manifestBytes = '{"kind":"test-deployment-payload"}\n';
+    const seaBytes = 'exact nested linux sea bytes';
+
+    try {
+      await writeTransactionalPackageApp(dir, 'framework-assets-package', [
+        currentTarget,
+      ]);
+      await fsp.mkdir(payloadDir, { mode: 0o700 });
+      await Promise.all([
+        fsp.writeFile(manifestPath, manifestBytes),
+        fsp.writeFile(seaPath, seaBytes),
+      ]);
+
+      jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+        /** @this {ActorSystem} */ async function () {
+          const buildDir = path.join(dir, '.fake-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
+
+          for (const resource of this.getResources()) {
+            if (!(resource instanceof SeaBuild)) continue;
+            const assets = resource.get('assets');
+            const assetDigests = resource.get('assetDigests');
+            expect(assets).toEqual(
+              expect.objectContaining({
+                [SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME]:
+                  manifestPath,
+                [SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME]: seaPath,
+              }),
+            );
+            expect(assetDigests).toEqual(
+              expect.objectContaining({
+                [SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME]:
+                  getSha256Digest(manifestBytes),
+                [SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME]:
+                  getSha256Digest(seaBytes),
+              }),
+            );
+            const binaryPath = path.join(buildDir, 'operator-sea');
+            await fsp.writeFile(binaryPath, 'operator sea bytes');
+            resource._setUNSAFE('binaryPath', binaryPath);
+          }
+        },
+      );
+
+      const result = await packageLocalApp({
+        dir,
+        outputDir,
+        frameworkAssets: {
+          assets: {
+            [SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME]: manifestPath,
+            [SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME]: seaPath,
+          },
+          assetDigests: {
+            [SINGLE_NODE_DEPLOYMENT_PAYLOAD_MANIFEST_ASSET_NAME]:
+              getSha256Digest(manifestBytes),
+            [SINGLE_NODE_DEPLOYMENT_PAYLOAD_SEA_ASSET_NAME]:
+              getSha256Digest(seaBytes),
+          },
+        },
+      });
+
+      expect(result.revision.inputs.assets).toBeUndefined();
+      expect(result.artifacts).toHaveLength(1);
+      expect(existsSync(result.artifacts[0].path)).toBe(true);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fences an expected revision change before build initialization', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-expected-revision-package-'),
+    );
+    const initializeEnvironment = jest.spyOn(
+      ActorSystem.prototype,
+      'initializeEnvironment',
+    );
+
+    try {
+      await writeTransactionalPackageApp(dir, 'expected-revision-package', [
+        currentTarget,
+      ]);
+
+      await expect(
+        packageLocalApp({
+          dir,
+          expectedRevisionId: `wrv1_${Buffer.alloc(32).toString('base64url')}`,
+        }),
+      ).rejects.toThrow(/revision changed between package passes/i);
+      expect(initializeEnvironment).not.toHaveBeenCalled();
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
 
   it.each([
     ['behavior', 'branding', true],

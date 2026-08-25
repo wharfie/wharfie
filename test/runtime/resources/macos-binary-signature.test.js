@@ -9,6 +9,7 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,6 +18,16 @@ const CMD_IMPORT = '../../../src/core/lib/cmd.js';
 const SIGNATURE_IMPORT =
   '../../../src/core/resources/builds/macos-binary-signature.js';
 const IDENTITY_HASH = '0123456789ABCDEF0123456789ABCDEF01234567';
+const CODE_SIGNING_IDENTIFIER_PREFIX = 'io.wharfie.sea.sha256.';
+
+/**
+ * @param {Buffer | Uint8Array} bytes
+ */
+function expectedCodeSigningIdentifier(bytes) {
+  return `${CODE_SIGNING_IDENTIFIER_PREFIX}${createHash('sha256')
+    .update(bytes)
+    .digest('hex')}`;
+}
 
 /** @type {ReturnType<typeof jest.fn>} */
 let runCmd;
@@ -151,12 +162,66 @@ describe('MacOSBinarySignature', () => {
     }
   });
 
+  it('derives a stable ad-hoc identifier from unsigned content rather than the private basename', async () => {
+    const sourceDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-content-signing-identifier-'),
+    );
+    const inputs = [
+      {
+        path: path.join(sourceDir, 'app-build-first-random-name'),
+        bytes: Buffer.from('same-unsigned-sea'),
+      },
+      {
+        path: path.join(sourceDir, 'app-build-second-random-name'),
+        bytes: Buffer.from('same-unsigned-sea'),
+      },
+      {
+        path: path.join(sourceDir, 'app-build-third-random-name'),
+        bytes: Buffer.from('different-unsigned-sea'),
+      },
+    ];
+
+    try {
+      const { default: MacOSBinarySignature } = await import(SIGNATURE_IMPORT);
+      for (const input of inputs) {
+        await fsp.writeFile(input.path, input.bytes);
+        const signature = new MacOSBinarySignature({
+          name: path.basename(input.path),
+          dependsOn: [/** @type {any} */ (createGenerationBuild(input.path))],
+          properties: { binaryPath: input.path },
+        });
+        await signature.signBinary();
+      }
+
+      const codesignCalls = runCmd.mock.calls.filter(
+        ([command]) => command === 'codesign',
+      );
+      expect(codesignCalls).toHaveLength(inputs.length);
+      const identifiers = codesignCalls.map(([, args]) => {
+        const identifierFlagIndex = args.indexOf('--identifier');
+        expect(identifierFlagIndex).toBeGreaterThanOrEqual(0);
+        return args[identifierFlagIndex + 1];
+      });
+      expect(identifiers).toEqual(
+        inputs.map((input) => expectedCodeSigningIdentifier(input.bytes)),
+      );
+      expect(identifiers[0]).toBe(identifiers[1]);
+      expect(identifiers[2]).not.toBe(identifiers[0]);
+      for (const [index, input] of inputs.entries()) {
+        expect(identifiers[index]).not.toContain(path.basename(input.path));
+      }
+    } finally {
+      await fsp.rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
   it('retains only the public identity name and hash after identity signing', async () => {
     const sourceDir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-identity-result-'),
     );
     const binaryPath = path.join(sourceDir, 'app');
-    await fsp.writeFile(binaryPath, 'binary', 'utf8');
+    const unsignedBytes = Buffer.from('binary');
+    await fsp.writeFile(binaryPath, unsignedBytes);
     const generationBuild = createGenerationBuild(binaryPath);
     const credentials = {
       certificateBase64: Buffer.from('certificate').toString('base64'),
@@ -183,6 +248,14 @@ describe('MacOSBinarySignature', () => {
         mode: 'identity',
         signer: `Portable Test Identity [${IDENTITY_HASH}]`,
       });
+      const codesignCall = runCmd.mock.calls.find(
+        ([command]) => command === 'codesign',
+      );
+      const identifierFlagIndex = codesignCall?.[1].indexOf('--identifier');
+      expect(identifierFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(codesignCall?.[1][Number(identifierFlagIndex) + 1]).toBe(
+        expectedCodeSigningIdentifier(unsignedBytes),
+      );
       const serialized = JSON.stringify(signature.serialize());
       expect(serialized).toContain('Portable Test Identity');
       expect(serialized).toContain(IDENTITY_HASH);

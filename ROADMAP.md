@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-06
+**Last updated:** 2026-08-24
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -67,8 +67,13 @@ The repository has substantial foundations:
   through install, automatic replacement, forced host restart, retained work,
   update, rollback, failed-target restoration, history/output reads,
   uninstall, prune, and host cleanup; and
-- extensive AWS-shaped deployment contracts, resource drivers, and mock-based
-  proofs.
+- packaged AWS and Hetzner single-node read-only preview and status plus
+  apply/update/recover/exec/destroy commands, recoverable provider mutations,
+  automated recovery proofs, and live packaged
+  apply/activate/adopt/restart/destroy proofs with independent owned-resource
+  cleanup. Journal-bound `exec` reaches only the exact active remote application
+  through pinned SSH, although that command has not yet received a new
+  live-provider proof.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -76,8 +81,10 @@ processes; it did not repeat crash or reboot recovery, which remains covered by
 the separate purpose-built service proof. The explicit epoch-authority kernel
 proves that a bound ledger can reject stale writers, but the production runtime
 does not bind it yet and neither run proves replacement of a failed coordinator
-by another machine. The cloud deployment work has not produced a successful
-clean-account end-to-end receipt.
+by another machine. The cloud deployment work now proves a bounded
+credentialed lifecycle through healthy guest service and independently
+verified owned-resource cleanup on AWS and Hetzner. The broader ADR 0035
+acceptance artifact remains partial.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -238,35 +245,76 @@ capability.
 - AWS-shaped specifications, ownership bindings, plans, inspections, actions,
   resource drivers, retained storage, artifacts, runtime identity, node
   bootstrap, and service-health contracts exist.
+- A self-deployable SEA can apply or recover the bounded single-node substrate
+  on AWS or Hetzner, then destroy it from exact durable local authority.
+  Credentials come only from the ordinary AWS chain or ambient
+  `HCLOUD_TOKEN`; they are not CLI arguments.
+- The same SEA can first perform a zero-write, point-in-time preview that
+  validates ambient access and separates selected external references from
+  managed resource roles and semantic apply steps. The
+  [packaged preview checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-preview.md)
+  records both live provider proofs and cleanup.
+- The same SEA can read one existing deployment with
+  `<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]`.
+  Status derives the provider from durable journal authority and joins that
+  journal with an exact provider observation and pinned guest service status.
+  It creates and mutates nothing, and its app-scoped read is not bound to the
+  outer SEA's current revision. The
+  [packaged status checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-status.md)
+  records the receipt and no-write boundaries.
+- The same SEA can execute ordinary application or packaged operator argv on
+  the exact active guest artifact with `deployment exec`. The command re-proves
+  journal, SSH, bootstrap, artifact, and service authority without provider
+  credentials or a generic remote shell. The
+  [packaged exec checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-exec.md)
+  records the boundary and automated evidence.
+- A new SEA can update an active deployment to its authenticated embedded Linux
+  release without revisiting provider state. Journal schema v3 keeps committed
+  current release authority until target activation is fully proven, retains
+  one rollback release, and records one crash-recoverable install or update
+  transition. `deployment recover` resumes the exact journal-selected apply,
+  update, repair, or destroy action without accepting a provider or mode
+  selector; the committed-current SEA can reconverge current and abandon a
+  permanently failed target. Remote wrapper storage is bounded to current,
+  rollback, and target. The
+  [packaged update/recovery checkpoint](llm/checkpoints/2026-07-31-packaged-deployment-update-recovery.md)
+  records the contract and automated crash-boundary evidence.
+- AWS reuses a qualifying default-VPC public-network path; Hetzner uses its
+  public network. The current node root disk holds application and control
+  data, so destroy is deliberately data-destructive.
 - Provider mutations are designed around explicit ownership, durable intent,
   conditional operations, readback, and conservative ambiguity recovery.
-- Most evidence is currently mock-based. Some host and delivery proof harnesses
-  exist, but no successful clean-account lifecycle is claimed.
+- Both provider paths have focused automated ambiguity/recovery coverage and
+  one live packaged apply/activate/adopt/restart/destroy proof with independent
+  owned-resource cleanup. The
+  [two-provider checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md)
+  records both the result and the remaining ADR 0035 evidence gap.
+- Repeated default packaging now reproduces the exact self-deployable operator
+  SEA bytes on the pinned builder. The
+  [reproducibility checkpoint](llm/checkpoints/2026-07-30-sea-packaging-reproducibility.md)
+  records the failure, fixes, final nested-artifact proof, and signing boundary.
 
 ### Work next
 
-1. Cut the first public deployment profile to the minimum AWS resources needed
-   to run the golden-path application on one node.
-2. Expose one approachable sequence for credential check, plan, deploy, status,
-   update, recovery, and destroy. Preview every mutation and distinguish owned
-   resources from external references.
-3. Bootstrap a narrowly scoped runtime identity and the exact packaged
-   artifact; do not expose provider credentials to application components.
-4. Connect node startup to the same durable service and operator experience
-   proved locally.
-5. Run a bounded clean-account proof, retain machine-readable receipts, and
-   verify destroy removes only owned resources while honoring declared
-   retention.
-6. Delete or quarantine provider abstractions that do not help this one
+1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
+   two-provider harness, including live packaged preview, packaged remote
+   durable work, guest audit, reboot, fault injection, and bounded proof
+   receipts.
+2. Add authenticated journal checkpoint/epoch rollover before treating one
+   coordinator as indefinitely evolving; v3 currently reserves terminal
+   records for recovery and destruction, then refuses further updates.
+3. Decide and implement an explicit retained-data capability before making any
+   durability claim beyond the current root-disk lifecycle.
+4. Delete or quarantine provider abstractions that do not help this one
    lifecycle before adding another provider or topology.
 
 ### Exit evidence
 
-Given ordinary AWS credentials and a packaged golden-path application, a user
-can preview and create one recoverable node, observe the application continue
-there, inspect and update it through the executable, and destroy its owned
-substrate without unexplained residue. The proof begins in a clean account and
-ends with independently checked receipts.
+Given ordinary AWS credentials or a Hetzner token and a packaged golden-path
+application, a user can preview and create one recoverable node, observe the
+application continue there, inspect and update it through the executable, and
+destroy its owned substrate without unexplained residue. The proof begins in a
+clean provider scope and ends with independently checked receipts.
 
 ## Immediate milestone: single-host developer preview
 
@@ -324,7 +372,9 @@ sequence and proof-owned cleanup.
 The single-host preview is closed. The coordinator-authority kernel remains
 complete but intentionally unbound; production authority binding and
 coordinator replacement are now the active Outcome 2 work. Provider-certified
-leases, multi-node placement, and cloud fulfillment remain later slices.
+leases and multi-node placement remain later slices. Outcome 3 has a bounded
+two-provider lifecycle proof, while its complete redacted acceptance harness,
+retained-data capability, and journal epoch rollover remain open.
 
 ## Explicitly not now
 
@@ -337,8 +387,8 @@ leases, multi-node placement, and cloud fulfillment remain later slices.
 - a public multi-language application framework;
 - a hosted Wharfie control plane requirement;
 - arbitrary physical exactly-once execution; or
-- additional providers, topology variants, or resource types before the first
-  clean lifecycle works.
+- additional providers, topology variants, or resource types without an
+  explicit capability decision after the bounded two-provider proof.
 
 TypeScript/Node remains the public authoring and orchestration boundary.
 Target-specific Node bindings, Node-API modules, WASI/WASM, or persistent

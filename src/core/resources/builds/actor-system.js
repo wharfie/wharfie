@@ -386,7 +386,6 @@ class ActorSystem extends BuildResourceGroup {
             : 'const loadDeveloperCliModule = null;';
 
           return `
-              import sourceMapSupport from 'source-map-support';
               import { preparePackagedCoreRuntimeDependencies } from ${JSON.stringify(
                 path.resolve(
                   actorSystemDir,
@@ -411,7 +410,6 @@ class ActorSystem extends BuildResourceGroup {
               )};
               ${developerCliLoader}
               (async () => {
-                sourceMapSupport.install();
                 const packagedAppStorage = await resolvePackagedAppStorage();
                 await withLocalAppStorageLayout(packagedAppStorage, async () => {
                   await runPackagedApp({
@@ -432,6 +430,14 @@ class ActorSystem extends BuildResourceGroup {
           `;
         },
         resolveDir: () => path.dirname(actorSystemDir),
+        ...(this._dependencyLock?.path
+          ? {
+              sourceMapApplicationRoot: path.join(
+                path.dirname(path.resolve(this._dependencyLock.path)),
+                'app',
+              ),
+            }
+          : {}),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
         nodeVersion: () => resolveNodeBinaryVersion(node_binary, nodeVersion),
         platform,

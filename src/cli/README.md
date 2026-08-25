@@ -34,10 +34,11 @@ Packaged dispatch resolves one app-scoped storage layout before entrypoint
 selection. Ordinary application argv does not prepare Wharfie's native durable
 runtime; only the reserved operator and private-runtime paths do so lazily. An
 explicit foreground root uses the single `WHARFIE_DATA_ROOT` environment
-variable and cannot be combined with the retired per-store overrides. The
-systemd service pins the same variable to the active packaged layout. Without
-an explicit root, packaged storage uses the stable operating-system account
-default.
+variable and must be a canonical absolute path. Retired per-store overrides are
+rejected for every packaged invocation, even when `WHARFIE_DATA_ROOT` is unset,
+and Wharfie performs no automatic split-store migration. The systemd service
+pins the same variable to the active packaged layout. Without an explicit root,
+packaged storage uses the stable operating-system account default.
 
 With `--json`, source and packaged durable operations emit the same
 schema-versioned camelCase receipt for the same immutable decision:
@@ -75,6 +76,12 @@ operation's prior final-byte and canonical sidecar/owning-revision record
 association; it is not independent verification, and its paths are local
 discovery conveniences. Packaged and selected-artifact consumer boundaries
 separately verify the executable's embedded revision/runtime metadata.
+
+For compatibility, bare `--no-pretty` still implies compact JSON. New machine
+callers should use `--json --no-pretty` explicitly. Likewise, the former
+packaged `<app> wharfie run --activity ...` shape is no longer a direct-activity
+alias: use `<app> wharfie activity run --activity ...`; reserve top-level `run`
+for the required `--name` default-workflow handoff.
 
 During packaging, all modes reserve stdout for the selected final human summary
 or JSON document. Ordinary manifest/build writes and Wharfie-owned build-tool
@@ -156,10 +163,10 @@ metadata. Branches, loops, parallel workflow steps, an early-signal inbox,
 managed-effect workflow successors, schedule pause/resume controls, and public
 log tail/search remain unsupported.
 
-The provider-backed `deployment` group has exactly five leaves: `plan`,
-`apply`, `inspect`, `reconcile`, and `destroy`. Source plan and direct apply
-accept a canonical DeploymentProfileV2 operator document separately from the
-app manifest:
+The legacy source `deployment` group still has five AWS-oriented leaves:
+`plan`, `apply`, `inspect`, `reconcile`, and `destroy`. Source plan and direct
+apply accept a canonical DeploymentProfileV2 operator document separately
+from the app manifest:
 
 ```text
 wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
@@ -170,21 +177,88 @@ wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-
 wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
 ```
 
-The same five leaves are mounted at `<app> wharfie deployment ...`; the
-packaged parent accepts neither `--dir` nor `--output-dir`. Source plan and
-direct apply package a selected SEA and durably pre-stage it. A later source
-`apply --plan` and source reconcile validate exact durable staged evidence.
-Packaged plan/apply and non-destroy reconcile instead prove the SEA running the
-command; active destroy recovery remains durable-only.
-Both modes use the operator's ordinary AWS credential chain; neither the
-canonical profile nor the reusable plan contains credentials. This surface is
-experimental and has focused mock evidence, not a clean-account deployment or
-complete resident service-readiness proof.
+Package a cloud-capable operator SEA with `wharfie app package
+--self-deployable`. Its packaged deployment surface deliberately has only
+AWS and Hetzner preview, apply, status, update, recover, exec, and destroy:
+
+```text
+<app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
+<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]
+<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
+<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
+```
+
+The SEA reads the authenticated embedded Linux payload and application
+revision, creates the fixed small single-node systemd-user intent, and applies
+or recovers it through durable local authority. Repeat `--allow-ssh-from` for
+each operator address. AWS preview/apply requires exactly `--region`; Hetzner
+preview/apply requires exactly `--location`. AWS uses the ordinary credential
+chain and Hetzner reads `HCLOUD_TOKEN` from the ambient process. There is no
+credential option and result output contains no credential data. Use a
+dedicated Hetzner project for this preview because its token is project-wide.
+
+Preview validates the embedded authority and performs only provider identity,
+describe, and list reads plus a side-effect-free local journal read. It does
+not create local state or cloud resources. Its point-in-time receipt separates
+referenced infrastructure from managed resource roles and reports the semantic
+steps a later apply would evaluate. Apply re-plans before generating and
+persisting its exact resource identities, SSH material, and cloud-init.
+
+Status reads the exact local journal, derives its provider and scope, and joins
+that evidence with an exact provider observation and the pinned guest's
+packaged `service status`. It accepts no provider or placement selector,
+creates no local or provider state, and mutates neither provider nor guest.
+The read is bound to the executable's embedded app identity but not to the
+outer SEA's current revision, so it can inspect an older deployment of the
+same app.
+
+Exec also derives all authority from the existing active journal and accepts
+no provider, placement, credential, host, identity, or executable selector.
+Arguments after `--` are forwarded to only the journal-pinned active
+application SEA. Its bounded stdout and stderr bytes are relayed without
+formatting, and its observed remote exit code becomes the local exit code.
+Exec performs no provider reads or mutations.
+
+Update derives its target from the invoking SEA's authenticated embedded Linux
+payload. It leaves the committed release authoritative until exact remote
+activation evidence is durable, then promotes the target and retains one
+rollback release. Recover selects its action entirely from journal state: it
+can resume initial apply, resume an exact update, repair the committed release,
+restore the committed release and abandon a failed update target, resume
+destroy, or report a destroyed deployment as a no-op. Neither command accepts
+a provider, placement, machine, access, host, credential, or artifact selector.
+
+Destroy authenticates only the embedded app identity, then uses the exact
+deployment instance and durable local authority without decoding the embedded
+Linux payload. Its journal supplies the bound AWS region or Hetzner location,
+so destroy accepts neither `--provider`, `--region`, nor `--location`; a
+non-default `--data-root` must match apply.
+
+AWS requires an existing usable default-VPC public-network path. Hetzner uses
+its public network; Wharfie creates no private network. AWS owns one security
+group, instance, and encrypted root volume. Hetzner owns one firewall, primary
+IPv4, and server. Destroy deletes those resources and the application/control
+data currently held on the node's root disk.
+
+Packaged `deployment inspect` and `deployment reconcile` are not exposed yet.
+AWS has completed a live packaged apply/activate/adopt/restart/destroy slice
+with independently verified cleanup. Hetzner completed the equivalent live
+slice in `fsn1`, including second-process adoption without replacement.
+
+Source plan and direct apply package a selected SEA and durably pre-stage it.
+A later source `apply --plan` and source reconcile validate exact durable
+staged evidence. The source mode uses the operator's ordinary AWS credential
+chain; neither the canonical profile nor the reusable plan contains
+credentials. Both deployment surfaces remain experimental.
 Create canonical profiles with the narrow
 `@wharfie/wharfie/deployment-profile` Node authoring API. Source plan JSON
 includes durable staged-artifact evidence and is accepted only by source
-`apply --plan`; packaged plan JSON is accepted only by an exact matching SEA.
-The two exact plan envelopes are intentionally not interchangeable.
+`apply --plan`.
 Plan requires an explicit control policy because source planning may package,
 stage, and create bootstrap control state. Direct apply defaults to `bootstrap`;
 prepared apply and the three located commands default to `require-active`.
