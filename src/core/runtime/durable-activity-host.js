@@ -4,6 +4,11 @@ import {
   resolveApplicationStateStoreConfiguration,
   validateApplicationStateStoreConfiguration,
 } from './application-state-store.js';
+import { resolveApplicationStateCoordinatorAuthority } from './application-state-authority.js';
+import {
+  preflightApplicationStateStoreIdentity,
+  resolveApplicationStateWriteBinding,
+} from './application-state-readiness.js';
 import {
   createBuiltinManagedEffectCatalog,
   createBuiltinManagedEffectHandler,
@@ -19,7 +24,10 @@ import {
   runManualLedgerActivity,
   submitManualLedgerActivity,
 } from './manual-ledger-run.js';
-import { createLedgerServiceOwnership } from '../lib/db/tables/ledger-service-lifecycle.js';
+import {
+  createLedgerServiceOwnership,
+  createLedgerServiceSessionId,
+} from '../lib/db/tables/ledger-service-lifecycle.js';
 import { hasSameCanonicalJson } from '../lib/ledger/execution-ledger-contract.js';
 import { assertLedgerOpaqueId } from '../lib/ledger/record-key.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
@@ -27,6 +35,7 @@ import { EXECUTION_LEDGER_CANCEL_OWNER_COMMAND } from './operator/execution-ledg
 import {
   resolveExecutionLedgerStoreConfiguration,
   withExecutionLedger,
+  withExecutionLedgerCoordinatorAuthority,
   withLocalLedgerServiceMutationOwnership,
 } from './operator/execution-ledger-store.js';
 import { createLocalOwnerCommandServer } from './operator/local-owner-command.js';
@@ -257,6 +266,37 @@ async function runResolvedDurableManifestActivity(request, options) {
       options.applicationStateConfiguration,
       options.controlContext,
     );
+    // A saved resident pin is authoritative even for foreground execution.
+    // Check it read-only before writable open or durable STARTED so a missing
+    // or replaced store leaves this claimed attempt safely retryable.
+    const preparedWriteBinding = await resolveApplicationStateWriteBinding({
+      appId,
+      controlContext: options.controlContext,
+      applicationStateContext: options.applicationStateConfiguration,
+    });
+    if (preparedWriteBinding !== undefined) {
+      const preflightCoordinatorAuthority =
+        preparedWriteBinding.destinationAuthorityFloor === undefined
+          ? undefined
+          : await resolveApplicationStateCoordinatorAuthority({
+              ledger: options.ledger,
+              appId,
+              controlContext: options.controlContext,
+            });
+      await preflightApplicationStateStoreIdentity({
+        configuration: options.applicationStateConfiguration,
+        controlContext: options.controlContext,
+        expectedStoreId: preparedWriteBinding.expectedStoreId,
+        ...(preparedWriteBinding.destinationAuthorityFloor === undefined
+          ? {}
+          : {
+              appId,
+              coordinatorAuthority: preflightCoordinatorAuthority,
+              destinationAuthorityFloor:
+                preparedWriteBinding.destinationAuthorityFloor,
+            }),
+      });
+    }
     const applicationState = await openApplicationStateDB({
       configuration: options.applicationStateConfiguration,
     });
@@ -277,11 +317,40 @@ async function runResolvedDurableManifestActivity(request, options) {
         ) => {
           // Store identity is application data. Initialize the catalog only
           // after this exact attempt wins durable dispatch authorization.
+          const coordinatorAuthority =
+            await resolveApplicationStateCoordinatorAuthority({
+              ledger: options.ledger,
+              appId,
+              controlContext: options.controlContext,
+            });
+          const currentWriteBinding = await resolveApplicationStateWriteBinding(
+            {
+              appId,
+              controlContext: options.controlContext,
+              applicationStateContext: applicationState.context,
+              ...(preparedWriteBinding === undefined
+                ? {}
+                : {
+                    expectedStoreId: preparedWriteBinding.expectedStoreId,
+                  }),
+            },
+          );
+          const expectedStoreId =
+            currentWriteBinding?.expectedStoreId ??
+            preparedWriteBinding?.expectedStoreId;
+          const destinationAuthorityFloor =
+            currentWriteBinding?.destinationAuthorityFloor ??
+            preparedWriteBinding?.destinationAuthorityFloor;
           const catalog = await createBuiltinManagedEffectCatalog({
             db: applicationState.db,
             appId,
             adapterName: applicationState.context.adapterName,
             tableName: applicationState.context.tableName,
+            coordinatorAuthority,
+            ...(expectedStoreId === undefined ? {} : { expectedStoreId }),
+            ...(destinationAuthorityFloor === undefined
+              ? {}
+              : { destinationAuthorityFloor }),
           });
           return await invokeManifestActivityAttemptWithStart({
             activityName: request.activityName,
@@ -621,107 +690,116 @@ export async function runLocalDurableManifestActivity(options) {
         appId: request.identity.appId,
         context: controlContext,
         handler: async (localOwner) => {
-          if (!localOwner) {
-            return await runResolvedDurableManifestActivity(request, {
-              ledger,
-              controlContext,
-              applicationStateConfiguration,
-            });
-          }
+          return await withExecutionLedgerCoordinatorAuthority({
+            appId: request.identity.appId,
+            coordinatorId:
+              localOwner?.sessionId || createLedgerServiceSessionId(),
+            ledger,
+            context: controlContext,
+            handler: async (boundLedger) => {
+              if (!localOwner) {
+                return await runResolvedDurableManifestActivity(request, {
+                  ledger: boundLedger,
+                  controlContext,
+                  applicationStateConfiguration,
+                });
+              }
 
-          const ownership = createLedgerServiceOwnership({
-            db: controlContext.db,
-            tableName: controlContext.tableName,
-          });
-          /** @type {{requestCancellation: (request: {requestId: string}) => Promise<Record<string, any>>} | undefined} */
-          let activeCancellationPort;
-          const commandServer = await createLocalOwnerCommandServer({
-            session: localOwner.commandSession,
-            isCurrentOwner: async () =>
-              isCurrentManualOwner(
-                await ownership.getOwnership({
-                  serviceId: localOwner.ownership.serviceId,
-                }),
-                localOwner.ownership,
-              ),
-            handleCommand: async (command) => {
-              if (
-                command.command !== EXECUTION_LEDGER_CANCEL_OWNER_COMMAND ||
-                !isExactOwnerCancelRequest(command.request, request.runId)
-              ) {
-                return {
-                  outcome: 'request-unavailable',
-                  delivery: 'not-delivered',
-                };
+              const ownership = createLedgerServiceOwnership({
+                db: controlContext.db,
+                tableName: controlContext.tableName,
+              });
+              /** @type {{requestCancellation: (request: {requestId: string}) => Promise<Record<string, any>>} | undefined} */
+              let activeCancellationPort;
+              const commandServer = await createLocalOwnerCommandServer({
+                session: localOwner.commandSession,
+                isCurrentOwner: async () =>
+                  isCurrentManualOwner(
+                    await ownership.getOwnership({
+                      serviceId: localOwner.ownership.serviceId,
+                    }),
+                    localOwner.ownership,
+                  ),
+                handleCommand: async (command) => {
+                  if (
+                    command.command !== EXECUTION_LEDGER_CANCEL_OWNER_COMMAND ||
+                    !isExactOwnerCancelRequest(command.request, request.runId)
+                  ) {
+                    return {
+                      outcome: 'request-unavailable',
+                      delivery: 'not-delivered',
+                    };
+                  }
+                  if (!activeCancellationPort) {
+                    return {
+                      outcome: 'owner-not-ready',
+                      delivery: 'not-delivered',
+                    };
+                  }
+                  return formatOwnerCancellationResponse(
+                    await activeCancellationPort.requestCancellation({
+                      requestId: command.requestId,
+                    }),
+                  );
+                },
+              });
+              /** @type {{appId: string, revisionId: string, activityName: string, idempotencyKey?: string, runId: string, outcome: Record<string, any>} | undefined} */
+              let result;
+              /** @type {unknown} */
+              let runnerError;
+              let runnerFailed = false;
+              try {
+                result = await runResolvedDurableManifestActivity(request, {
+                  ledger: boundLedger,
+                  controlContext,
+                  applicationStateConfiguration,
+                  ownerCancellation: {
+                    actor: {
+                      kind: 'local-owner-command',
+                      id: request.identity.appId,
+                    },
+                  },
+                  registerActiveAttemptCancellationPort: (port) => {
+                    activeCancellationPort = port;
+                    return () => {
+                      if (activeCancellationPort === port) {
+                        activeCancellationPort = undefined;
+                      }
+                    };
+                  },
+                });
+              } catch (error) {
+                runnerFailed = true;
+                runnerError = error;
               }
-              if (!activeCancellationPort) {
-                return {
-                  outcome: 'owner-not-ready',
-                  delivery: 'not-delivered',
-                };
+
+              /** @type {unknown} */
+              let closeError;
+              let closeFailed = false;
+              try {
+                // The endpoint disappears before owner release, so a request can
+                // never reach an old server after its generation ceased to exist.
+                await commandServer.close();
+              } catch (error) {
+                closeFailed = true;
+                closeError = error;
               }
-              return formatOwnerCancellationResponse(
-                await activeCancellationPort.requestCancellation({
-                  requestId: command.requestId,
-                }),
-              );
+              if (runnerFailed && closeFailed) {
+                throw new AggregateError(
+                  [runnerError, closeError],
+                  'Durable activity execution and owner-command cleanup both failed.',
+                );
+              }
+              if (runnerFailed) throw runnerError;
+              if (closeFailed) throw closeError;
+              return {
+                .../** @type {{appId: string, revisionId: string, activityName: string, runId: string, outcome: Record<string, any>}} */ (
+                  result
+                ),
+                idempotencyKey: request.idempotencyKey,
+              };
             },
           });
-          /** @type {{appId: string, revisionId: string, activityName: string, idempotencyKey?: string, runId: string, outcome: Record<string, any>} | undefined} */
-          let result;
-          /** @type {unknown} */
-          let runnerError;
-          let runnerFailed = false;
-          try {
-            result = await runResolvedDurableManifestActivity(request, {
-              ledger,
-              controlContext,
-              applicationStateConfiguration,
-              ownerCancellation: {
-                actor: {
-                  kind: 'local-owner-command',
-                  id: request.identity.appId,
-                },
-              },
-              registerActiveAttemptCancellationPort: (port) => {
-                activeCancellationPort = port;
-                return () => {
-                  if (activeCancellationPort === port) {
-                    activeCancellationPort = undefined;
-                  }
-                };
-              },
-            });
-          } catch (error) {
-            runnerFailed = true;
-            runnerError = error;
-          }
-
-          /** @type {unknown} */
-          let closeError;
-          let closeFailed = false;
-          try {
-            // The endpoint disappears before owner release, so a request can
-            // never reach an old server after its generation ceased to exist.
-            await commandServer.close();
-          } catch (error) {
-            closeFailed = true;
-            closeError = error;
-          }
-          if (runnerFailed && closeFailed) {
-            throw new AggregateError(
-              [runnerError, closeError],
-              'Durable activity execution and owner-command cleanup both failed.',
-            );
-          }
-          if (runnerFailed) throw runnerError;
-          if (closeFailed) throw closeError;
-          return {
-            .../** @type {{appId: string, revisionId: string, activityName: string, runId: string, outcome: Record<string, any>}} */ (
-              result
-            ),
-            idempotencyKey: request.idempotencyKey,
-          };
         },
       }),
     { configuration },

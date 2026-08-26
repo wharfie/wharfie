@@ -805,7 +805,7 @@ async function markUncertainOrReadTerminalResult(options) {
       expectedVersion,
       transitionId,
       actor,
-      coordinatorEpoch: 0,
+      coordinatorEpoch: attempt.coordinatorEpoch,
       reason,
     });
     return {
@@ -892,7 +892,7 @@ async function settleDispatchFailure(options) {
       expectedVersion: current.run.version,
       transitionId: `abandon:${currentAttempt.attemptId}`,
       actor,
-      coordinatorEpoch: 0,
+      coordinatorEpoch: currentAttempt.coordinatorEpoch,
       reason: {
         kind: 'local-pre-start-failure',
         phase,
@@ -982,7 +982,7 @@ export async function recoverManualLedgerActivity(options) {
           expectedVersion: view.run.version,
           transitionId: `recover-abandon:${attempt.attemptId}`,
           actor,
-          coordinatorEpoch: 0,
+          coordinatorEpoch: attempt.coordinatorEpoch,
           reason: preStartRecoveryReason(attempt.attemptId),
         });
         const current = await readCurrent(ledger, runId, invocationId);
@@ -1529,7 +1529,7 @@ export async function runManualLedgerActivity(options) {
     expectedVersion: current.run.version,
     transitionId: `claim:${current.invocation.generation + 1}`,
     actor,
-    coordinatorEpoch: 0,
+    coordinatorEpoch: ledger.getCoordinatorEpoch?.() ?? 0,
   });
   if (!claim.attempt) {
     throw new Error(`Execution ledger claim has no attempt: ${runId}`);
@@ -1743,7 +1743,7 @@ export async function runManualLedgerActivity(options) {
       expectedVersion: claim.run.version,
       transitionId: `start:${attempt.attemptId}`,
       actor,
-      coordinatorEpoch: 0,
+      coordinatorEpoch: attempt.coordinatorEpoch,
     });
     if (!started.dispatchAuthorized) {
       return await settleDispatchFailure({

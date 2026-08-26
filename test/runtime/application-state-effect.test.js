@@ -28,9 +28,18 @@ import {
   validateApplicationStateNotAppliedResolutionRecord,
 } from '../../src/core/lib/db/tables/application-state.js';
 import {
+  createApplicationStateCoordinatorAuthorityKey,
+  createApplicationStateCoordinatorAuthorityRecord,
+} from '../../src/core/lib/db/tables/application-state-authority.js';
+import {
   createExecutionLedger,
   createManagedEffectDestinationId,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
+import {
+  COORDINATOR_AUTHORITY_ID_DOMAIN,
+  COORDINATOR_AUTHORITY_ID_PREFIX,
+  createCoordinatorAuthorityToken,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
@@ -77,6 +86,41 @@ function createId(prefix, domain, value) {
 const STORE_ID = createId('was', 'wharfie:test:application-state-store:v2', {
   fixture: 'primary',
 });
+
+function catalogAuthority(epoch = 1, appId = APP_ID) {
+  const coordinatorId = `application-state-coordinator-${epoch}`;
+  return createCoordinatorAuthorityToken({
+    schemaVersion: 1,
+    appId,
+    coordinatorId,
+    authorityId: createId(
+      COORDINATOR_AUTHORITY_ID_PREFIX,
+      COORDINATOR_AUTHORITY_ID_DOMAIN,
+      {
+        schemaVersion: 1,
+        appId,
+        coordinatorId,
+        epoch,
+        requestId: `catalog-acquire-${epoch}`,
+      },
+    ),
+    epoch,
+  });
+}
+
+function catalogAuthoritySnapshot(epoch = 1) {
+  return {
+    ...catalogAuthority(epoch),
+    status: /** @type {const} */ ('ACTIVE'),
+    recordVersion: epoch,
+    acquisitionRequestId: `catalog-acquire-${epoch}`,
+    acquiredAt: epoch,
+    heartbeatAt: epoch,
+    releasedAt: null,
+    updatedAt: epoch,
+    lastRequestId: `catalog-acquire-${epoch}`,
+  };
+}
 
 /** @param {string} label */
 function makeRoot(label) {
@@ -136,7 +180,7 @@ function destinationEffectId(effectId = EFFECT_ID) {
 }
 
 /**
- * @param {{wrapDb?: (db: import('../../src/core/lib/db/base.js').DBClient) => import('../../src/core/lib/db/base.js').DBClient, appId?: string, createStoreId?: () => string}} [options]
+ * @param {{wrapDb?: (db: import('../../src/core/lib/db/base.js').DBClient) => import('../../src/core/lib/db/base.js').DBClient, appId?: string, createStoreId?: () => string, coordinatorAuthority?: import('../../src/core/lib/db/tables/coordinator-authority.js').CoordinatorAuthorityToken | import('../../src/core/lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot}} [options]
  */
 async function createCatalogHarness(options = {}) {
   const root = makeRoot('application-state-effect');
@@ -148,12 +192,18 @@ async function createCatalogHarness(options = {}) {
     adapterName: 'vanilla',
     allowTestAdapter: true,
     createStoreId: options.createStoreId ?? (() => STORE_ID),
+    ...(options.coordinatorAuthority === undefined
+      ? {}
+      : { coordinatorAuthority: options.coordinatorAuthority }),
   });
   const reconciliation = await createBuiltinManagedEffectReconciliationCatalog({
     db,
     appId: options.appId ?? APP_ID,
     adapterName: 'vanilla',
     allowTestAdapter: true,
+    ...(options.coordinatorAuthority === undefined
+      ? {}
+      : { coordinatorAuthority: options.coordinatorAuthority }),
   });
   return {
     root,
@@ -1730,6 +1780,468 @@ describe('application-state evidence verification', () => {
       await harness.cleanup();
     }
   });
+});
+
+describe.each([
+  { label: 'execution', createCatalog: createBuiltinManagedEffectCatalog },
+  {
+    label: 'reconciliation',
+    createCatalog: createBuiltinManagedEffectReconciliationCatalog,
+  },
+])('application-state $label catalog authority', ({ createCatalog }) => {
+  test.each([
+    { label: 'null', authority: null },
+    { label: 'missing fields', authority: {} },
+    { label: 'zero epoch', authority: { ...catalogAuthority(), epoch: 0 } },
+    {
+      label: 'unexpected fields',
+      authority: { ...catalogAuthority(), coordinatorEpoch: 1 },
+    },
+    { label: 'wrong app', authority: catalogAuthority(1, 'other-app') },
+  ])(
+    'rejects $label authority before reading or writing',
+    async ({ authority }) => {
+      const harness = await createCatalogHarness();
+      const get = jest.fn(async () => {
+        throw new Error('invalid authority must not read destination');
+      });
+      const transactionWrite = jest.fn(async () => {
+        throw new Error('invalid authority must not write destination');
+      });
+      try {
+        await expect(
+          createCatalog({
+            db: { ...harness.baseDb, get, transactionWrite },
+            appId: APP_ID,
+            adapterName: 'vanilla',
+            allowTestAdapter: true,
+            coordinatorAuthority: /** @type {any} */ (authority),
+          }),
+        ).rejects.toThrow(/coordinatorAuthority/i);
+        expect(get).not.toHaveBeenCalled();
+        expect(transactionWrite).not.toHaveBeenCalled();
+      } finally {
+        await harness.cleanup();
+      }
+    },
+  );
+
+  test.each(['token', 'snapshot'])(
+    'snapshots the full %s before its first asynchronous read',
+    async (kind) => {
+      const harness = await createCatalogHarness();
+      const candidate =
+        kind === 'token'
+          ? { ...catalogAuthority() }
+          : catalogAuthoritySnapshot();
+      const options = {
+        db: harness.baseDb,
+        appId: APP_ID,
+        adapterName: /** @type {const} */ ('vanilla'),
+        allowTestAdapter: true,
+        coordinatorAuthority: candidate,
+        expectedStoreId: STORE_ID,
+      };
+      try {
+        const creating = createCatalog(options);
+        candidate.epoch = 99;
+        candidate.coordinatorId = 'mutated-caller';
+        options.coordinatorAuthority = catalogAuthority(2);
+        options.appId = 'mutated-app';
+        options.expectedStoreId = createId(
+          'was',
+          'wharfie:test:mutated-store:v1',
+          { mutated: true },
+        );
+        const catalog = await creating;
+        const table = createApplicationStateTable({
+          db: harness.baseDb,
+          tableName: APPLICATION_STATE_TABLE_NAME,
+        });
+        const authority = await table.readCoordinatorAuthority({
+          storeId: STORE_ID,
+          namespace: APP_ID,
+        });
+        expect(authority).toMatchObject({
+          store_id: STORE_ID,
+          namespace: APP_ID,
+          authority_schema_version: 1,
+          coordinator_id: catalogAuthority().coordinatorId,
+          authority_id: catalogAuthority().authorityId,
+          epoch: 1,
+        });
+        expect(Object.isFrozen(authority)).toBe(true);
+        expect(authority).not.toHaveProperty('heartbeatAt');
+        expect(catalog.destination).toEqual(harness.catalog.destination);
+        expect(JSON.stringify(catalog.destination)).not.toMatch(
+          /coordinator|authority|epoch/i,
+        );
+      } finally {
+        await harness.cleanup();
+      }
+    },
+  );
+
+  test.each([null, '', 'not-a-store-id'])(
+    'rejects invalid expectedStoreId %p before reading or adopting',
+    async (expectedStoreId) => {
+      const harness = await createCatalogHarness();
+      const get = jest.fn(async () => {
+        throw new Error('invalid expectedStoreId must not read destination');
+      });
+      const transactionWrite = jest.fn(async () => {
+        throw new Error('invalid expectedStoreId must not write destination');
+      });
+      try {
+        await expect(
+          createCatalog(
+            /** @type {any} */ ({
+              db: { ...harness.baseDb, get, transactionWrite },
+              appId: APP_ID,
+              adapterName: 'vanilla',
+              allowTestAdapter: true,
+              coordinatorAuthority: catalogAuthority(),
+              expectedStoreId,
+            }),
+          ),
+        ).rejects.toThrow(/expectedStoreId/i);
+        expect(get).not.toHaveBeenCalled();
+        expect(transactionWrite).not.toHaveBeenCalled();
+      } finally {
+        await harness.cleanup();
+      }
+    },
+  );
+
+  test.each(['missing', 'replacement'])(
+    'refuses a %s retained destination without bootstrap or authority adoption',
+    async (kind) => {
+      const root = makeRoot('application-state-pinned-catalog');
+      const db = createVanillaDB({ path: root });
+      const replacementStoreId = createId(
+        'was',
+        'wharfie:test:replacement-store:v1',
+        { replacement: true },
+      );
+      const transactionWrite = jest.fn(async () => {
+        throw new Error('wrong destination must not receive any mutation');
+      });
+      try {
+        if (kind === 'replacement') {
+          await createBuiltinManagedEffectCatalog({
+            db,
+            appId: APP_ID,
+            adapterName: 'vanilla',
+            allowTestAdapter: true,
+            createStoreId: () => replacementStoreId,
+          });
+        }
+        await expect(
+          createCatalog({
+            db: { ...db, transactionWrite },
+            appId: APP_ID,
+            adapterName: 'vanilla',
+            allowTestAdapter: true,
+            coordinatorAuthority: catalogAuthority(),
+            expectedStoreId: STORE_ID,
+          }),
+        ).rejects.toBeInstanceOf(ApplicationStateStoreIdentityError);
+        expect(transactionWrite).not.toHaveBeenCalled();
+        const table = createApplicationStateTable({
+          db,
+          tableName: APPLICATION_STATE_TABLE_NAME,
+        });
+        if (kind === 'missing') {
+          await expect(table.readStoreIdentity()).resolves.toBeNull();
+        } else {
+          await expect(table.readStoreIdentity()).resolves.toMatchObject({
+            store_id: replacementStoreId,
+          });
+          await expect(
+            table.readCoordinatorAuthority({
+              storeId: replacementStoreId,
+              namespace: APP_ID,
+            }),
+          ).resolves.toBeNull();
+        }
+      } finally {
+        await db.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test('rejects constructing a new stale binding without downgrading the destination', async () => {
+    const harness = await createCatalogHarness({
+      coordinatorAuthority: catalogAuthority(2),
+    });
+    try {
+      await expect(
+        createCatalog({
+          db: harness.baseDb,
+          appId: APP_ID,
+          adapterName: 'vanilla',
+          allowTestAdapter: true,
+          coordinatorAuthority: catalogAuthority(),
+        }),
+      ).rejects.toMatchObject({
+        code: 'WHARFIE_APPLICATION_STATE_COORDINATOR_AUTHORITY_STALE',
+      });
+      const table = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+      });
+      await expect(
+        table.readCoordinatorAuthority({
+          storeId: STORE_ID,
+          namespace: APP_ID,
+        }),
+      ).resolves.toMatchObject({
+        coordinator_id: catalogAuthority(2).coordinatorId,
+        authority_id: catalogAuthority(2).authorityId,
+        epoch: 2,
+      });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test.each([
+    { corruption: 'deleted', floorEpoch: 1 },
+    { corruption: 'rolled back', floorEpoch: 3 },
+  ])(
+    'refuses a $corruption retained ADOPTED floor for same and higher catalog tokens without writes',
+    async ({ corruption, floorEpoch }) => {
+      const harness = await createCatalogHarness({
+        coordinatorAuthority: catalogAuthority(floorEpoch),
+      });
+      const floor = createApplicationStateCoordinatorAuthorityRecord({
+        storeId: STORE_ID,
+        namespace: APP_ID,
+        authority: catalogAuthority(floorEpoch),
+      });
+      const key = createApplicationStateCoordinatorAuthorityKey(APP_ID);
+      try {
+        if (corruption === 'deleted') {
+          await harness.baseDb.remove({
+            tableName: APPLICATION_STATE_TABLE_NAME,
+            keyName: APPLICATION_STATE_KEY_NAME,
+            keyValue: key.resourceId,
+            sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+            sortKeyValue: key.sortKey,
+          });
+        } else {
+          await harness.baseDb.put({
+            tableName: APPLICATION_STATE_TABLE_NAME,
+            keyName: APPLICATION_STATE_KEY_NAME,
+            sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+            record: createApplicationStateCoordinatorAuthorityRecord({
+              storeId: STORE_ID,
+              namespace: APP_ID,
+              authority: catalogAuthority(1),
+            }),
+          });
+        }
+        for (const epoch of [floorEpoch, floorEpoch + 1]) {
+          const transactionWrite = jest.fn(
+            async (
+              /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+            ) => await harness.baseDb.transactionWrite(params),
+          );
+          await expect(
+            createCatalog({
+              db: { ...harness.baseDb, transactionWrite },
+              appId: APP_ID,
+              adapterName: 'vanilla',
+              allowTestAdapter: true,
+              coordinatorAuthority: catalogAuthority(epoch),
+              expectedStoreId: STORE_ID,
+              destinationAuthorityFloor: floor,
+            }),
+          ).rejects.toMatchObject({
+            code: 'WHARFIE_APPLICATION_STATE_COORDINATOR_AUTHORITY_STALE',
+          });
+          expect(transactionWrite).not.toHaveBeenCalled();
+        }
+      } finally {
+        await harness.cleanup();
+      }
+    },
+  );
+});
+
+describe('application-state catalog authority replay and recovery', () => {
+  test('keeps held old catalogs usable for exact permanent results without writes', async () => {
+    /** @type {ReturnType<typeof jest.fn> | undefined} */
+    let write;
+    const harness = await createCatalogHarness({
+      coordinatorAuthority: catalogAuthority(),
+      wrapDb(baseDb) {
+        const transactionWrite = jest.fn(
+          async (
+            /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+          ) => await baseDb.transactionWrite(params),
+        );
+        write = transactionWrite;
+        return { ...baseDb, transactionWrite };
+      },
+    });
+    const negativeInput = {
+      effectId: 'permanent-not-applied',
+      requestOverrides: { input: { key: 'never-written', value: 7 } },
+    };
+    try {
+      const outcome = await executeCatalogEffect(harness.catalog);
+      const negative = await reconcileCatalogEffect(
+        harness.reconciliation,
+        negativeInput,
+      );
+      const successor = await createBuiltinManagedEffectCatalog({
+        db: harness.baseDb,
+        appId: APP_ID,
+        adapterName: 'vanilla',
+        allowTestAdapter: true,
+        coordinatorAuthority: catalogAuthority(2),
+      });
+      write?.mockClear();
+      await expect(executeCatalogEffect(harness.catalog)).resolves.toEqual(
+        outcome,
+      );
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation),
+      ).resolves.toEqual({ kind: 'outcome', outcome });
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation, negativeInput),
+      ).resolves.toEqual(negative);
+      await expect(
+        executeCatalogEffect(harness.catalog, negativeInput),
+      ).rejects.toBeInstanceOf(ApplicationStateEffectNotAppliedError);
+      expect(write).not.toHaveBeenCalled();
+      expect(successor.destination).toEqual(harness.catalog.destination);
+
+      await expect(
+        executeCatalogEffect(harness.catalog, {
+          effectId: 'stale-fresh-write',
+          requestOverrides: { input: { key: 'stale-fresh-key', value: 8 } },
+        }),
+      ).rejects.toMatchObject({
+        code: 'WHARFIE_APPLICATION_STATE_COORDINATOR_AUTHORITY_STALE',
+      });
+      await expect(
+        readBusiness(harness.baseDb, APP_ID, 'stale-fresh-key'),
+      ).resolves.toBeUndefined();
+      await expect(
+        executeCatalogEffect(successor, {
+          effectId: 'successor-fresh-write',
+          requestOverrides: { input: { key: 'successor-fresh-key', value: 9 } },
+        }),
+      ).resolves.toMatchObject({ result: { inserted: true } });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('leaves recovery and unbound reconciliation preflight read-only after adoption', async () => {
+    const harness = await createCatalogHarness({
+      coordinatorAuthority: catalogAuthority(),
+    });
+    const transactionWrite = jest.fn(async () => {
+      throw new Error('read-only catalog must not adopt or mutate');
+    });
+    try {
+      const outcome = await executeCatalogEffect(harness.catalog);
+      const readOnlyDb = { ...harness.baseDb, transactionWrite };
+      const recovery = await createBuiltinManagedEffectRecoveryCatalog({
+        db: readOnlyDb,
+        appId: APP_ID,
+        adapterName: 'vanilla',
+        allowTestAdapter: true,
+      });
+      const preflight = await createBuiltinManagedEffectReconciliationCatalog({
+        db: readOnlyDb,
+        appId: APP_ID,
+        adapterName: 'vanilla',
+        allowTestAdapter: true,
+      });
+      expect(preflight.destination).toEqual(harness.catalog.destination);
+      await expect(
+        recovery.recoverOutcome({
+          destinationEffectId: destinationEffectId(),
+          destination: harness.catalog.destination,
+          identity: contractIdentity(),
+          request: effectRequest('application-state-attempt'),
+        }),
+      ).resolves.toEqual(outcome);
+      await expect(
+        createBuiltinManagedEffectRecoveryCatalog(
+          /** @type {any} */ ({
+            db: readOnlyDb,
+            appId: APP_ID,
+            adapterName: 'vanilla',
+            allowTestAdapter: true,
+            coordinatorAuthority: catalogAuthority(2),
+          }),
+        ),
+      ).rejects.toThrow(/coordinatorAuthority is unsupported/i);
+      expect(transactionWrite).not.toHaveBeenCalled();
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test.each(['receipt', 'resolution'])(
+    'recovers a committed %s when response loss follows successor adoption',
+    async (kind) => {
+      let loseResponse = true;
+      let lostResponses = 0;
+      const harness = await createCatalogHarness({
+        coordinatorAuthority: catalogAuthority(),
+        wrapDb(baseDb) {
+          return {
+            ...baseDb,
+            async transactionWrite(params) {
+              const result = await baseDb.transactionWrite(params);
+              if (
+                loseResponse &&
+                params.putRequests?.some(
+                  ({ record }) =>
+                    record.record_kind === `application-state-effect-${kind}`,
+                )
+              ) {
+                loseResponse = false;
+                await createBuiltinManagedEffectCatalog({
+                  db: baseDb,
+                  appId: APP_ID,
+                  adapterName: 'vanilla',
+                  allowTestAdapter: true,
+                  coordinatorAuthority: catalogAuthority(2),
+                });
+                lostResponses += 1;
+                throw new Error('lost response after destination supersession');
+              }
+              return result;
+            },
+          };
+        },
+      });
+      try {
+        if (kind === 'receipt') {
+          await expect(
+            executeCatalogEffect(harness.catalog),
+          ).resolves.toMatchObject({
+            result: { inserted: true },
+          });
+        } else {
+          await expect(
+            reconcileCatalogEffect(harness.reconciliation),
+          ).resolves.toMatchObject({ kind: 'not-applied' });
+        }
+        expect(lostResponses).toBe(1);
+      } finally {
+        await harness.cleanup();
+      }
+    },
+  );
 });
 
 describe('application-state production storage', () => {

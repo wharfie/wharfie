@@ -14,6 +14,7 @@ import {
   createLedgerServiceId,
   createLedgerServiceLifecycle,
   createLedgerServiceOwnership,
+  createLedgerServiceSessionId,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
 import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
 import { resolveManifestActivityExecutionBinding } from '../app-runs.js';
@@ -24,6 +25,7 @@ import {
   validateApplicationStateStoreConfiguration,
   withApplicationStateDB,
 } from '../application-state-store.js';
+import { prepareApplicationStateReadiness } from '../application-state-readiness.js';
 import {
   runPersistedDurableManifestActivity,
   submitDurableManifestActivity,
@@ -55,6 +57,7 @@ import {
 import {
   resolveExecutionLedgerStoreConfiguration,
   withExecutionLedger,
+  withExecutionLedgerCoordinatorAuthority,
   withLocalLedgerServiceMutationOwnership,
 } from '../operator/execution-ledger-store.js';
 import {
@@ -1643,11 +1646,33 @@ export async function runLocalResidentActivityService(options) {
         db: controlContext.db,
         tableName: controlContext.tableName,
       });
+      /** @type {import('../../lib/db/tables/application-state-readiness.js').ApplicationStateReadinessRecord | undefined} */
+      let applicationStateReadiness;
       const service = createLedgerService({
         appId: binding.identity.appId,
         revisionId: binding.identity.revisionId,
         ...(artifactId === undefined ? {} : { artifactId }),
-        lifecycle,
+        lifecycle: {
+          ...lifecycle,
+          /**
+           * @param {{serviceId: string, sessionId: string, generation: number, observedAt?: number}} input - Exact resident lifecycle fence.
+           * @returns {Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>} - Atomically guarded READY publication.
+           */
+          markReady: async (input) => {
+            if (!applicationStateReadiness) {
+              throw new Error(
+                'Resident READY requires completed application-state adoption.',
+              );
+            }
+            // This control transaction must compare both the exact adoption
+            // record and current coordinator, not merely an earlier probe.
+            return await createLedgerServiceLifecycle({
+              db: controlContext.db,
+              tableName: controlContext.tableName,
+              applicationStateReadiness,
+            }).markReady(input);
+          },
+        },
         ownership,
         sessionRoot: controlContext.sessionPath,
       });
@@ -1665,25 +1690,52 @@ export async function runLocalResidentActivityService(options) {
             'Resident activity service became ready without its local owner.',
           );
         }
-        result = await runResidentActivityWorker({
+        result = await withExecutionLedgerCoordinatorAuthority({
+          appId: binding.identity.appId,
+          coordinatorId: owner.sessionId,
           ledger,
-          execution: binding.execution,
-          ...(artifactId === undefined ? {} : { artifactId }),
-          controlContext,
-          owner,
-          ...(signal === undefined ? {} : { signal }),
-          ...(options.pollIntervalMs === undefined
-            ? {}
-            : { pollIntervalMs: options.pollIntervalMs }),
-          ...(options.drainTimeoutMs === undefined
-            ? {}
-            : { drainTimeoutMs: options.drainTimeoutMs }),
-          applicationStateConfiguration,
-          onReady: async () => {
-            if (!signal?.aborted) await service.markReady();
-          },
-          onStopping: async () => {
-            await service.beginStopping();
+          context: controlContext,
+          handler: async (boundLedger) => {
+            if (signal?.aborted) return Object.freeze({ processed: 0 });
+            try {
+              applicationStateReadiness =
+                await prepareApplicationStateReadiness({
+                  ledger: boundLedger,
+                  appId: binding.identity.appId,
+                  controlContext,
+                  configuration: applicationStateConfiguration,
+                  ...(signal === undefined ? {} : { signal }),
+                });
+            } catch (error) {
+              if (signal?.aborted && error === signal.reason) {
+                return Object.freeze({ processed: 0 });
+              }
+              throw error;
+            }
+            if (signal?.aborted) return Object.freeze({ processed: 0 });
+            // Preparation precedes worker construction: its schedule observer
+            // can admit work before the command endpoint publishes READY.
+            return await runResidentActivityWorker({
+              ledger: boundLedger,
+              execution: binding.execution,
+              ...(artifactId === undefined ? {} : { artifactId }),
+              controlContext,
+              owner,
+              ...(signal === undefined ? {} : { signal }),
+              ...(options.pollIntervalMs === undefined
+                ? {}
+                : { pollIntervalMs: options.pollIntervalMs }),
+              ...(options.drainTimeoutMs === undefined
+                ? {}
+                : { drainTimeoutMs: options.drainTimeoutMs }),
+              applicationStateConfiguration,
+              onReady: async () => {
+                if (!signal?.aborted) await service.markReady();
+              },
+              onStopping: async () => {
+                await service.beginStopping();
+              },
+            });
           },
         });
         if (!signal?.aborted) {
@@ -1744,7 +1796,16 @@ export async function routeLocalResidentMutation(options) {
         await withLocalLedgerServiceMutationOwnership({
           appId: options.appId,
           context: controlContext,
-          handler: async () => await options.mutateDirect(ledger),
+          handler: async (localOwner) => {
+            return await withExecutionLedgerCoordinatorAuthority({
+              appId: options.appId,
+              coordinatorId:
+                localOwner?.sessionId ?? createLedgerServiceSessionId(),
+              ledger,
+              context: controlContext,
+              handler: options.mutateDirect,
+            });
+          },
         });
 
       /**

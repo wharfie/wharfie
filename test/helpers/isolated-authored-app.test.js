@@ -45,30 +45,26 @@ function createSourceFixture(label) {
 }
 
 describe('isolated authored app fixtures', () => {
-  it('preserves module scope for every relocated repository app', async () => {
-    /** @type {Array<[string, string]>} */
-    const cases = [
-      ['scratch/examples/apps/hello-world', 'hello-world-demo'],
-      ['scratch/examples/apps/kitchen-sink', 'kitchen-sink-demo'],
-      ['test/fixtures/apps/workflow-crash', 'workflow-crash-source'],
-    ];
-    /** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
-    const fixtures = [];
-    try {
-      for (const [relativePath, appId] of cases) {
-        const fixture = createIsolatedAuthoredAppFixture(
-          path.join(REPOSITORY_ROOT, relativePath),
-        );
-        fixtures.push(fixture);
+  it.each([
+    ['scratch/examples/apps/hello-world', 'hello-world-demo'],
+    ['scratch/examples/apps/kitchen-sink', 'kitchen-sink-demo'],
+    ['test/fixtures/apps/workflow-crash', 'workflow-crash-source'],
+  ])(
+    'preserves module scope for relocated app %s',
+    async (relativePath, appId) => {
+      const fixture = createIsolatedAuthoredAppFixture(
+        path.join(REPOSITORY_ROOT, relativePath),
+      );
+      try {
         await expect(loadApp({ dir: fixture.appDir })).resolves.toMatchObject({
           appDir: fixture.appDir,
           manifest: { app: { id: appId } },
         });
+      } finally {
+        fixture.cleanup();
       }
-    } finally {
-      cleanupIsolatedAuthoredAppFixtures(fixtures);
-    }
-  });
+    },
+  );
 
   it('copies authored bytes, excludes generated trees, and removes its root', () => {
     const sourceRoot = createSourceFixture('isolated-authored-source');

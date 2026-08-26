@@ -17,6 +17,7 @@ import {
   WorkflowTimerStatus,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
+import { createCoordinatorAuthority } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import {
   LedgerServiceOwnerKind,
   createLedgerServiceOwnership,
@@ -607,10 +608,16 @@ describe('execution-ledger local owner cancellation operator', () => {
       db,
       tableName: configuration.tableName,
     });
+    const authorityStore = createCoordinatorAuthority({
+      db,
+      tableName: configuration.tableName,
+    });
     /** @type {Awaited<ReturnType<typeof acquireLocalLedgerServiceSession>> | undefined} */
     let owner;
     /** @type {Awaited<ReturnType<typeof createLocalOwnerCommandServer>> | undefined} */
     let server;
+    /** @type {import('../../src/core/lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot | undefined} */
+    let heldAuthority;
     try {
       const runId = await seedRunnableWorkflowRun(ledger, {
         appId,
@@ -623,6 +630,13 @@ describe('execution-ledger local owner cancellation operator', () => {
         sessionRoot: configuration.sessionPath,
       });
       owner = residentOwner;
+      const acquisition = await authorityStore.acquire({
+        appId,
+        coordinatorId: residentOwner.sessionId,
+        requestId: 'resident-workflow-cancellation-acquire',
+      });
+      heldAuthority = acquisition.authority;
+      const residentLedger = ledger.bindCoordinatorAuthority(heldAuthority);
       /** @type {string[]} */
       const receivedRequestIds = [];
       server = await createLocalOwnerCommandServer({
@@ -639,7 +653,7 @@ describe('execution-ledger local owner cancellation operator', () => {
         handleCommand: async (command) => {
           receivedRequestIds.push(command.requestId);
           const result = await requestWorkflowLedgerRunCancellation({
-            ledger,
+            ledger: residentLedger,
             runId: command.request.runId,
             requestId: command.requestId,
             actor: { kind: 'local-owner-command', id: appId },
@@ -687,6 +701,9 @@ describe('execution-ledger local owner cancellation operator', () => {
       });
       await expect(externalCancellationResult(request)).resolves.toEqual(first);
       expect(receivedRequestIds).toEqual([request.requestId]);
+      await expect(authorityStore.get({ appId })).resolves.toEqual(
+        heldAuthority,
+      );
 
       const view = await ledger.rebuildRun(runId);
       expect(view).toMatchObject({
@@ -711,6 +728,12 @@ describe('execution-ledger local owner cancellation operator', () => {
       expect(serialized).not.toContain('workflow-caller-secret');
     } finally {
       await server?.close();
+      if (heldAuthority) {
+        await authorityStore.release({
+          authority: heldAuthority,
+          requestId: 'resident-workflow-cancellation-release',
+        });
+      }
       await owner?.release();
       await db.close();
       rmSync(root, { recursive: true, force: true });

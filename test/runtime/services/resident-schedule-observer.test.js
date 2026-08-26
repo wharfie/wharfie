@@ -8,6 +8,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import {
+  CoordinatorAuthorityStaleError,
+  createCoordinatorAuthority,
+  createCoordinatorAuthorityFence,
+} from '../../../src/core/lib/db/tables/coordinator-authority.js';
 import { createExecutionLedger } from '../../../src/core/lib/db/tables/execution-ledger.js';
 import {
   LocalApplicationActivationAction,
@@ -120,6 +125,7 @@ function createHarness() {
   return {
     db,
     ledger,
+    payloadStore,
     ownershipStore,
     scheduleControl,
     activation,
@@ -353,6 +359,129 @@ function expectedOccurrence(binding, scheduledAt) {
 }
 
 describe('resident schedule observer', () => {
+  test.each([
+    {
+      label: 'due occurrence admission',
+      cron: '* * * * *',
+      expected: { admitted: 1, advanced: 0 },
+    },
+    {
+      label: 'empty-window cursor advancement',
+      cron: '0 * * * *',
+      expected: { admitted: 0, advanced: 1 },
+    },
+  ])(
+    'uses its ledger authority exactly once per transaction for $label and stops after takeover',
+    async ({ cron, expected }) => {
+      const harness = createHarness();
+      const ownership = await claimResident(harness.ownershipStore);
+      const { execution } = createExecutionContext(cron);
+      const authority = createCoordinatorAuthority({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const acquired = await authority.acquire({
+        appId: APP_ID,
+        coordinatorId: ownership.sessionId,
+        requestId: 'schedule-observer-authority-a',
+      });
+      /** @type {import('../../../src/core/lib/db/base.js').TransactionWriteParams[]} */
+      const transactions = [];
+      const observedDb = {
+        ...harness.db,
+        async transactionWrite(
+          /** @type {import('../../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+        ) {
+          transactions.push(params);
+          return await harness.db.transactionWrite(params);
+        },
+      };
+      const ledger = createExecutionLedger({
+        db: observedDb,
+        tableName: TABLE_NAME,
+        payloadStore: harness.payloadStore,
+        coordinatorAuthority: acquired.authority,
+      });
+      const observer = createResidentScheduleObserver({
+        ledger,
+        execution,
+        controlContext: { db: observedDb, tableName: TABLE_NAME },
+        ownership,
+      });
+
+      await observer.observe({ observedAt: ACTIVATION_AT });
+      await expect(
+        observer.observe({ observedAt: 3 * MINUTE + 999 }),
+      ).resolves.toMatchObject(expected);
+
+      const fence = createCoordinatorAuthorityFence(acquired.authority);
+      expect(transactions).toHaveLength(2);
+      for (const transaction of transactions) {
+        const authorityChecks = (transaction.conditionChecks || []).filter(
+          (check) =>
+            check.keyName === fence.keyName &&
+            check.keyValue === fence.keyValue &&
+            check.sortKeyName === fence.sortKeyName &&
+            check.sortKeyValue === fence.sortKeyValue,
+        );
+        expect(authorityChecks).toEqual([fence]);
+      }
+      const cursor = await harness.scheduleControl.getCursor({
+        appId: APP_ID,
+        scheduleId: SCHEDULE_ID,
+      });
+      await authority.takeover({
+        appId: APP_ID,
+        coordinatorId: 'schedule-observer-authority-b',
+        requestId: 'schedule-observer-takeover-b',
+        observedAuthority: acquired.authority,
+        confirmAuthorityReplacement: true,
+      });
+
+      // No new minute or due work is needed to stop a taken-over observer.
+      await expect(
+        observer.observe({ observedAt: 3 * MINUTE + 1_999 }),
+      ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+      expect(transactions).toHaveLength(2);
+      await expect(
+        harness.scheduleControl.getCursor({
+          appId: APP_ID,
+          scheduleId: SCHEDULE_ID,
+        }),
+      ).resolves.toEqual(cursor);
+    },
+  );
+
+  test('rejects ledger authority for another application before observing', async () => {
+    const harness = createHarness();
+    const ownership = await claimResident(harness.ownershipStore);
+    const { execution } = createExecutionContext();
+    const authority = createCoordinatorAuthority({
+      db: harness.db,
+      tableName: TABLE_NAME,
+    });
+    const acquired = await authority.acquire({
+      appId: 'another-scheduled-application',
+      coordinatorId: 'another-coordinator',
+      requestId: 'another-coordinator-acquire',
+    });
+
+    expect(() =>
+      createResidentScheduleObserver({
+        ledger: harness.ledger.bindCoordinatorAuthority(acquired.authority),
+        execution,
+        controlContext: harness.controlContext,
+        ownership,
+      }),
+    ).toThrow(/coordinator authority must match its execution application/i);
+    await expect(
+      harness.scheduleControl.getCursor({
+        appId: APP_ID,
+        scheduleId: SCHEDULE_ID,
+      }),
+    ).resolves.toBeNull();
+  });
+
   test('becomes ready without inventing work for an unscheduled application', async () => {
     const harness = createHarness();
     const ownership = await claimResident(harness.ownershipStore);

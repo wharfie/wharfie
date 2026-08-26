@@ -17,9 +17,17 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { createPackageTarball, readJson } from './package-verification.js';
 import { verifyPackageSeaArtifactHandoff } from './package-sea-verification.js';
+import { createPackageSeaApplicationStateReadinessProof } from './application-state-readiness-proof.js';
+import { createPackageSeaCoordinatorHandoff } from './package-sea-coordinator-handoff.js';
+import {
+  assertOwnedSystemdProofRoot,
+  resetOwnedSystemdProofRoot,
+  resolveSystemdProofRoot,
+} from './systemd-proof-root.js';
 import {
   attachSeaInspector,
   spawnInspectorPausedProcess,
@@ -47,8 +55,7 @@ const WORKFLOW_ID = 'reboot-chain';
 const SIGNAL_ID = 'resume-after-reboot';
 const UNIT_NAME = `wharfie-${APP_ID}.service`;
 const BOOT_CHECK_UNIT = 'wharfie-systemd-proof-boot-check.service';
-const PROOF_ROOT =
-  process.env.WHARFIE_SYSTEMD_PROOF_ROOT || '/var/tmp/wharfie-systemd-proof';
+const PROOF_ROOT = resolveSystemdProofRoot();
 const PREPARE_PATH = path.join(PROOF_ROOT, 'prepare.json');
 const FINAL_PATH = path.join(PROOF_ROOT, 'final.json');
 const FAILURE_PATH = path.join(PROOF_ROOT, 'failure.json');
@@ -59,6 +66,8 @@ const ORDINARY_MARKER_PATH = path.join(
 );
 const BOOT_RECEIPT_PATH = '/var/lib/wharfie-systemd-proof/boot-receipt.json';
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
+const SUPERVISOR_SETTLE_RESERVE_MS = 1_000;
+const SUPERVISOR_PID_PREFIX = 'WHARFIE_PROCESS_GROUP_PID=';
 const STATUS_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 250;
 const EXPECTED_TIMER_DELAY_MS = 180_000;
@@ -99,6 +108,445 @@ const FAILING_RESIDENT_INJECTION = [
 const RELEASE_PLACEHOLDER = '__WHARFIE_SYSTEMD_PROOF_RELEASE__';
 
 /**
+ * Run inside a short-lived Node wrapper so the synchronous caller can retain a
+ * strict backstop while the wrapper owns and reaps a detached process group.
+ * @returns {Promise<void>} - Emits one JSON result to stdout.
+ */
+async function processGroupSupervisorMain() {
+  const { spawn } = await import('node:child_process');
+  const { readFileSync, writeFileSync } = await import('node:fs');
+  /** @type {Record<string, any>} */
+  const input = JSON.parse(readFileSync(0, 'utf8'));
+  /** @type {Buffer[]} */
+  const stdout = [];
+  /** @type {Buffer[]} */
+  const stderr = [];
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  /** @type {Record<string, any> | undefined} */
+  let failure;
+  let timedOut = false;
+  /** @type {import('node:child_process').ChildProcess | undefined} */
+  let child;
+
+  /**
+   * @param {unknown} error - Process failure.
+   * @returns {Record<string, any>} - Serializable error fields.
+   */
+  const serializeError = (error) => ({
+    message: error instanceof Error ? error.message : String(error),
+    code:
+      error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : undefined,
+    errno:
+      error && typeof error === 'object' && 'errno' in error
+        ? error.errno
+        : undefined,
+    syscall:
+      error && typeof error === 'object' && 'syscall' in error
+        ? String(error.syscall)
+        : undefined,
+    path:
+      error && typeof error === 'object' && 'path' in error
+        ? String(error.path)
+        : undefined,
+    spawnargs:
+      error && typeof error === 'object' && 'spawnargs' in error
+        ? error.spawnargs
+        : undefined,
+  });
+  /**
+   * @param {Record<string, any>} value - Supervisor result.
+   * @returns {void} - Writes the result protocol.
+   */
+  const emit = (value) => {
+    process.stdout.write(`${JSON.stringify(value)}\n`);
+  };
+  const hardKillGroup = () => {
+    if (!child?.pid) return;
+    try {
+      if (process.platform === 'win32') child.kill('SIGKILL');
+      else process.kill(-child.pid, 'SIGKILL');
+    } catch (error) {
+      if (
+        !error ||
+        typeof error !== 'object' ||
+        !('code' in error) ||
+        error.code !== 'ESRCH'
+      ) {
+        failure ??= serializeError(error);
+      }
+    }
+  };
+  /**
+   * @param {Buffer | string} chunk - Child output.
+   * @param {Buffer[]} target - Retained output chunks.
+   * @param {'stdout' | 'stderr'} streamName - Output channel.
+   */
+  const collect = (chunk, target, streamName) => {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const used = streamName === 'stdout' ? stdoutBytes : stderrBytes;
+    const remaining = Math.max(0, input.maxOutputBytes - used);
+    if (remaining > 0) target.push(bytes.subarray(0, remaining));
+    if (streamName === 'stdout') {
+      stdoutBytes += Math.min(bytes.byteLength, remaining);
+    } else {
+      stderrBytes += Math.min(bytes.byteLength, remaining);
+    }
+    if (bytes.byteLength > remaining && !failure) {
+      failure = {
+        message: `spawnSync ${input.command} ENOBUFS`,
+        code: 'ENOBUFS',
+        errno: 'ENOBUFS',
+        syscall: `spawnSync ${input.command}`,
+        path: input.command,
+        spawnargs: input.args,
+      };
+      hardKillGroup();
+    }
+  };
+
+  try {
+    child = spawn(input.command, input.args, {
+      cwd: input.cwd,
+      env: input.env,
+      detached: process.platform !== 'win32',
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+  } catch (error) {
+    emit({
+      status: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      error: serializeError(error),
+    });
+    return;
+  }
+  const runningChild = child;
+  if (runningChild.pid) {
+    writeFileSync(2, `WHARFIE_PROCESS_GROUP_PID=${runningChild.pid}\n`);
+  }
+  runningChild.stdout?.on('data', (chunk) => collect(chunk, stdout, 'stdout'));
+  runningChild.stderr?.on('data', (chunk) => collect(chunk, stderr, 'stderr'));
+  /** @type {{status: number | null, signal: NodeJS.Signals | null}} */
+  const outcome = await new Promise((resolve) => {
+    let settled = false;
+    /**
+     * @param {{status: number | null, signal: NodeJS.Signals | null}} value - Exit result.
+     * @returns {void} - Resolves the wrapper once.
+     */
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      failure ??= {
+        message: `spawnSync ${input.command} ETIMEDOUT`,
+        code: 'ETIMEDOUT',
+        errno: 'ETIMEDOUT',
+        syscall: `spawnSync ${input.command}`,
+        path: input.command,
+        spawnargs: input.args,
+      };
+      hardKillGroup();
+    }, input.timeoutMs);
+    runningChild.once('error', (error) => {
+      failure ??= serializeError(error);
+      if (!runningChild.pid) settle({ status: null, signal: null });
+    });
+    runningChild.once('close', (status, signal) => settle({ status, signal }));
+  });
+  if (timedOut) hardKillGroup();
+  emit({
+    ...outcome,
+    stdout: Buffer.concat(stdout, stdoutBytes).toString('base64'),
+    stderr: Buffer.concat(stderr, stderrBytes).toString('base64'),
+    error: failure,
+  });
+}
+
+const PROCESS_GROUP_SUPERVISOR_SOURCE = `await (${processGroupSupervisorMain.toString()})();`;
+
+/**
+ * @param {Record<string, any> | undefined} value - Serialized child error.
+ * @returns {Error | undefined} - Spawn-compatible error.
+ */
+function reviveSupervisorError(value) {
+  if (!value) return undefined;
+  const error = new Error(String(value.message || 'process supervisor failed'));
+  for (const key of ['code', 'errno', 'syscall', 'path', 'spawnargs']) {
+    if (value[key] !== undefined) {
+      Object.defineProperty(error, key, {
+        configurable: true,
+        enumerable: true,
+        value: value[key],
+      });
+    }
+  }
+  return error;
+}
+
+/**
+ * Best-effort backstop cleanup when the supervisor itself exceeds its bound.
+ * @param {string} diagnostics - Wrapper-only stderr containing the reported group leader.
+ * @returns {void} - Returns after issuing a hard group kill.
+ */
+function hardKillReportedProcessGroup(diagnostics) {
+  const match = diagnostics.match(
+    new RegExp(`^${SUPERVISOR_PID_PREFIX}(\\d+)$`, 'm'),
+  );
+  if (!match) return;
+  const pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid < 1) return;
+  try {
+    if (process.platform === 'win32') process.kill(pid, 'SIGKILL');
+    else process.kill(-pid, 'SIGKILL');
+  } catch (error) {
+    if (
+      !error ||
+      typeof error !== 'object' ||
+      !('code' in error) ||
+      error.code !== 'ESRCH'
+    ) {
+      throw error;
+    }
+  }
+}
+
+/**
+ * Synchronously supervise one exact command in its own process group.
+ * @param {string} command - Exact executable path.
+ * @param {string[]} args - Exact argv.
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv, timeoutMs: number}} options - Process policy.
+ * @returns {{status: number | null, stdout: string, stderr: string, error?: Error}} - Spawn-compatible result.
+ */
+function spawnProcessGroupSync(command, args, options) {
+  const targetTimeoutMs = Math.max(
+    1,
+    options.timeoutMs -
+      Math.min(
+        SUPERVISOR_SETTLE_RESERVE_MS,
+        Math.max(1, Math.floor(options.timeoutMs / 5)),
+      ),
+  );
+  const wrapper = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', PROCESS_GROUP_SUPERVISOR_SOURCE],
+    {
+      encoding: 'utf8',
+      env: { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin' },
+      input: JSON.stringify({
+        command,
+        args,
+        cwd: options.cwd,
+        env: options.env ?? process.env,
+        maxOutputBytes: MAX_OUTPUT_BYTES,
+        timeoutMs: targetTimeoutMs,
+      }),
+      killSignal: 'SIGKILL',
+      maxBuffer: MAX_OUTPUT_BYTES * 3 + 64 * 1024,
+      timeout: options.timeoutMs,
+    },
+  );
+  if (wrapper.error || wrapper.status !== 0) {
+    hardKillReportedProcessGroup(String(wrapper.stderr || ''));
+    const wrapperTimedOut =
+      /** @type {NodeJS.ErrnoException | undefined} */ (wrapper.error)?.code ===
+      'ETIMEDOUT';
+    return {
+      status: null,
+      stdout: '',
+      stderr: String(wrapper.stderr || ''),
+      error:
+        (wrapperTimedOut
+          ? reviveSupervisorError({
+              code: 'ETIMEDOUT',
+              errno: 'ETIMEDOUT',
+              syscall: `spawnSync ${command}`,
+              path: command,
+              spawnargs: args,
+              message: `spawnSync ${command} ETIMEDOUT`,
+            })
+          : wrapper.error) ??
+        reviveSupervisorError({
+          code: 'EPROTO',
+          message: `process supervisor exited with status ${wrapper.status}`,
+        }),
+    };
+  }
+  let value;
+  try {
+    value = JSON.parse(String(wrapper.stdout || '').trim());
+  } catch (error) {
+    hardKillReportedProcessGroup(String(wrapper.stderr || ''));
+    return {
+      status: null,
+      stdout: '',
+      stderr: String(wrapper.stderr || ''),
+      error: reviveSupervisorError({
+        code: 'EPROTO',
+        message: `process supervisor emitted invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      }),
+    };
+  }
+  return {
+    status: Number.isInteger(value.status) ? value.status : null,
+    stdout: Buffer.from(String(value.stdout || ''), 'base64').toString('utf8'),
+    stderr: Buffer.from(String(value.stderr || ''), 'base64').toString('utf8'),
+    error: reviveSupervisorError(value.error),
+  };
+}
+const READINESS_CRASH_BOUNDARIES = Object.freeze([
+  Object.freeze({
+    name: 'retained-adopted-before-destination-advance',
+    anchor:
+      'const destinationAuthority = await table.adoptCoordinatorAuthority(',
+    destinationAdopted: false,
+  }),
+  Object.freeze({
+    name: 'destination-advanced-before-adopted-control-cas',
+    anchor: 'return await readiness.advanceAdopted({',
+    destinationAdopted: true,
+  }),
+]);
+const coordinatorHandoff = createPackageSeaCoordinatorHandoff();
+/** @type {{assertReady: (snapshot: Record<string, any> | null) => Promise<Readonly<Record<string, any>>>} | undefined} */
+let applicationStateProof;
+/** @type {Record<string, any> | undefined} */
+let readinessModules;
+
+/**
+ * @param {string} artifactPath - Packaged executable for this application.
+ * @param {string} label - Exact observation boundary.
+ * @returns {import('./package-sea-coordinator-handoff.js').SeaCoordinatorCommandInput} - Public command scope.
+ */
+function coordinatorContext(artifactPath, label) {
+  return {
+    artifactPath,
+    appId: APP_ID,
+    cwd: PROOF_ROOT,
+    env: packagedEnvironment(),
+    label,
+  };
+}
+
+/**
+ * @param {string} installedPackageRoot - Exact installed package used for the SEA.
+ * @returns {Promise<void>} - Read-only live-readiness observer initialization.
+ */
+async function initializeApplicationStateProof(installedPackageRoot) {
+  const storage = proofStorageLayout();
+  const installedModule = async (/** @type {string} */ relativePath) =>
+    await import(
+      pathToFileURL(path.join(installedPackageRoot, relativePath)).href
+    );
+  const [adapter, lifecycle, readiness, application, barrier, dbConfig] =
+    await Promise.all([
+      installedModule('src/core/lib/db/adapters/lmdb.js'),
+      installedModule('src/core/lib/db/tables/ledger-service-lifecycle.js'),
+      installedModule('src/core/lib/db/tables/application-state-readiness.js'),
+      installedModule('src/core/lib/db/tables/application-state.js'),
+      installedModule('src/core/lib/db/tables/application-state-authority.js'),
+      installedModule('src/core/lib/config/db.js'),
+    ]);
+  readinessModules = {
+    adapter,
+    lifecycle,
+    readiness,
+    application,
+    barrier,
+    dbConfig,
+  };
+  applicationStateProof = await createPackageSeaApplicationStateReadinessProof({
+    installedPackageRoot,
+    controlPath: storage.controlPath,
+    applicationStatePath: storage.applicationStatePath,
+    tableName: LOCAL_APP_EXECUTION_LEDGER_TABLE,
+    appId: APP_ID,
+  });
+}
+
+/**
+ * Read retained control and destination evidence without creating or repairing
+ * either volume. This also works at a deliberately incomplete handoff.
+ * @returns {Promise<Record<string, any>>} - Separate read-only observations.
+ */
+async function readApplicationStateHandoff() {
+  assert.ok(
+    readinessModules,
+    'installed readiness modules are not initialized',
+  );
+  const modules = readinessModules;
+  const storage = proofStorageLayout();
+  for (const root of [storage.controlPath, storage.applicationStatePath]) {
+    for (const file of ['data.mdb', 'lock.mdb']) {
+      assert.ok(statSync(path.join(root, 'lmdb', file)).isFile());
+    }
+  }
+  const control = modules.adapter.default({
+    path: storage.controlPath,
+    readOnly: true,
+  });
+  try {
+    const readiness = await modules.readiness
+      .createApplicationStateReadinessStore({
+        db: control,
+        tableName: LOCAL_APP_EXECUTION_LEDGER_TABLE,
+      })
+      .get({ appId: APP_ID });
+    assert.ok(readiness, 'service must retain its application-state pin');
+    const serviceId = modules.lifecycle.createLedgerServiceId({
+      appId: APP_ID,
+    });
+    const lifecycle = await modules.lifecycle
+      .createLedgerServiceLifecycle({
+        db: control,
+        tableName: LOCAL_APP_EXECUTION_LEDGER_TABLE,
+      })
+      .get({ serviceId });
+    const ownership = await modules.lifecycle
+      .createLedgerServiceOwnership({
+        db: control,
+        tableName: LOCAL_APP_EXECUTION_LEDGER_TABLE,
+      })
+      .getOwnership({ serviceId });
+    const destination = modules.adapter.default({
+      path: storage.applicationStatePath,
+      readOnly: true,
+    });
+    try {
+      const table = modules.application.createApplicationStateTable({
+        db: destination,
+        tableName: modules.dbConfig.APPLICATION_STATE_TABLE_NAME,
+      });
+      const storeIdentity = await table.assertStoreIdentity(readiness.store_id);
+      const destinationAuthority = await table.readCoordinatorAuthority({
+        storeId: readiness.store_id,
+        namespace: APP_ID,
+      });
+      return {
+        readiness,
+        lifecycle,
+        ownership,
+        storeIdentity,
+        destinationAuthority,
+      };
+    } finally {
+      await destination.close();
+    }
+  } finally {
+    await control.close();
+  }
+}
+
+/**
  * @typedef CommandResult
  * @property {number} status - Exit status.
  * @property {string} stdout - Standard output.
@@ -120,12 +568,10 @@ const RELEASE_PLACEHOLDER = '__WHARFIE_SYSTEMD_PROOF_RELEASE__';
  * @returns {CommandResult} - Completed result.
  */
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const result = spawnProcessGroupSync(command, args, {
     cwd: options.cwd,
     env: options.env,
-    encoding: 'utf8',
-    maxBuffer: MAX_OUTPUT_BYTES,
-    timeout: options.timeoutMs || 180_000,
+    timeoutMs: options.timeoutMs || 180_000,
   });
   if (result.error) throw result.error;
   const output = {
@@ -336,9 +782,10 @@ function runArtifactJson(artifactPath, args, label) {
  * @returns {Record<string, any>} - Packaged service status.
  */
 function readServiceStatus(artifactPath) {
-  return runArtifactJson(
-    artifactPath,
-    ['wharfie', 'service', 'status', '--json'],
+  return parseJsonOutput(
+    runArtifact(artifactPath, ['wharfie', 'service', 'status', '--json'], {
+      allowFailure: true,
+    }),
     'service status',
   );
 }
@@ -967,6 +1414,7 @@ function readIndependentServiceState() {
     'Result',
     'ExecMainCode',
     'ExecMainStatus',
+    'ExecMainPID',
     'MainPID',
     'FragmentPath',
     'DropInPaths',
@@ -999,6 +1447,82 @@ function readIndependentServiceState() {
   }
   assert.deepEqual(Object.keys(parsed).sort(), [...properties].sort());
   return Object.freeze(parsed);
+}
+
+/**
+ * Require a real automatic startup attempt to fail before READY, without
+ * replacing retained coordinator authority or changing destination adoption.
+ * @param {string} artifactPath - Selected SEA.
+ * @param {Record<string, any>} before - Live status before process loss.
+ * @param {Record<string, any>} readinessBefore - Exact pre-loss readiness evidence.
+ * @returns {Promise<Record<string, any>>} - Failed-attempt and unchanged authority evidence.
+ */
+async function waitForBlockedRestart(artifactPath, before, readinessBefore) {
+  const observedStatus = await waitFor(
+    () => readServiceStatus(artifactPath),
+    (value) =>
+      value.health !== 'healthy' &&
+      value.runtime?.generation > before.runtime.generation &&
+      value.runtime?.status === 'STOPPED' &&
+      value.runtime?.session === 'absent' &&
+      value.runtime?.currentOwner === false &&
+      !value.runtime?.processId &&
+      value.systemd?.mainPid === 0,
+    'automatic restart refusal of retained ACTIVE coordinator',
+  );
+  // Freeze the retrying unit before collecting the cross-store evidence. A
+  // STOPPED observation alone is not a stable boundary while systemd may start
+  // another generation between the public status and retained-state reads.
+  const stopped = stopSupervisorForRecovery();
+  const status = readServiceStatus(artifactPath);
+  assert.ok(status.runtime?.generation >= observedStatus.runtime.generation);
+  assert.equal(status.runtime?.status, 'STOPPED');
+  assert.equal(status.runtime?.session, 'absent');
+  assert.equal(status.runtime?.currentOwner, false);
+  assert.equal(status.runtime?.processId, undefined);
+  assert.equal(status.systemd?.mainPid, 0);
+  const retained = await readApplicationStateHandoff();
+  const inspection = coordinatorHandoff.inspect(
+    coordinatorContext(artifactPath, 'blocked automatic restart'),
+  );
+  assert.deepEqual(inspection.observedAuthority, readinessBefore.authority);
+  assert.deepEqual(retained.readiness, readinessBefore.readiness);
+  assert.deepEqual(retained.storeIdentity, readinessBefore.storeIdentity);
+  assert.deepEqual(
+    retained.destinationAuthority,
+    readinessBefore.destinationAuthority,
+  );
+  assert.equal(retained.lifecycle.generation, status.runtime.generation);
+  assert.equal(retained.lifecycle.status, 'STOPPED');
+  assert.equal(retained.ownership, null);
+  return {
+    observedStatus,
+    status,
+    stopped,
+    coordinatorInspection: inspection,
+    retained,
+  };
+}
+
+/**
+ * Stop retries before the explicit takeover-and-release command so no new
+ * resident can race the independently verified RELEASED boundary.
+ * @returns {Readonly<Record<string, string>>} - Stable stopped manager state.
+ */
+function stopSupervisorForRecovery() {
+  run('/usr/bin/systemctl', ['--user', 'stop', UNIT_NAME], {
+    env: packagedEnvironment(),
+  });
+  run('/usr/bin/systemctl', ['--user', 'reset-failed', UNIT_NAME], {
+    env: packagedEnvironment(),
+  });
+  const stopped = readIndependentServiceState();
+  assert.equal(stopped.MainPID, '0');
+  assert.equal(stopped.ActiveState, 'inactive');
+  assert.equal(stopped.SubState, 'dead');
+  assert.equal(stopped.FragmentPath, proofStorageLayout().unitPath);
+  assert.equal(stopped.DropInPaths, '');
+  return stopped;
 }
 
 /**
@@ -1364,6 +1888,275 @@ async function crashActivationCommandAtBoundary(options) {
 }
 
 /**
+ * Kill the actual packaged resident on both sides of retained destination
+ * advancement. The fixed systemd unit remains stopped while its exact selected
+ * service runtime runs under the source-bound inspector; no runtime fault hook
+ * or unit drop-in is added. Each recovery starts a fresh, uninstrumented
+ * service.
+ * @param {{artifactPath: string, releasePath: string, installedPackageRoot: string, desired: Record<string, any>, runId: string, workflow: Record<string, any>, history: Record<string, any>, output: Record<string, any>, markers: Record<string, any>[]}} options - Completed durable work and exact packaged source.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Two independent process-death proofs.
+ */
+async function proveReadinessCrashHandoffs(options) {
+  assert.ok(readinessModules);
+  const cases = [];
+  const storage = proofStorageLayout();
+  // Installed activation admits the exact artifact, not a standalone public
+  // worker (which intentionally has no service artifact identity). Use the
+  // same immutable executable, working directory and hidden bootstrap fields
+  // as the fixed unit while keeping that unit independently stopped.
+  const serviceRuntime = {
+    cwd: storage.stateRoot,
+    env: {
+      ...packagedEnvironment(),
+      WHARFIE_DATA_ROOT: storage.dataRoot,
+      WHARFIE_RUNTIME_COMMAND: 'ledger-service',
+      WHARFIE_RUNTIME_ARGS: '[]',
+    },
+  };
+  const sourceSuffix = 'src/core/runtime/application-state-readiness.js';
+  const expectedSourceContent = readFileSync(
+    path.join(options.installedPackageRoot, sourceSuffix),
+    'utf8',
+  );
+  const sourceSha256 = createHash('sha256')
+    .update(expectedSourceContent)
+    .digest('hex');
+  const assertHistoryUnchanged = () => {
+    assert.deepEqual(
+      inspectRun(options.artifactPath, options.runId),
+      options.workflow,
+    );
+    assert.deepEqual(listRuns(options.artifactPath), options.history);
+    assert.deepEqual(
+      readRunOutput(options.artifactPath, options.runId),
+      options.output,
+    );
+    assert.deepEqual(readMarkers(), options.markers);
+  };
+  for (const boundary of READINESS_CRASH_BOUNDARIES) {
+    const baselineStatus = readServiceStatus(options.artifactPath);
+    const baselineReady = await assertRunningRelease(
+      baselineStatus,
+      options.releasePath,
+      options.desired,
+    );
+    const stop = runArtifactJson(
+      options.artifactPath,
+      ['wharfie', 'service', 'stop', '--json'],
+      `${boundary.name} graceful setup stop`,
+    );
+    assert.equal(stop.outcome, 'stopped');
+    const released = coordinatorHandoff.assertReleased(
+      coordinatorContext(
+        options.artifactPath,
+        `${boundary.name} setup release`,
+      ),
+    );
+    assert.equal(released.coordinatorId, baselineReady.authority.coordinatorId);
+    stopSupervisorForRecovery();
+    const baseline = await readApplicationStateHandoff();
+    assertHistoryUnchanged();
+    assert.equal(expectedSourceContent.split(boundary.anchor).length - 1, 1);
+    /** @type {InspectedCommand | undefined} */
+    let command;
+    /** @type {SeaInspector | undefined} */
+    let inspector;
+    try {
+      command = spawnInspectorPausedProcess(options.releasePath, [], {
+        ...serviceRuntime,
+        timeoutMs: STATUS_TIMEOUT_MS,
+      });
+      announce(`${boundary.name}-service-runtime-started`);
+      inspector = await attachSeaInspector(command, {
+        timeoutMs: STATUS_TIMEOUT_MS,
+      });
+      const breakpoint = await inspector.setSourceBreakpoint(boundary.name, {
+        sourceSuffix,
+        anchor: boundary.anchor,
+        occurrence: 1,
+        expectedSourceContent,
+      });
+      announce(`${boundary.name}-source-bound-breakpoint-ready`);
+      const paused = inspector.waitForPause();
+      await inspector.resume();
+      const pause = await paused;
+      assertActivationBreakpointPause(pause, breakpoint, boundary.name);
+      announce(`${boundary.name}-handoff-paused`);
+      assert.equal(command.getExit(), null);
+      assert.equal(
+        readlinkSync(`/proc/${command.child.pid}/exe`),
+        options.releasePath,
+      );
+      const frozen = await readApplicationStateHandoff();
+      assert.equal(frozen.lifecycle.status, 'STARTING');
+      assert.equal(frozen.lifecycle.artifactId, options.desired.artifactId);
+      assert.equal(frozen.lifecycle.revisionId, options.desired.revisionId);
+      assert.ok(
+        frozen.lifecycle.generation > baselineStatus.runtime.generation,
+      );
+      assert.equal(frozen.ownership?.sessionId, frozen.lifecycle.sessionId);
+      assert.equal(frozen.ownership?.ownerKind, 'resident');
+      assert.equal(frozen.readiness.status, 'ADOPTED');
+      assert.deepEqual(frozen.readiness, baseline.readiness);
+      assert.deepEqual(frozen.storeIdentity, baseline.storeIdentity);
+      const retainedToken =
+        readinessModules.readiness.applicationStateReadinessAuthority(
+          frozen.readiness,
+        );
+      const inspection = coordinatorHandoff.inspect(
+        coordinatorContext(
+          options.artifactPath,
+          `${boundary.name} paused coordinator`,
+        ),
+      );
+      assert.equal(inspection.observedAuthority.status, 'ACTIVE');
+      assert.equal(
+        inspection.observedAuthority.coordinatorId,
+        frozen.lifecycle.sessionId,
+      );
+      assert.equal(retainedToken.coordinatorId, released.coordinatorId);
+      assert.equal(retainedToken.authorityId, released.authorityId);
+      assert.equal(retainedToken.epoch, released.epoch);
+      assert.notEqual(
+        retainedToken.authorityId,
+        inspection.observedAuthority.authorityId,
+      );
+      assert.ok(inspection.observedAuthority.epoch > released.epoch);
+      const expectedBarrier = boundary.destinationAdopted
+        ? readinessModules.barrier.createApplicationStateCoordinatorAuthorityRecord(
+            {
+              storeId: frozen.readiness.store_id,
+              namespace: APP_ID,
+              authority: inspection.observedAuthority,
+            },
+          )
+        : baseline.destinationAuthority;
+      assert.deepEqual(frozen.destinationAuthority, expectedBarrier);
+      assert.equal(readIndependentServiceState().MainPID, '0');
+      assertHistoryUnchanged();
+      assert.equal(command.child.kill('SIGKILL'), true);
+      const exit = await waitWithTimeout(
+        command.exited,
+        CHILD_EXIT_TIMEOUT_MS,
+        `${boundary.name} SIGKILL`,
+      );
+      assert.deepEqual(exit, { code: null, signal: 'SIGKILL' });
+      assert.deepEqual(await readApplicationStateHandoff(), frozen);
+
+      const refused = run(options.releasePath, [], {
+        ...serviceRuntime,
+        allowFailure: true,
+      });
+      assert.equal(refused.status, 1);
+      assert.match(
+        `${refused.stdout}\n${refused.stderr}`,
+        /active authority must be gracefully released or explicitly taken over/,
+      );
+      const afterRefusal = await readApplicationStateHandoff();
+      assert.equal(afterRefusal.lifecycle.status, 'STOPPED');
+      assert.ok(
+        afterRefusal.lifecycle.generation > frozen.lifecycle.generation,
+      );
+      assert.equal(afterRefusal.ownership, null);
+      assert.deepEqual(afterRefusal.readiness, frozen.readiness);
+      assert.deepEqual(
+        afterRefusal.destinationAuthority,
+        frozen.destinationAuthority,
+      );
+      assert.deepEqual(afterRefusal.storeIdentity, frozen.storeIdentity);
+      assert.deepEqual(
+        coordinatorHandoff.inspect(
+          coordinatorContext(
+            options.artifactPath,
+            `${boundary.name} refused restart`,
+          ),
+        ),
+        inspection,
+      );
+      assertHistoryUnchanged();
+
+      const takeover = coordinatorHandoff.afterSigkill({
+        ...coordinatorContext(
+          options.artifactPath,
+          `${boundary.name} explicit takeover`,
+        ),
+        exit,
+        ownership: frozen.ownership,
+      });
+      const start = runArtifactJson(
+        options.artifactPath,
+        ['wharfie', 'service', 'start', '--json'],
+        `${boundary.name} fresh systemd resident`,
+      );
+      assert.equal(start.outcome, 'started');
+      const resumed = readServiceStatus(options.artifactPath);
+      const resumedReady = await assertRunningRelease(
+        resumed,
+        options.releasePath,
+        options.desired,
+      );
+      assert.ok(resumedReady.authority.epoch > takeover.resultAuthority.epoch);
+      assert.equal(
+        resumedReady.readiness.store_id,
+        baseline.readiness.store_id,
+      );
+      assert.deepEqual(resumedReady.storeIdentity, baseline.storeIdentity);
+      assertHistoryUnchanged();
+      cases.push({
+        boundary: boundary.name,
+        processKind:
+          'inspected-packaged-service-runtime-with-stopped-systemd-unit',
+        launch: {
+          executablePath: options.releasePath,
+          workingDirectory: serviceRuntime.cwd,
+          runtimeCommand: serviceRuntime.env.WHARFIE_RUNTIME_COMMAND,
+          runtimeArgs: serviceRuntime.env.WHARFIE_RUNTIME_ARGS,
+          dataRoot: serviceRuntime.env.WHARFIE_DATA_ROOT,
+        },
+        processId: command.child.pid,
+        processExit: exit,
+        breakpoint: {
+          sourceSuffix,
+          sourceSha256,
+          anchor: boundary.anchor,
+          originalLine: breakpoint.originalLine,
+          originalColumn: breakpoint.originalColumn,
+          generatedLine: breakpoint.generatedLine,
+          generatedColumn: breakpoint.generatedColumn,
+          retainedLocationCount: breakpoint.breakpointIds.length,
+        },
+        baseline,
+        frozen,
+        coordinatorInspection: inspection,
+        refused,
+        explicitTakeover: takeover,
+        recoveryStart: start,
+        recovered: {
+          processId: resumed.systemd.mainPid,
+          generation: resumed.runtime.generation,
+          applicationStateReadiness: resumedReady,
+        },
+        historyAndOutputUnchanged: true,
+      });
+      announce(`${boundary.name}-sigkill-and-explicit-recovery`);
+    } catch (error) {
+      if (!command) throw error;
+      throw childCommandError(
+        command,
+        `${boundary.name}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      await cleanupInspectedCommand(command, inspector);
+    }
+  }
+  return Object.freeze({
+    expectedCaseCount: 2,
+    observedCaseCount: cases.length,
+    cases,
+  });
+}
+
+/**
  * Run sudo with exact argv.
  * @param {string[]} args - Command and arguments after sudo.
  * @returns {CommandResult} - Result.
@@ -1375,8 +2168,8 @@ function sudo(args) {
 }
 
 /**
- * Install the root boot observer that proves automatic service readiness
- * before the proof user's first post-reboot login.
+ * Install the root boot observer that proves automatic startup fails closed
+ * before the proof user's first post-reboot login or explicit recovery.
  * @param {string} repoRoot - Extracted repository root.
  * @param {ProofPackageArtifact} packaged - Proof SEA evidence.
  * @param {Record<string, any>} serviceStatus - Last pre-reboot status.
@@ -1384,6 +2177,8 @@ function sudo(args) {
  * @param {string} runId - Workflow crossing the reboot.
  * @param {Record<string, any>} timer - Exact durable timer before reboot.
  * @param {string} releasePath - Immutable selected service executable.
+ * @param {string} installedPackageRoot - Installed read-only observation modules.
+ * @param {Record<string, any>} readinessEvidence - Exact pre-power-loss authority and adoption.
  * @returns {Record<string, any>} - Published boot configuration.
  */
 function installBootObserver(
@@ -1394,6 +2189,8 @@ function installBootObserver(
   runId,
   timer,
   releasePath,
+  installedPackageRoot,
+  readinessEvidence,
 ) {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
@@ -1403,7 +2200,7 @@ function installBootObserver(
   const commit = process.env.WHARFIE_SYSTEMD_PROOF_COMMIT;
   assert.match(commit, /^[0-9a-f]{40}$/);
   const config = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'wharfie.systemd-proof.boot-config',
     commit,
     user: process.env.USER,
@@ -1425,6 +2222,9 @@ function installBootObserver(
     },
     previousBootId: bootId,
     minimumGeneration: serviceStatus.runtime.generation,
+    installedPackageRoot,
+    previousAuthority: readinessEvidence.authority,
+    previousReadiness: readinessEvidence.readiness,
     receiptPath: BOOT_RECEIPT_PATH,
   };
   const configSource = path.join(PROOF_ROOT, 'boot-config.json');
@@ -1547,9 +2347,9 @@ function assertDesiredConvergence(status, desired, basis) {
  * Assert the finite service status agreement used throughout the proof.
  * @param {Record<string, any>} status - Packaged status.
  * @param {Record<string, any>} desired - Invoking artifact identity.
- * @returns {void} - Returns for healthy PID-bound boot persistence.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Exact current authority and adopted destination evidence.
  */
-function assertHealthy(status, desired) {
+async function assertHealthy(status, desired) {
   const storage = proofStorageLayout();
   assertDesiredConvergence(status, desired, 'durable-active');
   assert.equal(status.health, 'healthy');
@@ -1564,6 +2364,23 @@ function assertHealthy(status, desired) {
   assert.equal(status.runtime?.session, 'active');
   assert.equal(status.runtime?.currentOwner, true);
   assert.equal(status.integrity?.status, 'verified');
+  assert.ok(
+    applicationStateProof,
+    'live readiness observer is not initialized',
+  );
+  const retained = await readApplicationStateHandoff();
+  assert.equal(retained.lifecycle?.generation, status.runtime.generation);
+  assert.equal(
+    retained.lifecycle?.revisionId,
+    status.installation.activeRevisionId,
+  );
+  assert.equal(
+    retained.lifecycle?.artifactId,
+    status.installation.activeArtifactId,
+  );
+  const evidence = await applicationStateProof.assertReady(retained.lifecycle);
+  process.kill(status.systemd.mainPid, 0);
+  return evidence;
 }
 
 /**
@@ -1583,14 +2400,15 @@ function assertSameTimer(timer, expected, status) {
  * @param {Record<string, any>} status - Healthy service status.
  * @param {string} releasePath - Exact immutable release path.
  * @param {Record<string, any>} desired - Invoking artifact identity.
- * @returns {void} - Returns when the supervised PID executes that release.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Exact live readiness when the supervised PID executes that release.
  */
-function assertRunningRelease(status, releasePath, desired) {
-  assertHealthy(status, desired);
+async function assertRunningRelease(status, releasePath, desired) {
+  const readiness = await assertHealthy(status, desired);
   assert.equal(
     readlinkSync(`/proc/${status.systemd.mainPid}/exe`),
     releasePath,
   );
+  return readiness;
 }
 
 /**
@@ -1618,9 +2436,9 @@ function createActivationEvidence(activation) {
  * @param {Record<string, any> | null} rollback - Expected retained candidate.
  * @param {Readonly<Record<string, string>>} storage - Proof layout.
  * @param {Record<string, any>} [desired] - Invoking artifact identity.
- * @returns {Readonly<Record<string, any>>} - Healthy selection evidence.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Healthy selection evidence.
  */
-function assertActiveArtifact(
+async function assertActiveArtifact(
   status,
   current,
   rollback,
@@ -1632,7 +2450,11 @@ function assertActiveArtifact(
     current.artifactId,
     'app',
   );
-  assertRunningRelease(status, releasePath, desired);
+  const applicationStateReadiness = await assertRunningRelease(
+    status,
+    releasePath,
+    desired,
+  );
   assert.equal(status.installation?.activeArtifactId, current.artifactId);
   assert.equal(status.installation?.activeRevisionId, current.revisionId);
   assert.equal(
@@ -1670,6 +2492,7 @@ function assertActiveArtifact(
     processId: status.systemd.mainPid,
     generation: status.runtime.generation,
     lastOutcome: status.activation.lastOutcome,
+    applicationStateReadiness,
   });
 }
 
@@ -1704,9 +2527,9 @@ function assertSuccessfulActivationReceipt(
 /**
  * Execute and independently verify one ordinary update, rollback, or recovery.
  * @param {{artifactPath: string, action: 'update'|'rollback'|'recover', current: Record<string, any>, rollback: Record<string, any> | null, storage: Readonly<Record<string, string>>, label: string, outcome?: 'target-active'|'source-restored'}} options - Expected result.
- * @returns {Readonly<Record<string, any>>} - Public and host evidence.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Public and host evidence.
  */
-function runSuccessfulActivationCommand(options) {
+async function runSuccessfulActivationCommand(options) {
   const receipt = runArtifactJson(
     options.artifactPath,
     ['wharfie', 'service', options.action, '--json'],
@@ -1730,7 +2553,7 @@ function runSuccessfulActivationCommand(options) {
     desired,
     'activation verification must bind the exact invoking artifact',
   );
-  const active = assertActiveArtifact(
+  const active = await assertActiveArtifact(
     status,
     options.current,
     options.rollback,
@@ -1743,7 +2566,7 @@ function runSuccessfulActivationCommand(options) {
 /**
  * Collect deterministic SIGKILL/recovery evidence for one complete forward
  * update or rollback, including the committed ACTIVE response-loss boundary.
- * @param {{action: 'update'|'rollback', commandArtifact: Record<string, any>, recoveryArtifact: Record<string, any>, installedPackageRoot: string, source: Record<string, any>, target: Record<string, any>, storage: Readonly<Record<string, string>>, reset: () => Readonly<Record<string, any>>}} options - Matrix direction.
+ * @param {{action: 'update'|'rollback', commandArtifact: Record<string, any>, recoveryArtifact: Record<string, any>, installedPackageRoot: string, source: Record<string, any>, target: Record<string, any>, storage: Readonly<Record<string, string>>, reset: () => Promise<Readonly<Record<string, any>>>}} options - Matrix direction.
  * @returns {Promise<Readonly<Record<string, any>>>} - Ordered phase evidence.
  */
 async function proveActivationCrashDirection(options) {
@@ -1755,7 +2578,7 @@ async function proveActivationCrashDirection(options) {
     const baseline = await readDurableActivation(options.storage);
     assert.equal(baseline.phase, LocalApplicationActivationPhase.ACTIVE);
     assertReleaseReference(baseline.selected, options.source, 'matrix source');
-    assertActiveArtifact(
+    await assertActiveArtifact(
       readServiceStatus(options.source.artifactPath),
       options.source,
       baseline.rollbackCandidate,
@@ -1772,7 +2595,7 @@ async function proveActivationCrashDirection(options) {
       target: options.target,
       storage: options.storage,
     });
-    const recovered = runSuccessfulActivationCommand({
+    const recovered = await runSuccessfulActivationCommand({
       artifactPath: options.recoveryArtifact.artifactPath,
       action: 'recover',
       current: options.target,
@@ -1812,7 +2635,7 @@ async function proveActivationCrashDirection(options) {
       `${options.action}-write-${boundary.writeNumber}-${String(boundary.phase).toLowerCase()}-recovered`,
     );
     if (index + 1 < ACTIVATION_FORWARD_CRASH_BOUNDARIES.length) {
-      options.reset();
+      await options.reset();
     }
   }
   return Object.freeze({
@@ -1846,7 +2669,7 @@ async function proveSourceRestorationCrashDirection(options) {
       target: options.target,
       storage: options.storage,
     });
-    const recovered = runSuccessfulActivationCommand({
+    const recovered = await runSuccessfulActivationCommand({
       artifactPath: options.recoveryArtifact.artifactPath,
       action: 'recover',
       current: options.source,
@@ -1910,7 +2733,7 @@ async function proveActivationEvolution(options) {
     faultInjection,
     storage,
   } = options;
-  const before = assertActiveArtifact(
+  const before = await assertActiveArtifact(
     readServiceStatus(source.artifactPath),
     source,
     null,
@@ -1970,7 +2793,7 @@ async function proveActivationEvolution(options) {
   );
   const afterStaleRetry = await readDurableActivation(storage);
   assert.deepEqual(afterStaleRetry, beforeStaleRetry);
-  const afterAmbiguity = assertActiveArtifact(
+  const afterAmbiguity = await assertActiveArtifact(
     readServiceStatus(source.artifactPath),
     source,
     target,
@@ -2020,7 +2843,7 @@ async function proveActivationEvolution(options) {
   assert.equal(failedReceipt.activeRevisionId, source.revisionId);
   assert.equal(failedReceipt.rollbackArtifactId, target.artifactId);
   assert.equal(failedReceipt.rollbackRevisionId, target.revisionId);
-  const afterFailure = assertActiveArtifact(
+  const afterFailure = await assertActiveArtifact(
     readServiceStatus(source.artifactPath),
     source,
     target,
@@ -2169,8 +2992,7 @@ async function prepare(repoRoot) {
   process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
     .filter(Boolean)
     .join(path.delimiter);
-  rmSync(PROOF_ROOT, { recursive: true, force: true });
-  mkdirSync(PROOF_ROOT, { recursive: true, mode: 0o700 });
+  resetOwnedSystemdProofRoot();
 
   const nodeProbe = run('/usr/bin/env', ['node', '--version'], {
     env: packagedEnvironment(),
@@ -2183,6 +3005,7 @@ async function prepare(repoRoot) {
   );
 
   const packagedSet = packageProofArtifacts(repoRoot);
+  await initializeApplicationStateProof(packagedSet.installedPackageRoot);
   const packaged = packagedSet.source;
   const sourceArtifact = createArtifactEvidence(packagedSet.source);
   const targetArtifact = createArtifactEvidence(packagedSet.target);
@@ -2311,7 +3134,7 @@ async function prepare(repoRoot) {
   assert.equal(install.outcome, 'target-active');
   assert.equal(install.health, 'healthy');
   const installed = readServiceStatus(packaged.artifactPath);
-  assertHealthy(installed, sourceArtifact);
+  const installedReadiness = await assertHealthy(installed, sourceArtifact);
   announce('healthy-systemd-service');
   assert.equal(
     installed.installation.activeArtifactId,
@@ -2330,7 +3153,7 @@ async function prepare(repoRoot) {
   assert.equal(converge.activeArtifactId, packaged.artifact.artifactId);
   assert.equal(converge.activeRevisionId, packaged.revisionId);
   const converged = readServiceStatus(packaged.artifactPath);
-  assertHealthy(converged, sourceArtifact);
+  await assertHealthy(converged, sourceArtifact);
   assert.equal(converged.systemd.mainPid, installed.systemd.mainPid);
   assert.equal(converged.runtime.generation, installed.runtime.generation);
   announce('healthy-service-convergence');
@@ -2354,7 +3177,7 @@ async function prepare(repoRoot) {
   const releasePath = path.join(releaseDirectory, 'app');
   const releaseRecordPath = path.join(releaseDirectory, 'release.json');
   assert.equal(sha256File(releasePath), sha256File(packaged.artifactPath));
-  assertRunningRelease(installed, releasePath, sourceArtifact);
+  await assertRunningRelease(installed, releasePath, sourceArtifact);
 
   const timerWaiting = await waitFor(
     () => inspectRun(packaged.artifactPath, runId),
@@ -2375,23 +3198,78 @@ async function prepare(repoRoot) {
   announce('durable-timer-waiting');
 
   const beforeCrash = readServiceStatus(packaged.artifactPath);
-  assertHealthy(beforeCrash, sourceArtifact);
-  process.kill(beforeCrash.systemd.mainPid, 'SIGKILL');
-  const afterCrash = await waitFor(
-    () => readServiceStatus(packaged.artifactPath),
-    (status) =>
-      status.health === 'healthy' &&
-      status.systemd?.mainPid > 0 &&
-      status.systemd.mainPid !== beforeCrash.systemd.mainPid &&
-      status.runtime?.generation > beforeCrash.runtime.generation,
-    'systemd crash replacement',
+  const beforeCrashReadiness = await assertRunningRelease(
+    beforeCrash,
+    releasePath,
+    sourceArtifact,
   );
-  assertHealthy(afterCrash, sourceArtifact);
+  const beforeCrashManager = readIndependentServiceState();
+  assert.equal(beforeCrashManager.MainPID, String(beforeCrash.systemd.mainPid));
+  assert.equal(
+    beforeCrashManager.ExecMainPID,
+    String(beforeCrash.systemd.mainPid),
+  );
+  assert.equal(beforeCrashManager.ActiveState, 'active');
+  assert.equal(beforeCrashManager.SubState, 'running');
+  assert.equal(beforeCrashManager.FragmentPath, storage.unitPath);
+  assert.equal(beforeCrashManager.DropInPaths, '');
+  process.kill(beforeCrash.systemd.mainPid, 'SIGKILL');
+  const killedManager = await waitFor(
+    readIndependentServiceState,
+    (value) =>
+      value.ExecMainPID === String(beforeCrash.systemd.mainPid) &&
+      value.ExecMainCode === '2' &&
+      value.ExecMainStatus === '9',
+    'independent systemd SIGKILL death',
+  );
+  const blockedRestart = await waitForBlockedRestart(
+    packaged.artifactPath,
+    beforeCrash,
+    beforeCrashReadiness,
+  );
+  const stoppedForCrashRecovery = blockedRestart.stopped;
+  assert.deepEqual(inspectRun(packaged.artifactPath, runId), timerWaiting);
+  const crashTakeover = coordinatorHandoff.afterStoppedServiceLoss({
+    ...coordinatorContext(
+      packaged.artifactPath,
+      'systemd SIGKILL explicit recovery',
+    ),
+    expectedAuthority: beforeCrashReadiness.authority,
+    stopped:
+      /** @type {{MainPID: string, ActiveState: string, SubState: string}} */ (
+        stoppedForCrashRecovery
+      ),
+    loss: {
+      kind: 'systemd-sigkill',
+      processId: beforeCrash.systemd.mainPid,
+      ExecMainPID: killedManager.ExecMainPID,
+      ExecMainCode: killedManager.ExecMainCode,
+      ExecMainStatus: killedManager.ExecMainStatus,
+    },
+  });
+  const crashRecoveryStart = runArtifactJson(
+    packaged.artifactPath,
+    ['wharfie', 'service', 'start', '--json'],
+    'fresh resident after explicit SIGKILL recovery',
+  );
+  assert.equal(crashRecoveryStart.outcome, 'started');
+  const afterCrash = readServiceStatus(packaged.artifactPath);
+  assert.notEqual(afterCrash.systemd.mainPid, beforeCrash.systemd.mainPid);
+  assert.ok(
+    afterCrash.runtime.generation > blockedRestart.status.runtime.generation,
+  );
+  const afterCrashReadiness = await assertRunningRelease(
+    afterCrash,
+    releasePath,
+    sourceArtifact,
+  );
+  assert.ok(
+    afterCrashReadiness.authority.epoch > crashTakeover.resultAuthority.epoch,
+  );
   const afterCrashRun = inspectRun(packaged.artifactPath, runId);
   assert.equal(afterCrashRun.workflowCursor?.disposition, 'TIMER_WAITING');
   assertSameTimer(afterCrashRun.timers?.[0], timerWaiting.timers[0], 'WAITING');
-  assertRunningRelease(afterCrash, releasePath, sourceArtifact);
-  announce('systemd-crash-replacement');
+  announce('systemd-crash-fail-closed-and-explicitly-recovered');
   assert.deepEqual(
     readMarkers().map((entry) => entry.stepIndex),
     [0],
@@ -2406,10 +3284,12 @@ async function prepare(repoRoot) {
     runId,
     afterCrashRun.timers[0],
     releasePath,
+    packagedSet.installedPackageRoot,
+    afterCrashReadiness,
   );
   announce('boot-observer-installed');
   const receipt = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: 'wharfie.systemd-proof.prepare',
     commit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
     preparedAt: Date.now(),
@@ -2463,15 +3343,25 @@ async function prepare(repoRoot) {
     pendingHistory,
     converge,
     pendingBeforeInstall,
+    installedReadiness,
     crashReplacement: {
       before: {
         processId: beforeCrash.systemd.mainPid,
         generation: beforeCrash.runtime.generation,
+        applicationStateReadiness: beforeCrashReadiness,
+        systemd: beforeCrashManager,
       },
       after: {
         processId: afterCrash.systemd.mainPid,
         generation: afterCrash.runtime.generation,
+        applicationStateReadiness: afterCrashReadiness,
       },
+      automaticRecovery: false,
+      killedManager,
+      blockedRestart,
+      stoppedForRecovery: stoppedForCrashRecovery,
+      explicitTakeover: crashTakeover,
+      recoveryStart: crashRecoveryStart,
     },
     bootConfig,
     markerEntries: readMarkers(),
@@ -2482,8 +3372,8 @@ async function prepare(repoRoot) {
 }
 
 /**
- * Verify pre-login automatic boot, resume the durable workflow, exercise
- * graceful lifecycle operations, and prove uninstall preserves state.
+ * Verify pre-login fail-closed boot, explicitly recover the exact retained
+ * coordinator, resume durable work, and prove lifecycle/state retention.
  * @returns {Promise<Record<string, any>>} - Final proof receipt.
  */
 async function verify() {
@@ -2497,19 +3387,38 @@ async function verify() {
     'forced-stop-start',
     'proof must use the declared abrupt VM power cycle',
   );
+  assertOwnedSystemdProofRoot();
   const prepared = JSON.parse(readFileSync(PREPARE_PATH, 'utf8'));
-  assert.equal(prepared.schemaVersion, 3);
+  assert.equal(prepared.schemaVersion, 4);
   assert.equal(prepared.kind, 'wharfie.systemd-proof.prepare');
   assert.match(prepared.commit, /^[0-9a-f]{40}$/);
   assert.equal(process.env.WHARFIE_SYSTEMD_PROOF_COMMIT, prepared.commit);
+  await initializeApplicationStateProof(
+    prepared.activationInspector.installedPackageRoot,
+  );
   const bootReceipt = JSON.parse(readFileSync(BOOT_RECEIPT_PATH, 'utf8'));
+  assert.equal(bootReceipt.schemaVersion, 2);
   assert.equal(bootReceipt.kind, 'wharfie.systemd-proof.boot-receipt');
+  assert.equal(bootReceipt.commit, prepared.commit);
   assert.notEqual(bootReceipt.bootId, prepared.bootId);
   assert.equal(bootReceipt.previousBootId, prepared.bootId);
   assert.deepEqual(bootReceipt.sessionsBeforeCheck, []);
-  assert.equal(bootReceipt.automaticStart, true);
-  assertHealthy(bootReceipt.status, prepared);
-  assert.equal(bootReceipt.executablePath, prepared.release.artifactPath);
+  assert.deepEqual(bootReceipt.sessionsAfterCheck, []);
+  assert.equal(bootReceipt.automaticStart, false);
+  assert.equal(bootReceipt.automaticStartAttempt, true);
+  assert.equal(bootReceipt.recoveryRequired, 'explicit-coordinator-takeover');
+  assert.notEqual(bootReceipt.status.health, 'healthy');
+  assert.equal(bootReceipt.status.runtime.status, 'STOPPED');
+  assert.equal(bootReceipt.status.runtime.currentOwner, false);
+  assert.equal(bootReceipt.status.systemd.mainPid, 0);
+  assert.deepEqual(
+    bootReceipt.coordinatorInspection.observedAuthority,
+    prepared.bootConfig.previousAuthority,
+  );
+  assert.deepEqual(
+    bootReceipt.readinessEvidence.readiness,
+    prepared.bootConfig.previousReadiness,
+  );
   assert.equal(bootReceipt.workflow.run?.runId, prepared.runId);
   assert.equal(
     bootReceipt.workflow.workflowCursor?.disposition,
@@ -2521,11 +3430,58 @@ async function verify() {
       prepared.crashReplacement.after.generation,
   );
   assert.equal(readBootId(), bootReceipt.bootId);
+  // The one-shot observer has completed and its receipt is fully accepted.
+  // Remove its privileged configuration before any later proof phase can fail
+  // and leave a stale observer enabled in a retained debug VM.
+  removeBootObserver();
 
   const artifactPath = prepared.artifactPath;
+  const stoppedForBootRecovery = stopSupervisorForRecovery();
+  assert.deepEqual(
+    inspectRun(artifactPath, prepared.runId),
+    bootReceipt.workflow,
+  );
+  const bootTakeover = coordinatorHandoff.afterStoppedServiceLoss({
+    ...coordinatorContext(
+      artifactPath,
+      'forced VM power-cycle explicit recovery',
+    ),
+    expectedAuthority: prepared.bootConfig.previousAuthority,
+    stopped:
+      /** @type {{MainPID: string, ActiveState: string, SubState: string}} */ (
+        stoppedForBootRecovery
+      ),
+    loss: {
+      kind: 'vm-power-cycle',
+      previousBootId: prepared.bootId,
+      bootId: readBootId(),
+    },
+  });
+  const bootRecoveryStart = runArtifactJson(
+    artifactPath,
+    ['wharfie', 'service', 'start', '--json'],
+    'fresh resident after explicit boot recovery',
+  );
+  assert.equal(bootRecoveryStart.outcome, 'started');
   const bootStatus = readServiceStatus(artifactPath);
-  assertRunningRelease(bootStatus, prepared.release.artifactPath, prepared);
-  assert.equal(bootStatus.systemd.mainPid, bootReceipt.status.systemd.mainPid);
+  const bootReadiness = await assertRunningRelease(
+    bootStatus,
+    prepared.release.artifactPath,
+    prepared,
+  );
+  assert.ok(
+    bootStatus.runtime.generation > bootReceipt.status.runtime.generation,
+  );
+  assert.ok(bootReadiness.authority.epoch > bootTakeover.resultAuthority.epoch);
+  assert.equal(
+    bootReadiness.readiness.store_id,
+    prepared.bootConfig.previousReadiness.store_id,
+  );
+  assert.deepEqual(
+    bootReadiness.storeIdentity,
+    prepared.crashReplacement.after.applicationStateReadiness.storeIdentity,
+  );
+  announce('pre-login-boot-fail-closed-and-explicitly-recovered');
   const waitBeforePolling = prepared.timer.dueAt - Date.now() - 1_000;
   if (waitBeforePolling > 0) await wait(waitBeforePolling);
   const signalWaiting = await waitFor(
@@ -2624,6 +3580,24 @@ async function verify() {
   });
   announce('history-and-output-verified');
 
+  let readinessCrashHandoffs;
+  try {
+    readinessCrashHandoffs = await proveReadinessCrashHandoffs({
+      artifactPath,
+      releasePath: prepared.release.artifactPath,
+      installedPackageRoot: prepared.activationInspector.installedPackageRoot,
+      desired: prepared,
+      runId: prepared.runId,
+      workflow: completed,
+      history: completedHistory,
+      output: completedOutput,
+      markers: completedMarkers,
+    });
+  } catch (error) {
+    captureServiceFailure(artifactPath, 'readiness-crash-handoffs', error);
+    throw error;
+  }
+
   let activation;
   try {
     activation = await proveActivationEvolution({
@@ -2654,7 +3628,7 @@ async function verify() {
   assert.deepEqual(readMarkers(), completedMarkers);
 
   const beforeRestart = readServiceStatus(artifactPath);
-  assertHealthy(beforeRestart, prepared);
+  const beforeRestartReadiness = await assertHealthy(beforeRestart, prepared);
   const restart = runArtifactJson(
     artifactPath,
     ['wharfie', 'service', 'restart', '--json'],
@@ -2663,7 +3637,7 @@ async function verify() {
   assert.equal(restart.action, 'restart');
   assert.equal(restart.outcome, 'restarted');
   const afterRestart = readServiceStatus(artifactPath);
-  assertHealthy(afterRestart, prepared);
+  const afterRestartReadiness = await assertHealthy(afterRestart, prepared);
   assert.notEqual(afterRestart.systemd.mainPid, beforeRestart.systemd.mainPid);
   assert.ok(afterRestart.runtime.generation > beforeRestart.runtime.generation);
 
@@ -2678,6 +3652,19 @@ async function verify() {
   assertDesiredConvergence(stopped, prepared, 'durable-active');
   assert.equal(stopped.health, 'stopped');
   assert.equal(stopped.systemd?.activeState, 'inactive');
+  const stoppedAuthority = coordinatorHandoff.assertReleased(
+    coordinatorContext(artifactPath, 'graceful service stop'),
+  );
+  const stoppedReadiness = await readApplicationStateHandoff();
+  assert.equal(
+    stoppedAuthority.coordinatorId,
+    afterRestartReadiness.authority.coordinatorId,
+  );
+  assert.deepEqual(stoppedReadiness.readiness, afterRestartReadiness.readiness);
+  assert.deepEqual(
+    stoppedReadiness.destinationAuthority,
+    afterRestartReadiness.destinationAuthority,
+  );
 
   const start = runArtifactJson(
     artifactPath,
@@ -2687,7 +3674,7 @@ async function verify() {
   assert.equal(start.action, 'start');
   assert.equal(start.outcome, 'started');
   const afterStart = readServiceStatus(artifactPath);
-  assertHealthy(afterStart, prepared);
+  const afterStartReadiness = await assertHealthy(afterStart, prepared);
   assert.ok(afterStart.runtime.generation > afterRestart.runtime.generation);
 
   const beforeUninstall = inspectRun(artifactPath, prepared.runId);
@@ -2717,6 +3704,22 @@ async function verify() {
   assertDesiredConvergence(absent, prepared, 'durable-active');
   assert.equal(absent.health, 'absent');
   assert.equal(absent.installation?.state, 'uninstalled');
+  const uninstalledAuthority = coordinatorHandoff.assertReleased(
+    coordinatorContext(artifactPath, 'service uninstall'),
+  );
+  const uninstalledReadiness = await readApplicationStateHandoff();
+  assert.equal(
+    uninstalledAuthority.coordinatorId,
+    afterStartReadiness.authority.coordinatorId,
+  );
+  assert.deepEqual(
+    uninstalledReadiness.readiness,
+    afterStartReadiness.readiness,
+  );
+  assert.deepEqual(
+    uninstalledReadiness.destinationAuthority,
+    afterStartReadiness.destinationAuthority,
+  );
   const independentSystemd = readIndependentUninstallState();
   const afterUninstall = inspectRun(artifactPath, prepared.runId);
   const historyAfterUninstall = listRuns(artifactPath);
@@ -2827,9 +3830,8 @@ async function verify() {
   }
   assert.deepEqual(readMarkers(), completedMarkers);
 
-  removeBootObserver();
   const receipt = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: 'wharfie.systemd-proof.complete',
     commit: prepared.commit,
     completedAt: Date.now(),
@@ -2846,21 +3848,34 @@ async function verify() {
       powerCycle: process.env.WHARFIE_SYSTEMD_PROOF_POWER_CYCLE,
       sessionsBeforeCheck: bootReceipt.sessionsBeforeCheck,
       automaticStart: bootReceipt.automaticStart,
-      processId: bootReceipt.status.systemd.mainPid,
-      generation: bootReceipt.status.runtime.generation,
+      automaticStartAttempt: bootReceipt.automaticStartAttempt,
+      recoveryRequired: bootReceipt.recoveryRequired,
+      blockedGeneration: bootReceipt.status.runtime.generation,
+      processId: bootStatus.systemd.mainPid,
+      generation: bootStatus.runtime.generation,
+      stoppedForRecovery: stoppedForBootRecovery,
+      explicitTakeover: bootTakeover,
+      recoveryStart: bootRecoveryStart,
+      applicationStateReadiness: bootReadiness,
     },
     crashReplacement: prepared.crashReplacement,
+    readinessCrashHandoffs,
     activation,
     gracefulRestart: {
       beforeProcessId: beforeRestart.systemd.mainPid,
       afterProcessId: afterRestart.systemd.mainPid,
       beforeGeneration: beforeRestart.runtime.generation,
       afterGeneration: afterRestart.runtime.generation,
+      beforeReadiness: beforeRestartReadiness,
+      afterReadiness: afterRestartReadiness,
     },
     stopStart: {
       stoppedHealth: stopped.health,
       processId: afterStart.systemd.mainPid,
       generation: afterStart.runtime.generation,
+      releasedAuthority: stoppedAuthority,
+      retainedReadiness: stoppedReadiness,
+      applicationStateReadiness: afterStartReadiness,
     },
     workflow: {
       status: afterUninstall.run.status,
@@ -2886,6 +3901,8 @@ async function verify() {
       inspectableAfterUninstall: true,
       release: releaseBeforeUninstall,
       systemd: independentSystemd,
+      releasedAuthority: uninstalledAuthority,
+      retainedReadiness: uninstalledReadiness,
     },
     prune: {
       receipt: prune,

@@ -523,7 +523,7 @@ export async function executeManagedEffectSuccessorRun(options) {
       expectedVersion: current.view.run.version,
       transitionId: 'successor-start',
       actor: normalized.actor,
-      coordinatorEpoch: 0,
+      coordinatorEpoch: normalized.ledger.getCoordinatorEpoch?.() ?? 0,
     });
   } catch (startError) {
     let afterStart;

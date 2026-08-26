@@ -16,9 +16,15 @@ import {
   RunStatus,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
 import {
+  CoordinatorAuthorityConflictError,
+  CoordinatorAuthorityStatus,
+  createCoordinatorAuthority,
+} from '../../../src/core/lib/db/tables/coordinator-authority.js';
+import {
   LedgerServiceLifecycleStatus,
   createLedgerServiceId,
   createLedgerServiceLifecycle,
+  createLedgerServiceOwnership,
 } from '../../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import {
   ARTIFACT_RUNTIME_KIND,
@@ -215,6 +221,10 @@ describe('local resident activity service', () => {
           db: controlContext.db,
           tableName: controlContext.tableName,
         });
+        const authority = createCoordinatorAuthority({
+          db: controlContext.db,
+          tableName: controlContext.tableName,
+        });
         await expect(
           lifecycle.get({
             serviceId: createLedgerServiceId({
@@ -226,6 +236,87 @@ describe('local resident activity service', () => {
           revisionId: workerExecution.embeddedRevision.runtime.revisionId,
           generation: 1,
           status: LedgerServiceLifecycleStatus.STOPPED,
+        });
+        await expect(
+          authority.get({
+            appId: submissionExecution.embeddedRevision.runtime.appId,
+          }),
+        ).resolves.toMatchObject({
+          status: CoordinatorAuthorityStatus.RELEASED,
+          epoch: 2,
+        });
+        await expect(
+          authority.get({
+            appId: workerExecution.embeddedRevision.runtime.appId,
+          }),
+        ).resolves.toMatchObject({
+          status: CoordinatorAuthorityStatus.RELEASED,
+          epoch: 1,
+        });
+      },
+      { configuration, readOnly: true },
+    );
+  });
+
+  it('fails closed on an active predecessor authority and releases local ownership', async () => {
+    const { configuration, applicationStateConfiguration } =
+      createConfigurations();
+    const execution = makeEmbeddedExecution('resident-authority-conflict');
+    const appId = execution.embeddedRevision.runtime.appId;
+
+    await withExecutionLedger(
+      async (_ledger, controlContext) => {
+        const authority = createCoordinatorAuthority({
+          db: controlContext.db,
+          tableName: controlContext.tableName,
+        });
+        await authority.acquire({
+          appId,
+          coordinatorId: 'retained-predecessor',
+          requestId: 'retained-predecessor-acquire',
+          observedAt: 10,
+        });
+      },
+      { configuration },
+    );
+
+    const shutdown = new AbortController();
+    shutdown.abort(new Error('test shutdown'));
+    await expect(
+      runLocalResidentActivityService({
+        execution,
+        signal: shutdown.signal,
+        pollIntervalMs: 1,
+        drainTimeoutMs: 1,
+        configuration,
+        applicationStateConfiguration,
+      }),
+    ).rejects.toBeInstanceOf(CoordinatorAuthorityConflictError);
+
+    await withExecutionLedger(
+      async (_ledger, controlContext) => {
+        const lifecycle = createLedgerServiceLifecycle({
+          db: controlContext.db,
+          tableName: controlContext.tableName,
+        });
+        const ownership = createLedgerServiceOwnership({
+          db: controlContext.db,
+          tableName: controlContext.tableName,
+        });
+        const authority = createCoordinatorAuthority({
+          db: controlContext.db,
+          tableName: controlContext.tableName,
+        });
+        const serviceId = createLedgerServiceId({ appId });
+
+        await expect(lifecycle.get({ serviceId })).resolves.toMatchObject({
+          status: LedgerServiceLifecycleStatus.STOPPED,
+        });
+        await expect(ownership.getOwnership({ serviceId })).resolves.toBeNull();
+        await expect(authority.get({ appId })).resolves.toMatchObject({
+          status: CoordinatorAuthorityStatus.ACTIVE,
+          coordinatorId: 'retained-predecessor',
+          epoch: 1,
         });
       },
       { configuration, readOnly: true },

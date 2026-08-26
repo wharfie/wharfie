@@ -27,6 +27,11 @@ import {
 } from '../../ledger/workflow-execution-contract.js';
 import { CONDITION_TYPE } from '../base.js';
 import {
+  assertCoordinatorAuthorityCurrent,
+  assertCoordinatorAuthorityToken,
+  createCoordinatorAuthorityFence,
+} from './coordinator-authority.js';
+import {
   LEDGER_SERVICE_OWNERSHIP_RECORD_KIND,
   LEDGER_SERVICE_OWNERSHIP_SCHEMA_VERSION,
   LEDGER_SERVICE_OWNERSHIP_SORT_KEY,
@@ -131,6 +136,13 @@ function notExists(propertyName) {
     conditionType: CONDITION_TYPE.NOT_EXISTS,
     propertyName,
   });
+}
+
+/** @param {unknown} error */
+function isConditionalCheckFailed(error) {
+  return (
+    error instanceof Error && error.name === 'ConditionalCheckFailedException'
+  );
 }
 
 /** @param {Record<string, any>} value @param {readonly string[]} keys @param {string} label */
@@ -621,7 +633,7 @@ function preparedMetadata(prepared, expected, context) {
   assertInputKeys(
     context,
     ['db', 'tableName'],
-    [],
+    ['coordinatorAuthority'],
     'prepared schedule workflow admission store context',
   );
   const store = /** @type {Record<string, any>} */ (context);
@@ -636,15 +648,34 @@ function preparedMetadata(prepared, expected, context) {
       'prepared schedule workflow admission expected identity changed.',
     );
   }
+  const contextAuthority =
+    store.coordinatorAuthority === undefined
+      ? undefined
+      : assertCoordinatorAuthorityToken(
+          store.coordinatorAuthority,
+          'prepared schedule workflow admission context.coordinatorAuthority',
+        );
+  if (
+    (contextAuthority && contextAuthority.appId !== normalizedExpected.appId) ||
+    (metadata.coordinatorAuthority &&
+      (!contextAuthority ||
+        !hasSameCanonicalJson(metadata.coordinatorAuthority, contextAuthority)))
+  ) {
+    throw new TypeError(
+      'prepared schedule workflow admission coordinator authority must match its consuming execution ledger.',
+    );
+  }
   return metadata;
 }
 
 /**
  * Resolve private schedule-control transaction material for execution-ledger.
+ * A bound admission requires the same stable token in its consuming ledger;
+ * that ledger adds the single authority item check to the combined transaction.
  * @param {unknown} prepared - Opaque prepared admission.
  * @param {unknown} expected - Exact caller-owned workflow identity.
- * @param {{db: import('../base.js').DBClient, tableName: string}} context - Exact execution-ledger store.
- * @returns {Readonly<{mode: 'create'|'replay', conditionChecks: readonly import('../base.js').TransactionConditionCheck[], putRequests: readonly import('../base.js').TransactionPutRequest[]}>}
+ * @param {{db: import('../base.js').DBClient, tableName: string, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot}} context - Exact execution-ledger store and authority binding.
+ * @returns {Readonly<{mode: 'create'|'replay', coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken, conditionChecks: readonly import('../base.js').TransactionConditionCheck[], putRequests: readonly import('../base.js').TransactionPutRequest[]}>}
  */
 export function resolvePreparedScheduleWorkflowAdmission(
   prepared,
@@ -654,6 +685,9 @@ export function resolvePreparedScheduleWorkflowAdmission(
   const metadata = preparedMetadata(prepared, expected, context);
   return Object.freeze({
     mode: metadata.mode,
+    ...(metadata.coordinatorAuthority === undefined
+      ? {}
+      : { coordinatorAuthority: metadata.coordinatorAuthority }),
     conditionChecks: metadata.conditionChecks,
     putRequests: metadata.putRequests,
   });
@@ -663,7 +697,7 @@ export function resolvePreparedScheduleWorkflowAdmission(
  * Classify the durable result after an ambiguous execution-ledger response.
  * @param {unknown} prepared - Opaque prepared admission.
  * @param {unknown} expected - Exact caller-owned workflow identity.
- * @param {{db: import('../base.js').DBClient, tableName: string}} context - Exact execution-ledger store.
+ * @param {{db: import('../base.js').DBClient, tableName: string, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot}} context - Exact execution-ledger store and authority binding.
  * @returns {Promise<Readonly<{status: 'absent'|'exact'|'conflict', occurrence?: Readonly<Record<string, any>>}>>}
  */
 export async function reconcilePreparedScheduleWorkflowAdmission(
@@ -684,11 +718,12 @@ export async function reconcilePreparedScheduleWorkflowAdmission(
 
 /**
  * Create the durable schedule cursor and occurrence-control kernel.
- * @param {{db: import('../base.js').DBClient, tableName: string, now?: () => number}} options - Store dependencies.
+ * @param {{db: import('../base.js').DBClient, tableName: string, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot, now?: () => number}} options - Store dependencies.
  */
 export function createScheduleControl({
   db,
   tableName,
+  coordinatorAuthority,
   now = () => Date.now(),
 }) {
   if (
@@ -707,6 +742,63 @@ export function createScheduleControl({
     throw new TypeError('createScheduleControl now must be a function.');
   }
   const resolvedTableName = tableName.trim();
+  const resolvedCoordinatorAuthority =
+    coordinatorAuthority === undefined
+      ? undefined
+      : assertCoordinatorAuthorityToken(
+          coordinatorAuthority,
+          'createScheduleControl.coordinatorAuthority',
+        );
+
+  /** @param {string} appId */
+  function assertCoordinatorAppScope(appId) {
+    if (
+      resolvedCoordinatorAuthority &&
+      resolvedCoordinatorAuthority.appId !== appId
+    ) {
+      throw new TypeError(
+        'Schedule control coordinator authority must bind the mutated appId.',
+      );
+    }
+  }
+
+  /**
+   * Check the stable active authority tuple in the same transaction as every
+   * cursor mutation, alongside the existing application and local-owner
+   * fences. A diagnostic read before the transaction cannot provide fencing.
+   * @param {import('../base.js').TransactionWriteParams} params
+   * @param {string} appId
+   */
+  async function transactionWrite(params, appId) {
+    assertCoordinatorAppScope(appId);
+    const conditionChecks = [...(params.conditionChecks || [])];
+    if (resolvedCoordinatorAuthority) {
+      conditionChecks.push(
+        createCoordinatorAuthorityFence(resolvedCoordinatorAuthority),
+      );
+    }
+    await db.transactionWrite({
+      ...params,
+      ...(conditionChecks.length === 0 ? {} : { conditionChecks }),
+    });
+  }
+
+  /**
+   * Diagnose a failed conditional transaction only after callers preserve an
+   * exact known result. Successful and write-free replays do not need a later
+   * authority read that could hide their already accepted result.
+   * @param {unknown} error
+   */
+  async function assertCurrentCoordinatorAuthorityAfterFailure(error) {
+    if (!resolvedCoordinatorAuthority || !isConditionalCheckFailed(error)) {
+      return;
+    }
+    await assertCoordinatorAuthorityCurrent({
+      db,
+      tableName: resolvedTableName,
+      authority: resolvedCoordinatorAuthority,
+    });
+  }
 
   /** @param {string} appId @param {string} scheduleId */
   async function readCursor(appId, scheduleId) {
@@ -755,16 +847,18 @@ export function createScheduleControl({
       ['observedAt'],
       'activate',
     );
-    assertLogicalId(input?.appId, 'activate.appId');
-    assertLogicalId(input?.scheduleId, 'activate.scheduleId');
-    assertApplicationRevisionId(input?.revisionId, 'activate.revisionId');
-    assertScheduleDefinitionId(input?.definitionId, 'activate.definitionId');
-    const owner = normalizeOwner(input.owner, input.appId);
+    const { appId, scheduleId, revisionId, definitionId } = input;
+    assertLogicalId(appId, 'activate.appId');
+    assertCoordinatorAppScope(appId);
+    assertLogicalId(scheduleId, 'activate.scheduleId');
+    assertApplicationRevisionId(revisionId, 'activate.revisionId');
+    assertScheduleDefinitionId(definitionId, 'activate.definitionId');
+    const owner = normalizeOwner(input.owner, appId);
     const observedAt = normalizeTimestamp(
       input.observedAt ?? now(),
       'activate.observedAt',
     );
-    const current = await readCursor(input.appId, input.scheduleId);
+    const current = await readCursor(appId, scheduleId);
     // Wall clocks can regress across NTP correction or process restart.
     // Existing cursor progress is authoritative; a changed definition starts
     // no earlier than its last durable observation.
@@ -772,15 +866,15 @@ export function createScheduleControl({
       ? Math.max(observedAt, current.updatedAt)
       : observedAt;
     const sameDefinition =
-      current?.revisionId === input.revisionId &&
-      current.definitionId === input.definitionId;
+      current?.revisionId === revisionId &&
+      current.definitionId === definitionId;
     const next = sameDefinition
       ? current
       : normalizeCursor({
-          appId: input.appId,
-          scheduleId: input.scheduleId,
-          revisionId: input.revisionId,
-          definitionId: input.definitionId,
+          appId,
+          scheduleId,
+          revisionId,
+          definitionId,
           activationBoundary: floorScheduleMinute(effectiveObservedAt),
           horizon: floorScheduleMinute(effectiveObservedAt),
           version: current ? current.version + 1 : 1,
@@ -789,34 +883,45 @@ export function createScheduleControl({
     const admissionFence = await getLocalApplicationRunCreationFence({
       db,
       tableName: resolvedTableName,
-      appId: input.appId,
-      revisionId: input.revisionId,
+      appId,
+      revisionId,
     });
-    if (sameDefinition) {
-      await db.transactionWrite({
-        tableName: resolvedTableName,
-        conditionChecks: [
-          admissionFence,
-          ownerFence(owner),
-          cursorFence(current),
-        ],
-      });
-      return Object.freeze({ applied: false, cursor: current });
-    }
-    await db.transactionWrite({
-      tableName: resolvedTableName,
-      conditionChecks: [admissionFence, ownerFence(owner)],
-      putRequests: [
+    try {
+      if (sameDefinition) {
+        await transactionWrite(
+          {
+            tableName: resolvedTableName,
+            conditionChecks: [
+              admissionFence,
+              ownerFence(owner),
+              cursorFence(current),
+            ],
+          },
+          appId,
+        );
+        return Object.freeze({ applied: false, cursor: current });
+      }
+      await transactionWrite(
         {
-          keyName: KEY_NAME,
-          sortKeyName: SORT_KEY_NAME,
-          record: cursorRecord(next),
-          conditions: current
-            ? cursorFence(current).conditions
-            : [notExists(SORT_KEY_NAME)],
+          tableName: resolvedTableName,
+          conditionChecks: [admissionFence, ownerFence(owner)],
+          putRequests: [
+            {
+              keyName: KEY_NAME,
+              sortKeyName: SORT_KEY_NAME,
+              record: cursorRecord(next),
+              conditions: current
+                ? cursorFence(current).conditions
+                : [notExists(SORT_KEY_NAME)],
+            },
+          ],
         },
-      ],
-    });
+        appId,
+      );
+    } catch (error) {
+      await assertCurrentCoordinatorAuthorityAfterFailure(error);
+      throw error;
+    }
     return Object.freeze({ applied: true, cursor: next });
   }
 
@@ -832,6 +937,7 @@ export function createScheduleControl({
       'advance',
     );
     const expected = normalizeCursor(input?.expectedCursor);
+    assertCoordinatorAppScope(expected.appId);
     const throughInclusive = assertScheduleMinute(
       input?.throughInclusive,
       'advance.throughInclusive',
@@ -864,14 +970,22 @@ export function createScheduleControl({
       revisionId: expected.revisionId,
     });
     if (throughInclusive === expected.horizon) {
-      await db.transactionWrite({
-        tableName: resolvedTableName,
-        conditionChecks: [
-          admissionFence,
-          ownerFence(owner),
-          cursorFence(expected),
-        ],
-      });
+      try {
+        await transactionWrite(
+          {
+            tableName: resolvedTableName,
+            conditionChecks: [
+              admissionFence,
+              ownerFence(owner),
+              cursorFence(expected),
+            ],
+          },
+          expected.appId,
+        );
+      } catch (error) {
+        await assertCurrentCoordinatorAuthorityAfterFailure(error);
+        throw error;
+      }
       return Object.freeze({ applied: false, cursor: expected });
     }
     const next = normalizeCursor({
@@ -881,20 +995,33 @@ export function createScheduleControl({
       updatedAt: observedAt,
     });
     try {
-      await db.transactionWrite({
-        tableName: resolvedTableName,
-        conditionChecks: [admissionFence, ownerFence(owner)],
-        putRequests: [
-          {
-            keyName: KEY_NAME,
-            sortKeyName: SORT_KEY_NAME,
-            record: cursorRecord(next),
-            conditions: cursorFence(expected).conditions,
-          },
-        ],
-      });
+      await transactionWrite(
+        {
+          tableName: resolvedTableName,
+          conditionChecks: [admissionFence, ownerFence(owner)],
+          putRequests: [
+            {
+              keyName: KEY_NAME,
+              sortKeyName: SORT_KEY_NAME,
+              record: cursorRecord(next),
+              conditions: cursorFence(expected).conditions,
+            },
+          ],
+        },
+        expected.appId,
+      );
     } catch (error) {
       const current = await readCursor(expected.appId, expected.scheduleId);
+      if (
+        resolvedCoordinatorAuthority &&
+        current &&
+        hasSameCanonicalJson(current, next)
+      ) {
+        // The exact requested cursor is already durable. Returning this
+        // read-only result must not be hidden by a takeover after commit or
+        // cause another transaction under the predecessor's stale token.
+        return Object.freeze({ applied: false, cursor: current });
+      }
       if (
         current &&
         current.revisionId === expected.revisionId &&
@@ -903,6 +1030,7 @@ export function createScheduleControl({
         current.horizon >= throughInclusive &&
         current.version > expected.version
       ) {
+        await assertCurrentCoordinatorAuthorityAfterFailure(error);
         const currentAdmissionFence = await getLocalApplicationRunCreationFence(
           {
             db,
@@ -911,16 +1039,25 @@ export function createScheduleControl({
             revisionId: current.revisionId,
           },
         );
-        await db.transactionWrite({
-          tableName: resolvedTableName,
-          conditionChecks: [
-            currentAdmissionFence,
-            ownerFence(owner),
-            cursorFence(current),
-          ],
-        });
+        try {
+          await transactionWrite(
+            {
+              tableName: resolvedTableName,
+              conditionChecks: [
+                currentAdmissionFence,
+                ownerFence(owner),
+                cursorFence(current),
+              ],
+            },
+            current.appId,
+          );
+        } catch (replayError) {
+          await assertCurrentCoordinatorAuthorityAfterFailure(replayError);
+          throw replayError;
+        }
         return Object.freeze({ applied: false, cursor: current });
       }
+      await assertCurrentCoordinatorAuthorityAfterFailure(error);
       throw error;
     }
     return Object.freeze({ applied: true, cursor: next });
@@ -949,6 +1086,7 @@ export function createScheduleControl({
       'prepareWorkflowAdmission',
     );
     const cursor = normalizeCursor(input?.expectedCursor);
+    assertCoordinatorAppScope(cursor.appId);
     assertLogicalId(input?.workflowId, 'prepareWorkflowAdmission.workflowId');
     assertWorkflowPlanId(input?.planId, 'prepareWorkflowAdmission.planId');
     assertWorkflowRunId(input?.runId, 'prepareWorkflowAdmission.runId');
@@ -1064,6 +1202,7 @@ export function createScheduleControl({
     PREPARED_ADMISSIONS.set(prepared, {
       db,
       tableName: resolvedTableName,
+      coordinatorAuthority: resolvedCoordinatorAuthority,
       mode,
       expected,
       occurrence,

@@ -12,6 +12,7 @@ import {
   rename,
   rm,
   stat,
+  writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +37,25 @@ const ACCEPTANCE_BUILDER_ROOT_ENVIRONMENT_VARIABLE =
   'WHARFIE_MAGNETIC_ACCEPTANCE_BUILDER_ROOT';
 const SUPPORTED_NODE_RANGE = '>=24.13.1 <25';
 const RUN_NAME = 'first-run';
+const DURABLE_APP_ID = 'resumable-hello';
+const TAKEOVER_COORDINATOR_ID = 'magnetic-first-run-takeover';
+const TAKEOVER_REQUEST_ID = 'magnetic-first-run-authority-replacement';
+const UNSAFE_TERMINAL_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/gu;
+const COORDINATOR_AUTHORITY_SNAPSHOT_KEYS = Object.freeze([
+  'schemaVersion',
+  'appId',
+  'coordinatorId',
+  'authorityId',
+  'epoch',
+  'status',
+  'recordVersion',
+  'acquisitionRequestId',
+  'acquiredAt',
+  'heartbeatAt',
+  'releasedAt',
+  'updatedAt',
+  'lastRequestId',
+]);
 
 const scriptRoot = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptRoot, '..');
@@ -86,6 +106,30 @@ function delay(milliseconds) {
 
 function formatMiB(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function escapeUnicodeCodePoint(value) {
+  const codePoint = value.codePointAt(0);
+  if (codePoint === undefined) {
+    throw new TypeError('Terminal-safe JSON received an empty code point.');
+  }
+  if (codePoint <= 0xffff) {
+    return `\\u${codePoint.toString(16).padStart(4, '0')}`;
+  }
+  const scalar = codePoint - 0x10000;
+  const high = 0xd800 + (scalar >> 10);
+  const low = 0xdc00 + (scalar & 0x3ff);
+  return `\\u${high.toString(16).padStart(4, '0')}\\u${low
+    .toString(16)
+    .padStart(4, '0')}`;
+}
+
+export function renderTerminalSafeJson(value) {
+  const json = JSON.stringify(value);
+  if (typeof json !== 'string') {
+    throw new TypeError('Terminal-safe JSON requires a serializable value.');
+  }
+  return json.replace(UNSAFE_TERMINAL_CHARACTER, escapeUnicodeCodePoint);
 }
 
 function assertSupportedNodeVersion(actual, declaredRange) {
@@ -180,6 +224,161 @@ function parseJson(stdout, label) {
   } catch {
     throw new Error(`${label} did not emit one JSON document.`);
   }
+}
+
+function isBoundedOpaqueId(value) {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    Buffer.byteLength(value, 'utf8') <= 512
+  );
+}
+
+function hasExactKeys(value, keys) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const actual = Object.keys(value);
+  return (
+    actual.length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function assertCoordinatorAuthoritySnapshot(value, status, label) {
+  const releasedAtIsValid =
+    status === 'ACTIVE'
+      ? value?.releasedAt === null
+      : Number.isSafeInteger(value?.releasedAt) &&
+        value.releasedAt >= value.heartbeatAt;
+  invariant(
+    hasExactKeys(value, COORDINATOR_AUTHORITY_SNAPSHOT_KEYS) &&
+      value.schemaVersion === 1 &&
+      value.appId === DURABLE_APP_ID &&
+      isBoundedOpaqueId(value.coordinatorId) &&
+      /^wca1_[A-Za-z0-9_-]{43}$/u.test(value.authorityId) &&
+      Number.isSafeInteger(value.epoch) &&
+      value.epoch > 0 &&
+      value.status === status &&
+      Number.isSafeInteger(value.recordVersion) &&
+      value.recordVersion > 0 &&
+      isBoundedOpaqueId(value.acquisitionRequestId) &&
+      Number.isSafeInteger(value.acquiredAt) &&
+      value.acquiredAt >= 0 &&
+      Number.isSafeInteger(value.heartbeatAt) &&
+      value.heartbeatAt >= value.acquiredAt &&
+      releasedAtIsValid &&
+      Number.isSafeInteger(value.updatedAt) &&
+      value.updatedAt >= value.heartbeatAt &&
+      (status !== 'RELEASED' || value.updatedAt >= value.releasedAt) &&
+      isBoundedOpaqueId(value.lastRequestId),
+    `${label} did not match the exact ${status} authority contract.`,
+  );
+  return value;
+}
+
+function sameCoordinatorAuthoritySnapshot(left, right) {
+  return COORDINATOR_AUTHORITY_SNAPSHOT_KEYS.every(
+    (key) => left[key] === right[key],
+  );
+}
+
+function assertCoordinatorAuthorityInspection(value) {
+  invariant(
+    hasExactKeys(value, [
+      'schemaVersion',
+      'kind',
+      'authority',
+      'authoritative',
+      'integrity',
+      'scope',
+      'observedAuthority',
+    ]) &&
+      value.schemaVersion === 1 &&
+      value.kind === 'wharfie.coordinator-authority.inspection' &&
+      value.authority === 'none' &&
+      value.authoritative === false &&
+      hasExactKeys(value.integrity, ['verified']) &&
+      value.integrity.verified === true &&
+      hasExactKeys(value.scope, ['appId']) &&
+      value.scope.appId === DURABLE_APP_ID,
+    'The operator did not return the exact non-authoritative coordinator inspection.',
+  );
+  return assertCoordinatorAuthoritySnapshot(
+    value.observedAuthority,
+    'ACTIVE',
+    'The inspected killed-owner authority',
+  );
+}
+
+function assertCoordinatorAuthorityTakeoverReceipt(value, inspection) {
+  invariant(
+    hasExactKeys(value, [
+      'schemaVersion',
+      'kind',
+      'action',
+      'applied',
+      'scope',
+      'releaseRequestId',
+      'observedAuthority',
+      'takeoverAuthority',
+      'resultAuthority',
+    ]) &&
+      value.schemaVersion === 1 &&
+      value.kind === 'wharfie.coordinator-authority.takeover' &&
+      value.action === 'takeover-and-release' &&
+      value.applied === true &&
+      hasExactKeys(value.scope, ['appId']) &&
+      value.scope.appId === DURABLE_APP_ID &&
+      isBoundedOpaqueId(value.releaseRequestId),
+    'The operator did not return the exact takeover-and-release receipt.',
+  );
+  const predecessor = assertCoordinatorAuthoritySnapshot(
+    value.observedAuthority,
+    'ACTIVE',
+    'The takeover receipt predecessor',
+  );
+  invariant(
+    sameCoordinatorAuthoritySnapshot(predecessor, inspection.observedAuthority),
+    'The takeover receipt did not retain the exact inspected predecessor.',
+  );
+  const takeover = assertCoordinatorAuthoritySnapshot(
+    value.takeoverAuthority,
+    'ACTIVE',
+    'The temporary takeover authority',
+  );
+  invariant(
+    takeover.schemaVersion === predecessor.schemaVersion &&
+      takeover.appId === DURABLE_APP_ID &&
+      takeover.coordinatorId === TAKEOVER_COORDINATOR_ID &&
+      takeover.authorityId !== predecessor.authorityId &&
+      takeover.epoch === predecessor.epoch + 1 &&
+      takeover.recordVersion === predecessor.recordVersion + 1 &&
+      takeover.acquisitionRequestId === TAKEOVER_REQUEST_ID &&
+      takeover.acquiredAt === takeover.heartbeatAt &&
+      takeover.heartbeatAt === takeover.updatedAt &&
+      takeover.lastRequestId === TAKEOVER_REQUEST_ID,
+    'The takeover receipt did not install the exact temporary successor.',
+  );
+  const released = assertCoordinatorAuthoritySnapshot(
+    value.resultAuthority,
+    'RELEASED',
+    'The released takeover authority',
+  );
+  invariant(
+    released.schemaVersion === takeover.schemaVersion &&
+      released.appId === takeover.appId &&
+      released.coordinatorId === takeover.coordinatorId &&
+      released.authorityId === takeover.authorityId &&
+      released.epoch === takeover.epoch &&
+      released.recordVersion === takeover.recordVersion + 1 &&
+      released.acquisitionRequestId === takeover.acquisitionRequestId &&
+      released.acquiredAt === takeover.acquiredAt &&
+      released.heartbeatAt === takeover.heartbeatAt &&
+      released.updatedAt === released.releasedAt &&
+      released.lastRequestId === value.releaseRequestId,
+    'The takeover receipt did not release the exact temporary successor.',
+  );
 }
 
 function stopChild(child, signal = 'SIGKILL') {
@@ -407,7 +606,7 @@ function assertInspection(view, runId) {
       view?.kind === 'wharfie.execution-ledger.run' &&
       view?.integrity?.verified === true &&
       view?.run?.runId === runId &&
-      view?.run?.appId === 'resumable-hello',
+      view?.run?.appId === DURABLE_APP_ID,
     'Wharfie returned an unexpected durable inspection.',
   );
 }
@@ -724,9 +923,17 @@ async function runDemo() {
     `   ${expectedGreeting} (${ordinaryMilliseconds.toFixed(0)} ms)\n\n`,
   );
 
-  process.stdout.write('3. Kill it, then repeat the exact command\n');
+  process.stdout.write(
+    '3. Kill it, confirm authority replacement, then repeat the identical named invocation\n',
+  );
   const foregroundArgs = ['wharfie', 'run', '--name', RUN_NAME, '--', name];
-  process.stdout.write(`$ ./hello ${foregroundArgs.join(' ')}\n`);
+  const foregroundArgvJson = renderTerminalSafeJson([
+    './hello',
+    ...foregroundArgs,
+  ]);
+  process.stdout.write(
+    `named invocation argv (JSON data): ${foregroundArgvJson}\n`,
+  );
   const first = startCommand(relocatedArtifact, foregroundArgs, {
     cwd: relocatedDir,
     env: artifactEnvironment,
@@ -739,7 +946,7 @@ async function runDemo() {
   );
   invariant(
     runIdMatch,
-    'The foreground command did not report its retained run identity.',
+    'The named invocation did not report its retained run identity.',
   );
   const runId = runIdMatch[1];
   const readInspection = async () => {
@@ -766,7 +973,86 @@ async function runDemo() {
     `   ✓ Same preparation attempt and timer retained (${remainingSeconds.toFixed(1)}s remaining)\n\n`,
   );
 
-  process.stdout.write(`$ ./hello ${foregroundArgs.join(' ')}\n`);
+  invariant(
+    isBoundedOpaqueId(TAKEOVER_COORDINATOR_ID) &&
+      isBoundedOpaqueId(TAKEOVER_REQUEST_ID),
+    'The stable operator identities are not bounded IDs.',
+  );
+  process.stdout.write('$ ./hello wharfie coordinator inspect --json\n');
+  const coordinatorInspectionResult = await runArtifact([
+    'wharfie',
+    'coordinator',
+    'inspect',
+    '--json',
+  ]);
+  const coordinatorInspection = parseJson(
+    coordinatorInspectionResult.stdout,
+    'Wharfie coordinator inspection',
+  );
+  const inspectedAuthority = assertCoordinatorAuthorityInspection(
+    coordinatorInspection,
+  );
+  invariant(
+    inspectedAuthority.coordinatorId !== TAKEOVER_COORDINATOR_ID &&
+      inspectedAuthority.acquisitionRequestId !== TAKEOVER_REQUEST_ID,
+    'The stable operator identities collided with the killed owner.',
+  );
+  const coordinatorInspectionFile = 'coordinator-inspection.json';
+  const coordinatorInspectionPath = path.join(
+    relocatedDir,
+    coordinatorInspectionFile,
+  );
+  await writeFile(
+    coordinatorInspectionPath,
+    `${JSON.stringify(coordinatorInspection)}\n`,
+    {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    },
+  );
+  const coordinatorInspectionStats = await stat(coordinatorInspectionPath);
+  invariant(
+    coordinatorInspectionStats.isFile() &&
+      (coordinatorInspectionStats.mode & 0o777) === 0o600,
+    'The retained coordinator inspection is not a private regular file.',
+  );
+  process.stdout.write(
+    '   ✓ Operator inspected the exact non-authoritative ACTIVE authority\n',
+  );
+
+  const takeoverArgs = [
+    'wharfie',
+    'coordinator',
+    'takeover',
+    '--inspection-file',
+    `./${coordinatorInspectionFile}`,
+    '--coordinator-id',
+    TAKEOVER_COORDINATOR_ID,
+    '--request-id',
+    TAKEOVER_REQUEST_ID,
+    '--confirm-authority-replacement',
+    '--json',
+  ];
+  process.stdout.write(
+    `$ ./hello wharfie coordinator takeover --inspection-file ./${coordinatorInspectionFile} --coordinator-id ${TAKEOVER_COORDINATOR_ID} --request-id ${TAKEOVER_REQUEST_ID} --confirm-authority-replacement --json\n`,
+  );
+  const takeoverResult = await runArtifact(takeoverArgs);
+  const takeoverReceipt = parseJson(
+    takeoverResult.stdout,
+    'Wharfie coordinator takeover',
+  );
+  assertCoordinatorAuthorityTakeoverReceipt(
+    takeoverReceipt,
+    coordinatorInspection,
+  );
+  process.stdout.write(
+    '   ✓ Operator confirmed exact authority replacement and released its temporary successor\n\n',
+  );
+
+  process.stdout.write(
+    `named invocation argv (JSON data): ${foregroundArgvJson}\n`,
+  );
   const resumed = await runArtifact(foregroundArgs, {
     writeStdout: (chunk) => process.stdout.write(chunk),
     writeStderr: (chunk) => process.stderr.write(chunk),
@@ -776,7 +1062,7 @@ async function runDemo() {
       resumed.stdout.includes('✓ prepare — retained; not run again') &&
       resumed.stdout.includes(expectedGreeting) &&
       resumed.stdout.includes(`✓ Completed ${RUN_NAME}; result retained.`),
-    'Repeating the foreground command did not visibly resume and complete.',
+    'Repeating the identical named invocation did not visibly resume and complete.',
   );
   const completedView = await readInspection();
   assertCompleted(completedView, runId, beforeCrash);
@@ -814,76 +1100,85 @@ async function runDemo() {
     '   ✓ Later process verified the retained terminal output\n',
   );
   process.stdout.write(
-    '   ✓ One command owns start, execution, recovery, and result\n',
+    '   ✓ Original named run resumed and retained its result\n',
   );
   process.stdout.write(
     '   ✓ prepare-greeting: 1 invocation, 1 physical attempt\n',
   );
 }
 
-const signalHandlers = new Map();
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  const handler = () => {
-    if (interrupted) {
-      process.removeListener(signal, handler);
-      process.kill(process.pid, signal);
-      return;
-    }
-    interrupted = new Error(`Interrupted by ${signal}.`);
-    for (const child of activeChildren.keys()) stopChild(child, 'SIGTERM');
-  };
-  signalHandlers.set(signal, handler);
-  process.on(signal, handler);
-}
-
-let failure;
-try {
-  await runDemo();
-} catch (error) {
-  failure = asError(error);
-} finally {
-  let childrenStopped = true;
-  try {
-    await stopActiveChildren();
-  } catch (error) {
-    childrenStopped = false;
-    failure = failure
-      ? new AggregateError([failure, error], 'Demo and cleanup failed.')
-      : asError(error);
+async function main() {
+  const signalHandlers = new Map();
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    const handler = () => {
+      if (interrupted) {
+        process.removeListener(signal, handler);
+        process.kill(process.pid, signal);
+        return;
+      }
+      interrupted = new Error(`Interrupted by ${signal}.`);
+      for (const child of activeChildren.keys()) stopChild(child, 'SIGTERM');
+    };
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
   }
-  if (temporaryRoot && childrenStopped) {
-    retainedTemporaryRoot = temporaryRoot;
+
+  let failure;
+  try {
+    await runDemo();
+  } catch (error) {
+    failure = asError(error);
+  } finally {
+    let childrenStopped = true;
     try {
-      await safelyRemoveTemporaryRoot(temporaryRoot);
-      retainedTemporaryRoot = undefined;
+      await stopActiveChildren();
     } catch (error) {
+      childrenStopped = false;
       failure = failure
         ? new AggregateError([failure, error], 'Demo and cleanup failed.')
         : asError(error);
     }
-  } else if (temporaryRoot) {
-    retainedTemporaryRoot = temporaryRoot;
+    if (temporaryRoot && childrenStopped) {
+      retainedTemporaryRoot = temporaryRoot;
+      try {
+        await safelyRemoveTemporaryRoot(temporaryRoot);
+        retainedTemporaryRoot = undefined;
+      } catch (error) {
+        failure = failure
+          ? new AggregateError([failure, error], 'Demo and cleanup failed.')
+          : asError(error);
+      }
+    } else if (temporaryRoot) {
+      retainedTemporaryRoot = temporaryRoot;
+    }
+    for (const [signal, handler] of signalHandlers) {
+      process.removeListener(signal, handler);
+    }
   }
-  for (const [signal, handler] of signalHandlers) {
-    process.removeListener(signal, handler);
+
+  if (failure) {
+    const messages = failureMessages(failure);
+    process.stderr.write(`\nDemo failed: ${messages[0]}\n`);
+    for (const message of messages.slice(1)) {
+      process.stderr.write(`  - ${message}\n`);
+    }
+    if (retainedTemporaryRoot) {
+      process.stderr.write(
+        `Cleanup incomplete; temporary files retained at:\n${retainedTemporaryRoot}\n`,
+      );
+    }
+    process.exitCode = 1;
+  } else {
+    process.stdout.write(
+      '\n✓ The identical named invocation resumed committed work.\n',
+    );
+    process.stdout.write('✓ Disposable demo state was cleaned up.\n');
   }
 }
 
-if (failure) {
-  const messages = failureMessages(failure);
-  process.stderr.write(`\nDemo failed: ${messages[0]}\n`);
-  for (const message of messages.slice(1)) {
-    process.stderr.write(`  - ${message}\n`);
-  }
-  if (retainedTemporaryRoot) {
-    process.stderr.write(
-      `Cleanup incomplete; temporary files retained at:\n${retainedTemporaryRoot}\n`,
-    );
-  }
-  process.exitCode = 1;
-} else {
-  process.stdout.write(
-    '\n✓ The identical foreground command resumed committed work.\n',
-  );
-  process.stdout.write('✓ Disposable demo state was cleaned up.\n');
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  await main();
 }

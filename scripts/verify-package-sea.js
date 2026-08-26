@@ -31,6 +31,8 @@ import {
   verifyPackageSeaArtifactHandoff,
 } from './package-sea-verification.js';
 import { createPackageSeaScheduleRestartProof } from './package-sea-schedule-restart-proof.js';
+import { createPackageSeaCoordinatorHandoff } from './package-sea-coordinator-handoff.js';
+import { createPackageSeaApplicationStateReadinessProof } from './application-state-readiness-proof.js';
 import {
   attachSeaInspector,
   spawnInspectorPausedProcess,
@@ -58,8 +60,8 @@ const SEA_CRASH_DESTINATION_WRITE_BREAKPOINT = Object.freeze({
 const SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/lib/db/tables/application-state.js',
   // This condition occurs only in the fresh put-if-absent transaction. It
-  // excludes store initialization and reconciliation's negative closure, so
-  // one successor adapter delivery yields exactly one observable write.
+  // excludes store initialization, authority adoption, and reconciliation's
+  // negative closure, so one successor delivery exposes one business write.
   anchor: 'resolutionAbsentCondition(input.destinationEffectId),',
   occurrence: 1,
 });
@@ -151,6 +153,7 @@ const SEA_SCHEDULE_PROOF_CRON =
   '0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58 * * * *';
 const SEA_WORKFLOW_ACTIVITY_ID = 'workflow-step';
 const SEA_EXECUTION_LEDGER_TABLE = 'wharfie-execution-ledger-v10';
+const seaCoordinatorHandoff = createPackageSeaCoordinatorHandoff();
 
 /**
  * Independently derive the packaged app's sealed local-storage layout. Every
@@ -821,9 +824,10 @@ async function stopResidentServiceForCleanup(service) {
 /**
  * Load a host-side durable lifecycle reader from the installed tarball. The
  * observer is intentionally not part of the clean process environment; it
- * only reads the control store written by the copied standalone SEA.
- * @param {{installedPackageRoot: string, controlPath: string, tableName: string, appId: string}} options - Observer inputs.
- * @returns {Promise<{serviceId: string, getSessionEndpoint: (sessionId: string, sessionRoot: string) => string, read: () => Promise<Record<string, any> | null>, readOwnership: () => Promise<Record<string, any> | null>}>} - Lifecycle observer.
+ * only reads the control and separate application stores written by the copied
+ * standalone SEA. Live READY observations also require the exact adopted pin.
+ * @param {{installedPackageRoot: string, controlPath: string, applicationStatePath: string, tableName: string, appId: string}} options - Observer inputs.
+ * @returns {Promise<{serviceId: string, getSessionEndpoint: (sessionId: string, sessionRoot: string) => string, read: () => Promise<Record<string, any> | null>, readOwnership: () => Promise<Record<string, any> | null>, assertReady: (snapshot: Record<string, any> | null) => Promise<Readonly<Record<string, any>>>}>} - Lifecycle observer.
  */
 async function createInstalledLedgerLifecycleObserver(options) {
   const adapterModule = await import(
@@ -866,8 +870,11 @@ async function createInstalledLedgerLifecycleObserver(options) {
   const serviceId = lifecycleModule.createLedgerServiceId({
     appId: options.appId,
   });
+  const readinessProof =
+    await createPackageSeaApplicationStateReadinessProof(options);
   return {
     serviceId,
+    assertReady: readinessProof.assertReady,
     getSessionEndpoint: (sessionId, sessionRoot) =>
       localSessionModule.getLocalServiceSessionEndpoint({
         serviceId,
@@ -1012,7 +1019,7 @@ async function createInstalledScheduleControlObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createWorkflowRunId: (appId: string, idempotencyKey: string) => string, createCompletedWorkflowEvidence: (runId: string, result: unknown) => Promise<Record<string, any>>, listReadyWork: (appId: string, revisionId: string, observedAt?: number) => Promise<Record<string, any>[]>, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createWorkflowRunId: (appId: string, idempotencyKey: string) => string, createCompletedWorkflowEvidence: (runId: string, result: unknown) => Promise<Record<string, any>>, listReadyWork: (appId: string, revisionId: string, observedAt?: number) => Promise<Record<string, any>[]>, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string, expectedStoreId: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -1037,6 +1044,7 @@ async function createInstalledExecutionLedgerFixture(options) {
     recordKeyModule,
     workflowContractModule,
     activityProtocolModule,
+    ledgerStoreModule,
   ] = await Promise.all([
     installedModule('src/core/lib/db/adapters/lmdb.js'),
     installedModule('src/core/lib/db/tables/execution-ledger.js'),
@@ -1055,6 +1063,7 @@ async function createInstalledExecutionLedgerFixture(options) {
     installedModule('src/core/lib/ledger/record-key.js'),
     installedModule('src/core/lib/ledger/workflow-execution-contract.js'),
     installedModule('src/core/runtime/activity-protocol.js'),
+    installedModule('src/core/runtime/operator/execution-ledger-store.js'),
   ]);
   const payloadStoreId = `payload-${createHash('sha256')
     .update(path.resolve(options.payloadPath), 'utf8')
@@ -1083,6 +1092,33 @@ async function createInstalledExecutionLedgerFixture(options) {
       }),
     };
   };
+
+  /**
+   * Give trusted destination setup its own fresh control-authority lifetime.
+   * This deliberately refuses a live authority instead of borrowing its token
+   * or taking it over. The unbound fixture ledger preserves historical
+   * epoch-zero seed coordinates; destination catalogs receive the acquired
+   * token and use the same adoption and write fences as production.
+   * @template T
+   * @param {string} appId - Exact fixture application.
+   * @param {(authority: Readonly<Record<string, any>>, ledger: Record<string, any>) => Promise<T>} handler - Isolated trusted setup using the installed runtime's validated authority snapshot.
+   * @returns {Promise<T>} - Setup result after authority release.
+   */
+  async function withFixtureDestinationAuthority(appId, handler) {
+    const { db, ledger } = openLedger(false);
+    try {
+      return await ledgerStoreModule.withExecutionLedgerCoordinatorAuthority({
+        appId,
+        coordinatorId: `sea-fixture:${randomUUID()}`,
+        ledger,
+        context: { db, tableName: options.tableName, readOnly: false },
+        handler: async (_boundLedger, authority) =>
+          await handler(authority, ledger),
+      });
+    } finally {
+      await db.close();
+    }
+  }
 
   const createRunId = (appId, idempotencyKey) =>
     manualModule.createManualLedgerRunId({ appId, idempotencyKey });
@@ -1148,6 +1184,7 @@ async function createInstalledExecutionLedgerFixture(options) {
     /** @type {string} */ logicalKey,
     /** @type {Record<string, any>} */ value,
     /** @type {string} */ suffix,
+    /** @type {string} */ expectedStoreId,
   ) => {
     const identity = {
       runId: `sea-external-run-${suffix}`,
@@ -1167,39 +1204,43 @@ async function createInstalledExecutionLedgerFixture(options) {
       input: { key: logicalKey, value },
       requestedReplayProperties: ['idempotent', 'transactional'],
     };
-    const applicationDb = await dbConfigModule.createApplicationStateDBClient(
-      'lmdb',
-      { path: options.applicationStatePath },
-    );
-    try {
-      const catalog =
-        await builtinCatalogModule.createBuiltinManagedEffectCatalog({
-          db: applicationDb,
-          appId,
-          adapterName: 'lmdb',
+    return await withFixtureDestinationAuthority(appId, async (authority) => {
+      const applicationDb = await dbConfigModule.createApplicationStateDBClient(
+        'lmdb',
+        { path: options.applicationStatePath },
+      );
+      try {
+        const catalog =
+          await builtinCatalogModule.createBuiltinManagedEffectCatalog({
+            db: applicationDb,
+            appId,
+            adapterName: 'lmdb',
+            coordinatorAuthority: authority,
+            expectedStoreId,
+          });
+        const adapter = catalog.resolve(request);
+        const destinationEffectId =
+          ledgerContractModule.createManagedEffectDestinationId({
+            appId,
+            runId: identity.runId,
+            invocationId: identity.invocationId,
+            effectId: identity.effectId,
+          });
+        const outcome = await adapter.execute({
+          destinationEffectId,
+          destination: adapter.destination,
+          identity,
+          request,
         });
-      const adapter = catalog.resolve(request);
-      const destinationEffectId =
-        ledgerContractModule.createManagedEffectDestinationId({
-          appId,
-          runId: identity.runId,
-          invocationId: identity.invocationId,
-          effectId: identity.effectId,
-        });
-      const outcome = await adapter.execute({
-        destinationEffectId,
-        destination: adapter.destination,
-        identity,
-        request,
-      });
-      return {
-        destinationEffectId,
-        value: JSON.parse(JSON.stringify(value)),
-        outcome: JSON.parse(JSON.stringify(outcome)),
-      };
-    } finally {
-      await applicationDb.close();
-    }
+        return {
+          destinationEffectId,
+          value: JSON.parse(JSON.stringify(value)),
+          outcome: JSON.parse(JSON.stringify(outcome)),
+        };
+      } finally {
+        await applicationDb.close();
+      }
+    });
   };
   const readRawLedgerRunRows = async (/** @type {string} */ runId) => {
     const { db } = openLedger(true);
@@ -1455,116 +1496,91 @@ async function createInstalledExecutionLedgerFixture(options) {
       const callerSecret = `sea-effect-caller-secret-${idempotencyKey}`;
       const fencingToken = `sea-effect-fencing-secret-${idempotencyKey}`;
       const secrets = [inputSecret, callerSecret, fencingToken];
-      const { db, ledger } = openLedger(false);
-      const applicationDb = await dbConfigModule.createApplicationStateDBClient(
-        'lmdb',
-        { path: options.applicationStatePath },
-      );
-      try {
-        const catalog =
-          await builtinCatalogModule.createBuiltinManagedEffectCatalog({
-            db: applicationDb,
-            appId,
-            adapterName: 'lmdb',
-          });
-        const seeded = await seedClaimedRun(ledger, {
-          appId,
-          idempotencyKey,
-          inputSecret,
-          callerSecret,
-          fencingToken,
-          actor,
-        });
-        const started = await ledger.markAttemptStarted({
-          runId: seeded.runId,
-          invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
-          attemptId: seeded.claimed.attempt.attemptId,
-          fencingToken,
-          generation: seeded.claimed.attempt.generation,
-          expectedVersion: seeded.claimed.run.version,
-          transitionId: `start:${seeded.claimed.attempt.attemptId}`,
-          actor,
-        });
-        let currentRun = started.run;
-        const effects = [];
-        for (const [index, spec] of effectSpecs.entries()) {
-          assert.match(spec.effectId, /^[A-Za-z0-9-]+$/);
-          assert.ok(
-            [
-              'PENDING',
-              'STARTED_RECEIPT',
-              'STARTED_ABSENT',
-              'TERMINAL',
-            ].includes(spec.state),
-          );
-          const stateSecret = `sea-application-state-secret-${spec.effectId}`;
-          const requestKey = `sea-recovery-key-${spec.effectId}`;
-          secrets.push(stateSecret);
-          const request = {
-            protocol: 'wharfie.activity',
-            protocolVersion: 1,
-            type: 'effect-request',
-            attemptId: started.attempt.attemptId,
-            sequence: index + 1,
-            effectId: spec.effectId,
-            capability: 'application-state',
-            operation: 'put-if-absent',
-            input: {
-              key: requestKey,
-              value: { credential: stateSecret },
-            },
-            requestedReplayProperties: ['idempotent', 'transactional'],
-          };
-          const adapter = catalog.resolve(request);
-          const requested = await ledger.recordManagedEffectRequest({
-            runId: seeded.runId,
-            invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
-            attemptId: started.attempt.attemptId,
-            fencingToken,
-            generation: started.attempt.generation,
-            expectedVersion: currentRun.version,
-            transitionId: `effect-request:${spec.effectId}`,
-            request,
-            adapter: adapter.descriptor,
-            destination: adapter.destination,
-            verifier: adapter.verifier,
-            substantiatedReplayProperties:
-              adapter.substantiatedReplayProperties,
-            actor,
-          });
-          currentRun = requested.run;
-          let effect = requested.effect;
-          let receiptPresent = false;
-          if (spec.state !== 'PENDING') {
-            const effectStarted = await ledger.markManagedEffectStarted({
-              runId: seeded.runId,
-              invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
-              attemptId: started.attempt.attemptId,
-              effectId: spec.effectId,
+      return await withFixtureDestinationAuthority(
+        appId,
+        async (authority, ledger) => {
+          const applicationDb =
+            await dbConfigModule.createApplicationStateDBClient('lmdb', {
+              path: options.applicationStatePath,
+            });
+          try {
+            const catalog =
+              await builtinCatalogModule.createBuiltinManagedEffectCatalog({
+                db: applicationDb,
+                appId,
+                adapterName: 'lmdb',
+                coordinatorAuthority: authority,
+              });
+            const seeded = await seedClaimedRun(ledger, {
+              appId,
+              idempotencyKey,
+              inputSecret,
+              callerSecret,
               fencingToken,
-              generation: started.attempt.generation,
-              expectedVersion: currentRun.version,
-              expectedEffectVersion: effect.version,
-              transitionId: `effect-start:${spec.effectId}`,
               actor,
             });
-            currentRun = effectStarted.run;
-            effect = effectStarted.effect;
-            if (spec.state !== 'STARTED_ABSENT') {
-              const outcome = await adapter.execute({
-                destinationEffectId: effect.destinationEffectId,
-                destination: adapter.destination,
-                identity: {
-                  runId: seeded.runId,
-                  invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
-                  attemptId: started.attempt.attemptId,
-                  effectId: spec.effectId,
+            const started = await ledger.markAttemptStarted({
+              runId: seeded.runId,
+              invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+              attemptId: seeded.claimed.attempt.attemptId,
+              fencingToken,
+              generation: seeded.claimed.attempt.generation,
+              expectedVersion: seeded.claimed.run.version,
+              transitionId: `start:${seeded.claimed.attempt.attemptId}`,
+              actor,
+            });
+            let currentRun = started.run;
+            const effects = [];
+            for (const [index, spec] of effectSpecs.entries()) {
+              assert.match(spec.effectId, /^[A-Za-z0-9-]+$/);
+              assert.ok(
+                [
+                  'PENDING',
+                  'STARTED_RECEIPT',
+                  'STARTED_ABSENT',
+                  'TERMINAL',
+                ].includes(spec.state),
+              );
+              const stateSecret = `sea-application-state-secret-${spec.effectId}`;
+              const requestKey = `sea-recovery-key-${spec.effectId}`;
+              secrets.push(stateSecret);
+              const request = {
+                protocol: 'wharfie.activity',
+                protocolVersion: 1,
+                type: 'effect-request',
+                attemptId: started.attempt.attemptId,
+                sequence: index + 1,
+                effectId: spec.effectId,
+                capability: 'application-state',
+                operation: 'put-if-absent',
+                input: {
+                  key: requestKey,
+                  value: { credential: stateSecret },
                 },
+                requestedReplayProperties: ['idempotent', 'transactional'],
+              };
+              const adapter = catalog.resolve(request);
+              const requested = await ledger.recordManagedEffectRequest({
+                runId: seeded.runId,
+                invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+                attemptId: started.attempt.attemptId,
+                fencingToken,
+                generation: started.attempt.generation,
+                expectedVersion: currentRun.version,
+                transitionId: `effect-request:${spec.effectId}`,
                 request,
+                adapter: adapter.descriptor,
+                destination: adapter.destination,
+                verifier: adapter.verifier,
+                substantiatedReplayProperties:
+                  adapter.substantiatedReplayProperties,
+                actor,
               });
-              receiptPresent = true;
-              if (spec.state === 'TERMINAL') {
-                const committed = await ledger.commitManagedEffectOutcome({
+              currentRun = requested.run;
+              let effect = requested.effect;
+              let receiptPresent = false;
+              if (spec.state !== 'PENDING') {
+                const effectStarted = await ledger.markManagedEffectStarted({
                   runId: seeded.runId,
                   invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
                   attemptId: started.attempt.attemptId,
@@ -1573,51 +1589,80 @@ async function createInstalledExecutionLedgerFixture(options) {
                   generation: started.attempt.generation,
                   expectedVersion: currentRun.version,
                   expectedEffectVersion: effect.version,
-                  transitionId: `effect-outcome:${spec.effectId}`,
-                  outcome,
+                  transitionId: `effect-start:${spec.effectId}`,
                   actor,
                 });
-                currentRun = committed.run;
-                effect = committed.effect;
-              }
-            }
-          }
-          effects.push({
-            effectId: spec.effectId,
-            initialStatus: effect.status,
-            destinationEffectId: effect.destinationEffectId,
-            requestKey,
-            receiptPresent,
-            ...(spec.state === 'PENDING'
-              ? {
-                  recoveryAction: 'cancelled-before-start',
-                  recoveredStatus: ledgerModule.EffectStatus.CANCELLED,
-                }
-              : spec.state === 'STARTED_RECEIPT'
-                ? {
-                    recoveryAction: 'outcome-recovered',
-                    recoveredStatus: ledgerModule.EffectStatus.COMPLETED,
+                currentRun = effectStarted.run;
+                effect = effectStarted.effect;
+                if (spec.state !== 'STARTED_ABSENT') {
+                  const outcome = await adapter.execute({
+                    destinationEffectId: effect.destinationEffectId,
+                    destination: adapter.destination,
+                    identity: {
+                      runId: seeded.runId,
+                      invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+                      attemptId: started.attempt.attemptId,
+                      effectId: spec.effectId,
+                    },
+                    request,
+                  });
+                  receiptPresent = true;
+                  if (spec.state === 'TERMINAL') {
+                    const committed = await ledger.commitManagedEffectOutcome({
+                      runId: seeded.runId,
+                      invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+                      attemptId: started.attempt.attemptId,
+                      effectId: spec.effectId,
+                      fencingToken,
+                      generation: started.attempt.generation,
+                      expectedVersion: currentRun.version,
+                      expectedEffectVersion: effect.version,
+                      transitionId: `effect-outcome:${spec.effectId}`,
+                      outcome,
+                      actor,
+                    });
+                    currentRun = committed.run;
+                    effect = committed.effect;
                   }
-                : spec.state === 'STARTED_ABSENT'
+                }
+              }
+              effects.push({
+                effectId: spec.effectId,
+                initialStatus: effect.status,
+                destinationEffectId: effect.destinationEffectId,
+                requestKey,
+                receiptPresent,
+                ...(spec.state === 'PENDING'
                   ? {
-                      recoveryAction: 'outcome-uncertain',
-                      recoveredStatus: ledgerModule.EffectStatus.UNCERTAIN,
+                      recoveryAction: 'cancelled-before-start',
+                      recoveredStatus: ledgerModule.EffectStatus.CANCELLED,
                     }
-                  : {}),
-          });
-        }
-        return {
-          runId: seeded.runId,
-          attemptId: started.attempt.attemptId,
-          storeId: catalog.storeId,
-          payloadStoreId,
-          effects,
-          secrets,
-        };
-      } finally {
-        await applicationDb.close();
-        await db.close();
-      }
+                  : spec.state === 'STARTED_RECEIPT'
+                    ? {
+                        recoveryAction: 'outcome-recovered',
+                        recoveredStatus: ledgerModule.EffectStatus.COMPLETED,
+                      }
+                    : spec.state === 'STARTED_ABSENT'
+                      ? {
+                          recoveryAction: 'outcome-uncertain',
+                          recoveredStatus: ledgerModule.EffectStatus.UNCERTAIN,
+                        }
+                      : {}),
+              });
+            }
+            return {
+              runId: seeded.runId,
+              attemptId: started.attempt.attemptId,
+              storeId: catalog.storeId,
+              payloadStoreId,
+              effects,
+              secrets,
+            };
+          } finally {
+            await applicationDb.close();
+          }
+        },
+      );
     },
     readApplicationStateReceipt: async (appId, destinationEffectId) =>
       (await readApplicationStateReceipts(appId, [destinationEffectId])).get(
@@ -1644,6 +1689,7 @@ async function createInstalledExecutionLedgerFixture(options) {
           `Late application-state receipt requires one retained UNCERTAIN effect: ${effectId}.`,
         );
       }
+      assert.equal(delivery.effect.destination.configuration.namespace, appId);
       const request = {
         protocol: 'wharfie.activity',
         protocolVersion: 1,
@@ -1656,33 +1702,38 @@ async function createInstalledExecutionLedgerFixture(options) {
         input: delivery.request.input,
         requestedReplayProperties: delivery.request.requestedReplayProperties,
       };
-      const applicationDb = await dbConfigModule.createApplicationStateDBClient(
-        'lmdb',
-        { path: options.applicationStatePath },
-      );
-      try {
-        const catalog =
-          await builtinCatalogModule.createBuiltinManagedEffectCatalog({
-            db: applicationDb,
-            appId,
-            adapterName: 'lmdb',
+      return await withFixtureDestinationAuthority(appId, async (authority) => {
+        const applicationDb =
+          await dbConfigModule.createApplicationStateDBClient('lmdb', {
+            path: options.applicationStatePath,
           });
-        const adapter = catalog.resolve(request);
-        assert.deepEqual(adapter.destination, delivery.effect.destination);
-        return await adapter.execute({
-          destinationEffectId: delivery.effect.destinationEffectId,
-          destination: delivery.effect.destination,
-          identity: {
-            runId,
-            invocationId: delivery.effect.invocationId,
-            attemptId: delivery.effect.startedBy.attemptId,
-            effectId,
-          },
-          request,
-        });
-      } finally {
-        await applicationDb.close();
-      }
+        try {
+          const catalog =
+            await builtinCatalogModule.createBuiltinManagedEffectCatalog({
+              db: applicationDb,
+              appId,
+              adapterName: 'lmdb',
+              coordinatorAuthority: authority,
+              expectedStoreId:
+                delivery.effect.destination.configuration.storeId,
+            });
+          const adapter = catalog.resolve(request);
+          assert.deepEqual(adapter.destination, delivery.effect.destination);
+          return await adapter.execute({
+            destinationEffectId: delivery.effect.destinationEffectId,
+            destination: delivery.effect.destination,
+            identity: {
+              runId,
+              invocationId: delivery.effect.invocationId,
+              attemptId: delivery.effect.startedBy.attemptId,
+              effectId,
+            },
+            request,
+          });
+        } finally {
+          await applicationDb.close();
+        }
+      });
     },
     readApplicationStateDestination: async (
       appId,
@@ -2778,7 +2829,7 @@ async function waitForDurableRun(observer, predicate, service, label) {
 }
 
 /**
- * @param {{read: () => Promise<Record<string, any> | null>}} observer - Durable lifecycle observer.
+ * @param {{read: () => Promise<Record<string, any> | null>, assertReady: (snapshot: Record<string, any> | null) => Promise<Readonly<Record<string, any>>>}} observer - Durable lifecycle and readiness observer.
  * @param {(snapshot: Record<string, any> | null) => boolean} predicate - Required durable state.
  * @param {{getExit: () => ResidentServiceExit | null, getOutput: () => {stdout: string, stderr: string}}} service - Resident child to diagnose.
  * @param {string} label - State being awaited.
@@ -2793,11 +2844,19 @@ async function waitForResidentLifecycle(observer, predicate, service, label) {
         `Resident SEA exited before reaching ${label}.`,
       );
     }
+    let snapshot = null;
     try {
-      const snapshot = await observer.read();
-      if (predicate(snapshot)) return snapshot;
+      snapshot = await observer.read();
     } catch {
       // A just-created LMDB control volume may not be observable yet.
+    }
+    if (predicate(snapshot)) {
+      if (snapshot?.status === 'READY') {
+        // A READY mismatch is a proof failure, not a transient startup read
+        // to swallow and retry until the missing adoption is repaired.
+        await observer.assertReady(snapshot);
+      }
+      return snapshot;
     }
     await delay(RESIDENT_SERVICE_POLL_INTERVAL_MS);
   }
@@ -3488,7 +3547,10 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
         );
       }
       if (next.kind === 'inspector-error' && !service.getExit()) {
-        throw next.error;
+        throw residentServiceError(
+          service,
+          `${options.label} inspector failed: ${next.error instanceof Error ? next.error.message : String(next.error)}`,
+        );
       }
       const output = service.getOutput();
       const candidate = output.stdout.trim();
@@ -3755,6 +3817,7 @@ async function verifyRelocatedSeaCrashMatrix(options) {
     const lifecycle = await createInstalledLedgerLifecycleObserver({
       installedPackageRoot: options.installedPackageRoot,
       controlPath,
+      applicationStatePath,
       tableName,
       appId: options.appId,
     });
@@ -3970,6 +4033,16 @@ async function verifyRelocatedSeaCrashMatrix(options) {
       );
       assert.equal(existsSync(staleEndpoint), true);
 
+      seaCoordinatorHandoff.afterSigkill({
+        artifactPath: options.artifactPath,
+        appId: options.appId,
+        cwd: caseRoot,
+        env: environment,
+        label: `${scenario.label} killed-owner handoff`,
+        exit: killed,
+        ownership: ownershipBefore,
+      });
+
       const recovery = await runInspectorGuardedSeaJson(
         options.artifactPath,
         recoveryArgs,
@@ -4154,6 +4227,7 @@ async function verifyRelocatedSeaMixedSettlementCrashMatrix(options) {
     const lifecycle = await createInstalledLedgerLifecycleObserver({
       installedPackageRoot: options.installedPackageRoot,
       controlPath,
+      applicationStatePath,
       tableName,
       appId: options.appId,
     });
@@ -4393,6 +4467,16 @@ async function verifyRelocatedSeaMixedSettlementCrashMatrix(options) {
       );
       assert.equal(existsSync(staleEndpoint), true);
 
+      seaCoordinatorHandoff.afterSigkill({
+        artifactPath: options.artifactPath,
+        appId: options.appId,
+        cwd: caseRoot,
+        env: environment,
+        label: `${scenario.label} killed-owner handoff`,
+        exit: killed,
+        ownership: ownershipBefore,
+      });
+
       const recovery = await runInspectorGuardedSeaJson(
         options.artifactPath,
         recoveryArgs,
@@ -4552,6 +4636,7 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
   const lifecycle = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot: options.installedPackageRoot,
     controlPath,
+    applicationStatePath,
     tableName,
     appId: options.appId,
   });
@@ -5187,6 +5272,16 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
           ),
           destinationsAtBoundary,
         );
+
+        seaCoordinatorHandoff.afterSigkill({
+          artifactPath: options.artifactPath,
+          appId: options.appId,
+          cwd: caseRoot,
+          env: environment,
+          label: `${scenario.label} killed-owner handoff`,
+          exit: killed,
+          ownership: ownershipBeforeKill,
+        });
 
         const replay = await runInspectorGuardedSeaJson(
           options.artifactPath,
@@ -5937,6 +6032,7 @@ function assertSeaSuccessorTargetState(
  * @param {Record<string, any>} target - Verified successor target aggregate.
  * @param {Record<string, any>} authorization - Immutable target trigger.
  * @param {Record<string, any>} sourceRequest - Exact logical source request.
+ * @param {number} coordinatorEpoch - Exact coordinator epoch that started the target.
  * @param {string} label - Assertion context.
  * @returns {Promise<void>} - Resolves after every retained authority verifies.
  */
@@ -5946,6 +6042,7 @@ async function assertSeaSuccessorTargetAuthority(
   target,
   authorization,
   sourceRequest,
+  coordinatorEpoch,
   label,
 ) {
   const [invocation] = target.invocations;
@@ -5995,7 +6092,8 @@ async function assertSeaSuccessorTargetAuthority(
   assert.notEqual(attempt.attemptId, sourceAttempt.attemptId);
   assert.equal(attempt.generation, 1);
   assert.equal(invocation.generation, 1);
-  assert.equal(attempt.coordinatorEpoch, 0);
+  assert.ok(Number.isSafeInteger(coordinatorEpoch) && coordinatorEpoch > 0);
+  assert.equal(attempt.coordinatorEpoch, coordinatorEpoch);
   assert.notEqual(attempt.fencingToken, sourceAttempt.fencingToken);
   assert.deepEqual(effect.requestedBy, {
     attemptId: attempt.attemptId,
@@ -6337,6 +6435,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
       const lifecycle = await createInstalledLedgerLifecycleObserver({
         installedPackageRoot: options.installedPackageRoot,
         controlPath,
+        applicationStatePath,
         tableName,
         appId: options.appId,
       });
@@ -6516,6 +6615,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
                 credential: `sea-external-state-secret-${caseId}`,
               },
               caseId,
+              batch.storeId,
             )
           : null;
         if (preexistingBusiness) {
@@ -6603,6 +6703,23 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
         );
         assert.equal(existsSync(markerPath), false);
 
+        const ownershipAtBoundary = await lifecycle.readOwnership();
+        assert.ok(ownershipAtBoundary, `${scenario.label} has no owner`);
+        assert.equal(ownershipAtBoundary.appId, options.appId);
+        assert.equal(ownershipAtBoundary.ownerKind, 'manual');
+        const coordinatorAtBoundary = seaCoordinatorHandoff.inspect({
+          artifactPath: options.artifactPath,
+          appId: options.appId,
+          cwd: caseRoot,
+          env: environment,
+          label: `${scenario.label} paused coordinator`,
+        }).observedAuthority;
+        assert.equal(coordinatorAtBoundary?.status, 'ACTIVE');
+        assert.equal(
+          coordinatorAtBoundary.coordinatorId,
+          ownershipAtBoundary.sessionId,
+        );
+        let targetCoordinatorEpoch = coordinatorAtBoundary.epoch;
         const sourceAtBoundary = await fixture.readRun(batch.runId);
         assert.ok(sourceAtBoundary);
         let authorization;
@@ -6659,6 +6776,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
             targetAtBoundary,
             authorization,
             sourceRequest,
+            targetCoordinatorEpoch,
             scenario.label,
           );
         }
@@ -6723,10 +6841,6 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
             ? [...payloadAtBoundary.orphans]
             : [];
 
-        const ownershipAtBoundary = await lifecycle.readOwnership();
-        assert.ok(ownershipAtBoundary, `${scenario.label} has no owner`);
-        assert.equal(ownershipAtBoundary.appId, options.appId);
-        assert.equal(ownershipAtBoundary.ownerKind, 'manual');
         const staleEndpoint = lifecycle.getSessionEndpoint(
           ownershipAtBoundary.sessionId,
           sessionPath,
@@ -6783,6 +6897,21 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
           );
         }
 
+        const coordinatorHandoff = seaCoordinatorHandoff.afterSigkill({
+          artifactPath: options.artifactPath,
+          appId: options.appId,
+          cwd: caseRoot,
+          env: environment,
+          label: `${scenario.label} killed-owner handoff`,
+          exit: killed,
+          ownership: ownershipAtBoundary,
+        });
+        assert.deepEqual(
+          coordinatorHandoff.observedAuthority,
+          coordinatorAtBoundary,
+          `${scenario.label} changed coordinator authority across SIGKILL`,
+        );
+
         const commonSecrets = [
           ...batch.secrets,
           sourceEffectFixture.destinationEffectId,
@@ -6810,6 +6939,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
           scenario.boundary === 'successor-target-request-published' ||
           scenario.boundary === 'successor-authorization-committed'
         ) {
+          targetCoordinatorEpoch = coordinatorHandoff.resultAuthority.epoch + 1;
           const continuation = await runInspectorGuardedSeaJson(
             options.artifactPath,
             retryArgs,
@@ -6824,6 +6954,16 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
               writeBreakpointTarget:
                 SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT,
             },
+          );
+          assert.equal(
+            seaCoordinatorHandoff.assertReleased({
+              artifactPath: options.artifactPath,
+              appId: options.appId,
+              cwd: caseRoot,
+              env: environment,
+              label: `${scenario.label} completed coordinator`,
+            }).epoch,
+            targetCoordinatorEpoch,
           );
           finalSource = await fixture.readRun(batch.runId);
           assert.ok(finalSource);
@@ -6868,6 +7008,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
             finalTarget,
             authorization,
             sourceRequest,
+            targetCoordinatorEpoch,
             `${scenario.label} completed target`,
           );
           finalDestination = await fixture.readApplicationStateDestination(
@@ -7035,6 +7176,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
               recoveredTarget,
               authorization,
               sourceRequest,
+              targetCoordinatorEpoch,
               `${scenario.label} recovered target`,
             );
             assert.deepEqual(JSON.parse(recovery.serialized), {
@@ -7119,6 +7261,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
               finalTarget,
               authorization,
               sourceRequest,
+              targetCoordinatorEpoch,
               `${scenario.label} reconciled target`,
             );
             assert.deepEqual(finalTarget.attempts, recoveredTarget.attempts);
@@ -7194,6 +7337,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
           finalTarget,
           authorization,
           sourceRequest,
+          targetCoordinatorEpoch,
           `${scenario.label} final target`,
         );
         await assertSeaSuccessorTerminalOutcomeEvidence(
@@ -7391,6 +7535,7 @@ async function createRelocatedSeaWorkflowCase(options, boundary) {
   const lifecycle = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot: options.installedPackageRoot,
     controlPath,
+    applicationStatePath,
     tableName,
     appId: options.appId,
   });
@@ -7493,13 +7638,15 @@ async function createRelocatedSeaWorkflowCase(options, boundary) {
 }
 
 /**
- * Kill one exact inspected boundary and retain stale ownership evidence.
+ * Kill one exact inspected boundary, retain stale ownership evidence, and
+ * explicitly fence that killed coordinator before any replacement mutation.
  * @param {Record<string, any>} paused - Paused inspector and child process.
- * @param {Record<string, any>} lifecycle - Installed lifecycle observer.
- * @param {string} sessionPath - Ledger-service session directory.
+ * @param {{artifactPath: string, appId: string}} options - SEA inputs.
+ * @param {Record<string, any>} context - Isolated workflow case.
  * @returns {Promise<Record<string, any>>} - Retained ownership and endpoint.
  */
-async function killPausedWorkflowBoundary(paused, lifecycle, sessionPath) {
+async function killPausedWorkflowBoundary(paused, options, context) {
+  const { lifecycle, sessionPath } = context;
   const ownership = await lifecycle.readOwnership();
   assert.ok(ownership);
   const endpoint = lifecycle.getSessionEndpoint(
@@ -7512,6 +7659,15 @@ async function killPausedWorkflowBoundary(paused, lifecycle, sessionPath) {
   paused.inspector.close();
   assert.deepEqual(await lifecycle.readOwnership(), ownership);
   assert.equal(existsSync(endpoint), true);
+  seaCoordinatorHandoff.afterSigkill({
+    artifactPath: options.artifactPath,
+    appId: options.appId,
+    cwd: context.caseRoot,
+    env: context.environment,
+    label: `workflow ${context.boundary} killed-owner handoff`,
+    exit: killed,
+    ownership,
+  });
   return { ownership, endpoint };
 }
 
@@ -7519,16 +7675,31 @@ async function killPausedWorkflowBoundary(paused, lifecycle, sessionPath) {
  * Kill a public command after its mutation service released local ownership
  * but before its JSON response was constructed.
  * @param {Record<string, any>} paused - Paused inspector and child process.
- * @param {Record<string, any>} lifecycle - Installed lifecycle observer.
+ * @param {{artifactPath: string, appId: string}} options - SEA inputs.
+ * @param {Record<string, any>} context - Isolated workflow case.
  * @returns {Promise<void>} - Resolves after the owner-free SIGKILL.
  */
-async function killPausedWorkflowResponse(paused, lifecycle) {
+async function killPausedWorkflowResponse(paused, options, context) {
+  const { lifecycle } = context;
   assert.equal(await lifecycle.readOwnership(), null);
   assert.equal(paused.service.getOutput().stdout, '');
+  const authorityInput = {
+    artifactPath: options.artifactPath,
+    appId: options.appId,
+    cwd: context.caseRoot,
+    env: context.environment,
+    label: `workflow ${context.boundary} released response`,
+  };
+  const released = seaCoordinatorHandoff.assertReleased(authorityInput);
   const killed = await signalResidentService(paused.service, 'SIGKILL');
   assert.deepEqual(killed, { code: null, signal: 'SIGKILL' });
   paused.inspector.close();
   assert.equal(await lifecycle.readOwnership(), null);
+  assert.deepEqual(
+    seaCoordinatorHandoff.assertReleased(authorityInput),
+    released,
+    'response-loss SIGKILL changed released coordinator authority',
+  );
 }
 
 /**
@@ -7778,6 +7949,7 @@ async function verifyRelocatedSeaTimerSignalWorkflow(options) {
   const lifecycle = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot: options.installedPackageRoot,
     controlPath,
+    applicationStatePath,
     tableName,
     appId: options.appId,
   });
@@ -7851,7 +8023,8 @@ async function verifyRelocatedSeaTimerSignalWorkflow(options) {
     // Kill as soon as the durable wait is observed. Assertions and read-only
     // fixture queries below can then take arbitrarily long without racing the
     // live resident against the five-second timer deadline.
-    assert.deepEqual(await signalResidentService(firstService, 'SIGKILL'), {
+    const firstExit = await signalResidentService(firstService, 'SIGKILL');
+    assert.deepEqual(firstExit, {
       code: null,
       signal: 'SIGKILL',
     });
@@ -7893,6 +8066,15 @@ async function verifyRelocatedSeaTimerSignalWorkflow(options) {
       sessionPath,
     );
     assert.equal(existsSync(staleEndpoint), true);
+    seaCoordinatorHandoff.afterSigkill({
+      artifactPath: options.artifactPath,
+      appId: options.appId,
+      cwd: options.root,
+      env: environment,
+      label: 'timer workflow killed-owner handoff',
+      exit: firstExit,
+      ownership: firstOwnership,
+    });
     secondService = spawnResidentService(options.artifactPath, {
       cwd: options.root,
       env: environment,
@@ -8170,6 +8352,7 @@ async function verifyRelocatedSeaScheduleRestartProof(options) {
   const lifecycle = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot: options.installedPackageRoot,
     controlPath,
+    applicationStatePath,
     tableName,
     appId: options.appId,
   });
@@ -8381,6 +8564,17 @@ async function verifyRelocatedSeaScheduleRestartProof(options) {
           assert.equal(ownership?.ownerKind, 'resident');
           assert.equal(ownership?.generation, ready.generation);
           assert.equal(ownership?.sessionId, ready.sessionId);
+          // The proof has observed this exact child's SIGKILL exit. Fence and
+          // release only that retained owner before startResident can replace it.
+          seaCoordinatorHandoff.afterSigkill({
+            artifactPath: options.artifactPath,
+            appId: options.appId,
+            cwd: options.root,
+            env: environment,
+            label: `schedule proof ${phase} killed-owner handoff`,
+            exit,
+            ownership,
+          });
         } else {
           const stopped = await waitForDurableLifecycle(
             lifecycle,
@@ -8770,11 +8964,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
         existsSync(path.join(claim.markerDirectory, '1.json')),
         false,
       );
-      await killPausedWorkflowBoundary(
-        paused,
-        claim.lifecycle,
-        claim.sessionPath,
-      );
+      await killPausedWorkflowBoundary(paused, options, claim);
       const recovery = await runSeaWorkflowRecovery(
         options,
         claim,
@@ -8885,11 +9075,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
         existsSync(path.join(started.markerDirectory, '1.json')),
         false,
       );
-      await killPausedWorkflowBoundary(
-        paused,
-        started.lifecycle,
-        started.sessionPath,
-      );
+      await killPausedWorkflowBoundary(paused, options, started);
       const recovery = await runSeaWorkflowRecovery(
         options,
         started,
@@ -9028,11 +9214,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
         readPayloadReachability(terminal.payloadPath, before).orphans.length,
         0,
       );
-      await killPausedWorkflowBoundary(
-        paused,
-        terminal.lifecycle,
-        terminal.sessionPath,
-      );
+      await killPausedWorkflowBoundary(paused, options, terminal);
       const completed = await completeSeaWorkflow(
         options,
         terminal,
@@ -9077,11 +9259,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
       assert.ok(startedBeforeRecovery);
       assert.equal(startedBeforeRecovery.run.version, 3);
       assert.equal(startedBeforeRecovery.attempts[0].status, 'STARTED');
-      await killPausedWorkflowBoundary(
-        evidencePaused,
-        response.lifecycle,
-        response.sessionPath,
-      );
+      await killPausedWorkflowBoundary(evidencePaused, options, response);
 
       const recoveryArgs = [
         'wharfie',
@@ -9109,7 +9287,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
       assert.equal(blocked.run.status, 'BLOCKED');
       assert.equal(blocked.workflowCursor.disposition, 'ACTIVITY_UNCERTAIN');
       const retainedAttempt = JSON.parse(JSON.stringify(blocked.attempts[0]));
-      await killPausedWorkflowResponse(recoveryPaused, response.lifecycle);
+      await killPausedWorkflowResponse(recoveryPaused, options, response);
       const recoveryReplay = await runSeaWorkflowRecovery(
         options,
         response,
@@ -9191,10 +9369,7 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
           .length,
         0,
       );
-      await killPausedWorkflowResponse(
-        reconciliationPaused,
-        response.lifecycle,
-      );
+      await killPausedWorkflowResponse(reconciliationPaused, options, response);
       const reconciliationReplay = await runInspectorGuardedSeaJson(
         options.artifactPath,
         reconcileArgs,
@@ -10251,6 +10426,7 @@ export default defineApp({
   const lifecycleObserver = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot,
     controlPath,
+    applicationStatePath,
     tableName: ledgerTableName,
     appId: embeddedManifest.app.id,
   });
@@ -10582,6 +10758,74 @@ export default defineApp({
     root: path.join(cleanRunDirectory, 'timer-signal-workflow'),
   });
 
+  // Destination setup needs a fresh authority of its own. Prepare historical
+  // effect batches before the resident holds its long-lived token; their
+  // distinct revision keeps its worker from consuming these operator targets.
+  const recoveryEffectSpecs = (/** @type {string} */ prefix) => [
+    {
+      effectId: `${prefix}-01-pending`,
+      state: /** @type {const} */ ('PENDING'),
+    },
+    {
+      effectId: `${prefix}-02-receipt`,
+      state: /** @type {const} */ ('STARTED_RECEIPT'),
+    },
+    {
+      effectId: `${prefix}-03-absent`,
+      state: /** @type {const} */ ('STARTED_ABSENT'),
+    },
+    {
+      effectId: `${prefix}-04-terminal`,
+      state: /** @type {const} */ ('TERMINAL'),
+    },
+  ];
+  const sourceEffectBatch =
+    await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
+      embeddedManifest.app.id,
+      'source-mixed-effect-recovery',
+      recoveryEffectSpecs('source'),
+    );
+  const seaEffectBatch =
+    await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
+      embeddedManifest.app.id,
+      'sea-mixed-effect-recovery',
+      recoveryEffectSpecs('sea'),
+    );
+  const crashEffectIdSuffix = 'e'.repeat(470);
+  const crashEffectSpecs = [
+    ...Array.from(
+      { length: CRASH_RECOVERY_TERMINAL_PADDING_EFFECTS },
+      (_value, index) => ({
+        effectId: `crash-terminal-${String(index).padStart(2, '0')}-${crashEffectIdSuffix}`,
+        state: /** @type {const} */ ('TERMINAL'),
+      }),
+    ),
+    {
+      effectId: `crash-pending-${crashEffectIdSuffix}`,
+      state: /** @type {const} */ ('PENDING'),
+    },
+    ...Array.from({ length: 15 }, (_value, index) => ({
+      effectId: `crash-started-${String(index).padStart(2, '0')}-${crashEffectIdSuffix}`,
+      state: /** @type {const} */ ('STARTED_ABSENT'),
+    })),
+  ];
+  const seaCrashEffectBatch =
+    await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
+      embeddedManifest.app.id,
+      'sea-output-backpressure-crash-recovery',
+      crashEffectSpecs,
+      {
+        // These remain valid 500-byte opaque IDs. JSON's required control-
+        // character escaping expands each public history row enough to
+        // exceed ordinary Darwin/Linux child-pipe capacity with a modest
+        // durable fixture.
+        actor: {
+          kind: '\u0001'.repeat(500),
+          id: '\u0002'.repeat(500),
+        },
+      },
+    );
+
   const residentEffectBatch =
     await ledgerFixture.createApplicationStateRecoveryBatchRun(
       embeddedManifest.app.id,
@@ -10669,7 +10913,7 @@ export default defineApp({
     );
     assert.equal(existsSync(residentActivityDispatchMarkerPath), false);
     assert.equal(firstResidentService.getExit(), null);
-    assert.equal((await lifecycleObserver.read())?.status, 'READY');
+    await lifecycleObserver.assertReady(await lifecycleObserver.read());
 
     const postRecoveryIdempotencyKey = 'resident-post-managed-effect-recovery';
     const postRecoveryRunId = ledgerFixture.createRunId(
@@ -10739,7 +10983,7 @@ export default defineApp({
     );
     assert.equal(existsSync(residentActivityDispatchMarkerPath), false);
     assert.equal(firstResidentService.getExit(), null);
-    assert.equal((await lifecycleObserver.read())?.status, 'READY');
+    await lifecycleObserver.assertReady(await lifecycleObserver.read());
 
     // These runs exercise app-scoped, source-independent operator recovery for
     // historical revisions. Keeping them distinct from the resident's exact
@@ -10757,70 +11001,6 @@ export default defineApp({
       embeddedManifest.app.id,
       'packaged-operator-missing-run',
     );
-    const recoveryEffectSpecs = (/** @type {string} */ prefix) => [
-      {
-        effectId: `${prefix}-01-pending`,
-        state: /** @type {const} */ ('PENDING'),
-      },
-      {
-        effectId: `${prefix}-02-receipt`,
-        state: /** @type {const} */ ('STARTED_RECEIPT'),
-      },
-      {
-        effectId: `${prefix}-03-absent`,
-        state: /** @type {const} */ ('STARTED_ABSENT'),
-      },
-      {
-        effectId: `${prefix}-04-terminal`,
-        state: /** @type {const} */ ('TERMINAL'),
-      },
-    ];
-    const sourceEffectBatch =
-      await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
-        embeddedManifest.app.id,
-        'source-mixed-effect-recovery',
-        recoveryEffectSpecs('source'),
-      );
-    const seaEffectBatch =
-      await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
-        embeddedManifest.app.id,
-        'sea-mixed-effect-recovery',
-        recoveryEffectSpecs('sea'),
-      );
-    const crashEffectIdSuffix = 'e'.repeat(470);
-    const crashEffectSpecs = [
-      ...Array.from(
-        { length: CRASH_RECOVERY_TERMINAL_PADDING_EFFECTS },
-        (_value, index) => ({
-          effectId: `crash-terminal-${String(index).padStart(2, '0')}-${crashEffectIdSuffix}`,
-          state: /** @type {const} */ ('TERMINAL'),
-        }),
-      ),
-      {
-        effectId: `crash-pending-${crashEffectIdSuffix}`,
-        state: /** @type {const} */ ('PENDING'),
-      },
-      ...Array.from({ length: 15 }, (_value, index) => ({
-        effectId: `crash-started-${String(index).padStart(2, '0')}-${crashEffectIdSuffix}`,
-        state: /** @type {const} */ ('STARTED_ABSENT'),
-      })),
-    ];
-    const seaCrashEffectBatch =
-      await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
-        embeddedManifest.app.id,
-        'sea-output-backpressure-crash-recovery',
-        crashEffectSpecs,
-        {
-          // These remain valid 500-byte opaque IDs. JSON's required control-
-          // character escaping expands each public history row enough to
-          // exceed ordinary Darwin/Linux child-pipe capacity with a modest
-          // durable fixture.
-          actor: {
-            kind: '\u0001'.repeat(500),
-            id: '\u0002'.repeat(500),
-          },
-        },
-      );
     const effectRecoveryTargets = [
       {
         label: 'source mixed-effect batch',
@@ -11227,6 +11407,16 @@ export default defineApp({
       );
     }
 
+    seaCoordinatorHandoff.afterSigkill({
+      artifactPath: cleanArtifactPath,
+      appId: embeddedManifest.app.id,
+      cwd: cleanRunDirectory,
+      env: operatorEnvironment,
+      label: 'resident crash recovery killed-owner handoff',
+      exit: firstExit,
+      ownership: staleFirstOwnership,
+    });
+
     outputBlockedRecovery = spawnResidentService(cleanArtifactPath, {
       cwd: cleanRunDirectory,
       env: operatorEnvironment,
@@ -11265,6 +11455,16 @@ export default defineApp({
     // its response. The crash boundary is therefore durable settlement after
     // a clean owner release, with only response delivery still in flight.
     assert.equal(await lifecycleObserver.readOwnership(), null);
+    const responseAuthorityInput = {
+      artifactPath: cleanArtifactPath,
+      appId: embeddedManifest.app.id,
+      cwd: cleanRunDirectory,
+      env: operatorEnvironment,
+      label: 'compound recovery released response',
+    };
+    const releasedResponseAuthority = seaCoordinatorHandoff.assertReleased(
+      responseAuthorityInput,
+    );
     assert.equal(
       outputBlockedRecovery.getExit(),
       null,
@@ -11281,6 +11481,11 @@ export default defineApp({
       await lifecycleObserver.readOwnership(),
       null,
       'response-loss SIGKILL resurrected released mutation ownership',
+    );
+    assert.deepEqual(
+      seaCoordinatorHandoff.assertReleased(responseAuthorityInput),
+      releasedResponseAuthority,
+      'response-loss SIGKILL changed released coordinator authority',
     );
 
     const crashRunAfterKill = await ledgerFixture.readRun(
@@ -11599,7 +11804,7 @@ export default defineApp({
     Buffer.from(packagedArtifact.byteDigest.value, 'base64url').toString('hex'),
   );
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH${scheduleProof ? `, and due schedule ${scheduleProof.expected.occurrenceId} with one physical dispatch across real SIGKILL/replacement and an unchanged post-restart poll` : ', with the due-schedule/restart proof correctly gated to Linux'} (${artifactSize} bytes; sha256 ${artifactSha256})\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, explicit public coordinator takeover-and-release with exact receipt replay before every confirmed killed-owner restart and unchanged RELEASED authority across owner-free response-loss crashes, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH${scheduleProof ? `, and due schedule ${scheduleProof.expected.occurrenceId} with one physical dispatch across real SIGKILL/replacement and an unchanged post-restart poll` : ', with the due-schedule/restart proof correctly gated to Linux'} (${artifactSize} bytes; sha256 ${artifactSha256})\n`,
   );
 } catch (error) {
   verificationError = error;

@@ -22,6 +22,7 @@ import {
   LedgerServiceOwnerKind,
   createLedgerServiceId,
   createLedgerServiceOwnership,
+  createLedgerServiceSessionId,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
 import {
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES,
@@ -50,6 +51,11 @@ import {
   resolveApplicationStateStoreConfiguration,
   withApplicationStateDB,
 } from '../application-state-store.js';
+import { resolveApplicationStateCoordinatorAuthority } from '../application-state-authority.js';
+import {
+  preflightApplicationStateStoreIdentity,
+  resolveApplicationStateWriteBinding,
+} from '../application-state-readiness.js';
 import { createCanonicalJsonSha256Id } from '../content-id.js';
 import { cloneBoundedJsonObject } from '../json-value.js';
 import {
@@ -76,6 +82,7 @@ import {
 import {
   resolveExecutionLedgerStoreConfiguration,
   withExecutionLedger,
+  withExecutionLedgerCoordinatorAuthority,
   withLocalLedgerServiceMutationOwnership,
 } from './execution-ledger-store.js';
 import { sendLocalOwnerCommand } from './local-owner-command.js';
@@ -479,6 +486,30 @@ export async function inspectExecutionLedgerRun(options) {
     if (isMissingReadOnlyStore(error)) return null;
     throw error;
   }
+}
+
+/**
+ * Bind one direct operator mutation to a fresh coordinator authority after
+ * acquiring local ownership when the adapter supports it. Owner-routed
+ * commands never enter this scope: their active owner already holds authority.
+ * The authority is released before local ownership and the control DB close.
+ * @template T
+ * @param {{appId: string, ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean}, handler: (ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, localOwner?: Record<string, any>) => Promise<T>}} options - Direct mutation scope.
+ * @returns {Promise<T>} - Handler result after authority and local-owner cleanup.
+ */
+async function withDirectOperatorMutationAuthority(options) {
+  return await withLocalLedgerServiceMutationOwnership({
+    appId: options.appId,
+    context: options.context,
+    handler: async (localOwner) =>
+      await withExecutionLedgerCoordinatorAuthority({
+        appId: options.appId,
+        coordinatorId: localOwner?.sessionId || createLedgerServiceSessionId(),
+        ledger: options.ledger,
+        context: options.context,
+        handler: async (ledger) => await options.handler(ledger, localOwner),
+      }),
+  });
 }
 
 /** Exact authenticated local-owner command accepted by a manual ledger runner. */
@@ -1958,12 +1989,13 @@ async function cancelWorkflowWithoutResident(options) {
           'Workflow cancellation authority changed before local ownership was acquired.',
         );
       }
-      return await withLocalLedgerServiceMutationOwnership({
+      return await withDirectOperatorMutationAuthority({
         appId: current.run.appId,
+        ledger,
         context,
-        handler: async () =>
+        handler: async (boundLedger) =>
           await requestWorkflowLedgerRunCancellation({
-            ledger,
+            ledger: boundLedger,
             runId: current.run.runId,
             requestId: options.requestId,
             actor: {
@@ -2209,11 +2241,12 @@ export async function recoverExecutionLedgerRun(options) {
     : getStoppedEffectRecoveryTarget(preflight);
 
   return await withExecutionLedger(
-    async (ledger, context) =>
-      await withLocalLedgerServiceMutationOwnership({
+    async (unboundLedger, context) =>
+      await withDirectOperatorMutationAuthority({
         appId: options.expectedAppId || preflight.run.appId,
+        ledger: unboundLedger,
         context,
-        handler: async (localOwner) => {
+        handler: async (ledger, localOwner) => {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
@@ -2457,11 +2490,12 @@ export async function reconcileExecutionLedgerRun(options) {
   if (!preflight) return null;
 
   return await withExecutionLedger(
-    async (ledger, context) =>
-      await withLocalLedgerServiceMutationOwnership({
+    async (unboundLedger, context) =>
+      await withDirectOperatorMutationAuthority({
         appId: options.expectedAppId || preflight.run.appId,
+        ledger: unboundLedger,
         context,
-        handler: async () => {
+        handler: async (ledger) => {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
@@ -2572,11 +2606,12 @@ export async function reconcileExecutionLedgerEffect(options) {
   );
 
   return await withExecutionLedger(
-    async (ledger, context) =>
-      await withLocalLedgerServiceMutationOwnership({
+    async (unboundLedger, context) =>
+      await withDirectOperatorMutationAuthority({
         appId: options.expectedAppId || preflight.run.appId,
+        ledger: unboundLedger,
         context,
-        handler: async (localOwner) => {
+        handler: async (ledger, localOwner) => {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
@@ -2624,6 +2659,36 @@ export async function reconcileExecutionLedgerEffect(options) {
           let operationError;
           let operationFailed = false;
           try {
+            const coordinatorAuthority =
+              await resolveApplicationStateCoordinatorAuthority({
+                ledger,
+                appId: current.run.appId,
+                controlContext: context,
+              });
+            const writeBinding = await resolveApplicationStateWriteBinding({
+              appId: current.run.appId,
+              controlContext: context,
+              applicationStateContext: applicationStateConfiguration,
+              expectedStoreId: target.effect.destination.configuration.storeId,
+            });
+            if (!writeBinding) {
+              throw new Error(
+                'Application-state reconciliation write binding is unavailable.',
+              );
+            }
+            await preflightApplicationStateStoreIdentity({
+              configuration: applicationStateConfiguration,
+              controlContext: context,
+              expectedStoreId: writeBinding.expectedStoreId,
+              ...(writeBinding.destinationAuthorityFloor === undefined
+                ? {}
+                : {
+                    appId: current.run.appId,
+                    coordinatorAuthority,
+                    destinationAuthorityFloor:
+                      writeBinding.destinationAuthorityFloor,
+                  }),
+            });
             await withApplicationStateDB(
               async (db, readOnlyContext) => {
                 assertApplicationStateStoreIsolation(readOnlyContext, context);
@@ -2664,6 +2729,14 @@ export async function reconcileExecutionLedgerEffect(options) {
                 appId: current.run.appId,
                 adapterName: applicationState.context.adapterName,
                 tableName: applicationState.context.tableName,
+                coordinatorAuthority,
+                expectedStoreId: writeBinding.expectedStoreId,
+                ...(writeBinding.destinationAuthorityFloor === undefined
+                  ? {}
+                  : {
+                      destinationAuthorityFloor:
+                        writeBinding.destinationAuthorityFloor,
+                    }),
               });
             reconciliation =
               await reconcileUncertainManagedEffectAtOperatorBoundary({
@@ -2780,11 +2853,12 @@ export async function retryExecutionLedgerEffect(options) {
   getManagedEffectSuccessorRetryTarget(preflight, effectId);
 
   return await withExecutionLedger(
-    async (ledger, context) =>
-      await withLocalLedgerServiceMutationOwnership({
+    async (unboundLedger, context) =>
+      await withDirectOperatorMutationAuthority({
         appId: options.expectedAppId || preflight.run.appId,
+        ledger: unboundLedger,
         context,
-        handler: async (localOwner) => {
+        handler: async (ledger, localOwner) => {
           if (!localOwner || context.adapterName !== 'lmdb') {
             throw new Error(
               'Managed-effect successor retry requires the held LMDB local-owner protocol.',
@@ -2793,7 +2867,10 @@ export async function retryExecutionLedgerEffect(options) {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
-          getManagedEffectSuccessorRetryTarget(current, effectId);
+          const retryTarget = getManagedEffectSuccessorRetryTarget(
+            current,
+            effectId,
+          );
 
           const retainedAuthorization = current.events.find(
             (/** @type {Record<string, any>} */ event) =>
@@ -2862,6 +2939,38 @@ export async function retryExecutionLedgerEffect(options) {
             context,
           );
 
+          const coordinatorAuthority =
+            await resolveApplicationStateCoordinatorAuthority({
+              ledger,
+              appId: current.run.appId,
+              controlContext: context,
+            });
+          const writeBinding = await resolveApplicationStateWriteBinding({
+            appId: current.run.appId,
+            controlContext: context,
+            applicationStateContext: applicationStateConfiguration,
+            expectedStoreId:
+              retryTarget.effect.destination.configuration.storeId,
+          });
+          if (!writeBinding) {
+            throw new Error(
+              'Managed-effect successor write binding is unavailable.',
+            );
+          }
+          await preflightApplicationStateStoreIdentity({
+            configuration: applicationStateConfiguration,
+            controlContext: context,
+            expectedStoreId: writeBinding.expectedStoreId,
+            ...(writeBinding.destinationAuthorityFloor === undefined
+              ? {}
+              : {
+                  appId: current.run.appId,
+                  coordinatorAuthority,
+                  destinationAuthorityFloor:
+                    writeBinding.destinationAuthorityFloor,
+                }),
+          });
+
           // A wrong or absent local volume must fail without materializing a
           // replacement store. The executable catalog is opened only after
           // this existing-identity probe proves the retained destination.
@@ -2915,6 +3024,14 @@ export async function retryExecutionLedgerEffect(options) {
               appId: current.run.appId,
               adapterName: applicationState.context.adapterName,
               tableName: applicationState.context.tableName,
+              coordinatorAuthority,
+              expectedStoreId: writeBinding.expectedStoreId,
+              ...(writeBinding.destinationAuthorityFloor === undefined
+                ? {}
+                : {
+                    destinationAuthorityFloor:
+                      writeBinding.destinationAuthorityFloor,
+                  }),
             });
             await assertManagedEffectSuccessorCatalogPreflight({
               ledger,

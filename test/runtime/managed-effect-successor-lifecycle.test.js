@@ -968,6 +968,42 @@ describe('managed-effect successor dedicated lifecycle', () => {
     ).toEqual(eventsAfterFirst);
   });
 
+  test('stamps successor dispatch with the bound coordinator epoch', async () => {
+    const harness = await createHarness('runtime-coordinator-epoch');
+    const source = await seedNotAppliedSource(
+      harness,
+      'runtime-coordinator-epoch',
+    );
+    const handoff = await authorizeSuccessor(
+      harness,
+      source.runId,
+      SOURCE_EFFECT_ID,
+      'runtime-coordinator-epoch-successor',
+    );
+    const ledger = {
+      ...harness.ledger,
+      getCoordinatorEpoch: () => 7,
+    };
+
+    await expect(
+      executeManagedEffectSuccessorRun({
+        ledger,
+        authorization: handoff.authorization,
+        request: handoff.request,
+        catalog: harness.catalog,
+        actor: ACTOR,
+        createFencingToken: () => 'runtime-coordinator-epoch-fence',
+      }),
+    ).resolves.toMatchObject({
+      outcome: { disposition: 'completed', reused: false },
+    });
+    await expect(
+      harness.ledger.rebuildRun(handoff.authorization.target.runId),
+    ).resolves.toMatchObject({
+      attempts: [expect.objectContaining({ coordinatorEpoch: 7 })],
+    });
+  });
+
   test('concurrent target executors grant one atomic dispatch authority', async () => {
     const harness = await createHarness('concurrent-runtime');
     const source = await seedNotAppliedSource(harness, 'concurrent-runtime');

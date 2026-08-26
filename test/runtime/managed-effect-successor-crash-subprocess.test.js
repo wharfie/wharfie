@@ -2,6 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
@@ -18,6 +19,11 @@ import {
   createApplicationStateBusinessKey,
   createApplicationStateTable,
 } from '../../src/core/lib/db/tables/application-state.js';
+import { createApplicationStateCoordinatorAuthorityRecord } from '../../src/core/lib/db/tables/application-state-authority.js';
+import {
+  CoordinatorAuthorityStatus,
+  createCoordinatorAuthority,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
 import {
   AttemptStatus,
   EffectStatus,
@@ -37,6 +43,10 @@ import {
   reconcileExecutionLedgerEffect,
   recoverExecutionLedgerRun,
 } from '../../src/core/runtime/operator/execution-ledger-operator.js';
+import {
+  withExecutionLedgerCoordinatorAuthority,
+  withLocalLedgerServiceMutationOwnership,
+} from '../../src/core/runtime/operator/execution-ledger-store.js';
 
 const CHILD_PATH = fileURLToPath(
   new URL(
@@ -309,7 +319,7 @@ async function readRun(fixture, runId) {
 
 /** @param {SuccessorCrashFixture} fixture */
 async function replayAuthorization(fixture) {
-  const { db, ledger } = createLedger(fixture.configuration);
+  const { db, ledger } = createLedger(fixture.configuration, true);
   try {
     return await ledger.authorizeManagedEffectSuccessorRetry({
       sourceRunId: fixture.sourceRunId,
@@ -328,18 +338,9 @@ async function replayAuthorization(fixture) {
  * @param {SuccessorHandoff} handoff
  */
 async function replayWithoutStart(fixture, handoff) {
-  const { db, ledger } = createLedger(fixture.configuration);
-  const applicationDb = await createApplicationStateDBClient('lmdb', {
-    path: fixture.applicationStateConfiguration.storePath,
-  });
+  const { db, ledger } = createLedger(fixture.configuration, true);
   let startCalls = 0;
   try {
-    const catalog = await createBuiltinManagedEffectCatalog({
-      db: applicationDb,
-      appId: APP_ID,
-      adapterName: 'lmdb',
-      tableName: fixture.applicationStateConfiguration.tableName,
-    });
     const noStartLedger = {
       ...ledger,
       async startManagedEffectSuccessor() {
@@ -351,12 +352,10 @@ async function replayWithoutStart(fixture, handoff) {
       ledger: noStartLedger,
       authorization: handoff.authorization,
       request: handoff.request,
-      catalog,
       actor: ACTOR,
     });
     return { result, startCalls };
   } finally {
-    await applicationDb.close();
     await db.close();
   }
 }
@@ -366,27 +365,155 @@ async function replayWithoutStart(fixture, handoff) {
  * @param {SuccessorHandoff} handoff
  */
 async function executeAuthorizedTarget(fixture, handoff) {
-  const { db, ledger } = createLedger(fixture.configuration);
-  const applicationDb = await createApplicationStateDBClient('lmdb', {
-    path: fixture.applicationStateConfiguration.storePath,
-  });
+  const { db, ledger: unboundLedger } = createLedger(fixture.configuration);
+  const context = { ...fixture.configuration, db, readOnly: false };
   try {
-    const catalog = await createBuiltinManagedEffectCatalog({
-      db: applicationDb,
+    return await withLocalLedgerServiceMutationOwnership({
       appId: APP_ID,
-      adapterName: 'lmdb',
-      tableName: fixture.applicationStateConfiguration.tableName,
-    });
-    return await executeManagedEffectSuccessorRun({
-      ledger,
-      authorization: handoff.authorization,
-      request: handoff.request,
-      catalog,
-      actor: ACTOR,
-      createFencingToken: () => 'successor-replay-fence',
+      context,
+      handler: async (localOwner) => {
+        if (!localOwner) {
+          throw new Error('Successor proof requires its own local owner.');
+        }
+        return await withExecutionLedgerCoordinatorAuthority({
+          appId: APP_ID,
+          coordinatorId: localOwner.sessionId,
+          ledger: unboundLedger,
+          context,
+          handler: async (ledger, coordinatorAuthority) => {
+            const applicationDb = await createApplicationStateDBClient('lmdb', {
+              path: fixture.applicationStateConfiguration.storePath,
+            });
+            try {
+              const catalog = await createBuiltinManagedEffectCatalog({
+                db: applicationDb,
+                appId: APP_ID,
+                adapterName: 'lmdb',
+                tableName: fixture.applicationStateConfiguration.tableName,
+                coordinatorAuthority: ledger.getCoordinatorAuthority(),
+                expectedStoreId:
+                  handoff.authorization.contract.destination.configuration
+                    .storeId,
+              });
+              const result = await executeManagedEffectSuccessorRun({
+                ledger,
+                authorization: handoff.authorization,
+                request: handoff.request,
+                catalog,
+                actor: ACTOR,
+                createFencingToken: () => 'successor-replay-fence',
+              });
+              return { ...result, coordinatorAuthority };
+            } finally {
+              await applicationDb.close();
+            }
+          },
+        });
+      },
     });
   } finally {
-    await applicationDb.close();
+    await db.close();
+  }
+}
+
+/**
+ * Retire only the exact authority reported by the child whose SIGKILL exit
+ * this proof observed. Neither recovery nor ordinary acquisition is allowed
+ * to infer takeover from an old timestamp or a missing process.
+ * @param {SuccessorCrashFixture} fixture
+ * @param {ChildExit & {message: Record<string, any>}} crashed
+ * @returns {Promise<import('../../src/core/lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot>}
+ */
+async function releaseKnownStoppedCoordinator(fixture, crashed) {
+  assert.deepEqual(
+    { code: crashed.code, signal: crashed.signal },
+    { code: null, signal: 'SIGKILL' },
+    'Coordinator handoff requires the confirmed child SIGKILL exit.',
+  );
+  const reported = crashed.message.coordinatorAuthority;
+  const ownership = crashed.message.ownership;
+  assert.equal(reported?.appId, APP_ID);
+  assert.equal(reported?.status, CoordinatorAuthorityStatus.ACTIVE);
+  assert.equal(ownership?.appId, APP_ID);
+  assert.equal(reported?.coordinatorId, ownership?.sessionId);
+  assert.equal(typeof ownership?.sessionId, 'string');
+  assert.ok(ownership.sessionId.length > 0);
+
+  const db = createLMDB({ path: fixture.configuration.controlPath });
+  try {
+    const authorityStore = createCoordinatorAuthority({
+      db,
+      tableName: fixture.configuration.tableName,
+    });
+    const observed = await authorityStore.get({ appId: APP_ID });
+    // IPC and Jest create objects in different realms. Copy the flat snapshot
+    // fields before strict comparison so prototypes cannot mask equal values.
+    assert.deepEqual(
+      { ...observed },
+      { ...reported },
+      'Refusing to replace authority other than the confirmed stopped child.',
+    );
+    const takeoverRequest = {
+      appId: APP_ID,
+      coordinatorId: `successor-known-stopped:${fixture.boundary}`,
+      requestId: `successor-known-stopped-takeover:${fixture.boundary}`,
+      observedAuthority: observed,
+      confirmAuthorityReplacement: true,
+    };
+    const takeover = await authorityStore.takeover(takeoverRequest);
+    expect(takeover).toMatchObject({
+      applied: true,
+      action: 'takeover',
+      authority: {
+        appId: APP_ID,
+        status: CoordinatorAuthorityStatus.ACTIVE,
+        epoch: reported.epoch + 1,
+      },
+    });
+    const releaseRequest = {
+      authority: takeover.authority,
+      requestId: `successor-known-stopped-release:${fixture.boundary}`,
+    };
+    const released = await authorityStore.release(releaseRequest);
+    expect(released).toMatchObject({
+      applied: true,
+      action: 'release',
+      authority: {
+        status: CoordinatorAuthorityStatus.RELEASED,
+        epoch: takeover.authority.epoch,
+      },
+    });
+    // The exact takeover receipt remains replayable after its temporary
+    // successor is released; it never reacquires or changes current authority.
+    await expect(authorityStore.takeover(takeoverRequest)).resolves.toEqual({
+      ...takeover,
+      applied: false,
+    });
+    await expect(authorityStore.release(releaseRequest)).resolves.toEqual({
+      ...released,
+      applied: false,
+    });
+    await expect(authorityStore.get({ appId: APP_ID })).resolves.toEqual(
+      released.authority,
+    );
+    return released.authority;
+  } finally {
+    await db.close();
+  }
+}
+
+/** @param {SuccessorCrashFixture} fixture @param {string} storeId */
+async function readDestinationAuthority(fixture, storeId) {
+  const db = await createApplicationStateDBClient('lmdb', {
+    path: fixture.applicationStateConfiguration.storePath,
+    readOnly: true,
+  });
+  try {
+    return await createApplicationStateTable({
+      db,
+      tableName: fixture.applicationStateConfiguration.tableName,
+    }).readCoordinatorAuthority({ storeId, namespace: APP_ID });
+  } finally {
     await db.close();
   }
 }
@@ -615,10 +742,17 @@ describe('real SIGKILL managed-effect successor recovery', () => {
         expect(sourceBefore).toMatchObject({
           run: { status: RunStatus.BLOCKED },
           attempts: [
-            expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+            expect.objectContaining({
+              status: AttemptStatus.ABANDONED,
+              coordinatorEpoch: 0,
+            }),
           ],
           effects: [
-            expect.objectContaining({ status: EffectStatus.NOT_APPLIED }),
+            expect.objectContaining({
+              status: EffectStatus.NOT_APPLIED,
+              requestedBy: expect.objectContaining({ coordinatorEpoch: 0 }),
+              startedBy: expect.objectContaining({ coordinatorEpoch: 0 }),
+            }),
           ],
         });
 
@@ -639,8 +773,29 @@ describe('real SIGKILL managed-effect successor recovery', () => {
               ownerKind: 'manual',
               generation: 1,
             },
+            coordinatorAuthority: {
+              appId: APP_ID,
+              status: CoordinatorAuthorityStatus.ACTIVE,
+              epoch: expect.any(Number),
+            },
           },
         });
+        const childAuthority = crashed.message.coordinatorAuthority;
+        expect(childAuthority.coordinatorId).toBe(
+          crashed.message.ownership.sessionId,
+        );
+        expect(childAuthority.epoch).toBeGreaterThan(0);
+        const storeId =
+          sourceBefore.effects[0].destination.configuration.storeId;
+        const childDestinationAuthority =
+          createApplicationStateCoordinatorAuthorityRecord({
+            storeId,
+            namespace: APP_ID,
+            authority: childAuthority,
+          });
+        expect(await readDestinationAuthority(fixture, storeId)).toEqual(
+          childDestinationAuthority,
+        );
 
         const targetRunId = crashed.message.detail.targetRunId;
         const sourceAfterCrash = await readRun(fixture, fixture.sourceRunId);
@@ -663,6 +818,15 @@ describe('real SIGKILL managed-effect successor recovery', () => {
         expect(singleStatus(targetAfterCrash, 'effects')).toBe(
           scenario.before.effect,
         );
+        for (const attempt of targetAfterCrash.attempts) {
+          expect(attempt.coordinatorEpoch).toBe(childAuthority.epoch);
+        }
+        for (const effect of targetAfterCrash.effects) {
+          expect(effect.requestedBy.coordinatorEpoch).toBe(
+            childAuthority.epoch,
+          );
+          expect(effect.startedBy.coordinatorEpoch).toBe(childAuthority.epoch);
+        }
 
         const targetEffectAfterCrash = targetAfterCrash.effects[0] || null;
         const destinationAfterCrash = await readDestinationState(
@@ -696,6 +860,16 @@ describe('real SIGKILL managed-effect successor recovery', () => {
         expect(sourceAfterReplay).toEqual(sourceAfterCrash);
         expect(targetAfterReplay).toEqual(targetAfterCrash);
 
+        const releasedAuthority = await releaseKnownStoppedCoordinator(
+          fixture,
+          crashed,
+        );
+        // Control handoff does not implicitly advance the separate destination
+        // fence. The next bound writable catalog must adopt its own authority.
+        expect(await readDestinationAuthority(fixture, storeId)).toEqual(
+          childDestinationAuthority,
+        );
+
         if (scenario.boundary === Boundary.AUTHORIZATION) {
           expect(targetAfterReplay).toMatchObject({
             attempts: [],
@@ -704,7 +878,15 @@ describe('real SIGKILL managed-effect successor recovery', () => {
           const execution = await executeAuthorizedTarget(fixture, handoff);
           expect(execution).toMatchObject({
             outcome: { disposition: 'completed', reused: false },
+            coordinatorAuthority: {
+              appId: APP_ID,
+              status: CoordinatorAuthorityStatus.ACTIVE,
+              epoch: releasedAuthority.epoch + 1,
+            },
           });
+          expect(execution.coordinatorAuthority.coordinatorId).not.toBe(
+            childAuthority.coordinatorId,
+          );
           const completed = await readRun(fixture, targetRunId);
           if (!completed) throw new Error('Authorized target disappeared.');
           expect(completed).toMatchObject({
@@ -713,12 +895,30 @@ describe('real SIGKILL managed-effect successor recovery', () => {
               expect.objectContaining({ status: InvocationStatus.COMPLETED }),
             ],
             attempts: [
-              expect.objectContaining({ status: AttemptStatus.COMPLETED }),
+              expect.objectContaining({
+                status: AttemptStatus.COMPLETED,
+                coordinatorEpoch: execution.coordinatorAuthority.epoch,
+              }),
             ],
             effects: [
-              expect.objectContaining({ status: EffectStatus.COMPLETED }),
+              expect.objectContaining({
+                status: EffectStatus.COMPLETED,
+                requestedBy: expect.objectContaining({
+                  coordinatorEpoch: execution.coordinatorAuthority.epoch,
+                }),
+                startedBy: expect.objectContaining({
+                  coordinatorEpoch: execution.coordinatorAuthority.epoch,
+                }),
+              }),
             ],
           });
+          expect(await readDestinationAuthority(fixture, storeId)).toEqual(
+            createApplicationStateCoordinatorAuthorityRecord({
+              storeId,
+              namespace: APP_ID,
+              authority: execution.coordinatorAuthority,
+            }),
+          );
           const completedEffect = completed.effects[0];
           expect(await readDestinationState(fixture, completedEffect)).toEqual(
             expect.objectContaining({
@@ -760,6 +960,15 @@ describe('real SIGKILL managed-effect successor recovery', () => {
           applicationStateConfiguration: fixture.applicationStateConfiguration,
         });
         if (!recovered) throw new Error('Target recovery returned no run.');
+        for (const attempt of recovered.view.attempts) {
+          expect(attempt.coordinatorEpoch).toBe(childAuthority.epoch);
+        }
+        for (const effect of recovered.view.effects) {
+          expect(effect.requestedBy.coordinatorEpoch).toBe(
+            childAuthority.epoch,
+          );
+          expect(effect.startedBy.coordinatorEpoch).toBe(childAuthority.epoch);
+        }
         if (scenario.boundary === Boundary.TERMINAL) {
           expect(recovered).toMatchObject({
             recovery: {
@@ -878,6 +1087,12 @@ describe('real SIGKILL managed-effect successor recovery', () => {
                 status: completed
                   ? EffectStatus.COMPLETED
                   : EffectStatus.NOT_APPLIED,
+                requestedBy: expect.objectContaining({
+                  coordinatorEpoch: childAuthority.epoch,
+                }),
+                startedBy: expect.objectContaining({
+                  coordinatorEpoch: childAuthority.epoch,
+                }),
               }),
             ],
           },

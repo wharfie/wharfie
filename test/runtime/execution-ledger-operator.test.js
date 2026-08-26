@@ -28,6 +28,26 @@ import {
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
 import {
+  CoordinatorAuthorityConflictError,
+  CoordinatorAuthorityStatus,
+  createCoordinatorAuthority,
+  createCoordinatorAuthorityToken,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
+import {
+  APPLICATION_STATE_KEY_NAME,
+  APPLICATION_STATE_SORT_KEY_NAME,
+  createApplicationStateTable,
+} from '../../src/core/lib/db/tables/application-state.js';
+import {
+  createApplicationStateCoordinatorAuthorityKey,
+  createApplicationStateCoordinatorAuthorityRecord,
+} from '../../src/core/lib/db/tables/application-state-authority.js';
+import { createApplicationStateReadinessStore } from '../../src/core/lib/db/tables/application-state-readiness.js';
+import {
+  createLedgerServiceId,
+  createLedgerServiceOwnership,
+} from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
+import {
   WorkflowCursorDisposition,
   createWorkflowRunId,
 } from '../../src/core/lib/ledger/workflow-execution-contract.js';
@@ -47,6 +67,7 @@ import {
   reconcileManualLedgerActivity,
 } from '../../src/core/runtime/manual-ledger-run.js';
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
+import { prepareApplicationStateReadiness } from '../../src/core/runtime/application-state-readiness.js';
 import {
   ExecutionLedgerOperatorScopeError,
   EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES,
@@ -60,6 +81,7 @@ import {
   recoverStoppedManagedEffectsAtOperatorBoundary,
   retryExecutionLedgerEffect,
 } from '../../src/core/runtime/operator/execution-ledger-operator.js';
+import { withExecutionLedger } from '../../src/core/runtime/operator/execution-ledger-store.js';
 import {
   createExecutionLedgerEffectReconciliationOperatorView,
   createExecutionLedgerEffectSuccessorOperatorView,
@@ -302,6 +324,101 @@ async function readLmdbRun(configuration, runId) {
   }
 }
 
+/** @param {Awaited<ReturnType<typeof seedApplicationStateRecoveryRun>>} fixture */
+async function readApplicationStateAuthority(fixture) {
+  const db = await createApplicationStateDBClient('lmdb', {
+    path: fixture.applicationStateConfiguration.storePath,
+    readOnly: true,
+  });
+  try {
+    return await createApplicationStateTable({
+      db,
+      tableName: fixture.applicationStateConfiguration.tableName,
+    }).readCoordinatorAuthority({
+      storeId: fixture.storeId,
+      namespace: fixture.appId,
+    });
+  } finally {
+    await db.close();
+  }
+}
+
+/** @param {Awaited<ReturnType<typeof seedApplicationStateRecoveryRun>>} fixture */
+async function seedApplicationStateReadiness(fixture) {
+  const { db, ledger } = createLmdbLedger(fixture.configuration);
+  const authorityStore = createCoordinatorAuthority({
+    db,
+    tableName: fixture.configuration.tableName,
+  });
+  const acquired = await authorityStore.acquire({
+    appId: fixture.appId,
+    coordinatorId: 'operator-readiness-seed',
+    requestId: 'operator-readiness-seed-acquire',
+  });
+  const authority = createCoordinatorAuthorityToken(acquired.authority);
+  try {
+    const readiness = await prepareApplicationStateReadiness({
+      ledger: ledger.bindCoordinatorAuthority(authority),
+      appId: fixture.appId,
+      controlContext: {
+        db,
+        tableName: fixture.configuration.tableName,
+        adapterName: 'lmdb',
+        controlPath: fixture.configuration.controlPath,
+      },
+      configuration: fixture.applicationStateConfiguration,
+    });
+    await authorityStore.release({
+      authority,
+      requestId: 'operator-readiness-seed-release',
+    });
+    return { readiness, authority };
+  } finally {
+    await db.close();
+  }
+}
+
+/** @param {Awaited<ReturnType<typeof seedApplicationStateRecoveryRun>>} fixture */
+async function readApplicationStateReadiness(fixture) {
+  const { db } = createLmdbLedger(fixture.configuration, { readOnly: true });
+  try {
+    return await createApplicationStateReadinessStore({
+      db,
+      tableName: fixture.configuration.tableName,
+    }).get({ appId: fixture.appId });
+  } finally {
+    await db.close();
+  }
+}
+
+/** @param {Awaited<ReturnType<typeof seedApplicationStateRecoveryRun>>} fixture @param {Readonly<Record<string, any>> | null} barrier */
+async function replaceApplicationStateAuthority(fixture, barrier) {
+  const db = await createApplicationStateDBClient('lmdb', {
+    path: fixture.applicationStateConfiguration.storePath,
+  });
+  try {
+    const key = createApplicationStateCoordinatorAuthorityKey(fixture.appId);
+    if (barrier === null) {
+      await db.remove({
+        tableName: fixture.applicationStateConfiguration.tableName,
+        keyName: APPLICATION_STATE_KEY_NAME,
+        keyValue: key.resourceId,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        sortKeyValue: key.sortKey,
+      });
+    } else {
+      await db.put({
+        tableName: fixture.applicationStateConfiguration.tableName,
+        keyName: APPLICATION_STATE_KEY_NAME,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        record: barrier,
+      });
+    }
+  } finally {
+    await db.close();
+  }
+}
+
 /** @param {Record<string, any>} cursor */
 function workflowCursorGuard(cursor) {
   return {
@@ -380,6 +497,47 @@ async function readRun(root, configuration, runId) {
   } finally {
     await db.close();
   }
+}
+
+/**
+ * @param {OperatorConfiguration | ReturnType<typeof createLmdbConfiguration>} configuration
+ * @param {string} appId
+ */
+async function readOperatorAuthorityState(configuration, appId) {
+  return await withExecutionLedger(
+    async (_ledger, context) => ({
+      authority: await createCoordinatorAuthority({
+        db: context.db,
+        tableName: context.tableName,
+      }).get({ appId }),
+      ownership: await createLedgerServiceOwnership({
+        db: context.db,
+        tableName: context.tableName,
+      }).getOwnership({ serviceId: createLedgerServiceId({ appId }) }),
+    }),
+    { configuration, readOnly: true },
+  );
+}
+
+/**
+ * @param {OperatorConfiguration | ReturnType<typeof createLmdbConfiguration>} configuration
+ * @param {string} appId
+ */
+async function acquireRetainedOperatorAuthority(configuration, appId) {
+  return await withExecutionLedger(
+    async (_ledger, context) => {
+      const result = await createCoordinatorAuthority({
+        db: context.db,
+        tableName: context.tableName,
+      }).acquire({
+        appId,
+        coordinatorId: 'retained-operator-predecessor',
+        requestId: 'retained-operator-predecessor-acquire',
+      });
+      return result.authority;
+    },
+    { configuration },
+  );
 }
 
 describe('shared execution-ledger operator boundary', () => {
@@ -835,6 +993,53 @@ describe('shared execution-ledger operator boundary', () => {
     }
   });
 
+  it('uses fresh released authority epochs for non-LMDB recovery and its idempotent replay', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-authority-epochs-'),
+    );
+    const configuration = createConfiguration(
+      root,
+      'operator-authority-epochs',
+    );
+    const appId = 'operator-authority-epochs-app';
+    try {
+      const runId = await seedClaimedRun(root, configuration, appId, 'recover');
+      const request = { runId, expectedAppId: appId, configuration };
+      const first = await recoverExecutionLedgerRun(request);
+      const firstState = await readOperatorAuthorityState(configuration, appId);
+      expect(firstState).toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 1 },
+        ownership: null,
+      });
+      expect(firstState.authority?.coordinatorId).toMatch(
+        /^wss_[A-Za-z0-9_-]{43}$/u,
+      );
+
+      const replay = await recoverExecutionLedgerRun(request);
+      const replayState = await readOperatorAuthorityState(
+        configuration,
+        appId,
+      );
+      expect(replay?.view).toEqual(first?.view);
+      expect(replay?.recovery).toMatchObject({
+        changed: false,
+        action: 'none',
+      });
+      expect(replayState).toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 2 },
+        ownership: null,
+      });
+      expect(replayState.authority?.coordinatorId).toMatch(
+        /^wss_[A-Za-z0-9_-]{43}$/u,
+      );
+      expect(replayState.authority?.coordinatorId).not.toBe(
+        firstState.authority?.coordinatorId,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('cancels an offline runnable workflow and replays without duplicate authority', async () => {
     const root = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-operator-workflow-cancel-'),
@@ -900,6 +1105,14 @@ describe('shared execution-ledger operator boundary', () => {
         runStatus: RunStatus.CANCELLED,
         invocationStatus: InvocationStatus.CANCELLED,
       });
+      const firstAuthority = await readOperatorAuthorityState(
+        configuration,
+        appId,
+      );
+      expect(firstAuthority).toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 1 },
+        ownership: null,
+      });
       await expect(cancelExecutionLedgerRun(request)).resolves.toEqual(first);
       await expect(
         cancelExecutionLedgerRun({
@@ -930,6 +1143,75 @@ describe('shared execution-ledger operator boundary', () => {
             event.type === 'workflow-cancellation-requested',
         ),
       ).toHaveLength(1);
+      await expect(
+        readOperatorAuthorityState(configuration, appId),
+      ).resolves.toEqual(firstAuthority);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on an active predecessor during offline workflow cancellation and releases local ownership', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-cancel-authority-conflict-'),
+    );
+    const configuration = createLmdbConfiguration(
+      root,
+      'operator-cancel-authority-conflict',
+    );
+    const appId = 'operator-cancel-authority-conflict-app';
+    const runId = createWorkflowRunId({
+      appId,
+      idempotencyKey: 'active-predecessor',
+    });
+    try {
+      const seeded = createLmdbLedger(configuration);
+      try {
+        await seeded.ledger.createWorkflowRun({
+          runId,
+          appId,
+          revisionId: RUN_REVISION_ID,
+          workflowId: 'cancel-workflow',
+          definition: {
+            steps: [
+              {
+                id: 'work',
+                kind: 'activity',
+                activity: 'work',
+                input: { kind: 'workflow-input' },
+              },
+            ],
+          },
+          input: {},
+          callerMetadata: {},
+          transitionId: 'create-workflow-cancel-conflict',
+        });
+      } finally {
+        await seeded.db.close();
+      }
+      const predecessor = await acquireRetainedOperatorAuthority(
+        configuration,
+        appId,
+      );
+      const before = await readLmdbRun(configuration, runId);
+
+      await expect(
+        cancelExecutionLedgerRun({
+          runId,
+          requestId: 'blocked-workflow-cancel',
+          expectedAppId: appId,
+          configuration,
+        }),
+      ).resolves.toMatchObject({
+        outcome: 'owner-unreachable',
+        delivery: 'not-delivered',
+        runStatus: RunStatus.RUNNING,
+      });
+
+      await expect(readLmdbRun(configuration, runId)).resolves.toEqual(before);
+      await expect(
+        readOperatorAuthorityState(configuration, appId),
+      ).resolves.toEqual({ authority: predecessor, ownership: null });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1366,6 +1648,7 @@ describe('shared execution-ledger operator boundary', () => {
         effectStates: ['PENDING', 'STARTED', 'STARTED'],
         receiptIndexes: [1],
       });
+      await expect(readApplicationStateAuthority(fixture)).resolves.toBeNull();
       const before = await readLmdbRun(fixture.configuration, fixture.runId);
       const result = await recoverExecutionLedgerRun({
         runId: fixture.runId,
@@ -1375,6 +1658,9 @@ describe('shared execution-ledger operator boundary', () => {
         applicationStateConfiguration: fixture.applicationStateConfiguration,
       });
       if (!result) throw new Error('Expected managed-effect recovery result.');
+      // Control-ledger recovery may acquire authority, but receipt recovery
+      // must not install or advance a destination-local application fence.
+      await expect(readApplicationStateAuthority(fixture)).resolves.toBeNull();
 
       expect(result.recovery).toEqual({
         found: true,
@@ -1457,6 +1743,179 @@ describe('shared execution-ledger operator boundary', () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 20000);
+
+  it('rejects a mismatched retained destination during read-only reconciliation preflight without adopting either store', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-destination-preflight-'),
+    );
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root);
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      const otherConfiguration = Object.freeze({
+        ...fixture.applicationStateConfiguration,
+        storePath: path.join(root, 'other-application-state'),
+      });
+      const otherDb = await createApplicationStateDBClient('lmdb', {
+        path: otherConfiguration.storePath,
+      });
+      let otherStoreId;
+      try {
+        const catalog = await createBuiltinManagedEffectCatalog({
+          db: otherDb,
+          appId: fixture.appId,
+          adapterName: 'lmdb',
+        });
+        otherStoreId = catalog.storeId;
+      } finally {
+        await otherDb.close();
+      }
+      expect(otherStoreId).not.toBe(fixture.storeId);
+      const otherFixture = {
+        ...fixture,
+        storeId: otherStoreId,
+        applicationStateConfiguration: otherConfiguration,
+      };
+      await expect(readApplicationStateAuthority(fixture)).resolves.toBeNull();
+      await expect(
+        readApplicationStateAuthority(otherFixture),
+      ).resolves.toBeNull();
+
+      await expect(
+        reconcileExecutionLedgerEffect({
+          runId: fixture.runId,
+          effectId: fixture.effectIds[0],
+          reconciliationId: 'wrong-destination-must-not-adopt',
+          expectedAppId: fixture.appId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: otherConfiguration,
+        }),
+      ).rejects.toThrow(/store identity does not match expected store/i);
+
+      await expect(readApplicationStateAuthority(fixture)).resolves.toBeNull();
+      await expect(
+        readApplicationStateAuthority(otherFixture),
+      ).resolves.toBeNull();
+      await expect(
+        readLmdbRun(fixture.configuration, fixture.runId),
+      ).resolves.toEqual(recovered.view);
+      await expect(
+        readOperatorAuthorityState(fixture.configuration, fixture.appId),
+      ).resolves.toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 2 },
+        ownership: null,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('refuses reconciliation when an ADOPTED destination barrier was deleted without repairing the destination or ledger', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-deleted-readiness-barrier-'),
+    );
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const seeded = await seedApplicationStateReadiness(fixture);
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      await replaceApplicationStateAuthority(fixture, null);
+
+      await expect(
+        reconcileExecutionLedgerEffect({
+          runId: fixture.runId,
+          effectId: fixture.effectIds[0],
+          reconciliationId: 'deleted-readiness-barrier',
+          expectedAppId: fixture.appId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: fixture.applicationStateConfiguration,
+        }),
+      ).rejects.toMatchObject({
+        code: 'WHARFIE_APPLICATION_STATE_COORDINATOR_AUTHORITY_STALE',
+      });
+
+      await expect(
+        readLmdbRun(fixture.configuration, fixture.runId),
+      ).resolves.toEqual(recovered.view);
+      await expect(readApplicationStateReadiness(fixture)).resolves.toEqual(
+        seeded.readiness,
+      );
+      await expect(readApplicationStateAuthority(fixture)).resolves.toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('refuses successor authorization when an ADOPTED destination barrier was deleted after reconciliation', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-successor-deleted-barrier-'),
+    );
+    const actor = {
+      kind: 'packaged-operator',
+      id: OPERATOR_REVISION_ID,
+    };
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const seeded = await seedApplicationStateReadiness(fixture);
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      const sourceEffect = recovered.view.effects[0];
+      const reconciled = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: sourceEffect.effectId,
+        reconciliationId: 'successor-deleted-barrier-source',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!reconciled) throw new Error('Expected source reconciliation.');
+      await replaceApplicationStateAuthority(fixture, null);
+
+      await expect(
+        retryExecutionLedgerEffect({
+          runId: fixture.runId,
+          effectId: sourceEffect.effectId,
+          successorId: 'deleted-barrier-successor',
+          actor,
+          expectedAppId: fixture.appId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: fixture.applicationStateConfiguration,
+        }),
+      ).rejects.toMatchObject({
+        code: 'WHARFIE_APPLICATION_STATE_COORDINATOR_AUTHORITY_STALE',
+      });
+
+      await expect(
+        readLmdbRun(fixture.configuration, fixture.runId),
+      ).resolves.toEqual(reconciled.view);
+      await expect(readApplicationStateReadiness(fixture)).resolves.toEqual(
+        seeded.readiness,
+      );
+      await expect(readApplicationStateAuthority(fixture)).resolves.toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
 
   it('replays a destination not-applied resolution after the ledger append is lost', async () => {
     const root = mkdtempSync(
@@ -1816,7 +2275,19 @@ describe('shared execution-ledger operator boundary', () => {
         applicationStateConfiguration: fixture.applicationStateConfiguration,
       });
       if (!recovered) throw new Error('Expected uncertain recovery result.');
+      await expect(readApplicationStateAuthority(fixture)).resolves.toBeNull();
       const sourceEffect = recovered.view.effects[0];
+      expect(sourceEffect.destination).toEqual({
+        kind: 'application-state',
+        version: 2,
+        bindingId: 'primary',
+        configuration: {
+          provider: 'lmdb',
+          storeId: fixture.storeId,
+          tableName: APPLICATION_STATE_TABLE_NAME,
+          namespace: fixture.appId,
+        },
+      });
       const reconciled = await reconcileExecutionLedgerEffect({
         runId: fixture.runId,
         effectId: sourceEffect.effectId,
@@ -1830,6 +2301,24 @@ describe('shared execution-ledger operator boundary', () => {
         throw new Error('Expected not-applied source reconciliation.');
       }
       expect(reconciled.reconciliation.status).toBe(EffectStatus.NOT_APPLIED);
+      const reconciliationAuthority = await readOperatorAuthorityState(
+        fixture.configuration,
+        fixture.appId,
+      );
+      expect(reconciliationAuthority).toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 2 },
+        ownership: null,
+      });
+      await expect(readApplicationStateAuthority(fixture)).resolves.toEqual(
+        createApplicationStateCoordinatorAuthorityRecord({
+          storeId: fixture.storeId,
+          namespace: fixture.appId,
+          authority: reconciliationAuthority.authority,
+        }),
+      );
+      expect(reconciled.view.effects[0].destination).toEqual(
+        sourceEffect.destination,
+      );
       const sourceBefore = reconciled.view;
 
       const result = await retryExecutionLedgerEffect({
@@ -1869,6 +2358,7 @@ describe('shared execution-ledger operator boundary', () => {
       expect(result.targetView).toMatchObject({
         run: { status: RunStatus.COMPLETED },
         invocations: [{ status: InvocationStatus.COMPLETED }],
+        attempts: [expect.objectContaining({ coordinatorEpoch: 3 })],
         effects: [
           expect.objectContaining({
             effectId: result.successor.targetEffectId,
@@ -1876,6 +2366,67 @@ describe('shared execution-ledger operator boundary', () => {
           }),
         ],
       });
+      const successorAuthority = await readOperatorAuthorityState(
+        fixture.configuration,
+        fixture.appId,
+      );
+      expect(successorAuthority).toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 3 },
+        ownership: null,
+      });
+      const expectedDestinationAuthority =
+        createApplicationStateCoordinatorAuthorityRecord({
+          storeId: fixture.storeId,
+          namespace: fixture.appId,
+          authority: successorAuthority.authority,
+        });
+      await expect(readApplicationStateAuthority(fixture)).resolves.toEqual(
+        expectedDestinationAuthority,
+      );
+      expect(result.targetView.effects[0].destination).toEqual(
+        sourceEffect.destination,
+      );
+
+      const applicationDb = await createApplicationStateDBClient('lmdb', {
+        path: fixture.applicationStateConfiguration.storePath,
+        readOnly: true,
+      });
+      try {
+        const receipt = await createApplicationStateTable({
+          db: applicationDb,
+          tableName: APPLICATION_STATE_TABLE_NAME,
+        }).readReceipt(result.targetView.effects[0].destinationEffectId);
+        expect(receipt).toMatchObject({
+          record_kind: 'application-state-effect-receipt',
+          schema_version: 2,
+          store_id: fixture.storeId,
+          destination_effect_id:
+            result.targetView.effects[0].destinationEffectId,
+          inserted: true,
+        });
+        // Destination authority is a separate local fence, not new logical
+        // receipt data or a change to the existing v2 digest/schema contract.
+        expect(Object.keys(receipt || {}).sort()).toEqual(
+          [
+            'resource_id',
+            'sort_key',
+            'record_kind',
+            'schema_version',
+            'store_id',
+            'destination_effect_id',
+            'operation',
+            'contract_digest',
+            'business_resource_id',
+            'business_sort_key',
+            'business_record_digest',
+            'outcome_code',
+            'inserted',
+            'receipt_digest',
+          ].sort(),
+        );
+      } finally {
+        await applicationDb.close();
+      }
 
       const operatorView = createExecutionLedgerEffectSuccessorOperatorView(
         result.successor,
@@ -1904,10 +2455,18 @@ describe('shared execution-ledger operator boundary', () => {
       const serialized = JSON.stringify(operatorView);
       for (const secret of [
         fixture.storeId,
+        expectedDestinationAuthority.coordinator_id,
+        expectedDestinationAuthority.authority_id,
+        expectedDestinationAuthority.record_digest,
         'state-secret-remember-value',
         'private-successor-reason',
         'destinationEffectId',
         'fencingToken',
+        'coordinatorAuthority',
+        'coordinatorEpoch',
+        'coordinator_id',
+        'authority_id',
+        'application-state-coordinator-authority',
       ]) {
         expect(serialized).not.toContain(secret);
       }
@@ -1933,6 +2492,12 @@ describe('shared execution-ledger operator boundary', () => {
         },
         sourceView: result.sourceView,
         targetView: result.targetView,
+      });
+      await expect(
+        readOperatorAuthorityState(fixture.configuration, fixture.appId),
+      ).resolves.toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 4 },
+        ownership: null,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -2474,6 +3039,123 @@ describe('shared execution-ledger operator boundary', () => {
     }
   }, 30000);
 
+  it.each(['recover', 'reconcile', 'reconcile-effect', 'retry-effect'])(
+    'fails closed on an ACTIVE predecessor for direct %s and releases local ownership',
+    async (command) => {
+      const root = mkdtempSync(
+        path.join(
+          os.tmpdir(),
+          `wharfie-operator-${command}-authority-conflict-`,
+        ),
+      );
+      try {
+        const fixture = await seedApplicationStateRecoveryRun(root, {
+          effectStates: command === 'reconcile' ? [] : ['STARTED'],
+        });
+        const request = {
+          runId: fixture.runId,
+          expectedAppId: fixture.appId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: fixture.applicationStateConfiguration,
+        };
+        if (command !== 'recover') {
+          await recoverExecutionLedgerRun(request);
+        }
+        if (command === 'retry-effect') {
+          await reconcileExecutionLedgerEffect({
+            ...request,
+            effectId: fixture.effectIds[0],
+            reconciliationId: 'authority-conflict-source-not-applied',
+          });
+        }
+        const predecessor = await acquireRetainedOperatorAuthority(
+          fixture.configuration,
+          fixture.appId,
+        );
+        const before = await readLmdbRun(fixture.configuration, fixture.runId);
+
+        /** @type {Promise<unknown>} */
+        let operation;
+        switch (command) {
+          case 'recover':
+            operation = recoverExecutionLedgerRun(request);
+            break;
+          case 'reconcile':
+            operation = reconcileExecutionLedgerRun({
+              ...request,
+              reconciliationId: 'authority-conflict-run',
+              evidence: {},
+            });
+            break;
+          case 'reconcile-effect':
+            operation = reconcileExecutionLedgerEffect({
+              ...request,
+              effectId: fixture.effectIds[0],
+              reconciliationId: 'authority-conflict-effect',
+            });
+            break;
+          case 'retry-effect':
+            operation = retryExecutionLedgerEffect({
+              ...request,
+              effectId: fixture.effectIds[0],
+              successorId: 'authority-conflict-successor',
+            });
+            break;
+          default:
+            throw new Error('Unsupported authority-conflict test command.');
+        }
+        await expect(operation).rejects.toBeInstanceOf(
+          CoordinatorAuthorityConflictError,
+        );
+        await expect(
+          readLmdbRun(fixture.configuration, fixture.runId),
+        ).resolves.toEqual(before);
+        await expect(
+          readOperatorAuthorityState(fixture.configuration, fixture.appId),
+        ).resolves.toEqual({ authority: predecessor, ownership: null });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    20000,
+  );
+
+  it('releases authority and local ownership after a direct reconciliation failure', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-authority-failure-cleanup-'),
+    );
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: [],
+      });
+      const request = {
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+      };
+      await recoverExecutionLedgerRun(request);
+      const before = await readLmdbRun(fixture.configuration, fixture.runId);
+      await expect(
+        reconcileExecutionLedgerRun({
+          ...request,
+          reconciliationId: 'invalid-evidence-must-release-authority',
+          evidence: {},
+        }),
+      ).rejects.toThrow();
+      await expect(
+        readLmdbRun(fixture.configuration, fixture.runId),
+      ).resolves.toEqual(before);
+      await expect(
+        readOperatorAuthorityState(fixture.configuration, fixture.appId),
+      ).resolves.toMatchObject({
+        authority: { status: CoordinatorAuthorityStatus.RELEASED, epoch: 2 },
+        ownership: null,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses an unsupported STARTED effect during read-only preflight', async () => {
     const root = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-operator-effect-unsupported-started-'),
@@ -2575,36 +3257,67 @@ describe('shared execution-ledger operator boundary', () => {
     }
   }, 20000);
 
-  it('does not materialize a missing local store during inspection, recovery, or reconciliation', async () => {
-    const parent = mkdtempSync(
-      path.join(os.tmpdir(), 'wharfie-operator-missing-'),
-    );
-    const root = path.join(parent, 'absent-control-store');
-    const configuration = createConfiguration(root, 'operator-missing');
-    const runId = createManualLedgerRunId({
-      appId: 'application-a',
-      idempotencyKey: 'missing-run',
-    });
-    try {
-      await expect(
-        inspectExecutionLedgerRun({ runId, configuration }),
-      ).resolves.toBeNull();
-      await expect(
-        recoverExecutionLedgerRun({ runId, configuration }),
-      ).resolves.toBeNull();
-      await expect(
-        reconcileExecutionLedgerRun({
-          runId,
-          reconciliationId: 'missing-run-reconciliation',
-          evidence: {},
-          configuration,
-        }),
-      ).resolves.toBeNull();
-      expect(existsSync(root)).toBe(false);
-    } finally {
-      rmSync(parent, { recursive: true, force: true });
-    }
-  });
+  it.each(['vanilla', 'lmdb'])(
+    'does not materialize a missing %s store during operator preflight',
+    async (adapterName) => {
+      const parent = mkdtempSync(
+        path.join(os.tmpdir(), 'wharfie-operator-missing-'),
+      );
+      const root = path.join(parent, 'absent-control-store');
+      const configuration =
+        adapterName === 'lmdb'
+          ? createLmdbConfiguration(root, 'operator-missing')
+          : createConfiguration(root, 'operator-missing');
+      const runId = createManualLedgerRunId({
+        appId: 'application-a',
+        idempotencyKey: 'missing-run',
+      });
+      try {
+        await expect(
+          inspectExecutionLedgerRun({ runId, configuration }),
+        ).resolves.toBeNull();
+        await expect(
+          recoverExecutionLedgerRun({ runId, configuration }),
+        ).resolves.toBeNull();
+        await expect(
+          reconcileExecutionLedgerRun({
+            runId,
+            reconciliationId: 'missing-run-reconciliation',
+            evidence: {},
+            configuration,
+          }),
+        ).resolves.toBeNull();
+        await expect(
+          reconcileExecutionLedgerEffect({
+            runId,
+            effectId: 'missing-effect',
+            reconciliationId: 'missing-effect-reconciliation',
+            configuration,
+          }),
+        ).resolves.toBeNull();
+        if (adapterName === 'lmdb') {
+          await expect(
+            retryExecutionLedgerEffect({
+              runId,
+              effectId: 'missing-effect',
+              successorId: 'missing-effect-successor',
+              configuration,
+            }),
+          ).resolves.toBeNull();
+          await expect(
+            cancelExecutionLedgerRun({
+              runId,
+              requestId: 'missing-workflow-cancellation',
+              configuration,
+            }),
+          ).resolves.toBeNull();
+        }
+        expect(existsSync(root)).toBe(false);
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('does not let packaged recovery or reconciliation downgrade to an unfenced adapter', async () => {
     const parent = mkdtempSync(

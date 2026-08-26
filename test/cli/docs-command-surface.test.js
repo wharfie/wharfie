@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from '@jest/globals';
 import { promises as fsp } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 import appApi, { defineApp, invokeActivity } from '../../src/app.js';
@@ -14,6 +14,7 @@ import {
   isOperatorInvocation,
   OPERATOR_NAMESPACE,
 } from '../../src/core/resources/builds/packaged-app-entry.js';
+import { renderTerminalSafeJson as renderCanonicalTerminalSafeJson } from '../../src/core/runtime/operator/terminal-safe-json.js';
 import * as deploymentProfileApi from '../../src/deployment-profile.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -102,6 +103,42 @@ function expectCommandShape(
 }
 
 describe('docs command surface', () => {
+  it('renders the demo named invocation argv as terminal-inert JSON', async () => {
+    const demoModule = await import(
+      pathToFileURL(path.join(repoRoot, 'examples/hello-world/scripts/demo.js'))
+        .href
+    );
+    const hostileName = [
+      'Ada',
+      '\u009b',
+      '\u2028',
+      '\u2029',
+      '\u202e',
+      '\ud800',
+      'Lovelace',
+    ].join('');
+    const argv = [
+      './hello',
+      'wharfie',
+      'run',
+      '--name',
+      'first-run',
+      '--',
+      hostileName,
+    ];
+
+    const rendered = demoModule.renderTerminalSafeJson(argv);
+
+    expect(rendered).toBe(renderCanonicalTerminalSafeJson(argv));
+    expect(rendered).toContain('\\u009b');
+    expect(rendered).toContain('\\u2028');
+    expect(rendered).toContain('\\u2029');
+    expect(rendered).toContain('\\u202e');
+    expect(rendered).toContain('\\ud800');
+    expect(rendered).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u);
+    expect(JSON.parse(rendered)).toEqual(argv);
+  });
+
   it('keeps the magnetic copied starter small, separated, and release-gated', async () => {
     const [
       rootMetadataSource,
@@ -165,6 +202,38 @@ describe('docs command surface', () => {
       ": ['install', '--no-audit', '--no-fund'];",
     );
     expect(demoSource).toContain("'--confirm-sensitive-output'");
+    expect(demoSource).toContain(
+      '3. Kill it, confirm authority replacement, then repeat the identical named invocation',
+    );
+    expect(demoSource).toContain(
+      'const foregroundArgvJson = renderTerminalSafeJson([',
+    );
+    expect(
+      demoSource.split('named invocation argv (JSON data):').length - 1,
+    ).toBe(2);
+    expect(demoSource).not.toContain("foregroundArgs.join(' ')");
+    expect(demoSource).toContain(
+      '$ ./hello wharfie coordinator inspect --json',
+    );
+    expect(demoSource).toContain(
+      '$ ./hello wharfie coordinator takeover --inspection-file',
+    );
+    expect(demoSource).toContain("'--confirm-authority-replacement'");
+    expect(demoSource).toContain("flag: 'wx'");
+    expect(demoSource).toContain('mode: 0o600');
+    expect(demoSource).toContain(
+      'Operator confirmed exact authority replacement and released its temporary successor',
+    );
+    expect(demoSource).toContain(
+      'Original named run resumed and retained its result',
+    );
+    expect(demoSource).not.toContain(
+      'One command owns start, execution, recovery, and result',
+    );
+    expect(demoSource).toContain(
+      'The identical named invocation resumed committed work',
+    );
+    expect(demoSource).not.toContain('The identical foreground command');
     expect(demoSource).toContain(
       'Later process verified the retained terminal output',
     );
@@ -721,6 +790,33 @@ describe('docs command surface', () => {
       name: 'output',
       options: ['--app-id', '--run-id', '--confirm-sensitive-output', '--json'],
     });
+    const sourceCoordinator = findCommand(sourceOps, 'coordinator');
+    expectCommandShape(sourceCoordinator, {
+      name: 'coordinator',
+      options: [],
+    });
+    expectCommandShape(findCommand(sourceCoordinator, 'inspect'), {
+      name: 'inspect',
+      options: ['--app-id', '--json'],
+      requiredOptions: ['--app-id'],
+    });
+    expectCommandShape(findCommand(sourceCoordinator, 'takeover'), {
+      name: 'takeover',
+      options: [
+        '--app-id',
+        '--inspection-file',
+        '--coordinator-id',
+        '--request-id',
+        '--confirm-authority-replacement',
+        '--json',
+      ],
+      requiredOptions: [
+        '--app-id',
+        '--inspection-file',
+        '--coordinator-id',
+        '--request-id',
+      ],
+    });
 
     const packagedOperator = createPackagedOperatorProgram();
     expect(packagedOperator.name()).toBe('wharfie');
@@ -771,6 +867,30 @@ describe('docs command surface', () => {
     expectCommandShape(findCommand(packagedOperator, 'output'), {
       name: 'output',
       options: ['--run-id', '--confirm-sensitive-output', '--json'],
+    });
+    const packagedCoordinator = findCommand(packagedOperator, 'coordinator');
+    expectCommandShape(packagedCoordinator, {
+      name: 'coordinator',
+      options: [],
+    });
+    expectCommandShape(findCommand(packagedCoordinator, 'inspect'), {
+      name: 'inspect',
+      options: ['--json'],
+    });
+    expectCommandShape(findCommand(packagedCoordinator, 'takeover'), {
+      name: 'takeover',
+      options: [
+        '--inspection-file',
+        '--coordinator-id',
+        '--request-id',
+        '--confirm-authority-replacement',
+        '--json',
+      ],
+      requiredOptions: [
+        '--inspection-file',
+        '--coordinator-id',
+        '--request-id',
+      ],
     });
     const packagedService = findCommand(packagedOperator, 'service');
     expectCommandShape(packagedService, {

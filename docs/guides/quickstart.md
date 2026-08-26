@@ -23,7 +23,8 @@ the project reset. The examples below use `wharfie` as shorthand for
 The versioned [hello-world starter](../../examples/hello-world/README.md) is the
 shortest product journey. Its repository gate packs the current Wharfie package,
 copies only the starter into a temporary workspace, installs that tarball, and
-runs the complete ordinary-CLI, package, relocate, `SIGKILL`, exact-resume, and
+runs the complete ordinary-CLI, package, relocate, `SIGKILL`, exact coordinator
+inspection, confirmed takeover-and-release, identical named-run resumption, and
 later-process output proof:
 
 ```bash
@@ -37,6 +38,69 @@ pin an npm patch. That published-package journey remains a release acceptance
 condition until the preview exists; the repository command above tests the same
 files and harness against the locally packed candidate, then hides the
 disposable builder before relocated execution.
+
+After `SIGKILL`, the demo does not treat a bare repeat as permission to replace
+the still-ACTIVE coordinator. It retains the exact packaged inspection, checks
+that the predecessor it killed should be fenced, performs the explicit
+confirmed takeover-and-release, and only then repeats the named run with the
+same artifact, arguments, and data root. Run the visible sequence in a
+dedicated Bash shell so any setup or inspection failure terminates the attempt
+before takeover:
+
+```bash
+data_root='/absolute/path/to/the-existing-wharfie-data-root'
+artifact='./hello'
+inspection_dir="$(mktemp -d)" || exit 1
+chmod 0700 "$inspection_dir" || exit 1
+inspection_file="$inspection_dir/coordinator-inspection.json"
+raw_nonce="$(od -An -N16 -tx1 /dev/urandom)" || exit 1
+takeover_nonce="${raw_nonce//[[:space:]]/}"
+unset raw_nonce
+if [[ ! "$takeover_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+  printf '%s\n' 'Failed to generate a 32-character lowercase hexadecimal nonce.' >&2
+  exit 1
+fi
+coordinator_id="manual-takeover-$takeover_nonce"
+request_id="manual-takeover-request-$takeover_nonce"
+
+(
+  umask 077
+  set -C
+  WHARFIE_DATA_ROOT="$data_root" "$artifact" wharfie coordinator inspect \
+    --json > "$inspection_file"
+) || exit 1
+```
+
+Stop here. Confirm that inspection succeeded, leave the file and both generated
+IDs unchanged, and independently verify that the inspected predecessor should
+be fenced. Then run the takeover in the same shell:
+
+```bash
+WHARFIE_DATA_ROOT="$data_root" "$artifact" wharfie coordinator takeover \
+  --inspection-file "$inspection_file" \
+  --coordinator-id "$coordinator_id" \
+  --request-id "$request_id" \
+  --confirm-authority-replacement \
+  --json
+```
+
+Only after takeover returns a successful receipt may the named run be repeated:
+
+```bash
+WHARFIE_DATA_ROOT="$data_root" "$artifact" wharfie run --name first-run -- Ada
+```
+
+The coordinator operation is the operator safety boundary: it compares the
+retained ACTIVE snapshot, advances authority, and releases its temporary
+successor. The final repeated run is a separate durability demonstration—the
+committed greeting preparation and original timer are retained rather than run
+again. If the takeover response is lost or otherwise ambiguous, retry with the
+exact unchanged inspection file, coordinator ID, and request ID; do not inspect
+again or generate new identities. Only a definite conflict saying that the
+inspected predecessor is no longer current permits a rebased attempt: retain a
+new inspection, renew the operational confirmation, and generate fresh
+coordinator and request IDs. Diagnose every other explicit refusal or error at
+its cause; it does not authorize rebasing or a blind retry.
 
 The advanced [single-host developer preview](./developer-preview.md) and
 [golden-path guide](./golden-path.md) cover service lifecycle and operator
@@ -305,11 +369,16 @@ is the shortest interactive durable path:
 arguments after `--` are application arguments; Wharfie maps them through the
 manifest's durable adapter, temporarily hosts the exact revision when no
 resident is active, and otherwise follows the matching resident. Repeating the
-same artifact, name, arguments, and data root resumes the same run and reports
-retained steps without rerunning them. `SIGINT` and `SIGTERM` drain the
-foreground host without recording durable cancellation, print the exact resume
-command, and exit with 130 and 143 respectively. Packaged `start` remains
-admission-only, and packaged `worker` remains the explicit long-lived resident.
+same artifact, name, arguments, and data root either follows a live matching
+resident or rehosts the run after graceful release or when no ACTIVE authority
+remains. It reports retained steps without rerunning them. `SIGINT` and
+`SIGTERM` drain the foreground host without recording durable cancellation,
+print the exact resume command, and exit with 130 and 143 respectively. An
+abrupt `SIGKILL` can leave an ownerless authority ACTIVE, so a bare repeat fails
+closed until an operator retains the exact inspection, independently confirms
+replacement, and performs the explicit confirmed takeover-and-release.
+Packaged `start` remains admission-only, and packaged `worker` remains the
+explicit long-lived resident.
 
 Direct packaged activity execution is now nested under `activity`:
 
@@ -541,11 +610,13 @@ Activation receipts separate `requestStatus` (`fulfilled`, `refused`,
 `failed`, or `pending`) from `outcome` (`target-active`, `source-retained`,
 `source-restored`, `in-flight`, or `absent`). Non-fulfilled receipts use a
 nonzero exit code even in `--json` mode. The repository's disposable Ubuntu
-proof covers crash replacement, abrupt reboot, pre-login recovery, workflow
-continuation, and state-preserving uninstall. Its current three-SEA matrix also
-kills update and rollback after each durable phase write, recovers a lost
-committed response, refuses a stale reverse request, and restores the source
-across every phase after a clean target exit before readiness.
+proof covers crash replacement, abrupt reboot, pre-login automatic-start
+refusal followed by post-login operator recovery through exact inspected
+takeover-and-release, workflow continuation, and state-preserving uninstall.
+Its current three-SEA matrix also kills update and rollback after each durable
+phase write, recovers a lost committed response, refuses a stale reverse
+request, and restores the source across every phase after a clean target exit
+before readiness.
 
 The current worker executes exact workflow
 `ACTIVITY` rows, conservatively handles `RECOVERY` rows, and fires due `TIMER`
@@ -832,8 +903,9 @@ public workflow start, persisted timer restart, current-wait signal delivery,
 recovery, reconciliation, offline cancellation, and active
 persist-before-signal response-loss behavior. Wharfie remains a single-process
 worker rather than a production workflow service. A disposable Ubuntu systemd
-proof now covers abrupt reboot and pre-login recovery; multi-host coordination
-is still intentionally absent.
+proof now covers abrupt reboot, pre-login automatic-start refusal, and
+subsequent post-login explicit inspected recovery; multi-host coordination is
+still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.

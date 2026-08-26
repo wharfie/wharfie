@@ -7,6 +7,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
+import { APPLICATION_STATE_TABLE_NAME } from '../../src/core/lib/config/db.js';
+import { createApplicationStateCoordinatorAuthorityRecord } from '../../src/core/lib/db/tables/application-state-authority.js';
+import {
+  createApplicationStateReadinessFence,
+  createApplicationStateReadinessStore,
+} from '../../src/core/lib/db/tables/application-state-readiness.js';
+import {
+  CoordinatorAuthorityStaleError,
+  createCoordinatorAuthority,
+  createCoordinatorAuthorityFence,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
 import {
   LocalApplicationActivationDestination,
   LocalApplicationAdmissionClosedError,
@@ -27,8 +38,12 @@ import {
   createLedgerServiceSessionId,
   getLedgerServiceLifecyclePartitionKey,
 } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
+import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
+import { normalizeApplicationStateDestination } from '../../src/core/runtime/effects/application-state.js';
+import { createMockedDynamoDB } from '../helpers/db-adapters.js';
 
 const APP_ID = 'demo';
+const TABLE_NAME = 'execution-ledger-v3';
 const ARTIFACT_A = `waf1_${'A'.repeat(43)}`;
 const ARTIFACT_B = `waf1_${'B'.repeat(42)}A`;
 const REVISION_A = `wrv1_${'A'.repeat(43)}`;
@@ -37,6 +52,11 @@ const SCOPE_ID = 'local-session-root';
 const OTHER_SCOPE_ID = 'other-session-root';
 const PRINCIPAL_ID = 'developer';
 const OTHER_PRINCIPAL_ID = 'other-developer';
+/** @type {Array<'vanilla' | 'mocked DynamoDB'>} */
+const READINESS_ADAPTERS = ['vanilla', 'mocked DynamoDB'];
+
+/** @typedef {Awaited<ReturnType<typeof createReadinessHarness>>} ReadinessHarness */
+/** @typedef {{beforeGet?: (input: import('../../src/core/lib/db/base.js').GetParams) => Promise<void>, beforeTransaction?: (input: import('../../src/core/lib/db/base.js').TransactionWriteParams) => Promise<void>, applicationStateReadiness?: unknown}} ReadinessObservationOptions */
 
 /** @type {Array<() => Promise<void>>} */
 const cleanups = [];
@@ -123,6 +143,167 @@ function createOwnershipClaim(overrides = {}) {
     claimedAt: 100,
     ...overrides,
   };
+}
+
+function deferred() {
+  /** @type {() => void} */
+  let complete = () => {};
+  const promise = new Promise((resolve) => {
+    complete = () => resolve(undefined);
+  });
+  return { promise, resolve: complete };
+}
+
+/** @param {'vanilla' | 'mocked DynamoDB'} adapterName @param {string} [appId] */
+async function createReadinessHarness(adapterName, appId = APP_ID) {
+  const db =
+    adapterName === 'vanilla'
+      ? createStore().db
+      : (
+          await createMockedDynamoDB({
+            tableSchemas: { [TABLE_NAME]: ['run_id', 'sort_key'] },
+          })
+        ).db;
+  if (adapterName !== 'vanilla') cleanups.push(async () => await db.close());
+  const input = createStartInput({
+    appId,
+    serviceId: createLedgerServiceId({ appId }),
+  });
+  const authorityStore = createCoordinatorAuthority({
+    db,
+    tableName: TABLE_NAME,
+  });
+  const { authority } = await authorityStore.acquire({
+    appId,
+    coordinatorId: input.sessionId,
+    requestId: `readiness-acquire:${input.sessionId}`,
+    observedAt: 50,
+  });
+  const storeId = createCanonicalJsonSha256Id({
+    domain: 'wharfie:test:ledger-service-readiness:store',
+    prefix: 'was',
+    value: { appId },
+  });
+  const destination = normalizeApplicationStateDestination({
+    kind: 'application-state',
+    version: 2,
+    bindingId: 'primary',
+    configuration: {
+      provider: 'lmdb',
+      storeId,
+      tableName: APPLICATION_STATE_TABLE_NAME,
+      namespace: appId,
+    },
+  });
+  const readinessStore = createApplicationStateReadinessStore({
+    db,
+    tableName: TABLE_NAME,
+    coordinatorAuthority: authority,
+  });
+  const preparation = await readinessStore.prepare({ destination });
+  const readiness = await readinessStore.markAdopted({
+    preparation,
+    destinationAuthority: createApplicationStateCoordinatorAuthorityRecord({
+      storeId,
+      namespace: appId,
+      authority,
+    }),
+  });
+  return {
+    db,
+    input,
+    authorityStore,
+    authority,
+    readinessStore,
+    preparation,
+    readiness,
+    store: createLedgerServiceLifecycle({
+      db,
+      tableName: TABLE_NAME,
+      applicationStateReadiness: readiness,
+    }),
+  };
+}
+
+/** @param {ReadinessHarness} harness */
+async function startReadinessLifecycle(harness) {
+  const { lifecycle } = await harness.store.start(harness.input);
+  return {
+    serviceId: lifecycle.serviceId,
+    sessionId: lifecycle.sessionId,
+    generation: lifecycle.generation,
+  };
+}
+
+/** @param {ReadinessHarness} harness @param {ReadinessObservationOptions} [options] */
+function observeReadinessLifecycle(harness, options = {}) {
+  const db = {
+    ...harness.db,
+    get: jest.fn(
+      async (
+        /** @type {import('../../src/core/lib/db/base.js').GetParams} */ input,
+      ) => {
+        await options.beforeGet?.(input);
+        return await harness.db.get(input);
+      },
+    ),
+    transactionWrite: jest.fn(
+      async (
+        /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ input,
+      ) => {
+        await options.beforeTransaction?.(input);
+        return await harness.db.transactionWrite(input);
+      },
+    ),
+  };
+  return {
+    db,
+    store: createLedgerServiceLifecycle({
+      db,
+      tableName: TABLE_NAME,
+      applicationStateReadiness:
+        options.applicationStateReadiness ?? harness.readiness,
+    }),
+  };
+}
+
+/** @param {ReadinessHarness} harness */
+async function takeOverReadinessAuthority(harness) {
+  return await harness.authorityStore.takeover({
+    appId: harness.input.appId,
+    coordinatorId: createLedgerServiceSessionId(),
+    requestId: 'readiness-takeover',
+    observedAuthority: await harness.authorityStore.get({
+      appId: harness.input.appId,
+    }),
+    confirmAuthorityReplacement: true,
+    observedAt: 200,
+  });
+}
+
+/** @param {ReadinessHarness} harness */
+async function restoreReadinessPreparation(harness) {
+  // Fault injection reuses the real kernel's valid prior record, never an
+  // invented readiness schema or a forged ADOPTED acknowledgement.
+  const fence = createApplicationStateReadinessFence(harness.readiness);
+  await harness.db.put({
+    tableName: TABLE_NAME,
+    keyName: fence.keyName,
+    sortKeyName: fence.sortKeyName,
+    record: harness.preparation,
+  });
+}
+
+/** @param {ReadinessHarness} harness */
+async function removeReadinessRecord(harness) {
+  const fence = createApplicationStateReadinessFence(harness.readiness);
+  await harness.db.remove({
+    tableName: TABLE_NAME,
+    keyName: fence.keyName,
+    keyValue: fence.keyValue,
+    sortKeyName: fence.sortKeyName,
+    sortKeyValue: fence.sortKeyValue,
+  });
 }
 
 describe('ledger service lifecycle', () => {
@@ -746,5 +927,368 @@ describe('ledger service lifecycle', () => {
         }),
       ],
     });
+  });
+});
+
+for (const adapterName of READINESS_ADAPTERS) {
+  describe(`application-state-ready lifecycle (${adapterName})`, () => {
+    test('publishes READY with both exact fences and replays only after strong current-state reads', async () => {
+      const harness = await createReadinessHarness(adapterName);
+      const owner = await startReadinessLifecycle(harness);
+      const observed = observeReadinessLifecycle(harness);
+      const readinessFence = createApplicationStateReadinessFence(
+        harness.readiness,
+      );
+      const authorityFence = createCoordinatorAuthorityFence(harness.authority);
+
+      const ready = await observed.store.markReady({
+        ...owner,
+        observedAt: 110,
+      });
+      expect(ready).toMatchObject({
+        applied: true,
+        lifecycle: {
+          ...owner,
+          status: LedgerServiceLifecycleStatus.READY,
+          updatedAt: 110,
+        },
+      });
+      expect(observed.db.transactionWrite).toHaveBeenCalledTimes(1);
+      const [transaction] = observed.db.transactionWrite.mock.calls[0];
+      expect(transaction.conditionChecks).toHaveLength(2);
+      expect(transaction.conditionChecks).toEqual(
+        expect.arrayContaining([readinessFence, authorityFence]),
+      );
+      expect(transaction.putRequests).toEqual([
+        expect.objectContaining({
+          record: expect.objectContaining({
+            status: LedgerServiceLifecycleStatus.READY,
+          }),
+          conditions: expect.arrayContaining([
+            {
+              conditionType: 'EQUALS',
+              propertyName: 'session_id',
+              propertyValue: owner.sessionId,
+            },
+            {
+              conditionType: 'EQUALS',
+              propertyName: 'generation',
+              propertyValue: owner.generation,
+            },
+            {
+              conditionType: 'EQUALS',
+              propertyName: 'status',
+              propertyValue: LedgerServiceLifecycleStatus.STARTING,
+            },
+          ]),
+        }),
+      ]);
+
+      observed.db.get.mockClear();
+      await expect(
+        observed.store.markReady({ ...owner, observedAt: 111 }),
+      ).resolves.toEqual({ applied: false, lifecycle: ready.lifecycle });
+      expect(observed.db.transactionWrite).toHaveBeenCalledTimes(1);
+      for (const fence of [readinessFence, authorityFence]) {
+        expect(observed.db.get).toHaveBeenCalledWith({
+          tableName: TABLE_NAME,
+          keyName: fence.keyName,
+          keyValue: fence.keyValue,
+          sortKeyName: fence.sortKeyName,
+          sortKeyValue: fence.sortKeyValue,
+          consistentRead: true,
+        });
+      }
+      expect(await harness.readinessStore.get({ appId: APP_ID })).toEqual(
+        harness.readiness,
+      );
+    });
+
+    test.each([false, true])(
+      'rejects delayed READY after takeover, prioritizing stale authority when readiness also changes: %s',
+      async (changeReadiness) => {
+        const harness = await createReadinessHarness(adapterName);
+        const owner = await startReadinessLifecycle(harness);
+        const observed = observeReadinessLifecycle(harness, {
+          beforeTransaction: async () => {
+            await takeOverReadinessAuthority(harness);
+            if (changeReadiness) await restoreReadinessPreparation(harness);
+          },
+        });
+
+        await expect(observed.store.markReady(owner)).rejects.toBeInstanceOf(
+          CoordinatorAuthorityStaleError,
+        );
+        expect(observed.db.transactionWrite).toHaveBeenCalledTimes(1);
+        await expect(
+          harness.store.get({ serviceId: owner.serviceId }),
+        ).resolves.toMatchObject({
+          ...owner,
+          status: LedgerServiceLifecycleStatus.STARTING,
+        });
+      },
+    );
+
+    test('rejects a changed exact readiness record at the READY commit while control authority remains current', async () => {
+      const harness = await createReadinessHarness(adapterName);
+      const owner = await startReadinessLifecycle(harness);
+      const observed = observeReadinessLifecycle(harness, {
+        beforeTransaction: async () =>
+          await restoreReadinessPreparation(harness),
+      });
+
+      await expect(observed.store.markReady(owner)).rejects.toMatchObject({
+        name: 'LedgerServiceLifecycleConflictError',
+        reason: 'application-state readiness changed',
+      });
+      expect(observed.db.transactionWrite).toHaveBeenCalledTimes(1);
+      await expect(
+        harness.authorityStore.get({ appId: APP_ID }),
+      ).resolves.toEqual(harness.authority);
+      await expect(
+        harness.store.get({ serviceId: owner.serviceId }),
+      ).resolves.toMatchObject({
+        ...owner,
+        status: LedgerServiceLifecycleStatus.STARTING,
+      });
+    });
+
+    test.each(['missing', 'PREPARING'])(
+      'refuses READY replay with %s readiness without another lifecycle write',
+      async (state) => {
+        const harness = await createReadinessHarness(adapterName);
+        const owner = await startReadinessLifecycle(harness);
+        const ready = await harness.store.markReady(owner);
+        if (state === 'missing') await removeReadinessRecord(harness);
+        else await restoreReadinessPreparation(harness);
+        const observed = observeReadinessLifecycle(harness);
+
+        await expect(observed.store.markReady(owner)).rejects.toMatchObject({
+          name: 'LedgerServiceLifecycleConflictError',
+          reason: 'application-state readiness changed',
+        });
+        expect(observed.db.transactionWrite).not.toHaveBeenCalled();
+        expect(
+          observed.db.get.mock.calls.every(
+            (
+              /** @type {[import('../../src/core/lib/db/base.js').GetParams]} */ call,
+            ) => call[0].consistentRead === true,
+          ),
+        ).toBe(true);
+        await expect(
+          harness.store.get({ serviceId: owner.serviceId }),
+        ).resolves.toEqual(ready.lifecycle);
+      },
+    );
+
+    test.each(['takeover', 'release'])(
+      'refuses READY replay after authority %s without changing retained lifecycle or readiness',
+      async (change) => {
+        const harness = await createReadinessHarness(adapterName);
+        const owner = await startReadinessLifecycle(harness);
+        const ready = await harness.store.markReady(owner);
+        if (change === 'takeover') await takeOverReadinessAuthority(harness);
+        else {
+          await harness.authorityStore.release({
+            authority: harness.authority,
+            requestId: 'readiness-release',
+            observedAt: 200,
+          });
+        }
+        const observed = observeReadinessLifecycle(harness);
+
+        await expect(observed.store.markReady(owner)).rejects.toBeInstanceOf(
+          CoordinatorAuthorityStaleError,
+        );
+        expect(observed.db.transactionWrite).not.toHaveBeenCalled();
+        await expect(
+          harness.store.get({ serviceId: owner.serviceId }),
+        ).resolves.toEqual(ready.lifecycle);
+        await expect(
+          harness.readinessStore.get({ appId: APP_ID }),
+        ).resolves.toEqual(harness.readiness);
+      },
+    );
+
+    test.each(['application', 'session'])(
+      'rejects a valid readiness record for a different %s before database reads',
+      async (scope) => {
+        const harness = await createReadinessHarness(
+          adapterName,
+          scope === 'application' ? 'other-readiness-app' : APP_ID,
+        );
+        const owner = await startReadinessLifecycle(harness);
+        const observed = observeReadinessLifecycle(harness);
+        const input = {
+          ...owner,
+          ...(scope === 'application'
+            ? { serviceId: createLedgerServiceId({ appId: APP_ID }) }
+            : { sessionId: createLedgerServiceSessionId() }),
+        };
+
+        await expect(observed.store.markReady(input)).rejects.toBeInstanceOf(
+          TypeError,
+        );
+        expect(observed.db.get).not.toHaveBeenCalled();
+        expect(observed.db.transactionWrite).not.toHaveBeenCalled();
+      },
+    );
+
+    test('snapshots caller readiness and READY identity before the first awaited database read', async () => {
+      const harness = await createReadinessHarness(adapterName);
+      const owner = await startReadinessLifecycle(harness);
+      const entered = deferred();
+      const resume = deferred();
+      const readiness = JSON.parse(JSON.stringify(harness.readiness));
+      let paused = false;
+      const observed = observeReadinessLifecycle(harness, {
+        applicationStateReadiness: readiness,
+        beforeGet: async () => {
+          if (paused) return;
+          paused = true;
+          entered.resolve();
+          await resume.promise;
+        },
+      });
+      const input = { ...owner, observedAt: 110 };
+      const settled = observed.store.markReady(input).then(
+        (result) => ({ result, error: undefined }),
+        (error) => ({ result: undefined, error }),
+      );
+
+      try {
+        await Promise.race([
+          entered.promise,
+          settled.then(({ error }) => {
+            throw (
+              error ?? new Error('READY never reached its first database read.')
+            );
+          }),
+        ]);
+        readiness.app_id = 'mutated-readiness-app';
+        readiness.epoch += 1;
+        readiness.status = 'PREPARING';
+        input.serviceId = createLedgerServiceId({
+          appId: 'mutated-target-app',
+        });
+        input.sessionId = createLedgerServiceSessionId();
+        input.generation += 1;
+        input.observedAt = 999;
+        resume.resolve();
+
+        const outcome = await settled;
+        expect(outcome.error).toBeUndefined();
+        expect(outcome.result).toMatchObject({
+          applied: true,
+          lifecycle: {
+            ...owner,
+            status: LedgerServiceLifecycleStatus.READY,
+            updatedAt: 110,
+          },
+        });
+        expect(observed.db.transactionWrite).toHaveBeenCalledTimes(1);
+        expect(
+          observed.db.transactionWrite.mock.calls[0][0].conditionChecks,
+        ).toEqual(
+          expect.arrayContaining([
+            createApplicationStateReadinessFence(harness.readiness),
+            createCoordinatorAuthorityFence(harness.authority),
+          ]),
+        );
+      } finally {
+        resume.resolve();
+        await settled;
+      }
+    });
+
+    test('keeps STARTING and shutdown writable after takeover without applying READY fences', async () => {
+      const harness = await createReadinessHarness(adapterName);
+      await takeOverReadinessAuthority(harness);
+      const observed = observeReadinessLifecycle(harness);
+      const started = await observed.store.start(harness.input);
+      expect(started).toMatchObject({
+        applied: true,
+        lifecycle: { status: LedgerServiceLifecycleStatus.STARTING },
+      });
+      const owner = {
+        serviceId: started.lifecycle.serviceId,
+        sessionId: started.lifecycle.sessionId,
+        generation: started.lifecycle.generation,
+      };
+      const [startTransaction] = observed.db.transactionWrite.mock.calls[0];
+      expect(startTransaction.conditionChecks).not.toContainEqual(
+        createApplicationStateReadinessFence(harness.readiness),
+      );
+      expect(startTransaction.conditionChecks).not.toContainEqual(
+        createCoordinatorAuthorityFence(harness.authority),
+      );
+      await expect(observed.store.markReady(owner)).rejects.toBeInstanceOf(
+        CoordinatorAuthorityStaleError,
+      );
+
+      observed.db.transactionWrite.mockClear();
+      await expect(observed.store.markStopping(owner)).resolves.toMatchObject({
+        applied: true,
+        lifecycle: { status: LedgerServiceLifecycleStatus.STOPPING },
+      });
+      const stopped = await observed.store.markStopped(owner);
+      expect(stopped).toMatchObject({
+        applied: true,
+        lifecycle: { status: LedgerServiceLifecycleStatus.STOPPED },
+      });
+      await expect(observed.store.markStopped(owner)).resolves.toEqual({
+        applied: false,
+        lifecycle: stopped.lifecycle,
+      });
+      expect(observed.db.transactionWrite).toHaveBeenCalledTimes(2);
+      for (const [transaction] of observed.db.transactionWrite.mock.calls) {
+        expect(transaction.conditionChecks ?? []).toEqual([]);
+      }
+      await expect(
+        harness.readinessStore.get({ appId: APP_ID }),
+      ).resolves.toEqual(harness.readiness);
+    });
+  });
+}
+
+describe('application-state lifecycle readiness validation', () => {
+  test.each([
+    'PREPARING',
+    'null',
+    'array',
+    'missing app',
+    'mixed app',
+    'mixed token',
+    'extra field',
+  ])('refuses %s construction before database I/O', async (kind) => {
+    const harness = await createReadinessHarness('vanilla');
+    const candidate = JSON.parse(JSON.stringify(harness.readiness));
+    if (kind === 'missing app') Reflect.deleteProperty(candidate, 'app_id');
+    if (kind === 'mixed app') candidate.app_id = 'different-app';
+    if (kind === 'mixed token') candidate.epoch += 1;
+    if (kind === 'extra field') candidate.untrustedAuthority = true;
+    const db = {
+      ...harness.db,
+      get: jest.fn(harness.db.get),
+      transactionWrite: jest.fn(harness.db.transactionWrite),
+    };
+    const applicationStateReadiness =
+      kind === 'PREPARING'
+        ? harness.preparation
+        : kind === 'null'
+          ? null
+          : kind === 'array'
+            ? []
+            : candidate;
+
+    expect(() =>
+      createLedgerServiceLifecycle({
+        db,
+        tableName: TABLE_NAME,
+        applicationStateReadiness,
+      }),
+    ).toThrow();
+    expect(db.get).not.toHaveBeenCalled();
+    expect(db.transactionWrite).not.toHaveBeenCalled();
   });
 });

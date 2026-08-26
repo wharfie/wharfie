@@ -1231,7 +1231,7 @@ export async function runWorkflowLedgerActivity(options) {
     expectedVersion: current.run.version,
     transitionId: `workflow-claim:${invocationId}:${options.generation + 1}`,
     actor,
-    coordinatorEpoch: 0,
+    coordinatorEpoch: options.ledger.getCoordinatorEpoch?.() ?? 0,
   };
   /** @type {Record<string, any> | undefined} */
   let claim;

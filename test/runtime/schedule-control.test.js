@@ -8,6 +8,13 @@ import { join } from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
 import {
+  COORDINATOR_AUTHORITY_SORT_KEY,
+  CoordinatorAuthorityStaleError,
+  createCoordinatorAuthority,
+  createCoordinatorAuthorityFence,
+  createCoordinatorAuthorityToken,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
+import {
   createScheduleControl,
   reconcilePreparedScheduleWorkflowAdmission,
   resolvePreparedScheduleWorkflowAdmission,
@@ -180,6 +187,112 @@ function expectedFromInput(input, cursor = input.expectedCursor) {
 /** @param {import('../../src/core/lib/db/base.js').DBClient} db */
 function storeContext(db) {
   return { db, tableName: TABLE_NAME };
+}
+
+async function createCoordinatorHarness() {
+  const harness = createHarness();
+  await activateApplication(harness.db);
+  const owner = await claimResident(harness.ownership);
+  const authorities = createCoordinatorAuthority({
+    db: harness.db,
+    tableName: TABLE_NAME,
+  });
+  const { authority } = await authorities.acquire({
+    appId: APP_ID,
+    coordinatorId: 'coordinator-a',
+    requestId: 'acquire-a',
+    observedAt: 30,
+  });
+  const control = createScheduleControl({
+    db: harness.db,
+    tableName: TABLE_NAME,
+    coordinatorAuthority: authority,
+  });
+  return { ...harness, control, owner, authorities, authority };
+}
+
+/**
+ * @param {ReturnType<typeof createCoordinatorAuthority>} authorities
+ * @param {import('../../src/core/lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot} observedAuthority
+ */
+async function takeOverCoordinator(authorities, observedAuthority) {
+  return (
+    await authorities.takeover({
+      appId: APP_ID,
+      coordinatorId: 'coordinator-b',
+      requestId: 'takeover-b',
+      observedAuthority,
+      confirmAuthorityReplacement: true,
+      observedAt: 40,
+    })
+  ).authority;
+}
+
+/**
+ * @param {import('../../src/core/lib/db/base.js').DBClient} db
+ * @param {number} [transactionNumber]
+ */
+function createTransactionBarrier(db, transactionNumber = 1) {
+  /** @type {() => void} */
+  let notifyReached = () => {};
+  /** @type {() => void} */
+  let release = () => {};
+  const reached = new Promise((resolve) => {
+    notifyReached = () => resolve(undefined);
+  });
+  const released = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  let transactionCount = 0;
+  const instrumented = {
+    ...db,
+    /** @param {import('../../src/core/lib/db/base.js').TransactionWriteParams} params */
+    async transactionWrite(params) {
+      transactionCount += 1;
+      if (transactionCount === transactionNumber) {
+        notifyReached();
+        await released;
+      }
+      await db.transactionWrite(params);
+    },
+  };
+  return { db: instrumented, reached, release };
+}
+
+/**
+ * @param {ReturnType<typeof createScheduleControl>} control
+ * @param {Readonly<Record<string, any>>} owner
+ * @param {string} operation
+ */
+async function prepareCheckOnlyRequest(control, owner, operation) {
+  const activated = await activateSchedule(control, owner);
+  const progressed =
+    operation === 'progressed advance'
+      ? await control.advance({
+          expectedCursor: activated.cursor,
+          throughInclusive: 5 * MINUTE,
+          owner,
+          observedAt: 5 * MINUTE,
+        })
+      : activated;
+  return {
+    cursor: progressed.cursor,
+    transactionNumber: operation === 'progressed advance' ? 2 : 1,
+    /** @param {ReturnType<typeof createScheduleControl>} target */
+    run(target) {
+      return operation === 'activate'
+        ? activateSchedule(target, owner)
+        : target.advance({
+            expectedCursor: activated.cursor,
+            throughInclusive:
+              operation === 'progressed advance'
+                ? 4 * MINUTE
+                : activated.cursor.horizon,
+            owner,
+            observedAt: 4 * MINUTE,
+          });
+    },
+  };
 }
 
 describe('atomic schedule control', () => {
@@ -690,5 +803,487 @@ describe('atomic schedule control', () => {
         workflowId: 'another-workflow',
       }),
     ).rejects.toThrow(/conflicts with durable state/);
+  });
+});
+
+describe('coordinator-bound schedule control', () => {
+  test.each(['token', 'snapshot'])(
+    'binds activate, advance, and preparation to a full stable %s across heartbeats',
+    async (binding) => {
+      const { db, owner, authorities, authority } =
+        await createCoordinatorHarness();
+      const token = createCoordinatorAuthorityToken(authority);
+      const { authority: heartbeat } = await authorities.heartbeat({
+        authority,
+        requestId: 'heartbeat-a',
+        observedAt: 31,
+      });
+      expect(heartbeat.recordVersion).toBeGreaterThan(authority.recordVersion);
+      const control = createScheduleControl({
+        db,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: binding === 'token' ? token : authority,
+      });
+      const activated = await activateSchedule(control, owner);
+      expect(activated.applied).toBe(true);
+      const advanced = await control.advance({
+        expectedCursor: activated.cursor,
+        throughInclusive: 3 * MINUTE,
+        owner,
+        observedAt: 3 * MINUTE,
+      });
+      expect(advanced.applied).toBe(true);
+      const input = occurrenceInput(advanced.cursor, owner);
+      const prepared = await control.prepareWorkflowAdmission(input);
+      const extension = resolvePreparedScheduleWorkflowAdmission(
+        prepared,
+        expectedFromInput(input),
+        {
+          ...storeContext(db),
+          coordinatorAuthority: binding === 'token' ? heartbeat : token,
+        },
+      );
+      expect(extension.coordinatorAuthority).toEqual(token);
+      expect(Object.isFrozen(extension.coordinatorAuthority)).toBe(true);
+      expect(extension.mode).toBe('create');
+    },
+  );
+
+  test.each(['activate', 'advance', 'prepare'])(
+    'rejects a different application authority before %s touches durable state',
+    async (operation) => {
+      const { db, control, owner, authorities } =
+        await createCoordinatorHarness();
+      const activated = await activateSchedule(control, owner);
+      const { authority: otherAuthority } = await authorities.acquire({
+        appId: 'another-app',
+        coordinatorId: 'another-coordinator',
+        requestId: 'acquire-another-app',
+        observedAt: 30,
+      });
+      const inaccessibleDb = {
+        ...db,
+        async get() {
+          throw new Error('wrong-app request must not read durable state');
+        },
+        async transactionWrite() {
+          throw new Error('wrong-app request must not write durable state');
+        },
+      };
+      const otherControl = createScheduleControl({
+        db: inaccessibleDb,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: otherAuthority,
+      });
+      const result =
+        operation === 'activate'
+          ? activateSchedule(otherControl, owner)
+          : operation === 'advance'
+            ? otherControl.advance({
+                expectedCursor: activated.cursor,
+                throughInclusive: 4 * MINUTE,
+                owner,
+                observedAt: 4 * MINUTE,
+              })
+            : otherControl.prepareWorkflowAdmission(
+                occurrenceInput(activated.cursor, owner),
+              );
+      await expect(result).rejects.toThrow(/must bind the mutated appId/);
+      await expect(
+        control.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+      ).resolves.toEqual(activated.cursor);
+    },
+  );
+
+  test.each(['activate', 'advance'])(
+    'fences an in-flight %s when B takes over before its transaction',
+    async (operation) => {
+      const { db, control, owner, authorities, authority } =
+        await createCoordinatorHarness();
+      const before =
+        operation === 'advance'
+          ? (await activateSchedule(control, owner)).cursor
+          : null;
+      /** @param {ReturnType<typeof createScheduleControl>} target */
+      const mutate = (target) =>
+        before
+          ? target.advance({
+              expectedCursor: before,
+              throughInclusive: 4 * MINUTE,
+              owner,
+              observedAt: 4 * MINUTE,
+            })
+          : activateSchedule(target, owner);
+      const barrier = createTransactionBarrier(db);
+      const predecessor = createScheduleControl({
+        db: barrier.db,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: authority,
+      });
+      const outcome = mutate(predecessor).catch((error) => error);
+      await barrier.reached;
+      let successorAuthority;
+      try {
+        // The authority store uses the raw shared DB, not the paused wrapper.
+        successorAuthority = await takeOverCoordinator(authorities, authority);
+      } finally {
+        barrier.release();
+      }
+      expect(await outcome).toBeInstanceOf(CoordinatorAuthorityStaleError);
+      await expect(
+        control.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+      ).resolves.toEqual(before);
+
+      const successor = createScheduleControl({
+        db,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: successorAuthority,
+      });
+      const accepted = await mutate(successor);
+      expect(accepted.applied).toBe(true);
+      expect(accepted.cursor.horizon).toBe(
+        operation === 'advance' ? 4 * MINUTE : 2 * MINUTE,
+      );
+      await expect(
+        successor.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+      ).resolves.toEqual(accepted.cursor);
+    },
+  );
+
+  test.each(['activate', 'advance', 'progressed advance'])(
+    'fences the %s check-only transaction and permits current B to replay',
+    async (operation) => {
+      const { db, control, owner, authorities, authority } =
+        await createCoordinatorHarness();
+      const request = await prepareCheckOnlyRequest(control, owner, operation);
+      const barrier = createTransactionBarrier(db, request.transactionNumber);
+      const predecessor = createScheduleControl({
+        db: barrier.db,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: authority,
+      });
+      const outcome = request.run(predecessor).catch((error) => error);
+      await barrier.reached;
+      let successorAuthority;
+      try {
+        successorAuthority = await takeOverCoordinator(authorities, authority);
+      } finally {
+        barrier.release();
+      }
+      expect(await outcome).toBeInstanceOf(CoordinatorAuthorityStaleError);
+      await expect(
+        control.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+      ).resolves.toEqual(request.cursor);
+      const successor = createScheduleControl({
+        db,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: successorAuthority,
+      });
+      await expect(request.run(successor)).resolves.toEqual({
+        applied: false,
+        cursor: request.cursor,
+      });
+    },
+  );
+
+  test.each(['activate', 'advance', 'progressed advance'])(
+    'preserves a successful %s check-only response after an immediate takeover',
+    async (operation) => {
+      const { db, control, owner, authorities, authority } =
+        await createCoordinatorHarness();
+      const request = await prepareCheckOnlyRequest(control, owner, operation);
+      let transactionCount = 0;
+      let takenOver = false;
+      const instrumented = {
+        ...db,
+        /** @param {import('../../src/core/lib/db/base.js').GetParams} params */
+        async get(params) {
+          if (
+            takenOver &&
+            params.sortKeyValue === COORDINATOR_AUTHORITY_SORT_KEY
+          ) {
+            throw new Error('successful checks must not re-read authority');
+          }
+          return await db.get(params);
+        },
+        /** @param {import('../../src/core/lib/db/base.js').TransactionWriteParams} params */
+        async transactionWrite(params) {
+          transactionCount += 1;
+          await db.transactionWrite(params);
+          if (transactionCount === request.transactionNumber) {
+            expect(params.putRequests ?? []).toHaveLength(0);
+            await takeOverCoordinator(authorities, authority);
+            takenOver = true;
+          }
+        },
+      };
+      const predecessor = createScheduleControl({
+        db: instrumented,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: authority,
+      });
+      await expect(request.run(predecessor)).resolves.toEqual({
+        applied: false,
+        cursor: request.cursor,
+      });
+      expect(takenOver).toBe(true);
+      expect(transactionCount).toBe(request.transactionNumber);
+      await expect(authorities.get({ appId: APP_ID })).resolves.toMatchObject({
+        coordinatorId: 'coordinator-b',
+        epoch: authority.epoch + 1,
+      });
+    },
+  );
+
+  test.each(['activate', 'advance'])(
+    'keeps a local-owner %s failure conditional when coordinator authority is current',
+    async (operation) => {
+      const { control, owner, ownership, authorities, authority } =
+        await createCoordinatorHarness();
+      const activated = await activateSchedule(control, owner);
+      await ownership.releaseOwnership({
+        serviceId: owner.serviceId,
+        scopeId: owner.scopeId,
+        principalId: owner.principalId,
+        sessionId: owner.sessionId,
+        generation: owner.generation,
+      });
+      const result =
+        operation === 'activate'
+          ? activateSchedule(control, owner, { definitionId: DEFINITION_B })
+          : control.advance({
+              expectedCursor: activated.cursor,
+              throughInclusive: 4 * MINUTE,
+              owner,
+              observedAt: 4 * MINUTE,
+            });
+      await expect(result).rejects.toHaveProperty(
+        'name',
+        'ConditionalCheckFailedException',
+      );
+      await expect(
+        control.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+      ).resolves.toEqual(activated.cursor);
+      await expect(authorities.get({ appId: APP_ID })).resolves.toEqual(
+        authority,
+      );
+    },
+  );
+
+  test('returns exact committed advance readback after takeover and response loss without another transaction', async () => {
+    const { db, control, owner, authorities, authority } =
+      await createCoordinatorHarness();
+    const activated = await activateSchedule(control, owner);
+    let transactionCount = 0;
+    const instrumented = {
+      ...db,
+      /** @param {import('../../src/core/lib/db/base.js').GetParams} params */
+      async get(params) {
+        if (params.sortKeyValue === COORDINATOR_AUTHORITY_SORT_KEY) {
+          throw new Error('exact readback must not revalidate authority');
+        }
+        return await db.get(params);
+      },
+      /** @param {import('../../src/core/lib/db/base.js').TransactionWriteParams} params */
+      async transactionWrite(params) {
+        transactionCount += 1;
+        await db.transactionWrite(params);
+        await takeOverCoordinator(authorities, authority);
+        throw new Error('simulated response loss after commit and takeover');
+      },
+    };
+    const predecessor = createScheduleControl({
+      db: instrumented,
+      tableName: TABLE_NAME,
+      coordinatorAuthority: authority,
+    });
+    const expectedCursor = {
+      ...activated.cursor,
+      horizon: 4 * MINUTE,
+      version: activated.cursor.version + 1,
+      updatedAt: 4 * MINUTE,
+    };
+    await expect(
+      predecessor.advance({
+        expectedCursor: activated.cursor,
+        throughInclusive: 4 * MINUTE,
+        owner,
+        observedAt: 4 * MINUTE,
+      }),
+    ).resolves.toEqual({ applied: false, cursor: expectedCursor });
+    expect(transactionCount).toBe(1);
+    await expect(
+      control.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+    ).resolves.toEqual(expectedCursor);
+    await expect(authorities.get({ appId: APP_ID })).resolves.toMatchObject({
+      coordinatorId: 'coordinator-b',
+      epoch: authority.epoch + 1,
+    });
+  });
+
+  test.each(['create', 'replay'])(
+    'requires matching structural authority for prepared %s without duplicate checks or stale-token writes',
+    async (mode) => {
+      const { db, owner, authorities, authority } =
+        await createCoordinatorHarness();
+      let prohibitWrites = false;
+      const instrumented = {
+        ...db,
+        /** @param {import('../../src/core/lib/db/base.js').GetParams} params */
+        async get(params) {
+          if (params.sortKeyValue === COORDINATOR_AUTHORITY_SORT_KEY) {
+            throw new Error('prepared metadata must not read authority');
+          }
+          return await db.get(params);
+        },
+        /** @param {import('../../src/core/lib/db/base.js').TransactionWriteParams} params */
+        async transactionWrite(params) {
+          if (prohibitWrites) {
+            throw new Error('prepared metadata must remain read-only');
+          }
+          await db.transactionWrite(params);
+        },
+      };
+      const control = createScheduleControl({
+        db: instrumented,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: authority,
+      });
+      const activated = await activateSchedule(control, owner);
+      const input = occurrenceInput(activated.cursor, owner);
+      const expected = expectedFromInput(input);
+      const first = await control.prepareWorkflowAdmission(input);
+      const token = createCoordinatorAuthorityToken(authority);
+      const context = {
+        ...storeContext(instrumented),
+        coordinatorAuthority: token,
+      };
+      const createExtension = resolvePreparedScheduleWorkflowAdmission(
+        first,
+        expected,
+        context,
+      );
+      expect(createExtension.coordinatorAuthority).toEqual(token);
+      expect(createExtension.conditionChecks).toHaveLength(1);
+      expect(createExtension.conditionChecks[0].sortKeyValue).not.toBe(
+        COORDINATOR_AUTHORITY_SORT_KEY,
+      );
+      expect(createExtension.putRequests).toHaveLength(2);
+      if (mode === 'replay') {
+        const activationFence = await getLocalApplicationRunCreationFence({
+          db,
+          tableName: TABLE_NAME,
+          appId: APP_ID,
+          revisionId: REVISION_A,
+        });
+        await db.transactionWrite({
+          tableName: TABLE_NAME,
+          conditionChecks: [
+            activationFence,
+            ...createExtension.conditionChecks,
+            createCoordinatorAuthorityFence(token),
+          ],
+          putRequests: [...createExtension.putRequests],
+        });
+      }
+      const successorAuthority = await takeOverCoordinator(
+        authorities,
+        authority,
+      );
+      prohibitWrites = true;
+      // Preparation and resolution are structural even when A is now stale.
+      const prepared = await control.prepareWorkflowAdmission({
+        ...input,
+        observedAt: input.observedAt + 1,
+      });
+      const extension = resolvePreparedScheduleWorkflowAdmission(
+        prepared,
+        expected,
+        { ...context, coordinatorAuthority: authority },
+      );
+      expect(extension.mode).toBe(mode);
+      expect(extension.coordinatorAuthority).toEqual(token);
+      expect(extension.conditionChecks).toHaveLength(mode === 'create' ? 1 : 0);
+      expect(extension.putRequests).toHaveLength(mode === 'create' ? 2 : 0);
+      await expect(
+        reconcilePreparedScheduleWorkflowAdmission(prepared, expected, context),
+      ).resolves.toEqual(
+        mode === 'create'
+          ? { status: 'absent' }
+          : { status: 'exact', occurrence: first.occurrence },
+      );
+
+      for (const invalidContext of [
+        storeContext(instrumented),
+        { ...context, coordinatorAuthority: successorAuthority },
+      ]) {
+        expect(() =>
+          resolvePreparedScheduleWorkflowAdmission(
+            prepared,
+            expected,
+            invalidContext,
+          ),
+        ).toThrow(/coordinator authority must match/);
+        // eslint-disable-next-line no-await-in-loop
+        await expect(
+          reconcilePreparedScheduleWorkflowAdmission(
+            prepared,
+            expected,
+            invalidContext,
+          ),
+        ).rejects.toThrow(/coordinator authority must match/);
+      }
+    },
+  );
+
+  test('permits same-app bound consumers of unbound preparations but rejects different-app consumers', async () => {
+    const { db, control, ownership } = createHarness();
+    await activateApplication(db);
+    const owner = await claimResident(ownership);
+    const activated = await activateSchedule(control, owner);
+    const input = occurrenceInput(activated.cursor, owner);
+    const prepared = await control.prepareWorkflowAdmission(input);
+    const expected = expectedFromInput(input);
+    const authorities = createCoordinatorAuthority({
+      db,
+      tableName: TABLE_NAME,
+    });
+    const { authority } = await authorities.acquire({
+      appId: APP_ID,
+      coordinatorId: 'coordinator-a',
+      requestId: 'acquire-a',
+      observedAt: 30,
+    });
+    const context = { ...storeContext(db), coordinatorAuthority: authority };
+    expect(
+      resolvePreparedScheduleWorkflowAdmission(prepared, expected, context),
+    ).toMatchObject({ mode: 'create' });
+    await expect(
+      reconcilePreparedScheduleWorkflowAdmission(prepared, expected, context),
+    ).resolves.toEqual({ status: 'absent' });
+    const { authority: otherAuthority } = await authorities.acquire({
+      appId: 'another-app',
+      coordinatorId: 'another-coordinator',
+      requestId: 'acquire-another-app',
+      observedAt: 30,
+    });
+    const invalidContext = {
+      ...storeContext(db),
+      coordinatorAuthority: otherAuthority,
+    };
+    expect(() =>
+      resolvePreparedScheduleWorkflowAdmission(
+        prepared,
+        expected,
+        invalidContext,
+      ),
+    ).toThrow(/coordinator authority must match/);
+    await expect(
+      reconcilePreparedScheduleWorkflowAdmission(
+        prepared,
+        expected,
+        invalidContext,
+      ),
+    ).rejects.toThrow(/coordinator authority must match/);
   });
 });

@@ -10875,6 +10875,13 @@ export function createExecutionLedger({
           coordinatorAuthority,
           'createExecutionLedger.coordinatorAuthority',
         );
+  const scheduleAdmissionContext = Object.freeze({
+    db,
+    tableName: resolvedTableName,
+    ...(resolvedCoordinatorAuthority === undefined
+      ? {}
+      : { coordinatorAuthority: resolvedCoordinatorAuthority }),
+  });
   const effectVerifierRegistry = normalizeEffectEvidenceVerifiers(
     effectEvidenceVerifiers,
   );
@@ -13141,10 +13148,7 @@ export function createExecutionLedger({
               runId,
               cause,
             },
-            {
-              db,
-              tableName: resolvedTableName,
-            },
+            scheduleAdmissionContext,
           );
         if (scheduleReconciliation.status === 'absent') {
           throw new ExecutionLedgerProjectionError(
@@ -13331,10 +13335,7 @@ export function createExecutionLedger({
       ? resolvePreparedScheduleWorkflowAdmission(
           scheduleAdmission,
           scheduleExpected,
-          {
-            db,
-            tableName: resolvedTableName,
-          },
+          scheduleAdmissionContext,
         )
       : undefined;
     if (resolvedScheduleMutation?.mode === 'replay') {
@@ -13390,10 +13391,7 @@ export function createExecutionLedger({
         ? await reconcilePreparedScheduleWorkflowAdmission(
             scheduleAdmission,
             scheduleExpected,
-            {
-              db,
-              tableName: resolvedTableName,
-            },
+            scheduleAdmissionContext,
           )
         : undefined;
       if (!raced && scheduleReconciliation?.status === 'exact') {
@@ -13407,10 +13405,7 @@ export function createExecutionLedger({
           await reconcilePreparedScheduleWorkflowAdmission(
             scheduleAdmission,
             scheduleExpected,
-            {
-              db,
-              tableName: resolvedTableName,
-            },
+            scheduleAdmissionContext,
           );
       }
       if (raced) {
@@ -13517,10 +13512,7 @@ export function createExecutionLedger({
         await reconcilePreparedScheduleWorkflowAdmission(
           scheduleAdmission,
           scheduleExpected,
-          {
-            db,
-            tableName: resolvedTableName,
-          },
+          scheduleAdmissionContext,
         );
       if (scheduleReconciliation.status === 'absent') {
         throw new ExecutionLedgerProjectionError(
@@ -23359,11 +23351,56 @@ export function createExecutionLedger({
     };
   }
 
+  /**
+   * Create one ledger view over the same durable stores whose every mutation
+   * is transactionally fenced by the supplied coordinator authority. Binding
+   * is one-way so a caller cannot silently replace the identity held by an
+   * already-authoritative resident.
+   * @param {import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot} authority - Exact active authority.
+   * @returns {ExecutionLedgerStore} - Authority-bound ledger over the same stores.
+   */
+  function bindCoordinatorAuthority(authority) {
+    if (resolvedCoordinatorAuthority) {
+      throw new TypeError(
+        'Execution ledger coordinator authority cannot be rebound.',
+      );
+    }
+    return createExecutionLedger({
+      db,
+      tableName: resolvedTableName,
+      payloadStore,
+      coordinatorAuthority: authority,
+      effectEvidenceVerifiers,
+      now,
+    });
+  }
+
+  /**
+   * Return the epoch that must stamp new physical assignments. Admissions
+   * remain epoch zero; the transaction fence still protects their mutation.
+   * @returns {number} - Bound positive epoch, or zero for an unbound ledger.
+   */
+  function getCoordinatorEpoch() {
+    return resolvedCoordinatorAuthority?.epoch ?? 0;
+  }
+
+  /**
+   * Share the exact immutable token with trusted mutation collaborators.
+   * Same-table schedules compare this control authority transactionally;
+   * separate application state must explicitly adopt its own local barrier.
+   * Neither collaborator invents an epoch or process identity independently.
+   * @returns {import('./coordinator-authority.js').CoordinatorAuthorityToken | undefined} - Bound token, or undefined for an unbound ledger.
+   */
+  function getCoordinatorAuthority() {
+    return resolvedCoordinatorAuthority;
+  }
+
   return {
     abandonUnstartedAttempt,
     abandonUnstartedWorkflowActivityAttempt,
     appendActivityAttemptLog,
     authorizeManagedEffectSuccessorRetry,
+    bindCoordinatorAuthority,
     claimInvocation,
     claimWorkflowActivity,
     commitManagedEffectSuccessorOutcome,
@@ -23377,6 +23414,8 @@ export function createExecutionLedger({
     getAttempt,
     getEffect,
     getEvents,
+    getCoordinatorAuthority,
+    getCoordinatorEpoch,
     getInvocation,
     getRun,
     getWorkflowSignalDelivery,
@@ -23411,6 +23450,9 @@ export function createExecutionLedger({
 
 /**
  * @typedef ExecutionLedgerStore
+ * @property {(authority: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot) => ExecutionLedgerStore} bindCoordinatorAuthority - Returns a ledger over the same stores with every mutation fenced by one exact coordinator authority.
+ * @property {() => import('./coordinator-authority.js').CoordinatorAuthorityToken | undefined} getCoordinatorAuthority - Returns the exact immutable bound token for trusted collaborators, or undefined when unbound; separate destinations require their own local fence.
+ * @property {() => number} getCoordinatorEpoch - Returns the bound coordinator epoch, or zero when unbound.
  * @property {(...args: any[]) => Promise<any>} createManualRun - Creates one idempotent manual run.
  * @property {(...args: any[]) => Promise<any>} createWorkflowRun - Creates one idempotent activity-, timer-, or signal-headed workflow run.
  * @property {(...args: any[]) => Promise<any>} fireWorkflowTimer - Fires one exact due durable workflow timer.

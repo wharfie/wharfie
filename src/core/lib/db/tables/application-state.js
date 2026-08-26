@@ -12,6 +12,21 @@ import {
   cloneJsonValue,
 } from '../../../runtime/json-value.js';
 import { assertLedgerOpaqueId } from '../../ledger/record-key.js';
+import { assertCoordinatorAuthorityToken } from './coordinator-authority.js';
+import {
+  ApplicationStateCoordinatorAuthorityConflictError,
+  ApplicationStateCoordinatorAuthorityStaleError,
+  applicationStateCoordinatorRecordConditions,
+  createApplicationStateCoordinatorAuthorityFence,
+  createApplicationStateCoordinatorAuthorityKey,
+  createApplicationStateCoordinatorAuthorityRecord,
+  validateApplicationStateCoordinatorAuthorityRecord,
+} from './application-state-authority.js';
+
+export {
+  ApplicationStateCoordinatorAuthorityConflictError,
+  ApplicationStateCoordinatorAuthorityStaleError,
+} from './application-state-authority.js';
 
 export const APPLICATION_STATE_KEY_NAME = 'resource_id';
 export const APPLICATION_STATE_SORT_KEY_NAME = 'sort_key';
@@ -657,7 +672,7 @@ export function validateApplicationStateNotAppliedResolutionRecord(value) {
 
 /**
  * Create the provider-neutral physical v2 application-state table.
- * @param {{db: import('../base.js').DBClient, tableName: string, createStoreId?: () => string}} options - Exact dependencies.
+ * @param {{db: import('../base.js').DBClient, tableName: string, createStoreId?: () => string, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot}} options - Exact dependencies.
  */
 export function createApplicationStateTable(options) {
   if (!options?.db || typeof options.db.transactionWrite !== 'function') {
@@ -681,6 +696,135 @@ export function createApplicationStateTable(options) {
   const db = options.db;
   const tableName = options.tableName.trim();
   const createStoreId = options.createStoreId || createRandomStoreId;
+  const coordinatorAuthority =
+    options.coordinatorAuthority === undefined
+      ? undefined
+      : assertCoordinatorAuthorityToken(
+          options.coordinatorAuthority,
+          'createApplicationStateTable.coordinatorAuthority',
+        );
+
+  /** @param {unknown} input - Caller-owned namespace binding. @returns {Readonly<{storeId: string, namespace: string}>} - Validated immutable scope. */
+  function normalizeCoordinatorScope(input) {
+    const scope = cloneJsonObject(input, 'application-state coordinator scope');
+    if (
+      Object.keys(scope).length !== 2 ||
+      !Object.hasOwn(scope, 'storeId') ||
+      !Object.hasOwn(scope, 'namespace')
+    ) {
+      throw new TypeError(
+        'Application-state coordinator scope requires exactly storeId and namespace.',
+      );
+    }
+    assertDomainSeparatedSha256Id(
+      scope.storeId,
+      'was',
+      'application-state storeId',
+    );
+    if (typeof scope.namespace !== 'string' || !scope.namespace) {
+      throw new TypeError('application-state namespace must be non-empty.');
+    }
+    if (
+      coordinatorAuthority &&
+      coordinatorAuthority.appId !== scope.namespace
+    ) {
+      throw new TypeError(
+        'Application-state coordinator authority must match the namespace.',
+      );
+    }
+    return Object.freeze({
+      storeId: scope.storeId,
+      namespace: scope.namespace,
+    });
+  }
+
+  /** @param {unknown} value - Optional retained destination-authority floor. @param {Readonly<{storeId: string, namespace: string}>} scope - Exact destination scope. @returns {Readonly<{destinationAuthorityFloor?: Readonly<Record<string, any>>}>} - Validated immutable adoption options. */
+  function normalizeCoordinatorAdoptionOptions(value, scope) {
+    if (value === undefined) return Object.freeze({});
+    const input = cloneJsonObject(
+      value,
+      'application-state coordinator adoption options',
+    );
+    if (
+      Object.keys(input).length !== 1 ||
+      !Object.hasOwn(input, 'destinationAuthorityFloor')
+    ) {
+      throw new TypeError(
+        'Application-state coordinator adoption options require exactly destinationAuthorityFloor.',
+      );
+    }
+    let floor;
+    try {
+      floor = validateApplicationStateCoordinatorAuthorityRecord(
+        input.destinationAuthorityFloor,
+      );
+    } catch {
+      throw new TypeError(
+        'Application-state coordinator destinationAuthorityFloor is invalid.',
+      );
+    }
+    if (
+      floor.store_id !== scope.storeId ||
+      floor.namespace !== scope.namespace
+    ) {
+      throw new TypeError(
+        'Application-state coordinator destinationAuthorityFloor must match the adoption scope.',
+      );
+    }
+    return Object.freeze({ destinationAuthorityFloor: floor });
+  }
+
+  /** @param {unknown} value - Caller-owned logical mutation. @param {boolean} [allowMaxAttempts] - Whether the mutation accepts bounded retry configuration. @returns {Readonly<{storeId: string, namespace: string, key: string, value: any, destinationEffectId: string, contractDigest: string, maxAttempts: number}>} - Deeply frozen request captured before any await. */
+  function normalizeMutationInput(value, allowMaxAttempts = true) {
+    const input = cloneJsonObject(value, 'application-state mutation input');
+    const required = [
+      'storeId',
+      'namespace',
+      'key',
+      'value',
+      'destinationEffectId',
+      'contractDigest',
+    ];
+    if (
+      required.some((key) => !Object.hasOwn(input, key)) ||
+      Object.keys(input).some(
+        (key) =>
+          !required.includes(key) &&
+          !(allowMaxAttempts && key === 'maxAttempts'),
+      )
+    ) {
+      throw new TypeError(
+        'Application-state mutation input has unsupported or missing fields.',
+      );
+    }
+    const scope = normalizeCoordinatorScope({
+      storeId: input.storeId,
+      namespace: input.namespace,
+    });
+    if (typeof input.key !== 'string' || !input.key) {
+      throw new TypeError('application-state key must be non-empty.');
+    }
+    assertLedgerOpaqueId(
+      input.destinationEffectId,
+      'application-state destinationEffectId',
+    );
+    assertDomainSeparatedSha256Id(
+      input.contractDigest,
+      'wac',
+      'application-state contractDigest',
+    );
+    const maxAttempts = input.maxAttempts ?? 3;
+    if (
+      !Number.isSafeInteger(maxAttempts) ||
+      maxAttempts < 1 ||
+      maxAttempts > 8
+    ) {
+      throw new TypeError(
+        'application-state maxAttempts must be between 1 and 8.',
+      );
+    }
+    return deepFreezeJson({ ...input, ...scope, maxAttempts });
+  }
 
   /** @param {string} resourceId - Partition key. @param {string} sortKey - Sort key. @returns {Promise<Record<string, any> | null>} - Exact row. */
   async function readRecord(resourceId, sortKey) {
@@ -722,6 +866,13 @@ export function createApplicationStateTable(options) {
       store_id: storeId,
       identity_digest: createStoreIdentityDigest(storeId),
     });
+    const initialAuthority = coordinatorAuthority
+      ? createApplicationStateCoordinatorAuthorityRecord({
+          storeId,
+          namespace: coordinatorAuthority.appId,
+          authority: coordinatorAuthority,
+        })
+      : undefined;
     try {
       await db.transactionWrite({
         tableName,
@@ -737,6 +888,19 @@ export function createApplicationStateTable(options) {
               },
             ],
           },
+          ...(initialAuthority
+            ? [
+                {
+                  keyName: APPLICATION_STATE_KEY_NAME,
+                  sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+                  record: initialAuthority,
+                  conditions: createApplicationStateCoordinatorAuthorityFence({
+                    storeId,
+                    namespace: initialAuthority.namespace,
+                  }).conditions,
+                },
+              ]
+            : []),
         ],
       });
     } catch (error) {
@@ -767,6 +931,215 @@ export function createApplicationStateTable(options) {
       );
     }
     return identity;
+  }
+
+  /** @param {{storeId: string, namespace: string}} scope - Validated scope. @returns {Promise<Readonly<Record<string, any>> | null>} - Verified destination fence, without another identity read. */
+  async function readCoordinatorRecord(scope) {
+    const key = createApplicationStateCoordinatorAuthorityKey(scope.namespace);
+    const row = await readRecord(key.resourceId, key.sortKey);
+    if (!row) return null;
+    let record;
+    try {
+      record = validateApplicationStateCoordinatorAuthorityRecord(row);
+      if (record.namespace !== scope.namespace) {
+        throw new TypeError(
+          'Application-state coordinator record crossed namespace.',
+        );
+      }
+    } catch {
+      throw new ApplicationStateCorruptionError(
+        'Application-state coordinator record failed verification.',
+      );
+    }
+    if (record.store_id !== scope.storeId) {
+      throw new ApplicationStateStoreIdentityError(
+        'Application-state coordinator record does not belong to the expected store.',
+      );
+    }
+    return record;
+  }
+
+  /**
+   * Read only the destination-local high-water record. This neither inspects
+   * nor proves currentness in the separate control database.
+   * @param {{storeId: string, namespace: string}} input - Exact destination scope.
+   * @returns {Promise<Readonly<Record<string, any>> | null>} - Verified destination record or absence.
+   */
+  async function readCoordinatorAuthority(input) {
+    const scope = normalizeCoordinatorScope(input);
+    await assertStoreIdentity(scope.storeId);
+    return await readCoordinatorRecord(scope);
+  }
+
+  /** @param {Readonly<Record<string, any>> | null} current - Verified current destination fence. @param {Readonly<Record<string, any>> | undefined} floor - Retained ADOPTED high-water evidence. @param {Readonly<{namespace: string}>} scope - Exact destination scope. @returns {void} - Throws unless current covers the floor. */
+  function assertDestinationAuthorityFloor(current, floor, scope) {
+    if (!floor) return;
+    if (
+      !current ||
+      (current.record_digest !== floor.record_digest &&
+        current.epoch <= floor.epoch)
+    ) {
+      throw new ApplicationStateCoordinatorAuthorityStaleError(scope.namespace);
+    }
+  }
+
+  /** @param {Readonly<{storeId: string, namespace: string}>} scope - Exact destination scope. @param {Readonly<{destinationAuthorityFloor?: Readonly<Record<string, any>>}>} adoption - Validated adoption options. @returns {Promise<{identity: Readonly<Record<string, any>>, current: Readonly<Record<string, any>> | null, candidate: Readonly<Record<string, any>>}>} - One exact predecessor snapshot suitable for adoption. */
+  async function readCoordinatorAdoptionPrecondition(scope, adoption) {
+    if (!coordinatorAuthority) {
+      throw new TypeError(
+        'Application-state coordinator adoption requires a bound authority.',
+      );
+    }
+    const candidate = createApplicationStateCoordinatorAuthorityRecord({
+      ...scope,
+      authority: coordinatorAuthority,
+    });
+    const identity = await assertStoreIdentity(scope.storeId);
+    const current = await readCoordinatorRecord(scope);
+    assertDestinationAuthorityFloor(
+      current,
+      adoption.destinationAuthorityFloor,
+      scope,
+    );
+    if (
+      current &&
+      current.record_digest !== candidate.record_digest &&
+      candidate.epoch <= current.epoch
+    ) {
+      throw new ApplicationStateCoordinatorAuthorityStaleError(scope.namespace);
+    }
+    return { identity, current, candidate };
+  }
+
+  /**
+   * Read and verify the exact predecessor required by a later adoption. This
+   * is a read-only guard for callers that must fail before another durable
+   * store is mutated. Adoption still repeats this check and CASes the exact
+   * predecessor because the destination may change after this read.
+   * @param {{storeId: string, namespace: string}} input - Exact destination scope.
+   * @param {{destinationAuthorityFloor: unknown}} [options] - Retained ADOPTED floor.
+   * @returns {Promise<Readonly<Record<string, any>> | null>} - Exact verified current barrier.
+   */
+  async function assertCoordinatorAuthorityAdoptionPrecondition(
+    input,
+    options,
+  ) {
+    const scope = normalizeCoordinatorScope(input);
+    const adoption = normalizeCoordinatorAdoptionOptions(options, scope);
+    const { current } = await readCoordinatorAdoptionPrecondition(
+      scope,
+      adoption,
+    );
+    return current;
+  }
+
+  /**
+   * Explicitly install this bound token at the destination. Higher epochs may
+   * advance one exact predecessor; same-token replay is read-only. Superseded
+   * adoption is rejected, not replayed from historical receipts. This assumes
+   * one trusted control-authority lineage and does not infer a lease, release,
+   * control-store currentness, or a cross-database atomic handoff.
+   * @param {{storeId: string, namespace: string}} input - Exact destination scope.
+   * @param {{destinationAuthorityFloor: unknown}} [options] - Retained ADOPTED floor.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Verified adopted record.
+   */
+  async function adoptCoordinatorAuthority(input, options) {
+    const scope = normalizeCoordinatorScope(input);
+    const adoption = normalizeCoordinatorAdoptionOptions(options, scope);
+    const { identity, current, candidate } =
+      await readCoordinatorAdoptionPrecondition(scope, adoption);
+    if (current && current.record_digest === candidate.record_digest)
+      return current;
+    try {
+      await db.transactionWrite({
+        tableName,
+        conditionChecks: [
+          identityCondition(scope.storeId, identity.identity_digest),
+        ],
+        putRequests: [
+          {
+            keyName: APPLICATION_STATE_KEY_NAME,
+            sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+            record: candidate,
+            conditions: current
+              ? applicationStateCoordinatorRecordConditions(current)
+              : createApplicationStateCoordinatorAuthorityFence(scope)
+                  .conditions,
+          },
+        ],
+      });
+    } catch (error) {
+      await assertStoreIdentity(scope.storeId);
+      const winner = await readCoordinatorRecord(scope);
+      assertDestinationAuthorityFloor(
+        winner,
+        adoption.destinationAuthorityFloor,
+        scope,
+      );
+      if (winner && winner.record_digest === candidate.record_digest)
+        return winner;
+      if (winner && winner.epoch >= candidate.epoch) {
+        throw new ApplicationStateCoordinatorAuthorityStaleError(
+          scope.namespace,
+        );
+      }
+      if (isConditionalFailure(error)) {
+        throw new ApplicationStateCoordinatorAuthorityConflictError(
+          scope.namespace,
+        );
+      }
+      throw error;
+    }
+    const retained = await readCoordinatorAuthority(scope);
+    assertDestinationAuthorityFloor(
+      retained,
+      adoption.destinationAuthorityFloor,
+      scope,
+    );
+    if (!retained || retained.record_digest !== candidate.record_digest) {
+      if (retained && retained.epoch >= candidate.epoch) {
+        throw new ApplicationStateCoordinatorAuthorityStaleError(
+          scope.namespace,
+        );
+      }
+      throw new ApplicationStateCoordinatorAuthorityConflictError(
+        scope.namespace,
+      );
+    }
+    return retained;
+  }
+
+  /** @param {{storeId: string, namespace: string}} scope - Snapshotted mutation scope. @returns {Promise<void>} - Throws if a new mutation has no matching local authority. */
+  async function assertCurrentCoordinatorAuthority(scope) {
+    const retained = await readCoordinatorAuthority({
+      storeId: scope.storeId,
+      namespace: scope.namespace,
+    });
+    const expected = coordinatorAuthority
+      ? createApplicationStateCoordinatorAuthorityRecord({
+          storeId: scope.storeId,
+          namespace: scope.namespace,
+          authority: coordinatorAuthority,
+        })
+      : null;
+    if (retained?.record_digest !== expected?.record_digest) {
+      throw new ApplicationStateCoordinatorAuthorityStaleError(scope.namespace);
+    }
+  }
+
+  /** @param {import('../base.js').TransactionWriteParams} params - Destination mutation. @param {{storeId: string, namespace: string}} scope - Snapshotted mutation scope. @returns {Promise<void>} - Atomic locally fenced write. */
+  async function writeWithCoordinatorFence(params, scope) {
+    await db.transactionWrite({
+      ...params,
+      conditionChecks: [
+        ...(params.conditionChecks || []),
+        createApplicationStateCoordinatorAuthorityFence({
+          storeId: scope.storeId,
+          namespace: scope.namespace,
+          ...(coordinatorAuthority ? { authority: coordinatorAuthority } : {}),
+        }),
+      ],
+    });
   }
 
   /** @param {string} destinationEffectId - Receipt identity. @returns {Promise<Readonly<Record<string, any>> | null>} - Verified receipt. */
@@ -955,22 +1328,8 @@ export function createApplicationStateTable(options) {
    * @returns {Promise<Readonly<Record<string, any>>>} - Permanent receipt.
    */
   async function putIfAbsent(input) {
+    input = normalizeMutationInput(input);
     const identity = await assertStoreIdentity(input.storeId);
-    if (typeof input.namespace !== 'string' || !input.namespace) {
-      throw new TypeError('application-state namespace must be non-empty.');
-    }
-    if (typeof input.key !== 'string' || !input.key) {
-      throw new TypeError('application-state key must be non-empty.');
-    }
-    assertLedgerOpaqueId(
-      input.destinationEffectId,
-      'application-state destinationEffectId',
-    );
-    assertDomainSeparatedSha256Id(
-      input.contractDigest,
-      'wac',
-      'application-state contractDigest',
-    );
     const businessRecord = createApplicationStateBusinessRecord({
       storeId: input.storeId,
       namespace: input.namespace,
@@ -1005,6 +1364,7 @@ export function createApplicationStateTable(options) {
         input.destinationEffectId,
       );
     }
+    await assertCurrentCoordinatorAuthority(input);
 
     const insertedReceipt = createApplicationStateReceiptRecord({
       destinationEffectId: input.destinationEffectId,
@@ -1013,51 +1373,45 @@ export function createApplicationStateTable(options) {
       inserted: true,
     });
     const maxAttempts = input.maxAttempts ?? 3;
-    if (
-      !Number.isSafeInteger(maxAttempts) ||
-      maxAttempts < 1 ||
-      maxAttempts > 8
-    ) {
-      throw new TypeError(
-        'application-state maxAttempts must be between 1 and 8.',
-      );
-    }
 
     /** @type {unknown} */
     let lastError;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
-        await db.transactionWrite({
-          tableName,
-          conditionChecks: [
-            identityCondition(input.storeId, identity.identity_digest),
-            resolutionAbsentCondition(input.destinationEffectId),
-          ],
-          putRequests: [
-            {
-              keyName: APPLICATION_STATE_KEY_NAME,
-              sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
-              record: businessRecord,
-              conditions: [
-                {
-                  conditionType: CONDITION_TYPE.NOT_EXISTS,
-                  propertyName: APPLICATION_STATE_KEY_NAME,
-                },
-              ],
-            },
-            {
-              keyName: APPLICATION_STATE_KEY_NAME,
-              sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
-              record: insertedReceipt,
-              conditions: [
-                {
-                  conditionType: CONDITION_TYPE.NOT_EXISTS,
-                  propertyName: APPLICATION_STATE_KEY_NAME,
-                },
-              ],
-            },
-          ],
-        });
+        await writeWithCoordinatorFence(
+          {
+            tableName,
+            conditionChecks: [
+              identityCondition(input.storeId, identity.identity_digest),
+              resolutionAbsentCondition(input.destinationEffectId),
+            ],
+            putRequests: [
+              {
+                keyName: APPLICATION_STATE_KEY_NAME,
+                sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+                record: businessRecord,
+                conditions: [
+                  {
+                    conditionType: CONDITION_TYPE.NOT_EXISTS,
+                    propertyName: APPLICATION_STATE_KEY_NAME,
+                  },
+                ],
+              },
+              {
+                keyName: APPLICATION_STATE_KEY_NAME,
+                sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+                record: insertedReceipt,
+                conditions: [
+                  {
+                    conditionType: CONDITION_TYPE.NOT_EXISTS,
+                    propertyName: APPLICATION_STATE_KEY_NAME,
+                  },
+                ],
+              },
+            ],
+          },
+          input,
+        );
         return await requireMatchingReceipt(insertedReceipt, expected);
       } catch (error) {
         lastError = error;
@@ -1073,6 +1427,7 @@ export function createApplicationStateTable(options) {
             input.destinationEffectId,
           );
         }
+        await assertCurrentCoordinatorAuthority(input);
 
         const existingBusiness = await readBusinessByPhysicalKey(
           businessKey.resourceId,
@@ -1111,39 +1466,42 @@ export function createApplicationStateTable(options) {
             inserted: false,
           });
           try {
-            await db.transactionWrite({
-              tableName,
-              conditionChecks: [
-                identityCondition(input.storeId, identity.identity_digest),
-                resolutionAbsentCondition(input.destinationEffectId),
-                {
-                  keyName: APPLICATION_STATE_KEY_NAME,
-                  keyValue: businessKey.resourceId,
-                  sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
-                  sortKeyValue: businessKey.sortKey,
-                  conditions: [
-                    {
-                      conditionType: CONDITION_TYPE.EQUALS,
-                      propertyName: 'record_digest',
-                      propertyValue: existingBusiness.record_digest,
-                    },
-                  ],
-                },
-              ],
-              putRequests: [
-                {
-                  keyName: APPLICATION_STATE_KEY_NAME,
-                  sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
-                  record: conflictReceipt,
-                  conditions: [
-                    {
-                      conditionType: CONDITION_TYPE.NOT_EXISTS,
-                      propertyName: APPLICATION_STATE_KEY_NAME,
-                    },
-                  ],
-                },
-              ],
-            });
+            await writeWithCoordinatorFence(
+              {
+                tableName,
+                conditionChecks: [
+                  identityCondition(input.storeId, identity.identity_digest),
+                  resolutionAbsentCondition(input.destinationEffectId),
+                  {
+                    keyName: APPLICATION_STATE_KEY_NAME,
+                    keyValue: businessKey.resourceId,
+                    sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+                    sortKeyValue: businessKey.sortKey,
+                    conditions: [
+                      {
+                        conditionType: CONDITION_TYPE.EQUALS,
+                        propertyName: 'record_digest',
+                        propertyValue: existingBusiness.record_digest,
+                      },
+                    ],
+                  },
+                ],
+                putRequests: [
+                  {
+                    keyName: APPLICATION_STATE_KEY_NAME,
+                    sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+                    record: conflictReceipt,
+                    conditions: [
+                      {
+                        conditionType: CONDITION_TYPE.NOT_EXISTS,
+                        propertyName: APPLICATION_STATE_KEY_NAME,
+                      },
+                    ],
+                  },
+                ],
+              },
+              input,
+            );
             return await requireMatchingReceipt(conflictReceipt, expected);
           } catch (conflictError) {
             lastError = conflictError;
@@ -1159,6 +1517,7 @@ export function createApplicationStateTable(options) {
                 input.destinationEffectId,
               );
             }
+            await assertCurrentCoordinatorAuthority(input);
             if (isConditionalFailure(conflictError)) {
               await assertStoreIdentity(input.storeId);
             }
@@ -1180,22 +1539,8 @@ export function createApplicationStateTable(options) {
    * @returns {Promise<Readonly<{kind: 'outcome', receipt: Readonly<Record<string, any>>} | {kind: 'not-applied', resolution: Readonly<Record<string, any>>}>>} - Permanent destination disposition.
    */
   async function resolvePutIfAbsentNotApplied(input) {
+    input = normalizeMutationInput(input);
     const identity = await assertStoreIdentity(input.storeId);
-    if (typeof input.namespace !== 'string' || !input.namespace) {
-      throw new TypeError('application-state namespace must be non-empty.');
-    }
-    if (typeof input.key !== 'string' || !input.key) {
-      throw new TypeError('application-state key must be non-empty.');
-    }
-    assertLedgerOpaqueId(
-      input.destinationEffectId,
-      'application-state destinationEffectId',
-    );
-    assertDomainSeparatedSha256Id(
-      input.contractDigest,
-      'wac',
-      'application-state contractDigest',
-    );
     const insertedBusinessRecord = createApplicationStateBusinessRecord({
       storeId: input.storeId,
       namespace: input.namespace,
@@ -1241,17 +1586,9 @@ export function createApplicationStateTable(options) {
         ),
       });
     }
+    await assertCurrentCoordinatorAuthority(input);
 
     const maxAttempts = input.maxAttempts ?? 3;
-    if (
-      !Number.isSafeInteger(maxAttempts) ||
-      maxAttempts < 1 ||
-      maxAttempts > 8
-    ) {
-      throw new TypeError(
-        'application-state maxAttempts must be between 1 and 8.',
-      );
-    }
 
     /** @type {unknown} */
     let lastError;
@@ -1325,27 +1662,30 @@ export function createApplicationStateTable(options) {
             ],
       };
       try {
-        await db.transactionWrite({
-          tableName,
-          conditionChecks: [
-            identityCondition(input.storeId, identity.identity_digest),
-            receiptAbsentCondition(input.destinationEffectId),
-            businessCondition,
-          ],
-          putRequests: [
-            {
-              keyName: APPLICATION_STATE_KEY_NAME,
-              sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
-              record: candidate,
-              conditions: [
-                {
-                  conditionType: CONDITION_TYPE.NOT_EXISTS,
-                  propertyName: APPLICATION_STATE_KEY_NAME,
-                },
-              ],
-            },
-          ],
-        });
+        await writeWithCoordinatorFence(
+          {
+            tableName,
+            conditionChecks: [
+              identityCondition(input.storeId, identity.identity_digest),
+              receiptAbsentCondition(input.destinationEffectId),
+              businessCondition,
+            ],
+            putRequests: [
+              {
+                keyName: APPLICATION_STATE_KEY_NAME,
+                sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+                record: candidate,
+                conditions: [
+                  {
+                    conditionType: CONDITION_TYPE.NOT_EXISTS,
+                    propertyName: APPLICATION_STATE_KEY_NAME,
+                  },
+                ],
+              },
+            ],
+          },
+          input,
+        );
         return Object.freeze({
           kind: 'not-applied',
           resolution: await requireMatchingResolution(
@@ -1374,6 +1714,7 @@ export function createApplicationStateTable(options) {
             ),
           });
         }
+        await assertCurrentCoordinatorAuthority(input);
         if (isConditionalFailure(error)) {
           await assertStoreIdentity(input.storeId);
         }
@@ -1388,6 +1729,7 @@ export function createApplicationStateTable(options) {
    * @returns {Promise<Readonly<Record<string, any>> | null>} - Matching permanent receipt, if committed.
    */
   async function recoverPutIfAbsent(input) {
+    input = normalizeMutationInput(input, false);
     await assertStoreIdentity(input.storeId);
     const { receipt, resolution } = await readEffectDisposition(
       input.destinationEffectId,
@@ -1423,6 +1765,9 @@ export function createApplicationStateTable(options) {
     readStoreIdentity,
     ensureStoreIdentity,
     assertStoreIdentity,
+    readCoordinatorAuthority,
+    assertCoordinatorAuthorityAdoptionPrecondition,
+    adoptCoordinatorAuthority,
     readReceipt,
     readNotAppliedResolution,
     readBusinessByPhysicalKey,

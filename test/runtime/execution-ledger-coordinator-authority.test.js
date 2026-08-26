@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import {
   CoordinatorAuthorityStaleError,
   createCoordinatorAuthority,
+  createCoordinatorAuthorityToken,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import {
   AttemptStatus,
@@ -234,6 +235,41 @@ function completedEvidence(startFrame) {
 describe.each(adapterCases)(
   'execution-ledger coordinator fencing over $name',
   (adapterCase) => {
+    test('binds one unbound ledger view exactly once and exposes its assignment epoch', async () => {
+      const environment = await createEnvironment(adapterCase);
+      const ledger = createExecutionLedger({
+        db: environment.db,
+        tableName: TABLE_NAME,
+        payloadStore: environment.payloadStore,
+        now: () => 999,
+      });
+      const acquired = await acquireFirst(environment.authority);
+
+      expect(ledger.getCoordinatorEpoch()).toBe(0);
+      expect(ledger.getCoordinatorAuthority()).toBeUndefined();
+      const bound = ledger.bindCoordinatorAuthority(acquired.authority);
+      expect(bound.getCoordinatorEpoch()).toBe(1);
+      expect(bound.getCoordinatorAuthority()).toEqual(
+        createCoordinatorAuthorityToken(acquired.authority),
+      );
+      expect(Object.isFrozen(bound.getCoordinatorAuthority())).toBe(true);
+      expect(() => bound.bindCoordinatorAuthority(acquired.authority)).toThrow(
+        /cannot be rebound/i,
+      );
+
+      await expect(bound.createManualRun(runRequest())).resolves.toMatchObject({
+        applied: true,
+        run: { appId: APP_ID, runId: RUN_ID },
+      });
+      await takeover(environment.authority, acquired.authority);
+      await expect(
+        bound.createManualRun({
+          ...runRequest(),
+          runId: 'stale-bound-ledger-run',
+        }),
+      ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+    });
+
     test('rejects admission when takeover wins immediately before its transaction', async () => {
       const environment = await createEnvironment(adapterCase);
       const acquired = await acquireFirst(environment.authority);
@@ -286,14 +322,50 @@ describe.each(adapterCases)(
       const acquired = await acquireFirst(environment.authority);
       const predecessorLedger = ledgerFor(environment, acquired.authority);
       const claimed = await createAndClaim(predecessorLedger);
-      const replacement = await takeover(
-        environment.authority,
+      /** @type {() => void} */
+      let releasePredecessor = () => {};
+      /** @type {Promise<void>} */
+      const predecessorBlocked = new Promise((resolve) => {
+        releasePredecessor = () => resolve();
+      });
+      /** @type {() => void} */
+      let notifyPredecessorBlocked = () => {};
+      /** @type {Promise<void>} */
+      const predecessorReachedCommit = new Promise((resolve) => {
+        notifyPredecessorBlocked = () => resolve();
+      });
+      let blockOnce = true;
+      const delayedDb = {
+        ...environment.db,
+        async transactionWrite(
+          /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+        ) {
+          if (blockOnce) {
+            blockOnce = false;
+            notifyPredecessorBlocked();
+            await predecessorBlocked;
+          }
+          return await environment.db.transactionWrite(params);
+        },
+      };
+      const delayedPredecessorLedger = ledgerFor(
+        environment,
         acquired.authority,
+        delayedDb,
       );
+      const staleStart = startClaimed(delayedPredecessorLedger, claimed);
+      await predecessorReachedCommit;
 
-      await expect(
-        startClaimed(predecessorLedger, claimed),
-      ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+      let replacement;
+      try {
+        replacement = await takeover(environment.authority, acquired.authority);
+      } finally {
+        releasePredecessor();
+      }
+
+      await expect(staleStart).rejects.toBeInstanceOf(
+        CoordinatorAuthorityStaleError,
+      );
       await expect(
         predecessorLedger.getAttempt(
           RUN_ID,
