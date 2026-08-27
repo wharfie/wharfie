@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import {
   cpSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
 } from 'node:fs';
@@ -22,6 +24,42 @@ import {
 
 const PROOF_PREFIX = 'wharfie-magnetic-first-run-';
 const PACKAGE_NAME = '@wharfie/wharfie';
+const CANONICAL_NPM_REGISTRY = 'https://registry.npmjs.org';
+const DEPENDENCY_PACKAGE_BUDGET = 170;
+const INSTALLED_LOGICAL_BYTE_BUDGET = 85 * 1024 * 1024;
+
+/**
+ * @param {string} directory - Installed tree to measure.
+ * @returns {number} - Logical bytes in regular files below the tree.
+ */
+function logicalFileBytes(directory) {
+  let bytes = 0;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      bytes += logicalFileBytes(entryPath);
+    } else if (entry.isFile()) {
+      bytes += lstatSync(entryPath).size;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * @param {string} directory - Installed starter directory.
+ * @param {NodeJS.ProcessEnv} env - Isolated npm environment.
+ * @returns {number} - Installed dependency package directories.
+ */
+function dependencyPackageCount(directory, env) {
+  const listed = runCommand(NPM_COMMAND, ['ls', '--all', '--parseable'], {
+    cwd: directory,
+    env,
+    capture: true,
+    timeoutMs: 60_000,
+    killSignal: 'SIGKILL',
+  }).stdout;
+  return Math.max(0, listed.split(/\r?\n/u).filter(Boolean).length - 1);
+}
 
 /**
  * @returns {string | null} - Exact published package spec, or null for the
@@ -62,6 +100,7 @@ function packPublishedDependency(packageSpec, root, npmCache) {
       'pack',
       '--json',
       '--ignore-scripts',
+      `--registry=${CANONICAL_NPM_REGISTRY}`,
       '--pack-destination',
       root,
       packageSpec,
@@ -69,6 +108,8 @@ function packPublishedDependency(packageSpec, root, npmCache) {
     {
       cwd: root,
       capture: true,
+      timeoutMs: 240_000,
+      killSignal: 'SIGKILL',
       env: {
         ...process.env,
         npm_config_cache: npmCache,
@@ -140,13 +181,28 @@ try {
     packageSpec === null
       ? [
           'install',
+          '--ignore-scripts',
           '--no-audit',
           '--no-fund',
           '--no-save',
           '--package-lock=false',
+          `--registry=${CANONICAL_NPM_REGISTRY}`,
           packed.tarballPath,
         ]
-      : ['install', '--no-audit', '--no-fund'];
+      : [
+          'install',
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+          `--registry=${CANONICAL_NPM_REGISTRY}`,
+        ];
+  const installEnvironment = {
+    ...process.env,
+    npm_config_cache: npmCache,
+    npm_config_ignore_scripts: 'true',
+    npm_config_registry: CANONICAL_NPM_REGISTRY,
+    npm_config_update_notifier: 'false',
+  };
   process.stdout.write(
     packageSpec === null
       ? `Installing ${PACKAGE_NAME}@${packageMetadata.version} from one packed tarball\n`
@@ -154,11 +210,9 @@ try {
   );
   runCommand(NPM_COMMAND, installArgs, {
     cwd: starterRoot,
-    env: {
-      ...process.env,
-      npm_config_cache: npmCache,
-      npm_config_update_notifier: 'false',
-    },
+    env: installEnvironment,
+    timeoutMs: 240_000,
+    killSignal: 'SIGKILL',
   });
   assert.equal(
     readFileSync(starterMetadataPath, 'utf8'),
@@ -183,6 +237,30 @@ try {
     ),
     'the starter resolved Wharfie outside its copied workspace',
   );
+  const installedNodeModules = path.join(starterRoot, 'node_modules');
+  assert.equal(
+    existsSync(path.join(installedNodeModules, '@aws-sdk')),
+    false,
+    'the canonical starter must not install @aws-sdk packages',
+  );
+  assert.equal(
+    existsSync(path.join(installedNodeModules, '@smithy')),
+    false,
+    'the canonical starter must not install @smithy packages',
+  );
+  const dependencyPackages = dependencyPackageCount(
+    starterRoot,
+    installEnvironment,
+  );
+  const installedLogicalBytes = logicalFileBytes(installedNodeModules);
+  assert.ok(
+    dependencyPackages <= DEPENDENCY_PACKAGE_BUDGET,
+    `canonical starter dependency count ${dependencyPackages} exceeds ${DEPENDENCY_PACKAGE_BUDGET}`,
+  );
+  assert.ok(
+    installedLogicalBytes <= INSTALLED_LOGICAL_BYTE_BUDGET,
+    `canonical starter logical bytes ${installedLogicalBytes} exceed ${INSTALLED_LOGICAL_BYTE_BUDGET}`,
+  );
 
   process.stdout.write('Running the copied magnetic starter\n');
   runCommand(NPM_COMMAND, ['run', 'demo', '--', 'Ada'], {
@@ -192,11 +270,27 @@ try {
       NODE_PATH: undefined,
       WHARFIE_MAGNETIC_ACCEPTANCE_BUILDER_ROOT: starterRoot,
       npm_config_cache: npmCache,
+      npm_config_ignore_scripts: 'true',
+      npm_config_registry: CANONICAL_NPM_REGISTRY,
       npm_config_update_notifier: 'false',
     },
+    timeoutMs: 360_000,
+    killSignal: 'SIGKILL',
   });
   process.stdout.write(
-    `Verified magnetic first run with ${packed.manifest.filename}\n`,
+    `${JSON.stringify(
+      {
+        magneticFirstRun: 'ok',
+        package: packed.manifest.filename,
+        dependencyPackages,
+        dependencyPackageBudget: DEPENDENCY_PACKAGE_BUDGET,
+        installedLogicalBytes,
+        installedLogicalByteBudget: INSTALLED_LOGICAL_BYTE_BUDGET,
+        providerSdkPackages: 0,
+      },
+      null,
+      2,
+    )}\n`,
   );
 } finally {
   localPackage?.cleanup();

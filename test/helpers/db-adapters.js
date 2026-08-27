@@ -5,6 +5,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createAwsProviderModule } from './aws-provider.js';
+
 /**
  * @typedef {import('../../src/core/lib/db/base.js').DBClient} DBClient
  */
@@ -505,12 +507,27 @@ export async function createMockedDynamoDB(options = {}) {
   jest.resetModules();
   const fakeDocClient = createFakeDocClient(options);
 
+  const DynamoDBDocument = Object.assign(jest.fn(), {
+    from: () => fakeDocClient,
+  });
   jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
-    DynamoDBDocument: { from: () => fakeDocClient },
+    DynamoDBDocument,
   }));
 
-  const { default: createDynamoDB } = await import(DYNAMO_ADAPTER_IMPORT);
-  const db = createDynamoDB({ region: 'us-east-1' });
+  const [
+    { default: createDynamoDB },
+    { loadAwsProviderBindings, registerAwsProviderModule },
+  ] = await Promise.all([
+    import(DYNAMO_ADAPTER_IMPORT),
+    import('../../src/core/runtime/aws-provider-module.js'),
+  ]);
+  registerAwsProviderModule(
+    createAwsProviderModule({ libDynamoDB: { DynamoDBDocument } }),
+  );
+  const db = createDynamoDB(
+    { region: 'us-east-1' },
+    await loadAwsProviderBindings(),
+  );
   return { db, fakeDocClient };
 }
 

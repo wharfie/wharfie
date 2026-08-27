@@ -1,5 +1,3 @@
-import { ConfiguredRetryStrategy } from '@smithy/util-retry';
-
 /**
  * @typedef BaseAWSConfig
  * @property {number} [maxAttempts] - Maximum SDK attempts.
@@ -12,10 +10,16 @@ import { ConfiguredRetryStrategy } from '@smithy/util-retry';
  */
 class BaseAWS {
   /**
-   * @param {BaseAWSConfig} [options] - Retry configuration.
-   * @returns {{ retryStrategy: ConfiguredRetryStrategy }} - AWS SDK client configuration.
+   * @param {BaseAWSConfig} options - Retry configuration.
+   * @param {import('../../runtime/aws-provider-module.js').AwsSdkBindings} bindings - Fixed provider bindings.
+   * @returns {{ retryStrategy: any }} - AWS SDK client configuration.
    */
-  static config(options = {}) {
+  static config(options = {}, bindings) {
+    const ConfiguredRetryStrategy =
+      bindings?.utilRetry?.ConfiguredRetryStrategy;
+    if (typeof ConfiguredRetryStrategy !== 'function') {
+      throw new TypeError('AWS provider retry binding is invalid.');
+    }
     const configuredAttempts = Number(options.maxAttempts);
     const maxAttempts =
       Number.isSafeInteger(configuredAttempts) && configuredAttempts > 0
@@ -23,8 +27,10 @@ class BaseAWS {
         : 20;
 
     return {
-      retryStrategy: new ConfiguredRetryStrategy(maxAttempts, (attempt) =>
-        Math.floor(Math.random() * Math.min(20, Math.pow(2, attempt))),
+      retryStrategy: new ConfiguredRetryStrategy(
+        maxAttempts,
+        (/** @type {number} */ attempt) =>
+          Math.floor(Math.random() * Math.min(20, Math.pow(2, attempt))),
       ),
     };
   }

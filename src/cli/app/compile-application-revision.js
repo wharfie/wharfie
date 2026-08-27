@@ -1673,7 +1673,7 @@ function hasSameDigest(left, right) {
  * Prepare one immutable source/asset snapshot and derive its logical revision.
  * Both packaging and durable source execution must consume the returned paths,
  * never the mutable authored tree used to create them.
- * @param {{ appDir: string, manifest: unknown, outputDir?: string, assets?: Record<string, string>, dependencyLockPath?: string, runtimeRoot?: string }} options - Revision preparation inputs.
+ * @param {{ appDir: string, manifest: unknown, outputDir?: string, assets?: Record<string, string>, dependencyLockPath?: string, runtimeRoot?: string, trustInstalledRuntimeGraph?: boolean }} options - Revision preparation inputs. The trusted graph escape is reserved for Wharfie's installed-package self-host build.
  * @returns {Promise<PreparedApplicationRevision>} - Sealed snapshot handle.
  */
 export async function prepareApplicationRevision(options) {
@@ -1687,6 +1687,21 @@ export async function prepareApplicationRevision(options) {
   });
   assertEntrypointsIncluded(manifest, excludedPaths);
 
+  const runtimeRoot = path.resolve(
+    options.runtimeRoot || DEFAULT_WHARFIE_RUNTIME_ROOT,
+  );
+  const trustInstalledRuntimeGraph =
+    options.trustInstalledRuntimeGraph === true;
+  if (
+    trustInstalledRuntimeGraph &&
+    (runtimeRoot !== authoredAppDir ||
+      typeof options.dependencyLockPath !== 'string')
+  ) {
+    throw new TypeError(
+      'Trusted installed runtime packaging requires the application and runtime roots to match and an explicit dependency lock.',
+    );
+  }
+
   const stateDirectory = path.join(authoredAppDir, SNAPSHOT_STATE_DIRECTORY);
   const snapshotParent = path.join(stateDirectory, SNAPSHOT_PARENT_DIRECTORY);
   await fsp.mkdir(snapshotParent, { mode: 0o700, recursive: true });
@@ -1697,9 +1712,6 @@ export async function prepareApplicationRevision(options) {
   );
   await fsp.chmod(snapshotRoot, 0o700);
   const snapshotAppDir = path.join(snapshotRoot, 'app');
-  const runtimeRoot = path.resolve(
-    options.runtimeRoot || DEFAULT_WHARFIE_RUNTIME_ROOT,
-  );
 
   try {
     await copyBehaviorTree(authoredAppDir, snapshotAppDir, excludedPaths);
@@ -1730,7 +1742,9 @@ export async function prepareApplicationRevision(options) {
       );
     }
 
-    await auditBehaviorModuleGraph(snapshotAppDir, manifest);
+    if (!trustInstalledRuntimeGraph) {
+      await auditBehaviorModuleGraph(snapshotAppDir, manifest);
+    }
     const [source, dependencies, runtime, assetInputs] = await Promise.all([
       createSourceTreeInput(snapshotAppDir),
       createDependencyLockInput(snapshotAppDir, contract, {

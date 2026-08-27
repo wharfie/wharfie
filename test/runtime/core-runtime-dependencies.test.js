@@ -39,7 +39,7 @@ const PACKAGE_METADATA = JSON.parse(
   readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'),
 );
 const CAN_OPEN_NATIVE_LMDB =
-  process.versions.node === PACKAGE_METADATA.engines.node;
+  process.versions.node === PACKAGE_METADATA.devEngines.runtime.version;
 const CORE_RUNTIME_DEPENDENCY_HOLDER_PATH = fileURLToPath(
   new URL(
     '../fixtures/runtime/core-runtime-dependency-holder.js',

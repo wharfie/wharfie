@@ -8,6 +8,7 @@ import {
   inspectAwsDeployment,
   reconcileAwsStagedDeployment,
 } from '../../core/runtime/deployment-aws-lifecycle.js';
+import { requireAwsProvider } from '../../core/runtime/aws-provider-module.js';
 import {
   createDeploymentCommand,
   snapshotDeploymentOperationOverrides,
@@ -33,6 +34,19 @@ function createSelectedSeaRequest(input) {
 }
 
 /**
+ * Require the fixed provider before an AWS operation can package, stage, or
+ * contact a provider.
+ * @param {Function} operation - Existing operation implementation.
+ * @returns {(input: Record<string, any>) => Promise<any>} - Guarded operation.
+ */
+function withAwsProvider(operation) {
+  return async (input) => {
+    await requireAwsProvider();
+    return operation(input);
+  };
+}
+
+/**
  * Create a fresh source deployment parent.
  * @param {{operations?: Partial<Record<'prepare'|'apply'|'applyPrepared'|'inspect'|'reconcile'|'destroy', Function>>, output?: Partial<import('../../core/runtime/operator/deployment-command.js').DeploymentCommandOutput>, processRef?: import('../../core/runtime/operator/deployment-command.js').DeploymentCommandProcess, readJsonObjectFile?: typeof import('../../core/runtime/operator/json-document-file.js').readOperatorJsonObjectFile}} [options] - Test and host seams.
  * @returns {import('commander').Command} - Source deployment command.
@@ -44,16 +58,20 @@ export function createSourceDeploymentCommand(options = {}) {
     operations: {
       prepare:
         supplied.prepare ??
-        ((/** @type {Record<string, any>} */ input) =>
-          prepareAwsSelectedSeaPlan(createSelectedSeaRequest(input))),
+        withAwsProvider((/** @type {Record<string, any>} */ input) =>
+          prepareAwsSelectedSeaPlan(createSelectedSeaRequest(input)),
+        ),
       apply:
         supplied.apply ??
-        ((/** @type {Record<string, any>} */ input) =>
-          applyAwsSelectedSea(createSelectedSeaRequest(input))),
-      applyPrepared: supplied.applyPrepared ?? applyAwsPreparedStagedPlan,
-      inspect: supplied.inspect ?? inspectAwsDeployment,
-      reconcile: supplied.reconcile ?? reconcileAwsStagedDeployment,
-      destroy: supplied.destroy ?? destroyAwsDeployment,
+        withAwsProvider((/** @type {Record<string, any>} */ input) =>
+          applyAwsSelectedSea(createSelectedSeaRequest(input)),
+        ),
+      applyPrepared:
+        supplied.applyPrepared ?? withAwsProvider(applyAwsPreparedStagedPlan),
+      inspect: supplied.inspect ?? withAwsProvider(inspectAwsDeployment),
+      reconcile:
+        supplied.reconcile ?? withAwsProvider(reconcileAwsStagedDeployment),
+      destroy: supplied.destroy ?? withAwsProvider(destroyAwsDeployment),
     },
     ...(options.output === undefined ? {} : { output: options.output }),
     ...(options.processRef === undefined

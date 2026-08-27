@@ -1,4 +1,8 @@
+/* eslint-disable n/no-extraneous-import -- Dynamic SDK imports load the exact mocked companion bindings exercised by this test. */
+
 import { describe, expect, it, jest } from '@jest/globals';
+
+import { createAwsProviderModule } from '../helpers/aws-provider.js';
 
 const AUTHORITY_IMPORT = '../../src/core/runtime/deployment-aws-authority.js';
 
@@ -810,8 +814,44 @@ async function loadHarness({
     destroy: documentDestroy,
   };
   jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
-    DynamoDBDocument: { from: jest.fn(() => documentClient) },
+    DynamoDBDocument: Object.assign(jest.fn(), {
+      from: jest.fn(() => documentClient),
+    }),
   }));
+
+  const [
+    clientDynamoDB,
+    clientEC2,
+    clientIAM,
+    clientS3,
+    clientSSM,
+    clientSTS,
+    credentialProviders,
+    libDynamoDB,
+    { registerAwsProviderModule },
+  ] = await Promise.all([
+    import('@aws-sdk/client-dynamodb'),
+    import('@aws-sdk/client-ec2'),
+    import('@aws-sdk/client-iam'),
+    import('@aws-sdk/client-s3'),
+    import('@aws-sdk/client-ssm'),
+    import('@aws-sdk/client-sts'),
+    import('@aws-sdk/credential-providers'),
+    import('@aws-sdk/lib-dynamodb'),
+    import('../../src/core/runtime/aws-provider-module.js'),
+  ]);
+  registerAwsProviderModule(
+    createAwsProviderModule({
+      clientDynamoDB,
+      clientEC2,
+      clientIAM,
+      clientS3,
+      clientSSM,
+      clientSTS,
+      credentialProviders,
+      libDynamoDB,
+    }),
+  );
 
   const authorityModule = await import(AUTHORITY_IMPORT);
   return {

@@ -12,6 +12,7 @@ import {
   createSingleNodeDeploymentIntent,
 } from '../../../../runtime/single-node-deployment-intent.js';
 import { createSingleNodeDeploymentDesired } from '../../../../runtime/single-node-deployment-desired.js';
+import { requireAwsProvider } from '../../../../runtime/aws-provider-module.js';
 import {
   assertSingleNodeDeploymentInstanceId,
   getSingleNodeDeploymentInstanceId,
@@ -547,6 +548,7 @@ function combineCleanupError(operationError, cleanupError, operation) {
  *   inspectRemoteStatus?: typeof inspectSingleNodeRemoteStatus,
  *   executeRemote?: typeof executeSingleNodeRemoteApplication,
  *   resolveDataRoot?: typeof resolveStableLocalAppDataRoot,
+ *   requireAwsProvider?: typeof requireAwsProvider,
  *   output?: Partial<PackagedDeploymentCommandOutput>,
  *   processRef?: PackagedDeploymentCommandProcess
  * }} [options] - Test and host seams.
@@ -602,6 +604,7 @@ export function createPackagedDeploymentCommand(options = {}) {
     options.inspectRemoteStatus || inspectSingleNodeRemoteStatus;
   const executeRemote =
     options.executeRemote || executeSingleNodeRemoteApplication;
+  const requireProvider = options.requireAwsProvider || requireAwsProvider;
   const output = resolveOutput(options.output);
   const processRef = options.processRef || process;
 
@@ -630,6 +633,7 @@ export function createPackagedDeploymentCommand(options = {}) {
         operation,
       );
       const provider = validateProvider(providerSelection.kind);
+      if (provider === 'aws') await requireProvider();
       const pair = await readRevisionRuntimePair();
       const payload = await readDeploymentPayload({
         revision: pair.revision,
@@ -1039,6 +1043,7 @@ export function createPackagedDeploymentCommand(options = {}) {
       try {
         const authority = await readJournalAuthority(commandOptions, 'status');
         const { appId, dataRoot, journal, provider } = authority;
+        if (provider === 'aws') await requireProvider();
         const effectiveDesired =
           getSingleNodeDeploymentEffectiveDesired(journal);
         const providerObservation = await Reflect.apply(
@@ -1240,6 +1245,13 @@ export function createPackagedDeploymentCommand(options = {}) {
         let action;
         /** @type {Readonly<Record<string, any>>|null} */
         let actionReceipt;
+        const awsRecoveryRequiresProvider =
+          authority.provider === 'aws' &&
+          (['planned', 'provisioning', 'provisioned', 'activating'].includes(
+            authority.journal.phase,
+          ) ||
+            authority.journal.phase === 'destroying');
+        if (awsRecoveryRequiresProvider) await requireProvider();
 
         if (
           ['planned', 'provisioning', 'provisioned', 'activating'].includes(
@@ -1503,6 +1515,7 @@ export function createPackagedDeploymentCommand(options = {}) {
           commandOptions,
           'destroy',
         );
+        if (provider === 'aws') await requireProvider();
         const coordinator = Reflect.apply(
           createDestroyCoordinatorByProvider[provider],
           undefined,

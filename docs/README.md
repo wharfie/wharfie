@@ -23,14 +23,17 @@ unavailability, Node-absent execution, that operator safety step, exact-command
 resumption without recreating the committed preparation or timer, and a
 later-process verified output read against Wharfie's packed npm tarball.
 Release acceptance remains open until the same gate passes against the
-published preview. Both the repository gate and copied-starter journey use
-exactly Node 24.13.1, matching the installed Wharfie package's declared engine.
+published preview. The repository gate uses the exact contributor Node 24.13.1
+pin; published consumers may use the declared `>=24.13.1 <25` range.
 
 The deeper
 [single-host developer preview](./guides/developer-preview.md) installs the
 `steady-file` artifact as a Linux service and exercises its lifecycle. The
-longer [steady-file golden path](./guides/golden-path.md) covers the full source
-and operator surface.
+[preview release guide](./guides/preview-release.md) defines the guarded npm
+`preview` channel, attested provider-free Linux x64 glibc standalone CLI, and
+maintainer release boundary.
+The longer [steady-file golden path](./guides/golden-path.md) covers the full
+source and operator surface.
 Contributors should use the
 [development validation guide](./guides/development-validation.md) for the
 authoritative clean-install gates and the exact scope and exit condition of

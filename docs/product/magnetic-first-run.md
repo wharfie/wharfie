@@ -95,9 +95,10 @@ npm install
 npm run demo
 ```
 
-Both paths require exactly Node 24.13.1. The starter-level `demo` command may
-orchestrate the product commands, but it must make those commands and their
-results visible. An illustrative transcript is:
+The repository path uses the exact contributor Node 24.13.1 pin; the published
+starter supports the package's `>=24.13.1 <25` Node range. The starter-level
+`demo` command may orchestrate the product commands, but it must make those
+commands and their results visible. An illustrative transcript is:
 
 ```text
   Resolving application and build target
@@ -262,8 +263,8 @@ targetless manifest, human-first package output with an unchanged `--json`
 receipt, lazy native-runtime preparation for ordinary argv, one
 `WHARFIE_DATA_ROOT`, and the repeatable packaged
 `wharfie run --name <name> -- <args>` foreground workflow. The consumer starter
-requires exactly Node 24.13.1, matching the installed Wharfie package's engine,
-without pinning an npm patch. The
+supports the installed Wharfie package's `>=24.13.1 <25` Node range without
+pinning an npm patch. The
 canonical app, polished showcase, hidden harness, and explicitly noncanonical
 playground now have separate in-repository boundaries.
 

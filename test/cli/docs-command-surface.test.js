@@ -198,9 +198,9 @@ describe('docs command surface', () => {
     expect(verificationSource).toContain(
       'WHARFIE_MAGNETIC_ACCEPTANCE_BUILDER_ROOT: starterRoot',
     );
-    expect(verificationSource).toContain(
-      ": ['install', '--no-audit', '--no-fund'];",
-    );
+    expect(verificationSource).toContain('const installArgs =');
+    expect(verificationSource).toContain("'--ignore-scripts'");
+    expect(verificationSource).toContain("npm_config_ignore_scripts: 'true'");
     expect(demoSource).toContain("'--confirm-sensitive-output'");
     expect(demoSource).toContain(
       '3. Kill it, confirm authority replacement, then repeat the identical named invocation',
@@ -307,7 +307,7 @@ describe('docs command surface', () => {
     }
   });
 
-  it('documents the honest source-only installation path', async () => {
+  it('documents guarded preview and source-fallback installation paths', async () => {
     const installationDoc = await fsp.readFile(
       path.join(repoRoot, 'docs/guides/installation.md'),
       'utf8',
@@ -315,7 +315,7 @@ describe('docs command surface', () => {
 
     expect(installationDoc).toContain('npm ci');
     expect(installationDoc).toContain('node ./bin/wharfie --help');
-    expect(installationDoc).toContain('standalone builder binary');
+    expect(installationDoc).toMatch(/standalone builder\s+binary/u);
     expect(installationDoc).toContain('release-ready binary installer');
     expect(installationDoc).not.toContain('releases/latest');
     expect(installationDoc).not.toContain('install.sh');

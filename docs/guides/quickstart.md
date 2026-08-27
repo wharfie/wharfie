@@ -13,10 +13,11 @@ npm ci
 node ./bin/wharfie --help
 ```
 
-Use the exact Node version in `package.json#engines` and the npm version in
-`package.json#packageManager`. There is no release-ready binary installer during
-the project reset. The examples below use `wharfie` as shorthand for
-`node ./bin/wharfie` from the repository root.
+Use the supported Node range in `package.json#engines`; contributors use the
+exact `.nvmrc` Node and `package.json#packageManager` npm pins. Tagged previews
+are deliberately kept off `latest`; see the
+[preview release guide](./preview-release.md). The examples below use `wharfie`
+as shorthand for `node ./bin/wharfie` from the repository root.
 
 ## Run the magnetic starter
 
@@ -32,12 +33,13 @@ npm run verify:magnetic-first-run
 ```
 
 The copied starter's first supported journey is `npm install` followed by
-`npm run demo -- Ada` from the starter directory. Use exactly Node 24.13.1,
-matching the installed Wharfie package's declared engine; the starter does not
-pin an npm patch. That published-package journey remains a release acceptance
-condition until the preview exists; the repository command above tests the same
-files and harness against the locally packed candidate, then hides the
-disposable builder before relocated execution.
+`npm run demo -- Ada` from the starter directory. The repository acceptance
+gate uses the exact contributor Node 24.13.1 pin; a published starter may use
+the package's `>=24.13.1 <25` Node range and does not pin an npm patch. That
+published-package journey remains a release acceptance condition until the
+preview exists; the repository command above tests the same files and harness
+against the locally packed candidate, then hides the disposable builder before
+relocated execution.
 
 After `SIGKILL`, the demo does not treat a bare repeat as permission to replace
 the still-ACTIVE coordinator. It retains the exact packaged inspection, checks

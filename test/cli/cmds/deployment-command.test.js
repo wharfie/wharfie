@@ -9,6 +9,7 @@ import {
 
 import { createApplicationRevision } from '../../../src/core/runtime/application-revision.js';
 import { createArtifactRecord } from '../../../src/core/runtime/artifact-record.js';
+import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import {
   createCanonicalJsonSha256Id,
   sha256Base64Url,
@@ -29,6 +30,14 @@ import {
   resolveAwsSingleNodePlan,
 } from '../../../src/core/runtime/providers/aws/single-node-plan.js';
 import {
+  createAwsProvisionedResourceRecord,
+  createAwsProvisioningMutationAttempt,
+} from '../../../src/core/runtime/providers/aws/single-node-journal-evidence.js';
+import {
+  SINGLE_NODE_CLOUD_INIT_CONTRACT_VERSION,
+  SINGLE_NODE_DEPLOYMENT_ROOT,
+} from '../../../src/core/runtime/single-node-cloud-init.js';
+import {
   SINGLE_NODE_ACCESS_KIND,
   SINGLE_NODE_DEPLOYMENT_MODE,
   SINGLE_NODE_MACHINE,
@@ -43,10 +52,23 @@ import {
 } from '../../../src/core/runtime/single-node-deployment-identity.js';
 import {
   advanceSingleNodeDeploymentJournal,
+  completeSingleNodeDeploymentMutation,
   createSingleNodeDeploymentJournal,
   getSingleNodeDeploymentCurrentRelease,
+  prepareSingleNodeDeploymentMutation,
+  prepareSingleNodeDeploymentMutations,
   prepareSingleNodeDeploymentReleaseUpdate,
+  recordSingleNodeDeploymentActivation,
+  recordSingleNodeDeploymentResource,
+  recordSingleNodeDeploymentSshHost,
+  settleSingleNodeDeploymentReleaseTransition,
 } from '../../../src/core/runtime/single-node-deployment-journal.js';
+import {
+  SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_DOMAIN,
+  SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_PREFIX,
+  SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_KIND,
+  SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_SCHEMA_VERSION,
+} from '../../../src/core/runtime/single-node-remote-activation.js';
 import {
   SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_KIND,
   SINGLE_NODE_DEPLOYMENT_UPDATE_RESULT_SCHEMA_VERSION,
@@ -369,6 +391,133 @@ async function createTestAwsStatusJournal(fixture) {
   });
 }
 
+/**
+ * @param {Readonly<Record<string, any>>} journal
+ * @returns {Readonly<Record<string, any>>}
+ */
+function createTestAwsActivationEvidence(journal) {
+  const desired = journal.release.transition.target.desired;
+  const payload = sortCanonicalJsonValue({
+    schemaVersion: SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_SCHEMA_VERSION,
+    kind: SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_KIND,
+    deploymentInstanceId: desired.deploymentInstanceId,
+    incarnationId: journal.incarnationId,
+    desiredRevisionId: desired.desiredRevisionId,
+    address: STATUS_AWS_PUBLIC_IPV4,
+    sshHostKey: {
+      algorithm: 'ssh-ed25519',
+      fingerprint: STATUS_AWS_HOST_KEY_FINGERPRINT,
+    },
+    bootstrap: {
+      contractVersion: SINGLE_NODE_CLOUD_INIT_CONTRACT_VERSION,
+      sshPublicKeyFingerprint: STATUS_AWS_PUBLIC_KEY_FINGERPRINT,
+    },
+    artifact: {
+      artifactId: desired.artifact.artifactId,
+      revisionId: desired.artifact.revisionId,
+      byteDigest: desired.artifact.byteDigest,
+      size: desired.artifact.size,
+      remotePath: `${SINGLE_NODE_DEPLOYMENT_ROOT}/${desired.deploymentInstanceId}/artifacts/${desired.artifact.artifactId}/app-sea`,
+    },
+    service: {
+      appId: desired.intent.appId,
+      unit: `wharfie-${desired.intent.appId}.service`,
+      health: 'healthy',
+      activeArtifactId: desired.artifact.artifactId,
+      activeRevisionId: desired.artifact.revisionId,
+    },
+  });
+  return sortCanonicalJsonValue({
+    ...payload,
+    activationEvidenceId: createCanonicalJsonSha256Id({
+      domain: SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_DOMAIN,
+      prefix: SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_PREFIX,
+      value: payload,
+      valuePath: 'testAwsActivationEvidence',
+    }),
+  });
+}
+
+/**
+ * Build valid AWS journals at every recovery admission frontier.
+ * @param {Readonly<Record<string, any>>} planned
+ * @returns {Readonly<Record<string, Readonly<Record<string, any>>>>}
+ */
+function createTestAwsRecoveryJournals(planned) {
+  const providerIntent = planned.providerIntent.intent;
+  let current = advanceSingleNodeDeploymentJournal(planned, 'provisioning');
+  const provisioning = current;
+
+  current = prepareSingleNodeDeploymentMutation(
+    current,
+    createAwsProvisioningMutationAttempt(providerIntent, 'securityGroup'),
+  );
+  current = completeSingleNodeDeploymentMutation(
+    current,
+    createAwsProvisionedResourceRecord(
+      providerIntent,
+      'securityGroup',
+      STATUS_AWS_IDS.securityGroup,
+    ),
+  );
+  current = prepareSingleNodeDeploymentMutations(
+    current,
+    ['instance', 'rootVolume'].map((role) =>
+      createAwsProvisioningMutationAttempt(providerIntent, role),
+    ),
+  );
+  for (const role of ['instance', 'rootVolume']) {
+    current = completeSingleNodeDeploymentMutation(
+      current,
+      createAwsProvisionedResourceRecord(
+        providerIntent,
+        role,
+        STATUS_AWS_IDS[/** @type {keyof typeof STATUS_AWS_IDS} */ (role)],
+      ),
+    );
+  }
+  const instance = current.resources.find(
+    (/** @type {Readonly<Record<string, any>>} */ resource) =>
+      resource.role === 'instance',
+  );
+  if (instance === undefined) {
+    throw new Error('test AWS journal did not record its instance');
+  }
+  current = recordSingleNodeDeploymentResource(current, {
+    ...instance,
+    publicIpv4: STATUS_AWS_PUBLIC_IPV4,
+  });
+  const provisioned = advanceSingleNodeDeploymentJournal(
+    current,
+    'provisioned',
+  );
+
+  current = recordSingleNodeDeploymentSshHost(provisioned, {
+    address: STATUS_AWS_PUBLIC_IPV4,
+    algorithm: 'ssh-ed25519',
+    fingerprint: STATUS_AWS_HOST_KEY_FINGERPRINT,
+  });
+  const activating = advanceSingleNodeDeploymentJournal(current, 'activating');
+  current = recordSingleNodeDeploymentActivation(
+    activating,
+    createTestAwsActivationEvidence(activating),
+  );
+  current = settleSingleNodeDeploymentReleaseTransition(current);
+  const active = advanceSingleNodeDeploymentJournal(current, 'active');
+  const destroying = advanceSingleNodeDeploymentJournal(planned, 'destroying');
+  const destroyed = advanceSingleNodeDeploymentJournal(destroying, 'destroyed');
+
+  return Object.freeze({
+    planned,
+    provisioning,
+    provisioned,
+    activating,
+    active,
+    destroying,
+    destroyed,
+  });
+}
+
 const EMBEDDED_REVISION = createApplicationRevision({
   contract: {
     schemaVersion: 4,
@@ -455,6 +604,8 @@ let STATUS_HETZNER_JOURNAL;
 let STATUS_HETZNER_ACTIVE_JOURNAL;
 /** @type {Readonly<Record<string, any>>} */
 let STATUS_AWS_JOURNAL;
+/** @type {Readonly<Record<string, Readonly<Record<string, any>>>>} */
+let STATUS_AWS_RECOVERY_JOURNALS;
 /** @type {ReturnType<typeof createSingleNodeStatusUpdateTarget>} */
 let STATUS_UPDATE_TARGET;
 /** @type {Readonly<Record<string, any>>} */
@@ -474,7 +625,17 @@ const STATUS_AWS_IDS = Object.freeze({
   networkAclAssociation: 'aclassoc-0123456789abcdef0',
   image: 'ami-0123456789abcdef0',
   snapshot: 'snap-0123456789abcdef0',
+  securityGroup: 'sg-0123456789abcdef0',
+  instance: 'i-0123456789abcdef0',
+  rootVolume: 'vol-0123456789abcdef0',
 });
+const STATUS_AWS_PUBLIC_IPV4 = '203.0.113.42';
+const STATUS_AWS_HOST_KEY_FINGERPRINT = `SHA256:${Buffer.alloc(32, 23)
+  .toString('base64')
+  .replace(/=+$/u, '')}`;
+const STATUS_AWS_PUBLIC_KEY_FINGERPRINT = `SHA256:${Buffer.alloc(32, 29)
+  .toString('base64')
+  .replace(/=+$/u, '')}`;
 
 /** @param {string} method @returns {Record<string, string>} */
 function operationResult(method) {
@@ -836,6 +997,8 @@ function makePackagedHarness(overrides = {}) {
     overrides.createStatusReceipt ?? jest.fn(createSingleNodeDeploymentStatus);
   const executeRemote =
     overrides.executeRemote ?? jest.fn(async () => createProcessOutcome());
+  const requireAwsProvider =
+    overrides.requireAwsProvider ?? jest.fn(async () => undefined);
   const apply = jest.fn(async (/** @type {Record<string, any>} */ request) => {
     const desired = createSingleNodeDeploymentDesired({
       intent: request.intent ?? request.desired?.intent,
@@ -969,6 +1132,7 @@ function makePackagedHarness(overrides = {}) {
     },
     inspectRemoteStatus,
     executeRemote,
+    requireAwsProvider,
     createStatusReceipt,
     createApplyCoordinator,
     createUpdateCoordinator,
@@ -1004,6 +1168,7 @@ function makePackagedHarness(overrides = {}) {
     inspectHetznerStatus,
     inspectRemoteStatus,
     executeRemote,
+    requireAwsProvider,
     createStatusReceipt,
     apply,
     createApplyCoordinator,
@@ -1135,6 +1300,8 @@ beforeAll(async () => {
   STATUS_HETZNER_ACTIVE_JOURNAL =
     createSingleNodeStatusActiveJournal(STATUS_AUTHORITY);
   STATUS_AWS_JOURNAL = await createTestAwsStatusJournal(STATUS_AUTHORITY);
+  STATUS_AWS_RECOVERY_JOURNALS =
+    createTestAwsRecoveryJournals(STATUS_AWS_JOURNAL);
   STATUS_UPDATE_TARGET = createSingleNodeStatusUpdateTarget(
     STATUS_AUTHORITY,
     'deployment-command-v2',
@@ -1761,6 +1928,62 @@ describe('packaged deployment command adapter', () => {
     },
   );
 
+  it.each(['preview', 'apply'])(
+    'requires the AWS companion before reading embedded authority for %s',
+    async (commandName) => {
+      const providerError = new Error('AWS provider unavailable');
+      const requireAwsProvider = jest.fn(async () => {
+        throw providerError;
+      });
+      const harness = makePackagedHarness({ requireAwsProvider });
+
+      await parse(harness.command, [
+        commandName,
+        '--deployment',
+        'production',
+        '--provider',
+        'aws',
+        '--region',
+        'us-east-1',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ]);
+
+      expect(requireAwsProvider).toHaveBeenCalledTimes(1);
+      expect(harness.readRevisionRuntimePair).not.toHaveBeenCalled();
+      expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+      expect(harness.createJournalStore).not.toHaveBeenCalled();
+      expect(harness.output.failure).toHaveBeenCalledWith(providerError);
+      expect(harness.processRef.exitCode).toBe(1);
+    },
+  );
+
+  it.each(['preview', 'apply'])(
+    'keeps the Hetzner %s path independent of the AWS companion',
+    async (commandName) => {
+      const requireAwsProvider = jest.fn(async () => {
+        throw new Error('Hetzner must not load the AWS companion');
+      });
+      const harness = makePackagedHarness({ requireAwsProvider });
+
+      await parse(harness.command, [
+        commandName,
+        '--deployment',
+        'production',
+        '--provider',
+        'hetzner',
+        '--location',
+        'ash',
+        '--allow-ssh-from',
+        '198.51.100.9/32',
+      ]);
+
+      expect(requireAwsProvider).not.toHaveBeenCalled();
+      expect(harness.output.failure).not.toHaveBeenCalled();
+      expect(harness.processRef.exitCode).toBeUndefined();
+    },
+  );
+
   it('maps exact embedded authority and a read-only journal lookup into one Hetzner preview receipt', async () => {
     const harness = makePackagedHarness();
 
@@ -2332,6 +2555,7 @@ describe('packaged deployment command adapter', () => {
     expect(harness.output.line).not.toHaveBeenCalled();
     expect(harness.output.failure).not.toHaveBeenCalled();
     expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+    expect(harness.requireAwsProvider).not.toHaveBeenCalled();
     expectStatusJournalReadOnly(harness);
     expect(harness.processRef.exitCode).toBeUndefined();
   });
@@ -2357,9 +2581,49 @@ describe('packaged deployment command adapter', () => {
     );
     expect(harness.output.json).not.toHaveBeenCalled();
     expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.requireAwsProvider).toHaveBeenCalledTimes(1);
     expectStatusJournalReadOnly(harness);
     expect(harness.processRef.exitCode).toBeUndefined();
   });
+
+  it.each(['status', 'destroy'])(
+    'admits AWS %s only after journal discovery and before provider dispatch',
+    async (commandName) => {
+      const journal = STATUS_AWS_JOURNAL;
+      /** @type {string[]} */
+      const admissionOrder = [];
+      const providerError = new Error('AWS provider unavailable');
+      const readJournal = jest.fn(async () => {
+        admissionOrder.push('journal');
+        return journal;
+      });
+      const requireAwsProvider = jest.fn(async () => {
+        admissionOrder.push('provider');
+        throw providerError;
+      });
+      const harness = makeStatusHarness(journal, {
+        readJournal,
+        requireAwsProvider,
+      });
+
+      await parse(harness.command, [
+        commandName,
+        '--deployment-instance',
+        journal.deploymentInstanceId,
+        '--json',
+      ]);
+
+      expect(admissionOrder).toStrictEqual(['journal', 'provider']);
+      expect(harness.readRevisionRuntimePair).toHaveBeenCalledTimes(1);
+      expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+      expect(harness.inspectAwsStatus).not.toHaveBeenCalled();
+      expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
+      expect(harness.awsDestroy).not.toHaveBeenCalled();
+      expect(harness.output.failure).toHaveBeenCalledWith(providerError);
+      expect(harness.output.json).not.toHaveBeenCalled();
+      expect(harness.processRef.exitCode).toBe(1);
+    },
+  );
 
   it('rejects a mutable provider selector before reading journal-bound status authority', async () => {
     const journal = STATUS_AWS_JOURNAL;
@@ -2497,6 +2761,7 @@ describe('packaged deployment command adapter', () => {
     expect(harness.apply).not.toHaveBeenCalled();
     expect(harness.destroy).not.toHaveBeenCalled();
     expect(harness.readDeploymentPayload).toHaveBeenCalledTimes(1);
+    expect(harness.requireAwsProvider).not.toHaveBeenCalled();
     expect(harness.source.close).toHaveBeenCalledTimes(1);
     expect(harness.output.failure).not.toHaveBeenCalled();
     expect(harness.processRef.exitCode).toBeUndefined();
@@ -2566,6 +2831,46 @@ describe('packaged deployment command adapter', () => {
     expect(harness.processRef.exitCode).toBe(1);
   });
 
+  it.each(['update', 'exec'])(
+    'keeps AWS %s independent of provider admission',
+    async (commandName) => {
+      const journal = STATUS_AWS_RECOVERY_JOURNALS.active;
+      const downstreamError = new Error(`${commandName} reached remote work`);
+      const readDeploymentPayload = jest.fn(async () => {
+        throw downstreamError;
+      });
+      const executeRemote = jest.fn(async () => {
+        throw downstreamError;
+      });
+      const requireAwsProvider = jest.fn(async () => {
+        throw new Error(`${commandName} must not load the AWS companion`);
+      });
+      const harness = makeStatusHarness(journal, {
+        executeRemote,
+        readDeploymentPayload,
+        requireAwsProvider,
+      });
+      const argv = [
+        commandName,
+        '--deployment-instance',
+        journal.deploymentInstanceId,
+        ...(commandName === 'update' ? ['--json'] : ['--', 'manifest']),
+      ];
+
+      await parse(harness.command, argv);
+
+      expect(requireAwsProvider).not.toHaveBeenCalled();
+      expect(readDeploymentPayload).toHaveBeenCalledTimes(
+        commandName === 'update' ? 1 : 0,
+      );
+      expect(executeRemote).toHaveBeenCalledTimes(
+        commandName === 'exec' ? 1 : 0,
+      );
+      expect(harness.output.failure).toHaveBeenCalledWith(downstreamError);
+      expect(harness.processRef.exitCode).toBe(1);
+    },
+  );
+
   it.each([
     ['apply', () => STATUS_HETZNER_JOURNAL, () => STATUS_AUTHORITY],
     ['update', () => STATUS_PENDING_UPDATE_JOURNAL, () => STATUS_UPDATE_TARGET],
@@ -2628,11 +2933,119 @@ describe('packaged deployment command adapter', () => {
           ? 1
           : 0,
       );
+      expect(harness.requireAwsProvider).not.toHaveBeenCalled();
       expect(harness.output.failure).not.toHaveBeenCalled();
       expect(harness.processRef.exitCode).toBeUndefined();
       expectStatusJournalReadOnly(harness);
     },
   );
+
+  it.each([
+    'planned',
+    'provisioning',
+    'provisioned',
+    'activating',
+    'destroying',
+  ])(
+    'admits AWS %s recovery only after journal discovery and before remote work',
+    async (phase) => {
+      const journal = STATUS_AWS_RECOVERY_JOURNALS[phase];
+      /** @type {string[]} */
+      const admissionOrder = [];
+      const providerError = new Error('AWS provider unavailable');
+      const readJournal = jest.fn(async () => {
+        admissionOrder.push('journal');
+        return journal;
+      });
+      const requireAwsProvider = jest.fn(async () => {
+        admissionOrder.push('provider');
+        throw providerError;
+      });
+      const harness = makeStatusHarness(journal, {
+        readJournal,
+        requireAwsProvider,
+      });
+
+      await parse(harness.command, [
+        'recover',
+        '--deployment-instance',
+        journal.deploymentInstanceId,
+        '--json',
+      ]);
+
+      expect(admissionOrder).toStrictEqual(['journal', 'provider']);
+      expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+      expect(harness.createAwsApplyCoordinator).not.toHaveBeenCalled();
+      expect(harness.createUpdateCoordinator).not.toHaveBeenCalled();
+      expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
+      expect(harness.output.failure).toHaveBeenCalledWith(providerError);
+      expect(harness.output.json).not.toHaveBeenCalled();
+      expect(harness.processRef.exitCode).toBe(1);
+      expectStatusJournalReadOnly(harness);
+    },
+  );
+
+  it('keeps active AWS recovery independent of provider admission', async () => {
+    const journal = STATUS_AWS_RECOVERY_JOURNALS.active;
+    const payloadError = new Error('recovery reached embedded payload');
+    const readDeploymentPayload = jest.fn(async () => {
+      throw payloadError;
+    });
+    const requireAwsProvider = jest.fn(async () => {
+      throw new Error('active recovery must not load the AWS companion');
+    });
+    const harness = makeStatusHarness(journal, {
+      readDeploymentPayload,
+      requireAwsProvider,
+    });
+
+    await parse(harness.command, [
+      'recover',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--json',
+    ]);
+
+    expect(requireAwsProvider).not.toHaveBeenCalled();
+    expect(readDeploymentPayload).toHaveBeenCalledTimes(1);
+    expect(harness.createUpdateCoordinator).not.toHaveBeenCalled();
+    expect(harness.output.failure).toHaveBeenCalledWith(payloadError);
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it('keeps destroyed AWS recovery independent of provider admission', async () => {
+    const journal = STATUS_AWS_RECOVERY_JOURNALS.destroyed;
+    const requireAwsProvider = jest.fn(async () => {
+      throw new Error('destroyed recovery must not load the AWS companion');
+    });
+    const harness = makeStatusHarness(journal, { requireAwsProvider });
+
+    await parse(harness.command, [
+      'recover',
+      '--deployment-instance',
+      journal.deploymentInstanceId,
+      '--json',
+    ]);
+
+    expect(requireAwsProvider).not.toHaveBeenCalled();
+    expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
+    expect(harness.createAwsApplyCoordinator).not.toHaveBeenCalled();
+    expect(harness.createUpdateCoordinator).not.toHaveBeenCalled();
+    expect(harness.createAwsDestroyCoordinator).not.toHaveBeenCalled();
+    expect(harness.output.json).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      kind: 'wharfie.deployment.recover',
+      provider: 'aws',
+      status: 'destroyed',
+      action: 'none',
+      appId: 'status-app',
+      deploymentInstanceId: journal.deploymentInstanceId,
+      artifactId: null,
+      publicIpv4: null,
+    });
+    expect(harness.output.failure).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
 
   it('fails recovery closed when this SEA is not the exact pending release', async () => {
     const wrongTarget = createSingleNodeStatusUpdateTarget(
@@ -2710,6 +3123,7 @@ describe('packaged deployment command adapter', () => {
     expect(harness.inspectAwsStatus).not.toHaveBeenCalled();
     expect(harness.inspectHetznerStatus).not.toHaveBeenCalled();
     expect(harness.inspectRemoteStatus).not.toHaveBeenCalled();
+    expect(harness.requireAwsProvider).not.toHaveBeenCalled();
     expectStatusJournalReadOnly(harness);
     expect(harness.processRef.exitCode).toBe(23);
   });
@@ -2836,6 +3250,7 @@ describe('packaged deployment command adapter', () => {
     });
     expect(harness.resolveDataRoot).toHaveBeenCalledWith();
     expect(harness.source.close).not.toHaveBeenCalled();
+    expect(harness.requireAwsProvider).not.toHaveBeenCalled();
     expect(harness.output.json).toHaveBeenCalledWith({
       schemaVersion: 1,
       kind: 'wharfie.deployment.destroy',
@@ -2867,6 +3282,7 @@ describe('packaged deployment command adapter', () => {
     expect(harness.readDeploymentPayload).not.toHaveBeenCalled();
     expect(harness.createAwsDestroyCoordinator).toHaveBeenCalledWith();
     expect(harness.createDestroyCoordinator).not.toHaveBeenCalled();
+    expect(harness.requireAwsProvider).toHaveBeenCalledTimes(1);
     expectExactCall(harness.awsDestroy, {
       appId: 'status-app',
       deploymentInstanceId: journal.deploymentInstanceId,

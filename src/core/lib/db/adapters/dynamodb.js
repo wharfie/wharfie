@@ -1,11 +1,3 @@
-import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
-import {
-  DynamoDB,
-  ProvisionedThroughputExceededException,
-  ResourceNotFoundException,
-  ReturnValue,
-} from '@aws-sdk/client-dynamodb';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import BaseAWS from '../../aws/base.js';
 import {
   CONDITION_TYPE,
@@ -40,21 +32,33 @@ const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
  * - `marshallOptions.removeUndefinedValues` is enabled, so undefined properties are removed.
  * - SDK retry behavior is also enabled via `maxAttempts`, but this wrapper adds targeted retries
  *   for bursty throughput / eventual-consistency table creation races on a couple operations.
- * @param {CreateDynamoDBOptions} [options] - options.
+ * @param {CreateDynamoDBOptions} options - options.
+ * @param {import('../../../runtime/aws-provider-module.js').AwsSdkBindings} bindings - Fixed provider bindings.
  * @returns {import('../base.js').DBClient} - Result.
  */
-export default function createDynamoDB({
-  region = process.env.AWS_REGION,
-  readOnly = false,
-  credentials = fromNodeProviderChain(),
-} = {}) {
+export default function createDynamoDB(
+  { region = process.env.AWS_REGION, readOnly = false, credentials } = {},
+  bindings,
+) {
+  const { DynamoDBDocument } = bindings.libDynamoDB;
+  const {
+    DynamoDB,
+    ProvisionedThroughputExceededException,
+    ResourceNotFoundException,
+    ReturnValue,
+  } = bindings.clientDynamoDB;
+  const { fromNodeProviderChain } = bindings.credentialProviders;
+  const resolvedCredentials = credentials ?? fromNodeProviderChain();
   const docClient = DynamoDBDocument.from(
     new DynamoDB({
-      ...BaseAWS.config({
-        maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
-      }),
+      ...BaseAWS.config(
+        {
+          maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
+        },
+        bindings,
+      ),
       region,
-      credentials,
+      credentials: resolvedCredentials,
     }),
     { marshallOptions: { removeUndefinedValues: true } },
   );

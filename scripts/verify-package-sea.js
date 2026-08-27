@@ -9466,7 +9466,7 @@ process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
 const sourceMetadata = readJson(path.join(REPO_ROOT, 'package.json'));
 assert.equal(
   process.versions.node,
-  sourceMetadata.engines.node,
+  sourceMetadata.devEngines.runtime.version,
   'the SEA smoke test must run under the exact repository Node version',
 );
 

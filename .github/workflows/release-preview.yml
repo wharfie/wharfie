@@ -1,0 +1,271 @@
+name: Wharfie preview release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: wharfie-preview-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+
+jobs:
+  candidate:
+    if: github.repository == 'wharfie/wharfie'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup exact candidate-pack Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned pack-only npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - name: pack candidate without a root dependency install
+        run: |
+          mkdir -p "$RUNNER_TEMP/wharfie-preview-candidate"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/wharfie-preview-candidate"
+      - name: pack AWS companion handoff without a root dependency install
+        working-directory: packages/aws
+        run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/wharfie-preview-candidate"
+      - name: retain clean npm candidate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-${{ github.ref_name }}-npm-candidate
+          path: ${{ runner.temp }}/wharfie-preview-candidate/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    if: github.repository == 'wharfie/wharfie'
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: verify tag authority
+        run: |
+          expected_tag="v$(node --print "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "$expected_tag"
+          git fetch --no-tags origin master
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+      - name: setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - run: npm run test:ci
+      - name: download clean npm candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-${{ github.ref_name }}-npm-candidate
+          path: ${{ runner.temp }}/wharfie-preview-candidate
+      - name: build clean-install preview artifacts
+        run: npm run build:release:preview -- --tag "$GITHUB_REF_NAME" --output-dir "$GITHUB_WORKSPACE/dist/preview-release"
+      - name: verify release tarball matches the no-root-install candidate
+        run: |
+          version="$(node --print "require('./package.json').version")"
+          cmp \
+            "$RUNNER_TEMP/wharfie-preview-candidate/wharfie-wharfie-${version}.tgz" \
+            "$GITHUB_WORKSPACE/dist/preview-release/wharfie-wharfie-${version}.tgz"
+          cmp \
+            "$RUNNER_TEMP/wharfie-preview-candidate/wharfie-aws-${version}.tgz" \
+            "$GITHUB_WORKSPACE/dist/preview-release/wharfie-aws-${version}.tgz"
+      - name: retain release artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-${{ github.ref_name }}-preview-release
+          path: dist/preview-release/
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    if: github.repository == 'wharfie/wharfie'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: download release artifacts for attestation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-${{ github.ref_name }}-preview-release
+          path: dist/preview-release
+      - name: attest release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: '${{ github.workspace }}/dist/preview-release/*'
+
+  consumer:
+    if: github.repository == 'wharfie/wharfie'
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24.13.1', '24.x']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup supported consumer Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          package-manager-cache: false
+      - name: download no-root-install npm candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-${{ github.ref_name }}-npm-candidate
+          path: ${{ runner.temp }}/wharfie-preview-candidate
+      - name: install the candidate and run the complete magnetic demo
+        run: >-
+          node ./scripts/verify-preview-consumer.js
+          --candidate-tarball
+          "$RUNNER_TEMP/wharfie-preview-candidate/wharfie-wharfie-$(node --print "require('./package.json').version").tgz"
+
+  publish:
+    if: >-
+      github.repository == 'wharfie/wharfie' &&
+      github.ref_type == 'tag' &&
+      vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
+    needs: [attest, consumer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-preview
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: setup Node.js for trusted publishing
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      - name: verify publication guard
+        env:
+          WHARFIE_PREVIEW_PUBLISH: '1'
+          WHARFIE_PREVIEW_PUBLISH_ENABLED: ${{ vars.WHARFIE_PREVIEW_PUBLISH_ENABLED }}
+        run: node ./scripts/assert-preview-publish.js
+      - name: install pinned npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - name: download attested release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-${{ github.ref_name }}-preview-release
+          path: dist/preview-release
+      - name: reconcile the GitHub draft and quarantined npm candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          WHARFIE_PREVIEW_PUBLISH: '1'
+          WHARFIE_PREVIEW_PUBLISH_ENABLED: ${{ vars.WHARFIE_PREVIEW_PUBLISH_ENABLED }}
+        run: >-
+          node ./scripts/publish-preview-release.js
+          --artifact-dir "$GITHUB_WORKSPACE/dist/preview-release"
+          --defer-finalize
+
+  registry-consumer:
+    if: github.repository == 'wharfie/wharfie'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24.13.1', '24.x']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup supported registry consumer Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          package-manager-cache: false
+      - name: install pinned npm for signature verification
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - name: download authoritative release manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-${{ github.ref_name }}-preview-release
+          path: dist/preview-release
+      - name: install from npm, verify the generated lock, and run the magnetic demo
+        run: >-
+          node ./scripts/verify-preview-consumer.js
+          --registry-manifest
+          "$GITHUB_WORKSPACE/dist/preview-release/preview-release.json"
+
+  finalize:
+    if: >-
+      github.repository == 'wharfie/wharfie' &&
+      github.ref_type == 'tag' &&
+      vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
+    needs: [publish, registry-consumer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-preview-promotion
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: setup Node.js for final verification
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: verify publication guard
+        env:
+          WHARFIE_PREVIEW_PUBLISH: '1'
+          WHARFIE_PREVIEW_PUBLISH_ENABLED: ${{ vars.WHARFIE_PREVIEW_PUBLISH_ENABLED }}
+        run: node ./scripts/assert-preview-publish.js
+      - name: install pinned npm for registry verification
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - name: download authoritative release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wharfie-${{ github.ref_name }}-preview-release
+          path: dist/preview-release
+      - name: verify reviewed npm promotion and finalize the GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          WHARFIE_PREVIEW_PUBLISH: '1'
+          WHARFIE_PREVIEW_PUBLISH_ENABLED: ${{ vars.WHARFIE_PREVIEW_PUBLISH_ENABLED }}
+        run: >-
+          node ./scripts/publish-preview-release.js
+          --artifact-dir "$GITHUB_WORKSPACE/dist/preview-release"
+          --finalize-only
