@@ -7,8 +7,10 @@ import { createExecutionLedger } from '../../src/core/lib/db/tables/execution-le
 import { createLedgerServiceOwnership } from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import { openApplicationStateDB } from '../../src/core/runtime/application-state-store.js';
+import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../../src/core/runtime/effects/application-state.js';
 import { createBuiltinManagedEffectCatalog } from '../../src/core/runtime/effects/builtin-catalog.js';
 import { executeManagedEffectSuccessorRun } from '../../src/core/runtime/managed-effect-successor.js';
+import { withExecutionLedgerCoordinatorAuthority } from '../../src/core/runtime/operator/execution-ledger-store.js';
 import { acquireLocalLedgerServiceSession } from '../../src/core/runtime/services/ledger-service.js';
 
 const Boundary = Object.freeze({
@@ -91,119 +93,157 @@ function recordAdapterEntry(filePath, destinationEffectId) {
 async function main() {
   const options = parseOptions();
   const db = createLMDB({ path: options.control.controlPath });
-  const localOwner = await acquireLocalLedgerServiceSession({
-    appId: options.appId,
-    ownership: createLedgerServiceOwnership({
-      db,
-      tableName: options.control.tableName,
-    }),
-    sessionRoot: options.control.sessionPath,
-  });
-  let reached = false;
-  /** @type {(boundary: string, detail?: Record<string, unknown>) => Promise<void>} */
-  const reach = async (boundary, detail = {}) => {
-    if (boundary !== options.boundary || reached) return;
-    reached = true;
-    await send({
-      kind: 'boundary',
-      boundary,
-      detail,
-      ownership: localOwner.ownership,
-    });
-    waitForever();
-  };
-
-  const payloadStore = createLocalExecutionPayloadStore({
-    path: options.control.payloadPath,
-    storeId: options.control.payloadStoreId,
-  });
-  const applicationState = await openApplicationStateDB({
-    configuration: options.applicationState,
-  });
   try {
-    const catalog = await createBuiltinManagedEffectCatalog({
-      db: applicationState.db,
+    const localOwner = await acquireLocalLedgerServiceSession({
       appId: options.appId,
-      adapterName: applicationState.context.adapterName,
-      tableName: applicationState.context.tableName,
+      ownership: createLedgerServiceOwnership({
+        db,
+        tableName: options.control.tableName,
+      }),
+      sessionRoot: options.control.sessionPath,
     });
-    const ledger = createExecutionLedger({
-      db,
-      tableName: options.control.tableName,
-      payloadStore,
-      effectEvidenceVerifiers: [...catalog.effectEvidenceVerifiers],
-    });
-    const controlledLedger = {
-      ...ledger,
-      /** @param {Parameters<typeof ledger.startManagedEffectSuccessor>[0]} input */
-      async startManagedEffectSuccessor(input) {
-        const result = await ledger.startManagedEffectSuccessor(input);
-        await reach(Boundary.START, {
-          targetRunId: result.run.runId,
-          attemptId: result.attempt.attemptId,
-          effectId: result.effect.effectId,
-        });
-        return result;
-      },
-      /** @param {Parameters<typeof ledger.commitManagedEffectSuccessorOutcome>[0]} input */
-      async commitManagedEffectSuccessorOutcome(input) {
-        const result = await ledger.commitManagedEffectSuccessorOutcome(input);
-        await reach(Boundary.TERMINAL, {
-          targetRunId: result.run.runId,
-          effectId: result.effect.effectId,
-        });
-        return result;
-      },
-    };
-    const controlledCatalog = {
-      ...catalog,
-      /** @param {Parameters<typeof catalog.resolve>[0]} frame */
-      resolve(frame) {
-        const adapter = catalog.resolve(frame);
-        return Object.freeze({
-          ...adapter,
-          /** @param {Parameters<typeof adapter.execute>[0]} input */
-          async execute(input) {
-            const outcome = await adapter.execute(input);
-            recordAdapterEntry(
-              options.adapterMarkerPath,
-              input.destinationEffectId,
-            );
-            await reach(Boundary.DESTINATION, {
-              targetRunId: input.identity.runId,
-              effectId: input.identity.effectId,
-              destinationEffectId: input.destinationEffectId,
+    try {
+      const payloadStore = createLocalExecutionPayloadStore({
+        path: options.control.payloadPath,
+        storeId: options.control.payloadStoreId,
+      });
+      const baseLedger = createExecutionLedger({
+        db,
+        tableName: options.control.tableName,
+        payloadStore,
+        effectEvidenceVerifiers: [
+          ...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
+        ],
+      });
+      await withExecutionLedgerCoordinatorAuthority({
+        appId: options.appId,
+        coordinatorId: localOwner.sessionId,
+        ledger: baseLedger,
+        context: { db, tableName: options.control.tableName, readOnly: false },
+        async handler(ledger, coordinatorAuthority) {
+          let reached = false;
+          /** @type {(boundary: string, detail?: Record<string, unknown>) => Promise<void>} */
+          const reach = async (boundary, detail = {}) => {
+            if (boundary !== options.boundary || reached) return;
+            reached = true;
+            await send({
+              kind: 'boundary',
+              boundary,
+              detail,
+              ownership: localOwner.ownership,
+              coordinatorAuthority,
             });
-            return outcome;
-          },
-        });
-      },
-    };
+            waitForever();
+          };
 
-    const handoff = await controlledLedger.authorizeManagedEffectSuccessorRetry(
-      {
-        sourceRunId: options.sourceRunId,
-        sourceEffectId: options.sourceEffectId,
-        successorId: options.successorId,
-        reason: options.reason,
-        actor: options.actor,
-      },
-    );
-    await reach(Boundary.AUTHORIZATION, {
-      targetRunId: handoff.authorization.target.runId,
-      targetEffectId: handoff.authorization.target.effectId,
-      applied: handoff.applied,
-    });
-    await executeManagedEffectSuccessorRun({
-      ledger: controlledLedger,
-      authorization: handoff.authorization,
-      request: handoff.request,
-      catalog: controlledCatalog,
-      actor: options.actor,
-      createFencingToken: () => 'successor-crash-fence',
-    });
+          const source = await ledger.rebuildRun(options.sourceRunId);
+          const sourceEffect = source?.effects.find(
+            (/** @type {Record<string, any>} */ effect) =>
+              effect.effectId === options.sourceEffectId,
+          );
+          const expectedStoreId =
+            sourceEffect?.destination?.configuration?.storeId;
+          if (
+            source?.run.appId !== options.appId ||
+            sourceEffect?.destination?.kind !== 'application-state' ||
+            sourceEffect.destination.configuration?.namespace !==
+              options.appId ||
+            typeof expectedStoreId !== 'string'
+          ) {
+            throw new Error(
+              'Successor crash child requires the retained application-state source destination.',
+            );
+          }
+          const applicationState = await openApplicationStateDB({
+            configuration: options.applicationState,
+          });
+          try {
+            const catalog = await createBuiltinManagedEffectCatalog({
+              db: applicationState.db,
+              appId: options.appId,
+              adapterName: applicationState.context.adapterName,
+              tableName: applicationState.context.tableName,
+              coordinatorAuthority: ledger.getCoordinatorAuthority(),
+              expectedStoreId,
+            });
+            const controlledLedger = {
+              ...ledger,
+              /** @param {Parameters<typeof ledger.startManagedEffectSuccessor>[0]} input */
+              async startManagedEffectSuccessor(input) {
+                const result = await ledger.startManagedEffectSuccessor(input);
+                await reach(Boundary.START, {
+                  targetRunId: result.run.runId,
+                  attemptId: result.attempt.attemptId,
+                  effectId: result.effect.effectId,
+                });
+                return result;
+              },
+              /** @param {Parameters<typeof ledger.commitManagedEffectSuccessorOutcome>[0]} input */
+              async commitManagedEffectSuccessorOutcome(input) {
+                const result =
+                  await ledger.commitManagedEffectSuccessorOutcome(input);
+                await reach(Boundary.TERMINAL, {
+                  targetRunId: result.run.runId,
+                  effectId: result.effect.effectId,
+                });
+                return result;
+              },
+            };
+            const controlledCatalog = {
+              ...catalog,
+              /** @param {Parameters<typeof catalog.resolve>[0]} frame */
+              resolve(frame) {
+                const adapter = catalog.resolve(frame);
+                return Object.freeze({
+                  ...adapter,
+                  /** @param {Parameters<typeof adapter.execute>[0]} input */
+                  async execute(input) {
+                    const outcome = await adapter.execute(input);
+                    recordAdapterEntry(
+                      options.adapterMarkerPath,
+                      input.destinationEffectId,
+                    );
+                    await reach(Boundary.DESTINATION, {
+                      targetRunId: input.identity.runId,
+                      effectId: input.identity.effectId,
+                      destinationEffectId: input.destinationEffectId,
+                    });
+                    return outcome;
+                  },
+                });
+              },
+            };
+
+            const handoff =
+              await controlledLedger.authorizeManagedEffectSuccessorRetry({
+                sourceRunId: options.sourceRunId,
+                sourceEffectId: options.sourceEffectId,
+                successorId: options.successorId,
+                reason: options.reason,
+                actor: options.actor,
+              });
+            await reach(Boundary.AUTHORIZATION, {
+              targetRunId: handoff.authorization.target.runId,
+              targetEffectId: handoff.authorization.target.effectId,
+              applied: handoff.applied,
+            });
+            await executeManagedEffectSuccessorRun({
+              ledger: controlledLedger,
+              authorization: handoff.authorization,
+              request: handoff.request,
+              catalog: controlledCatalog,
+              actor: options.actor,
+              createFencingToken: () => 'successor-crash-fence',
+            });
+          } finally {
+            await applicationState.close();
+          }
+        },
+      });
+    } finally {
+      await localOwner.release();
+    }
   } finally {
-    await applicationState.close();
     await db.close();
   }
 

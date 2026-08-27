@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -34,25 +34,15 @@ const FENCING_TOKEN = 'source-activity-log-fence';
 const TABLE_NAME = 'source-activity-log-command-test';
 const SAFE_FAILURE =
   'Sensitive durable activity logs could not be read safely. No partial page was emitted.';
-
-/** @type {Set<string>} */
-const temporaryDirectories = new Set();
-
-afterEach(() => {
-  for (const directory of temporaryDirectories) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-  temporaryDirectories.clear();
-});
+const CLI_TIMEOUT_MS = 15_000;
+const SEEDED_COMMAND_TEST_TIMEOUT_MS = 45_000;
 
 /**
  * @param {string} label
  * @returns {string}
  */
 function createTemporaryRoot(label) {
-  const root = mkdtempSync(path.join(os.tmpdir(), label));
-  temporaryDirectories.add(root);
-  return root;
+  return mkdtempSync(path.join(os.tmpdir(), label));
 }
 
 /**
@@ -202,6 +192,7 @@ function runLogs(root, controlRoot, cwd, args) {
   return spawnSync(process.execPath, [BIN_PATH, 'ops', 'logs', ...args], {
     cwd,
     encoding: 'utf8',
+    timeout: CLI_TIMEOUT_MS,
     env: {
       PATH: process.env.PATH,
       HOME: root,
@@ -260,93 +251,105 @@ function logItem(sequence, level) {
 }
 
 describe('source sensitive activity-log command', () => {
-  it('reads actual retained logs in frozen JSON pages without loading app source or mutating durable bytes', async () => {
-    const root = createTemporaryRoot('wharfie-ops-logs-');
-    const controlRoot = path.join(root, 'control');
-    const authoredApp = createAuthoredAppTrap(root);
-    const attempt = await seedStartedAttempt(controlRoot);
-    const durableBefore = snapshotDirectory(controlRoot);
-    const commonArguments = [
-      '--app-id',
-      APP_ID,
-      '--run-id',
-      RUN_ID,
-      '--attempt-id',
-      attempt.attemptId,
-      '--limit',
-      '2',
-      '--confirm-sensitive-output',
-      '--json',
-    ];
+  it(
+    'reads actual retained logs in frozen JSON pages without loading app source or mutating durable bytes',
+    async () => {
+      const root = createTemporaryRoot('wharfie-ops-logs-');
+      try {
+        const controlRoot = path.join(root, 'control');
+        const authoredApp = createAuthoredAppTrap(root);
+        const attempt = await seedStartedAttempt(controlRoot);
+        const durableBefore = snapshotDirectory(controlRoot);
+        const commonArguments = [
+          '--app-id',
+          APP_ID,
+          '--run-id',
+          RUN_ID,
+          '--attempt-id',
+          attempt.attemptId,
+          '--limit',
+          '2',
+          '--confirm-sensitive-output',
+          '--json',
+        ];
 
-    const first = runLogs(root, controlRoot, authoredApp, commonArguments);
+        const first = runLogs(root, controlRoot, authoredApp, commonArguments);
 
-    expect(first.status).toBe(0);
-    expect(first.stderr).toBe('');
-    const firstPage = /** @type {Record<string, any>} */ (
-      JSON.parse(first.stdout)
-    );
-    expect(firstPage).toEqual({
-      schemaVersion: 1,
-      kind: 'wharfie.execution-ledger.activity-log-page',
-      authority: 'none',
-      authoritative: false,
-      disclosure: 'application-sensitive-unredacted',
-      integrity: { verified: true },
-      scope: exactScope(attempt),
-      snapshot: {
-        entryCount: 3,
-        cumulativePayloadBytes: expect.any(Number),
-        lastSequence: 3,
-      },
-      items: [logItem(1, 'info'), logItem(2, 'warn')],
-      nextCursor: expect.any(String),
-    });
-    expect(first.stdout).toContain('unredacted-log-secret-1');
-    expect(first.stdout).not.toContain(FENCING_TOKEN);
+        expect(first.status).toBe(0);
+        expect(first.stderr).toBe('');
+        const firstPage = /** @type {Record<string, any>} */ (
+          JSON.parse(first.stdout)
+        );
+        expect(firstPage).toEqual({
+          schemaVersion: 1,
+          kind: 'wharfie.execution-ledger.activity-log-page',
+          authority: 'none',
+          authoritative: false,
+          disclosure: 'application-sensitive-unredacted',
+          integrity: { verified: true },
+          scope: exactScope(attempt),
+          snapshot: {
+            entryCount: 3,
+            cumulativePayloadBytes: expect.any(Number),
+            lastSequence: 3,
+          },
+          items: [logItem(1, 'info'), logItem(2, 'warn')],
+          nextCursor: expect.any(String),
+        });
+        expect(first.stdout).toContain('unredacted-log-secret-1');
+        expect(first.stdout).not.toContain(FENCING_TOKEN);
 
-    const second = runLogs(root, controlRoot, authoredApp, [
-      ...commonArguments,
-      '--cursor',
-      firstPage.nextCursor,
-    ]);
+        const second = runLogs(root, controlRoot, authoredApp, [
+          ...commonArguments,
+          '--cursor',
+          firstPage.nextCursor,
+        ]);
 
-    expect(second.status).toBe(0);
-    expect(second.stderr).toBe('');
-    expect(JSON.parse(second.stdout)).toEqual({
-      schemaVersion: 1,
-      kind: 'wharfie.execution-ledger.activity-log-page',
-      authority: 'none',
-      authoritative: false,
-      disclosure: 'application-sensitive-unredacted',
-      integrity: { verified: true },
-      scope: exactScope(attempt),
-      snapshot: firstPage.snapshot,
-      items: [logItem(3, 'error')],
-      nextCursor: null,
-    });
-    expect(snapshotDirectory(controlRoot)).toEqual(durableBefore);
-  });
+        expect(second.status).toBe(0);
+        expect(second.stderr).toBe('');
+        expect(JSON.parse(second.stdout)).toEqual({
+          schemaVersion: 1,
+          kind: 'wharfie.execution-ledger.activity-log-page',
+          authority: 'none',
+          authoritative: false,
+          disclosure: 'application-sensitive-unredacted',
+          integrity: { verified: true },
+          scope: exactScope(attempt),
+          snapshot: firstPage.snapshot,
+          items: [logItem(3, 'error')],
+          nextCursor: null,
+        });
+        expect(snapshotDirectory(controlRoot)).toEqual(durableBefore);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    SEEDED_COMMAND_TEST_TIMEOUT_MS,
+  );
 
   it('emits only the fixed safe failure and does not create a missing store', () => {
     const root = createTemporaryRoot('wharfie-ops-logs-missing-');
-    const controlRoot = path.join(root, 'missing-control');
-    const authoredApp = createAuthoredAppTrap(root);
+    try {
+      const controlRoot = path.join(root, 'missing-control');
+      const authoredApp = createAuthoredAppTrap(root);
 
-    const result = runLogs(root, controlRoot, authoredApp, [
-      '--app-id',
-      APP_ID,
-      '--run-id',
-      RUN_ID,
-      '--attempt-id',
-      'missing-attempt',
-      '--confirm-sensitive-output',
-      '--json',
-    ]);
+      const result = runLogs(root, controlRoot, authoredApp, [
+        '--app-id',
+        APP_ID,
+        '--run-id',
+        RUN_ID,
+        '--attempt-id',
+        'missing-attempt',
+        '--confirm-sensitive-output',
+        '--json',
+      ]);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toBe(`${SAFE_FAILURE}\n`);
-    expect(existsSync(controlRoot)).toBe(false);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(`${SAFE_FAILURE}\n`);
+      expect(existsSync(controlRoot)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -5,6 +5,7 @@ import { createExecutionLedgerHistoryCommand } from '../../../runtime/operator/e
 import { createExecutionLedgerOperatorCommands } from '../../../runtime/operator/execution-ledger-operator.js';
 import { createExecutionLedgerRunOutputCommand } from '../../../runtime/operator/execution-ledger-run-output-command.js';
 import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.js';
+import { createPackagedCoordinatorAuthorityCommand } from './control_cmds/coordinator.js';
 import { createPackagedDurableWorkflowRunCommand } from './control_cmds/foreground-run.js';
 import { createPackagedManifestCommand } from './control_cmds/manifest.js';
 import { createPackagedMetadataCommand } from './control_cmds/metadata.js';
@@ -19,7 +20,7 @@ import { createPackagedDurableWorkerCommand } from './control_cmds/worker.js';
 /**
  * Build a fresh packaged operator program. Identity is read lazily so help and
  * immutable metadata commands do not open application control state.
- * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, readRunOutput?: (request: {appId: string, runId: string}) => unknown | Promise<unknown>, runOutputOutput?: Partial<import('../../../runtime/operator/execution-ledger-run-output-command.js').ExecutionLedgerRunOutputPort>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, loadDurableWorkflowRunExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-run-command.js').DurableWorkflowRunExecutionHandle>, durableWorkflowRunOutput?: Partial<import('../../../runtime/operator/durable-workflow-run-command.js').DurableWorkflowRunOutput>, runForegroundWorker?: import('../../../runtime/operator/durable-workflow-run-command.js').DurableWorkflowForegroundWorker, readForegroundRunOutput?: (request: {appId: string, runId: string}) => unknown | Promise<unknown>, inspectForegroundRun?: (request: {runId: string, expectedAppId: string}) => Record<string, any> | null | Promise<Record<string, any> | null>, loadDurableWorkflowStartExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, loadDeveloperCliModule?: () => Promise<Record<string, any> | null> | Record<string, any> | null, durableWorkflowStartOutput?: Partial<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, durableWorkflowSignalOutput?: Partial<import('../../../runtime/operator/durable-workflow-signal-command.js').DurableWorkflowSignalCommandOutput>, deliverWorkflowSignal?: typeof import('../../../runtime/operator/durable-workflow-signal-command.js').deliverLocalDurableWorkflowSignal, loadDurableSubmitExecution?: () => Promise<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitExecutionHandle>, durableSubmitOutput?: Partial<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitCommandOutput>, submitActivity?: import('../../../runtime/operator/durable-submit-command.js').ResidentActivitySubmit, loadDurableWorkerExecution?: () => Promise<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerExecutionHandle>, durableWorkerOutput?: Partial<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerCommandOutput>, runResidentWorker?: import('../../../runtime/operator/durable-worker-command.js').ResidentActivityWorkerRunner, loadSystemdUserServiceOperator?: () => any | Promise<any>, systemdUserServiceOutput?: Partial<import('../../../runtime/operator/systemd-user-service-command.js').SystemdUserServiceCommandOutput>, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable command providers.
+ * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, readRunOutput?: (request: {appId: string, runId: string}) => unknown | Promise<unknown>, runOutputOutput?: Partial<import('../../../runtime/operator/execution-ledger-run-output-command.js').ExecutionLedgerRunOutputPort>, inspectCoordinatorAuthority?: typeof import('../../../runtime/operator/coordinator-authority-command.js').inspectCoordinatorAuthority, takeoverCoordinatorAuthority?: typeof import('../../../runtime/operator/coordinator-authority-command.js').takeoverCoordinatorAuthority, readCoordinatorAuthorityInspectionFile?: typeof import('../../../runtime/operator/json-document-file.js').readOperatorJsonObjectFile, coordinatorAuthorityOutput?: Partial<import('../../../runtime/operator/coordinator-authority-command.js').CoordinatorAuthorityCommandOutput>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, loadDurableWorkflowRunExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-run-command.js').DurableWorkflowRunExecutionHandle>, durableWorkflowRunOutput?: Partial<import('../../../runtime/operator/durable-workflow-run-command.js').DurableWorkflowRunOutput>, runForegroundWorker?: import('../../../runtime/operator/durable-workflow-run-command.js').DurableWorkflowForegroundWorker, readForegroundRunOutput?: (request: {appId: string, runId: string}) => unknown | Promise<unknown>, inspectForegroundRun?: (request: {runId: string, expectedAppId: string}) => Record<string, any> | null | Promise<Record<string, any> | null>, loadDurableWorkflowStartExecution?: () => Promise<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartExecutionHandle>, loadDeveloperCliModule?: () => Promise<Record<string, any> | null> | Record<string, any> | null, durableWorkflowStartOutput?: Partial<import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStartCommandOutput>, startWorkflow?: import('../../../runtime/operator/durable-workflow-start-command.js').DurableWorkflowStarter, durableWorkflowSignalOutput?: Partial<import('../../../runtime/operator/durable-workflow-signal-command.js').DurableWorkflowSignalCommandOutput>, deliverWorkflowSignal?: typeof import('../../../runtime/operator/durable-workflow-signal-command.js').deliverLocalDurableWorkflowSignal, loadDurableSubmitExecution?: () => Promise<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitExecutionHandle>, durableSubmitOutput?: Partial<import('../../../runtime/operator/durable-submit-command.js').DurableSubmitCommandOutput>, submitActivity?: import('../../../runtime/operator/durable-submit-command.js').ResidentActivitySubmit, loadDurableWorkerExecution?: () => Promise<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerExecutionHandle>, durableWorkerOutput?: Partial<import('../../../runtime/operator/durable-worker-command.js').DurableWorkerCommandOutput>, runResidentWorker?: import('../../../runtime/operator/durable-worker-command.js').ResidentActivityWorkerRunner, loadSystemdUserServiceOperator?: () => any | Promise<any>, systemdUserServiceOutput?: Partial<import('../../../runtime/operator/systemd-user-service-command.js').SystemdUserServiceCommandOutput>, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable command providers.
  * @returns {Command} - Packaged operator program.
  */
 export function createProgram(options = {}) {
@@ -64,6 +65,26 @@ export function createProgram(options = {}) {
     ...(options.runOutputOutput === undefined
       ? {}
       : { output: options.runOutputOutput }),
+  });
+  const coordinatorCommand = createPackagedCoordinatorAuthorityCommand({
+    resolveExpectedIdentity,
+    ...(options.inspectCoordinatorAuthority === undefined
+      ? {}
+      : { inspectAuthority: options.inspectCoordinatorAuthority }),
+    ...(options.takeoverCoordinatorAuthority === undefined
+      ? {}
+      : { takeoverAuthority: options.takeoverCoordinatorAuthority }),
+    ...(options.readCoordinatorAuthorityInspectionFile === undefined
+      ? {}
+      : {
+          readJsonObjectFile: options.readCoordinatorAuthorityInspectionFile,
+        }),
+    ...(options.coordinatorAuthorityOutput === undefined
+      ? {}
+      : { output: options.coordinatorAuthorityOutput }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
   });
   const activityRunCommand = createPackagedDurableRunCommand({
     ...(options.loadDurableRunExecution === undefined
@@ -200,6 +221,7 @@ export function createProgram(options = {}) {
     .addCommand(listCommand)
     .addCommand(logsCommand)
     .addCommand(outputCommand)
+    .addCommand(coordinatorCommand)
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
     .addCommand(reconcileCommand)

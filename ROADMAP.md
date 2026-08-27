@@ -2,11 +2,11 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-24
+**Last updated:** 2026-08-26
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
-[checkpoints](llm/checkpoints/2026-07-29-single-host-developer-preview.md)
+[checkpoints](llm/checkpoints/2026-08-26-coordinator-readiness-systemd-proof.md)
 and [architecture decisions](docs/architecture/decisions/README.md), not in an
 ever-growing sequence of numbered tranches.
 
@@ -33,17 +33,27 @@ The repository has substantial foundations:
   package handoff by default and the unchanged v1 receipt behind `--json`;
 - a durable run, invocation, attempt, effect, workflow, timer, signal, and
   schedule ledger;
-- an opt-in per-application coordinator-authority kernel co-located with that
-  ledger, including monotonic epochs, stable-request receipts, deliberate
-  confirmed takeover, diagnostic-only heartbeats, and a transaction-fence seam;
-  production operator/resident assembly does not bind it yet;
+- a per-application coordinator-authority kernel co-located with that ledger,
+  including monotonic epochs, stable-request receipts, deliberate confirmed
+  takeover, diagnostic-only heartbeats, and transaction fencing now bound into
+  the local resident, direct durable-submission fallback, foreground
+  durable-activity paths, standalone mutating ledger operators, and resident
+  schedule-control writes; source and packaged operators can inspect an exact
+  predecessor and explicitly fence-and-release it for a fresh resident;
+- per-application high-water barriers in the separate application-state store,
+  adopted by writable runtime catalogs and checked in each effect transaction;
+  a resumable control-side primary-store pin now gates resident scheduling,
+  commands, and READY on exact destination adoption; protection still starts
+  at destination adoption, not control-store takeover;
 - conservative cancellation, recovery, reconciliation, fencing, and managed
   effect semantics;
 - source and packaged commands for durable submission, workers, history,
   redacted inspection, confirmed logs, and confirmed logical output;
-- a named packaged foreground workflow command that can be interrupted and
-  resumed by repeating the same invocation, while direct packaged activity
-  execution lives under `activity run`;
+- a named packaged foreground workflow command that can be gracefully
+  interrupted and resumed by repeating the same invocation. After abrupt
+  process death, an exact retained coordinator inspection and explicit
+  confirmed takeover-and-release must come before that same invocation can
+  reopen the run; direct packaged activity execution lives under `activity run`;
 - one `WHARFIE_DATA_ROOT` for every packaged durable store and lazy native
   runtime preparation that keeps ordinary application argv on the light path;
 - the `steady-file` golden-path application and a hermetic proof of ordinary
@@ -63,10 +73,13 @@ The repository has substantial foundations:
   which proves unfinished work across controller exit, explicit app-data
   purge, and complete proof-owned cleanup;
 - a recoverable single-machine service lifecycle, now exercised by a
-  [checksummed disposable-Ubuntu proof](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
-  through install, automatic replacement, forced host restart, retained work,
-  update, rollback, failed-target restoration, history/output reads,
-  uninstall, prune, and host cleanup; and
+  [checksummed current-policy Ubuntu proof](llm/checkpoints/2026-08-26-coordinator-readiness-systemd-proof.md)
+  through install, fail-closed automatic startup after process and VM loss,
+  explicit takeover-and-release, destination-adoption readiness, retained
+  work, all fifteen update/rollback/source-restoration crash cases,
+  history/output reads, uninstall, prune, and complete owned-host cleanup;
+  two additional actual packaged-resident kills prove both partial-handoff
+  stages with the fixed systemd unit stopped; and
 - packaged AWS and Hetzner single-node read-only preview and status plus
   apply/update/recover/exec/destroy commands, recoverable provider mutations,
   automated recovery proofs, and live packaged
@@ -77,14 +90,39 @@ The repository has substantial foundations:
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
-processes; it did not repeat crash or reboot recovery, which remains covered by
-the separate purpose-built service proof. The explicit epoch-authority kernel
-proves that a bound ledger can reject stale writers, but the production runtime
-does not bind it yet and neither run proves replacement of a failed coordinator
-by another machine. The cloud deployment work now proves a bounded
+processes; it did not repeat crash or reboot recovery. The separate current
+service proof verifies explicit recovery after actual process loss and a forced
+VM reboot; the earlier automatic-recovery proof is historical. The epoch-authority
+path now fences the selected production local execution-ledger writers, stamps new
+physical assignments with the bound epoch, and leaves a crashed active
+authority unavailable until an operator performs an exact inspected takeover.
+The operator immediately releases its temporary successor so a fresh resident
+session can acquire normally. Standalone mutating ledger operators and resident
+schedule-control writes now share this fence. Application-state writes use a
+separate destination-local barrier; atomic handoff across the two stores and
+automatic takeover remain unsupported. A local resident now adopts its one
+configured, history-verified application-state destination before replacement
+readiness, with durable interrupted-handoff progress and exact publication
+fences. This does not prove recovery after loss of either volume.
+These local proofs do not establish replacement by another machine.
+The cloud deployment work now proves a bounded
 credentialed lifecycle through healthy guest service and independently
 verified owned-resource cleanup on AWS and Hetzner. The broader ADR 0035
 acceptance artifact remains partial.
+
+Historical validation on this host included two complete two-worker coverage
+runs that exceeded different unchanged five-second fixture deadlines; both
+failed suites passed alone. A later complete serial coverage run passed all
+7,508 active tests under unchanged deadlines and normal thresholds. Those
+observations remain useful history, but they are superseded for the current
+tree: `npm run test:ci` passed 328 active suites and 7,578 active tests in
+755.272 seconds, with 1 suite and 5 tests skipped under the existing policy.
+Coverage passed at 84.06% statements, 80.89% branches, 91.45% functions, and
+84.79% lines; the package verifier accepted 364 package files and the production
+audit reported 0 vulnerabilities. The isolated same-token race regression
+passed all 15 tests. The locally packed magnetic proof passed explicit inspected
+takeover, and Darwin SEA verification passed at 155,538,992 bytes with SHA-256
+`1e085d1f20b43e6bdfef481beef54d26fff4f236b97fc7d9e7ba2ac385265cf2`.
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -103,12 +141,15 @@ The implemented surface in the
 teaching sequence for this outcome. A deliberately tiny canonical application
 answers "What is a Wharfie application?" A separate polished showcase answers
 "Why Wharfie?" by packaging ordinary JavaScript, interrupting durable work after
-one committed step, and resuming it from the standalone artifact without
-repeating that step. The versioned copied-starter gate hides its disposable
-builder, then exercises relocation, Node-absent execution, abrupt process
-death, exact-command resumption, and a later-process verified output read
-against Wharfie's packed npm tarball.
-Release acceptance remains open until the same gate passes against the
+one committed step, retaining an exact coordinator inspection after the abrupt
+exit, explicitly confirming takeover-and-release, and then resuming from the
+standalone artifact without repeating that step or its original timer. The
+versioned copied-starter gate hides its disposable builder, then exercises
+relocation, Node-absent execution, abrupt process death, the operator safety
+step, exact-command resumption, and a later-process verified output read against
+Wharfie's packed npm tarball. A bare repeat never replaces an ACTIVE resident.
+The locally packed candidate gate now passes that exact inspection/takeover
+journey. Release acceptance remains open until the same gate passes against the
 published preview. The target remains one obvious journey that finishes in
 under two minutes after prerequisites, with experimental machinery outside the
 beginner path.
@@ -182,9 +223,53 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   acquisition, heartbeat, release, and deliberate confirmed takeover;
   takeover increments the epoch and stale authority tokens cannot commit
   mutations through an authority-bound ledger.
-- The execution-ledger integration is opt-in. Existing production operator and
-  resident construction remains unbound, schedule-control has only its local
-  owner fence, and application-state writes have no coordinator fence.
+- Local resident construction, direct durable-submission fallback, and
+  foreground durable-activity execution acquire a fresh authority and bind the
+  execution ledger for their lifetime. Manual, workflow, and managed-effect
+  successor assignments carry the bound epoch.
+- All five direct mutating execution-ledger operator scopes acquire fresh
+  authority after any required local ownership. Read-only preflight and
+  cancellation routed to a live owner do not acquire competing authority.
+- Resident schedule activation, cursor-only advancement, and occurrence/run
+  admission use the exact ledger token. Prepared admissions cannot cross to
+  an unbound or differently bound ledger; combined transactions contain one
+  authority check, alongside the existing local-owner and activation fences.
+  The observer checks currentness even on no-work passes, while transactional
+  fencing remains the safety boundary; low-level unbound store construction
+  remains available.
+- Writable application-state catalogs explicitly adopt the exact ledger token
+  in their separate destination. Fresh identity/bootstrap and every new value,
+  receipt, and negative resolution are locally fenced. This implementation's
+  unbound writers cannot mutate an adopted namespace. Exact retained
+  dispositions remain read-only across epochs. Operator reconciliation and
+  successor retry pin the retained destination identity before adoption.
+  This is not an atomic control/destination handoff or retroactive fencing of
+  old binaries; upgrade cutover requires stopped legacy writers.
+- Local resident startup inventories all verified run history, including
+  terminal effects and authorization-only successor targets, and pins one
+  configured application-state/primary identity. Genuine first use and
+  interrupted pre-adoption recovery may retain PREPARING before ADOPTED. Once
+  ADOPTED exists, it remains the confirmed floor: the resident advances the
+  destination first and then transitions exact ADOPTED directly to ADOPTED,
+  never back through PREPARING. Scheduling and command handling start only
+  after adoption; READY atomically compares the exact ADOPTED record and
+  current coordinator alongside its lifecycle fence. Cleanup never rolls back
+  a destination barrier. Foreground and operator writable bindings reject
+  PREPARING and carry the ADOPTED floor. The floor check accepts the exact floor
+  or a structurally valid strictly higher current barrier. Known missing,
+  rolled-back, or replaced foreground stores fail read-only before durable
+  STARTED.
+- Source `ops coordinator` and packaged `wharfie coordinator` commands expose
+  non-authoritative exact inspection plus explicitly confirmed
+  takeover-and-release. Takeover compares the complete inspected ACTIVE
+  snapshot; the temporary successor is released with a deterministic request
+  identity so a normal fresh resident can acquire afterward.
+- Actual SIGKILL at both partial destination-handoff boundaries preserves the
+  immutable primary pin and retained history. The current single-host VM
+  proof also observes automatic crash/reboot startup failing closed before
+  explicit takeover, then exact adopted readiness under a fresh coordinator.
+  Both stores and one trusted control lineage survive; no volume-loss or
+  automatic multi-node recovery is implied.
 - Heartbeats are diagnostic only. No code infers authority expiry from process
   reachability, message silence, or a caller clock.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
@@ -194,27 +279,22 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
 
 ### Work next
 
-1. Bind the resident coordinator assembly to a freshly generated authority
-   session, require its token for every authoritative execution-ledger writer,
-   and expose deliberate takeover through an explicit operator path.
-2. Close the same-table scheduling gaps: compose the authority fence into
-   schedule-control mutations and carry the bound epoch in durable admission
-   and scheduling history where that history claims coordinator provenance.
-   Keep application-state writes outside the guarantee until they have a
-   destination-local fence.
-3. Define and implement a provider-certified semantic lease primitive with
+1. Decide whether durable admission and scheduling history need new
+   coordinator provenance. Current v10 admission epochs remain zero; the
+   transaction fence protects writes without inventing historical provenance.
+2. Define and implement a provider-certified semantic lease primitive with
    store-authoritative time and an atomic expiry predicate. Do not build
    automatic takeover from caller timestamps or diagnostic heartbeat age.
-4. Use that primitive to add renewable authority and automatic epoch takeover
+3. Use that primitive to add renewable authority and automatic epoch takeover
    without weakening the explicit same-table fence.
-5. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
+4. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
    replacement. Reassign only work whose replay contract permits it.
-6. Add deterministic crash tests at lease acquisition, assignment, activity
+5. Add deterministic crash tests at lease acquisition, assignment, activity
    start, managed-effect settlement, and terminal commit.
-7. Keep the mesh trusted and explicit: enroll nodes, authorize the application
+6. Keep the mesh trusted and explicit: enroll nodes, authorize the application
    revisions each may run, advertise finite capabilities, place work only on a
    matching node, and fence every node lease.
-8. After the local model is small and proved, run one two-node trusted recovery
+7. After the local model is small and proved, run one two-node trusted recovery
    proof. Multi-active scheduling is not required.
 
 ### Exit evidence
@@ -369,10 +449,15 @@ harness are implemented and accepted at commit `39be8d6`. The retained
 builder, prepare, final, cleanup, and checksum receipts prove the complete
 sequence and proof-owned cleanup.
 
-The single-host preview is closed. The coordinator-authority kernel remains
-complete but intentionally unbound; production authority binding and
-coordinator replacement are now the active Outcome 2 work. Provider-certified
-leases and multi-node placement remain later slices. Outcome 3 has a bounded
+The single-host preview is closed. The coordinator-authority kernel and its
+bounded local runtime, direct operator, and resident scheduling adoption are
+complete. Application state now has its own destination-local barrier and
+ordered, resumable adoption before READY, with actual partial-handoff process
+kills and explicit single-host crash/reboot recovery proved. Admission
+provenance, provider-certified leases, reconstruction, and multi-node
+replacement are the active Outcome 2 work; cross-store atomicity and arbitrary
+destination sets remain outside the supported primary-store protocol.
+Outcome 3 has a bounded
 two-provider lifecycle proof, while its complete redacted acceptance harness,
 retained-data capability, and journal epoch rollover remain open.
 

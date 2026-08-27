@@ -6,7 +6,10 @@ import {
   ApplicationStateStoreIdentityError,
   createApplicationStateTable,
 } from '../../lib/db/tables/application-state.js';
+import { validateApplicationStateCoordinatorAuthorityRecord } from '../../lib/db/tables/application-state-authority.js';
+import { assertCoordinatorAuthorityToken } from '../../lib/db/tables/coordinator-authority.js';
 import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
+import { assertDomainSeparatedSha256Id } from '../content-id.js';
 import { executeManagedEffect } from '../managed-effect.js';
 import { assertLogicalId } from '../logical-id.js';
 import {
@@ -30,6 +33,9 @@ const CATALOG_OPTION_KEYS = new Set([
   'tableName',
   'allowTestAdapter',
   'createStoreId',
+  'coordinatorAuthority',
+  'expectedStoreId',
+  'destinationAuthorityFloor',
 ]);
 const RECOVERY_CATALOG_OPTION_KEYS = new Set([
   'db',
@@ -38,7 +44,12 @@ const RECOVERY_CATALOG_OPTION_KEYS = new Set([
   'tableName',
   'allowTestAdapter',
 ]);
-const RECONCILIATION_CATALOG_OPTION_KEYS = RECOVERY_CATALOG_OPTION_KEYS;
+const RECONCILIATION_CATALOG_OPTION_KEYS = new Set([
+  ...RECOVERY_CATALOG_OPTION_KEYS,
+  'coordinatorAuthority',
+  'expectedStoreId',
+  'destinationAuthorityFloor',
+]);
 const FROZEN_REPLAY_PROPERTIES = [
   ...APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
 ];
@@ -95,6 +106,38 @@ function assertOptionalAbortSignal(value) {
     throw new TypeError(
       'Managed-effect handler signal must be an AbortSignal.',
     );
+  }
+}
+
+/** @param {unknown} value - Optional trusted coordinator binding. @param {string} appId - Catalog namespace. @param {string} label - Construction boundary. @returns {import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthorityToken | undefined} - Exact immutable token. */
+function normalizeCatalogCoordinatorAuthority(value, appId, label) {
+  if (value === undefined) return undefined;
+  const authority = assertCoordinatorAuthorityToken(
+    value,
+    `${label}.coordinatorAuthority`,
+  );
+  if (authority.appId !== appId) {
+    throw new TypeError(
+      `${label}.coordinatorAuthority must bind the catalog appId.`,
+    );
+  }
+  return authority;
+}
+
+/** @param {unknown} value - Optional retained destination identity. @param {string} label - Construction boundary. @returns {string | undefined} - Validated identity without opening or initializing a store. */
+function normalizeExpectedStoreId(value, label) {
+  if (value === undefined) return undefined;
+  assertDomainSeparatedSha256Id(value, 'was', `${label}.expectedStoreId`);
+  return value;
+}
+
+/** @param {unknown} value - Optional retained ADOPTED destination floor. @param {string} label - Construction boundary. @returns {Readonly<Record<string, any>> | undefined} - Canonical immutable floor. */
+function normalizeDestinationAuthorityFloor(value, label) {
+  if (value === undefined) return undefined;
+  try {
+    return validateApplicationStateCoordinatorAuthorityRecord(value);
+  } catch {
+    throw new TypeError(`${label}.destinationAuthorityFloor is invalid.`);
   }
 }
 
@@ -294,7 +337,9 @@ function createApplicationStateReconciliationSurface(options) {
  * Open the closed built-in catalog over one already-owned application-state DB
  * client. The caller owns the DB lifetime; every returned adapter must settle
  * before that lifetime closes.
- * @param {{db: import('../../lib/db/base.js').DBClient, appId: string, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName?: string, allowTestAdapter?: boolean, createStoreId?: () => string}} options - Trusted host configuration.
+ * A retained expectedStoreId pins an existing physical destination and forbids
+ * bootstrapping a replacement before authority adoption.
+ * @param {{db: import('../../lib/db/base.js').DBClient, appId: string, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName?: string, allowTestAdapter?: boolean, createStoreId?: () => string, coordinatorAuthority?: import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthorityToken | import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot, expectedStoreId?: string, destinationAuthorityFloor?: unknown}} options - Trusted host configuration.
  * @returns {Promise<Readonly<BuiltinManagedEffectCatalog>>} - Finite catalog.
  */
 export async function createBuiltinManagedEffectCatalog(options) {
@@ -322,6 +367,30 @@ export async function createBuiltinManagedEffectCatalog(options) {
     );
   }
   assertLogicalId(appId, 'built-in managed-effect catalog appId');
+  const coordinatorAuthority = normalizeCatalogCoordinatorAuthority(
+    options.coordinatorAuthority,
+    appId,
+    'Built-in managed-effect catalog',
+  );
+  const expectedStoreId = normalizeExpectedStoreId(
+    options.expectedStoreId,
+    'Built-in managed-effect catalog',
+  );
+  const destinationAuthorityFloor = normalizeDestinationAuthorityFloor(
+    options.destinationAuthorityFloor,
+    'Built-in managed-effect catalog',
+  );
+  if (
+    destinationAuthorityFloor !== undefined &&
+    (coordinatorAuthority === undefined ||
+      expectedStoreId === undefined ||
+      destinationAuthorityFloor.store_id !== expectedStoreId ||
+      destinationAuthorityFloor.namespace !== appId)
+  ) {
+    throw new TypeError(
+      'Built-in managed-effect catalog destinationAuthorityFloor requires matching coordinatorAuthority, expectedStoreId, and appId.',
+    );
+  }
   const tableName = configuredTableName ?? APPLICATION_STATE_TABLE_NAME;
   if (tableName !== APPLICATION_STATE_TABLE_NAME) {
     throw new TypeError(
@@ -348,9 +417,23 @@ export async function createBuiltinManagedEffectCatalog(options) {
     db,
     tableName,
     ...(createStoreId ? { createStoreId } : {}),
+    ...(coordinatorAuthority === undefined ? {} : { coordinatorAuthority }),
   });
-  const identity = await table.ensureStoreIdentity();
+  const identity =
+    expectedStoreId === undefined
+      ? await table.ensureStoreIdentity()
+      : await table.assertStoreIdentity(expectedStoreId);
   const storeId = identity.store_id;
+  if (coordinatorAuthority !== undefined) {
+    // The writable host explicitly advances the destination's own fence. This
+    // is not a control-store takeover and cannot fence another DB atomically.
+    await table.adoptCoordinatorAuthority(
+      { storeId, namespace: appId },
+      destinationAuthorityFloor === undefined
+        ? undefined
+        : { destinationAuthorityFloor },
+    );
+  }
   const destination = createApplicationStateDestination({
     adapterName,
     storeId,
@@ -510,7 +593,9 @@ export async function createBuiltinManagedEffectRecoveryCatalog(options) {
  * Open only the explicitly writable destination-reconciliation surface over
  * an existing application-state store. It never initializes a missing store
  * and exposes neither normal execution nor the read-only recovery probe.
- * @param {{db: import('../../lib/db/base.js').DBClient, appId: string, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName?: string, allowTestAdapter?: boolean}} options - Trusted host reconciliation configuration.
+ * A supplied authority explicitly adopts the existing destination; an unbound
+ * construction remains mutation-free for read-only destination preflight.
+ * @param {{db: import('../../lib/db/base.js').DBClient, appId: string, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName?: string, allowTestAdapter?: boolean, coordinatorAuthority?: import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthorityToken | import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot, expectedStoreId?: string, destinationAuthorityFloor?: unknown}} options - Trusted host reconciliation configuration.
  * @returns {Promise<Readonly<BuiltinManagedEffectReconciliationCatalog>>} - Reconciliation-only catalog.
  */
 export async function createBuiltinManagedEffectReconciliationCatalog(options) {
@@ -540,6 +625,30 @@ export async function createBuiltinManagedEffectReconciliationCatalog(options) {
     appId,
     'built-in managed-effect reconciliation catalog appId',
   );
+  const coordinatorAuthority = normalizeCatalogCoordinatorAuthority(
+    options.coordinatorAuthority,
+    appId,
+    'Built-in managed-effect reconciliation catalog',
+  );
+  const expectedStoreId = normalizeExpectedStoreId(
+    options.expectedStoreId,
+    'Built-in managed-effect reconciliation catalog',
+  );
+  const destinationAuthorityFloor = normalizeDestinationAuthorityFloor(
+    options.destinationAuthorityFloor,
+    'Built-in managed-effect reconciliation catalog',
+  );
+  if (
+    destinationAuthorityFloor !== undefined &&
+    (coordinatorAuthority === undefined ||
+      expectedStoreId === undefined ||
+      destinationAuthorityFloor.store_id !== expectedStoreId ||
+      destinationAuthorityFloor.namespace !== appId)
+  ) {
+    throw new TypeError(
+      'Built-in managed-effect reconciliation catalog destinationAuthorityFloor requires matching coordinatorAuthority, expectedStoreId, and appId.',
+    );
+  }
   if (tableName !== APPLICATION_STATE_TABLE_NAME) {
     throw new TypeError(
       `Built-in managed-effect reconciliation catalog tableName must be ${APPLICATION_STATE_TABLE_NAME}.`,
@@ -557,14 +666,29 @@ export async function createBuiltinManagedEffectReconciliationCatalog(options) {
     );
   }
   assertDBClientAdapterIdentity(db, adapterName);
-  const table = createApplicationStateTable({ db, tableName });
-  const identity = await table.readStoreIdentity();
+  const table = createApplicationStateTable({
+    db,
+    tableName,
+    ...(coordinatorAuthority === undefined ? {} : { coordinatorAuthority }),
+  });
+  const identity =
+    expectedStoreId === undefined
+      ? await table.readStoreIdentity()
+      : await table.assertStoreIdentity(expectedStoreId);
   if (!identity) {
     throw new ApplicationStateStoreIdentityError(
       'Application-state reconciliation requires an existing verified store identity.',
     );
   }
   const storeId = identity.store_id;
+  if (coordinatorAuthority !== undefined) {
+    await table.adoptCoordinatorAuthority(
+      { storeId, namespace: appId },
+      destinationAuthorityFloor === undefined
+        ? undefined
+        : { destinationAuthorityFloor },
+    );
+  }
   const destination = createApplicationStateDestination({
     adapterName,
     storeId,

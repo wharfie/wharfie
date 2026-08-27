@@ -1,12 +1,16 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, jest, test } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
+import {
+  CoordinatorAuthorityStaleError,
+  createCoordinatorAuthority,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
 import { createExecutionLedger } from '../../src/core/lib/db/tables/execution-ledger.js';
 import {
   LocalApplicationActivationAction,
@@ -242,6 +246,160 @@ function interceptScheduleAdmission(db, beforeScheduleAdmission) {
 }
 
 describe('scheduled workflow activation cutover', () => {
+  test.each(['create', 'replay'])(
+    'a bound prepared %s requires the exact consuming ledger authority',
+    async (mode) => {
+      const harness = createHarness();
+      const transactions = jest.spyOn(harness.db, 'transactionWrite');
+      try {
+        const owner = await claimResident(harness.db);
+        const authority = createCoordinatorAuthority({
+          db: harness.db,
+          tableName: TABLE_NAME,
+        });
+        const first = await authority.acquire({
+          appId: APP_ID,
+          coordinatorId: 'schedule-coordinator-a',
+          requestId: 'acquire-schedule-coordinator-a',
+          observedAt: 10,
+        });
+        const boundSchedule = createScheduleControl({
+          db: harness.db,
+          tableName: TABLE_NAME,
+          coordinatorAuthority: first.authority,
+        });
+        const prepared = await prepareScheduledRun(boundSchedule, owner);
+        const ledger = createExecutionLedger({
+          db: harness.db,
+          tableName: TABLE_NAME,
+          payloadStore: harness.payloadStore,
+          coordinatorAuthority: first.authority,
+        });
+        if (mode === 'replay') {
+          await ledger.createWorkflowRun(prepared.request);
+        }
+        const successor = await authority.takeover({
+          appId: APP_ID,
+          coordinatorId: 'schedule-coordinator-b',
+          requestId: 'replace-schedule-coordinator-a',
+          observedAuthority: first.authority,
+          confirmAuthorityReplacement: true,
+          observedAt: SCHEDULED_AT + 1,
+        });
+        const unboundLedger = createExecutionLedger({
+          db: harness.db,
+          tableName: TABLE_NAME,
+          payloadStore: harness.payloadStore,
+        });
+        const successorLedger = unboundLedger.bindCoordinatorAuthority(
+          successor.authority,
+        );
+        transactions.mockClear();
+
+        for (const otherLedger of [unboundLedger, successorLedger]) {
+          await expect(
+            otherLedger.createWorkflowRun(prepared.request),
+          ).rejects.toThrow(/coordinator authority must match/i);
+        }
+        expect(transactions).not.toHaveBeenCalled();
+
+        if (mode === 'replay') {
+          await expect(
+            ledger.createWorkflowRun(prepared.request),
+          ).resolves.toMatchObject({
+            applied: false,
+            run: { runId: prepared.runId },
+          });
+          expect(transactions).not.toHaveBeenCalled();
+          await expect(ledger.getEvents(prepared.runId)).resolves.toHaveLength(
+            1,
+          );
+        } else {
+          await expect(
+            ledger.createWorkflowRun(prepared.request),
+          ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+          await expect(ledger.rebuildRun(prepared.runId)).resolves.toBeNull();
+          await expect(
+            boundSchedule.getOccurrence({
+              occurrenceId: prepared.cause.occurrenceId,
+            }),
+          ).resolves.toBeNull();
+          await expect(
+            boundSchedule.getCursor({
+              appId: APP_ID,
+              scheduleId: SCHEDULE_ID,
+            }),
+          ).resolves.toEqual(prepared.activated.cursor);
+        }
+      } finally {
+        transactions.mockRestore();
+        await harness.cleanup();
+      }
+    },
+  );
+
+  test('coordinator takeover fences the combined occurrence and workflow transaction atomically', async () => {
+    const harness = createHarness();
+    try {
+      const owner = await claimResident(harness.db);
+      const authority = createCoordinatorAuthority({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const first = await authority.acquire({
+        appId: APP_ID,
+        coordinatorId: 'schedule-coordinator-a',
+        requestId: 'acquire-schedule-coordinator-a',
+        observedAt: 10,
+      });
+      let replacements = 0;
+      const racingDb = interceptScheduleAdmission(harness.db, async () => {
+        replacements += 1;
+        await authority.takeover({
+          appId: APP_ID,
+          coordinatorId: 'schedule-coordinator-b',
+          requestId: 'replace-schedule-coordinator-a',
+          observedAuthority: first.authority,
+          confirmAuthorityReplacement: true,
+          observedAt: SCHEDULED_AT + 1,
+        });
+      });
+      const schedule = createScheduleControl({
+        db: racingDb,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: first.authority,
+      });
+      const prepared = await prepareScheduledRun(schedule, owner);
+      const ledger = createExecutionLedger({
+        db: racingDb,
+        tableName: TABLE_NAME,
+        payloadStore: harness.payloadStore,
+        coordinatorAuthority: first.authority,
+      });
+
+      await expect(
+        ledger.createWorkflowRun(prepared.request),
+      ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+      expect(replacements).toBe(1);
+      await expect(ledger.rebuildRun(prepared.runId)).resolves.toBeNull();
+      await expect(ledger.getEvents(prepared.runId)).resolves.toEqual([]);
+      await expect(
+        schedule.getOccurrence({ occurrenceId: prepared.cause.occurrenceId }),
+      ).resolves.toBeNull();
+      await expect(
+        schedule.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+      ).resolves.toEqual(prepared.activated.cursor);
+      await expect(
+        createLedgerServiceOwnership({
+          db: harness.db,
+          tableName: TABLE_NAME,
+        }).getOwnership({ serviceId: owner.serviceId }),
+      ).resolves.toEqual(owner);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   test('a replacement resident preserves progress while the stale owner loses its fence', async () => {
     const harness = createHarness();
     try {

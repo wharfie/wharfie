@@ -21,14 +21,18 @@ an early-signal inbox. Reusing a delivery ID with changed contents conflicts.
 A packaged application with `cli.durable` exposes
 `<app> wharfie run --name <stable-name> -- <application-args>` as the foreground
 durable-workflow path. The stable name is the workflow's idempotency key; repeat
-the same command to reopen the same run. The command temporarily hosts the exact
-revision when no resident is active, follows a matching resident when one is
-already active, reports committed or retained steps and the persisted timer,
-and waits for verified terminal output. `SIGINT` or `SIGTERM` drains that
-foreground host without cancelling durable work and prints the exact resume
-command. Packaged `start` remains admission-only, and `worker` remains the
-explicit long-lived resident. Expert direct activity execution moved to
-`<app> wharfie activity run`; its source equivalent remains `wharfie ops run`.
+the same command to reopen the same run. It either follows a live matching
+resident or temporarily rehosts the exact revision after graceful release or
+when no ACTIVE authority remains. It reports committed or retained steps and
+the persisted timer, then waits for verified terminal output. `SIGINT` or
+`SIGTERM` drains that foreground host without cancelling durable work and
+prints the exact resume command. An abrupt `SIGKILL` can leave an ownerless
+authority ACTIVE, so a bare repeat fails closed until an operator retains the
+exact inspection, independently confirms replacement, and performs the explicit
+confirmed takeover-and-release. Packaged `start` remains admission-only, and
+`worker` remains the explicit long-lived resident. Expert direct activity
+execution moved to `<app> wharfie activity run`; its source equivalent remains
+`wharfie ops run`.
 
 Packaged dispatch resolves one app-scoped storage layout before entrypoint
 selection. Ordinary application argv does not prepare Wharfie's native durable
@@ -105,6 +109,103 @@ non-authoritative discovery semantics, verified integrity, `scope`, redacted
 `items`, and a string-or-null `nextCursor`. Human and JSON output omit payloads,
 evidence, fences, and filesystem paths. The listing grants no scheduling,
 cancellation, or mutation authority.
+
+A coordinator that does not release gracefully remains ACTIVE. Choose exactly
+one alternative below. Each creates a private directory and a new, no-clobber
+inspection file, then generates fresh identities for this replacement attempt.
+Run the chosen alternative in a dedicated Bash shell so any setup or inspection
+failure terminates the attempt before takeover.
+
+For a source application, set `app_id` to its canonical application ID:
+
+```bash
+app_id='my-application-id'
+inspection_dir="$(mktemp -d)" || exit 1
+chmod 0700 "$inspection_dir" || exit 1
+inspection_file="$inspection_dir/source-authority-inspection.json"
+raw_nonce="$(od -An -N16 -tx1 /dev/urandom)" || exit 1
+takeover_nonce="${raw_nonce//[[:space:]]/}"
+unset raw_nonce
+if [[ ! "$takeover_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+  printf '%s\n' 'Failed to generate a 32-character lowercase hexadecimal nonce.' >&2
+  exit 1
+fi
+coordinator_id="manual-takeover-$takeover_nonce"
+request_id="manual-takeover-request-$takeover_nonce"
+
+(
+  umask 077
+  set -C
+  wharfie ops coordinator inspect \
+    --app-id "$app_id" --json > "$inspection_file"
+) || exit 1
+```
+
+Stop here. Confirm that inspection succeeded, leave the file and both generated
+IDs unchanged, and independently verify that the inspected predecessor should
+be fenced. Then run the takeover in the same shell:
+
+```bash
+wharfie ops coordinator takeover \
+  --app-id "$app_id" \
+  --inspection-file "$inspection_file" \
+  --coordinator-id "$coordinator_id" \
+  --request-id "$request_id" \
+  --confirm-authority-replacement \
+  --json
+```
+
+For a packaged application, set `app` to the executable and `data_root` to the
+exact canonical data root used for the retained state:
+
+```bash
+app='./my-packaged-app'
+data_root='/absolute/path/to/the-existing-wharfie-data-root'
+inspection_dir="$(mktemp -d)" || exit 1
+chmod 0700 "$inspection_dir" || exit 1
+inspection_file="$inspection_dir/packaged-authority-inspection.json"
+raw_nonce="$(od -An -N16 -tx1 /dev/urandom)" || exit 1
+takeover_nonce="${raw_nonce//[[:space:]]/}"
+unset raw_nonce
+if [[ ! "$takeover_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+  printf '%s\n' 'Failed to generate a 32-character lowercase hexadecimal nonce.' >&2
+  exit 1
+fi
+coordinator_id="manual-takeover-$takeover_nonce"
+request_id="manual-takeover-request-$takeover_nonce"
+
+(
+  umask 077
+  set -C
+  WHARFIE_DATA_ROOT="$data_root" "$app" wharfie coordinator inspect \
+    --json > "$inspection_file"
+) || exit 1
+```
+
+Stop here. Confirm that inspection succeeded, leave the file and both generated
+IDs unchanged, and independently verify that the inspected predecessor should
+be fenced. Then run the takeover in the same shell:
+
+```bash
+WHARFIE_DATA_ROOT="$data_root" "$app" wharfie coordinator takeover \
+  --inspection-file "$inspection_file" \
+  --coordinator-id "$coordinator_id" \
+  --request-id "$request_id" \
+  --confirm-authority-replacement \
+  --json
+```
+
+The exact snapshot comparison fences the predecessor, and the operator releases
+its temporary successor so a fresh resident can acquire. If the takeover
+response is lost or otherwise ambiguous, repeat it with the exact unchanged
+inspection file, coordinator ID, and request ID; do not inspect again or
+generate new identities. An explicit refusal or snapshot mismatch does not by
+itself authorize a retry. Only a definite conflict saying that the inspected
+predecessor is no longer current permits a rebased attempt: retain a new
+inspection, renew the operational confirmation, and generate fresh coordinator
+and request IDs. Diagnose every other explicit refusal or error at its cause; it
+does not authorize rebasing or a blind retry. Heartbeat age is diagnostic and
+never grants takeover permission.
 
 Read one exact physical attempt's retained logs with
 `wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]`

@@ -8,6 +8,7 @@ import {
   createLedgerServiceId,
   createLedgerServiceOwnership,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
+import { assertCoordinatorAuthorityCurrent } from '../../lib/db/tables/coordinator-authority.js';
 import {
   LocalApplicationAdmissionClosedError,
   getLocalApplicationRunCreationFence,
@@ -352,10 +353,20 @@ export function createResidentScheduleObserver(options) {
     options.ownership,
     executionBinding.identity.appId,
   );
+  const coordinatorAuthority = options.ledger.getCoordinatorAuthority?.();
+  if (
+    coordinatorAuthority !== undefined &&
+    coordinatorAuthority.appId !== executionBinding.identity.appId
+  ) {
+    throw new TypeError(
+      'Resident schedule coordinator authority must match its execution application.',
+    );
+  }
   const tableName = options.controlContext.tableName.trim();
   const scheduleControl = createScheduleControl({
     db: options.controlContext.db,
     tableName,
+    ...(coordinatorAuthority === undefined ? {} : { coordinatorAuthority }),
   });
   const ownershipStore = createLedgerServiceOwnership({
     db: options.controlContext.db,
@@ -383,6 +394,15 @@ export function createResidentScheduleObserver(options) {
       throw new ResidentScheduleOwnershipLostError({
         appId: ownership.appId,
         serviceId: ownership.serviceId,
+      });
+    }
+    if (coordinatorAuthority !== undefined) {
+      // Fail fast even when there is no due work. The same-table transaction
+      // fence, not this diagnostic read, remains the mutation safety boundary.
+      await assertCoordinatorAuthorityCurrent({
+        db: options.controlContext.db,
+        tableName,
+        authority: coordinatorAuthority,
       });
     }
     if (signal?.aborted) return false;

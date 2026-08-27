@@ -12,7 +12,6 @@ import {
   readFileSync,
   readlinkSync,
   renameSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -23,12 +22,17 @@ import { parseApplicationPackageReceiptOutput } from '../src/cli/app/package-com
 import { createPackageTarball, readJson } from './package-verification.js';
 import { verifyPackageSeaArtifactHandoff } from './package-sea-verification.js';
 import { writeSteadyFilePreviewHandoff } from './steady-file-preview-handoff.js';
+import {
+  assertOwnedSystemdProofRoot,
+  initializeOwnedSystemdProofRoot,
+  resetOwnedSystemdProofRoot,
+  resolveSystemdProofRoot,
+} from './systemd-proof-root.js';
 
 const APP_ID = 'steady-file-demo';
 const WORKFLOW_ID = 'verify-stable';
 const UNIT_NAME = `wharfie-${APP_ID}.service`;
-const PROOF_ROOT =
-  process.env.WHARFIE_SYSTEMD_PROOF_ROOT || '/var/tmp/wharfie-systemd-proof';
+const PROOF_ROOT = resolveSystemdProofRoot();
 const PREPARE_PATH = path.join(PROOF_ROOT, 'steady-file-prepare.json');
 const FINAL_PATH = path.join(PROOF_ROOT, 'steady-file-final.json');
 const INPUT_PATH = path.join(PROOF_ROOT, 'artifact.tar');
@@ -841,7 +845,7 @@ function buildHandoff(repoRoot, handoffRoot, builderReceiptPath) {
   process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
     .filter(Boolean)
     .join(path.delimiter);
-  mkdirSync(PROOF_ROOT, { recursive: true, mode: 0o700 });
+  initializeOwnedSystemdProofRoot();
   mkdirSync(path.join(handoffRoot, 'source'), {
     recursive: true,
     mode: 0o700,
@@ -951,8 +955,7 @@ async function prepare(repoRoot) {
   process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
     .filter(Boolean)
     .join(path.delimiter);
-  rmSync(PROOF_ROOT, { recursive: true, force: true });
-  mkdirSync(PROOF_ROOT, { recursive: true, mode: 0o700 });
+  resetOwnedSystemdProofRoot();
   writeFileSync(INPUT_PATH, INPUT_BYTES, { mode: 0o600 });
 
   const nodeProbe = run('/usr/bin/env', ['node', '--version'], {
@@ -1193,6 +1196,7 @@ function readIndependentSystemdAbsence() {
  */
 async function verify() {
   assertProofEnvironment();
+  assertOwnedSystemdProofRoot();
   const prepared = JSON.parse(readFileSync(PREPARE_PATH, 'utf8'));
   assert.equal(prepared.kind, 'wharfie.steady-file-systemd-proof.prepare');
   assert.equal(prepared.schemaVersion, 1);

@@ -29,8 +29,12 @@ No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes c
 The shortest product moment is now versioned in
 [the hello-world starter](examples/hello-world/README.md). It begins with the
 complete `defineApp({ id, main })` application, then packages a separate
-resumable greeting, kills its foreground durable run, repeats the identical
-command, and verifies the retained terminal result from a later process. The
+resumable greeting, and kills its foreground durable run. Because `SIGKILL`
+leaves the resident's coordinator authority ACTIVE, the demo retains an exact
+inspection and performs the explicit confirmed takeover-and-release before it
+repeats the identical named run command. That safety step replaces authority;
+the repeated run separately proves that the committed preparation and original
+timer were retained, then a later process verifies the terminal result. The
 repository gate copies that starter and installs only Wharfie's packed npm
 tarball, then hides the copied builder before relocated execution:
 
@@ -41,8 +45,10 @@ npm run verify:magnetic-first-run
 Run both the repository gate and the copied-starter journey with exactly Node
 24.13.1, matching the installed Wharfie package's declared engine.
 
-This is release-candidate evidence, not a published-install claim; final
-acceptance still requires the same gate to pass against the published preview.
+The locally packed release-candidate gate now passes this exact flow, including
+retained coordinator inspection and explicit confirmed takeover-and-release.
+This is not a published-install claim; final acceptance still requires the same
+gate to pass against the published preview.
 The deeper [single-host developer preview](docs/guides/developer-preview.md)
 and its
 [accepted split builder/clean-target checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md)
@@ -86,7 +92,10 @@ moved from `<app> wharfie run --activity ...` to `<app> wharfie activity run
 --activity ...`; top-level `run` now names and resumes the declared default
 durable workflow.
 
-Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
+Local and single-node use should require no external Wharfie control plane.
+Automatic coordinator failover is a deferred, long-term ADR 0002 design, not
+part of the current surface; it requires provider-certified linearizable
+storage with store-time lease semantics.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v4
 manifest and the append-only V10 run → invocation → attempt → effect ledger
@@ -123,6 +132,13 @@ steps without rerunning them, and follows its verified output to completion.
 `SIGINT` and `SIGTERM` drain the foreground host without cancelling durable
 work and print the exact resume command. Packaged `start` remains
 admission-only, and `worker` remains the explicit long-lived resident.
+An abrupt `SIGKILL` is different: a bare repeat cannot replace the still-ACTIVE
+coordinator. Retain the exact JSON from
+the packaged `wharfie coordinator inspect --json` subcommand, check the
+operational evidence, and execute the explicit confirmed `coordinator takeover`
+from that inspection before repeating the named run. That takeover
+deterministically releases its temporary successor; it does not repeat the
+durable attempt or recompute the retained timer.
 
 That host now supports durable submission separately from execution. Source
 `wharfie ops submit` and packaged `<app> wharfie submit` persist an exact
@@ -163,6 +179,24 @@ yet supported on Windows. V10 carries forward verifier-backed managed effects
 through the framed source/SEA worker boundary and exposes one finite public
 operation: `application-state` / `put-if-absent`. Its LMDB destination
 atomically commits the business value with a permanent effect receipt.
+Writable runtime catalogs now adopt a persistent per-application coordinator
+barrier in that destination. New values, receipts, and negative resolutions
+compare it in the same transaction; an older token cannot write after a newer
+destination barrier commits. The separate control-store takeover is not an
+atomic takeover of application state, and existing permanent receipts remain
+readable across epochs.
+Before enabling scheduling or commands, a local resident now inventories
+verified history and adopts its one configured application-state destination.
+Genuine first use and interrupted pre-adoption recovery may record
+`PREPARING` before `ADOPTED`. Once an `ADOPTED` pin exists, it remains the
+confirmed floor: startup accepts its exact destination barrier or a
+structurally valid strictly higher current barrier, adopts the current token in
+the destination, and advances control directly from exact `ADOPTED` to
+`ADOPTED`. Writable foreground and operator bindings reject `PREPARING` and
+carry the retained floor through preflight and adoption. Publishing `READY`
+atomically checks the exact adopted record and current coordinator. Missing,
+rolled-back, conflicting, or corrupt retained destinations block startup
+rather than selecting or creating a replacement store.
 Confirmed source/SEA operator recovery and resident restart recovery now settle
 the complete active-effect set—at most 16 unresolved effects—for one stopped
 attempt under the held LMDB owner. A retained `PENDING`
@@ -212,12 +246,41 @@ admission, requires every existing source run to be terminal during update or
 rollback, and retains one exact rollback candidate before it changes the
 executable selection. First install separately admits already queued work for
 the exact target revision. Interrupted activation is resumed explicitly from
-durable phase state. In addition to focused repository tests, a checksummed
-Ubuntu proof builds three distinct SEAs from the installed npm tarball and
-covers exact-unit startup, resident `SIGKILL` replacement, abrupt VM power
-loss, pre-login recovery, durable workflow continuation, all five post-commit
-update and rollback boundaries, all five failed-target source-restoration
-boundaries, ambiguous-response recovery, and state-preserving uninstall.
+durable phase state. In addition to focused repository tests, the current
+[checksummed Ubuntu proof](llm/checkpoints/2026-08-26-coordinator-readiness-systemd-proof.md)
+built three distinct SEAs from the installed npm tarball and covered exact-unit
+startup, explicit recovery after resident `SIGKILL` and abrupt VM power loss,
+pre-login refusal of unconfirmed takeover, durable workflow continuation, all five
+post-commit update and rollback boundaries, all five failed-target
+source-restoration boundaries, ambiguous-response recovery, and state-preserving
+uninstall.
+Two additional real process kills exercise the first-use PREPARING path before
+destination adoption and after destination commit but before its first ADOPTED
+acknowledgement. Retained-ADOPTED replacement instead keeps that confirmed
+floor while it advances the destination, then transitions directly to the next
+exact ADOPTED record. Fresh service readiness must follow exact adoption of the
+same retained store at a higher coordinator epoch.
+The two probes use the selected packaged service runtime with the systemd unit
+stopped; they are not extra VM reboots. Automatic takeover remains unsupported:
+the older automatic-recovery evidence predates the current explicit policy.
+
+Historical repository-wide validation on this host included two complete
+parallel coverage runs that exceeded different existing tests' five-second
+deadlines; both suites passed alone. A subsequent complete serial coverage run
+passed all 7,508 active tests with unchanged deadlines and normal thresholds.
+Those observations remain recorded history, but they no longer describe the
+current tree's default gate.
+
+The current `npm run test:ci` passed 328 active suites and 7,578 active tests in
+755.272 seconds; 1 suite and 5 tests remained skipped under the existing policy.
+Coverage passed at 84.06% statements, 80.89% branches, 91.45% functions, and
+84.79% lines. The same clean-install gate verified 364 package files and found 0
+production vulnerabilities. The isolated same-token adoption-race regression
+passed 15 of 15 tests. Separately, the locally packed magnetic proof passed the
+explicit inspection/takeover journey, and Darwin SEA verification passed with a
+155,538,992-byte artifact whose SHA-256 is
+`1e085d1f20b43e6bdfef481beef54d26fff4f236b97fc7d9e7ba2ac385265cf2`.
+
 The accepted developer-preview proof separately builds two meaningful
 `steady-file` revisions, deletes its builder, and gives a clean no-Node target
 only the checksummed handoff. It proves packaged admission, install, unfinished
@@ -804,6 +867,11 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
+- [Coordinator/readiness crash and reboot proof](llm/checkpoints/2026-08-26-coordinator-readiness-systemd-proof.md) — real partial-handoff kills, explicit systemd crash/reboot recovery, immutable source snapshots, retained state, and checksummed cleanup.
+- [Application-state readiness checkpoint](llm/checkpoints/2026-08-26-application-state-readiness.md) — durable primary-store pins, resumable adoption before resident READY, exact current-authority publication, and foreground preflight.
+- [Application-state authority checkpoint](llm/checkpoints/2026-08-26-application-state-authority.md) — preceding destination-local barriers, exact disposition replay, and the cross-store boundary that motivated readiness gating.
+- [Operator and schedule authority checkpoint](llm/checkpoints/2026-08-26-operator-schedule-authority.md) — direct mutating operator binding, same-table schedule fencing, exact-token admission composition, takeover/replay proof, and remaining exclusions.
+- [Resident coordinator-authority checkpoint](llm/checkpoints/2026-08-25-resident-coordinator-authority.md) — initial production ledger binding, exact explicit takeover-and-release, and deterministic stale-writer proof.
 - [SEA packaging reproducibility checkpoint](llm/checkpoints/2026-07-30-sea-packaging-reproducibility.md) — the root-cause analysis and byte-identical nested operator proof for the pinned default unsigned/ad-hoc builder path, with independent cloud and local cleanup.
 - [Two-provider self-deployment checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md) — the live AWS and Hetzner apply/activate/adopt/restart/destroy proofs, independent provider cleanup, and remaining ADR 0035 acceptance boundary.
 - [Packaged deployment preview checkpoint](llm/checkpoints/2026-07-30-packaged-deployment-preview.md) — the stable zero-write receipt, structural read-only provider boundaries, live AWS/Hetzner packaged proofs, and complete artifact cleanup.
@@ -1084,9 +1152,12 @@ Top-level `run` is the shortest interactive durable path. It starts or reopens
 the app's declared default workflow, temporarily hosts it when no resident is
 active, follows an existing resident when one is active, and waits for verified
 terminal output. Repeat the same name and application arguments to resume the
-same run. Interrupting the foreground host drains it without creating a durable
-cancellation decision and prints the exact command to resume. Expert direct
-activity execution now lives under `activity run`.
+same run. Gracefully interrupting the foreground host drains it without creating
+a durable cancellation decision and prints the exact command to resume. After
+`SIGKILL`, first retain the exact coordinator inspection and perform the
+explicit confirmed takeover-and-release; the identical run command then
+reopens retained workflow state. Expert direct activity execution now lives
+under `activity run`.
 
 Packaged execution and service paths derive their stores from one app-scoped
 layout. Set the one `WHARFIE_DATA_ROOT` environment variable to a canonical absolute
@@ -1149,6 +1220,139 @@ wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> -
 wharfie ops output --app-id <app-id> --run-id <run-id> --confirm-sensitive-output [--json]
 <app> wharfie output --run-id <run-id> --confirm-sensitive-output [--json]
 ```
+
+Direct mutating ledger operators acquire temporary coordinator authority and
+release it before local ownership ends. They do not replace an ACTIVE
+coordinator automatically; cancellation routed to a live resident uses that
+resident's existing authority. Read-only inspection never acquires authority.
+Resident schedule writes use the same authority as their execution ledger,
+including activation and advancement without a due occurrence.
+
+A resident that exits without graceful release leaves its coordinator
+authority ACTIVE and blocks normal restart. Replacement is deliberately
+operator-confirmed. Choose exactly one of the source or packaged alternatives
+below. Each creates a private directory and a new, no-clobber inspection file,
+then generates fresh identities for this replacement attempt. Run the chosen
+alternative in a dedicated Bash shell so any setup or inspection failure
+terminates the attempt before takeover.
+
+For a source application, set `app_id` to its canonical application ID:
+
+```bash
+app_id='my-application-id'
+inspection_dir="$(mktemp -d)" || exit 1
+chmod 0700 "$inspection_dir" || exit 1
+inspection_file="$inspection_dir/source-authority-inspection.json"
+raw_nonce="$(od -An -N16 -tx1 /dev/urandom)" || exit 1
+takeover_nonce="${raw_nonce//[[:space:]]/}"
+unset raw_nonce
+if [[ ! "$takeover_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+  printf '%s\n' 'Failed to generate a 32-character lowercase hexadecimal nonce.' >&2
+  exit 1
+fi
+coordinator_id="manual-takeover-$takeover_nonce"
+request_id="manual-takeover-request-$takeover_nonce"
+
+(
+  umask 077
+  set -C
+  wharfie ops coordinator inspect \
+    --app-id "$app_id" --json > "$inspection_file"
+) || exit 1
+```
+
+Stop here. Confirm that inspection succeeded, leave the file and both generated
+IDs unchanged, and independently verify that the inspected predecessor should
+be fenced. Then run the takeover in the same shell:
+
+```bash
+wharfie ops coordinator takeover \
+  --app-id "$app_id" \
+  --inspection-file "$inspection_file" \
+  --coordinator-id "$coordinator_id" \
+  --request-id "$request_id" \
+  --confirm-authority-replacement \
+  --json
+```
+
+For a packaged application, set `app` to the executable and `data_root` to the
+exact canonical data root used for the retained state:
+
+```bash
+app='./my-packaged-app'
+data_root='/absolute/path/to/the-existing-wharfie-data-root'
+inspection_dir="$(mktemp -d)" || exit 1
+chmod 0700 "$inspection_dir" || exit 1
+inspection_file="$inspection_dir/packaged-authority-inspection.json"
+raw_nonce="$(od -An -N16 -tx1 /dev/urandom)" || exit 1
+takeover_nonce="${raw_nonce//[[:space:]]/}"
+unset raw_nonce
+if [[ ! "$takeover_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+  printf '%s\n' 'Failed to generate a 32-character lowercase hexadecimal nonce.' >&2
+  exit 1
+fi
+coordinator_id="manual-takeover-$takeover_nonce"
+request_id="manual-takeover-request-$takeover_nonce"
+
+(
+  umask 077
+  set -C
+  WHARFIE_DATA_ROOT="$data_root" "$app" wharfie coordinator inspect \
+    --json > "$inspection_file"
+) || exit 1
+```
+
+Stop here. Confirm that inspection succeeded, leave the file and both generated
+IDs unchanged, and independently verify that the inspected predecessor should
+be fenced. Then run the takeover in the same shell:
+
+```bash
+WHARFIE_DATA_ROOT="$data_root" "$app" wharfie coordinator takeover \
+  --inspection-file "$inspection_file" \
+  --coordinator-id "$coordinator_id" \
+  --request-id "$request_id" \
+  --confirm-authority-replacement \
+  --json
+```
+
+Takeover compares the complete inspected ACTIVE snapshot, advances the epoch,
+and deterministically releases its temporary authority so a fresh resident can
+acquire normally. If the takeover response is lost or otherwise ambiguous,
+repeat it with the exact unchanged inspection file, coordinator ID, and request
+ID; do not inspect again or generate new identities. An explicit refusal or
+snapshot mismatch does not by itself authorize a retry. Only a definite conflict
+saying that the inspected predecessor is no longer current permits a rebased
+attempt: retain a new inspection, renew the operational confirmation, and
+generate fresh coordinator and request IDs. Diagnose every other explicit
+refusal or error at its cause; it does not authorize rebasing or a blind retry.
+Heartbeat timestamps are diagnostic only; age, socket state, and process
+reachability never authorize this operation.
+
+That command changes control authority only. Application-state fencing starts
+when the newer token is adopted in the separate destination; an old destination
+writer can still commit before that adoption. The replacement resident now
+completes this adoption before scheduling, accepting commands, or publishing
+`READY`. It scans all verified runs, including terminal runs and authorized
+successors without an effect yet, and requires one exact configured
+`application-state` / `primary` destination. Its control-side store identity is
+immutable. Foreground execution and writable reconciliation/retry also honor
+that pin. Their writable bindings reject `PREPARING`; an `ADOPTED` binding
+requires the destination to retain the exact recorded barrier or a
+structurally valid strictly higher one. A known missing, rolled-back, or
+replaced foreground store is rejected read-only before durable attempt start.
+
+Interrupted first-use or pre-adoption work may retain `PREPARING` without
+rolling back the destination barrier. A retained `ADOPTED` record is never
+replaced by `PREPARING`: after destination adoption, a fresh resident advances
+it directly to the next exact `ADOPTED` record. After an ungraceful exit, use
+the same explicit takeover-and-release procedure, then start a fresh resident
+session to resume.
+`READY` proves the adoption and current authority at publication, not permanent
+liveness. This is a recoverable ordered handoff, not an atomic two-store
+transaction or automatic failover. Upgrade cutover requires stopped old
+binaries and an intact run directory; preserve both stores and their authority
+lineage. Store reset, rollback, volume loss, and automatic lineage migration
+remain unsupported.
 
 Listing is read-only and app-scoped across revisions, with newest-created runs
 first. The default page size is 50 and the maximum is 100. Every directory row
@@ -1290,17 +1494,20 @@ purge; remove the external SEA handoff separately when it should not remain.
 
 The repository's disposable Ubuntu proof builds the app from the installed npm
 tarball, removes Node from the packaged command `PATH`, force-cycles the VM,
-requires automatic healthy startup before a login session, and completes the
-same persisted workflow after the kernel boot ID changes. It builds distinct
-source, target, and clean-exit target SEAs; exact source-mapped breakpoints then
-kill update, rollback, and restoration operators after each durable write and
-require public recovery plus independent selector, receipt, process, systemd,
-and immutable-byte evidence. Run it with
-`npm run verify:service:systemd:lima`. A due timer remains persisted until the
-exact-revision resident observes and fires it; there is deliberately no public
-timer-fire command. The successful commit-bound run and its receipts are
-recorded in the
-[Linux/systemd lifecycle proof checkpoint](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md).
+observes automatic startup refusing retained ACTIVE authority before any login,
+and requires exact inspected takeover-and-release before a fresh resident
+completes the same persisted workflow under the changed kernel boot ID.
+It builds distinct source, target, and clean-exit target SEAs; exact source-mapped
+breakpoints kill update, rollback, and restoration operators after each durable
+write and require public recovery plus independent selector, receipt, process,
+systemd, and immutable-byte evidence. Two further direct service-runtime kills
+interrupt destination adoption before READY, with the fixed unit stopped.
+Run it with `npm run verify:service:systemd:lima`, adding `-- --snapshot` for an
+explicit snapshot of an unfinished worktree. A due timer remains persisted
+until the exact-revision resident observes and fires it; there is deliberately
+no public timer-fire command. The successful source-bound run and its receipts
+are recorded in the
+[coordinator/readiness crash and reboot checkpoint](llm/checkpoints/2026-08-26-coordinator-readiness-systemd-proof.md).
 The literal golden application uses a separate split builder/target driver:
 
 ```bash
@@ -1442,6 +1649,17 @@ exit condition are recorded in the
 The destructive, disposable real-machine service gate is
 `npm run verify:service:systemd:lima`; it requires Lima on macOS and creates,
 force-cycles, verifies, and deletes an isolated Ubuntu VM.
+Use `npm run verify:service:systemd:lima -- --snapshot` to include uncommitted
+work without changing this checkout's HEAD or index. The explicit snapshot
+excludes known credential paths and generated state, retains the exact source
+archive and per-file hashes, and labels receipts with its private snapshot
+commit. Default mode requires a clean committed export with no blocked
+credential paths.
+Both modes use a private Lima namespace and digest-verified image, no host
+mounts, fresh checksummed receipt directories, and verified owned-VM cleanup
+by default.
+See the [validation guide](docs/guides/development-validation.md#disposable-linux-service-proof)
+for evidence and retention boundaries.
 `npm run verify:steady-file:systemd:lima` instead uses sequential builder and
 clean no-Node target VMs for the focused product journey without the
 reboot/crash matrix. It deletes both VMs and its isolated Lima cache

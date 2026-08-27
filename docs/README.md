@@ -16,11 +16,14 @@ The versioned
 [magnetic first-run experience](./product/magnetic-first-run.md) turns that
 product promise into a concrete two-minute teaching sequence: a complete
 `defineApp({ id, main })` ordinary CLI first, followed by one visible durable
-interruption and repeat-to-resume. Its copied-starter gate proves relocation,
-builder-source unavailability, Node-absent execution, `SIGKILL`, exact-command
-resumption, and a later-process verified output read against Wharfie's packed
-npm tarball. Release acceptance remains open until the same gate passes against
-the published preview. Both the repository gate and copied-starter journey use
+interruption. After `SIGKILL`, it retains an exact coordinator inspection and
+performs explicit confirmed takeover-and-release before repeating the named run
+command. Its copied-starter gate proves relocation, builder-source
+unavailability, Node-absent execution, that operator safety step, exact-command
+resumption without recreating the committed preparation or timer, and a
+later-process verified output read against Wharfie's packed npm tarball.
+Release acceptance remains open until the same gate passes against the
+published preview. Both the repository gate and copied-starter journey use
 exactly Node 24.13.1, matching the installed Wharfie package's declared engine.
 
 The deeper
@@ -42,10 +45,11 @@ each deliberate exclusion.
 4. Promote that executable to a persistent single-node service.
 5. Enroll more trusted nodes when placement or recovery requires them.
 
-The current implementation proves the first four steps on Linux, including a
-packaged single-node systemd service that recovers after process death and an
-abrupt machine reboot in a disposable Ubuntu environment. That packaged
-service also supports serialized, crash-recoverable update and rollback:
+The current implementation proves the first four steps on Linux. Its disposable
+Ubuntu proof shows a packaged single-node systemd service failing closed after
+process death or an abrupt machine reboot until an operator retains an exact
+inspection and explicitly confirms takeover-and-release. That packaged service
+also supports serialized, crash-recoverable update and rollback:
 Wharfie closes admission, refuses while any durable run remains nonterminal,
 retains one exact prior release, and resumes interrupted activation through
 `service recover`. Its target-enforcing `service converge` operation lets host
@@ -92,10 +96,14 @@ For an application with a default durable CLI handoff, packaged top-level
 `<app> wharfie run --name <stable-name> -- <application-args>` starts or reopens
 the named workflow. It temporarily hosts the worker when no resident is active,
 follows an existing matching resident otherwise, and reports verified retained
-output through completion. Interruption drains without cancelling durable work
-and prints the exact command to repeat. Packaged `start` remains admission-only,
-and `worker` remains the long-lived resident; expert direct activity execution
-has moved to `<app> wharfie activity run`.
+output through completion. Graceful interruption drains without cancelling
+durable work and prints the exact command to repeat. Abrupt process death leaves
+coordinator authority ACTIVE: a bare repeat cannot replace it, so exact
+inspection and explicit confirmed takeover-and-release must happen first.
+That authority operation is separate from the repeated run's retention of
+committed attempts and timers. Packaged `start` remains admission-only, and
+`worker` remains the long-lived resident; expert direct activity execution has
+moved to `<app> wharfie activity run`.
 
 Packaged execution and service stores derive from one app-scoped layout. A
 foreground caller can set the single canonical absolute `WHARFIE_DATA_ROOT`;

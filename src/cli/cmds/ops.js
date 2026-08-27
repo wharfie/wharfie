@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import { createExecutionLedgerOperatorCommands } from '../../core/runtime/operator/execution-ledger-operator.js';
+import { createSourceCoordinatorAuthorityCommand } from './ops_cmds/coordinator.js';
 import { createSourceExecutionLedgerHistoryCommand } from './ops_cmds/list.js';
 import { createSourceExecutionLedgerActivityLogCommand } from './ops_cmds/logs.js';
 import { createSourceExecutionLedgerRunOutputCommand } from './ops_cmds/output.js';
@@ -30,6 +31,7 @@ export function createSourceOpsCommand() {
     .addCommand(createSourceExecutionLedgerHistoryCommand())
     .addCommand(createSourceExecutionLedgerActivityLogCommand())
     .addCommand(createSourceExecutionLedgerRunOutputCommand())
+    .addCommand(createSourceCoordinatorAuthorityCommand())
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
     .addCommand(reconcileCommand)

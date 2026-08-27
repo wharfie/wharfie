@@ -10,7 +10,18 @@ import {
 } from '../../../runtime/content-id.js';
 import { cloneBoundedJsonObject } from '../../../runtime/json-value.js';
 import { assertLogicalId } from '../../../runtime/logical-id.js';
+import { hasSameCanonicalJson } from '../../ledger/execution-ledger-contract.js';
 import { CONDITION_TYPE } from '../base.js';
+import {
+  applicationStateReadinessAuthority,
+  createApplicationStateReadinessFence,
+  createApplicationStateReadinessStore,
+  validateApplicationStateReadinessRecord,
+} from './application-state-readiness.js';
+import {
+  assertCoordinatorAuthorityCurrent,
+  createCoordinatorAuthorityFence,
+} from './coordinator-authority.js';
 import { getLocalApplicationServiceStartFence } from './local-application-activation.js';
 
 /**
@@ -586,13 +597,18 @@ function normalizeGetOptions(value) {
  * A new session may write STARTING after any preceding state. The caller must
  * acquire that ownership before calling `start`; the conditional generation
  * write prevents two would-be successors from both becoming current.
- * @param {{db: import('../base.js').DBClient, tableName: string, now?: () => number}} options - Store dependencies.
+ * An optional adopted application-state readiness snapshot binds only READY:
+ * publication requires its exact control record and active coordinator in the
+ * same transaction. STARTING and shutdown retain their local lifecycle fences
+ * so a superseded coordinator can still clean up its owned service session.
+ * @param {{db: import('../base.js').DBClient, tableName: string, now?: () => number, applicationStateReadiness?: unknown}} options - Store dependencies.
  * @returns {{get: (input: {serviceId: string}) => Promise<Readonly<Record<string, any>> | null>, start: (input: {serviceId: string, appId: string, revisionId: string, artifactId?: string, sessionId: string, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markReady: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markStopping: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>, markStopped: (input: {serviceId: string, sessionId: string, generation: number, observedAt?: number}) => Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>}} - Durable lifecycle API.
  */
 export function createLedgerServiceLifecycle({
   db,
   tableName,
   now = () => Date.now(),
+  applicationStateReadiness,
 }) {
   if (
     !db ||
@@ -610,6 +626,76 @@ export function createLedgerServiceLifecycle({
     throw new TypeError('createLedgerServiceLifecycle now must be a function.');
   }
   const resolvedTableName = tableName.trim();
+  const readiness =
+    applicationStateReadiness === undefined
+      ? undefined
+      : validateApplicationStateReadinessRecord(applicationStateReadiness);
+  // Constructing this fence also refuses PREPARING records synchronously.
+  // Validation owns an immutable snapshot before any asynchronous read.
+  const readinessFence =
+    readiness === undefined
+      ? undefined
+      : createApplicationStateReadinessFence(readiness);
+  const readinessAuthority =
+    readiness === undefined
+      ? undefined
+      : applicationStateReadinessAuthority(readiness);
+  const readinessStore =
+    readiness === undefined
+      ? undefined
+      : createApplicationStateReadinessStore({
+          db,
+          tableName: resolvedTableName,
+        });
+
+  /**
+   * @param {{serviceId: string, sessionId: string}} options - Snapshotted READY target.
+   * @returns {void} - Refuses mixed local owner/application scopes before reads.
+   */
+  function assertReadyScope(options) {
+    if (readiness === undefined || readinessAuthority === undefined) return;
+    if (
+      options.serviceId !== createLedgerServiceId({ appId: readiness.app_id })
+    ) {
+      throw new TypeError(
+        'markReady.serviceId must bind applicationStateReadiness.app_id.',
+      );
+    }
+    if (options.sessionId !== readinessAuthority.coordinatorId) {
+      throw new TypeError(
+        'markReady.sessionId must match application-state readiness coordinatorId.',
+      );
+    }
+  }
+
+  /**
+   * Diagnose READY replay or a rejected publication without claiming that a
+   * historical READY row still has current authority. New publication relies
+   * on the same-transaction conditions, not these non-atomic diagnostic reads.
+   * @param {string} serviceId - Exact local service identity.
+   * @returns {Promise<void>} - Resolves only for the current adopted binding.
+   */
+  async function assertReadinessCurrent(serviceId) {
+    if (
+      readiness === undefined ||
+      readinessAuthority === undefined ||
+      readinessStore === undefined
+    ) {
+      return;
+    }
+    await assertCoordinatorAuthorityCurrent({
+      db,
+      tableName: resolvedTableName,
+      authority: readinessAuthority,
+    });
+    const current = await readinessStore.get({ appId: readiness.app_id });
+    if (!current || !hasSameCanonicalJson(current, readiness)) {
+      throw new LedgerServiceLifecycleConflictError(
+        serviceId,
+        'application-state readiness changed',
+      );
+    }
+  }
 
   /**
    * @param {string} serviceId - Valid typed service identity.
@@ -742,6 +828,8 @@ export function createLedgerServiceLifecycle({
    */
   async function transition(input, operation, expectedStatuses, targetStatus) {
     const options = normalizeTransitionOptions(input, operation, now);
+    const publishingReady = targetStatus === LedgerServiceLifecycleStatus.READY;
+    if (publishingReady) assertReadyScope(options);
     const current = await readStored(options.serviceId);
     if (!current)
       throw new LedgerServiceLifecycleNotFoundError(options.serviceId);
@@ -758,6 +846,7 @@ export function createLedgerServiceLifecycle({
       );
     }
     if (current.status === targetStatus) {
+      if (publishingReady) await assertReadinessCurrent(options.serviceId);
       return { applied: false, lifecycle: toLifecycleSnapshot(current) };
     }
     if (!expectedStatuses.includes(current.status)) {
@@ -783,6 +872,14 @@ export function createLedgerServiceLifecycle({
     try {
       await db.transactionWrite({
         tableName: resolvedTableName,
+        ...(publishingReady && readinessFence && readinessAuthority
+          ? {
+              conditionChecks: [
+                readinessFence,
+                createCoordinatorAuthorityFence(readinessAuthority),
+              ],
+            }
+          : {}),
         putRequests: [
           {
             keyName: KEY_NAME,
@@ -794,6 +891,7 @@ export function createLedgerServiceLifecycle({
       });
     } catch (error) {
       if (isConditionalCheckFailed(error)) {
+        if (publishingReady) await assertReadinessCurrent(options.serviceId);
         throw new LedgerServiceLifecycleConflictError(
           options.serviceId,
           'concurrent lifecycle update',
@@ -805,7 +903,9 @@ export function createLedgerServiceLifecycle({
   }
 
   /**
-   * Mark the current owner ready to run future scheduler work.
+   * Mark the current owner ready to run future scheduler work. A bound call
+   * atomically requires its adopted destination readiness and coordinator;
+   * exact READY replay diagnoses both again without performing a write.
    * @param {{serviceId: string, sessionId: string, generation: number, observedAt?: number}} input - Current owner fence.
    * @returns {Promise<{applied: boolean, lifecycle: Readonly<Record<string, any>>}>} - Current durable lifecycle.
    */

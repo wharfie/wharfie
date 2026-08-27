@@ -16,6 +16,7 @@ import { WHARFIE_VERSION } from '../src/core/lib/version.js';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 export const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const MAX_RUN_COMMAND_TIMEOUT_MS = 2_147_483_647;
 const REQUIRED_PREVIEW_FILES = Object.freeze([
   'examples/README.md',
   'examples/hello-world/README.md',
@@ -51,10 +52,30 @@ export function readJson(filePath) {
 /**
  * @param {string} command - Executable to run.
  * @param {string[]} args - Command arguments.
- * @param {{ cwd?: string, env?: Record<string, string | undefined>, capture?: boolean }} [options] - Execution options.
+ * @param {{ cwd?: string, env?: Record<string, string | undefined>, capture?: boolean, timeoutMs?: number, killSignal?: 'SIGKILL' }} [options] - Execution options. A bounded command must use the hard-kill policy so a child cannot trap the deadline signal and hold the verifier open.
  * @returns {{ stdout: string, stderr: string }} - Captured output, when requested.
  */
 export function runCommand(command, args, options = {}) {
+  const timeoutMs = options.timeoutMs;
+  const killSignal = options.killSignal;
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < 1 ||
+      timeoutMs > MAX_RUN_COMMAND_TIMEOUT_MS)
+  ) {
+    throw new TypeError(
+      `runCommand timeoutMs must be a positive integer no greater than ${MAX_RUN_COMMAND_TIMEOUT_MS}.`,
+    );
+  }
+  if (timeoutMs === undefined && killSignal !== undefined) {
+    throw new TypeError('runCommand killSignal requires timeoutMs.');
+  }
+  if (timeoutMs !== undefined && killSignal !== 'SIGKILL') {
+    throw new TypeError(
+      'runCommand bounded execution requires killSignal SIGKILL.',
+    );
+  }
   const capture = options.capture === true;
   const result = spawnSync(command, args, {
     cwd: options.cwd,
@@ -62,6 +83,8 @@ export function runCommand(command, args, options = {}) {
     encoding: capture ? 'utf8' : undefined,
     stdio: capture ? 'pipe' : 'inherit',
     maxBuffer: capture ? 20 * 1024 * 1024 : undefined,
+    timeout: timeoutMs,
+    killSignal,
   });
 
   if (result.error) throw result.error;

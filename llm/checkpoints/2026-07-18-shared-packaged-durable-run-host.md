@@ -126,7 +126,7 @@ to a clean directory, supplies LMDB control/application roots, removes Node from
 `PATH`, and invokes:
 
 ```text
-<app> wharfie run --activity persist-once \
+<app> wharfie activity run --activity persist-once \
   --idempotency-key packaged-durable-managed-effect \
   --input <json> --caller-metadata <json> --json
 ```

@@ -100,6 +100,7 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('worker');
     expect(help).toContain('list');
     expect(help).toContain('output');
+    expect(help).toContain('coordinator');
     expect(help).toContain('inspect');
     expect(help).toContain('recover');
     expect(help).toContain('reconcile');
@@ -194,6 +195,55 @@ describe('packaged application dispatch', () => {
     expect(secondManifest?.description()).toBe(
       'Print the packaged Wharfie app manifest for this artifact',
     );
+  });
+
+  it('mounts coordinator inspection and takeover with only source app selection', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    const { createSourceOpsCommand } = await import(SOURCE_OPS_CLI_IMPORT);
+    const sourceCoordinator = createSourceOpsCommand().commands.find(
+      (/** @type {import('commander').Command} */ command) =>
+        command.name() === 'coordinator',
+    );
+    const packagedCoordinator = createProgram().commands.find(
+      (/** @type {import('commander').Command} */ command) =>
+        command.name() === 'coordinator',
+    );
+
+    expect(sourceCoordinator).toBeDefined();
+    expect(packagedCoordinator).toBeDefined();
+    expect(packagedCoordinator?.description()).toBe(
+      sourceCoordinator?.description(),
+    );
+    expect(
+      sourceCoordinator?.commands.map(
+        (/** @type {import('commander').Command} */ command) => command.name(),
+      ),
+    ).toEqual(['inspect', 'takeover']);
+    expect(
+      packagedCoordinator?.commands.map(
+        (/** @type {import('commander').Command} */ command) => command.name(),
+      ),
+    ).toEqual(['inspect', 'takeover']);
+    for (const commandName of ['inspect', 'takeover']) {
+      const sourceLeaf = sourceCoordinator?.commands.find(
+        (/** @type {import('commander').Command} */ command) =>
+          command.name() === commandName,
+      );
+      const packagedLeaf = packagedCoordinator?.commands.find(
+        (/** @type {import('commander').Command} */ command) =>
+          command.name() === commandName,
+      );
+      expect(
+        sourceLeaf?.options.map(
+          (/** @type {import('commander').Option} */ option) => option.long,
+        ),
+      ).toContain('--app-id');
+      expect(
+        packagedLeaf?.options.map(
+          (/** @type {import('commander').Option} */ option) => option.long,
+        ),
+      ).not.toContain('--app-id');
+    }
   });
 
   it('forwards the packaged process seam to deployment command failures', async () => {

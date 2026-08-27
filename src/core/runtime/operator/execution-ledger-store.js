@@ -1,4 +1,8 @@
 import { createExecutionLedger } from '../../lib/db/tables/execution-ledger.js';
+import {
+  CoordinatorAuthorityStaleError,
+  createCoordinatorAuthority,
+} from '../../lib/db/tables/coordinator-authority.js';
 import { createLedgerServiceOwnership } from '../../lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../lib/payload-store/local.js';
 import {
@@ -116,10 +120,90 @@ export async function withExecutionLedger(handler, options = {}) {
 }
 
 /**
+ * Hold one explicit app-scoped coordinator authority while a caller uses an
+ * authority-bound view of an already-open execution ledger. A stale release
+ * after deliberate takeover is successful relinquishment from this process's
+ * perspective; every earlier or concurrent mutation was still fenced in the
+ * same durable transaction.
+ * @template T
+ * @param {{appId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, tableName: string, readOnly: boolean}, handler: (ledger: ExecutionLedgerStore, authority: import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot) => Promise<T>}} options - Authority-scoped operation.
+ * @returns {Promise<T>} - Handler result after graceful authority release.
+ */
+export async function withExecutionLedgerCoordinatorAuthority(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'withExecutionLedgerCoordinatorAuthority requires options.',
+    );
+  }
+  if (options.context?.readOnly) {
+    throw new Error(
+      'A read-only execution ledger cannot acquire coordinator authority.',
+    );
+  }
+  if (typeof options.ledger?.bindCoordinatorAuthority !== 'function') {
+    throw new TypeError(
+      'withExecutionLedgerCoordinatorAuthority requires a bindable execution ledger.',
+    );
+  }
+  if (typeof options.handler !== 'function') {
+    throw new TypeError(
+      'withExecutionLedgerCoordinatorAuthority.handler must be a function.',
+    );
+  }
+
+  const authorityStore = createCoordinatorAuthority({
+    db: options.context.db,
+    tableName: options.context.tableName,
+  });
+  const acquisition = await authorityStore.acquire({
+    appId: options.appId,
+    coordinatorId: options.coordinatorId,
+    requestId: `coordinator-authority:acquire:${options.coordinatorId}`,
+  });
+  const authority = acquisition.authority;
+
+  /** @type {T | undefined} */
+  let result;
+  /** @type {unknown} */
+  let handlerError;
+  let handlerFailed = false;
+  try {
+    const boundLedger = options.ledger.bindCoordinatorAuthority(authority);
+    result = await options.handler(boundLedger, authority);
+  } catch (error) {
+    handlerFailed = true;
+    handlerError = error;
+  }
+
+  /** @type {unknown} */
+  let releaseError;
+  try {
+    await authorityStore.release({
+      authority,
+      requestId: `coordinator-authority:release:${options.coordinatorId}`,
+    });
+  } catch (error) {
+    if (!(error instanceof CoordinatorAuthorityStaleError)) {
+      releaseError = error;
+    }
+  }
+  if (handlerFailed && releaseError !== undefined) {
+    throw new AggregateError(
+      [handlerError, releaseError],
+      'Coordinator-authoritative execution-ledger operation and authority release both failed.',
+    );
+  }
+  if (handlerFailed) throw handlerError;
+  if (releaseError !== undefined) throw releaseError;
+  return /** @type {T} */ (result);
+}
+
+/**
  * Hold the resident-service ownership fence while a local manual mutation
- * uses an LMDB-backed control volume. Other adapters retain the explicit
- * operator-confirmation contract until provider-backed coordinator ownership
- * exists; callers must not claim local exclusion for those adapters.
+ * uses an LMDB-backed control volume. Other adapters have no local exclusion
+ * here: callers must separately bind coordinator authority for transactional
+ * fencing and retain any required operator confirmations. That authority is
+ * not a provider lease or proof that physical work has stopped.
  * @template T
  * @param {{appId: string, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean}, handler: (localOwner?: Record<string, any>) => Promise<T>}} options - Ownership-scoped mutation.
  * @returns {Promise<T>} - Handler result.
