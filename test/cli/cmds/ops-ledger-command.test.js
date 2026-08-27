@@ -1194,11 +1194,19 @@ describe('ledger-native operator commands', () => {
     expect(retryEffectHelp.stdout).toContain('--successor-id');
     expect(retryEffectHelp.stdout).toContain('--confirm-runner-stopped');
 
-    const list = runCli(['ops', 'list'], env, repoRoot);
-    expect(list.status).toBe(1);
-    expect(list.stderr).toMatch(
-      /durable run history could not be read safely/i,
-    );
+    const list = runCli(['ops', 'list', '--json'], env, repoRoot);
+    expect(list.status).toBe(0);
+    expect(list.stderr).toBe('');
+    expect(JSON.parse(list.stdout)).toEqual({
+      schemaVersion: 1,
+      kind: 'wharfie.execution-ledger.run-page',
+      authority: 'none',
+      authoritative: false,
+      integrity: { verified: true },
+      scope: { appId: 'wharfie' },
+      items: [],
+      nextCursor: null,
+    });
 
     const cancel = runCli(
       ['ops', 'cancel', '--request-id', 'missing-run-id-request'],
