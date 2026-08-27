@@ -1150,7 +1150,7 @@ class SeaBuild extends BaseResource {
         },
         size: entryCodeBytes.length,
       };
-      await this.esbuild(tmpBuildDir, entryCode);
+      await this.esbuild(tmpBuildDir, entryCode, preparedBuildOptions.plugins);
       await this.prepareExternalBinaries();
 
       if (!existsSync(SeaBuild.BINARIES_DIR)) {
@@ -1312,8 +1312,9 @@ class SeaBuild extends BaseResource {
   /**
    * @param {string} buildDir - buildDir.
    * @param {string} [capturedEntryCode] - Exact entry code captured by build().
+   * @param {import('esbuild').Plugin[]} [providerBoundaryPlugins] - Provider boundary resolvers prepared with the entry.
    */
-  async esbuild(buildDir, capturedEntryCode) {
+  async esbuild(buildDir, capturedEntryCode, providerBoundaryPlugins = []) {
     const nodeVersion = this.assertNodeVersionCompatible();
     const outputPath = join(buildDir, 'esbundle.js');
     const entryCode =
@@ -1341,6 +1342,7 @@ class SeaBuild extends BaseResource {
       sourcemap: 'inline',
       target: `node${nodeVersion}`,
       logLevel: 'silent',
+      plugins: providerBoundaryPlugins,
       external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'lmdb'],
       alias: {
         [WHARFIE_PUBLIC_APP_SPECIFIER]: getWharfiePublicAppEntrypoint(),

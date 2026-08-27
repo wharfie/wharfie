@@ -15,6 +15,13 @@ const AWS_PROVIDER_BOUNDARY_MARKER_PREFIX =
   '/* wharfie:fixed-aws-provider-boundary:v1:';
 const AWS_PROVIDER_BOUNDARY_MARKER_PATTERN =
   /^\/\* wharfie:fixed-aws-provider-boundary:v1:(provider-free|embed-if-available):(sealed|embedded) \*\/$/u;
+const AWS_PROVIDER_RUNTIME_MODULE_PATH = path.join(
+  'src',
+  'core',
+  'runtime',
+  'aws-provider-module.js',
+);
+const fixedAwsProviderBoundaryPlugins = new WeakSet();
 export const AWS_PROVIDER_EMBEDDING_POLICY = Object.freeze({
   PROVIDER_FREE: 'provider-free',
   EMBED_IF_AVAILABLE: 'embed-if-available',
@@ -120,6 +127,54 @@ function resolveAwsProviderEmbedding(dependencies = {}) {
 }
 
 /**
+ * Collapse copied self-host runtime boundaries onto the exact module instance
+ * sealed or registered by the generated entry. Immutable application
+ * snapshots can contain byte-identical Wharfie sources at a different path;
+ * without this resolver esbuild treats that copy as independent module state
+ * and its provider loader remains able to perform a runtime import.
+ * @param {string} providerLoaderPath - Exact installed runtime boundary.
+ * @returns {import('esbuild').Plugin} - Fixed provider-module resolver.
+ */
+function createFixedAwsProviderBoundaryPlugin(providerLoaderPath) {
+  const canonicalProviderLoaderPath = path.resolve(providerLoaderPath);
+  const canonicalProviderLoaderBytes = readFileSync(
+    canonicalProviderLoaderPath,
+  );
+  /** @type {import('esbuild').Plugin} */
+  const plugin = {
+    name: 'wharfie-fixed-aws-provider-boundary',
+    setup(buildContext) {
+      buildContext.onResolve({ filter: /aws-provider-module\.js$/ }, (args) => {
+        if (args.namespace !== 'file') return null;
+        const resolutionBase = args.importer
+          ? path.dirname(args.importer)
+          : args.resolveDir;
+        if (!resolutionBase && !path.isAbsolute(args.path)) return null;
+        const candidate = path.resolve(resolutionBase || '', args.path);
+        if (
+          candidate !== canonicalProviderLoaderPath &&
+          !candidate.endsWith(`${path.sep}${AWS_PROVIDER_RUNTIME_MODULE_PATH}`)
+        ) {
+          return null;
+        }
+        if (candidate !== canonicalProviderLoaderPath) {
+          try {
+            if (!readFileSync(candidate).equals(canonicalProviderLoaderBytes)) {
+              return null;
+            }
+          } catch {
+            return null;
+          }
+        }
+        return { path: canonicalProviderLoaderPath };
+      });
+    },
+  };
+  fixedAwsProviderBoundaryPlugins.add(plugin);
+  return plugin;
+}
+
+/**
  * Add the fixed packaged-app provider boundary. The error boundary is present
  * in every generated app. The AWS SDK graph is added only when the caller
  * explicitly selects the outer-operator embedding policy and the one exact
@@ -149,7 +204,24 @@ async function withEmbeddedAwsProvider(args, dependencies = {}) {
           'AWS provider boundary was prepared with a conflicting policy.',
         );
       }
-      return args;
+      if (
+        (args.plugins || []).some((plugin) =>
+          fixedAwsProviderBoundaryPlugins.has(plugin),
+        )
+      ) {
+        return args;
+      }
+      const providerLoaderPath = (
+        dependencies.resolveProviderLoader ??
+        (() => require.resolve('../runtime/aws-provider-module.js'))
+      )();
+      return {
+        ...args,
+        plugins: [
+          createFixedAwsProviderBoundaryPlugin(providerLoaderPath),
+          ...(args.plugins || []),
+        ],
+      };
     }
   }
   if (
@@ -216,6 +288,10 @@ async function withEmbeddedAwsProvider(args, dependencies = {}) {
 
   return {
     ...args,
+    plugins: [
+      createFixedAwsProviderBoundaryPlugin(providerLoaderPath),
+      ...(args.plugins || []),
+    ],
     stdin: {
       ...args.stdin,
       contents: `${AWS_PROVIDER_BOUNDARY_MARKER_PREFIX}${embeddingPolicy}:${

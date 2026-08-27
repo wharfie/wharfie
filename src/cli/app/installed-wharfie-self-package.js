@@ -327,8 +327,7 @@ export async function packageInstalledWharfieCli(options, dependencies = {}) {
     {
       ...packageOptions,
       dir: validated.root,
-      awsProviderEmbeddingPolicy:
-        AWS_PROVIDER_EMBEDDING_POLICY.PROVIDER_FREE,
+      awsProviderEmbeddingPolicy: AWS_PROVIDER_EMBEDDING_POLICY.PROVIDER_FREE,
     },
     {
       dependencyLockPath: validated.lockPath,

@@ -799,6 +799,11 @@ describe('SeaBuild', () => {
       expect(esbuild).toHaveBeenCalledWith(
         expect.any(String),
         transformedEntry,
+        [
+          expect.objectContaining({
+            name: 'wharfie-fixed-aws-provider-boundary',
+          }),
+        ],
       );
       expect(evidence.entryCode).toEqual(evidenceFor(transformedEntry));
     } finally {

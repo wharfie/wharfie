@@ -2,7 +2,12 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it, jest } from '@jest/globals';
+import { spawnSync } from 'node:child_process';
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+
+import { build } from 'esbuild';
 
 import {
   AWS_PROVIDER_EMBEDDING_POLICY,
@@ -163,6 +168,24 @@ describe('AWS provider SEA embedding boundary', () => {
     expect(preparedAgain).toBe(prepared);
   });
 
+  it('reattaches the fixed resolver when prepared entry options are reconstructed', async () => {
+    const prepared = await withEmbeddedAwsProvider({
+      stdin: { contents: GENERATED_ENTRY, resolveDir: process.cwd() },
+    });
+    const reconstructed = { ...prepared, plugins: [] };
+
+    const repaired = await withEmbeddedAwsProvider(reconstructed);
+
+    expect(repaired).not.toBe(reconstructed);
+    expect(repaired.stdin).toBe(reconstructed.stdin);
+    expect(repaired.plugins).toEqual([
+      expect.objectContaining({
+        name: 'wharfie-fixed-aws-provider-boundary',
+      }),
+    ]);
+    expect(await withEmbeddedAwsProvider(repaired)).toBe(repaired);
+  });
+
   it('seals an outer operator when the explicitly optional companion is absent', async () => {
     const resolveProvider = jest.fn(() => undefined);
     const importProvider = jest.fn(async () => ({}));
@@ -205,6 +228,141 @@ describe('AWS provider SEA embedding boundary', () => {
     expect(prepared.stdin?.contents).not.toContain(
       'wharfieEmbeddedAwsProvider',
     );
+  });
+
+  it('seals a copied self-host runtime boundary in a provider-free bundle', async () => {
+    const root = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-provider-free-linux-bundle-'),
+    );
+    const snapshotProviderPath = path.join(
+      root,
+      'snapshot',
+      'src',
+      'core',
+      'runtime',
+      'aws-provider-module.js',
+    );
+    const snapshotVersionPath = path.join(
+      root,
+      'snapshot',
+      'src',
+      'core',
+      'lib',
+      'version.js',
+    );
+    const fakeProviderRoot = path.join(root, 'node_modules', '@wharfie', 'aws');
+    const providerImportMarker = path.join(root, 'provider-imported');
+    const bundlePath = path.join(root, 'provider-free-linux.cjs');
+    const authoredBoundaryPath = path.join(
+      root,
+      'authored',
+      'src',
+      'core',
+      'runtime',
+      'aws-provider-module.js',
+    );
+    try {
+      await Promise.all([
+        fsp.mkdir(path.dirname(snapshotProviderPath), { recursive: true }),
+        fsp.mkdir(path.dirname(snapshotVersionPath), { recursive: true }),
+        fsp.mkdir(fakeProviderRoot, { recursive: true }),
+        fsp.mkdir(path.dirname(authoredBoundaryPath), { recursive: true }),
+      ]);
+      await Promise.all([
+        fsp.copyFile(
+          path.resolve('src/core/runtime/aws-provider-module.js'),
+          snapshotProviderPath,
+        ),
+        fsp.copyFile(
+          path.resolve('src/core/lib/version.js'),
+          snapshotVersionPath,
+        ),
+        fsp.writeFile(
+          path.join(root, 'snapshot', 'package.json'),
+          `${JSON.stringify({ version: '0.0.15' })}\n`,
+        ),
+        fsp.writeFile(
+          path.join(root, 'operator.js'),
+          'export default async function operatorCli() {}\n',
+        ),
+        fsp.writeFile(
+          authoredBoundaryPath,
+          'export const authoredBoundary = "authored-boundary";\n',
+        ),
+        fsp.writeFile(
+          path.join(fakeProviderRoot, 'package.json'),
+          `${JSON.stringify({
+            name: '@wharfie/aws',
+            version: '0.0.15',
+            type: 'module',
+            exports: './index.js',
+          })}\n`,
+        ),
+        fsp.writeFile(
+          path.join(fakeProviderRoot, 'index.js'),
+          [
+            "import { writeFileSync } from 'node:fs';",
+            'writeFileSync(process.env.WHARFIE_PROVIDER_IMPORT_MARKER, "imported");',
+            'export const WHARFIE_AWS_PROVIDER_PACKAGE_VERSION = "0.0.15";',
+            'export const WHARFIE_AWS_PROVIDER_CONTRACT_VERSION = 1;',
+            'export const getAwsSdkBindings = () => Object.freeze({});',
+            '',
+          ].join('\n'),
+        ),
+      ]);
+      const prepared = await withEmbeddedAwsProvider({
+        stdin: {
+          contents: [
+            `import { requireAwsProvider } from ${JSON.stringify(snapshotProviderPath)};`,
+            `import { authoredBoundary } from ${JSON.stringify(authoredBoundaryPath)};`,
+            "import runtimeOperatorCli from './operator.js';",
+            'const ledgerServiceCmd = {};',
+            'async function runPackagedApp() {}',
+            '(async () => {',
+            '  await runPackagedApp({',
+            '    runtimeModules: {',
+            '      operatorCli: runtimeOperatorCli,',
+            "      'ledger-service': ledgerServiceCmd,",
+            '    },',
+            '  });',
+            '  if (authoredBoundary !== "authored-boundary") throw new Error("authored boundary was replaced");',
+            '  await requireAwsProvider();',
+            '})();',
+          ].join('\n'),
+          resolveDir: root,
+          sourcefile: 'index.js',
+        },
+      });
+      await build({
+        ...prepared,
+        bundle: true,
+        format: 'cjs',
+        logLevel: 'silent',
+        outfile: bundlePath,
+        platform: 'node',
+        target: 'node24.13.1',
+      });
+
+      const result = spawnSync(process.execPath, [bundlePath], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          WHARFIE_PROVIDER_IMPORT_MARKER: providerImportMarker,
+        },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(`${result.stdout}${result.stderr}`.trim()).toBe(
+        "AWS deployment support was not embedded. Install matching '@wharfie/aws@0.0.15' beside '@wharfie/wharfie@0.0.15' in the builder, rebuild the application, and retry.",
+      );
+      await expect(fsp.access(providerImportMarker)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await fsp.rm(root, { force: true, recursive: true });
+    }
   });
 
   it('rejects invalid and conflicting explicit policies', async () => {
