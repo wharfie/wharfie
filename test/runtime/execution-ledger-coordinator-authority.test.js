@@ -19,6 +19,7 @@ import {
 } from '../../src/core/lib/db/tables/execution-ledger.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
+import { createExecutionLedgerOperatorView } from '../../src/core/runtime/operator/execution-ledger-view.js';
 import {
   createMockedDynamoDB,
   createVanillaDB,
@@ -247,6 +248,20 @@ describe.each(adapterCases)(
 
       expect(ledger.getCoordinatorEpoch()).toBe(0);
       expect(ledger.getCoordinatorAuthority()).toBeUndefined();
+      const unboundRunId = `${RUN_ID}-unbound`;
+      await ledger.createManualRun({
+        ...runRequest(),
+        runId: unboundRunId,
+        transitionId: 'create-unbound-run',
+      });
+      await expect(ledger.getEvents(unboundRunId)).resolves.toEqual([
+        expect.objectContaining({
+          fence: { coordinatorEpoch: 0, invocationGeneration: 0 },
+          payload: expect.not.objectContaining({
+            coordinatorAuthority: expect.anything(),
+          }),
+        }),
+      ]);
       const bound = ledger.bindCoordinatorAuthority(acquired.authority);
       expect(bound.getCoordinatorEpoch()).toBe(1);
       expect(bound.getCoordinatorAuthority()).toEqual(
@@ -257,11 +272,53 @@ describe.each(adapterCases)(
         /cannot be rebound/i,
       );
 
+      const token = createCoordinatorAuthorityToken(acquired.authority);
       await expect(bound.createManualRun(runRequest())).resolves.toMatchObject({
         applied: true,
+        coordinatorAuthority: token,
         run: { appId: APP_ID, runId: RUN_ID },
       });
-      await takeover(environment.authority, acquired.authority);
+      await expect(bound.getEvents(RUN_ID)).resolves.toEqual([
+        expect.objectContaining({
+          type: 'manual-run-created',
+          fence: { coordinatorEpoch: 0, invocationGeneration: 0 },
+          payload: expect.objectContaining({ coordinatorAuthority: token }),
+        }),
+      ]);
+      const successor = await takeover(
+        environment.authority,
+        acquired.authority,
+      );
+      const successorLedger = ledgerFor(environment, successor.authority);
+      await expect(
+        successorLedger.createManualRun(runRequest()),
+      ).resolves.toMatchObject({
+        applied: false,
+        coordinatorAuthority: token,
+        run: { appId: APP_ID, runId: RUN_ID },
+      });
+      await expect(bound.createManualRun(runRequest())).resolves.toMatchObject({
+        applied: false,
+        coordinatorAuthority: token,
+      });
+      await expect(bound.getEvents(RUN_ID)).resolves.toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({ coordinatorAuthority: token }),
+        }),
+      ]);
+      const rebuilt = await successorLedger.rebuildRun(RUN_ID);
+      if (!rebuilt) throw new Error('Expected retained manual run.');
+      const operatorView = createExecutionLedgerOperatorView(rebuilt);
+      const serializedOperatorView = JSON.stringify(operatorView);
+      for (const privateValue of [
+        'coordinatorAuthority',
+        'authorityId',
+        'coordinatorId',
+        token.authorityId,
+        token.coordinatorId,
+      ]) {
+        expect(serializedOperatorView).not.toContain(privateValue);
+      }
       await expect(
         bound.createManualRun({
           ...runRequest(),

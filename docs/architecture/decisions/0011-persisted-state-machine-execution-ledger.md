@@ -1,6 +1,6 @@
 # 0011 — Persisted state-machine execution ledger
 
-**Status:** Accepted, amended 2026-08-01 · **Date:** 2026-07-17
+**Status:** Accepted, amended 2026-08-27 · **Date:** 2026-07-17
 
 ## Context
 
@@ -241,6 +241,23 @@ Timers and signals are ledger data rather than process-local callbacks.
 Wall-clock observations can determine when a timer becomes eligible, but event
 sequence and conditional transitions determine which firing or retry decision
 became authoritative.
+
+### Admission provenance
+
+As amended by
+[ADR 0036](0036-durable-coordinator-admission-provenance.md), a newly
+authority-bound manual run, workflow run, or managed-effect successor handoff
+retains the admitting coordinator's complete stable token in its creation
+event payload. Both events of the atomic successor handoff retain the same
+token. The version 10 admission fence remains at epoch zero because historical
+logical authorship is distinct from physical-attempt fencing.
+
+The token is not part of the semantic request digest. Exact retry after
+takeover returns the retained winner and its original authority instead of
+rewriting history or conflicting with unchanged work. Legacy and unbound
+events omit the token; absence is unknown provenance and is never synthesized
+from the current coordinator. Internal folds retain this evidence while the
+public operator history projection remains redacted.
 
 ### Cancellation, reconciliation, and compensation
 

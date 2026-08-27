@@ -1,6 +1,6 @@
 # 0033 — Explicit coordinator epoch authority
 
-**Status:** Accepted · **Date:** 2026-07-28
+**Status:** Accepted, amended 2026-08-27 · **Date:** 2026-07-28
 
 ## Context
 
@@ -263,6 +263,11 @@ crash-boundary proof establish those semantics.
   authority condition to the combined transaction; it must not add a second
   operation on that authority item. Exact retained replays are read-only and
   do not claim that their historical token is still current.
+- [ADR 0036](0036-durable-coordinator-admission-provenance.md) now retains that
+  stable token as bounded historical provenance on new manual, workflow,
+  scheduled-workflow, and managed-effect-successor admissions. Existing
+  version 10 admission fences remain at epoch zero. Legacy and unbound history
+  stays unattributed, and public operator history stays redacted.
 - Application-state mutations are locally fenced after destination adoption,
   separately from control-store takeover. Recovery-only catalogs remain
   mutation-free; writable reconciliation and successor-retry catalogs pin the

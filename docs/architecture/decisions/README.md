@@ -14,7 +14,7 @@ These records capture product-level decisions that should survive implementation
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md)                 | Accepted; profile V1 superseded by 0021            |
 | [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                                      | Accepted                                           |
 | [0010 — Versioned activity-attempt protocol](0010-versioned-activity-attempt-protocol.md)                                  | Accepted                                           |
-| [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)                        | Accepted; amended 2026-08-01                       |
+| [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)                        | Accepted; amended 2026-08-27                       |
 | [0012 — No manifest resource injection](0012-no-manifest-resource-injection.md)                                            | Accepted                                           |
 | [0013 — Durable cancellation and evidence-backed reconciliation](0013-durable-cancellation-and-evidence-reconciliation.md) | Accepted; V4 slice carried forward by 0014         |
 | [0014 — Verifier-backed persisted managed effects](0014-verifier-backed-managed-effects.md)                                | Accepted; internal V5 foundation implemented       |
@@ -29,15 +29,16 @@ These records capture product-level decisions that should survive implementation
 | [0023 — Verified sensitive activity-log disclosure](0023-sensitive-activity-log-disclosure.md)                             | Accepted                                           |
 | [0024 — Revision-bound workflow schedules](0024-revision-bound-workflow-schedules.md)                                      | Accepted; pending admission superseded by 0025     |
 | [0025 — Atomic scheduled-workflow admission](0025-atomic-scheduled-workflow-admission.md)                                  | Accepted; internal kernel carried forward by 0026  |
-| [0026 — Resident revision-bound workflow schedules](0026-resident-workflow-schedules.md)                                   | Accepted; manifest V3 superseded by 0032           |
+| [0026 — Resident revision-bound workflow schedules](0026-resident-workflow-schedules.md)                                   | Accepted; amended 2026-08-27                       |
 | [0027 — Relocated SEA schedule/restart proof](0027-relocated-sea-schedule-restart-proof.md)                                | Accepted; Linux execution evidence remains pending |
 | [0028 — Versioned durable-operation receipts](0028-versioned-durable-operation-receipts.md)                                | Accepted                                           |
 | [0029 — Explicit bounded local release pruning](0029-local-release-pruning.md)                                             | Accepted                                           |
 | [0030 — Versioned application-package receipt](0030-versioned-application-package-receipt.md)                              | Accepted; amended 2026-08-01                       |
 | [0031 — Verified sensitive durable run-output disclosure](0031-verified-sensitive-run-output.md)                           | Accepted                                           |
 | [0032 — Default durable CLI handoff](0032-default-durable-cli-handoff.md)                                                  | Accepted; replaces strict V3 with executable V4    |
-| [0033 — Explicit coordinator epoch authority](0033-explicit-coordinator-epoch-authority.md)                                | Accepted; bounded precursor to automatic recovery  |
+| [0033 — Explicit coordinator epoch authority](0033-explicit-coordinator-epoch-authority.md)                                | Accepted; amended 2026-08-27                       |
 | [0034 — Explicit local application-data purge](0034-explicit-local-application-data-purge.md)                              | Accepted; bounded developer-preview cleanup        |
 | [0035 — Two-provider single-node self-deployment](0035-two-provider-single-node-self-deployment.md)                        | Accepted                                           |
+| [0036 — Durable coordinator admission provenance](0036-durable-coordinator-admission-provenance.md)                        | Accepted; bounded historical attribution           |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

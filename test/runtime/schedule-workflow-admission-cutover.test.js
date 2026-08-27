@@ -10,8 +10,12 @@ import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
 import {
   CoordinatorAuthorityStaleError,
   createCoordinatorAuthority,
+  createCoordinatorAuthorityToken,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
-import { createExecutionLedger } from '../../src/core/lib/db/tables/execution-ledger.js';
+import {
+  ExecutionLedgerProjectionError,
+  createExecutionLedger,
+} from '../../src/core/lib/db/tables/execution-ledger.js';
 import {
   LocalApplicationActivationAction,
   LocalApplicationActivationDestination,
@@ -34,6 +38,7 @@ import {
   createWorkflowRunId,
 } from '../../src/core/lib/ledger/workflow-execution-contract.js';
 import { inspectLocalApplicationQuiescence } from '../../src/core/runtime/services/local-application-quiescence.js';
+import { createExecutionLedgerOperatorView } from '../../src/core/runtime/operator/execution-ledger-view.js';
 
 /** @typedef {import('../../src/core/lib/db/base.js').DBClient} DBClient */
 
@@ -180,7 +185,7 @@ async function prepareScheduledRun(schedule, owner) {
     workflowId: WORKFLOW_ID,
     definition,
   });
-  const scheduleAdmission = await schedule.prepareWorkflowAdmission({
+  const scheduleAdmissionInput = {
     expectedCursor: activated.cursor,
     scheduledAt: SCHEDULED_AT,
     throughInclusive: SCHEDULED_AT,
@@ -191,11 +196,15 @@ async function prepareScheduledRun(schedule, owner) {
     cause,
     owner,
     observedAt: SCHEDULED_AT,
-  });
+  };
+  const scheduleAdmission = await schedule.prepareWorkflowAdmission(
+    scheduleAdmissionInput,
+  );
   return {
     activated,
     cause,
     runId,
+    scheduleAdmissionInput,
     request: {
       runId,
       appId: APP_ID,
@@ -275,8 +284,41 @@ describe('scheduled workflow activation cutover', () => {
           payloadStore: harness.payloadStore,
           coordinatorAuthority: first.authority,
         });
+        const token = createCoordinatorAuthorityToken(first.authority);
         if (mode === 'replay') {
-          await ledger.createWorkflowRun(prepared.request);
+          await expect(
+            ledger.createWorkflowRun(prepared.request),
+          ).resolves.toMatchObject({
+            applied: true,
+            coordinatorAuthority: token,
+          });
+          await expect(
+            boundSchedule.getOccurrence({
+              occurrenceId: prepared.cause.occurrenceId,
+            }),
+          ).resolves.toMatchObject({ coordinatorAuthority: token });
+          await expect(ledger.getEvents(prepared.runId)).resolves.toEqual([
+            expect.objectContaining({
+              type: 'workflow-run-created',
+              fence: { coordinatorEpoch: 0, invocationGeneration: 0 },
+              payload: expect.objectContaining({
+                coordinatorAuthority: token,
+              }),
+            }),
+          ]);
+          const rebuilt = await ledger.rebuildRun(prepared.runId);
+          if (!rebuilt) throw new Error('Expected retained workflow run.');
+          const operatorView = createExecutionLedgerOperatorView(rebuilt);
+          const serializedOperatorView = JSON.stringify(operatorView);
+          for (const privateValue of [
+            'coordinatorAuthority',
+            'authorityId',
+            'coordinatorId',
+            token.authorityId,
+            token.coordinatorId,
+          ]) {
+            expect(serializedOperatorView).not.toContain(privateValue);
+          }
         }
         const successor = await authority.takeover({
           appId: APP_ID,
@@ -308,12 +350,34 @@ describe('scheduled workflow activation cutover', () => {
             ledger.createWorkflowRun(prepared.request),
           ).resolves.toMatchObject({
             applied: false,
+            coordinatorAuthority: token,
             run: { runId: prepared.runId },
           });
           expect(transactions).not.toHaveBeenCalled();
           await expect(ledger.getEvents(prepared.runId)).resolves.toHaveLength(
             1,
           );
+          const successorSchedule = createScheduleControl({
+            db: harness.db,
+            tableName: TABLE_NAME,
+            coordinatorAuthority: successor.authority,
+          });
+          const successorAdmission =
+            await successorSchedule.prepareWorkflowAdmission({
+              ...prepared.scheduleAdmissionInput,
+              observedAt: SCHEDULED_AT + 2,
+            });
+          await expect(
+            successorLedger.createWorkflowRun({
+              ...prepared.request,
+              scheduleAdmission: successorAdmission,
+            }),
+          ).resolves.toMatchObject({
+            applied: false,
+            coordinatorAuthority: token,
+            run: { runId: prepared.runId },
+          });
+          expect(transactions).not.toHaveBeenCalled();
         } else {
           await expect(
             ledger.createWorkflowRun(prepared.request),
@@ -337,6 +401,77 @@ describe('scheduled workflow activation cutover', () => {
       }
     },
   );
+
+  test('rejects a scheduled workflow whose occurrence and creation retain different authorities', async () => {
+    const harness = createHarness();
+    const transactions = jest.spyOn(harness.db, 'transactionWrite');
+    try {
+      const owner = await claimResident(harness.db);
+      const authority = createCoordinatorAuthority({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const first = await authority.acquire({
+        appId: APP_ID,
+        coordinatorId: 'schedule-coordinator-a',
+        requestId: 'acquire-schedule-coordinator-a',
+        observedAt: 10,
+      });
+      const schedule = createScheduleControl({
+        db: harness.db,
+        tableName: TABLE_NAME,
+        coordinatorAuthority: first.authority,
+      });
+      const prepared = await prepareScheduledRun(schedule, owner);
+      const ledger = createExecutionLedger({
+        db: harness.db,
+        tableName: TABLE_NAME,
+        payloadStore: harness.payloadStore,
+        coordinatorAuthority: first.authority,
+      });
+      await ledger.createWorkflowRun(prepared.request);
+      const occurrenceWrite = transactions.mock.calls
+        .flatMap((/** @type {any[]} */ [params]) => params.putRequests ?? [])
+        .find(
+          (/** @type {Record<string, any>} */ { record }) =>
+            record.record_kind === 'schedule-occurrence',
+        );
+      if (!occurrenceWrite) {
+        throw new Error('Expected the atomic schedule occurrence write.');
+      }
+      const successor = await authority.takeover({
+        appId: APP_ID,
+        coordinatorId: 'schedule-coordinator-b',
+        requestId: 'replace-schedule-coordinator-a',
+        observedAuthority: first.authority,
+        confirmAuthorityReplacement: true,
+        observedAt: SCHEDULED_AT + 1,
+      });
+      await harness.db.update({
+        tableName: TABLE_NAME,
+        keyName: 'run_id',
+        keyValue: occurrenceWrite.record.run_id,
+        sortKeyName: 'sort_key',
+        sortKeyValue: occurrenceWrite.record.sort_key,
+        updates: [
+          {
+            property: ['coordinator_authority'],
+            propertyValue: createCoordinatorAuthorityToken(successor.authority),
+          },
+        ],
+      });
+
+      await expect(
+        ledger.createWorkflowRun(prepared.request),
+      ).rejects.toMatchObject({
+        name: ExecutionLedgerProjectionError.name,
+        reason: 'scheduled workflow admission coordinator authority mismatch',
+      });
+    } finally {
+      transactions.mockRestore();
+      await harness.cleanup();
+    }
+  });
 
   test('coordinator takeover fences the combined occurrence and workflow transaction atomically', async () => {
     const harness = createHarness();

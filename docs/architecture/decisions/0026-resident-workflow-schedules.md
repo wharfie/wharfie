@@ -1,6 +1,6 @@
 # 0026 — Resident revision-bound workflow schedules
 
-**Status:** Accepted · **Date:** 2026-07-27
+**Status:** Accepted, amended 2026-08-27 · **Date:** 2026-07-27
 
 ## Context
 
@@ -88,6 +88,15 @@ An occurrence and workflow run already committed before activation cutover
 remain an exact replay after the revision enters `QUIESCING`; they were admitted
 at the earlier atomic linearization point. An uncommitted admission loses the
 activation fence and creates neither projection nor cursor progress.
+
+As amended by
+[ADR 0036](0036-durable-coordinator-admission-provenance.md), an
+authority-bound occurrence uses strict occurrence schema version 2 and retains
+the same stable coordinator token as its atomically created workflow event.
+Fresh-coordinator replay preserves that original token. Schema version 1 is
+the exact legacy/unbound shape; absence is not attributed to a later
+coordinator. A missing, malformed, application-mismatched, or cross-record
+disagreeing token fails closed.
 
 ### Observer failure is resident failure
 

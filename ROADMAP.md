@@ -279,22 +279,25 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
 
 ### Work next
 
-1. Decide whether durable admission and scheduling history need new
-   coordinator provenance. Current v10 admission epochs remain zero; the
-   transaction fence protects writes without inventing historical provenance.
-2. Define and implement a provider-certified semantic lease primitive with
+Durable coordinator admission provenance is now decided and implemented by
+[ADR 0036](docs/architecture/decisions/0036-durable-coordinator-admission-provenance.md).
+New bound manual, workflow, scheduled-workflow, and managed-effect-successor
+admissions retain their stable authority token; legacy and unbound history
+remains explicitly unattributed. Version 10 admission epochs remain zero.
+
+1. Define and implement a provider-certified semantic lease primitive with
    store-authoritative time and an atomic expiry predicate. Do not build
    automatic takeover from caller timestamps or diagnostic heartbeat age.
-3. Use that primitive to add renewable authority and automatic epoch takeover
+2. Use that primitive to add renewable authority and automatic epoch takeover
    without weakening the explicit same-table fence.
-4. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
+3. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
    replacement. Reassign only work whose replay contract permits it.
-5. Add deterministic crash tests at lease acquisition, assignment, activity
+4. Add deterministic crash tests at lease acquisition, assignment, activity
    start, managed-effect settlement, and terminal commit.
-6. Keep the mesh trusted and explicit: enroll nodes, authorize the application
+5. Keep the mesh trusted and explicit: enroll nodes, authorize the application
    revisions each may run, advertise finite capabilities, place work only on a
    matching node, and fence every node lease.
-7. After the local model is small and proved, run one two-node trusted recovery
+6. After the local model is small and proved, run one two-node trusted recovery
    proof. Multi-active scheduling is not required.
 
 ### Exit evidence
@@ -454,9 +457,11 @@ bounded local runtime, direct operator, and resident scheduling adoption are
 complete. Application state now has its own destination-local barrier and
 ordered, resumable adoption before READY, with actual partial-handoff process
 kills and explicit single-host crash/reboot recovery proved. Admission
-provenance, provider-certified leases, reconstruction, and multi-node
-replacement are the active Outcome 2 work; cross-store atomicity and arbitrary
-destination sets remain outside the supported primary-store protocol.
+provenance is now retained for new bound logical admissions without changing
+version 10 attempt fencing or public history. Provider-certified leases,
+reconstruction, and multi-node replacement are the active Outcome 2 work;
+cross-store atomicity and arbitrary destination sets remain outside the
+supported primary-store protocol.
 Outcome 3 has a bounded
 two-provider lifecycle proof, while its complete redacted acceptance harness,
 retained-data capability, and journal epoch rollover remain open.
