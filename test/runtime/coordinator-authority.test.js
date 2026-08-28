@@ -10,10 +10,13 @@ import {
   COORDINATOR_AUTHORITY_ID_DOMAIN,
   COORDINATOR_AUTHORITY_ID_PREFIX,
   COORDINATOR_AUTHORITY_RECORD_KIND,
+  COORDINATOR_AUTHORITY_REQUEST_SORT_KEY_PREFIX,
   COORDINATOR_AUTHORITY_SCHEMA_VERSION,
   COORDINATOR_AUTHORITY_SORT_KEY,
   CoordinatorAuthorityConflictError,
   CoordinatorAuthorityEpochOverflowError,
+  CoordinatorAuthorityRecordVersionOverflowError,
+  CoordinatorAuthorityRenewalUnknownError,
   CoordinatorAuthorityRequestConflictError,
   CoordinatorAuthorityStaleError,
   CoordinatorAuthorityStatus,
@@ -24,6 +27,7 @@ import {
   getCoordinatorAuthorityPartitionKey,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import { CONDITION_TYPE } from '../../src/core/lib/db/base.js';
+import { encodeLedgerKeySegment } from '../../src/core/lib/ledger/record-key.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
   createMockedDynamoDB,
@@ -206,6 +210,159 @@ describe.each(adapterCases)(
       await expect(store.get({ appId: APP_ID })).resolves.toEqual(
         reacquired.authority,
       );
+    });
+
+    test('renews an exact record version without retaining a request receipt', async () => {
+      const db = await createAdapter(adapterCase);
+      const store = createCoordinatorAuthority({ db, tableName: TABLE_NAME });
+      const acquired = await store.acquire(acquireInput());
+      const token = createCoordinatorAuthorityToken(acquired.authority);
+
+      const request = {
+        observedAuthority: acquired.authority,
+        requestId: 'renew-a',
+        observedAt: 20,
+      };
+      const renewed = await store.renewRecordVersion(request);
+
+      expect(renewed).toMatchObject({
+        applied: true,
+        authority: {
+          ...token,
+          status: CoordinatorAuthorityStatus.ACTIVE,
+          recordVersion: 2,
+          heartbeatAt: 20,
+          updatedAt: 20,
+          lastRequestId: 'renew-a',
+        },
+      });
+      expect(Object.keys(renewed).sort()).toEqual(['applied', 'authority']);
+      expect(createCoordinatorAuthorityFence(renewed.authority)).toEqual(
+        createCoordinatorAuthorityFence(acquired.authority),
+      );
+      await expect(
+        db.get({
+          tableName: TABLE_NAME,
+          keyName: 'run_id',
+          keyValue: getCoordinatorAuthorityPartitionKey(APP_ID),
+          sortKeyName: 'sort_key',
+          sortKeyValue: `${COORDINATOR_AUTHORITY_REQUEST_SORT_KEY_PREFIX}${encodeLedgerKeySegment(
+            'renew-a',
+          )}`,
+          consistentRead: true,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(store.renewRecordVersion(request)).resolves.toEqual({
+        applied: false,
+        authority: renewed.authority,
+      });
+    });
+
+    test('fails an exact renewal closed when its response is lost before commit', async () => {
+      const db = await createAdapter(adapterCase);
+      const direct = createCoordinatorAuthority({ db, tableName: TABLE_NAME });
+      const acquired = await direct.acquire(acquireInput());
+      const failure = new Error(
+        'simulated renewal response loss before commit',
+      );
+      let failBeforeCommit = true;
+      const faulted = {
+        ...db,
+        async transactionWrite(
+          /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+        ) {
+          if (failBeforeCommit) {
+            failBeforeCommit = false;
+            throw failure;
+          }
+          await db.transactionWrite(params);
+        },
+      };
+      const store = createCoordinatorAuthority({
+        db: faulted,
+        tableName: TABLE_NAME,
+      });
+
+      const request = {
+        observedAuthority: acquired.authority,
+        requestId: 'renew-before-commit',
+        observedAt: 20,
+      };
+      await expect(store.renewRecordVersion(request)).rejects.toBeInstanceOf(
+        CoordinatorAuthorityRenewalUnknownError,
+      );
+      await expect(direct.get({ appId: APP_ID })).resolves.toEqual(
+        acquired.authority,
+      );
+      await expect(store.renewRecordVersion(request)).resolves.toMatchObject({
+        applied: true,
+        authority: { recordVersion: 2, lastRequestId: request.requestId },
+      });
+    });
+
+    test('reads back an exact renewal whose committed response is lost', async () => {
+      const db = await createAdapter(adapterCase);
+      const direct = createCoordinatorAuthority({ db, tableName: TABLE_NAME });
+      const acquired = await direct.acquire(acquireInput());
+      let loseResponse = true;
+      const faulted = {
+        ...db,
+        async transactionWrite(
+          /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+        ) {
+          await db.transactionWrite(params);
+          if (loseResponse) {
+            loseResponse = false;
+            throw new Error('simulated renewal response loss after commit');
+          }
+        },
+      };
+      const store = createCoordinatorAuthority({
+        db: faulted,
+        tableName: TABLE_NAME,
+      });
+
+      const renewed = await store.renewRecordVersion({
+        observedAuthority: acquired.authority,
+        requestId: 'renew-after-commit',
+        observedAt: 20,
+      });
+      expect(renewed).toMatchObject({
+        applied: true,
+        authority: {
+          recordVersion: 2,
+          lastRequestId: 'renew-after-commit',
+        },
+      });
+      await expect(direct.get({ appId: APP_ID })).resolves.toEqual(
+        renewed.authority,
+      );
+      await expect(
+        store.renewRecordVersion({
+          observedAuthority: acquired.authority,
+          requestId: 'renew-after-commit',
+          observedAt: 20,
+        }),
+      ).resolves.toEqual({ applied: false, authority: renewed.authority });
+    });
+
+    test('rejects a stale exact renewal after another renewal advances the RVN', async () => {
+      const db = await createAdapter(adapterCase);
+      const store = createCoordinatorAuthority({ db, tableName: TABLE_NAME });
+      const acquired = await store.acquire(acquireInput());
+      await store.renewRecordVersion({
+        observedAuthority: acquired.authority,
+        requestId: 'renew-winner',
+        observedAt: 20,
+      });
+
+      await expect(
+        store.renewRecordVersion({
+          observedAuthority: acquired.authority,
+          requestId: 'renew-stale',
+          observedAt: 21,
+        }),
+      ).rejects.toBeInstanceOf(CoordinatorAuthorityConflictError);
     });
 
     test('allows exactly one confirmed takeover and fences the predecessor', async () => {
@@ -448,6 +605,43 @@ describe.each(adapterCases)(
         }),
       ).rejects.toBeInstanceOf(CoordinatorAuthorityEpochOverflowError);
       await expect(store.get({ appId: APP_ID })).resolves.toEqual(observed);
+    });
+
+    test('fails closed before overflowing the monotonic record version', async () => {
+      const db = await createAdapter(adapterCase);
+      const store = createCoordinatorAuthority({ db, tableName: TABLE_NAME });
+      const acquired = await store.acquire(acquireInput());
+      const physical = await db.get({
+        tableName: TABLE_NAME,
+        keyName: 'run_id',
+        keyValue: getCoordinatorAuthorityPartitionKey(APP_ID),
+        sortKeyName: 'sort_key',
+        sortKeyValue: COORDINATOR_AUTHORITY_SORT_KEY,
+        consistentRead: true,
+      });
+      await db.put({
+        tableName: TABLE_NAME,
+        keyName: 'run_id',
+        sortKeyName: 'sort_key',
+        record: {
+          ...physical,
+          record_version: Number.MAX_SAFE_INTEGER,
+        },
+      });
+      const observed = await store.get({ appId: APP_ID });
+
+      await expect(
+        store.renewRecordVersion({
+          observedAuthority: observed,
+          requestId: 'renew-overflow',
+          observedAt: 20,
+        }),
+      ).rejects.toBeInstanceOf(CoordinatorAuthorityRecordVersionOverflowError);
+      await expect(store.get({ appId: APP_ID })).resolves.toEqual(observed);
+      expect(observed).toMatchObject({
+        authorityId: acquired.authority.authorityId,
+        recordVersion: Number.MAX_SAFE_INTEGER,
+      });
     });
   },
 );

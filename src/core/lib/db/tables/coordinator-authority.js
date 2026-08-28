@@ -83,6 +83,7 @@ export const COORDINATOR_AUTHORITY_MAX_RECORD_BYTES = 32 * 1024;
  * @typedef {Readonly<{
  *   get: (input: {appId: string}) => Promise<CoordinatorAuthoritySnapshot | null>,
  *   acquire: (input: {appId: string, coordinatorId: string, requestId: string, observedAt?: number}) => Promise<CoordinatorAuthorityTransitionResult>,
+ *   renewRecordVersion: (input: {observedAuthority: unknown, requestId: string, observedAt: number}) => Promise<{applied: boolean, authority: CoordinatorAuthoritySnapshot}>,
  *   heartbeat: (input: {authority: unknown, requestId: string, observedAt?: number}) => Promise<CoordinatorAuthorityTransitionResult>,
  *   release: (input: {authority: unknown, requestId: string, observedAt?: number}) => Promise<CoordinatorAuthorityTransitionResult>,
  *   takeover: (input: {appId: string, coordinatorId: string, requestId: string, observedAuthority: unknown, confirmAuthorityReplacement: boolean, observedAt?: number}) => Promise<CoordinatorAuthorityTransitionResult>,
@@ -223,6 +224,40 @@ export class CoordinatorAuthorityEpochOverflowError extends Error {
     this.name = 'CoordinatorAuthorityEpochOverflowError';
     this.code = 'WHARFIE_COORDINATOR_AUTHORITY_EPOCH_OVERFLOW';
     this.appId = appId;
+  }
+}
+
+/** The monotonic renewal version cannot advance safely. */
+export class CoordinatorAuthorityRecordVersionOverflowError extends Error {
+  /** @param {string} appId - Application scope. */
+  constructor(appId) {
+    super(
+      `Coordinator authority record version cannot advance safely: ${appId}`,
+    );
+    this.name = 'CoordinatorAuthorityRecordVersionOverflowError';
+    this.code = 'WHARFIE_COORDINATOR_AUTHORITY_RECORD_VERSION_OVERFLOW';
+    this.appId = appId;
+  }
+}
+
+/** A receiptless renewal could not prove whether its exact CAS committed. */
+export class CoordinatorAuthorityRenewalUnknownError extends Error {
+  /**
+   * @param {string} appId - Application scope.
+   * @param {string} requestId - Exact retry identity.
+   * @param {{cause?: unknown}} [options] - Provider or readback failure.
+   */
+  constructor(appId, requestId, options = {}) {
+    super(
+      `Coordinator authority renewal outcome is unknown: ${appId}#${requestId}`,
+      {
+        ...(options.cause === undefined ? {} : { cause: options.cause }),
+      },
+    );
+    this.name = 'CoordinatorAuthorityRenewalUnknownError';
+    this.code = 'WHARFIE_COORDINATOR_AUTHORITY_RENEWAL_UNKNOWN';
+    this.appId = appId;
+    this.requestId = requestId;
   }
 }
 
@@ -1042,7 +1077,7 @@ export function createCoordinatorAuthority(options) {
         authorityId,
         epoch,
         status: CoordinatorAuthorityStatus.ACTIVE,
-        recordVersion: current ? current.recordVersion + 1 : 1,
+        recordVersion: current ? nextRecordVersion(current) : 1,
         acquisitionRequestId: requestId,
         acquiredAt: timestamp,
         heartbeatAt: timestamp,
@@ -1062,6 +1097,136 @@ export function createCoordinatorAuthority(options) {
   }
 
   /**
+   * Advance only the renewable record version under an exact ACTIVE snapshot
+   * CAS. Unlike a diagnostic heartbeat, this bounded primitive deliberately
+   * writes no permanent per-renewal receipt. An uncertain caller must retry
+   * this exact predecessor, request ID, and observedAt tuple.
+   * @param {{observedAuthority: unknown, requestId: string, observedAt: number}} input - Exact renewable predecessor and retry identity.
+   * @returns {Promise<{applied: boolean, authority: CoordinatorAuthoritySnapshot}>} - Exact renewal or retained retry result.
+   */
+  async function renewRecordVersion(input) {
+    const value = cloneBoundedJsonObject(
+      input,
+      COORDINATOR_AUTHORITY_MAX_RECORD_BYTES,
+      'coordinatorAuthority.renewRecordVersion',
+    );
+    const allowed = new Set(['observedAuthority', 'requestId', 'observedAt']);
+    if (
+      Object.keys(value).length !== allowed.size ||
+      Object.keys(value).some((key) => !allowed.has(key))
+    ) {
+      throw new TypeError(
+        'coordinatorAuthority.renewRecordVersion contains unsupported or missing fields.',
+      );
+    }
+    const observed = normalizeSnapshot(
+      value.observedAuthority,
+      'coordinatorAuthority.renewRecordVersion.observedAuthority',
+    );
+    if (observed.status !== CoordinatorAuthorityStatus.ACTIVE) {
+      throw new TypeError(
+        'coordinatorAuthority.renewRecordVersion requires an ACTIVE predecessor.',
+      );
+    }
+    const requestId = opaqueId(
+      value.requestId,
+      'coordinatorAuthority.renewRecordVersion.requestId',
+    );
+    const timestamp = nonnegativeInteger(
+      value.observedAt,
+      'coordinatorAuthority.renewRecordVersion.observedAt',
+    );
+    const next = normalizeSnapshot(
+      {
+        ...observed,
+        recordVersion: nextRecordVersion(observed),
+        heartbeatAt: Math.max(observed.heartbeatAt, timestamp),
+        updatedAt: Math.max(observed.updatedAt, timestamp),
+        lastRequestId: requestId,
+      },
+      'coordinator authority record-version renewal',
+    );
+
+    const current = await readAuthority(observed.appId);
+    if (current && sameSnapshot(current, next)) {
+      return { applied: false, authority: current };
+    }
+    if (!current || !sameSnapshot(current, observed)) {
+      if (
+        !current ||
+        current.status !== CoordinatorAuthorityStatus.ACTIVE ||
+        !sameAuthority(current, observed)
+      ) {
+        throw new CoordinatorAuthorityStaleError(observed.appId);
+      }
+      throw new CoordinatorAuthorityConflictError(
+        observed.appId,
+        'renewal predecessor record version is no longer current',
+      );
+    }
+
+    /** @type {unknown} */
+    let writeError;
+    try {
+      await db.transactionWrite({
+        tableName,
+        putRequests: [
+          {
+            keyName: KEY_NAME,
+            sortKeyName: SORT_KEY_NAME,
+            record: createAuthorityRecord(next),
+            conditions: exactRecordConditions(observed),
+          },
+        ],
+      });
+    } catch (error) {
+      writeError = error;
+    }
+    if (writeError === undefined) {
+      return { applied: true, authority: next };
+    }
+
+    /** @type {CoordinatorAuthoritySnapshot | null} */
+    let retained;
+    try {
+      retained = await readAuthority(observed.appId);
+    } catch (readbackError) {
+      throw new CoordinatorAuthorityRenewalUnknownError(
+        observed.appId,
+        requestId,
+        {
+          cause: new AggregateError(
+            [writeError, readbackError],
+            'Coordinator renewal write and strong readback both failed.',
+          ),
+        },
+      );
+    }
+    if (retained && sameSnapshot(retained, next)) {
+      return { applied: true, authority: retained };
+    }
+    if (retained && sameSnapshot(retained, observed)) {
+      throw new CoordinatorAuthorityRenewalUnknownError(
+        observed.appId,
+        requestId,
+        { cause: writeError },
+      );
+    }
+    if (
+      !retained ||
+      retained.status !== CoordinatorAuthorityStatus.ACTIVE ||
+      !sameAuthority(retained, observed)
+    ) {
+      throw new CoordinatorAuthorityStaleError(observed.appId);
+    }
+    throw new CoordinatorAuthorityConflictError(
+      observed.appId,
+      'another renewal advanced the record version',
+      { cause: writeError },
+    );
+  }
+
+  /**
    * @param {{authority: unknown, requestId: string, observedAt?: number}} input - Exact owner heartbeat.
    * @returns {Promise<CoordinatorAuthorityTransitionResult>} - Diagnostic heartbeat result.
    */
@@ -1071,7 +1236,7 @@ export function createCoordinatorAuthority(options) {
       CoordinatorAuthorityAction.HEARTBEAT,
       (current, timestamp, requestId) => ({
         ...current,
-        recordVersion: current.recordVersion + 1,
+        recordVersion: nextRecordVersion(current),
         heartbeatAt: Math.max(current.heartbeatAt, timestamp),
         updatedAt: Math.max(current.updatedAt, timestamp),
         lastRequestId: requestId,
@@ -1092,7 +1257,7 @@ export function createCoordinatorAuthority(options) {
         return {
           ...current,
           status: CoordinatorAuthorityStatus.RELEASED,
-          recordVersion: current.recordVersion + 1,
+          recordVersion: nextRecordVersion(current),
           releasedAt,
           updatedAt: Math.max(current.updatedAt, releasedAt),
           lastRequestId: requestId,
@@ -1280,7 +1445,7 @@ export function createCoordinatorAuthority(options) {
         }),
         epoch,
         status: CoordinatorAuthorityStatus.ACTIVE,
-        recordVersion: current.recordVersion + 1,
+        recordVersion: nextRecordVersion(current),
         acquisitionRequestId: requestId,
         acquiredAt: timestamp,
         heartbeatAt: timestamp,
@@ -1299,7 +1464,14 @@ export function createCoordinatorAuthority(options) {
     );
   }
 
-  return Object.freeze({ get, acquire, heartbeat, release, takeover });
+  return Object.freeze({
+    get,
+    acquire,
+    renewRecordVersion,
+    heartbeat,
+    release,
+    takeover,
+  });
 }
 
 /**
@@ -1330,6 +1502,17 @@ function nextEpoch(current) {
     throw new CoordinatorAuthorityEpochOverflowError(current.appId);
   }
   return current.epoch + 1;
+}
+
+/**
+ * @param {CoordinatorAuthoritySnapshot} current - Current snapshot.
+ * @returns {number} - Next renewable record version.
+ */
+function nextRecordVersion(current) {
+  if (current.recordVersion >= Number.MAX_SAFE_INTEGER) {
+    throw new CoordinatorAuthorityRecordVersionOverflowError(current.appId);
+  }
+  return current.recordVersion + 1;
 }
 
 /**

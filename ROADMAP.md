@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-26
+**Last updated:** 2026-08-28
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -40,6 +40,11 @@ The repository has substantial foundations:
   durable-activity paths, standalone mutating ledger operators, and resident
   schedule-control writes; source and packaged operators can inspect an exact
   predecessor and explicitly fence-and-release it for a fresh resident;
+- an accepted single-Region, non-global DynamoDB replacement profile in
+  [ADR 0037](docs/architecture/decisions/0037-single-region-dynamodb-rvn-coordinator-replacement.md):
+  receiptless exact RVN renewal, strong observation across a local monotonic
+  window, exact-CAS epoch takeover, and the existing same-transaction stable
+  tuple fence; deterministic races and a disposable-table provider proof pass;
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -100,7 +105,10 @@ The operator immediately releases its temporary successor so a fresh resident
 session can acquire normally. Standalone mutating ledger operators and resident
 schedule-control writes now share this fence. Application-state writes use a
 separate destination-local barrier; atomic handoff across the two stores and
-automatic takeover remain unsupported. A local resident now adopts its one
+automatic resident takeover remain unsupported. The accepted DynamoDB RVN
+profile now supplies a validated bounded path to automatic epoch replacement,
+but has no resident wiring, reconstruction, or multi-node recovery proof. A
+local resident now adopts its one
 configured, history-verified application-state destination before replacement
 readiness, with durable interrupted-handoff progress and exact publication
 fences. This does not prove recovery after loss of either volume.
@@ -270,8 +278,16 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   explicit takeover, then exact adopted readiness under a fresh coordinator.
   Both stores and one trusted control lineage survive; no volume-loss or
   automatic multi-node recovery is implied.
-- Heartbeats are diagnostic only. No code infers authority expiry from process
-  reachability, message silence, or a caller clock.
+- Heartbeat timestamps are diagnostic only. No code infers authority expiry
+  from process reachability, message silence, or a caller clock. A committed
+  heartbeat RVN advance does restart ADR 0037's exact-snapshot observation.
+- [ADR 0037](docs/architecture/decisions/0037-single-region-dynamodb-rvn-coordinator-replacement.md)
+  defines the first provider-specific automatic-replacement profile. It is
+  limited to one single-Region, non-global DynamoDB transaction domain. An
+  unchanged exact RVN across a local monotonic window is only a failure
+  detector; exact-CAS epoch takeover and the stable-tuple condition in every
+  protected transaction are the safety boundary. Implementation validation
+  and the live proof pass; resident wiring and reconstruction remain pending.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -285,29 +301,34 @@ New bound manual, workflow, scheduled-workflow, and managed-effect-successor
 admissions retain their stable authority token; legacy and unbound history
 remains explicitly unattributed. Version 10 admission epochs remain zero.
 
-1. Define and implement a provider-certified semantic lease primitive with
-   store-authoritative time and an atomic expiry predicate. Do not build
-   automatic takeover from caller timestamps or diagnostic heartbeat age.
-2. Use that primitive to add renewable authority and automatic epoch takeover
-   without weakening the explicit same-table fence.
-3. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
+ADR 0037's provider primitive, deterministic race matrix, and live disposable-
+table proof are complete. The proof retained exact topology, race, fencing,
+successor-commit, checksum, and cleanup evidence in the August 27 checkpoint.
+
+1. Wire renewal, observation, and takeover into the resident lifecycle without
+   weakening the explicit same-table fence. Treat local time only as
+   failure-detector policy: premature replacement may reduce availability but
+   must not admit stale DynamoDB commits.
+2. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
    replacement. Reassign only work whose replay contract permits it.
-4. Add deterministic crash tests at lease acquisition, assignment, activity
+3. Add deterministic crash tests at renewal, takeover, assignment, activity
    start, managed-effect settlement, and terminal commit.
-5. Keep the mesh trusted and explicit: enroll nodes, authorize the application
+4. Keep the mesh trusted and explicit: enroll nodes, authorize the application
    revisions each may run, advertise finite capabilities, place work only on a
    matching node, and fence every node lease.
-6. After the local model is small and proved, run one two-node trusted recovery
-   proof. Multi-active scheduling is not required.
+5. After the provider and reconstruction models are small and proved, run one
+   two-node trusted recovery proof. Multi-active scheduling is not required.
 
 ### Exit evidence
 
 Killing the coordinator at every durable boundary and starting a replacement
 never creates two authoritative terminal outcomes, never lets a stale epoch
 commit, never silently repeats unsafe work, and eventually resumes eligible
-work. Only enrolled trusted nodes can accept permitted revisions under current
-capability and lease authority. Loss of a worker or coordinator is visible and
-operable from the same packaged CLI.
+work. A deliberately premature DynamoDB suspicion may replace a live process,
+but its delayed fenced transaction is rejected after the exact epoch takeover.
+Only enrolled trusted nodes can accept permitted revisions under current
+capability and authority-renewal policy. Loss of a worker or coordinator is
+visible and operable from the same packaged CLI.
 
 ## Outcome 3: Wharfie can fulfill the narrow cloud substrate it needs
 
@@ -458,10 +479,11 @@ complete. Application state now has its own destination-local barrier and
 ordered, resumable adoption before READY, with actual partial-handoff process
 kills and explicit single-host crash/reboot recovery proved. Admission
 provenance is now retained for new bound logical admissions without changing
-version 10 attempt fencing or public history. Provider-certified leases,
-reconstruction, and multi-node replacement are the active Outcome 2 work;
-cross-store atomicity and arbitrary destination sets remain outside the
-supported primary-store protocol.
+version 10 attempt fencing or public history. ADR 0037 selects a bounded
+single-Region DynamoDB RVN replacement primitive; its validation and live
+proof pass. Resident wiring, reconstruction, and multi-node replacement are
+the active Outcome 2 work. Cross-store atomicity, multi-Region DynamoDB, and
+arbitrary destination sets remain outside the supported primary-store protocol.
 Outcome 3 has a bounded
 two-provider lifecycle proof, while its complete redacted acceptance harness,
 retained-data capability, and journal epoch rollover remain open.

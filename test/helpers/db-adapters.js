@@ -112,6 +112,7 @@ export const createFakeDocClient = ({ tableSchemas = {} } = {}) => {
     ),
   };
   const calls = { batchWrite: 0, transactWrite: 0 };
+  const getCalls = [];
   const queryCalls = [];
   const scriptedQueryResponses = [];
   let nextTransactionError;
@@ -231,6 +232,7 @@ export const createFakeDocClient = ({ tableSchemas = {} } = {}) => {
   return {
     __state: state,
     __calls: calls,
+    __getCalls: getCalls,
     __queryCalls: queryCalls,
     __failNextTransaction(error) {
       nextTransactionError = error;
@@ -248,7 +250,9 @@ export const createFakeDocClient = ({ tableSchemas = {} } = {}) => {
       return {};
     },
 
-    async get({ TableName, Key }) {
+    async get(request) {
+      getCalls.push(clone(request));
+      const { TableName, Key } = request;
       const table = ensureTable(TableName);
       learnSchema(TableName, Key);
       const item = findItem(table, Key);
