@@ -5879,7 +5879,7 @@ function createExpectedSeaSuccessorAuthorization(
  * abandoned attempt and permanently decided effect remain byte-identical.
  * @param {Record<string, any>} before - Source before authorization.
  * @param {Record<string, any>} after - Source after authorization.
- * @param {{successorId: string, sourceEffectId: string, actor: Record<string, any>, reason: string, revisionId: string}} expected - Exact causal authority.
+ * @param {{successorId: string, sourceEffectId: string, actor: Record<string, any>, coordinatorAuthority: Record<string, any>, reason: string, revisionId: string}} expected - Exact causal authority.
  * @returns {Record<string, any>} - Verified immutable authorization.
  */
 function assertSeaSuccessorSourceAuthorization(before, after, expected) {
@@ -5967,10 +5967,19 @@ function assertSeaSuccessorSourceAuthorization(before, after, expected) {
     authorization.target.destinationEffectId,
     sourceEffect.destinationEffectId,
   );
+  const coordinatorAuthority = {
+    schemaVersion: expected.coordinatorAuthority.schemaVersion,
+    appId: expected.coordinatorAuthority.appId,
+    coordinatorId: expected.coordinatorAuthority.coordinatorId,
+    authorityId: expected.coordinatorAuthority.authorityId,
+    epoch: expected.coordinatorAuthority.epoch,
+  };
+  assert.deepEqual(event.payload.coordinatorAuthority, coordinatorAuthority);
   assert.deepEqual(event.payload, {
     run: after.run,
     invocation: after.invocations[0],
     authorization,
+    coordinatorAuthority,
   });
   return authorization;
 }
@@ -6756,6 +6765,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
               successorId,
               sourceEffectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
               actor: packagedActor,
+              coordinatorAuthority: coordinatorAtBoundary,
               reason: retryReason,
               revisionId: options.revisionId,
             },
@@ -6955,16 +6965,14 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
                 SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT,
             },
           );
-          assert.equal(
-            seaCoordinatorHandoff.assertReleased({
-              artifactPath: options.artifactPath,
-              appId: options.appId,
-              cwd: caseRoot,
-              env: environment,
-              label: `${scenario.label} completed coordinator`,
-            }).epoch,
-            targetCoordinatorEpoch,
-          );
+          const completedCoordinator = seaCoordinatorHandoff.assertReleased({
+            artifactPath: options.artifactPath,
+            appId: options.appId,
+            cwd: caseRoot,
+            env: environment,
+            label: `${scenario.label} completed coordinator`,
+          });
+          assert.equal(completedCoordinator.epoch, targetCoordinatorEpoch);
           finalSource = await fixture.readRun(batch.runId);
           assert.ok(finalSource);
           if (!scenario.authorizationCommitted) {
@@ -6975,6 +6983,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
                 successorId,
                 sourceEffectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
                 actor: packagedActor,
+                coordinatorAuthority: completedCoordinator,
                 reason: retryReason,
                 revisionId: options.revisionId,
               },
