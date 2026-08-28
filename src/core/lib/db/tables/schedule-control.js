@@ -68,7 +68,7 @@ const CURSOR_STORAGE_KEYS = Object.freeze([
   'version',
   'updated_at',
 ]);
-const OCCURRENCE_STORAGE_KEYS = Object.freeze([
+const OCCURRENCE_STORAGE_KEYS_V1 = Object.freeze([
   KEY_NAME,
   SORT_KEY_NAME,
   'schema_version',
@@ -88,6 +88,10 @@ const OCCURRENCE_STORAGE_KEYS = Object.freeze([
   'skipped',
   'cause',
   'created_at',
+]);
+const OCCURRENCE_STORAGE_KEYS_V2 = Object.freeze([
+  ...OCCURRENCE_STORAGE_KEYS_V1,
+  'coordinator_authority',
 ]);
 const OWNER_KEYS = Object.freeze([
   'schemaVersion',
@@ -516,7 +520,22 @@ function occurrenceFromRecord(record) {
     RECORD_MAX_BYTES,
     'schedule occurrence record',
   );
-  assertExactKeys(raw, OCCURRENCE_STORAGE_KEYS, 'schedule occurrence record');
+  const schemaVersion = raw.schema_version;
+  if (schemaVersion === 1) {
+    assertExactKeys(
+      raw,
+      OCCURRENCE_STORAGE_KEYS_V1,
+      'schedule occurrence record',
+    );
+  } else if (schemaVersion === 2) {
+    assertExactKeys(
+      raw,
+      OCCURRENCE_STORAGE_KEYS_V2,
+      'schedule occurrence record',
+    );
+  } else {
+    throw new Error('Schedule occurrence record schema is invalid.');
+  }
   const expected = normalizeExpected({
     appId: raw.app_id,
     revisionId: raw.revision_id,
@@ -530,7 +549,6 @@ function occurrenceFromRecord(record) {
   if (
     raw[KEY_NAME] !== occurrencePartition(expected.cause.occurrenceId) ||
     raw[SORT_KEY_NAME] !== OCCURRENCE_SORT_KEY ||
-    raw.schema_version !== 1 ||
     raw.record_kind !== 'schedule-occurrence' ||
     raw.occurrence_id !== expected.cause.occurrenceId ||
     raw.scheduled_at !== expected.cause.scheduledAt
@@ -572,6 +590,21 @@ function occurrenceFromRecord(record) {
   if (createdAt < throughInclusive) {
     throw new Error('Schedule occurrence creation precedes its scan window.');
   }
+  const coordinatorAuthority =
+    schemaVersion === 2
+      ? assertCoordinatorAuthorityToken(
+          raw.coordinator_authority,
+          'schedule occurrence.coordinatorAuthority',
+        )
+      : undefined;
+  if (
+    coordinatorAuthority !== undefined &&
+    coordinatorAuthority.appId !== expected.appId
+  ) {
+    throw new Error(
+      'Schedule occurrence coordinator authority does not match its application.',
+    );
+  }
   return Object.freeze({
     ...expected,
     occurrenceId: expected.cause.occurrenceId,
@@ -581,15 +614,31 @@ function occurrenceFromRecord(record) {
     scannedMinuteCount,
     skipped,
     createdAt,
+    ...(coordinatorAuthority === undefined ? {} : { coordinatorAuthority }),
   });
 }
 
 /** @param {Readonly<Record<string, any>>} occurrence */
 function occurrenceRecord(occurrence) {
+  const coordinatorAuthority =
+    occurrence.coordinatorAuthority === undefined
+      ? undefined
+      : assertCoordinatorAuthorityToken(
+          occurrence.coordinatorAuthority,
+          'schedule occurrence.coordinatorAuthority',
+        );
+  if (
+    coordinatorAuthority !== undefined &&
+    coordinatorAuthority.appId !== occurrence.appId
+  ) {
+    throw new TypeError(
+      'schedule occurrence coordinatorAuthority must bind its appId.',
+    );
+  }
   return {
     [KEY_NAME]: occurrencePartition(occurrence.occurrenceId),
     [SORT_KEY_NAME]: OCCURRENCE_SORT_KEY,
-    schema_version: 1,
+    schema_version: coordinatorAuthority === undefined ? 1 : 2,
     record_kind: 'schedule-occurrence',
     app_id: occurrence.appId,
     schedule_id: occurrence.scheduleId,
@@ -606,6 +655,9 @@ function occurrenceRecord(occurrence) {
     skipped: occurrence.skipped,
     cause: occurrence.cause,
     created_at: occurrence.createdAt,
+    ...(coordinatorAuthority === undefined
+      ? {}
+      : { coordinator_authority: coordinatorAuthority }),
   };
 }
 
@@ -613,10 +665,32 @@ function occurrenceRecord(occurrence) {
 function sameOccurrenceRequest(left, right) {
   /** @param {Readonly<Record<string, any>>} value */
   const withoutCreatedAt = (value) => {
-    const { createdAt: _createdAt, ...identity } = value;
+    const {
+      createdAt: _createdAt,
+      coordinatorAuthority: _coordinatorAuthority,
+      ...identity
+    } = value;
     return identity;
   };
   return hasSameCanonicalJson(withoutCreatedAt(left), withoutCreatedAt(right));
+}
+
+/**
+ * Attach the exact authority that will fence a new combined admission. Legacy
+ * and unbound occurrences intentionally omit authorship instead of treating
+ * epoch zero or a later coordinator as historical provenance.
+ * @param {Readonly<Record<string, any>>} occurrence
+ * @param {import('./coordinator-authority.js').CoordinatorAuthorityToken | undefined} coordinatorAuthority
+ */
+function occurrenceWithCoordinatorAuthority(occurrence, coordinatorAuthority) {
+  const {
+    coordinatorAuthority: _retainedCoordinatorAuthority,
+    ...logicalOccurrence
+  } = occurrence;
+  return Object.freeze({
+    ...logicalOccurrence,
+    ...(coordinatorAuthority === undefined ? {} : { coordinatorAuthority }),
+  });
 }
 
 /** @param {unknown} prepared @param {unknown} expected @param {unknown} context */
@@ -665,7 +739,7 @@ function preparedMetadata(prepared, expected, context) {
       'prepared schedule workflow admission coordinator authority must match its consuming execution ledger.',
     );
   }
-  return metadata;
+  return { metadata, contextAuthority };
 }
 
 /**
@@ -682,14 +756,44 @@ export function resolvePreparedScheduleWorkflowAdmission(
   expected,
   context,
 ) {
-  const metadata = preparedMetadata(prepared, expected, context);
+  const { metadata, contextAuthority } = preparedMetadata(
+    prepared,
+    expected,
+    context,
+  );
+  const occurrence =
+    metadata.mode === 'create'
+      ? occurrenceWithCoordinatorAuthority(
+          metadata.occurrence,
+          contextAuthority,
+        )
+      : metadata.occurrence;
+  const occurrenceChanged = !hasSameCanonicalJson(
+    occurrence.coordinatorAuthority ?? null,
+    metadata.occurrence.coordinatorAuthority ?? null,
+  );
+  const putRequests =
+    metadata.mode === 'create' && occurrenceChanged
+      ? Object.freeze(
+          metadata.putRequests.map(
+            (/** @type {Record<string, any>} */ request) =>
+              request.record?.record_kind === 'schedule-occurrence'
+                ? deepFreeze({
+                    ...request,
+                    record: occurrenceRecord(occurrence),
+                  })
+                : request,
+          ),
+        )
+      : metadata.putRequests;
+  const retainedAuthority = occurrence.coordinatorAuthority;
   return Object.freeze({
     mode: metadata.mode,
-    ...(metadata.coordinatorAuthority === undefined
+    ...(retainedAuthority === undefined
       ? {}
-      : { coordinatorAuthority: metadata.coordinatorAuthority }),
+      : { coordinatorAuthority: retainedAuthority }),
     conditionChecks: metadata.conditionChecks,
-    putRequests: metadata.putRequests,
+    putRequests,
   });
 }
 
@@ -705,12 +809,12 @@ export async function reconcilePreparedScheduleWorkflowAdmission(
   expected,
   context,
 ) {
-  const metadata = preparedMetadata(prepared, expected, context);
+  const { metadata } = preparedMetadata(prepared, expected, context);
   const occurrence = await metadata.readOccurrence(
     metadata.expected.cause.occurrenceId,
   );
   if (!occurrence) return Object.freeze({ status: 'absent' });
-  if (!hasSameCanonicalJson(occurrence, metadata.occurrence)) {
+  if (!sameOccurrenceRequest(occurrence, metadata.occurrence)) {
     return Object.freeze({ status: 'conflict' });
   }
   return Object.freeze({ status: 'exact', occurrence });
@@ -1159,6 +1263,9 @@ export function createScheduleControl({
       scannedMinuteCount,
       skipped,
       createdAt: observedAt,
+      ...(resolvedCoordinatorAuthority === undefined
+        ? {}
+        : { coordinatorAuthority: resolvedCoordinatorAuthority }),
     });
     const current = await readOccurrence(cause.occurrenceId);
     let mode;

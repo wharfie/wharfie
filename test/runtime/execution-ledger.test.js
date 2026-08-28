@@ -3658,6 +3658,16 @@ for (const adapter of getAdapterMatrix()) {
           ledger.createManualRun(manualRun({ coordinatorEpoch: 1 })),
         ).rejects.toThrow(/coordinatorEpoch must be 0/);
         await expect(ledger.getRun(RUN_ID)).resolves.toBeNull();
+
+        await ledger.createManualRun(manualRun());
+        await expect(ledger.getEvents(RUN_ID)).resolves.toEqual([
+          expect.objectContaining({
+            fence: { coordinatorEpoch: 0, invocationGeneration: 0 },
+            payload: expect.not.objectContaining({
+              coordinatorAuthority: expect.anything(),
+            }),
+          }),
+        ]);
       } finally {
         await cleanup();
       }

@@ -3740,7 +3740,7 @@ function normalizeTransitionReceipt(value, runId) {
 /**
  * @param {Record<string, any>} event - Event being folded.
  * @param {string} runId - Expected run identity.
- * @returns {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, timer?: Record<string, any>, nextTimer?: Record<string, any>, signalWait?: Record<string, any>, nextSignalWait?: Record<string, any>, signalDelivery?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots. Wait-only events omit invocation at runtime and are handled before invocation-dependent folds.
+ * @returns {{run: Record<string, any>, invocation: Record<string, any>, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, timer?: Record<string, any>, nextTimer?: Record<string, any>, signalWait?: Record<string, any>, nextSignalWait?: Record<string, any>, signalDelivery?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots. Wait-only events omit invocation at runtime and are handled before invocation-dependent folds.
  */
 function eventSnapshots(event, runId) {
   const payload = cloneBoundedJsonObject(
@@ -3752,7 +3752,7 @@ function eventSnapshots(event, runId) {
     assertSnapshotKeys(
       payload,
       ['run', 'workflowCursor'],
-      ['invocation', 'timer', 'signalWait'],
+      ['invocation', 'timer', 'signalWait', 'coordinatorAuthority'],
       'event payload',
     );
   } else if (
@@ -3816,9 +3816,17 @@ function eventSnapshots(event, runId) {
     event.type === 'effect-successor-authorized' ||
     event.type === 'effect-successor-run-created'
   ) {
-    assertExactKeys(
+    assertSnapshotKeys(
       payload,
       ['run', 'invocation', 'authorization'],
+      ['coordinatorAuthority'],
+      'event payload',
+    );
+  } else if (event.type === 'manual-run-created') {
+    assertSnapshotKeys(
+      payload,
+      ['run', 'invocation'],
+      ['coordinatorAuthority'],
       'event payload',
     );
   } else if (event.type === 'manual-cancellation-requested') {
@@ -3859,21 +3867,32 @@ function eventSnapshots(event, runId) {
       'event payload',
     );
   } else {
-    assertExactKeys(
-      payload,
-      [
-        'manual-run-created',
-        'workflow-run-created',
-        'effect-successor-run-created',
-      ].includes(event.type)
-        ? ['run', 'invocation']
-        : ['run', 'invocation', 'attempt'],
-      'event payload',
-    );
+    assertExactKeys(payload, ['run', 'invocation', 'attempt'], 'event payload');
   }
   const run = normalizeRunSnapshot(payload.run, runId);
-  /** @type {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, timer?: Record<string, any>, nextTimer?: Record<string, any>, signalWait?: Record<string, any>, nextSignalWait?: Record<string, any>, signalDelivery?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
+  /** @type {{run: Record<string, any>, invocation: Record<string, any>, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, timer?: Record<string, any>, nextTimer?: Record<string, any>, signalWait?: Record<string, any>, nextSignalWait?: Record<string, any>, signalDelivery?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
   const result = /** @type {any} */ ({ run });
+  if (Object.prototype.hasOwnProperty.call(payload, 'coordinatorAuthority')) {
+    let authority;
+    try {
+      authority = assertCoordinatorAuthorityToken(
+        payload.coordinatorAuthority,
+        'event payload coordinatorAuthority',
+      );
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid admission coordinator authority',
+      );
+    }
+    if (authority.appId !== run.appId) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'admission coordinator authority application mismatch',
+      );
+    }
+    result.coordinatorAuthority = authority;
+  }
   if (Object.prototype.hasOwnProperty.call(payload, 'invocation')) {
     result.invocation = normalizeInvocationSnapshot(payload.invocation, runId);
   }
@@ -9665,7 +9684,7 @@ async function foldAndVerifyRun(
  * @param {boolean} applied - Whether this call appended the transition.
  * @param {Record<string, any> | undefined} effect - Current affected effect.
  * @param {Record<string, any>[] | undefined} effects - Current compound affected effects.
- * @returns {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, nextTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, signalDelivery?: Record<string, any>, outputRef?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} - Public transition view. Wait-only workflow transitions omit invocation at runtime.
+ * @returns {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, nextTimer?: Record<string, any>, nextSignalWait?: Record<string, any>, timer?: Record<string, any>, signalWait?: Record<string, any>, signalDelivery?: Record<string, any>, outputRef?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} - Public transition view. Wait-only workflow transitions omit invocation at runtime.
  */
 function transitionResult(
   state,
@@ -9699,6 +9718,25 @@ function transitionResult(
       ? { invocation: cloneJsonObject(invocation, 'invocation result') }
       : {}),
   };
+  if (receipt.type === 'manual-run-created') {
+    const event = state.events[receipt.sequence - 1];
+    if (!event || event.event_id !== receipt.event_id) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'manual admission result event is unavailable',
+      );
+    }
+    const authority = eventSnapshots(
+      event,
+      state.run.runId,
+    ).coordinatorAuthority;
+    if (authority) {
+      result.coordinatorAuthority = cloneJsonObject(
+        authority,
+        'manual admission coordinator authority result',
+      );
+    }
+  }
   if (receipt.type === 'workflow-signal-rejected') {
     const event = state.events[receipt.sequence - 1];
     if (!event || event.event_id !== receipt.event_id) {
@@ -11302,6 +11340,14 @@ export function createExecutionLedger({
           hasSameCanonicalJson(event.payload.authorization, authorization),
       );
       const targetEvent = target?.events[0];
+      const sourceAdmissionAuthority =
+        sourceEvent && source
+          ? eventSnapshots(sourceEvent, source.run.runId).coordinatorAuthority
+          : undefined;
+      const targetAdmissionAuthority =
+        targetEvent && target
+          ? eventSnapshots(targetEvent, target.run.runId).coordinatorAuthority
+          : undefined;
       if (
         !source ||
         !target ||
@@ -11313,6 +11359,10 @@ export function createExecutionLedger({
         !hasSameCanonicalJson(
           targetEvent.payload.authorization,
           authorization,
+        ) ||
+        !hasSameCanonicalJson(
+          sourceAdmissionAuthority ?? null,
+          targetAdmissionAuthority ?? null,
         ) ||
         !hasSameCanonicalJson(target.run.trigger, authorization)
       ) {
@@ -12537,7 +12587,7 @@ export function createExecutionLedger({
    * is its idempotency identity: identical requests return the retained run;
    * different work fails visibly rather than being silently deduplicated.
    * @param {{runId: string, appId: string, revisionId: string, invocationId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, trigger?: {kind: 'manual'}, transitionId: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Immutable run definition.
-   * @returns {Promise<{applied: boolean, receipt?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>}>} - Created or deduplicated run.
+   * @returns {Promise<{applied: boolean, receipt?: Record<string, any>, coordinatorAuthority?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>}>} - Created or deduplicated run.
    */
   async function createManualRun(options) {
     const value = cloneBoundedJsonObject(
@@ -12674,11 +12724,23 @@ export function createExecutionLedger({
           if (!(error instanceof ExecutionLedgerConflictError)) throw error;
         }
       }
+      const retainedCoordinatorAuthority = eventSnapshots(
+        existing.events[0],
+        runId,
+      ).coordinatorAuthority;
       return {
         applied: false,
         ...(receipt ? { receipt: cloneJsonObject(receipt, 'receipt') } : {}),
         run: cloneJsonObject(existing.run, 'run result'),
         invocation: cloneJsonObject(persistedInvocation, 'invocation result'),
+        ...(retainedCoordinatorAuthority
+          ? {
+              coordinatorAuthority: cloneJsonObject(
+                retainedCoordinatorAuthority,
+                'manual admission coordinator authority result',
+              ),
+            }
+          : {}),
       };
     }
 
@@ -12744,7 +12806,13 @@ export function createExecutionLedger({
       observedAt,
       actor,
       { coordinatorEpoch, invocationGeneration: 0 },
-      { run, invocation },
+      {
+        run,
+        invocation,
+        ...(resolvedCoordinatorAuthority === undefined
+          ? {}
+          : { coordinatorAuthority: resolvedCoordinatorAuthority }),
+      },
     );
 
     try {
@@ -12808,6 +12876,10 @@ export function createExecutionLedger({
               }
             }
           }
+          const retainedCoordinatorAuthority = eventSnapshots(
+            raced.events[0],
+            runId,
+          ).coordinatorAuthority;
           return {
             applied: false,
             ...(receipt
@@ -12818,6 +12890,14 @@ export function createExecutionLedger({
               persistedInvocation,
               'invocation result',
             ),
+            ...(retainedCoordinatorAuthority
+              ? {
+                  coordinatorAuthority: cloneJsonObject(
+                    retainedCoordinatorAuthority,
+                    'manual admission coordinator authority result',
+                  ),
+                }
+              : {}),
           };
         }
       }
@@ -12887,8 +12967,35 @@ export function createExecutionLedger({
           ...(creation.invocation ? { invocation: creation.invocation } : {}),
           ...(creation.timer ? { timer: creation.timer } : {}),
           ...(creation.signalWait ? { signalWait: creation.signalWait } : {}),
+          ...(creation.coordinatorAuthority
+            ? { coordinatorAuthority: creation.coordinatorAuthority }
+            : {}),
         }
       : undefined;
+  }
+
+  /**
+   * A scheduled occurrence and its workflow creation share one transaction and
+   * therefore one historical authority token. Legacy pairs omit both. A token
+   * on only one side is corrupt rather than evidence to be synthesized.
+   * @param {string} runId - Scheduled workflow run identity.
+   * @param {Record<string, any>} creation - Verified creation snapshots.
+   * @param {Record<string, any> | undefined} occurrence - Verified schedule occurrence.
+   * @returns {void}
+   */
+  function assertScheduledAdmissionAuthority(runId, creation, occurrence) {
+    if (
+      !occurrence ||
+      !hasSameCanonicalJson(
+        creation.coordinatorAuthority ?? null,
+        occurrence?.coordinatorAuthority ?? null,
+      )
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'scheduled workflow admission coordinator authority mismatch',
+      );
+    }
   }
 
   /**
@@ -12968,6 +13075,10 @@ export function createExecutionLedger({
         'workflow creation state is incomplete',
       );
     }
+    const coordinatorAuthority = eventSnapshots(
+      state.events[0],
+      state.run.runId,
+    ).coordinatorAuthority;
     return {
       applied,
       ...(receipt
@@ -12975,6 +13086,14 @@ export function createExecutionLedger({
         : {}),
       run: cloneJsonObject(state.run, 'workflow run result'),
       workflowCursor: cloneJsonObject(cursor, 'workflow cursor result'),
+      ...(coordinatorAuthority
+        ? {
+            coordinatorAuthority: cloneJsonObject(
+              coordinatorAuthority,
+              'workflow admission coordinator authority result',
+            ),
+          }
+        : {}),
       ...(invocation
         ? {
             invocation: cloneJsonObject(
@@ -13159,6 +13278,11 @@ export function createExecutionLedger({
         if (scheduleReconciliation.status !== 'exact') {
           throw new ExecutionLedgerRunConflictError(runId);
         }
+        assertScheduledAdmissionAuthority(
+          runId,
+          creation,
+          scheduleReconciliation.occurrence,
+        );
       }
       const requestDigest = createWorkflowRunRequestDigest({
         runId,
@@ -13351,6 +13475,9 @@ export function createExecutionLedger({
             putRequests: [...resolvedScheduleMutation.putRequests],
           }
         : undefined;
+    const admissionCoordinatorAuthority = cause
+      ? resolvedScheduleMutation?.coordinatorAuthority
+      : resolvedCoordinatorAuthority;
     const event = createEventRecord(
       runId,
       1,
@@ -13366,6 +13493,9 @@ export function createExecutionLedger({
         ...(invocation ? { invocation } : {}),
         ...(timer ? { timer } : {}),
         ...(signalWait ? { signalWait } : {}),
+        ...(admissionCoordinatorAuthority === undefined
+          ? {}
+          : { coordinatorAuthority: admissionCoordinatorAuthority }),
       },
     );
 
@@ -13418,6 +13548,13 @@ export function createExecutionLedger({
           raced.workflowCursor &&
           (!scheduleReconciliation || scheduleReconciliation.status === 'exact')
         ) {
+          if (scheduleReconciliation) {
+            assertScheduledAdmissionAuthority(
+              runId,
+              racedCreation,
+              scheduleReconciliation.occurrence,
+            );
+          }
           const racedRequestDigest = createWorkflowRunRequestDigest({
             runId,
             activation: workflowCreationActivationDigest(racedCreation),
@@ -13523,6 +13660,18 @@ export function createExecutionLedger({
       if (scheduleReconciliation.status !== 'exact') {
         throw new ExecutionLedgerRunConflictError(runId);
       }
+      const creation = await getMatchingWorkflowCreation(next, requested);
+      if (!creation) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'created scheduled workflow admission is unavailable',
+        );
+      }
+      assertScheduledAdmissionAuthority(
+        runId,
+        creation,
+        scheduleReconciliation.occurrence,
+      );
     }
     return workflowCreationResult(next, receipt, true);
   }
@@ -14158,7 +14307,7 @@ export function createExecutionLedger({
    * public successor ID and one source reconciliation policy slot are both
    * first-wins identities.
    * @param {{sourceRunId: string, sourceEffectId: string, successorId: string, reason: Record<string, any>, actor?: {kind: string, id: string}, observedAt?: number}} options - Stable successor request.
-   * @returns {Promise<{applied: boolean, authorization: Record<string, any>, sourceRun: Record<string, any>, sourceInvocation: Record<string, any>, targetRun: Record<string, any>, targetInvocation: Record<string, any>, request: Record<string, any>}>} - Atomic authorization and target state.
+   * @returns {Promise<{applied: boolean, authorization: Record<string, any>, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken, sourceRun: Record<string, any>, sourceInvocation: Record<string, any>, targetRun: Record<string, any>, targetInvocation: Record<string, any>, request: Record<string, any>}>} - Atomic authorization and target state.
    */
   async function authorizeManagedEffectSuccessorRetry(options) {
     const value = cloneBoundedJsonObject(
@@ -14314,7 +14463,7 @@ export function createExecutionLedger({
      * Return an exact existing atomic handoff, or fail when either the public
      * identity or causal slot already belongs to different work.
      * @param {Record<string, any>} current - Fresh verified source state.
-     * @returns {Promise<null | {applied: false, authorization: Record<string, any>, sourceRun: Record<string, any>, sourceInvocation: Record<string, any>, targetRun: Record<string, any>, targetInvocation: Record<string, any>, request: Record<string, any>} >} - Existing handoff when exact.
+     * @returns {Promise<null | {applied: false, authorization: Record<string, any>, coordinatorAuthority?: import('./coordinator-authority.js').CoordinatorAuthorityToken, sourceRun: Record<string, any>, sourceInvocation: Record<string, any>, targetRun: Record<string, any>, targetInvocation: Record<string, any>, request: Record<string, any>} >} - Existing handoff when exact.
      */
     const readExisting = async (current) => {
       const identity = await readSuccessorIdentityRecord(
@@ -14398,9 +14547,18 @@ export function createExecutionLedger({
           'authorized successor source invocation is unavailable',
         );
       }
+      const coordinatorAuthority = eventSnapshots(
+        slotEvent,
+        sourceRunId,
+      ).coordinatorAuthority;
       return {
         applied: false,
         authorization: retained,
+        ...(coordinatorAuthority
+          ? {
+              coordinatorAuthority,
+            }
+          : {}),
         sourceRun: cloneJsonObject(current.run, 'successor source run'),
         sourceInvocation: cloneJsonObject(
           durableSourceInvocation,
@@ -14493,6 +14651,9 @@ export function createExecutionLedger({
         run: nextSourceRun,
         invocation: nextSourceInvocation,
         authorization,
+        ...(resolvedCoordinatorAuthority === undefined
+          ? {}
+          : { coordinatorAuthority: resolvedCoordinatorAuthority }),
       },
     );
     const targetRun = {
@@ -14548,7 +14709,14 @@ export function createExecutionLedger({
       observedAt,
       actor,
       { coordinatorEpoch: 0, invocationGeneration: 0 },
-      { run: targetRun, invocation: targetInvocation, authorization },
+      {
+        run: targetRun,
+        invocation: targetInvocation,
+        authorization,
+        ...(resolvedCoordinatorAuthority === undefined
+          ? {}
+          : { coordinatorAuthority: resolvedCoordinatorAuthority }),
+      },
     );
     const sourceHead = createHeadRecord(
       sourceRunId,
@@ -14695,9 +14863,27 @@ export function createExecutionLedger({
         'accepted atomic successor handoff is unavailable',
       );
     }
+    const acceptedSourceEvent = acceptedSource.events.find(
+      (candidate) => candidate.event_id === sourceEvent.event_id,
+    );
+    if (!acceptedSourceEvent) {
+      throw new ExecutionLedgerProjectionError(
+        sourceRunId,
+        'accepted successor admission event is unavailable',
+      );
+    }
+    const coordinatorAuthority = eventSnapshots(
+      acceptedSourceEvent,
+      sourceRunId,
+    ).coordinatorAuthority;
     return {
       applied: true,
       authorization,
+      ...(coordinatorAuthority
+        ? {
+            coordinatorAuthority,
+          }
+        : {}),
       sourceRun: cloneJsonObject(
         acceptedSource.run,
         'accepted successor source run',

@@ -501,6 +501,16 @@ describe('atomic schedule control', () => {
       ]),
     );
     expect(extension.putRequests).toHaveLength(2);
+    expect(
+      extension.putRequests.find(
+        ({ record }) => record.record_kind === 'schedule-occurrence',
+      )?.record,
+    ).toMatchObject({ schema_version: 1 });
+    expect(
+      extension.putRequests.find(
+        ({ record }) => record.record_kind === 'schedule-occurrence',
+      )?.record,
+    ).not.toHaveProperty('coordinator_authority');
     expect(Object.isFrozen(extension)).toBe(true);
     expect(Object.isFrozen(extension.conditionChecks)).toBe(true);
     expect(Object.isFrozen(extension.putRequests)).toBe(true);
@@ -682,6 +692,79 @@ describe('atomic schedule control', () => {
       control.getOccurrence({ occurrenceId: input.cause.occurrenceId }),
     ).rejects.toThrow(/window is invalid/);
   });
+
+  test.each([
+    [
+      'v2 without its authority token',
+      (/** @type {Record<string, any>} */ record) => {
+        const { coordinator_authority: _omitted, ...malformed } = record;
+        return malformed;
+      },
+      /must contain exactly/i,
+    ],
+    [
+      'v1 with a v2 authority field',
+      (/** @type {Record<string, any>} */ record) => ({
+        ...record,
+        schema_version: 1,
+      }),
+      /must contain exactly/i,
+    ],
+    [
+      'v2 with an authority for another application',
+      (/** @type {Record<string, any>} */ record) => ({
+        ...record,
+        coordinator_authority: {
+          ...record.coordinator_authority,
+          appId: 'another-application',
+        },
+      }),
+      /does not match its application/i,
+    ],
+  ])(
+    'rejects a malformed persisted occurrence: %s',
+    async (
+      /** @type {string} */ _label,
+      /** @type {(record: Record<string, any>) => Record<string, any>} */ forge,
+      /** @type {RegExp} */ error,
+    ) => {
+      const { db, control, owner, authority } =
+        await createCoordinatorHarness();
+      const activated = await activateSchedule(control, owner);
+      const input = occurrenceInput(activated.cursor, owner);
+      const expected = expectedFromInput(input);
+      const prepared = await control.prepareWorkflowAdmission(input);
+      const token = createCoordinatorAuthorityToken(authority);
+      const extension = resolvePreparedScheduleWorkflowAdmission(
+        prepared,
+        expected,
+        { ...storeContext(db), coordinatorAuthority: token },
+      );
+      const activationFence = await getLocalApplicationRunCreationFence({
+        db,
+        tableName: TABLE_NAME,
+        appId: APP_ID,
+        revisionId: REVISION_A,
+      });
+      await db.transactionWrite({
+        tableName: TABLE_NAME,
+        conditionChecks: [
+          activationFence,
+          ...extension.conditionChecks,
+          createCoordinatorAuthorityFence(token),
+        ],
+        putRequests: extension.putRequests.map((request) =>
+          request.record.record_kind === 'schedule-occurrence'
+            ? { ...request, record: forge(request.record) }
+            : request,
+        ),
+      });
+
+      await expect(
+        control.getOccurrence({ occurrenceId: input.cause.occurrenceId }),
+      ).rejects.toThrow(error);
+    },
+  );
 
   test('rejects forged preparations, moved identities, invalid run IDs, and durable conflicts', async () => {
     const { db, control, ownership } = createHarness();
@@ -1169,6 +1252,14 @@ describe('coordinator-bound schedule control', () => {
         COORDINATOR_AUTHORITY_SORT_KEY,
       );
       expect(createExtension.putRequests).toHaveLength(2);
+      expect(
+        createExtension.putRequests.find(
+          ({ record }) => record.record_kind === 'schedule-occurrence',
+        )?.record,
+      ).toMatchObject({
+        schema_version: 2,
+        coordinator_authority: token,
+      });
       if (mode === 'replay') {
         const activationFence = await getLocalApplicationRunCreationFence({
           db,
@@ -1185,6 +1276,9 @@ describe('coordinator-bound schedule control', () => {
           ],
           putRequests: [...createExtension.putRequests],
         });
+        await expect(
+          control.getOccurrence({ occurrenceId: input.cause.occurrenceId }),
+        ).resolves.toEqual(first.occurrence);
       }
       const successorAuthority = await takeOverCoordinator(
         authorities,
@@ -1255,12 +1349,51 @@ describe('coordinator-bound schedule control', () => {
       observedAt: 30,
     });
     const context = { ...storeContext(db), coordinatorAuthority: authority };
+    const token = createCoordinatorAuthorityToken(authority);
+    const extension = resolvePreparedScheduleWorkflowAdmission(
+      prepared,
+      expected,
+      context,
+    );
+    expect(extension).toMatchObject({
+      mode: 'create',
+      coordinatorAuthority: token,
+    });
     expect(
-      resolvePreparedScheduleWorkflowAdmission(prepared, expected, context),
-    ).toMatchObject({ mode: 'create' });
+      extension.putRequests.find(
+        ({ record }) => record.record_kind === 'schedule-occurrence',
+      )?.record,
+    ).toMatchObject({
+      schema_version: 2,
+      coordinator_authority: token,
+    });
     await expect(
       reconcilePreparedScheduleWorkflowAdmission(prepared, expected, context),
     ).resolves.toEqual({ status: 'absent' });
+    const activationFence = await getLocalApplicationRunCreationFence({
+      db,
+      tableName: TABLE_NAME,
+      appId: APP_ID,
+      revisionId: REVISION_A,
+    });
+    await db.transactionWrite({
+      tableName: TABLE_NAME,
+      conditionChecks: [
+        activationFence,
+        ...extension.conditionChecks,
+        createCoordinatorAuthorityFence(token),
+      ],
+      putRequests: [...extension.putRequests],
+    });
+    await expect(
+      control.getOccurrence({ occurrenceId: input.cause.occurrenceId }),
+    ).resolves.toMatchObject({ coordinatorAuthority: token });
+    await expect(
+      reconcilePreparedScheduleWorkflowAdmission(prepared, expected, context),
+    ).resolves.toMatchObject({
+      status: 'exact',
+      occurrence: { coordinatorAuthority: token },
+    });
     const { authority: otherAuthority } = await authorities.acquire({
       appId: 'another-app',
       coordinatorId: 'another-coordinator',

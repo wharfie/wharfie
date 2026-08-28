@@ -8,6 +8,10 @@ import { join } from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
 import {
+  createCoordinatorAuthority,
+  createCoordinatorAuthorityToken,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
+import {
   ExecutionLedgerProjectionError,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
@@ -35,6 +39,7 @@ import {
 } from '../../src/core/runtime/effects/builtin-catalog.js';
 import { executeManagedEffectSuccessorRun } from '../../src/core/runtime/managed-effect-successor.js';
 import { MANUAL_LEDGER_INVOCATION_ID } from '../../src/core/runtime/manual-ledger-run.js';
+import { createExecutionLedgerOperatorView } from '../../src/core/runtime/operator/execution-ledger-view.js';
 
 const APP_ID = 'successor-lifecycle';
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
@@ -327,6 +332,131 @@ function interceptFirstConditionedWrite(db, beforeConditionedWrite) {
 }
 
 describe('managed-effect successor dedicated lifecycle', () => {
+  test('retains one admission authority across both successor events and later-authority replay', async () => {
+    const harness = await createHarness('admission-provenance');
+    const source = await seedNotAppliedSource(harness, 'admission-provenance');
+    const authorities = createCoordinatorAuthority({
+      db: harness.db,
+      tableName: harness.tableName,
+    });
+    const first = await authorities.acquire({
+      appId: APP_ID,
+      coordinatorId: 'successor-coordinator-a',
+      requestId: 'acquire-successor-coordinator-a',
+      observedAt: 10,
+    });
+    const token = createCoordinatorAuthorityToken(first.authority);
+    harness.ledger = harness.ledger.bindCoordinatorAuthority(first.authority);
+    const accepted = await authorizeSuccessor(
+      harness,
+      source.runId,
+      SOURCE_EFFECT_ID,
+      'admission-provenance-successor',
+    );
+    expect(accepted).toMatchObject({
+      applied: true,
+      coordinatorAuthority: token,
+    });
+    const sourceEvents = await harness.ledger.getEvents(source.runId);
+    const sourceEvent = sourceEvents.find(
+      ({ type }) => type === 'effect-successor-authorized',
+    );
+    const targetEvents = await harness.ledger.getEvents(
+      accepted.authorization.target.runId,
+    );
+    expect(sourceEvent).toMatchObject({
+      fence: expect.objectContaining({ coordinatorEpoch: 0 }),
+      payload: expect.objectContaining({ coordinatorAuthority: token }),
+    });
+    expect(targetEvents).toEqual([
+      expect.objectContaining({
+        type: 'effect-successor-run-created',
+        fence: { coordinatorEpoch: 0, invocationGeneration: 0 },
+        payload: expect.objectContaining({ coordinatorAuthority: token }),
+      }),
+    ]);
+
+    const successor = await authorities.takeover({
+      appId: APP_ID,
+      coordinatorId: 'successor-coordinator-b',
+      requestId: 'replace-successor-coordinator-a',
+      observedAuthority: first.authority,
+      confirmAuthorityReplacement: true,
+      observedAt: 20,
+    });
+    const successorLedger = createExecutionLedger({
+      db: harness.db,
+      tableName: harness.tableName,
+      payloadStore: harness.payloadStore,
+      coordinatorAuthority: successor.authority,
+      effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
+    });
+    await expect(
+      successorLedger.authorizeManagedEffectSuccessorRetry({
+        sourceRunId: source.runId,
+        sourceEffectId: SOURCE_EFFECT_ID,
+        successorId: 'admission-provenance-successor',
+        reason: reason('operator-retry'),
+        actor: ACTOR,
+      }),
+    ).resolves.toMatchObject({
+      applied: false,
+      coordinatorAuthority: token,
+    });
+    for (const runId of [source.runId, accepted.authorization.target.runId]) {
+      // eslint-disable-next-line no-await-in-loop
+      const rebuilt = await successorLedger.rebuildRun(runId);
+      if (!rebuilt) throw new Error('Expected retained successor-linked run.');
+      const operatorView = createExecutionLedgerOperatorView(rebuilt);
+      const serializedOperatorView = JSON.stringify(operatorView);
+      for (const privateValue of [
+        'coordinatorAuthority',
+        'authorityId',
+        'coordinatorId',
+        token.authorityId,
+        token.coordinatorId,
+      ]) {
+        expect(serializedOperatorView).not.toContain(privateValue);
+      }
+    }
+
+    const targetEvent = targetEvents[0];
+    if (!targetEvent) throw new Error('Expected target creation event.');
+    const forgedPayload = JSON.parse(JSON.stringify(targetEvent.payload));
+    forgedPayload.coordinatorAuthority = createCoordinatorAuthorityToken(
+      successor.authority,
+    );
+    const forgedEventId = successorEventId({
+      ...targetEvent,
+      payload: forgedPayload,
+    });
+    await harness.db.update({
+      tableName: harness.tableName,
+      keyName: 'run_id',
+      keyValue: accepted.authorization.target.runId,
+      sortKeyName: 'sort_key',
+      sortKeyValue: getEventSortKey(1),
+      updates: [
+        { property: ['payload'], propertyValue: forgedPayload },
+        { property: ['event_id'], propertyValue: forgedEventId },
+      ],
+    });
+    await harness.db.update({
+      tableName: harness.tableName,
+      keyName: 'run_id',
+      keyValue: accepted.authorization.target.runId,
+      sortKeyName: 'sort_key',
+      sortKeyValue: getTransitionSortKey('create'),
+      updates: [{ property: ['event_id'], propertyValue: forgedEventId }],
+    });
+    await expect(
+      successorLedger.rebuildRun(accepted.authorization.target.runId),
+    ).rejects.toMatchObject({
+      name: ExecutionLedgerProjectionError.name,
+      reason: 'successor atomic source-target link is unavailable',
+    });
+  });
+
   test('fences new successors while preserving an exact authorized replay', async () => {
     const harness = await createHarness('admission');
     const replaySource = await seedNotAppliedSource(
