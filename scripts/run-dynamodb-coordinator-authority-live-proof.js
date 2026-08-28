@@ -241,23 +241,31 @@ export function createDynamoDBCoordinatorAuthorityProofTableName(uniqueSuffix) {
 
 /**
  * @param {(milliseconds: number, signal?: AbortSignal) => Promise<void>} wait - Real/injected waiter.
- * @returns {{started: Promise<void>, wait: (milliseconds: number, signal?: AbortSignal) => Promise<void>}} - First-wait barrier.
+ * @returns {{started: Promise<void>, release: () => void, wait: (milliseconds: number, signal?: AbortSignal) => Promise<void>}} - First-wait barrier.
  */
 function createObservationWaitBarrier(wait) {
   /** @type {() => void} */
   let announce = () => {};
+  /** @type {() => void} */
+  let release = () => {};
   let announced = false;
   /** @type {Promise<void>} */
   const started = new Promise((resolve) => {
     announce = () => resolve();
   });
+  /** @type {Promise<void>} */
+  const released = new Promise((resolve) => {
+    release = () => resolve();
+  });
   return {
     started,
+    release,
     async wait(milliseconds, signal) {
       if (!announced) {
         announced = true;
         announce();
       }
+      await released;
       await wait(milliseconds, signal);
     },
   };
@@ -449,11 +457,10 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
         input.region,
         wait,
       );
-      const [dbA, dbB] = await Promise.all([
-        dependencies.createDBClient('coordinator-a'),
-        dependencies.createDBClient('coordinator-b'),
-      ]);
-      clients.push(dbA, dbB);
+      const dbA = await dependencies.createDBClient('coordinator-a');
+      clients.push(dbA);
+      const dbB = await dependencies.createDBClient('coordinator-b');
+      clients.push(dbB);
 
       const protocol = (
         /** @type {import('../src/core/lib/db/base.js').DBClient} */ db,
@@ -484,12 +491,33 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
         dbB,
         renewalBarrier.wait,
       ).observeReplacement({ appId });
-      await renewalBarrier.started;
-      const renewal = await coordinatorA.renew({
-        observedAuthority: initial.authority,
-        requestId: `renew-a-${suffix}`,
-        observedAt: observedAt(now()),
-      });
+      const observationEnteredWait = await Promise.race([
+        renewalBarrier.started.then(() => true),
+        renewalObservationPromise.then(
+          () => false,
+          (error) => {
+            throw error;
+          },
+        ),
+      ]);
+      if (!observationEnteredWait) {
+        throw new Error(
+          'DynamoDB coordinator observation completed before its renewal barrier.',
+        );
+      }
+      let renewal;
+      try {
+        renewal = await coordinatorA.renew({
+          observedAuthority: initial.authority,
+          requestId: `renew-a-${suffix}`,
+          observedAt: observedAt(now()),
+        });
+      } catch (error) {
+        renewalBarrier.release();
+        await Promise.allSettled([renewalObservationPromise]);
+        throw error;
+      }
+      renewalBarrier.release();
       const renewalObservation = await renewalObservationPromise;
       if (
         renewalObservation.outcome !== 'changed' ||
@@ -801,11 +829,13 @@ async function createLiveDriver(region) {
  * Write one new evidence file and adjacent SHA-256 checksum without overwrite.
  * @param {unknown} receipt - Sanitized proof evidence.
  * @param {string} outputPath - Absolute JSON path.
+ * @param {Pick<typeof fsp, 'open' | 'rm'>} [fsOps] - Injectable publication filesystem.
  * @returns {Promise<Readonly<{outputPath: string, checksumPath: string, sha256: string, bytes: number}>>} - Published pair.
  */
 export async function publishDynamoDBCoordinatorAuthorityLiveProof(
   receipt,
   outputPath,
+  fsOps = fsp,
 ) {
   if (
     typeof outputPath !== 'string' ||
@@ -824,18 +854,18 @@ export async function publishDynamoDBCoordinatorAuthorityLiveProof(
   }
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const checksumPath = `${outputPath}.sha256`;
-  let outputWritten = false;
+  let outputCreated = false;
   let checksumCreated = false;
   try {
-    const output = await fsp.open(outputPath, 'wx', 0o600);
+    const output = await fsOps.open(outputPath, 'wx', 0o600);
+    outputCreated = true;
     try {
       await output.writeFile(bytes);
       await output.sync();
     } finally {
       await output.close();
     }
-    outputWritten = true;
-    const checksum = await fsp.open(checksumPath, 'wx', 0o600);
+    const checksum = await fsOps.open(checksumPath, 'wx', 0o600);
     checksumCreated = true;
     try {
       await checksum.writeFile(`${sha256}  ${path.basename(outputPath)}\n`);
@@ -844,8 +874,8 @@ export async function publishDynamoDBCoordinatorAuthorityLiveProof(
       await checksum.close();
     }
   } catch (error) {
-    if (checksumCreated) await fsp.rm(checksumPath, { force: true });
-    if (outputWritten) await fsp.rm(outputPath, { force: true });
+    if (checksumCreated) await fsOps.rm(checksumPath, { force: true });
+    if (outputCreated) await fsOps.rm(outputPath, { force: true });
     throw error;
   }
   return Object.freeze({

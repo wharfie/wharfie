@@ -230,7 +230,12 @@ function createFakeProtocolFamily() {
   return { createProtocol, state };
 }
 
-function createHarness({ tableOverrides = {}, createFailure } = {}) {
+function createHarness({
+  tableOverrides = {},
+  createFailure,
+  createClientFailure,
+  observeFailure,
+} = {}) {
   const calls = [];
   let tableName;
   let exists = false;
@@ -263,6 +268,9 @@ function createHarness({ tableOverrides = {}, createFailure } = {}) {
   };
   async function createDBClient(label) {
     calls.push(['createDBClient', label]);
+    if (createClientFailure?.label === label) {
+      throw createClientFailure.error;
+    }
     const client = {
       async transactionWrite(params) {
         const epochCondition = params.conditionChecks
@@ -293,7 +301,17 @@ function createHarness({ tableOverrides = {}, createFailure } = {}) {
   const driver = createDynamoDBCoordinatorAuthorityLiveProofDriver({
     admin,
     createDBClient,
-    createProtocol: family.createProtocol,
+    createProtocol(options) {
+      const protocol = family.createProtocol(options);
+      return observeFailure
+        ? {
+            ...protocol,
+            async observeReplacement() {
+              throw observeFailure;
+            },
+          }
+        : protocol;
+    },
     observationWindowMs: 10,
     now: (() => {
       let value = 100;
@@ -490,6 +508,37 @@ describe('DynamoDB coordinator authority live-proof driver', () => {
     expect(harness.calls.some(([name]) => name === 'deleteTable')).toBe(false);
     expect(harness.calls.slice(-1)).toEqual([['closeAdmin']]);
   });
+
+  test('joins an observation failure before its wait barrier and still cleans up', async () => {
+    const failure = new Error('strong read failed before observation wait');
+    const harness = createHarness({ observeFailure: failure });
+
+    await expect(harness.driver.run({ region: REGION })).rejects.toBe(failure);
+
+    expect(harness.tableExists()).toBe(false);
+    expect(harness.calls.filter(([name]) => name === 'closeDB')).toEqual([
+      ['closeDB', 'coordinator-a'],
+      ['closeDB', 'coordinator-b'],
+    ]);
+    expect(harness.calls.some(([name]) => name === 'deleteTable')).toBe(true);
+    expect(harness.calls.slice(-1)).toEqual([['closeAdmin']]);
+  });
+
+  test('closes the first client when creation of the second client fails', async () => {
+    const failure = new Error('second client failed');
+    const harness = createHarness({
+      createClientFailure: { label: 'coordinator-b', error: failure },
+    });
+
+    await expect(harness.driver.run({ region: REGION })).rejects.toBe(failure);
+
+    expect(harness.tableExists()).toBe(false);
+    expect(harness.calls.filter(([name]) => name === 'closeDB')).toEqual([
+      ['closeDB', 'coordinator-a'],
+    ]);
+    expect(harness.calls.some(([name]) => name === 'deleteTable')).toBe(true);
+    expect(harness.calls.slice(-1)).toEqual([['closeAdmin']]);
+  });
 });
 
 describe('DynamoDB coordinator authority proof publication', () => {
@@ -546,6 +595,45 @@ describe('DynamoDB coordinator authority proof publication', () => {
     expect(await fsp.readFile(`${outputPath}.sha256`, 'utf8')).toBe(
       'pre-existing\n',
     );
+  });
+
+  test('removes a partial JSON when writing fails after exclusive creation', async () => {
+    directory = await fsp.mkdtemp(path.join(tmpdir(), 'wharfie-rvn-proof-'));
+    const outputPath = path.join(directory, 'proof.json');
+    const failure = new Error('simulated receipt write failure');
+    const fsOps = {
+      open: async (target, flags, mode) => {
+        const handle = await fsp.open(target, flags, mode);
+        if (target !== outputPath) return handle;
+        return {
+          async writeFile(bytes) {
+            await handle.writeFile(Buffer.from(bytes).subarray(0, 1));
+            throw failure;
+          },
+          async sync() {
+            await handle.sync();
+          },
+          async close() {
+            await handle.close();
+          },
+        };
+      },
+      rm: fsp.rm,
+    };
+
+    await expect(
+      publishDynamoDBCoordinatorAuthorityLiveProof(
+        { schemaVersion: 1, status: 'passed' },
+        outputPath,
+        fsOps,
+      ),
+    ).rejects.toBe(failure);
+    await expect(fsp.stat(outputPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fsp.stat(`${outputPath}.sha256`)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   test('main publishes injected evidence without loading or calling AWS', async () => {

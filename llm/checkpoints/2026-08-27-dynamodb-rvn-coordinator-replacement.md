@@ -95,7 +95,7 @@ unmanaged external effect exactly once.
 - Pinned versions: Node `v24.13.1`; npm `11.12.0`.
 - Focused protocol/proof command:
   `node ./test/run-jest.js --silent --runInBand test/runtime/coordinator-authority.test.js test/runtime/dynamodb-coordinator-authority-protocol.test.js test/scripts/run-dynamodb-coordinator-authority-live-proof.test.js`.
-- Focused result: 3 suites, 51 tests, all passed.
+- Focused result: 3 suites, 54 tests, all passed.
 - Existing protected-writer command:
   `node ./test/run-jest.js --silent --runInBand test/runtime/execution-ledger-coordinator-authority.test.js test/runtime/schedule-control.test.js test/runtime/ledger-service-lifecycle.test.js`.
 - Existing protected-writer result: 3 suites, 84 tests, all passed.
@@ -115,13 +115,17 @@ Relevant SHA-256 digests:
 ```text
 fef0546791da3a760174a503f9d89b126f20a0654985061f113615dde7ba7c07  src/core/lib/db/tables/coordinator-authority.js
 8a9cc509796bc839e0134b70f9f78b57cb1d9f624bc68feb9f51bbfdb8c30eb4  src/core/lib/db/tables/dynamodb-coordinator-authority.js
-90053f7c53a12100c44412470f42f6660ed8279efb496eb310d31fb6178efe3b  scripts/run-dynamodb-coordinator-authority-live-proof.js
+e22910fc9336c23ce6329228fccc2c901b60c133b95910c5c48c0edc860337fb  scripts/run-dynamodb-coordinator-authority-live-proof.js
 bb3844fbb4ed648fdcc84e0d53f95c42ac6655dabe503d8d805cb6089f8c4924  test/runtime/coordinator-authority.test.js
 2526ab0d1493efd9c8b0cad1fdfb8043cb491a0f9df7e40288c3e891d27c253c  test/runtime/dynamodb-coordinator-authority-protocol.test.js
-e651fcd24dd2500be200726e200e51ba1bbe5449382e88ce2704641f907cc7ea  test/scripts/run-dynamodb-coordinator-authority-live-proof.test.js
+969065b88ddfc9a84f724cc5de38b4f3dc37549dd1bbe7b8736808e93d5a6339  test/scripts/run-dynamodb-coordinator-authority-live-proof.test.js
 ```
 
 ## Executed live DynamoDB proof
+
+After the final review hardened early-failure cleanup, partial client cleanup,
+publication cleanup, and renewal-barrier ordering, the exact hashed runner was
+executed again on 2026-08-28.
 
 The live proof used a disposable table and retained redacted evidence for all
 of these steps:
@@ -142,9 +146,9 @@ of these steps:
 ### Live-proof result
 
 - Redacted AWS identity: account fingerprint
-  `sha256:093d42afa9370904ca45c643f71adf3e9b6979c5a8180338f14a5a7bb79232e8`.
+  `sha256:40316ba8e46264061fcee06c941638b9435b039cef6775d736a1070259cb727e`.
 - AWS Region: `us-east-2`.
-- Disposable table: `wharfie-rvn-proof-f7b0a241f5c473ad`.
+- Disposable table: `wharfie-rvn-proof-be87a910eda2ce6b`.
 - Topology: `DescribeTable` returned the exact `us-east-2` table ARN,
   `PAY_PER_REQUEST`, no replicas, and no Global Tables version.
 - Observation window: 1,500 local monotonic milliseconds.
@@ -158,10 +162,10 @@ of these steps:
   `ConditionalCheckFailedException`, and not retained.
 - Current successor: the epoch-3 fenced mutation committed and was retained by
   a strongly consistent read.
-- Receipt: `/private/tmp/wharfie-dynamodb-rvn-proof-2026-08-27.json`, 1,178
+- Receipt: `/private/tmp/wharfie-dynamodb-rvn-proof-2026-08-28-review.json`, 1,178
   bytes; its canonical contents are archived below.
 - Receipt SHA-256:
-  `cb62c1ca2e8c7e0b434f01b09e99e22a784b1a17ecad85f04e7d593e54661559`;
+  `c8586cdd88890f0b41ae01e7c7a04972016a07b9c6abcc304c87aa1f55d64a40`;
   the adjacent checksum verified successfully.
 - Cleanup: the proof waited until `DescribeTable` returned resource-not-found;
   `tableDeleted` is `true`.
@@ -172,13 +176,13 @@ The exact semantic invocation was:
 AWS_PROFILE=<redacted-authorized-profile> node scripts/run-dynamodb-coordinator-authority-live-proof.js \
   --confirm-live-aws \
   --region us-east-2 \
-  --output /private/tmp/wharfie-dynamodb-rvn-proof-2026-08-27.json
+  --output /private/tmp/wharfie-dynamodb-rvn-proof-2026-08-28-review.json
 ```
 
 Canonical sanitized receipt:
 
 ```text
-{"cleanup":{"tableDeleted":true,"tableName":"wharfie-rvn-proof-f7b0a241f5c473ad"},"evidence":{"contenderRace":{"contenders":2,"loserCode":"WHARFIE_COORDINATOR_AUTHORITY_CONFLICT","rejected":1,"winnerEpoch":3,"winners":1},"initialAcquisition":{"applied":true,"epoch":1,"recordVersion":1},"renewalAbortedObservation":{"afterRecordVersion":2,"beforeRecordVersion":1,"outcome":"changed","reason":"renewed"},"stableTakeover":{"applied":true,"fromEpoch":1,"observedRecordVersion":2,"toEpoch":2},"staleFencedMutation":{"currentEpoch":3,"errorName":"ConditionalCheckFailedException","preparedBeforeTakeover":true,"rejected":true,"releasedAfterTakeover":true,"retainedMutation":false,"staleEpoch":2},"successorFencedMutation":{"committed":true,"coordinatorEpoch":3,"retained":true}},"kind":"wharfie.dynamodb-rvn-coordinator-authority-live-proof","protocol":{"kind":"record-version-number-observation","observationWindowMs":1500,"stableFence":"coordinator-authority-active-tuple"},"provider":{"billingMode":"PAY_PER_REQUEST","globalTable":false,"kind":"aws-dynamodb","region":"us-east-2","replicas":0,"tableName":"wharfie-rvn-proof-f7b0a241f5c473ad"},"schemaVersion":1,"status":"passed"}
+{"cleanup":{"tableDeleted":true,"tableName":"wharfie-rvn-proof-be87a910eda2ce6b"},"evidence":{"contenderRace":{"contenders":2,"loserCode":"WHARFIE_COORDINATOR_AUTHORITY_CONFLICT","rejected":1,"winnerEpoch":3,"winners":1},"initialAcquisition":{"applied":true,"epoch":1,"recordVersion":1},"renewalAbortedObservation":{"afterRecordVersion":2,"beforeRecordVersion":1,"outcome":"changed","reason":"renewed"},"stableTakeover":{"applied":true,"fromEpoch":1,"observedRecordVersion":2,"toEpoch":2},"staleFencedMutation":{"currentEpoch":3,"errorName":"ConditionalCheckFailedException","preparedBeforeTakeover":true,"rejected":true,"releasedAfterTakeover":true,"retainedMutation":false,"staleEpoch":2},"successorFencedMutation":{"committed":true,"coordinatorEpoch":3,"retained":true}},"kind":"wharfie.dynamodb-rvn-coordinator-authority-live-proof","protocol":{"kind":"record-version-number-observation","observationWindowMs":1500,"stableFence":"coordinator-authority-active-tuple"},"provider":{"billingMode":"PAY_PER_REQUEST","globalTable":false,"kind":"aws-dynamodb","region":"us-east-2","replicas":0,"tableName":"wharfie-rvn-proof-be87a910eda2ce6b"},"schemaVersion":1,"status":"passed"}
 ```
 
 ## Honest boundary
