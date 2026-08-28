@@ -8,14 +8,20 @@ import { pathToFileURL } from 'node:url';
 import { sortCanonicalJsonValue } from '../src/core/runtime/canonical-order.js';
 import { createCoordinatorAuthorityFence } from '../src/core/lib/db/tables/coordinator-authority.js';
 import { createDynamoDBCoordinatorAuthorityProtocol } from '../src/core/lib/db/tables/dynamodb-coordinator-authority.js';
+import { validateAwsDynamoDBCoordinatorAuthorityTableTopology } from '../src/core/runtime/dynamodb-coordinator-authority-topology-provider.js';
+import {
+  ResidentCoordinatorAuthorityLostError,
+  createResidentCoordinatorAuthoritySupervisor,
+} from '../src/core/runtime/services/resident-coordinator-authority.js';
 
-export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_SCHEMA_VERSION = 1;
+export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_SCHEMA_VERSION = 2;
 export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_KIND =
   'wharfie.dynamodb-rvn-coordinator-authority-live-proof';
 export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_CONFIRMATION =
   '--confirm-live-aws';
 
 const DEFAULT_OBSERVATION_WINDOW_MS = 1_500;
+const DEFAULT_RESIDENT_RENEWAL_INTERVAL_MS = 250;
 const TABLE_WAIT_MILLISECONDS = 2_000;
 const MAX_TABLE_WAIT_ATTEMPTS = 90;
 const MAX_EVIDENCE_BYTES = 64 * 1024;
@@ -23,6 +29,10 @@ const REGION_PATTERN = /^[a-z]{2}(?:-gov)?-[a-z0-9-]+-[0-9]+$/u;
 const UNIQUE_SUFFIX_PATTERN = /^[a-z0-9]{8,32}$/u;
 const SAFE_ERROR_CODE_PATTERN = /^WHARFIE_[A-Z0-9_]+$/u;
 const STALE_MUTATION_SORT_KEY = 'proof/v1/stale-authority-mutation';
+const RESIDENT_STALE_MUTATION_SORT_KEY =
+  'proof/v1/resident-stale-authority-mutation';
+const RESIDENT_SUCCESSOR_MUTATION_SORT_KEY =
+  'proof/v1/resident-successor-authority-mutation';
 
 /**
  * @typedef {Readonly<{
@@ -118,80 +128,37 @@ function isResourceNotFound(error) {
 /**
  * @param {unknown} description - DescribeTable response.
  * @param {string} tableName - Exact proof table.
- * @param {string} region - Expected AWS region.
- * @returns {Readonly<Record<string, any>>} - Validated ACTIVE table summary.
+ * @returns {Readonly<{billingMode: 'PAY_PER_REQUEST'}>} - Proof-owned cleanup-policy evidence.
  */
-function assertDisposableTable(description, tableName, region) {
+function assertDisposableTable(description, tableName) {
   if (!isPlainObject(description) || !isPlainObject(description.Table)) {
     throw new Error('DynamoDB proof table description is unavailable.');
   }
   const table = description.Table;
-  const keySchema = Array.isArray(table.KeySchema) ? table.KeySchema : [];
-  const attributes = Array.isArray(table.AttributeDefinitions)
-    ? table.AttributeDefinitions
-    : [];
-  const exactKeys =
-    keySchema.length === 2 &&
-    keySchema.some(
-      (entry) => entry?.AttributeName === 'run_id' && entry?.KeyType === 'HASH',
-    ) &&
-    keySchema.some(
-      (entry) =>
-        entry?.AttributeName === 'sort_key' && entry?.KeyType === 'RANGE',
-    ) &&
-    attributes.length === 2 &&
-    attributes.some(
-      (entry) =>
-        entry?.AttributeName === 'run_id' && entry?.AttributeType === 'S',
-    ) &&
-    attributes.some(
-      (entry) =>
-        entry?.AttributeName === 'sort_key' && entry?.AttributeType === 'S',
-    );
-  const replicas = table.Replicas;
-  const noReplicas =
-    replicas === undefined ||
-    (Array.isArray(replicas) && replicas.length === 0);
-  const arnParts =
-    typeof table.TableArn === 'string' ? table.TableArn.split(':') : [];
-  const exactArn =
-    arnParts.length === 6 &&
-    arnParts[2] === 'dynamodb' &&
-    arnParts[3] === region &&
-    arnParts[5] === `table/${tableName}`;
   if (
     table.TableName !== tableName ||
     table.TableStatus !== 'ACTIVE' ||
-    table.BillingModeSummary?.BillingMode !== 'PAY_PER_REQUEST' ||
-    !exactKeys ||
-    !noReplicas ||
-    !exactArn ||
-    table.GlobalTableVersion !== undefined
+    table.BillingModeSummary?.BillingMode !== 'PAY_PER_REQUEST'
   ) {
     throw new Error(
-      'DynamoDB proof table does not match the disposable single-region contract.',
+      'DynamoDB proof table does not match the disposable PAY_PER_REQUEST contract.',
     );
   }
-  return Object.freeze({
-    billingMode: 'PAY_PER_REQUEST',
-    globalTable: false,
-    replicas: 0,
-  });
+  return Object.freeze({ billingMode: 'PAY_PER_REQUEST' });
 }
 
 /**
  * @param {Record<string, any>} admin - Injected DynamoDB administrative client.
  * @param {string} tableName - Exact table.
- * @param {string} region - Expected AWS region.
  * @param {(milliseconds: number, signal?: AbortSignal) => Promise<void>} wait - Bounded waiter.
- * @returns {Promise<Readonly<Record<string, any>>>} - ACTIVE table summary.
+ * @returns {Promise<Readonly<{billingMode: 'PAY_PER_REQUEST'}>>} - ACTIVE disposable-table policy evidence.
  */
-async function waitForTableActive(admin, tableName, region, wait) {
+async function waitForTableActive(admin, tableName, wait) {
   for (let attempt = 0; attempt < MAX_TABLE_WAIT_ATTEMPTS; attempt += 1) {
     // eslint-disable-next-line no-await-in-loop -- provider state is deliberately polled serially.
     const description = await admin.describeTable({ TableName: tableName });
     if (description?.Table?.TableStatus === 'ACTIVE') {
-      return assertDisposableTable(description, tableName, region);
+      return assertDisposableTable(description, tableName);
     }
     if (!['CREATING', 'UPDATING'].includes(description?.Table?.TableStatus)) {
       throw new Error('DynamoDB proof table entered an unsupported state.');
@@ -341,12 +308,481 @@ function createHeldMutation(execute) {
 }
 
 /**
+ * @returns {Readonly<{promise: Promise<void>, resolve: () => void}>} - Idempotent one-way gate.
+ */
+function createDeferredGate() {
+  /** @type {() => void} */
+  let settle = () => {};
+  let settled = false;
+  /** @type {Promise<void>} */
+  const promise = new Promise((resolve) => {
+    settle = resolve;
+  });
+  return Object.freeze({
+    promise,
+    resolve() {
+      if (settled) return;
+      settled = true;
+      settle();
+    },
+  });
+}
+
+/**
+ * @param {unknown} error - Candidate bounded domain error.
+ * @returns {string | null} - Safe Wharfie code or null.
+ */
+function safeErrorCode(error) {
+  if (
+    error instanceof Error &&
+    'code' in error &&
+    typeof (/** @type {{code?: unknown}} */ (error).code) === 'string' &&
+    SAFE_ERROR_CODE_PATTERN.test(/** @type {{code: string}} */ (error).code)
+  ) {
+    return /** @type {{code: string}} */ (error).code;
+  }
+  return null;
+}
+
+/**
+ * @param {Promise<any>} promise - Long-running resident session.
+ * @returns {Promise<{status: 'fulfilled', value: any} | {status: 'rejected', reason: any}>} - Non-rejecting outcome.
+ */
+function captureOutcome(promise) {
+  return promise.then(
+    (value) => ({ status: 'fulfilled', value }),
+    (reason) => ({ status: 'rejected', reason }),
+  );
+}
+
+/**
+ * @param {Promise<void>} milestone - Expected session milestone.
+ * @param {ReturnType<typeof captureOutcome>} outcome - Session outcome.
+ * @param {string} message - Failure when the session drains prematurely.
+ * @returns {Promise<void>} - Resolves only after the milestone.
+ */
+async function waitForResidentMilestone(milestone, outcome, message) {
+  const reached = await Promise.race([
+    milestone.then(() => true),
+    outcome.then((result) => {
+      if (result.status === 'rejected') throw result.reason;
+      return false;
+    }),
+  ]);
+  if (!reached) throw new Error(message);
+}
+
+/**
+ * @param {Promise<void>} gate - Graceful handler drain gate.
+ * @param {AbortSignal} signal - Resident authority signal.
+ * @returns {Promise<'gate'|'aborted'>} - First drain reason.
+ */
+async function waitForGateOrAbort(gate, signal) {
+  if (signal.aborted) return 'aborted';
+  return await new Promise((resolve) => {
+    let complete = false;
+    /** @param {'gate'|'aborted'} reason - First handler drain event. */
+    const settle = (reason) => {
+      if (complete) return;
+      complete = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve(reason);
+    };
+    const onAbort = () => settle('aborted');
+    signal.addEventListener('abort', onAbort, { once: true });
+    gate.then(() => settle('gate'));
+  });
+}
+
+/**
+ * Exercise two production resident supervisors around the already-proven RVN
+ * protocol. The incumbent's second renewal is held before provider submission,
+ * giving the successor one complete unchanged observation window. Releasing
+ * that exact old renewal after takeover proves both fencing and fail-closed
+ * handler cancellation.
+ * @param {Record<string, any>} options - Exact protocols, clients, identity, and timing ports.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Sanitized resident-supervisor evidence.
+ */
+async function runResidentSupervisorProof(options) {
+  const {
+    coordinatorA,
+    coordinatorB,
+    dbA,
+    dbB,
+    appId,
+    tableName,
+    mutationPartition,
+    observationWindowMs,
+    suffix,
+    now,
+    createSupervisor,
+    residentRenewalIntervalMs,
+    residentSupervisorTiming,
+  } = options;
+  const firstRenewalCommitted = createDeferredGate();
+  const pausedRenewalStarted = createDeferredGate();
+  const resumePausedRenewal = createDeferredGate();
+  const incumbentHandlerStarted = createDeferredGate();
+  const incumbentCleanupDrain = createDeferredGate();
+  const successorHandlerStarted = createDeferredGate();
+  const successorDrain = createDeferredGate();
+  const incumbentStop = new AbortController();
+  const successorStop = new AbortController();
+  let renewalAttempts = 0;
+  let successfulRenewals = 0;
+  /** @type {any} */
+  let firstRenewalAuthority;
+  /** @type {any} */
+  let pausedRenewalError;
+  /** @type {any} */
+  let incumbentContext;
+  /** @type {any} */
+  let successorContext;
+  /** @type {any} */
+  let successorObservation;
+
+  const incumbentProtocol = Object.freeze({
+    ...coordinatorA,
+    async renew(/** @type {any} */ intent) {
+      renewalAttempts += 1;
+      const attempt = renewalAttempts;
+      if (attempt === 2) {
+        pausedRenewalStarted.resolve();
+        await resumePausedRenewal.promise;
+      }
+      try {
+        const result = await coordinatorA.renew(intent);
+        successfulRenewals += 1;
+        if (attempt === 1) {
+          firstRenewalAuthority = result.authority;
+          firstRenewalCommitted.resolve();
+        }
+        return result;
+      } catch (error) {
+        if (attempt === 2) pausedRenewalError = error;
+        throw error;
+      }
+    },
+  });
+  const successorProtocol = Object.freeze({
+    ...coordinatorB,
+    async observeReplacement(/** @type {any} */ input) {
+      const result = await coordinatorB.observeReplacement(input);
+      if (result.outcome === 'stable') {
+        successorObservation = result.observation;
+      }
+      return result;
+    },
+  });
+
+  /**
+   * @param {'incumbent'|'successor'} label - Deterministic resident role.
+   * @param {Record<string, any>} protocol - Role-specific protocol wrapper.
+   * @returns {ReturnType<typeof createResidentCoordinatorAuthoritySupervisor>} - Production resident supervisor.
+   */
+  function supervisor(label, protocol) {
+    const timing = residentSupervisorTiming
+      ? residentSupervisorTiming(label)
+      : {};
+    if (
+      !isPlainObject(timing) ||
+      Object.keys(timing).some(
+        (key) => !['monotonicNow', 'waitForInterval'].includes(key),
+      ) ||
+      (timing.monotonicNow !== undefined &&
+        typeof timing.monotonicNow !== 'function') ||
+      (timing.waitForInterval !== undefined &&
+        typeof timing.waitForInterval !== 'function')
+    ) {
+      throw new TypeError(
+        'DynamoDB live-proof resident supervisor timing is invalid.',
+      );
+    }
+    return createSupervisor({
+      ...timing,
+      protocol,
+      appId,
+      coordinatorId: `resident-${label}-${suffix}`,
+      renewalIntervalMs: residentRenewalIntervalMs,
+      renewalJitterRatio: 0,
+      observedAtNow: () => observedAt(now()),
+      random: () => 0,
+      createRequestId: (
+        /** @type {{action: 'acquire'|'takeover'|'renew'|'release', sequence: number}} */ {
+          action,
+          sequence,
+        },
+      ) => `resident-${label}-${action}-${sequence}-${suffix}`,
+    });
+  }
+
+  const incumbentSupervisor = supervisor('incumbent', incumbentProtocol);
+  const successorSupervisor = supervisor('successor', successorProtocol);
+  const incumbentOutcome = captureOutcome(
+    incumbentSupervisor.run({
+      signal: incumbentStop.signal,
+      async handler(/** @type {any} */ context) {
+        incumbentContext = context;
+        incumbentHandlerStarted.resolve();
+        await waitForGateOrAbort(incumbentCleanupDrain.promise, context.signal);
+        return 'incumbent-drained';
+      },
+    }),
+  );
+  /** @type {ReturnType<typeof captureOutcome> | undefined} */
+  let successorOutcome;
+  const cleanupReason = Object.freeze(
+    Object.assign(new Error('Resident live-proof cleanup.'), {
+      name: 'ResidentLiveProofCleanup',
+      code: 'WHARFIE_RESIDENT_LIVE_PROOF_CLEANUP',
+    }),
+  );
+
+  try {
+    await waitForResidentMilestone(
+      incumbentHandlerStarted.promise,
+      incumbentOutcome,
+      'DynamoDB resident incumbent drained before its handler started.',
+    );
+    await waitForResidentMilestone(
+      firstRenewalCommitted.promise,
+      incumbentOutcome,
+      'DynamoDB resident incumbent drained before renewing.',
+    );
+    await waitForResidentMilestone(
+      pausedRenewalStarted.promise,
+      incumbentOutcome,
+      'DynamoDB resident incumbent drained before its renewal pause.',
+    );
+
+    successorOutcome = captureOutcome(
+      successorSupervisor.run({
+        signal: successorStop.signal,
+        async handler(/** @type {any} */ context) {
+          successorContext = context;
+          successorHandlerStarted.resolve();
+          await waitForGateOrAbort(successorDrain.promise, context.signal);
+          return 'successor-drained';
+        },
+      }),
+    );
+    await waitForResidentMilestone(
+      successorHandlerStarted.promise,
+      successorOutcome,
+      'DynamoDB resident successor drained before taking authority.',
+    );
+
+    if (
+      !incumbentContext ||
+      !successorContext ||
+      !firstRenewalAuthority ||
+      !successorObservation ||
+      successorContext.authority.epoch !==
+        incumbentContext.authority.epoch + 1 ||
+      successorObservation.authority.epoch !== incumbentContext.authority.epoch
+    ) {
+      throw new Error(
+        'DynamoDB resident successor did not replace the renewed incumbent.',
+      );
+    }
+    const elapsedNanoseconds = successorObservation.elapsedNanoseconds;
+    if (
+      typeof elapsedNanoseconds !== 'string' ||
+      !/^[0-9]+$/u.test(elapsedNanoseconds) ||
+      BigInt(elapsedNanoseconds) < BigInt(observationWindowMs) * 1_000_000n
+    ) {
+      throw new Error(
+        'DynamoDB resident takeover lacked a complete monotonic observation.',
+      );
+    }
+
+    let staleMutationErrorName = '';
+    try {
+      await dbA.transactionWrite({
+        tableName,
+        conditionChecks: [
+          createCoordinatorAuthorityFence(
+            incumbentContext.coordinatorAuthority,
+          ),
+        ],
+        putRequests: [
+          {
+            keyName: 'run_id',
+            sortKeyName: 'sort_key',
+            record: {
+              run_id: mutationPartition,
+              sort_key: RESIDENT_STALE_MUTATION_SORT_KEY,
+              kind: 'resident-stale-authority-mutation-must-not-commit',
+            },
+            conditions: [
+              {
+                conditionType: 'NOT_EXISTS',
+                propertyName: 'sort_key',
+              },
+            ],
+          },
+        ],
+      });
+    } catch (error) {
+      staleMutationErrorName =
+        error instanceof Error ? error.name : 'UnknownProviderError';
+    }
+    const staleMutation = await dbB.get({
+      tableName,
+      keyName: 'run_id',
+      keyValue: mutationPartition,
+      sortKeyName: 'sort_key',
+      sortKeyValue: RESIDENT_STALE_MUTATION_SORT_KEY,
+      consistentRead: true,
+    });
+    if (
+      staleMutationErrorName !== 'ConditionalCheckFailedException' ||
+      staleMutation !== undefined
+    ) {
+      throw new Error(
+        'DynamoDB resident stale fenced mutation was not rejected.',
+      );
+    }
+
+    await dbB.transactionWrite({
+      tableName,
+      conditionChecks: [
+        createCoordinatorAuthorityFence(successorContext.coordinatorAuthority),
+      ],
+      putRequests: [
+        {
+          keyName: 'run_id',
+          sortKeyName: 'sort_key',
+          record: {
+            run_id: mutationPartition,
+            sort_key: RESIDENT_SUCCESSOR_MUTATION_SORT_KEY,
+            kind: 'resident-successor-authority-mutation',
+            coordinator_epoch: successorContext.authority.epoch,
+          },
+          conditions: [
+            {
+              conditionType: 'NOT_EXISTS',
+              propertyName: 'sort_key',
+            },
+          ],
+        },
+      ],
+    });
+    const successorMutation = await dbA.get({
+      tableName,
+      keyName: 'run_id',
+      keyValue: mutationPartition,
+      sortKeyName: 'sort_key',
+      sortKeyValue: RESIDENT_SUCCESSOR_MUTATION_SORT_KEY,
+      consistentRead: true,
+    });
+    if (
+      successorMutation?.kind !== 'resident-successor-authority-mutation' ||
+      successorMutation.coordinator_epoch !== successorContext.authority.epoch
+    ) {
+      throw new Error(
+        'DynamoDB resident successor fenced mutation was not retained.',
+      );
+    }
+
+    resumePausedRenewal.resolve();
+    const incumbentResult = await incumbentOutcome;
+    if (
+      incumbentResult.status !== 'rejected' ||
+      !(
+        incumbentResult.reason instanceof ResidentCoordinatorAuthorityLostError
+      ) ||
+      safeErrorCode(incumbentResult.reason) !==
+        'WHARFIE_RESIDENT_COORDINATOR_AUTHORITY_LOST' ||
+      safeErrorCode(incumbentResult.reason.cause) !==
+        'WHARFIE_COORDINATOR_AUTHORITY_STALE' ||
+      safeErrorCode(pausedRenewalError) !==
+        'WHARFIE_COORDINATOR_AUTHORITY_STALE' ||
+      !incumbentContext.signal.aborted ||
+      incumbentContext.signal.reason !== incumbentResult.reason
+    ) {
+      throw new Error(
+        'DynamoDB resident stale renewal did not fail closed and abort its handler.',
+      );
+    }
+
+    successorDrain.resolve();
+    const successorResult = await successorOutcome;
+    if (
+      successorResult.status !== 'fulfilled' ||
+      successorResult.value !== 'successor-drained'
+    ) {
+      if (successorResult.status === 'rejected') throw successorResult.reason;
+      throw new Error('DynamoDB resident successor did not drain cleanly.');
+    }
+    const releasedSuccessor = await coordinatorB.get({ appId });
+    if (
+      !releasedSuccessor ||
+      releasedSuccessor.status !== 'RELEASED' ||
+      releasedSuccessor.authorityId !==
+        successorContext.coordinatorAuthority.authorityId ||
+      releasedSuccessor.epoch !== successorContext.authority.epoch
+    ) {
+      throw new Error(
+        'DynamoDB resident successor did not release its latest authority.',
+      );
+    }
+
+    return deepFreeze({
+      supervisors: 2,
+      incumbent: {
+        epoch: incumbentContext.authority.epoch,
+        successfulRenewals,
+        firstRenewalRecordVersion: firstRenewalAuthority.recordVersion,
+        pausedRenewalAttempt: renewalAttempts,
+        staleRenewalRejected: true,
+        renewalErrorCode: safeErrorCode(pausedRenewalError),
+        handlerAborted: true,
+        lossCode: safeErrorCode(incumbentResult.reason),
+      },
+      successor: {
+        observedFromEpoch: successorObservation.authority.epoch,
+        epoch: successorContext.authority.epoch,
+        observationWindowMs: successorObservation.observationWindowMs,
+        elapsedNanoseconds,
+        takeoverAdvancedEpoch: true,
+        fencedMutationCommitted: true,
+        mutationRetained: true,
+        drained: true,
+        released: true,
+      },
+      staleFencedMutation: {
+        rejected: true,
+        errorName: staleMutationErrorName,
+        retainedMutation: false,
+        staleEpoch: incumbentContext.authority.epoch,
+        currentEpoch: successorContext.authority.epoch,
+      },
+    });
+  } finally {
+    if (!incumbentStop.signal.aborted) incumbentStop.abort(cleanupReason);
+    if (!successorStop.signal.aborted) successorStop.abort(cleanupReason);
+    resumePausedRenewal.resolve();
+    incumbentCleanupDrain.resolve();
+    successorDrain.resolve();
+    await Promise.all([
+      incumbentOutcome,
+      ...(successorOutcome ? [successorOutcome] : []),
+    ]);
+  }
+}
+
+/**
  * Create the bounded live-proof driver from provider and timing seams.
  * @param {{
  *   admin: {createTable: (input: Record<string, any>) => Promise<any>, describeTable: (input: Record<string, any>) => Promise<any>, deleteTable: (input: Record<string, any>) => Promise<any>, close?: () => Promise<void> | void},
  *   createDBClient: (label: 'coordinator-a'|'coordinator-b') => Promise<import('../src/core/lib/db/base.js').DBClient>,
  *   createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol,
+ *   createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor,
+ *   validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology,
  *   observationWindowMs?: number,
+ *   residentRenewalIntervalMs?: number,
+ *   residentSupervisorTiming?: (label: 'incumbent'|'successor') => Readonly<{monotonicNow?: () => bigint, waitForInterval?: (milliseconds: number, signal?: AbortSignal) => Promise<void>}>,
  *   now?: () => number,
  *   uniqueSuffix?: () => string,
  *   wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>,
@@ -375,8 +811,24 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
   }
   const createProtocol =
     dependencies.createProtocol ?? createDynamoDBCoordinatorAuthorityProtocol;
+  const createSupervisor =
+    dependencies.createSupervisor ??
+    createResidentCoordinatorAuthoritySupervisor;
+  const validateTopology =
+    dependencies.validateTopology ??
+    validateAwsDynamoDBCoordinatorAuthorityTableTopology;
   const observationWindowMs =
     dependencies.observationWindowMs ?? DEFAULT_OBSERVATION_WINDOW_MS;
+  const residentRenewalIntervalMs =
+    dependencies.residentRenewalIntervalMs ??
+    Math.max(
+      1,
+      Math.min(
+        DEFAULT_RESIDENT_RENEWAL_INTERVAL_MS,
+        Math.floor(observationWindowMs / 3),
+      ),
+    );
+  const residentSupervisorTiming = dependencies.residentSupervisorTiming;
   const now = dependencies.now ?? Date.now;
   const uniqueSuffix =
     dependencies.uniqueSuffix ?? (() => randomBytes(8).toString('hex'));
@@ -387,8 +839,14 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
     });
   if (
     typeof createProtocol !== 'function' ||
+    typeof createSupervisor !== 'function' ||
+    typeof validateTopology !== 'function' ||
     !Number.isSafeInteger(observationWindowMs) ||
     observationWindowMs < 1 ||
+    !Number.isSafeInteger(residentRenewalIntervalMs) ||
+    residentRenewalIntervalMs < 1 ||
+    (residentSupervisorTiming !== undefined &&
+      typeof residentSupervisorTiming !== 'function') ||
     typeof now !== 'function' ||
     typeof uniqueSuffix !== 'function' ||
     typeof wait !== 'function'
@@ -451,16 +909,58 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
         );
       }
       tableOwned = true;
-      const table = await waitForTableActive(
-        admin,
-        tableName,
-        input.region,
-        wait,
-      );
+      const table = await waitForTableActive(admin, tableName, wait);
       const dbA = await dependencies.createDBClient('coordinator-a');
       clients.push(dbA);
       const dbB = await dependencies.createDBClient('coordinator-b');
       clients.push(dbB);
+      const topologyResults = await Promise.allSettled(
+        [dbA, dbB].map(
+          async (db) =>
+            await validateTopology({
+              db,
+              tableName,
+              region: input.region,
+            }),
+        ),
+      );
+      const topologyFailure = topologyResults.find(
+        (result) => result.status === 'rejected',
+      );
+      if (topologyFailure?.status === 'rejected') {
+        throw topologyFailure.reason;
+      }
+      const topologies = topologyResults.map((result) => {
+        if (result.status !== 'fulfilled') {
+          throw new Error('DynamoDB proof topology validation did not settle.');
+        }
+        return result.value;
+      });
+      for (const topologyEvidence of topologies) {
+        if (
+          !isPlainObject(topologyEvidence) ||
+          topologyEvidence.kind !== 'dynamodb-coordinator-authority-topology' ||
+          topologyEvidence.tableName !== tableName ||
+          topologyEvidence.region !== input.region ||
+          topologyEvidence.tableStatus !== 'ACTIVE' ||
+          topologyEvidence.globalTable !== false ||
+          topologyEvidence.replicaCount !== 0 ||
+          topologyEvidence.witnessCount !== 0
+        ) {
+          throw new Error(
+            'DynamoDB proof topology validator returned invalid evidence.',
+          );
+        }
+      }
+      if (
+        JSON.stringify(sortCanonicalJsonValue(topologies[0])) !==
+        JSON.stringify(sortCanonicalJsonValue(topologies[1]))
+      ) {
+        throw new Error(
+          'DynamoDB proof data clients did not validate the same topology.',
+        );
+      }
+      const topology = topologies[0];
 
       const protocol = (
         /** @type {import('../src/core/lib/db/base.js').DBClient} */ db,
@@ -673,6 +1173,36 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
         );
       }
 
+      const releasedRaceWinner = await coordinatorA.release({
+        authority: race.winner.authority,
+        requestId: `release-race-winner-${suffix}`,
+        observedAt: observedAt(now()),
+      });
+      if (
+        !releasedRaceWinner.applied ||
+        releasedRaceWinner.authority.status !== 'RELEASED' ||
+        releasedRaceWinner.authority.epoch !== race.winner.authority.epoch
+      ) {
+        throw new Error(
+          'DynamoDB coordinator race winner did not release before the resident proof.',
+        );
+      }
+      const residentSupervisors = await runResidentSupervisorProof({
+        coordinatorA,
+        coordinatorB,
+        dbA,
+        dbB,
+        appId,
+        tableName,
+        mutationPartition,
+        observationWindowMs,
+        suffix,
+        now,
+        createSupervisor,
+        residentRenewalIntervalMs,
+        residentSupervisorTiming,
+      });
+
       proof = deepFreeze({
         schemaVersion: DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_SCHEMA_VERSION,
         kind: DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_KIND,
@@ -682,8 +1212,10 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
           region: input.region,
           tableName,
           billingMode: table.billingMode,
-          globalTable: table.globalTable,
-          replicas: table.replicas,
+          globalTable: topology.globalTable,
+          replicas: topology.replicaCount,
+          validatedDataClients: 2,
+          topology,
         },
         protocol: {
           kind: 'record-version-number-observation',
@@ -729,6 +1261,7 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
             retained: true,
             coordinatorEpoch: race.winner.authority.epoch,
           },
+          residentSupervisors,
         },
       });
     } catch (error) {
@@ -799,6 +1332,75 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
 }
 
 /**
+ * Bind the live administrative and data clients to one retained credentials
+ * provider. The provider object remains private to these client constructors;
+ * no credential identity or material enters proof evidence.
+ * @param {{region: string, bindings: import('../src/core/runtime/aws-provider-module.js').AwsSdkBindings, createDynamoDB: typeof import('../src/core/lib/db/adapters/dynamodb.js').default}} options - Loaded AWS bindings and adapter.
+ * @param {{createDriver?: typeof createDynamoDBCoordinatorAuthorityLiveProofDriver}} [dependencies] - Focused constructor test seam.
+ * @returns {ReturnType<typeof createDynamoDBCoordinatorAuthorityLiveProofDriver>} - Live proof driver.
+ */
+export function createDynamoDBCoordinatorAuthorityLiveAwsDriver(
+  options,
+  dependencies = {},
+) {
+  if (
+    !isPlainObject(options) ||
+    Object.keys(options).some(
+      (key) => !['region', 'bindings', 'createDynamoDB'].includes(key),
+    ) ||
+    typeof options.region !== 'string' ||
+    !REGION_PATTERN.test(options.region) ||
+    !options.bindings ||
+    typeof options.bindings !== 'object' ||
+    typeof options.createDynamoDB !== 'function' ||
+    !isPlainObject(dependencies) ||
+    Object.keys(dependencies).some((key) => key !== 'createDriver') ||
+    (dependencies.createDriver !== undefined &&
+      typeof dependencies.createDriver !== 'function')
+  ) {
+    throw new TypeError(
+      'DynamoDB coordinator live AWS client dependencies are invalid.',
+    );
+  }
+  const bindings = options.bindings;
+  const fromNodeProviderChain =
+    bindings.credentialProviders?.fromNodeProviderChain;
+  const DynamoDB = bindings.clientDynamoDB?.DynamoDB;
+  if (
+    typeof fromNodeProviderChain !== 'function' ||
+    typeof DynamoDB !== 'function'
+  ) {
+    throw new TypeError(
+      'DynamoDB coordinator live AWS bindings are incomplete.',
+    );
+  }
+  const credentials = fromNodeProviderChain();
+  if (typeof credentials !== 'function') {
+    throw new TypeError(
+      'DynamoDB coordinator live AWS credentials provider is invalid.',
+    );
+  }
+  const region = options.region;
+  const adminClient = new DynamoDB({ region, credentials });
+  const createDriver =
+    dependencies.createDriver ??
+    createDynamoDBCoordinatorAuthorityLiveProofDriver;
+  return createDriver({
+    admin: {
+      createTable: async (input) =>
+        await adminClient.createTable(/** @type {any} */ (input)),
+      describeTable: async (input) =>
+        await adminClient.describeTable(/** @type {any} */ (input)),
+      deleteTable: async (input) =>
+        await adminClient.deleteTable(/** @type {any} */ (input)),
+      close: () => adminClient.destroy(),
+    },
+    createDBClient: async () =>
+      options.createDynamoDB({ region, credentials }, bindings),
+  });
+}
+
+/**
  * Load the optional AWS companion only after the explicit live confirmation.
  * @param {string} region - AWS region.
  * @returns {Promise<ReturnType<typeof createDynamoDBCoordinatorAuthorityLiveProofDriver>>} - Live driver.
@@ -810,18 +1412,10 @@ async function createLiveDriver(region) {
       import('../src/core/lib/db/adapters/dynamodb.js'),
     ]);
   const bindings = getAwsSdkBindings();
-  const adminClient = new bindings.clientDynamoDB.DynamoDB({ region });
-  return createDynamoDBCoordinatorAuthorityLiveProofDriver({
-    admin: {
-      createTable: async (input) =>
-        await adminClient.createTable(/** @type {any} */ (input)),
-      describeTable: async (input) =>
-        await adminClient.describeTable(/** @type {any} */ (input)),
-      deleteTable: async (input) =>
-        await adminClient.deleteTable(/** @type {any} */ (input)),
-      close: () => adminClient.destroy(),
-    },
-    createDBClient: async () => createDynamoDB({ region }, bindings),
+  return createDynamoDBCoordinatorAuthorityLiveAwsDriver({
+    region,
+    bindings,
+    createDynamoDB,
   });
 }
 

@@ -354,6 +354,9 @@ async function withCoordinatorAuthorityStore(handler, options = {}) {
     db = await createControlDBClient(configuration.adapterName, {
       path: configuration.controlPath,
       readOnly,
+      ...(configuration.region === undefined
+        ? {}
+        : { region: configuration.region }),
     });
     result = await handler(
       createCoordinatorAuthority({

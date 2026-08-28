@@ -15,6 +15,36 @@ import {
 } from '../utils.js';
 
 const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
+const DYNAMODB_SERVICE_CLIENTS = new WeakMap();
+
+/**
+ * Describe one table through the exact raw service client owned by a live
+ * DynamoDB DB wrapper. The WeakMap capability cannot be recovered from the
+ * public adapter brand or copied onto another object.
+ * @param {import('../base.js').DBClient} db - Exact open DynamoDB wrapper.
+ * @param {Readonly<{TableName: string}>} input - Exact DescribeTable request.
+ * @returns {Promise<unknown>} - Raw provider response for topology validation.
+ */
+export async function describeDynamoDBTableForClient(db, input) {
+  const client =
+    db && typeof db === 'object' ? DYNAMODB_SERVICE_CLIENTS.get(db) : undefined;
+  if (!client) {
+    throw new TypeError(
+      'DescribeTable requires the exact open DynamoDB DB client.',
+    );
+  }
+  if (
+    !input ||
+    typeof input !== 'object' ||
+    Array.isArray(input) ||
+    Reflect.ownKeys(input).length !== 1 ||
+    typeof input.TableName !== 'string' ||
+    input.TableName.length === 0
+  ) {
+    throw new TypeError('DescribeTable requires one exact TableName.');
+  }
+  return await client.describeTable({ TableName: input.TableName });
+}
 
 /**
  * Factory options for creating a DynamoDB wrapper client.
@@ -49,19 +79,19 @@ export default function createDynamoDB(
   } = bindings.clientDynamoDB;
   const { fromNodeProviderChain } = bindings.credentialProviders;
   const resolvedCredentials = credentials ?? fromNodeProviderChain();
-  const docClient = DynamoDBDocument.from(
-    new DynamoDB({
-      ...BaseAWS.config(
-        {
-          maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
-        },
-        bindings,
-      ),
-      region,
-      credentials: resolvedCredentials,
-    }),
-    { marshallOptions: { removeUndefinedValues: true } },
-  );
+  const serviceClient = new DynamoDB({
+    ...BaseAWS.config(
+      {
+        maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
+      },
+      bindings,
+    ),
+    region,
+    credentials: resolvedCredentials,
+  });
+  const docClient = DynamoDBDocument.from(serviceClient, {
+    marshallOptions: { removeUndefinedValues: true },
+  });
 
   /** @returns {void} - Throws when this client cannot mutate state. */
   function assertWritable() {
@@ -914,7 +944,7 @@ export default function createDynamoDB(
     throw new Error('DynamoDB transaction conflict retry limit exceeded');
   }
 
-  return brandDBClient(
+  const db = brandDBClient(
     {
       query,
       queryPage,
@@ -930,9 +960,13 @@ export default function createDynamoDB(
        * @returns {import('../base.js').CloseReturn} - Result.
        */
       close: async () => {
-        if (typeof docClient.destroy === 'function') docClient.destroy();
+        DYNAMODB_SERVICE_CLIENTS.delete(db);
+        if (typeof serviceClient.destroy === 'function')
+          serviceClient.destroy();
       },
     },
     DB_ADAPTER_NAMES.DYNAMODB,
   );
+  DYNAMODB_SERVICE_CLIENTS.set(db, serviceClient);
+  return db;
 }

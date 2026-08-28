@@ -10,11 +10,19 @@ import {
   jest,
 } from '@jest/globals';
 
+import {
+  COORDINATOR_AUTHORITY_ID_DOMAIN,
+  COORDINATOR_AUTHORITY_ID_PREFIX,
+} from '../../src/core/lib/db/tables/coordinator-authority.js';
+import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
+
 const LEDGER_SERVICE_IMPORT =
   '../../src/core/runtime/services/ledger-service.js';
 const DB_CONFIG_IMPORT = '../../src/core/lib/config/db.js';
 const EXECUTION_LEDGER_STORE_IMPORT =
   '../../src/core/runtime/operator/execution-ledger-store.js';
+const EXECUTION_LEDGER_IMPORT =
+  '../../src/core/lib/db/tables/execution-ledger.js';
 
 /** @type {ReturnType<typeof jest.fn>} */
 let acquireLocalLedgerServiceSession;
@@ -23,7 +31,15 @@ let createControlDBClient;
 /** @type {Function} */
 let withExecutionLedger;
 /** @type {Function} */
+let withExecutionLedgerResidentCoordinatorAuthority;
+/** @type {Function} */
 let withLocalLedgerServiceMutationOwnership;
+/** @type {Function} */
+let assertExecutionLedgerStoreScope;
+/** @type {Function} */
+let createExecutionLedger;
+/** @type {Function} */
+let prepareExecutionLedgerCoordinatorAuthorityBinding;
 
 beforeEach(async () => {
   jest.resetModules();
@@ -34,16 +50,27 @@ beforeEach(async () => {
   }));
   jest.unstable_mockModule(DB_CONFIG_IMPORT, () => ({
     APPLICATION_STATE_TABLE_NAME: 'wharfie-application-state-v2',
+    DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE: 'dynamodb-rvn-v1',
     createControlDBClient,
     resolveControlAdapterName: () => 'lmdb',
+    resolveControlStoreRegion: () => undefined,
     resolveControlStorePath: () => '/control',
     resolveExecutionLedgerTableName: () => 'execution-ledger-test',
     resolveExecutionPayloadPath: () => '/payloads',
     resolveExecutionPayloadStoreId: () => 'payload-store-test',
     resolveLedgerServiceSessionPath: () => '/sessions',
+    resolveResidentCoordinatorAuthorityConfiguration: () => undefined,
   }));
-  ({ withExecutionLedger, withLocalLedgerServiceMutationOwnership } =
-    await import(EXECUTION_LEDGER_STORE_IMPORT));
+  ({
+    withExecutionLedger,
+    withExecutionLedgerResidentCoordinatorAuthority,
+    withLocalLedgerServiceMutationOwnership,
+  } = await import(EXECUTION_LEDGER_STORE_IMPORT));
+  ({
+    assertExecutionLedgerStoreScope,
+    createExecutionLedger,
+    prepareExecutionLedgerCoordinatorAuthorityBinding,
+  } = await import(EXECUTION_LEDGER_IMPORT));
 });
 
 afterEach(() => {
@@ -81,7 +108,89 @@ function executionLedgerConfiguration() {
   });
 }
 
+function residentAuthorityConfiguration() {
+  return Object.freeze({
+    ...executionLedgerConfiguration(),
+    adapterName: /** @type {const} */ ('dynamodb'),
+    region: 'us-east-2',
+    residentCoordinatorAuthority: Object.freeze({
+      profile: /** @type {const} */ ('dynamodb-rvn-v1'),
+      adapterName: /** @type {const} */ ('dynamodb'),
+      region: 'us-east-2',
+      tableName: 'execution-ledger-test',
+      renewalIntervalMs: 5_000,
+      observationWindowMs: 15_000,
+    }),
+  });
+}
+
+function coordinatorAuthorityToken() {
+  const requestId = 'resident-acquisition-request';
+  return Object.freeze({
+    schemaVersion: 1,
+    appId: 'resident-test-app',
+    coordinatorId: 'resident-session',
+    authorityId: createCanonicalJsonSha256Id({
+      domain: COORDINATOR_AUTHORITY_ID_DOMAIN,
+      prefix: COORDINATOR_AUTHORITY_ID_PREFIX,
+      value: {
+        schemaVersion: 1,
+        appId: 'resident-test-app',
+        coordinatorId: 'resident-session',
+        epoch: 2,
+        requestId,
+      },
+    }),
+    epoch: 2,
+  });
+}
+
+function executionLedgerDB(kind = 'dynamodb-client') {
+  return {
+    kind,
+    transactionWrite: jest.fn(),
+  };
+}
+
+/**
+ * @param {Record<string, any>} db
+ * @param {string} [tableName]
+ * @returns {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore}
+ */
+function scopedExecutionLedger(db, tableName = 'execution-ledger-test') {
+  return createExecutionLedger({
+    db,
+    tableName,
+    payloadStore: {
+      putJson: jest.fn(),
+      readBytes: jest.fn(),
+    },
+  });
+}
+
 describe('execution-ledger control-store cleanup', () => {
+  it('passes the command-local DynamoDB region instead of rereading ambient routing', async () => {
+    const close = jest.fn();
+    createControlDBClient.mockResolvedValue({
+      transactionWrite: jest.fn(),
+      close,
+    });
+    const configuration = Object.freeze({
+      ...executionLedgerConfiguration(),
+      adapterName: /** @type {const} */ ('dynamodb'),
+      region: 'us-east-2',
+    });
+
+    await withExecutionLedger(async () => 'done', { configuration });
+
+    expect(createControlDBClient).toHaveBeenCalledWith('dynamodb', {
+      path: '/control',
+      readOnly: false,
+      region: 'us-east-2',
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('closes the DB and preserves a handler-only non-Error failure', async () => {
     /** @type {string[]} */
     const order = [];
@@ -181,6 +290,477 @@ describe('execution-ledger control-store cleanup', () => {
     expect(order).toEqual(['handler', 'close']);
     expect(close).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('execution-ledger construction scope', () => {
+  it('recognizes exact unbound and authority-bound ledger objects', () => {
+    const db = executionLedgerDB();
+    const ledger = scopedExecutionLedger(db);
+    const boundLedger = ledger.bindCoordinatorAuthority(
+      coordinatorAuthorityToken(),
+    );
+
+    expect(() =>
+      assertExecutionLedgerStoreScope(ledger, db, 'execution-ledger-test'),
+    ).not.toThrow();
+    expect(() =>
+      assertExecutionLedgerStoreScope(boundLedger, db, 'execution-ledger-test'),
+    ).not.toThrow();
+  });
+
+  it('binds through the retained construction closure exactly once', () => {
+    const db = executionLedgerDB();
+    const ledger = scopedExecutionLedger(db);
+    const publicBinder = jest
+      .spyOn(ledger, 'bindCoordinatorAuthority')
+      .mockImplementation(() => {
+        throw new Error('mutable public binder invoked');
+      });
+    const bindCoordinatorAuthority =
+      prepareExecutionLedgerCoordinatorAuthorityBinding(
+        ledger,
+        db,
+        'execution-ledger-test',
+      );
+
+    const boundLedger = bindCoordinatorAuthority(coordinatorAuthorityToken());
+
+    expect(publicBinder).not.toHaveBeenCalled();
+    expect(boundLedger.getCoordinatorAuthority()).toEqual(
+      coordinatorAuthorityToken(),
+    );
+    expect(() => bindCoordinatorAuthority(coordinatorAuthorityToken())).toThrow(
+      /already used/u,
+    );
+  });
+
+  it.each([
+    ['copied ledger', 'copied'],
+    ['unrelated object', 'unrelated'],
+    ['different DB object', 'different-db'],
+    ['different table', 'different-table'],
+  ])('rejects a %s', (_label, scenario) => {
+    const db = executionLedgerDB();
+    const ledger = scopedExecutionLedger(db);
+    const differentDB = executionLedgerDB('different-dynamodb-client');
+    const candidate =
+      scenario === 'copied'
+        ? { ...ledger }
+        : scenario === 'unrelated'
+          ? { bindCoordinatorAuthority: ledger.bindCoordinatorAuthority }
+          : ledger;
+
+    expect(() =>
+      assertExecutionLedgerStoreScope(
+        candidate,
+        scenario === 'different-db' ? differentDB : db,
+        scenario === 'different-table'
+          ? 'other-execution-ledger'
+          : 'execution-ledger-test',
+      ),
+    ).toThrow(/exact store/u);
+  });
+});
+
+describe('resident DynamoDB coordinator authority integration', () => {
+  /** @param {{topologyFailure?: unknown}} [settings] */
+  function harness(settings = {}) {
+    const { topologyFailure } = settings;
+    /** @type {string[]} */
+    const calls = [];
+    const protocol = Object.freeze({ kind: 'protocol' });
+    const topology = Object.freeze({
+      kind: 'dynamodb-coordinator-authority-topology',
+      tableName: 'execution-ledger-test',
+      region: 'us-east-2',
+    });
+    const coordinatorAuthority = coordinatorAuthorityToken();
+    const authority = Object.freeze({
+      ...coordinatorAuthority,
+      status: 'ACTIVE',
+      recordVersion: 7,
+    });
+    const authoritySignal = new AbortController().signal;
+    const db = executionLedgerDB();
+    const ledger = scopedExecutionLedger(db);
+    jest.spyOn(ledger, 'bindCoordinatorAuthority').mockImplementation(() => {
+      throw new Error('The mutable public binder must not be called.');
+    });
+    const validateTopology = jest.fn(async (input) => {
+      calls.push('topology');
+      if (topologyFailure) throw topologyFailure;
+      expect(input).toEqual({
+        db,
+        tableName: 'execution-ledger-test',
+        region: 'us-east-2',
+      });
+      return topology;
+    });
+    const createProtocol = jest.fn((input) => {
+      calls.push('protocol');
+      expect(input).toMatchObject({
+        tableName: 'execution-ledger-test',
+        observationWindowMs: 15_000,
+      });
+      return protocol;
+    });
+    const run = jest.fn(async (/** @type {any} */ input) => {
+      calls.push('run');
+      return await input.handler({
+        authority,
+        coordinatorAuthority,
+        signal: authoritySignal,
+      });
+    });
+    const createSupervisor = jest.fn((input) => {
+      calls.push('supervisor');
+      expect(input).toMatchObject({
+        protocol,
+        appId: 'resident-test-app',
+        coordinatorId: 'resident-session',
+        renewalIntervalMs: 5_000,
+      });
+      return { run };
+    });
+    return {
+      calls,
+      protocol,
+      topology,
+      authority,
+      coordinatorAuthority,
+      authoritySignal,
+      db,
+      ledger,
+      validateTopology,
+      createProtocol,
+      createSupervisor,
+      run,
+    };
+  }
+
+  /**
+   * @param {ReturnType<typeof harness>} fixture
+   * @param {Function} handler
+   * @param {any} [configuration]
+   */
+  function options(
+    fixture,
+    handler,
+    configuration = residentAuthorityConfiguration(),
+  ) {
+    return {
+      appId: 'resident-test-app',
+      coordinatorId: 'resident-session',
+      ledger: fixture.ledger,
+      context: {
+        db: fixture.db,
+        adapterName: 'dynamodb',
+        tableName: 'execution-ledger-test',
+        readOnly: false,
+      },
+      configuration,
+      handler,
+    };
+  }
+
+  test('proves topology before starting and binds only the stable authority token', async () => {
+    const fixture = harness();
+    const handler = jest.fn(
+      async (
+        /** @type {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */ ledger,
+        /** @type {Record<string, any>} */ session,
+      ) => {
+        fixture.calls.push('handler');
+        expect(ledger.getCoordinatorAuthority()).toEqual(
+          fixture.coordinatorAuthority,
+        );
+        expect(session).toEqual({
+          authority: fixture.authority,
+          coordinatorAuthority: fixture.coordinatorAuthority,
+          signal: fixture.authoritySignal,
+          topology: fixture.topology,
+        });
+        expect(Object.isFrozen(session)).toBe(true);
+        return 'completed';
+      },
+    );
+
+    await expect(
+      withExecutionLedgerResidentCoordinatorAuthority(
+        options(fixture, handler),
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+        },
+      ),
+    ).resolves.toBe('completed');
+
+    expect(fixture.calls).toEqual([
+      'protocol',
+      'topology',
+      'supervisor',
+      'run',
+      'handler',
+    ]);
+    expect(fixture.ledger.bindCoordinatorAuthority).not.toHaveBeenCalled();
+  });
+
+  test('snapshots accessor-backed client and routing fields exactly once', async () => {
+    const fixture = harness();
+    const differentDB = executionLedgerDB('drifting-dynamodb-client');
+    const reads = {
+      contextDB: 0,
+      contextTable: 0,
+      configurationRegion: 0,
+      configurationTable: 0,
+      authorityRegion: 0,
+      authorityTable: 0,
+    };
+    const authorityConfiguration = {
+      ...residentAuthorityConfiguration().residentCoordinatorAuthority,
+      get region() {
+        reads.authorityRegion += 1;
+        return reads.authorityRegion === 1 ? 'us-east-2' : 'us-west-2';
+      },
+      get tableName() {
+        reads.authorityTable += 1;
+        return reads.authorityTable === 1
+          ? 'execution-ledger-test'
+          : 'different-execution-ledger';
+      },
+    };
+    const configuration = {
+      ...residentAuthorityConfiguration(),
+      get region() {
+        reads.configurationRegion += 1;
+        return reads.configurationRegion === 1 ? 'us-east-2' : 'us-west-2';
+      },
+      get tableName() {
+        reads.configurationTable += 1;
+        return reads.configurationTable === 1
+          ? 'execution-ledger-test'
+          : 'different-execution-ledger';
+      },
+      residentCoordinatorAuthority: authorityConfiguration,
+    };
+    const context = {
+      get db() {
+        reads.contextDB += 1;
+        return reads.contextDB === 1 ? fixture.db : differentDB;
+      },
+      adapterName: 'dynamodb',
+      get tableName() {
+        reads.contextTable += 1;
+        return reads.contextTable === 1
+          ? 'execution-ledger-test'
+          : 'different-execution-ledger';
+      },
+      readOnly: false,
+    };
+    const handler = jest.fn(async () => 'accessors-snapshotted');
+    const input = options(fixture, handler, configuration);
+    input.context = context;
+
+    await expect(
+      withExecutionLedgerResidentCoordinatorAuthority(input, {
+        validateTopology: fixture.validateTopology,
+        createProtocol: fixture.createProtocol,
+        createSupervisor: fixture.createSupervisor,
+      }),
+    ).resolves.toBe('accessors-snapshotted');
+
+    expect(reads).toEqual({
+      contextDB: 1,
+      contextTable: 1,
+      configurationRegion: 1,
+      configurationTable: 1,
+      authorityRegion: 1,
+      authorityTable: 1,
+    });
+    expect(fixture.createProtocol.mock.calls[0][0]).toMatchObject({
+      db: fixture.db,
+      tableName: 'execution-ledger-test',
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  test('retains one run snapshot when protocol construction mutates caller inputs and dependencies', async () => {
+    const fixture = harness();
+    const originalHandler = jest.fn(async () => 'snapshot-retained');
+    const replacementHandler = jest.fn(async () => 'drifted-handler');
+    const driftedTopology = jest.fn(async () => {
+      throw new Error('drifted topology dependency invoked');
+    });
+    const authorityConfiguration = /** @type {any} */ ({
+      ...residentAuthorityConfiguration().residentCoordinatorAuthority,
+    });
+    const configuration = /** @type {any} */ ({
+      ...residentAuthorityConfiguration(),
+      residentCoordinatorAuthority: authorityConfiguration,
+    });
+    const input = /** @type {any} */ (
+      options(fixture, originalHandler, configuration)
+    );
+    const dependencies = /** @type {any} */ ({
+      validateTopology: fixture.validateTopology,
+      createProtocol: jest.fn((protocolInput) => {
+        fixture.calls.push('protocol');
+        expect(protocolInput).toEqual({
+          db: fixture.db,
+          tableName: 'execution-ledger-test',
+          observationWindowMs: 15_000,
+        });
+        input.appId = 'drifted-app';
+        input.coordinatorId = 'drifted-coordinator';
+        input.ledger = { bindCoordinatorAuthority: jest.fn() };
+        input.context.db = executionLedgerDB('drifted-dynamodb-client');
+        input.context.adapterName = 'lmdb';
+        input.context.tableName = 'different-execution-ledger';
+        input.context.readOnly = true;
+        input.configuration.adapterName = 'lmdb';
+        input.configuration.region = 'us-west-2';
+        input.configuration.tableName = 'different-execution-ledger';
+        authorityConfiguration.adapterName = 'lmdb';
+        authorityConfiguration.region = 'us-west-2';
+        authorityConfiguration.tableName = 'different-execution-ledger';
+        authorityConfiguration.renewalIntervalMs = 1;
+        authorityConfiguration.observationWindowMs = 2;
+        input.signal = new AbortController().signal;
+        input.handler = replacementHandler;
+        dependencies.validateTopology = driftedTopology;
+        dependencies.createSupervisor = jest.fn(() => {
+          throw new Error('drifted supervisor dependency invoked');
+        });
+        return fixture.protocol;
+      }),
+      createSupervisor: fixture.createSupervisor,
+    });
+
+    await expect(
+      withExecutionLedgerResidentCoordinatorAuthority(input, dependencies),
+    ).resolves.toBe('snapshot-retained');
+
+    expect(fixture.validateTopology).toHaveBeenCalledWith({
+      db: fixture.db,
+      tableName: 'execution-ledger-test',
+      region: 'us-east-2',
+    });
+    expect(fixture.createSupervisor).toHaveBeenCalledWith({
+      protocol: fixture.protocol,
+      appId: 'resident-test-app',
+      coordinatorId: 'resident-session',
+      renewalIntervalMs: 5_000,
+    });
+    expect(originalHandler).toHaveBeenCalledTimes(1);
+    expect(replacementHandler).not.toHaveBeenCalled();
+    expect(driftedTopology).not.toHaveBeenCalled();
+  });
+
+  test('never starts authority when topology cannot be established', async () => {
+    const failure = new Error('topology unknown');
+    const fixture = harness({ topologyFailure: failure });
+    const handler = jest.fn();
+
+    await expect(
+      withExecutionLedgerResidentCoordinatorAuthority(
+        options(fixture, handler),
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+        },
+      ),
+    ).rejects.toBe(failure);
+
+    expect(fixture.calls).toEqual(['protocol', 'topology']);
+    expect(fixture.createSupervisor).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['copied ledger', 'copied'],
+    ['unrelated object', 'unrelated'],
+    ['ledger from a different DB object', 'different-db'],
+    ['ledger from a different table', 'different-table'],
+    ['ledger that is already authority-bound', 'already-bound'],
+  ])(
+    'rejects a %s before protocol or topology construction',
+    async (_label, scenario) => {
+      const fixture = harness();
+      const input = /** @type {any} */ (options(fixture, jest.fn()));
+      if (scenario === 'copied') {
+        input.ledger = { ...fixture.ledger };
+      } else if (scenario === 'unrelated') {
+        input.ledger = { bindCoordinatorAuthority: jest.fn() };
+      } else if (scenario === 'different-db') {
+        input.ledger = scopedExecutionLedger(
+          executionLedgerDB('different-dynamodb-client'),
+        );
+      } else if (scenario === 'already-bound') {
+        input.ledger = scopedExecutionLedger(
+          fixture.db,
+        ).bindCoordinatorAuthority(coordinatorAuthorityToken());
+      } else {
+        input.ledger = scopedExecutionLedger(
+          fixture.db,
+          'different-execution-ledger',
+        );
+      }
+
+      await expect(
+        withExecutionLedgerResidentCoordinatorAuthority(input, {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+        }),
+      ).rejects.toThrow(
+        scenario === 'already-bound' ? /unbound/u : /exact store/u,
+      );
+      expect(fixture.createProtocol).not.toHaveBeenCalled();
+      expect(fixture.validateTopology).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    ['non-DynamoDB context', { contextAdapterName: 'lmdb' }],
+    ['missing profile', { omitProfile: true }],
+    ['different Region', { region: 'us-west-2' }],
+    ['different table', { tableName: 'other-ledger' }],
+  ])(
+    'rejects %s before protocol or topology construction',
+    async (_label, drift) => {
+      const change = /** @type {Record<string, any>} */ (drift);
+      const fixture = harness();
+      const configuration = residentAuthorityConfiguration();
+      const changedConfiguration = change.omitProfile
+        ? Object.freeze({
+            ...configuration,
+            residentCoordinatorAuthority: undefined,
+          })
+        : Object.freeze({
+            ...configuration,
+            ...(change.region === undefined ? {} : { region: change.region }),
+          });
+      const input = options(fixture, jest.fn(), changedConfiguration);
+      if (change.contextAdapterName !== undefined) {
+        input.context.adapterName = change.contextAdapterName;
+      }
+      if (change.tableName !== undefined) {
+        input.context.tableName = change.tableName;
+      }
+
+      await expect(
+        withExecutionLedgerResidentCoordinatorAuthority(input, {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+        }),
+      ).rejects.toThrow();
+      expect(fixture.createProtocol).not.toHaveBeenCalled();
+      expect(fixture.validateTopology).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('local execution-ledger mutation ownership cleanup', () => {

@@ -5,13 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  COORDINATOR_AUTHORITY_MAX_TIMER_MS,
+  DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
   closeDB,
   createControlDBClient,
   resolveControlAdapterName,
+  resolveControlStoreRegion,
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,
   resolveLedgerServiceSessionPath,
+  resolveResidentCoordinatorAuthorityConfiguration,
   resolveStateAdapterName,
 } from '../../src/core/lib/config/db.js';
 import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../src/core/lib/db/state/store.js';
@@ -97,6 +101,135 @@ describe('Unified DB config', () => {
     await withEnv({ WHARFIE_CONTROL_ADAPTER: 'vanilla' }, async () => {
       expect(resolveControlAdapterName()).toBe('vanilla');
     });
+  });
+
+  test('snapshots an explicit DynamoDB region without enabling automatic replacement', async () => {
+    await withEnv(
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE: undefined,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: undefined,
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: undefined,
+      },
+      async () => {
+        expect(resolveControlStoreRegion('dynamodb')).toBe('us-east-2');
+        expect(
+          resolveResidentCoordinatorAuthorityConfiguration({
+            adapterName: 'dynamodb',
+            tableName: 'ledger-table',
+            region: 'us-east-2',
+          }),
+        ).toBeUndefined();
+      },
+    );
+    await withEnv({ AWS_REGION: undefined }, async () => {
+      expect(resolveControlStoreRegion('dynamodb')).toBeUndefined();
+    });
+  });
+
+  test('resolves only the explicit bounded DynamoDB RVN resident profile', async () => {
+    await withEnv(
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+      },
+      async () => {
+        const configuration = resolveResidentCoordinatorAuthorityConfiguration({
+          adapterName: 'dynamodb',
+          tableName: ' ledger-table ',
+          region: resolveControlStoreRegion('dynamodb'),
+        });
+        expect(configuration).toEqual({
+          profile: 'dynamodb-rvn-v1',
+          adapterName: 'dynamodb',
+          region: 'us-east-2',
+          tableName: 'ledger-table',
+          renewalIntervalMs: 5000,
+          observationWindowMs: 15000,
+        });
+        expect(Object.isFrozen(configuration)).toBe(true);
+      },
+    );
+  });
+
+  test.each([
+    [
+      'unsupported profile',
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE: 'timestamp-lease-v0',
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+      },
+      'WHARFIE_COORDINATOR_AUTHORITY_PROFILE',
+    ],
+    [
+      'missing renewal',
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: undefined,
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+      },
+      'WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS',
+    ],
+    [
+      'unbounded observation',
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: String(
+          COORDINATOR_AUTHORITY_MAX_TIMER_MS + 1,
+        ),
+      },
+      'must be no greater',
+    ],
+    [
+      'window no larger than cadence',
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '5000',
+      },
+      'must be greater',
+    ],
+  ])('rejects %s', async (_label, environment, message) => {
+    await withEnv(environment, async () => {
+      expect(() =>
+        resolveResidentCoordinatorAuthorityConfiguration({
+          adapterName: 'dynamodb',
+          tableName: 'ledger-table',
+          region: 'us-east-2',
+        }),
+      ).toThrow(message);
+    });
+  });
+
+  test('rejects automatic replacement outside exact DynamoDB routing', async () => {
+    await withEnv(
+      {
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+      },
+      async () => {
+        expect(() =>
+          resolveResidentCoordinatorAuthorityConfiguration({
+            adapterName: 'lmdb',
+            tableName: 'ledger-table',
+          }),
+        ).toThrow(/DynamoDB control adapter/u);
+      },
+    );
   });
 
   test('execution ledger table names resolve independently at call time', async () => {
