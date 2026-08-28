@@ -12587,7 +12587,7 @@ export function createExecutionLedger({
    * is its idempotency identity: identical requests return the retained run;
    * different work fails visibly rather than being silently deduplicated.
    * @param {{runId: string, appId: string, revisionId: string, invocationId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, trigger?: {kind: 'manual'}, transitionId: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Immutable run definition.
-   * @returns {Promise<{applied: boolean, receipt?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>}>} - Created or deduplicated run.
+   * @returns {Promise<{applied: boolean, receipt?: Record<string, any>, coordinatorAuthority?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>}>} - Created or deduplicated run.
    */
   async function createManualRun(options) {
     const value = cloneBoundedJsonObject(
