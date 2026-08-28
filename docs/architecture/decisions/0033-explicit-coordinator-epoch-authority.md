@@ -1,6 +1,18 @@
 # 0033 — Explicit coordinator epoch authority
 
-**Status:** Accepted, amended 2026-08-27 · **Date:** 2026-07-28
+**Status:** Accepted; automatic-replacement boundary amended by
+[0037](0037-single-region-dynamodb-rvn-coordinator-replacement.md) on
+2026-08-27 · **Date:** 2026-07-28
+
+> **Amendment (2026-08-27):** ADR 0037 supersedes this record's conclusion
+> that automatic replacement must always wait for store-authoritative expiry.
+> A single-Region, non-global DynamoDB table may instead use receiptless exact
+> RVN renewal, strongly consistent observation across a local monotonic
+> window, and exact-CAS epoch takeover. The existing same-transaction stable
+> authority-tuple fence remains the sole safety boundary. Deterministic and
+> live-provider proof passed, while resident wiring, reconstruction,
+> multi-node recovery, cross-store atomicity, and multi-Region behavior remain
+> outside that amendment.
 
 ## Context
 
@@ -74,9 +86,15 @@ An ambiguous acquire, release, heartbeat, or takeover result is resolved by a
 retained stable-request receipt and strong readback of the intended successor.
 A timeout is not treated as proof that the conditional write failed.
 
-Heartbeats are diagnostic only. They help an operator decide whether to
-investigate or confirm takeover, but they are neither renewable leases nor an
-automatic failure detector.
+The original request-receipted heartbeat timestamp remains diagnostic only.
+Its age may help an operator investigate, but it is neither a lease nor
+takeover authority. Because the committed heartbeat transition also advances
+the record version, ADR 0037 treats that exact snapshot change as legitimate
+current-owner activity and restarts an in-flight observation window.
+[ADR 0037](0037-single-region-dynamodb-rvn-coordinator-replacement.md) adds a
+distinct receiptless exact renewal for continuous DynamoDB renewal without a
+per-renewal durable receipt. Exact RVN change is contender-observable renewal
+evidence; no heartbeat or caller-wall-clock age becomes authority.
 
 ### Every authoritative mutation must be epoch-fenced
 
@@ -223,31 +241,41 @@ typed managed-effect receipts and business values; the Linux service gate
 retains its timer/signal workflow, history, and output through activation and
 uninstall. Neither evidence scope establishes automatic or volume-loss recovery.
 
-### Automatic replacement remains deferred
+### One provider-specific automatic-replacement primitive is accepted
 
-This decision is a bounded precursor to ADR 0002, not a replacement for its
-automatic-recovery goal. Automatic takeover requires a provider-certified
-semantic lease primitive that supplies:
+[ADR 0037](0037-single-region-dynamodb-rvn-coordinator-replacement.md)
+supersedes this decision's universal store-authoritative-expiry requirement for
+one single-Region, non-global DynamoDB table. Its current owner performs
+receiptless exact renewal by advancing the full snapshot's RVN. A contender
+uses strongly consistent reads to observe one exact unchanged snapshot across
+a full local monotonic window, then attempts an exact-CAS transition to the
+next epoch.
 
-- linearizable acquire and renewal;
-- expiry evaluated from store-authoritative time;
-- an atomic expiry predicate and monotonic epoch transition;
-- exact fencing conditions for authoritative writes; and
-- strong readback after ambiguous outcomes.
+The monotonic timer is only a failure detector. Clock acceleration, process
+pause, or an aggressive interval can replace a live owner and cause
+availability churn. Safety still comes exclusively from the stable ACTIVE
+authority-tuple condition in the same DynamoDB transaction as every protected
+ledger mutation: a predecessor write either commits before takeover or its
+stale condition fails afterward.
 
-The generic database API is not that primitive. Wharfie will not claim
-automatic coordinator failover until a provider-backed implementation and
-crash-boundary proof establish those semantics.
+The generic database API is still not this primitive, and other providers or
+topologies need their own certification. Deterministic validation and a live
+DynamoDB disposable-table proof passed. Automatic resident wiring, replacement
+reconstruction, two-node service recovery, cross-store atomicity, and
+multi-Region DynamoDB are not established by this decision.
 
 ## Consequences
 
 - The authority state machine and an authority-bound execution ledger can
   safely replace a coordinator after deliberate confirmation without
   depending on stopping the old process.
-- A coordinator crash does not currently trigger automatic recovery. The
-  application remains unavailable for new authoritative commits until a caller
-  explicitly confirms takeover through the operator path.
-- Heartbeat freshness is useful evidence but never authority.
+- A coordinator crash does not yet trigger automatic resident recovery. Until
+  ADR 0037's certified primitive is wired into a runtime, the application
+  remains unavailable for new authoritative commits until a caller explicitly
+  confirms takeover through the operator path.
+- Diagnostic heartbeat freshness is useful evidence but never authority. In
+  ADR 0037's DynamoDB profile, exact RVN change is renewal evidence for the
+  failure detector, while the committed stable tuple remains authority.
 - The execution-ledger transaction budget includes one additional authority
   condition, and every direct mutation path must be audited rather than only
   the common transition helper.
@@ -276,9 +304,9 @@ crash-boundary proof establish those semantics.
 - Same-volume local stores can exercise the state machine and fencing model,
   but they do not establish recovery after loss of the host or volume.
 - Cross-store adoption/readiness is ordered and recoverable for the single
-  configured application-state destination, not atomic. Automatic coordinator
-  recovery still requires the provider-certified lease primitive, followed by
-  reconstruction and a two-node trusted recovery proof.
+  configured application-state destination, not atomic. ADR 0037 defines the
+  first provider-specific automatic replacement primitive; reconstruction,
+  runtime wiring, and a two-node trusted recovery proof remain open.
 
 ## Rejected alternatives
 
@@ -294,8 +322,10 @@ Rejected for the execution path because the current transaction contract
 cannot atomically condition a ledger-table mutation on a record in another
 table.
 
-### Let heartbeat loss trigger takeover
+### Let heartbeat timestamp age or message loss trigger takeover
 
 Rejected because message and process liveness do not prove durable authority
-has ended. Heartbeats remain diagnostic until a semantic lease makes expiry a
-store decision.
+has ended. ADR 0037 permits an exact unchanged RVN observed across a monotonic
+window to trigger an exact takeover attempt in its narrow DynamoDB profile,
+but that detector does not itself grant authority. Only the committed epoch
+transition plus the same-transaction stable-tuple fence protects writes.

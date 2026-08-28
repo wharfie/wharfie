@@ -1,6 +1,16 @@
 # 0011 — Persisted state-machine execution ledger
 
-**Status:** Accepted, amended 2026-08-27 · **Date:** 2026-07-17
+**Status:** Accepted; amended by [0036](0036-durable-coordinator-admission-provenance.md)
+and [0037](0037-single-region-dynamodb-rvn-coordinator-replacement.md) on
+2026-08-27 · **Date:** 2026-07-17
+
+> **Coordinator amendment (2026-08-27):** ADR 0037 narrows the prior
+> store-authoritative-expiry requirement. Its single-Region, non-global
+> DynamoDB control-table profile may use receiptless exact RVN renewal,
+> strong reads across a local monotonic observation window, and exact-CAS
+> epoch takeover. The same-transaction stable authority-tuple condition is
+> still the sole safety boundary. No generic-store, resident auto-wiring,
+> reconstruction, multi-node, cross-store, or multi-Region claim follows.
 
 ## Context
 
@@ -479,11 +489,22 @@ startup remains an explicit packaging and validation obligation rather than a
 property of this lifecycle record.
 
 Automatic coordinator replacement requires a provider-backed **ControlStore**
-with semantic operations for lease acquisition, renewal, epoch increment, and
-fenced transactions. Lease expiry is evaluated against store-authoritative
-time, and every mutation validates current lease authority. The existing
-generic `DBClient.transactionWrite` interface and caller-generated timestamps
-do not by themselves meet that contract.
+with certified semantic operations for acquisition, renewal, epoch increment,
+and fenced transactions. The existing generic `DBClient.transactionWrite`
+interface and caller-generated timestamps do not by themselves meet that
+contract.
+
+[ADR 0037](0037-single-region-dynamodb-rvn-coordinator-replacement.md)
+defines a narrower provider profile for a single-Region, non-global DynamoDB
+table. A current owner renews the exact full snapshot by advancing its RVN
+without a separate request receipt. A contender must observe one unchanged exact
+snapshot through strongly consistent reads across a full local monotonic
+window before attempting exact-CAS epoch takeover. The timer may cause
+premature eviction and availability churn; it cannot authorize a stale commit
+because every protected DynamoDB ledger mutation still compares the stable
+authority tuple in the same transaction. Deterministic validation and a live
+disposable-table provider proof passed; resident integration and
+reconstruction remain open.
 
 Ledger transition APIs accept fencing values from their first implementation so
 provider-backed coordination can replace local coordination without changing
@@ -530,8 +551,10 @@ invocation-creation decisions; it is not durable execution truth.
   reconciliation. This friction is intentional and preferable to duplicate
   unmanaged effects.
 - Provider-backed coordinator recovery cannot be claimed until a ControlStore
-  satisfies authoritative lease and fencing semantics independently of the
-  local ledger implementation.
+  satisfies its certified renewal, replacement, and fencing semantics
+  independently of the local ledger implementation. ADR 0037 defines that
+  contract for one single-Region DynamoDB topology; runtime integration,
+  reconstruction, and provider proof remain separate obligations.
 
 ## Rejected alternatives
 

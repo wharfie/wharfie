@@ -1,6 +1,6 @@
 # Wharfie project charter
 
-**Status:** active project reset · **Last updated:** 2026-07-28
+**Status:** active project reset · **Last updated:** 2026-08-28
 
 ## One sentence
 
@@ -33,7 +33,7 @@ A developer should be able to:
 6. Return later with the same executable to inspect revisions, runs, attempts, effects, logs, and node health; intervene when necessary; and upgrade or roll back explicitly.
 7. Add trusted nodes when placement, capacity, or recovery requires them.
 
-Local and single-node operation require no external Wharfie control plane. The distributed design fences explicit coordinator replacement with a linearizable durable authority record. Automatic replacement additionally requires a provider-certified semantic lease with store-authoritative expiry. A later mesh milestone—not the initial product proof—will validate worker and coordinator recovery across two nodes.
+Local and single-node operation require no external Wharfie control plane. The distributed design fences explicit coordinator replacement with a linearizable durable authority record. Automatic replacement additionally requires a provider-certified renewal, failure-detection, epoch-transition, and transaction-fencing profile. The first certified primitive is deliberately limited to single-Region, non-global DynamoDB; deterministic validation and a disposable-table provider proof passed. Resident wiring and reconstruction remain open. A later mesh milestone—not this provider primitive—will validate worker and coordinator recovery across two nodes.
 
 ## Product model
 
@@ -47,7 +47,7 @@ Local and single-node operation require no external Wharfie control plane. The d
 - **Attempt:** one physical execution of an invocation under a lease and fencing token.
 - **Effect:** an operation routed through Wharfie's managed effect API, recorded under a stable identity with declared and substantiated replay properties. It can be pure or externally visible.
 - **Node:** a trusted machine enrolled in a deployment and authorized to run its permitted application revisions.
-- **Coordinator:** the holder of the application's current durable epoch authority that schedules and reconciles work. Automatic replacement will additionally require a renewable semantic lease.
+- **Coordinator:** the holder of the application's current durable epoch authority that schedules and reconciles work. Automatic replacement additionally requires a provider-certified renewal and fenced-replacement protocol.
 - **Capability:** a portable resource, property, or semantic guarantee that a node or deployment can provide and an application or activity can require, such as application state, fenced control state, artifact storage, ingress, identity, or a hardware feature. Placement constraints are predicates over advertised capabilities.
 - **Deployment:** the binding between an application revision, a deployment profile, fulfilled capabilities, and enrolled nodes.
 
@@ -97,7 +97,11 @@ All enrolled nodes are trusted. The first distributed design has one coordinator
 
 The repository now binds the production resident, direct durable-submission fallback, foreground execution, and direct mutating operator paths to the explicit authority state machine and execution-ledger transaction fence. Resident schedule-control writes consume that exact ledger token, while application-state writes use a separate destination-local adoption barrier and ordered control-store readiness protocol. New authority-bound admissions retain the exact admitting authority as durable provenance without changing their logical epoch-zero event fence. This completes the bounded, explicit operator-confirmed replacement path; it does not establish automatic failover, atomic cross-store handoff, host-or-volume-loss recovery, or multi-node recovery.
 
-Heartbeats are diagnostic evidence, not leases, and their age never authorizes takeover. The generic database contract has no store-authoritative clock or expiry predicate, so Wharfie does not infer expiry from coordinator timestamps or claim automatic failover from that contract. Automatic replacement requires a provider-certified semantic lease whose acquisition, renewal, expiry, and epoch transition are linearizable at the store. Local development may exercise explicit authority through LMDB, but a local-only store cannot provide automatic failover after loss of its host. A later peer-quorum store can remove the provider dependency without changing the public model.
+Diagnostic heartbeat timestamps are not leases, and their age never authorizes takeover. The generic database contract has no store-authoritative clock or expiry predicate, so Wharfie does not infer expiry from coordinator wall-clock fields or claim automatic failover from that contract.
+
+[ADR 0037](docs/architecture/decisions/0037-single-region-dynamodb-rvn-coordinator-replacement.md) accepts one narrower provider design. In a single-Region DynamoDB table with no Global Tables replicas, the current owner renews its exact authority snapshot by advancing a Wharfie-owned record version number without a separate request receipt. A contender must strongly observe the exact unchanged snapshot across a full local monotonic window before attempting an exact-CAS epoch takeover. A fast clock, process pause, or aggressive interval can evict a live owner and cause availability churn. It cannot admit a stale protected DynamoDB commit: every authoritative ledger mutation still compares the stable active-authority tuple in the same transaction, and that transaction fence is the sole safety boundary.
+
+The DynamoDB primitive's deterministic validation and live disposable-table proof passed, including a delayed stale predecessor rejected after takeover and a current successor mutation retained. It does not yet provide resident automatic wiring, ledger reconstruction, multi-node service recovery, atomic control/application-state handoff, or multi-Region behavior. Local development may exercise explicit authority through LMDB, but a local-only store cannot provide automatic failover after loss of its host. Other providers and a later peer-quorum store need their own certified profile without changing the public model.
 
 ### Committed outcomes and effects
 
@@ -120,7 +124,7 @@ TypeScript/Node is the only initial authoring and orchestration model. Activity 
 1. **Continuity over machinery.** The product is the smooth path from local CLI to durable service; SEA, cloud resources, and mesh coordination support that path.
 2. **Local first, progressively durable.** A user should gain value before creating an account or deployment.
 3. **One artifact, one operator surface.** The application executable should remain the primary way to run, deploy, inspect, and evolve itself.
-4. **Explicit durable truth.** Revisions, authority epochs, leases, attempts, effects, ownership, and operator actions are data, not inference from logs or heartbeat age.
+4. **Explicit durable truth.** Revisions, authority epochs, renewals, attempts, effects, ownership, and operator actions are data, not inference from logs or heartbeat age.
 5. **Honest failure semantics.** Prefer `uncertain` and reconciliation to a false exactly-once claim.
 6. **Narrow portable abstractions.** Keep provider and language details behind finite contracts.
 7. **Delete migration scaffolding.** Reuse good v2 code, but do not preserve obsolete concepts merely because they already exist.

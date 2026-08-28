@@ -1,6 +1,17 @@
 # 0002 — One recoverable authoritative coordinator
 
-**Status:** Accepted · **Date:** 2026-07-16
+**Status:** Accepted; automatic-replacement rule amended by
+[0037](0037-single-region-dynamodb-rvn-coordinator-replacement.md) on
+2026-08-27 · **Date:** 2026-07-16
+
+> **Amendment (2026-08-27):** ADR 0037 supersedes this record's requirement
+> that every automatic replacement be authorized by store-authoritative
+> expiry. Its certified narrow single-Region, non-global DynamoDB primitive
+> permits an unchanged RVN observed across a local monotonic window to
+> trigger an exact-CAS epoch takeover. The stable authority-tuple condition in
+> each DynamoDB ledger transaction, not timeout accuracy, remains the safety
+> boundary. The original rule remains the default for other stores and
+> topologies.
 
 ## Context
 
