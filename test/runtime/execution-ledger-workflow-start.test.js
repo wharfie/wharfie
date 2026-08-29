@@ -7,7 +7,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createLMDBDB, getAdapterMatrix } from '../helpers/db-adapters.js';
+import {
+  createLMDBDB,
+  createMutableDBTestFacade,
+  getAdapterMatrix,
+} from '../helpers/db-adapters.js';
 import {
   ExecutionLedgerConflictError,
   ExecutionLedgerProjectionError,
@@ -404,7 +408,8 @@ for (const adapter of getAdapterMatrix()) {
     });
 
     test('binds a scheduled workflow cause into creation and exact replay', async () => {
-      const { db, cleanup } = await adapter.create();
+      const { db: exactDb, cleanup } = await adapter.create();
+      const db = createMutableDBTestFacade(exactDb);
       const tableName = 'execution-ledger-scheduled-workflow-start';
       const occurrenceId = createScheduleOccurrenceId({
         appId: APP_ID,
@@ -486,15 +491,16 @@ for (const adapter of getAdapterMatrix()) {
         );
         const wrongStore = await adapter.create();
         try {
+          const wrongStoreDb = createMutableDBTestFacade(wrongStore.db);
           const wrongStoreTransactionWrite =
-            wrongStore.db.transactionWrite.bind(wrongStore.db);
+            wrongStoreDb.transactionWrite.bind(wrongStoreDb);
           let wrongStoreWriteCount = 0;
-          wrongStore.db.transactionWrite = async (input) => {
+          wrongStoreDb.transactionWrite = async (input) => {
             wrongStoreWriteCount += 1;
             await wrongStoreTransactionWrite(input);
           };
           const wrongStoreLedger = createExecutionLedger({
-            db: wrongStore.db,
+            db: wrongStoreDb,
             tableName,
           });
           await expect(

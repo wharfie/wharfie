@@ -18,7 +18,10 @@ import {
 } from '../../src/core/lib/db/tables/local-application-activation.js';
 import { createWorkflowRunId } from '../../src/core/lib/ledger/workflow-execution-contract.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
-import { getAdapterMatrix } from '../helpers/db-adapters.js';
+import {
+  createMutableDBTestFacade,
+  getAdapterMatrix,
+} from '../helpers/db-adapters.js';
 
 /** @typedef {import('../../src/core/lib/db/base.js').DBClient} DBClient */
 
@@ -105,8 +108,9 @@ async function closeAdmission(activation, appId) {
  */
 function interceptFirstConditionedWrite(db, beforeConditionedWrite) {
   let intercepted = false;
+  const facade = createMutableDBTestFacade(db);
   return /** @type {DBClient} */ (
-    new Proxy(db, {
+    new Proxy(facade, {
       get(target, property, receiver) {
         if (property === 'transactionWrite') {
           /** @param {import('../../src/core/lib/db/base.js').TransactionWriteParams} params */
