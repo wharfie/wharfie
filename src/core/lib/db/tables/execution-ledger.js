@@ -204,6 +204,14 @@ export {
 
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
+/**
+ * Unforgeable construction provenance for execution-ledger views. Keeping this
+ * outside the returned object prevents a copied method surface or caller-owned
+ * brand from claiming the DB client/table transaction domain certified for a
+ * resident coordinator.
+ * @type {WeakMap<object, Readonly<{db: import('../base.js').DBClient, tableName: string, coordinatorAuthorityBound: boolean, bindCoordinatorAuthority: (authority: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot) => ExecutionLedgerStore}>>}
+ */
+const EXECUTION_LEDGER_STORE_SCOPES = new WeakMap();
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
 const RUN_DIRECTORY_RUN_KINDS = new Set([
   'manual',
@@ -23581,7 +23589,7 @@ export function createExecutionLedger({
     return resolvedCoordinatorAuthority;
   }
 
-  return {
+  const ledger = {
     abandonUnstartedAttempt,
     abandonUnstartedWorkflowActivityAttempt,
     appendActivityAttemptLog,
@@ -23632,6 +23640,75 @@ export function createExecutionLedger({
     settleStoppedAttemptManagedEffects,
     startManagedEffectSuccessor,
   };
+  EXECUTION_LEDGER_STORE_SCOPES.set(
+    ledger,
+    Object.freeze({
+      db,
+      tableName: resolvedTableName,
+      coordinatorAuthorityBound: resolvedCoordinatorAuthority !== undefined,
+      bindCoordinatorAuthority,
+    }),
+  );
+  return ledger;
+}
+
+/**
+ * Require the exact execution-ledger object constructed over one DB client and
+ * table. Both unbound and authority-bound views are registered at construction;
+ * copied, wrapped, or caller-shaped method surfaces have no capability.
+ * @param {unknown} ledger - Candidate exact execution-ledger object.
+ * @param {unknown} db - Required exact DB client object.
+ * @param {unknown} tableName - Required exact table name.
+ * @returns {void}
+ */
+export function assertExecutionLedgerStoreScope(ledger, db, tableName) {
+  const scope =
+    ledger !== null &&
+    (typeof ledger === 'object' || typeof ledger === 'function')
+      ? EXECUTION_LEDGER_STORE_SCOPES.get(/** @type {object} */ (ledger))
+      : undefined;
+  if (!scope || scope.db !== db || scope.tableName !== tableName) {
+    throw new TypeError(
+      'Execution ledger must be the exact store created for this DB client and table.',
+    );
+  }
+}
+
+/**
+ * Prepare one authority-binding capability for an exact unbound ledger scope.
+ * The returned closure invokes the original binder retained at construction,
+ * so replacing a public method on the same ledger object cannot redirect the
+ * authority-bound view to another DB client or table.
+ * @param {unknown} ledger - Candidate exact unbound execution-ledger object.
+ * @param {unknown} db - Required exact DB client object.
+ * @param {unknown} tableName - Required exact table name.
+ * @returns {(authority: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot) => ExecutionLedgerStore} - One-use exact binding capability.
+ */
+export function prepareExecutionLedgerCoordinatorAuthorityBinding(
+  ledger,
+  db,
+  tableName,
+) {
+  assertExecutionLedgerStoreScope(ledger, db, tableName);
+  const scope = EXECUTION_LEDGER_STORE_SCOPES.get(
+    /** @type {object} */ (ledger),
+  );
+  if (!scope || scope.coordinatorAuthorityBound) {
+    throw new TypeError(
+      'Resident coordinator authority requires an exact unbound execution ledger.',
+    );
+  }
+  let used = false;
+  return Object.freeze((authority) => {
+    if (used) {
+      throw new TypeError(
+        'Execution ledger coordinator authority binding was already used.',
+      );
+    }
+    const boundLedger = scope.bindCoordinatorAuthority(authority);
+    used = true;
+    return boundLedger;
+  });
 }
 
 /**

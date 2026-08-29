@@ -44,7 +44,8 @@ The repository has substantial foundations:
   [ADR 0037](docs/architecture/decisions/0037-single-region-dynamodb-rvn-coordinator-replacement.md):
   receiptless exact RVN renewal, strong observation across a local monotonic
   window, exact-CAS epoch takeover, and the existing same-transaction stable
-  tuple fence; deterministic races and a disposable-table provider proof pass;
+  tuple fence; its exact-client topology guard, internal resident supervisor,
+  deterministic races, and disposable-table provider proof pass;
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -106,8 +107,9 @@ session can acquire normally. Standalone mutating ledger operators and resident
 schedule-control writes now share this fence. Application-state writes use a
 separate destination-local barrier; atomic handoff across the two stores and
 automatic resident takeover remain unsupported. The accepted DynamoDB RVN
-profile now supplies a validated bounded path to automatic epoch replacement,
-but has no resident wiring, reconstruction, or multi-node recovery proof. A
+profile now supplies a validated bounded path to automatic epoch replacement
+and an internal resident authority lifecycle, but has no product activation,
+reconstruction, or multi-node recovery proof. A
 local resident now adopts its one
 configured, history-verified application-state destination before replacement
 readiness, with durable interrupted-handoff progress and exact publication
@@ -287,7 +289,12 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   unchanged exact RVN across a local monotonic window is only a failure
   detector; exact-CAS epoch takeover and the stable-tuple condition in every
   protected transaction are the safety boundary. Implementation validation
-  and the live proof pass; resident wiring and reconstruction remain pending.
+  and the live proof pass. An explicit internal resident supervisor now binds
+  topology proof to the exact immutable data client, pins all traffic to its
+  full table ARN and TableId, requires one provisioning-retained opaque
+  resource identity across participants, renews through drain, performs
+  observation-backed takeover, and fails closed on authority loss. Product
+  activation and reconstruction remain pending.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -303,14 +310,22 @@ remains explicitly unattributed. Version 10 admission epochs remain zero.
 
 ADR 0037's provider primitive, deterministic race matrix, and live disposable-
 table proof are complete. The proof retained exact topology, race, fencing,
-successor-commit, checksum, and cleanup evidence in the August 27 checkpoint.
+successor-commit, checksum, and cleanup evidence in the
+[August 27 checkpoint](llm/checkpoints/2026-08-27-dynamodb-rvn-coordinator-replacement.md).
+The follow-on
+[August 28 resident-supervisor checkpoint](llm/checkpoints/2026-08-28-resident-dynamodb-authority-supervisor.md)
+retains the exact-client construction, lifecycle race, live two-supervisor,
+checksum, and cleanup evidence.
 
-1. Wire renewal, observation, and takeover into the resident lifecycle without
-   weakening the explicit same-table fence. Treat local time only as
-   failure-detector policy: premature replacement may reduce availability but
-   must not admit stale DynamoDB commits.
-2. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
+The bounded internal lifecycle slice is complete. It deliberately did not
+lift the current LMDB-only resident and submission gates.
+
+1. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
    replacement. Reassign only work whose replay contract permits it.
+2. Integrate the supervisor around that reconstructed dispatcher, durably
+   retain and distribute the provisioned DynamoDB `tableResourceId`, decide
+   the separate application-state handoff boundary, and only then lift the
+   explicitly configured DynamoDB resident gate.
 3. Add deterministic crash tests at renewal, takeover, assignment, activity
    start, managed-effect settlement, and terminal commit.
 4. Keep the mesh trusted and explicit: enroll nodes, authorize the application
@@ -481,8 +496,9 @@ kills and explicit single-host crash/reboot recovery proved. Admission
 provenance is now retained for new bound logical admissions without changing
 version 10 attempt fencing or public history. ADR 0037 selects a bounded
 single-Region DynamoDB RVN replacement primitive; its validation and live
-proof pass. Resident wiring, reconstruction, and multi-node replacement are
-the active Outcome 2 work. Cross-store atomicity, multi-Region DynamoDB, and
+proof pass. Its internal resident supervisor now passes, while reconstruction,
+product activation, and multi-node replacement are the active Outcome 2 work.
+Cross-store atomicity, multi-Region DynamoDB, and
 arbitrary destination sets remain outside the supported primary-store protocol.
 Outcome 3 has a bounded
 two-provider lifecycle proof, while its complete redacted acceptance harness,

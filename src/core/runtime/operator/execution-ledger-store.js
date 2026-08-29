@@ -1,4 +1,7 @@
-import { createExecutionLedger } from '../../lib/db/tables/execution-ledger.js';
+import {
+  createExecutionLedger,
+  prepareExecutionLedgerCoordinatorAuthorityBinding,
+} from '../../lib/db/tables/execution-ledger.js';
 import {
   CoordinatorAuthorityStaleError,
   createCoordinatorAuthority,
@@ -6,16 +9,24 @@ import {
 import { createLedgerServiceOwnership } from '../../lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../lib/payload-store/local.js';
 import {
+  DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
   createControlDBClient,
   resolveControlAdapterName,
+  resolveControlStoreRegion,
   resolveControlStorePath,
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,
   resolveLedgerServiceSessionPath,
+  resolveResidentCoordinatorAuthorityConfiguration,
 } from '../../lib/config/db.js';
+import { createDynamoDBCoordinatorAuthorityProtocol } from '../../lib/db/tables/dynamodb-coordinator-authority.js';
 import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
+import { assertDomainSeparatedSha256Id } from '../content-id.js';
+import { DYNAMODB_TABLE_RESOURCE_ID_PREFIX } from '../dynamodb-coordinator-authority-topology.js';
+import { validateAwsDynamoDBCoordinatorAuthorityTableTopology } from '../dynamodb-coordinator-authority-topology-provider.js';
 import { acquireLocalLedgerServiceSession } from '../services/ledger-service.js';
+import { createResidentCoordinatorAuthoritySupervisor } from '../services/resident-coordinator-authority.js';
 
 /**
  * @typedef {import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore} ExecutionLedgerStore
@@ -24,13 +35,20 @@ import { acquireLocalLedgerServiceSession } from '../services/ledger-service.js'
 /**
  * Resolve every ambient storage input once so one command cannot drift between
  * adapters, payload roots, or ownership namespaces while it is running.
- * @returns {Readonly<{adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string}>} - One immutable command-local store configuration.
+ * @returns {Readonly<{adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string, region?: string, residentCoordinatorAuthority?: NonNullable<ReturnType<typeof resolveResidentCoordinatorAuthorityConfiguration>>}>} - One immutable command-local store configuration.
  */
 export function resolveExecutionLedgerStoreConfiguration() {
   const adapterName = resolveControlAdapterName();
   const controlPath = resolveControlStorePath();
   const tableName = resolveExecutionLedgerTableName();
   const payloadPath = resolveExecutionPayloadPath(controlPath);
+  const region = resolveControlStoreRegion(adapterName);
+  const residentCoordinatorAuthority =
+    resolveResidentCoordinatorAuthorityConfiguration({
+      adapterName,
+      tableName,
+      ...(region === undefined ? {} : { region }),
+    });
   return Object.freeze({
     adapterName,
     controlPath,
@@ -38,6 +56,10 @@ export function resolveExecutionLedgerStoreConfiguration() {
     payloadPath,
     payloadStoreId: resolveExecutionPayloadStoreId(payloadPath),
     sessionPath: resolveLedgerServiceSessionPath(controlPath),
+    ...(region === undefined ? {} : { region }),
+    ...(residentCoordinatorAuthority === undefined
+      ? {}
+      : { residentCoordinatorAuthority }),
   });
 }
 
@@ -66,6 +88,9 @@ export async function withExecutionLedger(handler, options = {}) {
     db = await createControlDBClient(configuration.adapterName, {
       path: configuration.controlPath,
       readOnly,
+      ...(configuration.region === undefined
+        ? {}
+        : { region: configuration.region }),
     });
     const payloadStore = createLocalExecutionPayloadStore({
       path: configuration.payloadPath,
@@ -196,6 +221,204 @@ export async function withExecutionLedgerCoordinatorAuthority(options) {
   if (handlerFailed) throw handlerError;
   if (releaseError !== undefined) throw releaseError;
   return /** @type {T} */ (result);
+}
+
+/**
+ * Run one explicitly configured DynamoDB resident authority session. This is
+ * the internal lifecycle seam for automatic RVN replacement; it deliberately
+ * does not change the short-lived foreground/operator helper above or lift the
+ * LMDB-only resident product gates. Topology must be proved before acquisition,
+ * observation, renewal, takeover, or handler execution can begin.
+ * @template T
+ * @param {{appId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, readOnly: boolean}, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, signal?: AbortSignal, handler: (ledger: ExecutionLedgerStore, session: Readonly<{authority: import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot, coordinatorAuthority: import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthorityToken, signal: AbortSignal, topology: Readonly<Record<string, any>>}>) => Promise<T> | T}} options - Exact resident authority session.
+ * @param {{validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology, createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol, createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor}} [dependencies] - Focused construction seams.
+ * @returns {Promise<T>} - Resident handler result after drain and release.
+ */
+export async function withExecutionLedgerResidentCoordinatorAuthority(
+  options,
+  dependencies = {},
+) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'withExecutionLedgerResidentCoordinatorAuthority requires options.',
+    );
+  }
+  const allowedOptions = new Set([
+    'appId',
+    'coordinatorId',
+    'ledger',
+    'context',
+    'configuration',
+    'signal',
+    'handler',
+  ]);
+  if (Object.keys(options).some((key) => !allowedOptions.has(key))) {
+    throw new TypeError(
+      'withExecutionLedgerResidentCoordinatorAuthority options contain unsupported fields.',
+    );
+  }
+
+  // Snapshot the complete trusted run input once. No later dependency or
+  // caller-owned accessor may split validation, topology proof, authority
+  // mutation, and ledger binding across different objects or routing values.
+  const appId = options.appId;
+  const coordinatorId = options.coordinatorId;
+  const ledger = options.ledger;
+  const context = options.context;
+  const contextDB = context?.db;
+  const contextAdapterName = context?.adapterName;
+  const contextTableName = context?.tableName;
+  const contextReadOnly = context?.readOnly;
+  const configuration = options.configuration;
+  const configurationAdapterName = configuration?.adapterName;
+  const configurationRegion = configuration?.region;
+  const configurationTableName = configuration?.tableName;
+  const authorityConfiguration = configuration?.residentCoordinatorAuthority;
+  const authorityProfile = authorityConfiguration?.profile;
+  const authorityAdapterName = authorityConfiguration?.adapterName;
+  const authorityRegion = authorityConfiguration?.region;
+  const authorityTableName = authorityConfiguration?.tableName;
+  const expectedTableResourceId = authorityConfiguration?.tableResourceId;
+  const renewalIntervalMs = authorityConfiguration?.renewalIntervalMs;
+  const observationWindowMs = authorityConfiguration?.observationWindowMs;
+  const signal = options.signal;
+  const handler = options.handler;
+
+  if (
+    !dependencies ||
+    typeof dependencies !== 'object' ||
+    Array.isArray(dependencies)
+  ) {
+    throw new TypeError(
+      'withExecutionLedgerResidentCoordinatorAuthority dependencies must be an object.',
+    );
+  }
+  const allowedDependencies = new Set([
+    'validateTopology',
+    'createProtocol',
+    'createSupervisor',
+  ]);
+  if (Object.keys(dependencies).some((key) => !allowedDependencies.has(key))) {
+    throw new TypeError(
+      'withExecutionLedgerResidentCoordinatorAuthority dependencies contain unsupported fields.',
+    );
+  }
+  const dependencyValidateTopology = dependencies.validateTopology;
+  const dependencyCreateProtocol = dependencies.createProtocol;
+  const dependencyCreateSupervisor = dependencies.createSupervisor;
+  const validateTopology =
+    dependencyValidateTopology ??
+    validateAwsDynamoDBCoordinatorAuthorityTableTopology;
+  const createProtocol =
+    dependencyCreateProtocol ?? createDynamoDBCoordinatorAuthorityProtocol;
+  const createSupervisor =
+    dependencyCreateSupervisor ?? createResidentCoordinatorAuthoritySupervisor;
+  if (
+    typeof validateTopology !== 'function' ||
+    typeof createProtocol !== 'function' ||
+    typeof createSupervisor !== 'function'
+  ) {
+    throw new TypeError(
+      'withExecutionLedgerResidentCoordinatorAuthority dependencies must be functions.',
+    );
+  }
+  if (contextReadOnly) {
+    throw new Error(
+      'A read-only execution ledger cannot start resident coordinator authority.',
+    );
+  }
+  if (contextAdapterName !== 'dynamodb') {
+    throw new Error(
+      'Resident automatic coordinator replacement requires the DynamoDB control adapter.',
+    );
+  }
+  if (typeof ledger?.bindCoordinatorAuthority !== 'function') {
+    throw new TypeError(
+      'withExecutionLedgerResidentCoordinatorAuthority requires a bindable execution ledger.',
+    );
+  }
+  if (typeof handler !== 'function') {
+    throw new TypeError(
+      'withExecutionLedgerResidentCoordinatorAuthority.handler must be a function.',
+    );
+  }
+  let expectedTableResourceIdIsValid = true;
+  try {
+    assertDomainSeparatedSha256Id(
+      expectedTableResourceId,
+      DYNAMODB_TABLE_RESOURCE_ID_PREFIX,
+      'Resident DynamoDB coordinator authority tableResourceId',
+    );
+  } catch {
+    expectedTableResourceIdIsValid = false;
+  }
+  if (
+    configurationAdapterName !== 'dynamodb' ||
+    authorityProfile !== DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE ||
+    authorityAdapterName !== 'dynamodb' ||
+    typeof configurationRegion !== 'string' ||
+    configurationRegion !== authorityRegion ||
+    configurationTableName !== authorityTableName ||
+    contextTableName !== authorityTableName ||
+    !expectedTableResourceIdIsValid ||
+    typeof renewalIntervalMs !== 'number' ||
+    typeof observationWindowMs !== 'number'
+  ) {
+    throw new Error(
+      'Resident DynamoDB coordinator authority requires one exact resolved profile, Region, and execution-ledger table.',
+    );
+  }
+
+  const bindCoordinatorAuthority =
+    prepareExecutionLedgerCoordinatorAuthorityBinding(
+      ledger,
+      contextDB,
+      authorityTableName,
+    );
+
+  const topology = await validateTopology({
+    db: contextDB,
+    tableName: authorityTableName,
+    region: authorityRegion,
+    expectedTableResourceId,
+  });
+  if (topology?.tableResourceId !== expectedTableResourceId) {
+    throw new Error(
+      'Resident DynamoDB coordinator authority topology does not match the configured table resource.',
+    );
+  }
+
+  // Construct the authority protocol only after the exact data client has
+  // pinned and matched the shared resource identity. No authority request can
+  // be issued against a same-named table in another account or incarnation.
+  const protocol = createProtocol({
+    db: contextDB,
+    tableName: authorityTableName,
+    observationWindowMs,
+  });
+  const supervisor = createSupervisor({
+    protocol,
+    appId,
+    coordinatorId,
+    renewalIntervalMs,
+  });
+  if (typeof supervisor?.run !== 'function') {
+    throw new TypeError(
+      'Resident coordinator authority supervisor must expose run().',
+    );
+  }
+  return await supervisor.run({
+    ...(signal === undefined ? {} : { signal }),
+    handler: async (session) => {
+      const boundLedger = bindCoordinatorAuthority(
+        session.coordinatorAuthority,
+      );
+      return await handler(
+        boundLedger,
+        Object.freeze({ ...session, topology }),
+      );
+    },
+  });
 }
 
 /**

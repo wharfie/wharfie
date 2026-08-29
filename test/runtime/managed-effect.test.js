@@ -6,7 +6,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { getAdapterMatrix } from '../helpers/db-adapters.js';
+import {
+  createMutableDBTestFacade,
+  getAdapterMatrix,
+} from '../helpers/db-adapters.js';
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
@@ -307,6 +310,7 @@ function withLostResponses(ledger, method, count) {
  */
 function createReceiptRaceLedger(harness, transitionId, insert) {
   let injectReceipt = true;
+  const facade = createMutableDBTestFacade(harness.db);
   /** @type {ProxyHandler<any>} */
   const handler = {
     get(target, property) {
@@ -327,7 +331,7 @@ function createReceiptRaceLedger(harness, transitionId, insert) {
     },
   };
   return createExecutionLedger({
-    db: new Proxy(harness.db, handler),
+    db: new Proxy(facade, handler),
     tableName: 'managed-effect-ledger',
     payloadStore: harness.payloadStore,
     effectEvidenceVerifiers: [destinationVerifier()],

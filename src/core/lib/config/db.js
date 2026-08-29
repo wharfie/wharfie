@@ -3,7 +3,22 @@ import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import paths from '../paths.js';
+import { assertDomainSeparatedSha256Id } from '../../runtime/content-id.js';
 import { getLocalAppStorageLayout } from './local-app-storage-context.js';
+
+export const DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE = 'dynamodb-rvn-v1';
+export const COORDINATOR_AUTHORITY_MAX_TIMER_MS = 2_147_483_647;
+
+const AWS_REGION_PATTERN = /^[a-z]{2}(?:-gov)?-[a-z0-9-]+-[0-9]+$/u;
+const COORDINATOR_AUTHORITY_PROFILE_ENV =
+  'WHARFIE_COORDINATOR_AUTHORITY_PROFILE';
+const COORDINATOR_RENEWAL_INTERVAL_ENV =
+  'WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS';
+const COORDINATOR_OBSERVATION_WINDOW_ENV =
+  'WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS';
+const COORDINATOR_TABLE_RESOURCE_ID_ENV =
+  'WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID';
+const DYNAMODB_TABLE_RESOURCE_ID_PREFIX = 'wdtr1';
 
 /**
  * Centralized DB configuration for Wharfie core runtime.
@@ -34,6 +49,148 @@ function normalizeAdapterName(value, label) {
     return normalized;
   }
   throw new Error(`Unsupported ${label}: ${value}`);
+}
+
+/**
+ * Resolve one explicit AWS Region for a DynamoDB control client. The resolved
+ * value is copied into command-local configuration so later ambient changes
+ * cannot split the data client from its topology proof.
+ * @param {DBAdapterName} [adapterName] - Already-resolved control adapter.
+ * @returns {string | undefined} - Explicit region when configured, otherwise absent.
+ */
+export function resolveControlStoreRegion(
+  adapterName = resolveControlAdapterName(),
+) {
+  const normalizedAdapter = normalizeAdapterName(
+    adapterName,
+    'control-store adapter',
+  );
+  if (normalizedAdapter !== 'dynamodb') return undefined;
+  const region = process.env.AWS_REGION;
+  if (region === undefined || region.trim() === '') return undefined;
+  if (typeof region !== 'string' || !AWS_REGION_PATTERN.test(region.trim())) {
+    throw new Error(
+      'AWS_REGION must be a valid AWS Region when explicitly configured.',
+    );
+  }
+  return region.trim();
+}
+
+/**
+ * @param {string} name - Exact environment variable.
+ * @returns {number} - Explicit positive bounded timer value.
+ */
+function resolveCoordinatorTimer(name) {
+  const raw = process.env[name];
+  if (typeof raw !== 'string' || !/^[1-9][0-9]*$/u.test(raw.trim())) {
+    throw new Error(`${name} must be an explicit positive integer.`);
+  }
+  const value = Number(raw.trim());
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > COORDINATOR_AUTHORITY_MAX_TIMER_MS
+  ) {
+    throw new Error(
+      `${name} must be no greater than ${COORDINATOR_AUTHORITY_MAX_TIMER_MS}.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Resolve the deliberately opt-in resident automatic-replacement profile.
+ * Merely selecting DynamoDB does not enable automatic takeover. The caller
+ * must also prove the exact table topology before starting a supervisor.
+ * @param {{adapterName?: DBAdapterName, tableName?: string, region?: string}} [options] - Already-resolved command-local routing.
+ * @returns {Readonly<{profile: 'dynamodb-rvn-v1', adapterName: 'dynamodb', region: string, tableName: string, tableResourceId: string, renewalIntervalMs: number, observationWindowMs: number}> | undefined} - Frozen policy or no automatic profile.
+ */
+export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'Resident coordinator authority configuration options must be an object.',
+    );
+  }
+  const allowed = new Set(['adapterName', 'tableName', 'region']);
+  if (Object.keys(options).some((key) => !allowed.has(key))) {
+    throw new TypeError(
+      'Resident coordinator authority configuration options contain unsupported fields.',
+    );
+  }
+  const adapterName = normalizeAdapterName(
+    options.adapterName ?? resolveControlAdapterName(),
+    'resident coordinator control adapter',
+  );
+  const configuredProfile = process.env[COORDINATOR_AUTHORITY_PROFILE_ENV];
+  const configuredRenewal = process.env[COORDINATOR_RENEWAL_INTERVAL_ENV];
+  const configuredObservation = process.env[COORDINATOR_OBSERVATION_WINDOW_ENV];
+  const configuredTableResourceId =
+    process.env[COORDINATOR_TABLE_RESOURCE_ID_ENV];
+  if (
+    configuredProfile === undefined &&
+    configuredRenewal === undefined &&
+    configuredObservation === undefined &&
+    configuredTableResourceId === undefined
+  ) {
+    return undefined;
+  }
+  if (
+    typeof configuredProfile !== 'string' ||
+    configuredProfile.trim() !== DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE
+  ) {
+    throw new Error(
+      `${COORDINATOR_AUTHORITY_PROFILE_ENV} must be '${DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE}'.`,
+    );
+  }
+  if (adapterName !== 'dynamodb') {
+    throw new Error(
+      `${DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE} requires the DynamoDB control adapter.`,
+    );
+  }
+  const tableName = options.tableName ?? resolveExecutionLedgerTableName();
+  if (typeof tableName !== 'string' || !tableName.trim()) {
+    throw new Error(
+      `${DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE} requires an execution-ledger table.`,
+    );
+  }
+  const region = options.region ?? resolveControlStoreRegion(adapterName);
+  if (typeof region !== 'string' || !AWS_REGION_PATTERN.test(region)) {
+    throw new Error(
+      `${DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE} requires one resolved AWS Region.`,
+    );
+  }
+  try {
+    assertDomainSeparatedSha256Id(
+      configuredTableResourceId,
+      DYNAMODB_TABLE_RESOURCE_ID_PREFIX,
+      COORDINATOR_TABLE_RESOURCE_ID_ENV,
+    );
+  } catch {
+    throw new Error(
+      `${COORDINATOR_TABLE_RESOURCE_ID_ENV} must be an explicit canonical DynamoDB table resource identity.`,
+    );
+  }
+  const tableResourceId = /** @type {string} */ (configuredTableResourceId);
+  const renewalIntervalMs = resolveCoordinatorTimer(
+    COORDINATOR_RENEWAL_INTERVAL_ENV,
+  );
+  const observationWindowMs = resolveCoordinatorTimer(
+    COORDINATOR_OBSERVATION_WINDOW_ENV,
+  );
+  if (observationWindowMs <= renewalIntervalMs) {
+    throw new Error(
+      `${COORDINATOR_OBSERVATION_WINDOW_ENV} must be greater than ${COORDINATOR_RENEWAL_INTERVAL_ENV}.`,
+    );
+  }
+  return Object.freeze({
+    profile: DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+    adapterName: /** @type {const} */ ('dynamodb'),
+    region,
+    tableName: tableName.trim(),
+    tableResourceId,
+    renewalIntervalMs,
+    observationWindowMs,
+  });
 }
 
 /**
@@ -333,7 +490,7 @@ export async function createDBClient(adapterName = resolveDBAdapterName()) {
 /**
  * Create the dedicated durable control-store DB client.
  * @param {DBAdapterName} [adapterName] - Explicit adapter override.
- * @param {{readOnly?: boolean, path?: string}} [options] - Access mode and already-resolved local root.
+ * @param {{readOnly?: boolean, path?: string, region?: string}} [options] - Access mode and already-resolved routing.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 export async function createControlDBClient(
@@ -342,7 +499,7 @@ export async function createControlDBClient(
 ) {
   if (adapterName === 'dynamodb') {
     return createDynamoDBClient({
-      region: process.env.AWS_REGION,
+      region: options.region ?? process.env.AWS_REGION,
       readOnly: options.readOnly === true,
     });
   }
@@ -517,9 +674,13 @@ export async function closeDB() {
 
 export default {
   APPLICATION_STATE_TABLE_NAME,
+  DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+  COORDINATOR_AUTHORITY_MAX_TIMER_MS,
   resolveDBAdapterName,
   resolveStateAdapterName,
   resolveControlAdapterName,
+  resolveControlStoreRegion,
+  resolveResidentCoordinatorAuthorityConfiguration,
   resolveApplicationStateAdapterName,
   resolveControlStorePath,
   resolveApplicationStateStorePath,

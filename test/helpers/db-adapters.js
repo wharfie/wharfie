@@ -536,6 +536,23 @@ export async function createMockedDynamoDB(options = {}) {
 }
 
 /**
+ * Create a mutable test-only facade whose methods remain bound to the exact
+ * adapter instance. Production DynamoDB clients are intentionally frozen, so
+ * race and fault-injection tests instrument this facade instead of weakening
+ * the certified client's operation surface.
+ * @param {DBClient} db - Exact adapter instance.
+ * @returns {DBClient} - Mutable, identity-preserving delegating facade.
+ */
+export function createMutableDBTestFacade(db) {
+  const facade = { ...db };
+  for (const key of Reflect.ownKeys(facade)) {
+    const value = facade[key];
+    if (typeof value === 'function') facade[key] = value.bind(db);
+  }
+  return facade;
+}
+
+/**
  * Adapter contract matrix.
  *
  * @returns {Array<{name: string, create: () => Promise<{db: DBClient, cleanup: () => Promise<void>}>}>}

@@ -3093,6 +3093,8 @@ describe('AWS deployment invocation authority', () => {
     ).resolves.toMatchObject({ Reservations: [] });
 
     await db.close();
+    expect(harness.documentDestroy).not.toHaveBeenCalled();
+    expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
     await controlClient.close();
     await controlClient.close();
     expect(() =>
@@ -3172,8 +3174,8 @@ describe('AWS deployment invocation authority', () => {
         'AWS deployment runtime-identity resource client is closed.',
       );
     }
-    expect(harness.documentDestroy).toHaveBeenCalledTimes(1);
-    expect(harness.dynamoDestroy).toHaveBeenCalledTimes(1);
+    expect(harness.documentDestroy).not.toHaveBeenCalled();
+    expect(harness.dynamoDestroy).toHaveBeenCalledTimes(2);
     expect(harness.s3Destroy).toHaveBeenCalledTimes(2);
     expect(harness.ssmDestroy).toHaveBeenCalledTimes(1);
     expect(harness.ec2Destroy).toHaveBeenCalledTimes(6);
