@@ -11,6 +11,7 @@ import path from 'node:path';
 import {
   DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_CONFIRMATION,
   DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_KIND,
+  DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_MIN_CREDENTIAL_VALIDITY_MS,
   createDynamoDBCoordinatorAuthorityLiveAwsDriver,
   createDynamoDBCoordinatorAuthorityLiveProofDriver,
   createDynamoDBCoordinatorAuthorityProofTableName,
@@ -39,6 +40,7 @@ function activeTable(tableName, overrides = {}) {
   return {
     Table: {
       TableName: tableName,
+      TableId: '00000000-1111-2222-3333-444444444444',
       TableStatus: 'ACTIVE',
       AttributeDefinitions: [
         { AttributeName: 'run_id', AttributeType: 'S' },
@@ -241,6 +243,7 @@ function createFakeProtocolFamily() {
 
 function createHarness({
   tableOverrides = {},
+  cleanupTableOverrides,
   createFailure,
   createClientFailure,
   observeFailure,
@@ -250,6 +253,7 @@ function createHarness({
   const calls = [];
   let tableName;
   let exists = false;
+  let adminDescribeCount = 0;
   const family = createFakeProtocolFamily();
   const records = new Map();
   const clients = [];
@@ -266,7 +270,13 @@ function createHarness({
     async describeTable(input) {
       calls.push(['describeTable', clone(input)]);
       if (!exists) throw resourceNotFound();
-      return activeTable(tableName, tableOverrides);
+      adminDescribeCount += 1;
+      return activeTable(
+        tableName,
+        adminDescribeCount > 1 && cleanupTableOverrides
+          ? { ...tableOverrides, ...cleanupTableOverrides }
+          : tableOverrides,
+      );
     },
     async deleteTable(input) {
       calls.push(['deleteTable', clone(input)]);
@@ -332,11 +342,22 @@ function createHarness({
       ? transformTopology(evidence, clientIndex)
       : evidence;
   });
+  const assertPinnedTable = jest.fn((db, input) => {
+    const clientIndex = clients.indexOf(db);
+    calls.push(['assertPinnedTable', { clientIndex, input: clone(input) }]);
+    expect(clientIndex).toBeGreaterThanOrEqual(0);
+    expect(input).toEqual({
+      TableName: tableName,
+      TableArn: activeTable(tableName, tableOverrides).Table.TableArn,
+      TableId: activeTable(tableName, tableOverrides).Table.TableId,
+    });
+  });
   const residentClocks = new Map();
   const driver = createDynamoDBCoordinatorAuthorityLiveProofDriver({
     admin,
     createDBClient,
     validateTopology,
+    assertPinnedTable,
     createProtocol(options) {
       calls.push([
         'createProtocol',
@@ -382,6 +403,7 @@ function createHarness({
     family,
     records,
     validateTopology,
+    assertPinnedTable,
     tableExists: () => exists,
   };
 }
@@ -453,9 +475,17 @@ describe('DynamoDB coordinator authority live-proof CLI', () => {
 });
 
 describe('DynamoDB coordinator authority live AWS client binding', () => {
-  test('retains one credentials provider object across the admin and both data clients', async () => {
-    const credentials = jest.fn(async () => ({}));
-    const fromNodeProviderChain = jest.fn(() => credentials);
+  test('pins one SDK-compatible credential snapshot across the admin and both data clients', async () => {
+    const resolvedCredentials = {
+      accessKeyId: 'live-proof-access-key',
+      secretAccessKey: 'live-proof-secret-key',
+      sessionToken: 'live-proof-session-token',
+      credentialScope: 'live-proof-credential-scope',
+      accountId: '123456789012',
+      expiration: new Date('2030-01-01T00:00:00.000Z'),
+    };
+    const credentialProvider = jest.fn(async () => resolvedCredentials);
+    const fromNodeProviderChain = jest.fn(() => credentialProvider);
     const adminOptions = [];
     class DynamoDB {
       constructor(options) {
@@ -486,26 +516,124 @@ describe('DynamoDB coordinator authority live AWS client binding', () => {
       return expectedDriver;
     });
 
-    const driver = createDynamoDBCoordinatorAuthorityLiveAwsDriver(
+    const driver = await createDynamoDBCoordinatorAuthorityLiveAwsDriver(
       { region: REGION, bindings, createDynamoDB },
-      { createDriver },
+      {
+        createDriver,
+        wallNow: () => Date.parse('2029-12-31T00:00:00.000Z'),
+      },
     );
+    resolvedCredentials.accessKeyId = 'mutated-after-resolution';
+    resolvedCredentials.secretAccessKey = 'mutated-after-resolution';
     const first = await capturedDependencies.createDBClient('coordinator-a');
     const second = await capturedDependencies.createDBClient('coordinator-b');
+    const firstAdminCredentials = await adminOptions[0].credentials();
+    const secondAdminCredentials = await adminOptions[0].credentials();
 
     expect(driver).toBe(expectedDriver);
     expect(fromNodeProviderChain).toHaveBeenCalledTimes(1);
-    expect(credentials).not.toHaveBeenCalled();
+    expect(credentialProvider).toHaveBeenCalledTimes(1);
     expect(adminOptions).toHaveLength(1);
-    expect(adminOptions[0]).toEqual({ region: REGION, credentials });
+    expect(adminOptions[0].region).toBe(REGION);
+    expect(adminOptions[0].credentials).not.toBe(credentialProvider);
+    expect(firstAdminCredentials).toMatchObject({
+      accessKeyId: 'live-proof-access-key',
+      secretAccessKey: 'live-proof-secret-key',
+      sessionToken: 'live-proof-session-token',
+      credentialScope: 'live-proof-credential-scope',
+      accountId: '123456789012',
+      expiration: new Date('2030-01-01T00:00:00.000Z'),
+    });
+    expect(firstAdminCredentials).not.toBe(secondAdminCredentials);
+    expect(Object.isFrozen(firstAdminCredentials)).toBe(false);
+    expect(() => {
+      firstAdminCredentials.$source = { CREDENTIALS_CODE: 'e' };
+    }).not.toThrow();
+    expect(secondAdminCredentials.$source).toBeUndefined();
     expect(first).toBe(dataClients[0]);
     expect(second).toBe(dataClients[1]);
     expect(createDynamoDB).toHaveBeenCalledTimes(2);
     for (const [clientOptions, clientBindings] of createDynamoDB.mock.calls) {
-      expect(clientOptions).toEqual({ region: REGION, credentials });
+      expect(clientOptions).toEqual({
+        region: REGION,
+        credentials: adminOptions[0].credentials,
+      });
       expect(clientOptions.credentials).toBe(adminOptions[0].credentials);
       expect(clientBindings).toBe(bindings);
     }
+  });
+
+  test('rejects an expiring snapshot before constructing any AWS client', async () => {
+    const resolvedAt = Date.parse('2029-12-31T00:00:00.000Z');
+    const credentialProvider = jest.fn(async () => ({
+      accessKeyId: 'live-proof-access-key',
+      secretAccessKey: 'live-proof-secret-key',
+      expiration: new Date(
+        resolvedAt +
+          DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_MIN_CREDENTIAL_VALIDITY_MS -
+          1,
+      ),
+    }));
+    const DynamoDB = jest.fn();
+    const createDynamoDB = jest.fn();
+    const createDriver = jest.fn();
+
+    await expect(
+      createDynamoDBCoordinatorAuthorityLiveAwsDriver(
+        {
+          region: REGION,
+          bindings: {
+            credentialProviders: {
+              fromNodeProviderChain: () => credentialProvider,
+            },
+            clientDynamoDB: { DynamoDB },
+          },
+          createDynamoDB,
+        },
+        { createDriver, wallNow: () => resolvedAt },
+      ),
+    ).rejects.toThrow(/expire too soon/u);
+    expect(DynamoDB).not.toHaveBeenCalled();
+    expect(createDynamoDB).not.toHaveBeenCalled();
+    expect(createDriver).not.toHaveBeenCalled();
+  });
+
+  test('rejects optional credential accessors without invoking them', async () => {
+    let expirationAccessorInvoked = false;
+    const resolvedCredentials = {
+      accessKeyId: 'live-proof-access-key',
+      secretAccessKey: 'live-proof-secret-key',
+    };
+    Object.defineProperty(resolvedCredentials, 'expiration', {
+      enumerable: true,
+      get() {
+        expirationAccessorInvoked = true;
+        return new Date('2030-01-01T00:00:00.000Z');
+      },
+    });
+    const DynamoDB = jest.fn();
+    const createDynamoDB = jest.fn();
+    const createDriver = jest.fn();
+
+    await expect(
+      createDynamoDBCoordinatorAuthorityLiveAwsDriver(
+        {
+          region: REGION,
+          bindings: {
+            credentialProviders: {
+              fromNodeProviderChain: () => async () => resolvedCredentials,
+            },
+            clientDynamoDB: { DynamoDB },
+          },
+          createDynamoDB,
+        },
+        { createDriver, wallNow: () => 0 },
+      ),
+    ).rejects.toThrow(/credentials are invalid/u);
+    expect(expirationAccessorInvoked).toBe(false);
+    expect(DynamoDB).not.toHaveBeenCalled();
+    expect(createDynamoDB).not.toHaveBeenCalled();
+    expect(createDriver).not.toHaveBeenCalled();
   });
 });
 
@@ -515,7 +643,7 @@ describe('DynamoDB coordinator authority live-proof driver', () => {
     const receipt = await harness.driver.run({ region: REGION });
 
     expect(receipt).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_KIND,
       status: 'passed',
       provider: {
@@ -527,11 +655,12 @@ describe('DynamoDB coordinator authority live-proof driver', () => {
         replicas: 0,
         validatedDataClients: 2,
         topology: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           kind: 'dynamodb-coordinator-authority-topology',
           tableName: `wharfie-rvn-proof-${SUFFIX}`,
           region: REGION,
           arnPartition: 'aws',
+          tableResourceId: expect.stringMatching(/^wdtr1_[A-Za-z0-9_-]{43}$/u),
           tableStatus: 'ACTIVE',
           replicaCount: 0,
           witnessCount: 0,
@@ -627,6 +756,7 @@ describe('DynamoDB coordinator authority live-proof driver', () => {
       ],
     );
     expect(harness.validateTopology).toHaveBeenCalledTimes(2);
+    expect(harness.assertPinnedTable).toHaveBeenCalledTimes(2);
     expect(harness.validateTopology.mock.calls).toEqual(
       harness.clients.map((db) => [
         {
@@ -805,6 +935,49 @@ describe('DynamoDB coordinator authority live-proof driver', () => {
     await expect(harness.driver.run({ region: REGION })).rejects.toBe(
       collision,
     );
+    expect(harness.calls.some(([name]) => name === 'deleteTable')).toBe(false);
+    expect(harness.calls.slice(-1)).toEqual([['closeAdmin']]);
+  });
+
+  test('never deletes a same-ARN replacement whose TableId changed before cleanup', async () => {
+    const harness = createHarness({
+      cleanupTableOverrides: {
+        TableId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      },
+    });
+
+    await expect(harness.driver.run({ region: REGION })).rejects.toThrow(
+      /identity changed; refusing destructive cleanup/u,
+    );
+
+    expect(harness.tableExists()).toBe(true);
+    expect(harness.calls.some(([name]) => name === 'deleteTable')).toBe(false);
+    expect(harness.calls.slice(-1)).toEqual([['closeAdmin']]);
+  });
+
+  test('never falls back to name-routed cleanup without CreateTable resource identity', async () => {
+    const harness = createHarness({ tableOverrides: { TableId: undefined } });
+
+    let failure;
+    try {
+      await harness.driver.run({ region: REGION });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringMatching(/exact proof-owned table resource/u),
+        }),
+        expect.objectContaining({
+          message: expect.stringMatching(
+            /identity is unavailable; refusing destructive cleanup/u,
+          ),
+        }),
+      ]),
+    );
+    expect(harness.tableExists()).toBe(true);
     expect(harness.calls.some(([name]) => name === 'deleteTable')).toBe(false);
     expect(harness.calls.slice(-1)).toEqual([['closeAdmin']]);
   });

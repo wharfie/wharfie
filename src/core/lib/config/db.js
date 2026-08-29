@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import paths from '../paths.js';
+import { assertDomainSeparatedSha256Id } from '../../runtime/content-id.js';
 import { getLocalAppStorageLayout } from './local-app-storage-context.js';
 
 export const DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE = 'dynamodb-rvn-v1';
@@ -15,6 +16,9 @@ const COORDINATOR_RENEWAL_INTERVAL_ENV =
   'WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS';
 const COORDINATOR_OBSERVATION_WINDOW_ENV =
   'WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS';
+const COORDINATOR_TABLE_RESOURCE_ID_ENV =
+  'WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID';
+const DYNAMODB_TABLE_RESOURCE_ID_PREFIX = 'wdtr1';
 
 /**
  * Centralized DB configuration for Wharfie core runtime.
@@ -99,7 +103,7 @@ function resolveCoordinatorTimer(name) {
  * Merely selecting DynamoDB does not enable automatic takeover. The caller
  * must also prove the exact table topology before starting a supervisor.
  * @param {{adapterName?: DBAdapterName, tableName?: string, region?: string}} [options] - Already-resolved command-local routing.
- * @returns {Readonly<{profile: 'dynamodb-rvn-v1', adapterName: 'dynamodb', region: string, tableName: string, renewalIntervalMs: number, observationWindowMs: number}> | undefined} - Frozen policy or no automatic profile.
+ * @returns {Readonly<{profile: 'dynamodb-rvn-v1', adapterName: 'dynamodb', region: string, tableName: string, tableResourceId: string, renewalIntervalMs: number, observationWindowMs: number}> | undefined} - Frozen policy or no automatic profile.
  */
 export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
@@ -120,10 +124,13 @@ export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
   const configuredProfile = process.env[COORDINATOR_AUTHORITY_PROFILE_ENV];
   const configuredRenewal = process.env[COORDINATOR_RENEWAL_INTERVAL_ENV];
   const configuredObservation = process.env[COORDINATOR_OBSERVATION_WINDOW_ENV];
+  const configuredTableResourceId =
+    process.env[COORDINATOR_TABLE_RESOURCE_ID_ENV];
   if (
     configuredProfile === undefined &&
     configuredRenewal === undefined &&
-    configuredObservation === undefined
+    configuredObservation === undefined &&
+    configuredTableResourceId === undefined
   ) {
     return undefined;
   }
@@ -152,6 +159,18 @@ export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
       `${DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE} requires one resolved AWS Region.`,
     );
   }
+  try {
+    assertDomainSeparatedSha256Id(
+      configuredTableResourceId,
+      DYNAMODB_TABLE_RESOURCE_ID_PREFIX,
+      COORDINATOR_TABLE_RESOURCE_ID_ENV,
+    );
+  } catch {
+    throw new Error(
+      `${COORDINATOR_TABLE_RESOURCE_ID_ENV} must be an explicit canonical DynamoDB table resource identity.`,
+    );
+  }
+  const tableResourceId = /** @type {string} */ (configuredTableResourceId);
   const renewalIntervalMs = resolveCoordinatorTimer(
     COORDINATOR_RENEWAL_INTERVAL_ENV,
   );
@@ -168,6 +187,7 @@ export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
     adapterName: /** @type {const} */ ('dynamodb'),
     region,
     tableName: tableName.trim(),
+    tableResourceId,
     renewalIntervalMs,
     observationWindowMs,
   });

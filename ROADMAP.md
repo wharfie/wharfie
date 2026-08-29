@@ -290,7 +290,9 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   detector; exact-CAS epoch takeover and the stable-tuple condition in every
   protected transaction are the safety boundary. Implementation validation
   and the live proof pass. An explicit internal resident supervisor now binds
-  topology proof to the exact data client, renews through drain, performs
+  topology proof to the exact immutable data client, pins all traffic to its
+  full table ARN and TableId, requires one provisioning-retained opaque
+  resource identity across participants, renews through drain, performs
   observation-backed takeover, and fails closed on authority loss. Product
   activation and reconstruction remain pending.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
@@ -320,8 +322,9 @@ lift the current LMDB-only resident and submission gates.
 
 1. Rebuild runnable, in-flight, blocked, and terminal work from the ledger on
    replacement. Reassign only work whose replay contract permits it.
-2. Integrate the supervisor around that reconstructed dispatcher, decide the
-   separate application-state handoff boundary, and only then lift the
+2. Integrate the supervisor around that reconstructed dispatcher, durably
+   retain and distribute the provisioned DynamoDB `tableResourceId`, decide
+   the separate application-state handoff boundary, and only then lift the
    explicitly configured DynamoDB resident gate.
 3. Add deterministic crash tests at renewal, takeover, assignment, activity
    start, managed-effect settlement, and terminal commit.

@@ -28,11 +28,23 @@ cross-store handoff, and multi-node recovery remain the next Outcome 2 work.
   window are resolved once. Timers are positive, bounded by Node's timer
   limit, and the observation window must exceed the renewal interval.
 - A private adapter capability calls `DescribeTable` through the exact raw
-  service client already owned by the open DynamoDB ledger wrapper. Copied,
-  unrelated, or closed wrappers cannot recover that capability.
+  service client already owned by the open, immutable DynamoDB ledger wrapper.
+  Copied, unrelated, mutated, or closed wrappers cannot recover that
+  capability. First validation is a barrier: prior or racing logical-name data
+  traffic prevents certification or remains blocked.
 - Topology validation requires the exact table ARN Region and resource name,
-  `ACTIVE` status, the `run_id`/`sort_key` string key schema, and no replicas,
-  Global Table version, witnesses, or multi-Region consistency metadata.
+  TableId, `ACTIVE` status, the `run_id`/`sort_key` string key schema, and no
+  replicas, Global Table version, witnesses, or multi-Region consistency
+  metadata. Only the exact retained response can pin the wrapper.
+- Every later item, query, batch, and transaction operation resolves the table
+  once to the pinned full ARN. Managed credentials may refresh, but a new
+  principal can access that resource or fail; it cannot select a same-named
+  table in another account. A detected ARN, TableId, or topology change poisons
+  the route.
+- ARN account and TableId are summarized as an opaque, canonical
+  `tableResourceId`. The opt-in profile requires the same provisioning-retained
+  expected ID on every participant and compares it before authority protocol,
+  supervisor, or handler construction.
 - A separate private execution-ledger capability retains the exact DB object,
   table name, original authority binder, and bound state. The resident helper
   rejects copied, unrelated, differently scoped, or already-bound ledgers and
@@ -62,33 +74,36 @@ cross-store handoff, and multi-node recovery remain the next Outcome 2 work.
 5. One unprovable, stale, conflicting, or otherwise invalid renewal after the
    exact retained retry aborts the handler signal with
    `WHARFIE_RESIDENT_COORDINATOR_AUTHORITY_LOST`.
-6. Release uses one immutable receipt-backed intent across opaque retries.
-   Stale release means a successor already fenced the owner; known domain
-   conflicts are terminal. Cleanup cannot restore old authority.
+6. Release uses one immutable receipt-backed intent across opaque retries and
+   exact-retries a CAS conflict when a late same-owner renewal advanced the
+   full snapshot. A stable release token makes that replay safe. Stale release
+   means a successor already fenced the owner; request/domain corruption is
+   terminal. Cleanup cannot restore old authority.
 
 ## Deterministic validation
 
-The final focused command passed 10 suites and 189 tests. It covers the
+The final focused command passed 10 suites and 215 tests. It covers the
 supervisor, exact ledger wrapper, topology validator/provider, private adapter
 capability, DynamoDB RVN protocol, authority store, configuration, operator
 routing, and live-proof driver.
 
-| Boundary | Result |
-| --- | --- |
-| Historical acquisition/takeover receipts | Rejected until exact current strong-read proof; identities rotate |
-| Ambiguous startup plus cancellation | Exact retained intent settles after a non-owned read; proven/created authority released; handler never starts |
-| Renewal and drain | Stable token retained; latest full snapshot renewed and released |
-| Authority loss | Handler signal aborted; stale fenced mutation rejected |
-| Opaque release outcomes | Same immutable intent retried; terminal domain errors not retried |
-| Construction provenance | Copied, different-client, different-table, already-bound, and accessor-drift inputs rejected or pinned |
-| Topology | Wrong Region/name/schema/status and replica/global metadata rejected |
-| Live-proof fidelity | Both exact data clients validate identical topology before protocol construction; failed checks settle before cleanup |
+| Boundary                                 | Result                                                                                                                                    |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Historical acquisition/takeover receipts | Rejected until exact current strong-read proof; identities rotate                                                                         |
+| Ambiguous startup plus cancellation      | Exact retained intent settles after a non-owned read; proven/created authority released; handler never starts                             |
+| Renewal and drain                        | Stable token retained; latest full snapshot renewed and released                                                                          |
+| Authority loss                           | Handler signal aborted; stale fenced mutation rejected                                                                                    |
+| Opaque release outcomes                  | Same immutable intent retries opaque failures and late-renewal CAS conflicts; stale successor and corrupt domain outcomes remain terminal |
+| Construction provenance                  | Copied, mutable, different-client, different-table, already-bound, accessor-drift, prior-use, and racing-use inputs fail closed           |
+| Exact resource binding                   | Full ARN/TableId pin, canonical expected resource ID, refresh drift, revalidation poison, and all operation families covered              |
+| Topology                                 | Wrong resource ID/Region/name/incarnation/schema/status and replica/global metadata rejected before authority construction                |
+| Live-proof fidelity                      | Both exact data clients join the admin-created ARN/TableId before protocol construction; cleanup rechecks identity before ARN deletion    |
 
 Local validation at this checkpoint used Node `v24.13.1` and npm `11.12.0`:
 
 - `npm run lint`: passed with zero warnings; Prettier check passed.
 - `npm run typecheck`: all source, app, test, and SEA-verifier programs passed.
-- Focused Jest matrix: 10 suites, 189 tests, all passed.
+- Focused Jest matrix: 10 suites, 215 tests, all passed.
 - `npm run verify:package`: passed with 371 packaged files.
 - `npm run verify:provider-boundary`: passed with zero provider SDK graph
   inputs, 158 core production packages, and 205 packages with the optional AWS
@@ -99,25 +114,26 @@ Local validation at this checkpoint used Node `v24.13.1` and npm `11.12.0`:
 Relevant SHA-256 digests:
 
 ```text
-66193447127435b4b91bd11a3c511fef96921d664a4c41826b2cb69ba1e0ca85  src/core/runtime/services/resident-coordinator-authority.js
-d73d0bbba5b4a0f0409b6fd71af33b66b5ed9837131c3f75eaeba5c7797a3630  src/core/runtime/dynamodb-coordinator-authority-topology.js
-6b01ebccc9b06d0b9afb5c83dfcc8e7297db572d90ed51459773270859ff5669  src/core/runtime/dynamodb-coordinator-authority-topology-provider.js
-9f24c182dd7f400f13e1c98ff09f4437835bf714f1d76423a140d9f59aaec62e  src/core/runtime/operator/execution-ledger-store.js
-d8a3829e57b6c12caf2a403bc5c8392cbc4e63b0efa10605f7004bd1016c6be1  src/core/lib/db/adapters/dynamodb.js
+b511b9ec52c425adfabf9c852bd6e6a2fe5f323b5a515181dd3d5121a9e8a825  src/core/runtime/services/resident-coordinator-authority.js
+12be2b13b6f311d7ccfacf588bf36934e369c6dd49bc2e90916fe9035184ea02  src/core/runtime/dynamodb-coordinator-authority-topology.js
+8ebeaaca2bc05f47e508c66d3afab71e4315569003d4b8456d1bd421286c3691  src/core/runtime/dynamodb-coordinator-authority-topology-provider.js
+e305b300cbfe62aae8da55e662d4bdd2a139e194df3d98a12559c80ea95773cd  src/core/runtime/operator/execution-ledger-store.js
+a6acdfa860511082be7831a22db486a27e059b313613c932a7e28e8d97b9798e  src/core/lib/db/adapters/dynamodb.js
 ec99f8c24dd3c3fe13d9a9165b6cbfe8cf3c7fb6b6d95345be4d7e62f2a3009a  src/core/lib/db/tables/execution-ledger.js
-52ccc5608ef6b752858b8c057a5c333dae9fca2bf2491b1f438877fb86b2c13e  src/core/lib/config/db.js
-bc908d092f1a2fc50a16372398c53cfdad4792fe9ea774aac7101983204e27b2  scripts/run-dynamodb-coordinator-authority-live-proof.js
-fd6d940158f4a2a5916be903987210db2aca9fc8a16d999feed11903f1676d1c  test/runtime/services/resident-coordinator-authority.test.js
-42ebf4eae181a21b1f4a6011100b3d16a037904d5c76879eee7c61f4e6c1d08a  test/runtime/execution-ledger-store.test.js
-7af2eae43706fbf68448a98bbb738327f2fe767f44b1ff7490ed68862dd8e484  test/scripts/run-dynamodb-coordinator-authority-live-proof.test.js
+f84fa1154d4c1a3062c0aed7ac707f176f1a1fcdb502748b8aaca0810a741d18  src/core/lib/config/db.js
+6a277fdb5bd07f5c0d6e9ce4286154b23647e906fb93dd196385862c71393c56  scripts/run-dynamodb-coordinator-authority-live-proof.js
+a1ce1ba478ae7ed08a0b425dadde9134961e279aa7c70b2b430d574b2ff2c98c  test/runtime/services/resident-coordinator-authority.test.js
+856d28df20281c745f8003d82b718026d68b782067893b974e68a004aae45ec4  test/runtime/execution-ledger-store.test.js
+f0aa152d112ef8898544f0961f4b49dd54563467e698d30454690b89a51a1684  test/scripts/run-dynamodb-coordinator-authority-live-proof.test.js
 ```
 
 ## Executed live DynamoDB proof
 
 The exact hashed runner above executed after the final independent review. It
-created one disposable `PAY_PER_REQUEST` table, retained one credentials
-provider across the administrative client and both data clients, validated
-identical topology through both exact opened data clients, exercised the raw
+created one disposable `PAY_PER_REQUEST` table, retained one sufficiently
+lived credential snapshot across the administrative client and both data
+clients while returning SDK-compatible mutable copies, validated and pinned
+the exact CreateTable ARN/TableId through both opened data clients, exercised the raw
 RVN race/fence matrix, and then exercised two production supervisors.
 
 The supervisor leg committed one incumbent renewal, paused the next renewal
@@ -130,13 +146,15 @@ authority. Cleanup waited until the table was absent.
 - Redacted AWS identity: account fingerprint
   `sha256:40316ba8e46264061fcee06c941638b9435b039cef6775d736a1070259cb727e`.
 - AWS Region: `us-east-2`.
-- Disposable table: `wharfie-rvn-proof-8cc4af0c8e646ead`.
+- Disposable table: `wharfie-rvn-proof-d0339e18c573b14f`.
 - Exact validated data clients: 2.
+- Receipt schema: live proof v3 with nested topology v2 and one opaque
+  cross-client `tableResourceId`.
 - Receipt:
-  `/private/tmp/wharfie-dynamodb-resident-supervisor-proof-2026-08-28-reviewed.json`,
-  2,267 bytes.
+  `/private/tmp/wharfie-dynamodb-resident-supervisor-proof-2026-08-29-final.json`,
+  2,337 bytes.
 - Receipt SHA-256:
-  `12c11d91e8a244072131154c5c52dffbe0c289f2c23df821dff4afcdbd2426ee`;
+  `ea1a2f7636eed141366334254dc09ee08397492bd715f5f54f110c7ac280c341`;
   the adjacent checksum verified successfully.
 - Cleanup: `tableDeleted` is `true` after resource-not-found confirmation.
 
@@ -146,13 +164,13 @@ The exact semantic invocation was:
 AWS_PROFILE=<redacted-authorized-profile> node scripts/run-dynamodb-coordinator-authority-live-proof.js \
   --confirm-live-aws \
   --region us-east-2 \
-  --output /private/tmp/wharfie-dynamodb-resident-supervisor-proof-2026-08-28-reviewed.json
+  --output /private/tmp/wharfie-dynamodb-resident-supervisor-proof-2026-08-29-final.json
 ```
 
 Canonical sanitized receipt:
 
 ```text
-{"cleanup":{"tableDeleted":true,"tableName":"wharfie-rvn-proof-8cc4af0c8e646ead"},"evidence":{"contenderRace":{"contenders":2,"loserCode":"WHARFIE_COORDINATOR_AUTHORITY_CONFLICT","rejected":1,"winnerEpoch":3,"winners":1},"initialAcquisition":{"applied":true,"epoch":1,"recordVersion":1},"renewalAbortedObservation":{"afterRecordVersion":2,"beforeRecordVersion":1,"outcome":"changed","reason":"renewed"},"residentSupervisors":{"incumbent":{"epoch":4,"firstRenewalRecordVersion":7,"handlerAborted":true,"lossCode":"WHARFIE_RESIDENT_COORDINATOR_AUTHORITY_LOST","pausedRenewalAttempt":2,"renewalErrorCode":"WHARFIE_COORDINATOR_AUTHORITY_STALE","staleRenewalRejected":true,"successfulRenewals":1},"staleFencedMutation":{"currentEpoch":5,"errorName":"ConditionalCheckFailedException","rejected":true,"retainedMutation":false,"staleEpoch":4},"successor":{"drained":true,"elapsedNanoseconds":"1502869500","epoch":5,"fencedMutationCommitted":true,"mutationRetained":true,"observationWindowMs":1500,"observedFromEpoch":4,"released":true,"takeoverAdvancedEpoch":true},"supervisors":2},"stableTakeover":{"applied":true,"fromEpoch":1,"observedRecordVersion":2,"toEpoch":2},"staleFencedMutation":{"currentEpoch":3,"errorName":"ConditionalCheckFailedException","preparedBeforeTakeover":true,"rejected":true,"releasedAfterTakeover":true,"retainedMutation":false,"staleEpoch":2},"successorFencedMutation":{"committed":true,"coordinatorEpoch":3,"retained":true}},"kind":"wharfie.dynamodb-rvn-coordinator-authority-live-proof","protocol":{"kind":"record-version-number-observation","observationWindowMs":1500,"stableFence":"coordinator-authority-active-tuple"},"provider":{"billingMode":"PAY_PER_REQUEST","globalTable":false,"kind":"aws-dynamodb","region":"us-east-2","replicas":0,"tableName":"wharfie-rvn-proof-8cc4af0c8e646ead","topology":{"arnPartition":"aws","globalTable":false,"keySchema":[{"attributeName":"run_id","attributeType":"S","keyType":"HASH"},{"attributeName":"sort_key","attributeType":"S","keyType":"RANGE"}],"kind":"dynamodb-coordinator-authority-topology","region":"us-east-2","replicaCount":0,"schemaVersion":1,"tableName":"wharfie-rvn-proof-8cc4af0c8e646ead","tableStatus":"ACTIVE","witnessCount":0},"validatedDataClients":2},"schemaVersion":2,"status":"passed"}
+{"cleanup":{"tableDeleted":true,"tableName":"wharfie-rvn-proof-d0339e18c573b14f"},"evidence":{"contenderRace":{"contenders":2,"loserCode":"WHARFIE_COORDINATOR_AUTHORITY_CONFLICT","rejected":1,"winnerEpoch":3,"winners":1},"initialAcquisition":{"applied":true,"epoch":1,"recordVersion":1},"renewalAbortedObservation":{"afterRecordVersion":2,"beforeRecordVersion":1,"outcome":"changed","reason":"renewed"},"residentSupervisors":{"incumbent":{"epoch":4,"firstRenewalRecordVersion":7,"handlerAborted":true,"lossCode":"WHARFIE_RESIDENT_COORDINATOR_AUTHORITY_LOST","pausedRenewalAttempt":2,"renewalErrorCode":"WHARFIE_COORDINATOR_AUTHORITY_STALE","staleRenewalRejected":true,"successfulRenewals":1},"staleFencedMutation":{"currentEpoch":5,"errorName":"ConditionalCheckFailedException","rejected":true,"retainedMutation":false,"staleEpoch":4},"successor":{"drained":true,"elapsedNanoseconds":"1501150750","epoch":5,"fencedMutationCommitted":true,"mutationRetained":true,"observationWindowMs":1500,"observedFromEpoch":4,"released":true,"takeoverAdvancedEpoch":true},"supervisors":2},"stableTakeover":{"applied":true,"fromEpoch":1,"observedRecordVersion":2,"toEpoch":2},"staleFencedMutation":{"currentEpoch":3,"errorName":"ConditionalCheckFailedException","preparedBeforeTakeover":true,"rejected":true,"releasedAfterTakeover":true,"retainedMutation":false,"staleEpoch":2},"successorFencedMutation":{"committed":true,"coordinatorEpoch":3,"retained":true}},"kind":"wharfie.dynamodb-rvn-coordinator-authority-live-proof","protocol":{"kind":"record-version-number-observation","observationWindowMs":1500,"stableFence":"coordinator-authority-active-tuple"},"provider":{"billingMode":"PAY_PER_REQUEST","globalTable":false,"kind":"aws-dynamodb","region":"us-east-2","replicas":0,"tableName":"wharfie-rvn-proof-d0339e18c573b14f","topology":{"arnPartition":"aws","globalTable":false,"keySchema":[{"attributeName":"run_id","attributeType":"S","keyType":"HASH"},{"attributeName":"sort_key","attributeType":"S","keyType":"RANGE"}],"kind":"dynamodb-coordinator-authority-topology","region":"us-east-2","replicaCount":0,"schemaVersion":2,"tableName":"wharfie-rvn-proof-d0339e18c573b14f","tableResourceId":"wdtr1_cYHG521TCJXgaGp9JVti9_T8XsrA4KGnN66d8v3Ww6o","tableStatus":"ACTIVE","witnessCount":0},"validatedDataClients":2},"schemaVersion":3,"status":"passed"}
 ```
 
 ## Honest boundary
@@ -166,6 +184,17 @@ Canonical sanitized receipt:
   capability protocol is proved.
 - No DynamoDB Global Tables, cross-Region, generic-store, or conventional
   wall-clock lease claim is made.
+- All future participants must receive the same provisioning-retained
+  `tableResourceId`. The internal environment seam proves that admission gate;
+  product activation still needs to durably distribute it.
+- DynamoDB data requests cannot atomically compare TableId. Provisioning must
+  prevent deletion/recreation after startup; explicit revalidation detects and
+  poisons a changed incarnation but cannot retroactively fence an unobserved
+  administrative replacement.
+- Live cleanup checks ARN and TableId immediately before `DeleteTable` and
+  never falls back to a logical name. DynamoDB offers no conditional delete on
+  TableId, so a narrow describe/delete race remains; the proof's random owned
+  name and creation response are the bounded external invariant.
 - A false suspicion may interrupt a live owner and duplicate unmanaged
   physical work. Safety ends at the same-table transaction fence.
 - The generic acquisition API does not yet distinguish transient ambiguity

@@ -15,7 +15,72 @@ import {
 } from '../utils.js';
 
 const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
-const DYNAMODB_SERVICE_CLIENTS = new WeakMap();
+const DYNAMODB_CLIENT_CAPABILITIES = new WeakMap();
+const DYNAMODB_TABLE_ARN_PATTERN =
+  /^arn:(aws(?:-[a-z0-9]+)*):dynamodb:([^:]+):([0-9]{12}):table\/([A-Za-z0-9_.-]{3,255})$/u;
+const DYNAMODB_TABLE_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
+
+/**
+ * Snapshot one exact enumerable own-data object without invoking accessors.
+ * @param {unknown} input - Candidate input.
+ * @param {Readonly<string[]>} keys - Complete accepted key surface.
+ * @param {string} message - Fixed validation failure.
+ * @returns {Readonly<Record<string, any>>} - Descriptor-snapshotted input.
+ */
+function snapshotExactDataInput(input, keys, message) {
+  try {
+    if (
+      !input ||
+      typeof input !== 'object' ||
+      Array.isArray(input) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(input))
+    ) {
+      throw new TypeError(message);
+    }
+    const ownKeys = Reflect.ownKeys(input);
+    if (
+      ownKeys.length !== keys.length ||
+      ownKeys.some(
+        (key) => typeof key !== 'string' || !keys.includes(String(key)),
+      )
+    ) {
+      throw new TypeError(message);
+    }
+    /** @type {Record<string, any>} */
+    const snapshot = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (
+        descriptor === undefined ||
+        descriptor.enumerable !== true ||
+        !Object.hasOwn(descriptor, 'value')
+      ) {
+        throw new TypeError(message);
+      }
+      snapshot[key] = descriptor.value;
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    throw new TypeError(message);
+  }
+}
+
+/**
+ * Require one exact DescribeTable request.
+ * @param {unknown} input - Candidate request.
+ * @returns {Readonly<{TableName: string}>} - Exact logical table request.
+ */
+function exactTableInput(input) {
+  const message = 'DescribeTable requires one exact TableName.';
+  const snapshot = snapshotExactDataInput(input, ['TableName'], message);
+  if (
+    typeof snapshot.TableName !== 'string' ||
+    snapshot.TableName.length === 0
+  ) {
+    throw new TypeError(message);
+  }
+  return /** @type {Readonly<{TableName: string}>} */ (snapshot);
+}
 
 /**
  * Describe one table through the exact raw service client owned by a live
@@ -26,24 +91,173 @@ const DYNAMODB_SERVICE_CLIENTS = new WeakMap();
  * @returns {Promise<unknown>} - Raw provider response for topology validation.
  */
 export async function describeDynamoDBTableForClient(db, input) {
-  const client =
-    db && typeof db === 'object' ? DYNAMODB_SERVICE_CLIENTS.get(db) : undefined;
-  if (!client) {
+  const capability =
+    db && typeof db === 'object'
+      ? DYNAMODB_CLIENT_CAPABILITIES.get(db)
+      : undefined;
+  if (!capability) {
     throw new TypeError(
       'DescribeTable requires the exact open DynamoDB DB client.',
     );
   }
+  const request = exactTableInput(input);
   if (
-    !input ||
-    typeof input !== 'object' ||
-    Array.isArray(input) ||
-    Reflect.ownKeys(input).length !== 1 ||
-    typeof input.TableName !== 'string' ||
-    input.TableName.length === 0
+    capability.failedTableNames.has(request.TableName) ||
+    (!capability.pinnedTables.has(request.TableName) &&
+      capability.usedTableNames.has(request.TableName))
   ) {
-    throw new TypeError('DescribeTable requires one exact TableName.');
+    capability.failedTableNames.add(request.TableName);
+    throw new TypeError(
+      'DynamoDB table topology cannot be certified after unpinned use or failed validation.',
+    );
   }
-  return await client.describeTable({ TableName: input.TableName });
+  if (capability.validatingTableNames.has(request.TableName)) {
+    throw new TypeError(
+      'DynamoDB table topology validation is already in progress.',
+    );
+  }
+  capability.validatingTableNames.add(request.TableName);
+  let description;
+  try {
+    description = await capability.serviceClient.describeTable({
+      TableName:
+        capability.pinnedTables.get(request.TableName)?.tableArn ??
+        request.TableName,
+    });
+  } catch (error) {
+    // An unpinned validation failure leaves this logical table blocked. A
+    // previously pinned resource remains safe and may be revalidated later.
+    if (capability.pinnedTables.has(request.TableName)) {
+      capability.validatingTableNames.delete(request.TableName);
+    } else {
+      capability.validatingTableNames.delete(request.TableName);
+      capability.failedTableNames.add(request.TableName);
+    }
+    throw error;
+  }
+  const tableArn = description?.Table?.TableArn;
+  const tableId = description?.Table?.TableId;
+  capability.lastDescriptions.set(
+    request.TableName,
+    Object.freeze({
+      description,
+      tableArn: typeof tableArn === 'string' ? tableArn : undefined,
+      tableId: typeof tableId === 'string' ? tableId : undefined,
+    }),
+  );
+  return description;
+}
+
+/**
+ * Pin the exact raw DescribeTable result only after provider-free topology
+ * validation succeeds. First pin wins; later validation may confirm the same
+ * ARN but can never redirect this wrapper to another account or resource.
+ * @param {import('../base.js').DBClient} db - Exact open DynamoDB wrapper.
+ * @param {Readonly<{TableName: string}>} input - Exact described logical table.
+ * @param {unknown} description - Exact response object returned above.
+ * @returns {void}
+ */
+export function pinDescribedDynamoDBTableForClient(db, input, description) {
+  const capability =
+    db && typeof db === 'object'
+      ? DYNAMODB_CLIENT_CAPABILITIES.get(db)
+      : undefined;
+  if (!capability) {
+    throw new TypeError(
+      'Table pinning requires the exact open DynamoDB DB client.',
+    );
+  }
+  const request = exactTableInput(input);
+  const retained = capability.lastDescriptions.get(request.TableName);
+  const pinned = capability.pinnedTables.get(request.TableName);
+  const tableArn = retained?.tableArn;
+  const tableId = retained?.tableId;
+  const describedTable =
+    description !== null &&
+    typeof description === 'object' &&
+    !Array.isArray(description)
+      ? /** @type {Record<string, any>} */ (description).Table
+      : undefined;
+  const match =
+    typeof tableArn === 'string'
+      ? DYNAMODB_TABLE_ARN_PATTERN.exec(tableArn)
+      : null;
+  if (
+    !retained ||
+    !capability.validatingTableNames.has(request.TableName) ||
+    retained.description !== description ||
+    describedTable?.TableArn !== tableArn ||
+    describedTable?.TableId !== tableId ||
+    describedTable?.TableName !== request.TableName ||
+    !match ||
+    match[4] !== request.TableName ||
+    typeof tableId !== 'string' ||
+    !DYNAMODB_TABLE_ID_PATTERN.test(tableId)
+  ) {
+    capability.validatingTableNames.delete(request.TableName);
+    capability.failedTableNames.add(request.TableName);
+    throw new TypeError(
+      'Table pinning requires the exact retained DynamoDB table description.',
+    );
+  }
+  if (
+    pinned !== undefined &&
+    (pinned.tableArn !== tableArn || pinned.tableId !== tableId)
+  ) {
+    capability.validatingTableNames.delete(request.TableName);
+    capability.failedTableNames.add(request.TableName);
+    throw new TypeError(
+      'The DynamoDB DB client is already pinned to a different table resource.',
+    );
+  }
+  capability.pinnedTables.set(
+    request.TableName,
+    Object.freeze({ tableArn, tableId }),
+  );
+  capability.validatingTableNames.delete(request.TableName);
+}
+
+/**
+ * Assert one exact wrapper is pinned to an expected private table ARN without
+ * returning or embedding that ARN in an error. The live proof uses this to
+ * join both data clients to its exact proof-owned resource before mutation.
+ * @param {import('../base.js').DBClient} db - Exact open DynamoDB wrapper.
+ * @param {Readonly<{TableName: string, TableArn: string, TableId: string}>} input - Expected private resource identity.
+ * @returns {void}
+ */
+export function assertDynamoDBTablePinnedForClient(db, input) {
+  const capability =
+    db && typeof db === 'object'
+      ? DYNAMODB_CLIENT_CAPABILITIES.get(db)
+      : undefined;
+  let expected;
+  try {
+    expected = snapshotExactDataInput(
+      input,
+      ['TableName', 'TableArn', 'TableId'],
+      'The DynamoDB DB client is not pinned to the expected table resource.',
+    );
+  } catch {
+    expected = undefined;
+  }
+  if (
+    !capability ||
+    !expected ||
+    typeof expected.TableName !== 'string' ||
+    typeof expected.TableArn !== 'string' ||
+    typeof expected.TableId !== 'string' ||
+    capability.failedTableNames.has(expected.TableName) ||
+    !DYNAMODB_TABLE_ARN_PATTERN.test(expected.TableArn) ||
+    !DYNAMODB_TABLE_ID_PATTERN.test(expected.TableId) ||
+    capability.pinnedTables.get(expected.TableName)?.tableArn !==
+      expected.TableArn ||
+    capability.pinnedTables.get(expected.TableName)?.tableId !==
+      expected.TableId
+  ) {
+    throw new TypeError(
+      'The DynamoDB DB client is not pinned to the expected table resource.',
+    );
+  }
 }
 
 /**
@@ -79,6 +293,11 @@ export default function createDynamoDB(
   } = bindings.clientDynamoDB;
   const { fromNodeProviderChain } = bindings.credentialProviders;
   const resolvedCredentials = credentials ?? fromNodeProviderChain();
+  const pinnedTables = new Map();
+  const lastDescriptions = new Map();
+  const validatingTableNames = new Set();
+  const usedTableNames = new Set();
+  const failedTableNames = new Set();
   const serviceClient = new DynamoDB({
     ...BaseAWS.config(
       {
@@ -92,6 +311,26 @@ export default function createDynamoDB(
   const docClient = DynamoDBDocument.from(serviceClient, {
     marshallOptions: { removeUndefinedValues: true },
   });
+
+  /**
+   * Resolve one logical table exactly once at operation entry. An unfinished
+   * topology validation blocks traffic; once pinned, every operation uses the
+   * full ARN unless a later revalidation is pending or fails closed.
+   * @param {string} tableName - Logical table name.
+   * @returns {string} - Logical name or exact pinned ARN.
+   */
+  function resolveTableName(tableName) {
+    if (failedTableNames.has(tableName)) {
+      throw new Error('DynamoDB table topology validation failed.');
+    }
+    if (validatingTableNames.has(tableName)) {
+      throw new Error('DynamoDB table topology validation has not completed.');
+    }
+    const pinned = pinnedTables.get(tableName);
+    if (pinned !== undefined) return pinned.tableArn;
+    usedTableNames.add(tableName);
+    return tableName;
+  }
 
   /** @returns {void} - Throws when this client cannot mutate state. */
   function assertWritable() {
@@ -276,7 +515,7 @@ export default function createDynamoDB(
     const built = buildKeyConditionExpression(params.keyConditions);
 
     const dynamoParams = {
-      TableName: params.tableName,
+      TableName: resolveTableName(params.tableName),
       ConsistentRead: params.consistentRead ?? true,
       ...built,
     };
@@ -405,7 +644,7 @@ export default function createDynamoDB(
     const { pk, sk, limit, startAfter } = assertTightQueryPage(params);
     const built = buildKeyConditionExpression([pk, sk]);
     const queryBase = {
-      TableName: params.tableName,
+      TableName: resolveTableName(params.tableName),
       ConsistentRead: params.consistentRead ?? true,
       ScanIndexForward: true,
       ...built,
@@ -509,7 +748,7 @@ export default function createDynamoDB(
     }
 
     const dynamoParams = {
-      TableName: params.tableName,
+      TableName: resolveTableName(params.tableName),
       Item: params.record,
     };
 
@@ -619,7 +858,7 @@ export default function createDynamoDB(
     }
 
     const dynamoParams = {
-      TableName: params.tableName,
+      TableName: resolveTableName(params.tableName),
       Key,
       UpdateExpression: `SET ${setClauses.join(', ')}`,
       ExpressionAttributeNames,
@@ -638,7 +877,7 @@ export default function createDynamoDB(
    */
   async function get(params) {
     const dynamoParams = {
-      TableName: params.tableName,
+      TableName: resolveTableName(params.tableName),
       ConsistentRead: params.consistentRead ?? true, // preserve explicit false
       Key: buildKey(params),
     };
@@ -654,7 +893,7 @@ export default function createDynamoDB(
   async function remove(params) {
     assertWritable();
     const dynamoParams = {
-      TableName: params.tableName,
+      TableName: resolveTableName(params.tableName),
       Key: buildKey(params),
       ReturnValues: ReturnValue.NONE,
     };
@@ -724,6 +963,7 @@ export default function createDynamoDB(
    */
   async function batchWrite(params) {
     assertWritable();
+    const tableName = resolveTableName(params.tableName);
     const puts = (
       Array.isArray(params.putRequests) ? params.putRequests : []
     ).filter((v) => v !== undefined && v !== null);
@@ -771,12 +1011,29 @@ export default function createDynamoDB(
 
       while (unprocessed.length > 0) {
         const dynamoParams = {
-          RequestItems: { [params.tableName]: unprocessed },
+          RequestItems: { [tableName]: unprocessed },
         };
 
         try {
           const { UnprocessedItems } = await docClient.batchWrite(dynamoParams);
-          unprocessed = UnprocessedItems?.[params.tableName] ?? [];
+          if (
+            UnprocessedItems !== undefined &&
+            (UnprocessedItems === null ||
+              typeof UnprocessedItems !== 'object' ||
+              Array.isArray(UnprocessedItems) ||
+              Object.keys(UnprocessedItems).some((key) => key !== tableName))
+          ) {
+            throw new Error(
+              'DynamoDB batchWrite returned unexpected table routing.',
+            );
+          }
+          const retained = UnprocessedItems?.[tableName] ?? [];
+          if (!Array.isArray(retained)) {
+            throw new Error(
+              'DynamoDB batchWrite returned invalid unprocessed items.',
+            );
+          }
+          unprocessed = retained;
 
           if (unprocessed.length > 0) {
             attempt++;
@@ -814,13 +1071,14 @@ export default function createDynamoDB(
   async function transactionWrite(params) {
     assertWritable();
     const requests = validateTransactionWrite(params);
+    const tableName = resolveTableName(params.tableName);
     /** @type {any[]} */
     const TransactItems = [];
 
     for (const [index, request] of requests.conditionChecks.entries()) {
       TransactItems.push({
         ConditionCheck: {
-          TableName: params.tableName,
+          TableName: tableName,
           Key: buildKey(transactionRequestKey(request, '', false)),
           ...compileWriteConditions(request.conditions, `cc${index}`),
         },
@@ -830,7 +1088,7 @@ export default function createDynamoDB(
     for (const [index, request] of requests.putRequests.entries()) {
       TransactItems.push({
         Put: {
-          TableName: params.tableName,
+          TableName: tableName,
           Item: request.record,
           ...compileWriteConditions(request.conditions, `p${index}`),
         },
@@ -868,7 +1126,7 @@ export default function createDynamoDB(
 
       TransactItems.push({
         Update: {
-          TableName: params.tableName,
+          TableName: tableName,
           Key: buildKey(transactionRequestKey(request, '', false)),
           UpdateExpression: `SET ${clauses.join(', ')}`,
           ...(condition.ConditionExpression
@@ -889,7 +1147,7 @@ export default function createDynamoDB(
     for (const [index, request] of requests.deleteRequests.entries()) {
       TransactItems.push({
         Delete: {
-          TableName: params.tableName,
+          TableName: tableName,
           Key: buildKey(transactionRequestKey(request, '', false)),
           ...compileWriteConditions(request.conditions, `d${index}`),
         },
@@ -960,13 +1218,27 @@ export default function createDynamoDB(
        * @returns {import('../base.js').CloseReturn} - Result.
        */
       close: async () => {
-        DYNAMODB_SERVICE_CLIENTS.delete(db);
+        DYNAMODB_CLIENT_CAPABILITIES.delete(db);
         if (typeof serviceClient.destroy === 'function')
           serviceClient.destroy();
       },
     },
     DB_ADAPTER_NAMES.DYNAMODB,
   );
-  DYNAMODB_SERVICE_CLIENTS.set(db, serviceClient);
+  // Topology proof is attached to this exact wrapper. Keep its operation
+  // surface immutable so later callers cannot redirect authority or ledger
+  // traffic away from the raw client whose Region and table were validated.
+  Object.freeze(db);
+  DYNAMODB_CLIENT_CAPABILITIES.set(
+    db,
+    Object.freeze({
+      serviceClient,
+      pinnedTables,
+      lastDescriptions,
+      validatingTableNames,
+      usedTableNames,
+      failedTableNames,
+    }),
+  );
   return db;
 }

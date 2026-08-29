@@ -22,6 +22,8 @@ import {
 } from '../../lib/config/db.js';
 import { createDynamoDBCoordinatorAuthorityProtocol } from '../../lib/db/tables/dynamodb-coordinator-authority.js';
 import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
+import { assertDomainSeparatedSha256Id } from '../content-id.js';
+import { DYNAMODB_TABLE_RESOURCE_ID_PREFIX } from '../dynamodb-coordinator-authority-topology.js';
 import { validateAwsDynamoDBCoordinatorAuthorityTableTopology } from '../dynamodb-coordinator-authority-topology-provider.js';
 import { acquireLocalLedgerServiceSession } from '../services/ledger-service.js';
 import { createResidentCoordinatorAuthoritySupervisor } from '../services/resident-coordinator-authority.js';
@@ -276,6 +278,7 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
   const authorityAdapterName = authorityConfiguration?.adapterName;
   const authorityRegion = authorityConfiguration?.region;
   const authorityTableName = authorityConfiguration?.tableName;
+  const expectedTableResourceId = authorityConfiguration?.tableResourceId;
   const renewalIntervalMs = authorityConfiguration?.renewalIntervalMs;
   const observationWindowMs = authorityConfiguration?.observationWindowMs;
   const signal = options.signal;
@@ -339,6 +342,16 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
       'withExecutionLedgerResidentCoordinatorAuthority.handler must be a function.',
     );
   }
+  let expectedTableResourceIdIsValid = true;
+  try {
+    assertDomainSeparatedSha256Id(
+      expectedTableResourceId,
+      DYNAMODB_TABLE_RESOURCE_ID_PREFIX,
+      'Resident DynamoDB coordinator authority tableResourceId',
+    );
+  } catch {
+    expectedTableResourceIdIsValid = false;
+  }
   if (
     configurationAdapterName !== 'dynamodb' ||
     authorityProfile !== DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE ||
@@ -347,6 +360,7 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
     configurationRegion !== authorityRegion ||
     configurationTableName !== authorityTableName ||
     contextTableName !== authorityTableName ||
+    !expectedTableResourceIdIsValid ||
     typeof renewalIntervalMs !== 'number' ||
     typeof observationWindowMs !== 'number'
   ) {
@@ -362,17 +376,25 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
       authorityTableName,
     );
 
-  // Construction validates the branded data client before any provider
-  // topology request or authority mutation is attempted.
-  const protocol = createProtocol({
-    db: contextDB,
-    tableName: authorityTableName,
-    observationWindowMs,
-  });
   const topology = await validateTopology({
     db: contextDB,
     tableName: authorityTableName,
     region: authorityRegion,
+    expectedTableResourceId,
+  });
+  if (topology?.tableResourceId !== expectedTableResourceId) {
+    throw new Error(
+      'Resident DynamoDB coordinator authority topology does not match the configured table resource.',
+    );
+  }
+
+  // Construct the authority protocol only after the exact data client has
+  // pinned and matched the shared resource identity. No authority request can
+  // be issued against a same-named table in another account or incarnation.
+  const protocol = createProtocol({
+    db: contextDB,
+    tableName: authorityTableName,
+    observationWindowMs,
   });
   const supervisor = createSupervisor({
     protocol,

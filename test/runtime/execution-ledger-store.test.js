@@ -23,6 +23,8 @@ const EXECUTION_LEDGER_STORE_IMPORT =
   '../../src/core/runtime/operator/execution-ledger-store.js';
 const EXECUTION_LEDGER_IMPORT =
   '../../src/core/lib/db/tables/execution-ledger.js';
+const TABLE_RESOURCE_ID = `wdtr1_${'A'.repeat(43)}`;
+const OTHER_TABLE_RESOURCE_ID = `wdtr1_${'E'.repeat(43)}`;
 
 /** @type {ReturnType<typeof jest.fn>} */
 let acquireLocalLedgerServiceSession;
@@ -118,6 +120,7 @@ function residentAuthorityConfiguration() {
       adapterName: /** @type {const} */ ('dynamodb'),
       region: 'us-east-2',
       tableName: 'execution-ledger-test',
+      tableResourceId: TABLE_RESOURCE_ID,
       renewalIntervalMs: 5_000,
       observationWindowMs: 15_000,
     }),
@@ -363,9 +366,10 @@ describe('execution-ledger construction scope', () => {
 });
 
 describe('resident DynamoDB coordinator authority integration', () => {
-  /** @param {{topologyFailure?: unknown}} [settings] */
+  /** @param {{topologyFailure?: unknown, expectedRequestedResourceId?: string}} [settings] */
   function harness(settings = {}) {
-    const { topologyFailure } = settings;
+    const { topologyFailure, expectedRequestedResourceId = TABLE_RESOURCE_ID } =
+      settings;
     /** @type {string[]} */
     const calls = [];
     const protocol = Object.freeze({ kind: 'protocol' });
@@ -373,6 +377,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
       kind: 'dynamodb-coordinator-authority-topology',
       tableName: 'execution-ledger-test',
       region: 'us-east-2',
+      tableResourceId: TABLE_RESOURCE_ID,
     });
     const coordinatorAuthority = coordinatorAuthorityToken();
     const authority = Object.freeze({
@@ -393,6 +398,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
         db,
         tableName: 'execution-ledger-test',
         region: 'us-east-2',
+        expectedTableResourceId: expectedRequestedResourceId,
       });
       return topology;
     });
@@ -497,8 +503,8 @@ describe('resident DynamoDB coordinator authority integration', () => {
     ).resolves.toBe('completed');
 
     expect(fixture.calls).toEqual([
-      'protocol',
       'topology',
+      'protocol',
       'supervisor',
       'run',
       'handler',
@@ -516,6 +522,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
       configurationTable: 0,
       authorityRegion: 0,
       authorityTable: 0,
+      authorityTableResource: 0,
     };
     const authorityConfiguration = {
       ...residentAuthorityConfiguration().residentCoordinatorAuthority,
@@ -528,6 +535,12 @@ describe('resident DynamoDB coordinator authority integration', () => {
         return reads.authorityTable === 1
           ? 'execution-ledger-test'
           : 'different-execution-ledger';
+      },
+      get tableResourceId() {
+        reads.authorityTableResource += 1;
+        return reads.authorityTableResource === 1
+          ? TABLE_RESOURCE_ID
+          : OTHER_TABLE_RESOURCE_ID;
       },
     };
     const configuration = {
@@ -577,6 +590,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
       configurationTable: 1,
       authorityRegion: 1,
       authorityTable: 1,
+      authorityTableResource: 1,
     });
     expect(fixture.createProtocol.mock.calls[0][0]).toMatchObject({
       db: fixture.db,
@@ -624,6 +638,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
         authorityConfiguration.adapterName = 'lmdb';
         authorityConfiguration.region = 'us-west-2';
         authorityConfiguration.tableName = 'different-execution-ledger';
+        authorityConfiguration.tableResourceId = OTHER_TABLE_RESOURCE_ID;
         authorityConfiguration.renewalIntervalMs = 1;
         authorityConfiguration.observationWindowMs = 2;
         input.signal = new AbortController().signal;
@@ -645,6 +660,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
       db: fixture.db,
       tableName: 'execution-ledger-test',
       region: 'us-east-2',
+      expectedTableResourceId: TABLE_RESOURCE_ID,
     });
     expect(fixture.createSupervisor).toHaveBeenCalledWith({
       protocol: fixture.protocol,
@@ -673,9 +689,42 @@ describe('resident DynamoDB coordinator authority integration', () => {
       ),
     ).rejects.toBe(failure);
 
-    expect(fixture.calls).toEqual(['protocol', 'topology']);
+    expect(fixture.calls).toEqual(['topology']);
     expect(fixture.createSupervisor).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('rejects a different configured table resource before authority construction or mutation', async () => {
+    const fixture = harness({
+      expectedRequestedResourceId: OTHER_TABLE_RESOURCE_ID,
+    });
+    const handler = jest.fn();
+    const configuration = residentAuthorityConfiguration();
+    const mismatched = Object.freeze({
+      ...configuration,
+      residentCoordinatorAuthority: Object.freeze({
+        ...configuration.residentCoordinatorAuthority,
+        tableResourceId: OTHER_TABLE_RESOURCE_ID,
+      }),
+    });
+
+    await expect(
+      withExecutionLedgerResidentCoordinatorAuthority(
+        options(fixture, handler, mismatched),
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+        },
+      ),
+    ).rejects.toThrow(/does not match the configured table resource/u);
+
+    expect(fixture.calls).toEqual(['topology']);
+    expect(fixture.createProtocol).not.toHaveBeenCalled();
+    expect(fixture.createSupervisor).not.toHaveBeenCalled();
+    expect(fixture.run).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(fixture.db.transactionWrite).not.toHaveBeenCalled();
   });
 
   test.each([

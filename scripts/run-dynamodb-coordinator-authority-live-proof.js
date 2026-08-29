@@ -6,19 +6,27 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import { sortCanonicalJsonValue } from '../src/core/runtime/canonical-order.js';
+import { assertDynamoDBTablePinnedForClient } from '../src/core/lib/db/adapters/dynamodb.js';
 import { createCoordinatorAuthorityFence } from '../src/core/lib/db/tables/coordinator-authority.js';
 import { createDynamoDBCoordinatorAuthorityProtocol } from '../src/core/lib/db/tables/dynamodb-coordinator-authority.js';
+import { assertDomainSeparatedSha256Id } from '../src/core/runtime/content-id.js';
+import {
+  DYNAMODB_COORDINATOR_AUTHORITY_TOPOLOGY_SCHEMA_VERSION,
+  DYNAMODB_TABLE_RESOURCE_ID_PREFIX,
+} from '../src/core/runtime/dynamodb-coordinator-authority-topology.js';
 import { validateAwsDynamoDBCoordinatorAuthorityTableTopology } from '../src/core/runtime/dynamodb-coordinator-authority-topology-provider.js';
 import {
   ResidentCoordinatorAuthorityLostError,
   createResidentCoordinatorAuthoritySupervisor,
 } from '../src/core/runtime/services/resident-coordinator-authority.js';
 
-export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_SCHEMA_VERSION = 2;
+export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_SCHEMA_VERSION = 3;
 export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_KIND =
   'wharfie.dynamodb-rvn-coordinator-authority-live-proof';
 export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_CONFIRMATION =
   '--confirm-live-aws';
+export const DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_MIN_CREDENTIAL_VALIDITY_MS =
+  30 * 60 * 1_000;
 
 const DEFAULT_OBSERVATION_WINDOW_MS = 1_500;
 const DEFAULT_RESIDENT_RENEWAL_INTERVAL_MS = 250;
@@ -27,12 +35,16 @@ const MAX_TABLE_WAIT_ATTEMPTS = 90;
 const MAX_EVIDENCE_BYTES = 64 * 1024;
 const REGION_PATTERN = /^[a-z]{2}(?:-gov)?-[a-z0-9-]+-[0-9]+$/u;
 const UNIQUE_SUFFIX_PATTERN = /^[a-z0-9]{8,32}$/u;
+const TABLE_ARN_PATTERN =
+  /^arn:(aws(?:-[a-z0-9]+)*):dynamodb:([^:]+):([0-9]{12}):table\/([A-Za-z0-9_.-]{3,255})$/u;
+const TABLE_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 const SAFE_ERROR_CODE_PATTERN = /^WHARFIE_[A-Z0-9_]+$/u;
 const STALE_MUTATION_SORT_KEY = 'proof/v1/stale-authority-mutation';
 const RESIDENT_STALE_MUTATION_SORT_KEY =
   'proof/v1/resident-stale-authority-mutation';
 const RESIDENT_SUCCESSOR_MUTATION_SORT_KEY =
   'proof/v1/resident-successor-authority-mutation';
+const INVALID_OWN_DATA_PROPERTY = Symbol('invalid-own-data-property');
 
 /**
  * @typedef {Readonly<{
@@ -51,6 +63,21 @@ function isPlainObject(value) {
   }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Read one own data property without invoking an accessor.
+ * @param {unknown} value - Candidate record.
+ * @param {string} key - Property name.
+ * @returns {unknown} - Snapshotted value, undefined when absent, or an invalid sentinel.
+ */
+function ownDataValue(value, key) {
+  if (!isPlainObject(value)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return undefined;
+  return Object.hasOwn(descriptor, 'value')
+    ? descriptor.value
+    : INVALID_OWN_DATA_PROPERTY;
 }
 
 /**
@@ -127,16 +154,19 @@ function isResourceNotFound(error) {
 
 /**
  * @param {unknown} description - DescribeTable response.
- * @param {string} tableName - Exact proof table.
+ * @param {string} tableName - Exact proof table logical name.
+ * @param {Readonly<{TableArn: string, TableId: string}>} resource - Exact proof-owned resource.
  * @returns {Readonly<{billingMode: 'PAY_PER_REQUEST'}>} - Proof-owned cleanup-policy evidence.
  */
-function assertDisposableTable(description, tableName) {
+function assertDisposableTable(description, tableName, resource) {
   if (!isPlainObject(description) || !isPlainObject(description.Table)) {
     throw new Error('DynamoDB proof table description is unavailable.');
   }
   const table = description.Table;
   if (
     table.TableName !== tableName ||
+    table.TableArn !== resource.TableArn ||
+    table.TableId !== resource.TableId ||
     table.TableStatus !== 'ACTIVE' ||
     table.BillingModeSummary?.BillingMode !== 'PAY_PER_REQUEST'
   ) {
@@ -148,17 +178,42 @@ function assertDisposableTable(description, tableName) {
 }
 
 /**
+ * Refuse destructive cleanup unless the immediately observed resource still
+ * has the exact identity returned by this invocation's CreateTable call.
+ * @param {unknown} description - Immediate pre-delete DescribeTable response.
+ * @param {string} tableName - Exact proof table logical name.
+ * @param {Readonly<{TableArn: string, TableId: string}>} resource - Captured proof-owned resource.
+ * @returns {void}
+ */
+function assertProofOwnedTableForDeletion(description, tableName, resource) {
+  if (
+    !isPlainObject(description) ||
+    !isPlainObject(description.Table) ||
+    description.Table.TableName !== tableName ||
+    description.Table.TableArn !== resource.TableArn ||
+    description.Table.TableId !== resource.TableId
+  ) {
+    throw new Error(
+      'DynamoDB proof table identity changed; refusing destructive cleanup.',
+    );
+  }
+}
+
+/**
  * @param {Record<string, any>} admin - Injected DynamoDB administrative client.
- * @param {string} tableName - Exact table.
+ * @param {string} tableName - Exact logical table.
+ * @param {Readonly<{TableArn: string, TableId: string}>} resource - Exact proof-owned resource.
  * @param {(milliseconds: number, signal?: AbortSignal) => Promise<void>} wait - Bounded waiter.
  * @returns {Promise<Readonly<{billingMode: 'PAY_PER_REQUEST'}>>} - ACTIVE disposable-table policy evidence.
  */
-async function waitForTableActive(admin, tableName, wait) {
+async function waitForTableActive(admin, tableName, resource, wait) {
   for (let attempt = 0; attempt < MAX_TABLE_WAIT_ATTEMPTS; attempt += 1) {
     // eslint-disable-next-line no-await-in-loop -- provider state is deliberately polled serially.
-    const description = await admin.describeTable({ TableName: tableName });
+    const description = await admin.describeTable({
+      TableName: resource.TableArn,
+    });
     if (description?.Table?.TableStatus === 'ACTIVE') {
-      return assertDisposableTable(description, tableName);
+      return assertDisposableTable(description, tableName, resource);
     }
     if (!['CREATING', 'UPDATING'].includes(description?.Table?.TableStatus)) {
       throw new Error('DynamoDB proof table entered an unsupported state.');
@@ -171,15 +226,15 @@ async function waitForTableActive(admin, tableName, wait) {
 
 /**
  * @param {Record<string, any>} admin - Injected DynamoDB administrative client.
- * @param {string} tableName - Exact table.
+ * @param {string} tableArn - Exact proof-owned table ARN.
  * @param {(milliseconds: number, signal?: AbortSignal) => Promise<void>} wait - Bounded waiter.
  * @returns {Promise<void>} - Resolves once the table is absent.
  */
-async function waitForTableDeleted(admin, tableName, wait) {
+async function waitForTableDeleted(admin, tableArn, wait) {
   for (let attempt = 0; attempt < MAX_TABLE_WAIT_ATTEMPTS; attempt += 1) {
     try {
       // eslint-disable-next-line no-await-in-loop -- provider state is deliberately polled serially.
-      await admin.describeTable({ TableName: tableName });
+      await admin.describeTable({ TableName: tableArn });
     } catch (error) {
       if (isResourceNotFound(error)) return;
       throw error;
@@ -780,6 +835,7 @@ async function runResidentSupervisorProof(options) {
  *   createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol,
  *   createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor,
  *   validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology,
+ *   assertPinnedTable?: typeof assertDynamoDBTablePinnedForClient,
  *   observationWindowMs?: number,
  *   residentRenewalIntervalMs?: number,
  *   residentSupervisorTiming?: (label: 'incumbent'|'successor') => Readonly<{monotonicNow?: () => bigint, waitForInterval?: (milliseconds: number, signal?: AbortSignal) => Promise<void>}>,
@@ -817,6 +873,8 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
   const validateTopology =
     dependencies.validateTopology ??
     validateAwsDynamoDBCoordinatorAuthorityTableTopology;
+  const assertPinnedTable =
+    dependencies.assertPinnedTable ?? assertDynamoDBTablePinnedForClient;
   const observationWindowMs =
     dependencies.observationWindowMs ?? DEFAULT_OBSERVATION_WINDOW_MS;
   const residentRenewalIntervalMs =
@@ -841,6 +899,7 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
     typeof createProtocol !== 'function' ||
     typeof createSupervisor !== 'function' ||
     typeof validateTopology !== 'function' ||
+    typeof assertPinnedTable !== 'function' ||
     !Number.isSafeInteger(observationWindowMs) ||
     observationWindowMs < 1 ||
     !Number.isSafeInteger(residentRenewalIntervalMs) ||
@@ -878,6 +937,8 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
     /** @type {import('../src/core/lib/db/base.js').DBClient[]} */
     const clients = [];
     let tableOwned = false;
+    /** @type {Readonly<{TableArn: string, TableId: string}> | undefined} */
+    let tableResource;
     let tableDeleted = false;
     /** @type {Readonly<Record<string, any>> | undefined} */
     let proof;
@@ -909,7 +970,28 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
         );
       }
       tableOwned = true;
-      const table = await waitForTableActive(admin, tableName, wait);
+      const tableArn = creation.TableDescription.TableArn;
+      const tableId = creation.TableDescription.TableId;
+      const arnMatch =
+        typeof tableArn === 'string' ? TABLE_ARN_PATTERN.exec(tableArn) : null;
+      if (
+        !arnMatch ||
+        arnMatch[2] !== input.region ||
+        arnMatch[4] !== tableName ||
+        typeof tableId !== 'string' ||
+        !TABLE_ID_PATTERN.test(tableId)
+      ) {
+        throw new Error(
+          'DynamoDB did not return the exact proof-owned table resource.',
+        );
+      }
+      tableResource = Object.freeze({ TableArn: tableArn, TableId: tableId });
+      const table = await waitForTableActive(
+        admin,
+        tableName,
+        tableResource,
+        wait,
+      );
       const dbA = await dependencies.createDBClient('coordinator-a');
       clients.push(dbA);
       const dbB = await dependencies.createDBClient('coordinator-b');
@@ -937,11 +1019,24 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
         return result.value;
       });
       for (const topologyEvidence of topologies) {
+        let resourceIdValid = true;
+        try {
+          assertDomainSeparatedSha256Id(
+            topologyEvidence?.tableResourceId,
+            DYNAMODB_TABLE_RESOURCE_ID_PREFIX,
+            'DynamoDB proof topology tableResourceId',
+          );
+        } catch {
+          resourceIdValid = false;
+        }
         if (
           !isPlainObject(topologyEvidence) ||
+          topologyEvidence.schemaVersion !==
+            DYNAMODB_COORDINATOR_AUTHORITY_TOPOLOGY_SCHEMA_VERSION ||
           topologyEvidence.kind !== 'dynamodb-coordinator-authority-topology' ||
           topologyEvidence.tableName !== tableName ||
           topologyEvidence.region !== input.region ||
+          !resourceIdValid ||
           topologyEvidence.tableStatus !== 'ACTIVE' ||
           topologyEvidence.globalTable !== false ||
           topologyEvidence.replicaCount !== 0 ||
@@ -958,6 +1053,12 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
       ) {
         throw new Error(
           'DynamoDB proof data clients did not validate the same topology.',
+        );
+      }
+      for (const db of [dbA, dbB]) {
+        assertPinnedTable(
+          db,
+          Object.freeze({ TableName: tableName, ...tableResource }),
         );
       }
       const topology = topologies[0];
@@ -1283,16 +1384,29 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
     );
     if (tableOwned) {
       try {
+        if (!tableResource) {
+          throw new Error(
+            'DynamoDB proof table identity is unavailable; refusing destructive cleanup.',
+          );
+        }
+        const tableReference = tableResource.TableArn;
         let exists = true;
         try {
-          await admin.describeTable({ TableName: tableName });
+          const description = await admin.describeTable({
+            TableName: tableReference,
+          });
+          assertProofOwnedTableForDeletion(
+            description,
+            tableName,
+            tableResource,
+          );
         } catch (error) {
           if (isResourceNotFound(error)) exists = false;
           else throw error;
         }
         if (exists) {
-          await admin.deleteTable({ TableName: tableName });
-          await waitForTableDeleted(admin, tableName, wait);
+          await admin.deleteTable({ TableName: tableReference });
+          await waitForTableDeleted(admin, tableReference, wait);
         }
         tableDeleted = true;
       } catch (error) {
@@ -1332,14 +1446,15 @@ export function createDynamoDBCoordinatorAuthorityLiveProofDriver(
 }
 
 /**
- * Bind the live administrative and data clients to one retained credentials
- * provider. The provider object remains private to these client constructors;
- * no credential identity or material enters proof evidence.
+ * Resolve one credential snapshot before the name-addressed CreateTable call,
+ * then serve fresh mutable copies to every SDK client. This prevents retry or
+ * refresh from crossing accounts before an ARN exists. Expiring credentials
+ * need a conservative cleanup margin; no identity or material enters evidence.
  * @param {{region: string, bindings: import('../src/core/runtime/aws-provider-module.js').AwsSdkBindings, createDynamoDB: typeof import('../src/core/lib/db/adapters/dynamodb.js').default}} options - Loaded AWS bindings and adapter.
- * @param {{createDriver?: typeof createDynamoDBCoordinatorAuthorityLiveProofDriver}} [dependencies] - Focused constructor test seam.
- * @returns {ReturnType<typeof createDynamoDBCoordinatorAuthorityLiveProofDriver>} - Live proof driver.
+ * @param {{createDriver?: typeof createDynamoDBCoordinatorAuthorityLiveProofDriver, wallNow?: () => number}} [dependencies] - Focused constructor test seams.
+ * @returns {Promise<ReturnType<typeof createDynamoDBCoordinatorAuthorityLiveProofDriver>>} - Live proof driver.
  */
-export function createDynamoDBCoordinatorAuthorityLiveAwsDriver(
+export async function createDynamoDBCoordinatorAuthorityLiveAwsDriver(
   options,
   dependencies = {},
 ) {
@@ -1354,9 +1469,13 @@ export function createDynamoDBCoordinatorAuthorityLiveAwsDriver(
     typeof options.bindings !== 'object' ||
     typeof options.createDynamoDB !== 'function' ||
     !isPlainObject(dependencies) ||
-    Object.keys(dependencies).some((key) => key !== 'createDriver') ||
+    Object.keys(dependencies).some(
+      (key) => key !== 'createDriver' && key !== 'wallNow',
+    ) ||
     (dependencies.createDriver !== undefined &&
-      typeof dependencies.createDriver !== 'function')
+      typeof dependencies.createDriver !== 'function') ||
+    (dependencies.wallNow !== undefined &&
+      typeof dependencies.wallNow !== 'function')
   ) {
     throw new TypeError(
       'DynamoDB coordinator live AWS client dependencies are invalid.',
@@ -1374,12 +1493,86 @@ export function createDynamoDBCoordinatorAuthorityLiveAwsDriver(
       'DynamoDB coordinator live AWS bindings are incomplete.',
     );
   }
-  const credentials = fromNodeProviderChain();
-  if (typeof credentials !== 'function') {
+  const credentialProvider = fromNodeProviderChain();
+  if (typeof credentialProvider !== 'function') {
     throw new TypeError(
       'DynamoDB coordinator live AWS credentials provider is invalid.',
     );
   }
+  let resolvedCredentials;
+  try {
+    resolvedCredentials = await credentialProvider();
+  } catch {
+    throw new Error(
+      'DynamoDB coordinator live AWS credentials could not be resolved.',
+    );
+  }
+  const wallNow = dependencies.wallNow ?? Date.now;
+  const resolvedAt = wallNow();
+  const accessKeyId = ownDataValue(resolvedCredentials, 'accessKeyId');
+  const secretAccessKey = ownDataValue(resolvedCredentials, 'secretAccessKey');
+  const sessionToken = ownDataValue(resolvedCredentials, 'sessionToken');
+  const credentialScope = ownDataValue(resolvedCredentials, 'credentialScope');
+  const accountId = ownDataValue(resolvedCredentials, 'accountId');
+  const expiration = ownDataValue(resolvedCredentials, 'expiration');
+  const expirationMs =
+    expiration instanceof Date ? expiration.getTime() : undefined;
+  if (
+    !Number.isSafeInteger(resolvedAt) ||
+    resolvedAt < 0 ||
+    !isPlainObject(resolvedCredentials) ||
+    typeof accessKeyId !== 'string' ||
+    accessKeyId.length === 0 ||
+    typeof secretAccessKey !== 'string' ||
+    secretAccessKey.length === 0 ||
+    (sessionToken !== undefined &&
+      (typeof sessionToken !== 'string' || sessionToken.length === 0)) ||
+    (credentialScope !== undefined &&
+      (typeof credentialScope !== 'string' || credentialScope.length === 0)) ||
+    (accountId !== undefined &&
+      (typeof accountId !== 'string' || accountId.length === 0)) ||
+    (expiration !== undefined &&
+      (!(expiration instanceof Date) || !Number.isFinite(expirationMs)))
+  ) {
+    throw new TypeError(
+      'DynamoDB coordinator live AWS credentials are invalid.',
+    );
+  }
+  if (
+    expirationMs !== undefined &&
+    expirationMs - resolvedAt <
+      DYNAMODB_COORDINATOR_AUTHORITY_LIVE_PROOF_MIN_CREDENTIAL_VALIDITY_MS
+  ) {
+    throw new Error(
+      'DynamoDB coordinator live AWS credentials expire too soon for bounded proof and cleanup.',
+    );
+  }
+  const credentialSnapshot = Object.freeze({
+    accessKeyId,
+    secretAccessKey,
+    ...(sessionToken === undefined ? {} : { sessionToken }),
+    ...(credentialScope === undefined ? {} : { credentialScope }),
+    ...(accountId === undefined ? {} : { accountId }),
+    ...(expirationMs === undefined ? {} : { expirationMs }),
+  });
+  // AWS SDK v3 annotates resolved credentials, so each resolution receives a
+  // mutable object while the values remain fixed for this proof invocation.
+  const credentials = async () => ({
+    accessKeyId: credentialSnapshot.accessKeyId,
+    secretAccessKey: credentialSnapshot.secretAccessKey,
+    ...(credentialSnapshot.sessionToken === undefined
+      ? {}
+      : { sessionToken: credentialSnapshot.sessionToken }),
+    ...(credentialSnapshot.credentialScope === undefined
+      ? {}
+      : { credentialScope: credentialSnapshot.credentialScope }),
+    ...(credentialSnapshot.accountId === undefined
+      ? {}
+      : { accountId: credentialSnapshot.accountId }),
+    ...(credentialSnapshot.expirationMs === undefined
+      ? {}
+      : { expiration: new Date(credentialSnapshot.expirationMs) }),
+  });
   const region = options.region;
   const adminClient = new DynamoDB({ region, credentials });
   const createDriver =
@@ -1412,7 +1605,7 @@ async function createLiveDriver(region) {
       import('../src/core/lib/db/adapters/dynamodb.js'),
     ]);
   const bindings = getAwsSdkBindings();
-  return createDynamoDBCoordinatorAuthorityLiveAwsDriver({
+  return await createDynamoDBCoordinatorAuthorityLiveAwsDriver({
     region,
     bindings,
     createDynamoDB,

@@ -20,6 +20,7 @@ function tableDescription(overrides = {}) {
     Table: {
       TableName: TABLE_NAME,
       TableArn: `arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${TABLE_NAME}`,
+      TableId: '00000000-1111-2222-3333-444444444444',
       TableStatus: 'ACTIVE',
       BillingModeSummary: { BillingMode: 'PAY_PER_REQUEST' },
       KeySchema: [
@@ -45,7 +46,7 @@ function assertTopology(description) {
 }
 
 describe('DynamoDB coordinator authority table topology', () => {
-  test('returns frozen normalized single-Region evidence without account identity', () => {
+  test('returns frozen account-bound evidence without raw account identity', () => {
     const evidence = assertTopology(
       tableDescription({
         Replicas: [],
@@ -54,11 +55,12 @@ describe('DynamoDB coordinator authority table topology', () => {
     );
 
     expect(evidence).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: DYNAMODB_COORDINATOR_AUTHORITY_TOPOLOGY_KIND,
       tableName: TABLE_NAME,
       region: REGION,
       arnPartition: 'aws',
+      tableResourceId: expect.stringMatching(/^wdtr1_[A-Za-z0-9_-]{43}$/u),
       tableStatus: 'ACTIVE',
       keySchema: [
         {
@@ -80,6 +82,29 @@ describe('DynamoDB coordinator authority table topology', () => {
     expect(Object.isFrozen(evidence.keySchema)).toBe(true);
     expect(Object.isFrozen(evidence.keySchema[0])).toBe(true);
     expect(JSON.stringify(evidence)).not.toContain(ACCOUNT_ID);
+  });
+
+  test('distinguishes same-named tables in different AWS accounts', () => {
+    const first = assertTopology(tableDescription());
+    const second = assertTopology(
+      tableDescription({
+        TableArn: `arn:aws:dynamodb:${REGION}:210987654321:table/${TABLE_NAME}`,
+      }),
+    );
+
+    expect(second.tableResourceId).not.toBe(first.tableResourceId);
+    expect(JSON.stringify(second)).not.toContain('210987654321');
+  });
+
+  test('distinguishes recreated tables with the same ARN', () => {
+    const first = assertTopology(tableDescription());
+    const second = assertTopology(
+      tableDescription({
+        TableId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      }),
+    );
+
+    expect(second.tableResourceId).not.toBe(first.tableResourceId);
   });
 
   test('accepts provider schema arrays in either order and canonicalizes evidence', () => {
@@ -187,6 +212,8 @@ describe('DynamoDB coordinator authority table topology', () => {
       },
     ],
     ['malformed ARN', { TableArn: 'not-an-arn' }],
+    ['a missing table ID', { TableId: undefined }],
+    ['a malformed table ID', { TableId: 'not a table id' }],
   ])('rejects a table with %s', (_label, overrides) => {
     expect(() => assertTopology(tableDescription(overrides))).toThrow(
       DynamoDBCoordinatorAuthorityTopologyError,

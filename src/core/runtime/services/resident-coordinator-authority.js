@@ -177,10 +177,7 @@ function isKnownAuthorityDomainError(error) {
 
 /** @param {unknown} error */
 function isOpaqueTransitionError(error) {
-  return (
-    isTakeoverUnknown(error) ||
-    (!(error instanceof TypeError) && !isKnownAuthorityDomainError(error))
-  );
+  return isTakeoverUnknown(error) || !isKnownAuthorityDomainError(error);
 }
 
 /**
@@ -548,9 +545,7 @@ export function createResidentCoordinatorAuthoritySupervisor(options) {
       try {
         before = await readCurrentAuthority();
       } catch (error) {
-        if (error instanceof TypeError || isKnownAuthorityDomainError(error)) {
-          throw error;
-        }
+        if (isKnownAuthorityDomainError(error)) throw error;
       }
       if (before && isRetainedIntentAuthority(before, intent)) {
         return normalizeOwnedAuthority(
@@ -571,12 +566,7 @@ export function createResidentCoordinatorAuthoritySupervisor(options) {
           try {
             afterConflict = await readCurrentAuthority();
           } catch (readError) {
-            if (
-              readError instanceof TypeError ||
-              isKnownAuthorityDomainError(readError)
-            ) {
-              throw readError;
-            }
+            if (isKnownAuthorityDomainError(readError)) throw readError;
             // eslint-disable-next-line no-await-in-loop -- Settlement persists through opaque provider reads.
             await waitForCompleteInterval(retryDelayMs, undefined);
             continue;
@@ -598,14 +588,22 @@ export function createResidentCoordinatorAuthoritySupervisor(options) {
         continue;
       }
 
-      normalizeOwnedAuthority(result.authority, label);
+      try {
+        normalizeOwnedAuthority(result.authority, label);
+      } catch (error) {
+        if (isKnownAuthorityDomainError(error)) throw error;
+        // A malformed or unreadable response after the transition returned
+        // cannot prove that its write did not commit. Replay the exact intent
+        // until receipt/read evidence settles ownership.
+        // eslint-disable-next-line no-await-in-loop -- Settlement persists through ambiguous transition responses.
+        await waitForCompleteInterval(retryDelayMs, undefined);
+        continue;
+      }
       let after;
       try {
         after = await readCurrentAuthority();
       } catch (error) {
-        if (error instanceof TypeError || isKnownAuthorityDomainError(error)) {
-          throw error;
-        }
+        if (isKnownAuthorityDomainError(error)) throw error;
         // A definite receipt with an unknown current read is replayed until a
         // strong read establishes whether cleanup still owns an ACTIVE record.
         // eslint-disable-next-line no-await-in-loop -- Settlement persists through opaque provider reads.
@@ -673,14 +671,28 @@ export function createResidentCoordinatorAuthoritySupervisor(options) {
         continue;
       }
 
-      const candidate = normalizeOwnedAuthority(result.authority, label);
+      let candidate;
+      try {
+        candidate = normalizeOwnedAuthority(result.authority, label);
+      } catch (error) {
+        if (isKnownAuthorityDomainError(error)) throw error;
+        // The transition already returned, so response-shape failure is an
+        // ambiguous post-attempt outcome. Preserve the exact request identity.
+        if (signal.aborted) continue;
+        try {
+          // eslint-disable-next-line no-await-in-loop -- Exact retained intent retry is deliberately serial.
+          await waitForCompleteInterval(retryDelayMs, signal);
+        } catch (waitError) {
+          if (signal.aborted) continue;
+          throw waitError;
+        }
+        continue;
+      }
       let current;
       try {
         current = await readCurrentAuthority();
       } catch (error) {
-        if (error instanceof TypeError || isKnownAuthorityDomainError(error)) {
-          throw error;
-        }
+        if (isKnownAuthorityDomainError(error)) throw error;
         // The transition result alone is not an admission point. Replay its
         // exact intent after a bounded delay unless cancellation has switched
         // this lifecycle into exact-intent settlement.
@@ -774,8 +786,10 @@ export function createResidentCoordinatorAuthoritySupervisor(options) {
 
   /**
    * Release with one immutable receipt-backed intent. Opaque failures can be
-   * exact-retried safely; known domain failures are terminal, while stale
-   * means a successor already completed relinquishment for this owner.
+   * exact-retried safely. A transition conflict is also exact-retried because
+   * a late same-owner renewal may have advanced the release CAS predecessor.
+   * Request-identity and other known domain failures remain terminal, while
+   * stale means a successor or another release already fenced this owner.
    * @param {import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthoritySnapshot} authority - Latest full owner snapshot.
    */
   async function releaseOwnedAuthority(authority) {
@@ -793,10 +807,18 @@ export function createResidentCoordinatorAuthoritySupervisor(options) {
         return;
       } catch (error) {
         if (isAuthorityStale(error)) return;
-        if (error instanceof TypeError || isKnownAuthorityDomainError(error)) {
+        if (
+          isRequestConflict(error) ||
+          (isKnownAuthorityDomainError(error) && !isAuthorityConflict(error))
+        ) {
           throw error;
         }
-        // eslint-disable-next-line no-await-in-loop -- Release receipts make this exact cleanup retry safe.
+        // A conditional conflict can mean that an earlier unknown renewal
+        // committed between release read and CAS. The release digest retains
+        // only the stable authority token, so replaying this exact request ID
+        // safely rereads and releases the advanced same owner or observes a
+        // stale successor/release.
+        // eslint-disable-next-line no-await-in-loop -- Release receipts and the stable token make this exact cleanup retry safe.
         await waitForCompleteInterval(retryDelayMs, undefined);
       }
     }

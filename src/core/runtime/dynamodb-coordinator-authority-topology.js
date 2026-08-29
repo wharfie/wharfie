@@ -1,11 +1,17 @@
-export const DYNAMODB_COORDINATOR_AUTHORITY_TOPOLOGY_SCHEMA_VERSION = 1;
+import { createCanonicalJsonSha256Id } from './content-id.js';
+
+export const DYNAMODB_COORDINATOR_AUTHORITY_TOPOLOGY_SCHEMA_VERSION = 2;
 export const DYNAMODB_COORDINATOR_AUTHORITY_TOPOLOGY_KIND =
   'dynamodb-coordinator-authority-topology';
+export const DYNAMODB_TABLE_RESOURCE_ID_DOMAIN =
+  'wharfie:dynamodb-table-resource:v1';
+export const DYNAMODB_TABLE_RESOURCE_ID_PREFIX = 'wdtr1';
 
 const TABLE_NAME_PATTERN = /^[A-Za-z0-9_.-]{3,255}$/u;
 const REGION_PATTERN = /^[a-z]{2}(?:-gov)?-[a-z0-9-]+-[0-9]+$/u;
 const TABLE_ARN_PATTERN =
   /^arn:(aws(?:-[a-z0-9]+)*):dynamodb:([^:]+):([0-9]{12}):table\/([A-Za-z0-9_.-]{3,255})$/u;
+const TABLE_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/u;
 const EXPECTED_KEY_SCHEMA = Object.freeze([
   Object.freeze({
     attributeName: 'run_id',
@@ -150,16 +156,17 @@ function hasExactLedgerSchema(keySchema, attributeDefinitions) {
 
 /**
  * Validate one DescribeTable response against the resident authority contract.
- * No provider client or SDK type crosses this core boundary. The table ARN is
- * used only to prove the exact Region and table resource; account identity is
- * deliberately omitted from the returned evidence.
+ * No provider client or SDK type crosses this core boundary. Raw account and
+ * ARN values remain private; a domain-separated resource ID lets independent
+ * clients prove they resolved the same table without disclosing either.
  * @param {{description: unknown, tableName: string, region: string}} options - Exact response and expected identity.
  * @returns {Readonly<{
- *   schemaVersion: 1,
+ *   schemaVersion: 2,
  *   kind: 'dynamodb-coordinator-authority-topology',
  *   tableName: string,
  *   region: string,
  *   arnPartition: string,
+ *   tableResourceId: string,
  *   tableStatus: 'ACTIVE',
  *   keySchema: typeof EXPECTED_KEY_SCHEMA,
  *   replicaCount: 0,
@@ -203,7 +210,9 @@ export function assertDynamoDBCoordinatorAuthorityTableTopology(options) {
     table.TableName !== tableName ||
     !arnMatch ||
     arnMatch[2] !== region ||
-    arnMatch[4] !== tableName
+    arnMatch[4] !== tableName ||
+    typeof table.TableId !== 'string' ||
+    !TABLE_ID_PATTERN.test(table.TableId)
   ) {
     throw new DynamoDBCoordinatorAuthorityTopologyError(
       tableName,
@@ -243,6 +252,18 @@ export function assertDynamoDBCoordinatorAuthorityTableTopology(options) {
     tableName,
     region,
     arnPartition: arnMatch[1],
+    tableResourceId: createCanonicalJsonSha256Id({
+      domain: DYNAMODB_TABLE_RESOURCE_ID_DOMAIN,
+      prefix: DYNAMODB_TABLE_RESOURCE_ID_PREFIX,
+      value: {
+        partition: arnMatch[1],
+        region: arnMatch[2],
+        accountId: arnMatch[3],
+        tableName: arnMatch[4],
+        tableId: table.TableId,
+      },
+      valuePath: 'DynamoDB table resource identity',
+    }),
     tableStatus: 'ACTIVE',
     keySchema: EXPECTED_KEY_SCHEMA.map((entry) => ({ ...entry })),
     replicaCount: 0,

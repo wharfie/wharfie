@@ -20,6 +20,8 @@ import {
 } from '../../src/core/lib/config/db.js';
 import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../src/core/lib/db/state/store.js';
 
+const TABLE_RESOURCE_ID = `wdtr1_${'A'.repeat(43)}`;
+
 describe('Unified DB config', () => {
   afterEach(async () => {
     await closeDB();
@@ -108,6 +110,7 @@ describe('Unified DB config', () => {
       {
         AWS_REGION: 'us-east-2',
         WHARFIE_COORDINATOR_AUTHORITY_PROFILE: undefined,
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: undefined,
         WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: undefined,
         WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: undefined,
       },
@@ -135,6 +138,7 @@ describe('Unified DB config', () => {
           DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
         WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
         WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: TABLE_RESOURCE_ID,
       },
       async () => {
         const configuration = resolveResidentCoordinatorAuthorityConfiguration({
@@ -147,6 +151,7 @@ describe('Unified DB config', () => {
           adapterName: 'dynamodb',
           region: 'us-east-2',
           tableName: 'ledger-table',
+          tableResourceId: TABLE_RESOURCE_ID,
           renewalIntervalMs: 5000,
           observationWindowMs: 15000,
         });
@@ -163,6 +168,7 @@ describe('Unified DB config', () => {
         WHARFIE_COORDINATOR_AUTHORITY_PROFILE: 'timestamp-lease-v0',
         WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
         WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: TABLE_RESOURCE_ID,
       },
       'WHARFIE_COORDINATOR_AUTHORITY_PROFILE',
     ],
@@ -174,6 +180,7 @@ describe('Unified DB config', () => {
           DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
         WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: undefined,
         WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: TABLE_RESOURCE_ID,
       },
       'WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS',
     ],
@@ -187,6 +194,7 @@ describe('Unified DB config', () => {
         WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: String(
           COORDINATOR_AUTHORITY_MAX_TIMER_MS + 1,
         ),
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: TABLE_RESOURCE_ID,
       },
       'must be no greater',
     ],
@@ -198,8 +206,44 @@ describe('Unified DB config', () => {
           DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
         WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
         WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '5000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: TABLE_RESOURCE_ID,
       },
       'must be greater',
+    ],
+    [
+      'missing table resource identity',
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: undefined,
+      },
+      'WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID',
+    ],
+    [
+      'noncanonical table resource identity',
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: `wdtr1_${'A'.repeat(42)}B`,
+      },
+      'canonical DynamoDB table resource identity',
+    ],
+    [
+      'table resource identity without a profile',
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE: undefined,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: undefined,
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: undefined,
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: TABLE_RESOURCE_ID,
+      },
+      'WHARFIE_COORDINATOR_AUTHORITY_PROFILE',
     ],
   ])('rejects %s', async (_label, environment, message) => {
     await withEnv(environment, async () => {
@@ -220,6 +264,7 @@ describe('Unified DB config', () => {
           DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
         WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
         WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: TABLE_RESOURCE_ID,
       },
       async () => {
         expect(() =>

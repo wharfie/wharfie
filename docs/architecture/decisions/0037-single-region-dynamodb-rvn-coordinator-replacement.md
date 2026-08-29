@@ -5,12 +5,17 @@
 > **Implementation addendum (2026-08-28):** the certified primitive now has
 > an explicitly configured, internal resident supervisor. Startup proves the
 > exact table topology through the same open DynamoDB client used for ledger
-> transactions; the owner renews while work drains, contenders observe and
-> take over through the retained exact closure, and an unprovable or stale
-> renewal aborts admissions and fails closed. A transition receipt admits no
-> work until a strong read proves that exact full snapshot is still current,
-> and a private construction capability binds the handler's ledger to the same
-> client and table. Current resident product gates remain local/LMDB-only.
+> transactions, pins that immutable client to the returned full table ARN and
+> TableId, and matches an opaque provisioning-supplied resource identity before
+> constructing authority. Every later data operation addresses the pinned ARN,
+> so managed credential refresh can retain access or fail closed but cannot
+> silently redirect a resident to a same-named table. The owner renews while
+> work drains, contenders observe and take over through the retained exact
+> closure, and an unprovable or stale renewal aborts admissions and fails
+> closed. A transition receipt admits no work until a strong read proves that
+> exact full snapshot is still current, and a private construction capability
+> binds the handler's ledger to the same client and table. Current resident
+> product gates remain local/LMDB-only.
 > Reconstruction, product activation, cross-store handoff, and multi-node
 > recovery are still outside this decision's proof.
 
@@ -55,12 +60,26 @@ Tables, cross-Region replication, a generic `DBClient`, a different ledger
 store, or an application-state destination outside that transaction.
 The primitive verifies the DynamoDB adapter identity. The resident startup
 guard additionally calls `DescribeTable` through a capability retained only by
-the exact already-open data client, then checks its ARN, status, key schema,
-and absence of replica/global metadata. That binds the startup proof to the
-same credential, Region, endpoint, and table name used by authority and ledger
-transactions. Provisioning must still prevent an administrator from changing
-the accepted topology after startup, and every protected consumer must retain
-the same table transaction fence. The internal resident helper additionally
+the exact already-open data client. The adapter blocks prior or racing
+logical-name use while first validation is unresolved. Pure validation checks
+the response's ARN Region and resource name, TableId, `ACTIVE` status, key
+schema, and absence of replica/global metadata, then the capability pins that
+exact response. The public wrapper is immutable and every later query, item,
+batch, or transaction operation resolves the logical name once to the full
+ARN. A managed credential provider may refresh after that point, but it can
+only access the pinned resource or fail.
+
+The validated account, ARN, and TableId are summarized as a domain-separated
+opaque `tableResourceId`; raw account identity is not exposed. Every node using
+the opt-in resident profile must carry the same provisioning-supplied expected
+resource ID, and startup compares it before protocol or supervisor
+construction. This prevents independently configured nodes from accepting
+same-named tables in different accounts or table incarnations. A later
+revalidation that observes another ARN, TableId, or unsupported topology
+poisons that route. Provisioning must still prevent deletion, recreation, or
+topology change after startup because DynamoDB cannot atomically condition
+ordinary data operations on TableId. Every protected consumer must retain the
+same table transaction fence. The internal resident helper additionally
 requires the exact unbound ledger object registered at construction for that
 client and table; copied or caller-shaped method surfaces cannot satisfy this
 scope proof or redirect the retained authority binder.
@@ -175,7 +194,12 @@ The follow-on internal lifecycle seam now wires acquisition, renewal,
 observation, takeover, drain, and release around an injected resident handler.
 It uses one stable authority token for protected work while retaining the
 latest full snapshot for renewal and release. It retries only exact retained
-ambiguous intents and aborts the handler on authority loss. Acquisition and
+ambiguous intents and aborts the handler on authority loss. Post-attempt
+provider failures, including transport-shaped `TypeError`s, remain ambiguous
+until exact readback orders them. Release also exact-retries a same-owner CAS
+conflict caused by a late renewal, retaining one stable release request; stale
+release means a successor already fenced the owner, while request corruption
+and other known domain errors remain terminal. Acquisition and
 takeover responses require an exact current strong-read match before handler
 admission; historical receipts are read-only evidence. Cancellation during an
 ambiguous startup write suppresses handler admission but continues exact
@@ -199,6 +223,10 @@ separate implementation and proof obligations.
   consistent reads and restart their full monotonic window after any change.
 - Every protected mutation must retain the same-transaction stable-tuple
   condition. Removing or moving that condition would invalidate the proof.
+- Full-ARN routing preserves ordinary managed credential refresh without
+  allowing refreshed credentials to select a different same-named table.
+- All participants need the same provisioning-retained `tableResourceId`, and
+  provisioning must prevent table replacement after startup.
 - The provider-specific supervisor is not evidence of product-level automatic
   resident or multi-node recovery. Reconstruction and activation remain open.
 - Other stores still need their own provider certification. ADR 0002's

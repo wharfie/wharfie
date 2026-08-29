@@ -709,7 +709,7 @@ describe('resident DynamoDB coordinator authority supervisor', () => {
     const initial = createAuthority();
     const acquire = jest
       .fn()
-      .mockRejectedValueOnce(new Error('transport response lost'))
+      .mockRejectedValueOnce(new TypeError('post-write receipt read failed'))
       .mockResolvedValueOnce({ applied: false, authority: initial });
     const harness = createHarness({ timing, initial, acquire });
     const run = harness.supervisor.run({ handler: async () => 'acquired' });
@@ -738,7 +738,7 @@ describe('resident DynamoDB coordinator authority supervisor', () => {
     }));
     const get = jest
       .fn()
-      .mockRejectedValueOnce(new Error('strong read unavailable'))
+      .mockRejectedValueOnce(new TypeError('strong read response malformed'))
       .mockResolvedValueOnce(initial);
     const harness = createHarness({ timing, initial, acquire, get });
     const run = harness.supervisor.run({ handler: async () => 'proved' });
@@ -839,6 +839,46 @@ describe('resident DynamoDB coordinator authority supervisor', () => {
       'read-owned',
       'release',
     ]);
+  });
+
+  test('settles a cancelled acquisition after a TypeError current read', async () => {
+    const acquired = deferred();
+    const winner = createAuthority({
+      acquisitionRequestId: 'acquire-request-1',
+      lastRequestId: 'acquire-request-1',
+    });
+    const acquire = jest
+      .fn()
+      .mockImplementationOnce(async () => await acquired.promise)
+      .mockResolvedValueOnce({ applied: false, authority: winner });
+    const get = jest
+      .fn()
+      .mockRejectedValueOnce(new TypeError('settlement read malformed'))
+      .mockResolvedValueOnce(winner);
+    const harness = createHarness({ initial: winner, acquire, get });
+    const cancellation = new AbortController();
+    const reason = new Error('cancel ambiguous acquisition');
+    const handler = jest.fn();
+    const run = harness.supervisor.run({
+      signal: cancellation.signal,
+      handler,
+    });
+    const outcome = run.catch((error) => error);
+
+    await waitUntil(() => acquire.mock.calls.length === 1, 'acquisition call');
+    const retainedIntent = acquire.mock.calls[0][0];
+    cancellation.abort(reason);
+    acquired.reject(new Error('acquisition response lost'));
+
+    expect(await outcome).toBe(reason);
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(acquire.mock.calls[1][0]).toBe(retainedIntent);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(handler).not.toHaveBeenCalled();
+    expect(harness.protocol.release).toHaveBeenCalledTimes(1);
+    expect(harness.protocol.release.mock.calls[0][0].authority).toStrictEqual(
+      winner,
+    );
   });
 
   test('settles a cancelled late-commit takeover and releases its orphan', async () => {
@@ -1003,7 +1043,7 @@ describe('resident DynamoDB coordinator authority supervisor', () => {
     const timing = createControlledTiming();
     const release = jest
       .fn()
-      .mockRejectedValueOnce(new Error('release response lost'))
+      .mockRejectedValueOnce(new TypeError('release response malformed'))
       .mockRejectedValueOnce(new Error('release readback unavailable'))
       .mockResolvedValueOnce({ applied: false });
     const harness = createHarness({ timing, release });
@@ -1025,6 +1065,42 @@ describe('resident DynamoDB coordinator authority supervisor', () => {
     expect(release).toHaveBeenCalledTimes(3);
     expect(release.mock.calls[1][0]).toBe(retainedIntent);
     expect(release.mock.calls[2][0]).toBe(retainedIntent);
+  });
+
+  test('exact-retries release after a late same-owner renewal wins its CAS', async () => {
+    const timing = createControlledTiming();
+    let current = createAuthority();
+    const release = jest.fn(async (input) => {
+      if (release.mock.calls.length === 1) {
+        // Model a renewal that reported an unknown outcome, then committed
+        // after release read the old ACTIVE predecessor but before its CAS.
+        current = renewAuthority(current, 'late-renewal', 200);
+        throw new CoordinatorAuthorityConflictError(
+          APP_ID,
+          'late renewal advanced the release predecessor',
+        );
+      }
+      current = releaseAuthority(current, input.requestId, input.observedAt);
+      return { applied: true, authority: current };
+    });
+    const harness = createHarness({ timing, release });
+    const run = harness.supervisor.run({ handler: async () => 'drained' });
+
+    await waitUntil(
+      () => release.mock.calls.length === 1 && timing.pendingCount() === 1,
+      'release retry after late renewal',
+    );
+    const retainedIntent = release.mock.calls[0][0];
+    await timing.advanceNext();
+
+    await expect(run).resolves.toBe('drained');
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(release.mock.calls[1][0]).toBe(retainedIntent);
+    expect(current).toMatchObject({
+      status: CoordinatorAuthorityStatus.RELEASED,
+      recordVersion: 3,
+      lastRequestId: retainedIntent.requestId,
+    });
   });
 
   test('does not retry a terminal release request conflict', async () => {
