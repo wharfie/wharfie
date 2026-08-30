@@ -22,11 +22,13 @@ import {
 } from '../../lib/config/db.js';
 import { createDynamoDBCoordinatorAuthorityProtocol } from '../../lib/db/tables/dynamodb-coordinator-authority.js';
 import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
+import { assertApplicationRevisionId } from '../application-revision.js';
 import { assertDomainSeparatedSha256Id } from '../content-id.js';
 import { DYNAMODB_TABLE_RESOURCE_ID_PREFIX } from '../dynamodb-coordinator-authority-topology.js';
 import { validateAwsDynamoDBCoordinatorAuthorityTableTopology } from '../dynamodb-coordinator-authority-topology-provider.js';
 import { acquireLocalLedgerServiceSession } from '../services/ledger-service.js';
 import { createResidentCoordinatorAuthoritySupervisor } from '../services/resident-coordinator-authority.js';
+import { reconstructResidentExecutionHistory } from '../services/resident-execution-reconstruction.js';
 
 /**
  * @typedef {import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore} ExecutionLedgerStore
@@ -419,6 +421,177 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
       );
     },
   });
+}
+
+/**
+ * Compose the still-internal DynamoDB resident startup boundary. Complete
+ * source-free history reconstruction and ready-work convergence happen first;
+ * the caller's separate application-state handoff happens second; only then
+ * may its resident dispatcher body start. The existing supervisor continues
+ * renewing authority for the entire body and aborts the shared signal on
+ * loss. This helper deliberately has no public service or CLI call site and
+ * does not lift the LMDB-only resident product gates.
+ * @template T
+ * @template P
+ * @param {{appId: string, currentRevisionId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, readOnly: boolean}, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, signal?: AbortSignal, prepareApplicationState: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<P> | P, handler: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<T> | T}} options - Exact reconstructed resident authority session.
+ * @param {{validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology, createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol, createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor, reconstructHistory?: typeof reconstructResidentExecutionHistory}} [dependencies] - Focused internal seams.
+ * @returns {Promise<T>} - Resident body result after supervised drain and release.
+ */
+export async function withReconstructedExecutionLedgerResidentAuthority(
+  options,
+  dependencies = {},
+) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority requires options.',
+    );
+  }
+  const allowedOptions = new Set([
+    'appId',
+    'currentRevisionId',
+    'coordinatorId',
+    'ledger',
+    'context',
+    'configuration',
+    'signal',
+    'prepareApplicationState',
+    'handler',
+  ]);
+  if (Object.keys(options).some((key) => !allowedOptions.has(key))) {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority options contain unsupported fields.',
+    );
+  }
+  if (
+    !dependencies ||
+    typeof dependencies !== 'object' ||
+    Array.isArray(dependencies)
+  ) {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority dependencies must be an object.',
+    );
+  }
+  const allowedDependencies = new Set([
+    'validateTopology',
+    'createProtocol',
+    'createSupervisor',
+    'reconstructHistory',
+  ]);
+  if (Object.keys(dependencies).some((key) => !allowedDependencies.has(key))) {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority dependencies contain unsupported fields.',
+    );
+  }
+
+  // Snapshot every caller-controlled port before topology, authority, or
+  // reconstruction can invoke external code.
+  const appId = options.appId;
+  const currentRevisionId = options.currentRevisionId;
+  const coordinatorId = options.coordinatorId;
+  const ledger = options.ledger;
+  const context = options.context;
+  const configuration = options.configuration;
+  const signal = options.signal;
+  const prepareApplicationState = options.prepareApplicationState;
+  const handler = options.handler;
+  const dependencyValidateTopology = dependencies.validateTopology;
+  const dependencyCreateProtocol = dependencies.createProtocol;
+  const dependencyCreateSupervisor = dependencies.createSupervisor;
+  const dependencyReconstructHistory = dependencies.reconstructHistory;
+  const reconstructHistory =
+    dependencyReconstructHistory ?? reconstructResidentExecutionHistory;
+  const authorityDependencies = {
+    ...(dependencyValidateTopology === undefined
+      ? {}
+      : { validateTopology: dependencyValidateTopology }),
+    ...(dependencyCreateProtocol === undefined
+      ? {}
+      : { createProtocol: dependencyCreateProtocol }),
+    ...(dependencyCreateSupervisor === undefined
+      ? {}
+      : { createSupervisor: dependencyCreateSupervisor }),
+  };
+
+  assertApplicationRevisionId(
+    currentRevisionId,
+    'reconstructed resident currentRevisionId',
+  );
+  if (typeof reconstructHistory !== 'function') {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority.reconstructHistory must be a function.',
+    );
+  }
+  if (typeof prepareApplicationState !== 'function') {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority.prepareApplicationState must be a function.',
+    );
+  }
+  if (typeof handler !== 'function') {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority.handler must be a function.',
+    );
+  }
+
+  return await withExecutionLedgerResidentCoordinatorAuthority(
+    {
+      appId,
+      coordinatorId,
+      ledger,
+      context,
+      configuration,
+      ...(signal === undefined ? {} : { signal }),
+      handler: async (boundLedger, session) => {
+        // Capture the exact freshly constructed ledger assertion before either
+        // injected startup phase can mutate its public method surface.
+        const assertCurrentCoordinatorAuthority =
+          boundLedger.assertCurrentCoordinatorAuthority.bind(boundLedger);
+        const reconstruction = await reconstructHistory({
+          ledger: boundLedger,
+          appId,
+          currentRevisionId,
+          coordinatorAuthority: session.coordinatorAuthority,
+          signal: session.signal,
+        });
+        if (session.signal.aborted) {
+          throw (
+            session.signal.reason ??
+            new Error('Resident authority ended after reconstruction.')
+          );
+        }
+        const reconstructionSession = Object.freeze({
+          ...session,
+          reconstruction,
+        });
+        const applicationState = await prepareApplicationState(
+          boundLedger,
+          reconstructionSession,
+        );
+        if (session.signal.aborted) {
+          throw (
+            session.signal.reason ??
+            new Error(
+              'Resident authority ended during application-state preparation.',
+            )
+          );
+        }
+        await assertCurrentCoordinatorAuthority();
+        if (session.signal.aborted) {
+          throw (
+            session.signal.reason ??
+            new Error('Resident authority ended before dispatcher admission.')
+          );
+        }
+        return await handler(
+          boundLedger,
+          Object.freeze({
+            ...reconstructionSession,
+            applicationState,
+          }),
+        );
+      },
+    },
+    authorityDependencies,
+  );
 }
 
 /**

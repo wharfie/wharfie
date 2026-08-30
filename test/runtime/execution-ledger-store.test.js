@@ -13,6 +13,10 @@ import {
 import {
   COORDINATOR_AUTHORITY_ID_DOMAIN,
   COORDINATOR_AUTHORITY_ID_PREFIX,
+  COORDINATOR_AUTHORITY_RECORD_KIND,
+  COORDINATOR_AUTHORITY_SCHEMA_VERSION,
+  COORDINATOR_AUTHORITY_SORT_KEY,
+  getCoordinatorAuthorityPartitionKey,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 
@@ -25,6 +29,11 @@ const EXECUTION_LEDGER_IMPORT =
   '../../src/core/lib/db/tables/execution-ledger.js';
 const TABLE_RESOURCE_ID = `wdtr1_${'A'.repeat(43)}`;
 const OTHER_TABLE_RESOURCE_ID = `wdtr1_${'E'.repeat(43)}`;
+const CURRENT_REVISION_ID = createCanonicalJsonSha256Id({
+  domain: 'wharfie:test:resident-reconstruction-revision:v1',
+  prefix: 'wrv1',
+  value: { revision: 'current' },
+});
 
 /** @type {ReturnType<typeof jest.fn>} */
 let acquireLocalLedgerServiceSession;
@@ -34,6 +43,8 @@ let createControlDBClient;
 let withExecutionLedger;
 /** @type {Function} */
 let withExecutionLedgerResidentCoordinatorAuthority;
+/** @type {Function} */
+let withReconstructedExecutionLedgerResidentAuthority;
 /** @type {Function} */
 let withLocalLedgerServiceMutationOwnership;
 /** @type {Function} */
@@ -66,6 +77,7 @@ beforeEach(async () => {
   ({
     withExecutionLedger,
     withExecutionLedgerResidentCoordinatorAuthority,
+    withReconstructedExecutionLedgerResidentAuthority,
     withLocalLedgerServiceMutationOwnership,
   } = await import(EXECUTION_LEDGER_STORE_IMPORT));
   ({
@@ -151,8 +163,31 @@ function coordinatorAuthorityToken() {
 function executionLedgerDB(kind = 'dynamodb-client') {
   return {
     kind,
+    get: jest.fn(),
     transactionWrite: jest.fn(),
   };
+}
+
+/** @param {Record<string, any>} snapshot */
+function authorityRecord(snapshot) {
+  return Object.freeze({
+    run_id: getCoordinatorAuthorityPartitionKey(snapshot.appId),
+    sort_key: COORDINATOR_AUTHORITY_SORT_KEY,
+    schema_version: COORDINATOR_AUTHORITY_SCHEMA_VERSION,
+    record_kind: COORDINATOR_AUTHORITY_RECORD_KIND,
+    app_id: snapshot.appId,
+    coordinator_id: snapshot.coordinatorId,
+    authority_id: snapshot.authorityId,
+    epoch: snapshot.epoch,
+    status: snapshot.status,
+    record_version: snapshot.recordVersion,
+    acquisition_request_id: snapshot.acquisitionRequestId,
+    acquired_at: snapshot.acquiredAt,
+    heartbeat_at: snapshot.heartbeatAt,
+    released_at: snapshot.releasedAt,
+    updated_at: snapshot.updatedAt,
+    last_request_id: snapshot.lastRequestId,
+  });
 }
 
 /**
@@ -384,9 +419,20 @@ describe('resident DynamoDB coordinator authority integration', () => {
       ...coordinatorAuthority,
       status: 'ACTIVE',
       recordVersion: 7,
+      acquisitionRequestId: 'resident-acquisition-request',
+      acquiredAt: 1,
+      heartbeatAt: 7,
+      releasedAt: null,
+      updatedAt: 7,
+      lastRequestId: 'resident-renewal-6',
     });
-    const authoritySignal = new AbortController().signal;
+    const authorityController = new AbortController();
+    const authoritySignal = authorityController.signal;
     const db = executionLedgerDB();
+    db.get.mockImplementation(async () => {
+      calls.push('assert-current-authority');
+      return authorityRecord(authority);
+    });
     const ledger = scopedExecutionLedger(db);
     jest.spyOn(ledger, 'bindCoordinatorAuthority').mockImplementation(() => {
       throw new Error('The mutable public binder must not be called.');
@@ -435,6 +481,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
       authority,
       coordinatorAuthority,
       authoritySignal,
+      authorityController,
       db,
       ledger,
       validateTopology,
@@ -510,6 +557,170 @@ describe('resident DynamoDB coordinator authority integration', () => {
       'handler',
     ]);
     expect(fixture.ledger.bindCoordinatorAuthority).not.toHaveBeenCalled();
+  });
+
+  test('reconstructs, prepares application state, and only then starts the resident body', async () => {
+    const fixture = harness();
+    const reconstruction = Object.freeze({
+      schemaVersion: 1,
+      inspectedRuns: 3,
+    });
+    const applicationState = Object.freeze({ storeId: 'prepared-store' });
+    const redirectedAssertion = jest.fn(async () => {
+      throw new Error('mutable public authority assertion invoked');
+    });
+    const reconstructHistory = jest.fn(async (/** @type {any} */ input) => {
+      fixture.calls.push('reconstruct');
+      expect(input).toEqual({
+        ledger: expect.any(Object),
+        appId: 'resident-test-app',
+        currentRevisionId: CURRENT_REVISION_ID,
+        coordinatorAuthority: fixture.coordinatorAuthority,
+        signal: fixture.authoritySignal,
+      });
+      expect(input.ledger.getCoordinatorAuthority()).toEqual(
+        fixture.coordinatorAuthority,
+      );
+      return reconstruction;
+    });
+    const prepareApplicationState = jest.fn(
+      async (
+        /** @type {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */ ledger,
+        /** @type {Record<string, any>} */ session,
+      ) => {
+        fixture.calls.push('prepare-application-state');
+        expect(ledger.getCoordinatorAuthority()).toEqual(
+          fixture.coordinatorAuthority,
+        );
+        expect(session).toMatchObject({
+          reconstruction,
+          topology: fixture.topology,
+        });
+        expect(Object.isFrozen(session)).toBe(true);
+        ledger.assertCurrentCoordinatorAuthority = redirectedAssertion;
+        return applicationState;
+      },
+    );
+    const handler = jest.fn(
+      async (
+        /** @type {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */ ledger,
+        /** @type {Record<string, any>} */ session,
+      ) => {
+        fixture.calls.push('resident-body');
+        expect(ledger.getCoordinatorAuthority()).toEqual(
+          fixture.coordinatorAuthority,
+        );
+        expect(session).toMatchObject({
+          reconstruction,
+          applicationState,
+          topology: fixture.topology,
+        });
+        expect(Object.isFrozen(session)).toBe(true);
+        return 'resident-completed';
+      },
+    );
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+        },
+      ),
+    ).resolves.toBe('resident-completed');
+
+    expect(fixture.calls).toEqual([
+      'topology',
+      'protocol',
+      'supervisor',
+      'run',
+      'reconstruct',
+      'prepare-application-state',
+      'assert-current-authority',
+      'resident-body',
+    ]);
+    expect(redirectedAssertion).not.toHaveBeenCalled();
+  });
+
+  test('never starts the resident body when authority becomes stale during application-state preparation', async () => {
+    const fixture = harness();
+    const staleAuthority = new Error('replacement token is stale');
+    const reconstructHistory = jest.fn(async () => {
+      fixture.calls.push('reconstruct');
+      return Object.freeze({ schemaVersion: 1 });
+    });
+    const prepareApplicationState = jest.fn(async () => {
+      fixture.calls.push('prepare-application-state');
+      fixture.db.get.mockImplementation(async () => {
+        fixture.calls.push('assert-current-authority');
+        throw staleAuthority;
+      });
+      return Object.freeze({ storeId: 'prepared-store' });
+    });
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+        },
+      ),
+    ).rejects.toBe(staleAuthority);
+    expect(fixture.calls).toEqual([
+      'topology',
+      'protocol',
+      'supervisor',
+      'run',
+      'reconstruct',
+      'prepare-application-state',
+      'assert-current-authority',
+    ]);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('never prepares or starts the resident body after reconstruction loses authority', async () => {
+    const fixture = harness();
+    const authorityLoss = new Error('replacement authority lost');
+    const reconstructHistory = jest.fn(async () => {
+      fixture.calls.push('reconstruct');
+      fixture.authorityController.abort(authorityLoss);
+      return Object.freeze({ schemaVersion: 1 });
+    });
+    const prepareApplicationState = jest.fn();
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+        },
+      ),
+    ).rejects.toBe(authorityLoss);
+    expect(prepareApplicationState).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
   });
 
   test('snapshots accessor-backed client and routing fields exactly once', async () => {

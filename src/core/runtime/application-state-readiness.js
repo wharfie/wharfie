@@ -16,8 +16,8 @@ import {
   assertCoordinatorAuthorityCurrent,
   assertCoordinatorAuthorityToken,
 } from '../lib/db/tables/coordinator-authority.js';
-import { assertLedgerOpaqueId } from '../lib/ledger/record-key.js';
 import { assertDomainSeparatedSha256Id } from './content-id.js';
+import { visitExecutionLedgerHistory } from './execution-ledger-history-inventory.js';
 import { assertLogicalId } from './logical-id.js';
 import { resolveApplicationStateCoordinatorAuthority } from './application-state-authority.js';
 import {
@@ -69,8 +69,6 @@ export async function collectApplicationStateReadinessDestination(options) {
       'Application-state readiness requires complete verified run history.',
     );
   }
-  const listRuns = options.ledger.listRuns.bind(options.ledger);
-  const rebuildRun = options.ledger.rebuildRun.bind(options.ledger);
   const scope = { appId, ...configuration };
   let destination =
     options.retainedDestination === undefined
@@ -89,39 +87,12 @@ export async function collectApplicationStateReadinessDestination(options) {
     }
     destination = normalized;
   };
-  const seenRuns = new Set();
-  const seenCursors = new Set();
-  /** @type {string | undefined} */
-  let cursor;
-  do {
-    signal?.throwIfAborted();
-    const page = await listRuns({
-      appId,
-      limit: 100,
-      ...(cursor === undefined ? {} : { cursor }),
-    });
-    if (!page || !Array.isArray(page.items)) {
-      throw new TypeError('Application-state readiness history is invalid.');
-    }
-    for (const row of page.items) {
-      signal?.throwIfAborted();
-      const runId = assertLedgerOpaqueId(
-        row?.runId,
-        'application-state readiness runId',
-      );
-      if (row.appId !== appId || seenRuns.has(runId)) {
-        throw new TypeError(
-          'Application-state readiness history crossed application scope or repeated a run.',
-        );
-      }
-      seenRuns.add(runId);
-      const view = await rebuildRun(runId);
-      if (
-        !view ||
-        view.run?.runId !== runId ||
-        view.run.appId !== appId ||
-        !Array.isArray(view.effects)
-      ) {
+  await visitExecutionLedgerHistory({
+    ledger: options.ledger,
+    appId,
+    signal,
+    visit: ({ view }) => {
+      if (!Array.isArray(view.effects)) {
         throw new TypeError(
           'Application-state readiness history could not be rebuilt exactly.',
         );
@@ -130,17 +101,8 @@ export async function collectApplicationStateReadinessDestination(options) {
       if (view.run.trigger?.kind === 'effect-successor') {
         include(view.run.trigger.contract?.destination);
       }
-    }
-    cursor = page.nextCursor;
-    if (cursor !== undefined) {
-      if (typeof cursor !== 'string' || !cursor || seenCursors.has(cursor)) {
-        throw new TypeError(
-          'Application-state readiness history cursor did not advance.',
-        );
-      }
-      seenCursors.add(cursor);
-    }
-  } while (cursor !== undefined);
+    },
+  });
   signal?.throwIfAborted();
   return destination;
 }

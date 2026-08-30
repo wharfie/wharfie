@@ -19,6 +19,13 @@
 > Reconstruction, product activation, cross-store handoff, and multi-node
 > recovery are still outside this decision's proof.
 
+> **Follow-on (2026-08-29):** [ADR 0038](0038-authority-bound-replacement-reconstruction.md)
+> now composes a complete source-free history inventory, explicit replay
+> policy, ready-work convergence, final current-authority assertion, and the
+> ordered application-state/dispatcher handoff under this supervisor. Product
+> activation, cross-store handoff implementation, and multi-node recovery
+> remain outside both proofs.
+
 ## Context
 
 [ADR 0002](0002-one-recoverable-active-coordinator.md) originally required
@@ -228,7 +235,8 @@ separate implementation and proof obligations.
 - All participants need the same provisioning-retained `tableResourceId`, and
   provisioning must prevent table replacement after startup.
 - The provider-specific supervisor is not evidence of product-level automatic
-  resident or multi-node recovery. Reconstruction and activation remain open.
+  resident or multi-node recovery. ADR 0038 completes internal reconstruction;
+  product activation and multi-node recovery remain open.
 - Other stores still need their own provider certification. ADR 0002's
   store-authoritative-expiry rule remains the default where no equivalent
   fenced protocol has been proved.
