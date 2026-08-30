@@ -88,7 +88,7 @@ complete serial coverage run passed it in context. No assertion mismatch or
 branch-related failure was observed.
 
 Local validation uses Node `v24.13.1` and npm `11.12.0`. No release, preview,
-deployment, live AWS, native-package, or SEA command is part of this slice.
+deployment, live AWS, or publication command is part of this slice.
 
 ## Honest boundary
 
