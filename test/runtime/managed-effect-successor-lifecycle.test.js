@@ -12,6 +12,10 @@ import {
   createCoordinatorAuthorityToken,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import {
+  CoordinatorQuiescenceBarrierClosedError,
+  createCoordinatorQuiescenceBarrier,
+} from '../../src/core/lib/db/tables/coordinator-quiescence-barrier.js';
+import {
   ExecutionLedgerProjectionError,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
@@ -498,6 +502,67 @@ describe('managed-effect successor dedicated lifecycle', () => {
         'admission-closed-successor',
       ),
     ).rejects.toBeInstanceOf(LocalApplicationAdmissionClosedError);
+  });
+
+  test('keeps an exact successor replay available while coordinator admission is closed', async () => {
+    const harness = await createHarness('coordinator-admission');
+    const replaySource = await seedNotAppliedSource(
+      harness,
+      'coordinator-admission-replay',
+    );
+    const closedSource = await seedNotAppliedSource(
+      harness,
+      'coordinator-admission-closed',
+    );
+    const authorities = createCoordinatorAuthority({
+      db: harness.db,
+      tableName: harness.tableName,
+    });
+    const acquired = await authorities.acquire({
+      appId: APP_ID,
+      coordinatorId: 'successor-coordinator-barrier',
+      requestId: 'acquire-successor-coordinator-barrier',
+      observedAt: 30,
+    });
+    harness.ledger = harness.ledger.bindCoordinatorAuthority(
+      acquired.authority,
+    );
+    const accepted = await authorizeSuccessor(
+      harness,
+      replaySource.runId,
+      SOURCE_EFFECT_ID,
+      'coordinator-admission-replay-successor',
+    );
+    const barrier = createCoordinatorQuiescenceBarrier({
+      db: harness.db,
+      tableName: harness.tableName,
+    });
+    await barrier.close({
+      authority: acquired.authority,
+      requestId: 'close-successor-admission',
+      predecessor: null,
+      observedAt: 31,
+    });
+
+    await expect(
+      authorizeSuccessor(
+        harness,
+        replaySource.runId,
+        SOURCE_EFFECT_ID,
+        'coordinator-admission-replay-successor',
+      ),
+    ).resolves.toMatchObject({
+      applied: false,
+      authorization: { target: accepted.authorization.target },
+    });
+    await expect(
+      authorizeSuccessor(
+        harness,
+        closedSource.runId,
+        SOURCE_EFFECT_ID,
+        'coordinator-admission-closed-successor',
+      ),
+    ).rejects.toBeInstanceOf(CoordinatorQuiescenceBarrierClosedError);
   });
 
   test('rejects a successor when activation changes after preflight', async () => {

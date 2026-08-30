@@ -4,6 +4,7 @@ import {
 } from '../../lib/db/tables/execution-ledger.js';
 import {
   CoordinatorAuthorityStaleError,
+  assertCoordinatorAuthorityToken,
   createCoordinatorAuthority,
 } from '../../lib/db/tables/coordinator-authority.js';
 import { createLedgerServiceOwnership } from '../../lib/db/tables/ledger-service-lifecycle.js';
@@ -21,6 +22,10 @@ import {
   resolveResidentCoordinatorAuthorityConfiguration,
 } from '../../lib/config/db.js';
 import { createDynamoDBCoordinatorAuthorityProtocol } from '../../lib/db/tables/dynamodb-coordinator-authority.js';
+import {
+  CoordinatorQuiescenceBarrierState,
+  createCoordinatorQuiescenceBarrier,
+} from '../../lib/db/tables/coordinator-quiescence-barrier.js';
 import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
 import { assertApplicationRevisionId } from '../application-revision.js';
 import { assertDomainSeparatedSha256Id } from '../content-id.js';
@@ -434,7 +439,7 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
  * @template T
  * @template P
  * @param {{appId: string, currentRevisionId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, readOnly: boolean}, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, signal?: AbortSignal, prepareApplicationState: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<P> | P, handler: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<T> | T}} options - Exact reconstructed resident authority session.
- * @param {{validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology, createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol, createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor, reconstructHistory?: typeof reconstructResidentExecutionHistory}} [dependencies] - Focused internal seams.
+ * @param {{validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology, createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol, createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor, reconstructHistory?: typeof reconstructResidentExecutionHistory, createAdmissionBarrier?: typeof createCoordinatorQuiescenceBarrier}} [dependencies] - Focused internal seams.
  * @returns {Promise<T>} - Resident body result after supervised drain and release.
  */
 export async function withReconstructedExecutionLedgerResidentAuthority(
@@ -476,6 +481,7 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
     'createProtocol',
     'createSupervisor',
     'reconstructHistory',
+    'createAdmissionBarrier',
   ]);
   if (Object.keys(dependencies).some((key) => !allowedDependencies.has(key))) {
     throw new TypeError(
@@ -489,7 +495,13 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
   const currentRevisionId = options.currentRevisionId;
   const coordinatorId = options.coordinatorId;
   const ledger = options.ledger;
-  const context = options.context;
+  const inputContext = options.context;
+  const context = Object.freeze({
+    db: inputContext?.db,
+    adapterName: inputContext?.adapterName,
+    tableName: inputContext?.tableName,
+    readOnly: inputContext?.readOnly,
+  });
   const configuration = options.configuration;
   const signal = options.signal;
   const prepareApplicationState = options.prepareApplicationState;
@@ -498,8 +510,11 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
   const dependencyCreateProtocol = dependencies.createProtocol;
   const dependencyCreateSupervisor = dependencies.createSupervisor;
   const dependencyReconstructHistory = dependencies.reconstructHistory;
+  const dependencyCreateAdmissionBarrier = dependencies.createAdmissionBarrier;
   const reconstructHistory =
     dependencyReconstructHistory ?? reconstructResidentExecutionHistory;
+  const createAdmissionBarrier =
+    dependencyCreateAdmissionBarrier ?? createCoordinatorQuiescenceBarrier;
   const authorityDependencies = {
     ...(dependencyValidateTopology === undefined
       ? {}
@@ -519,6 +534,11 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
   if (typeof reconstructHistory !== 'function') {
     throw new TypeError(
       'withReconstructedExecutionLedgerResidentAuthority.reconstructHistory must be a function.',
+    );
+  }
+  if (typeof createAdmissionBarrier !== 'function') {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority.createAdmissionBarrier must be a function.',
     );
   }
   if (typeof prepareApplicationState !== 'function') {
@@ -541,15 +561,98 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
       configuration,
       ...(signal === undefined ? {} : { signal }),
       handler: async (boundLedger, session) => {
-        // Capture the exact freshly constructed ledger assertion before either
+        // Capture the exact freshly constructed ledger assertion before any
         // injected startup phase can mutate its public method surface.
         const assertCurrentCoordinatorAuthority =
           boundLedger.assertCurrentCoordinatorAuthority.bind(boundLedger);
+        const currentAuthority = assertCoordinatorAuthorityToken(
+          session.coordinatorAuthority,
+          'reconstructed resident coordinator authority',
+        );
+        const admissionBarrier = createAdmissionBarrier({
+          db: context.db,
+          tableName: context.tableName,
+        });
+        const getAdmissionBarrierMethod = admissionBarrier?.get;
+        const closeAdmissionBarrierMethod = admissionBarrier?.close;
+        const adoptAdmissionBarrierMethod = admissionBarrier?.adopt;
+        const reopenAdmissionBarrierMethod = admissionBarrier?.reopen;
+        if (
+          typeof getAdmissionBarrierMethod !== 'function' ||
+          typeof closeAdmissionBarrierMethod !== 'function' ||
+          typeof adoptAdmissionBarrierMethod !== 'function' ||
+          typeof reopenAdmissionBarrierMethod !== 'function'
+        ) {
+          throw new TypeError(
+            'Resident admission barrier must expose get(), close(), adopt(), and reopen().',
+          );
+        }
+        // Bind every barrier method before reconstruction or application-state
+        // callbacks can replace the factory result's public method surface.
+        const getAdmissionBarrier =
+          getAdmissionBarrierMethod.bind(admissionBarrier);
+        const closeAdmissionBarrier =
+          closeAdmissionBarrierMethod.bind(admissionBarrier);
+        const adoptAdmissionBarrier =
+          adoptAdmissionBarrierMethod.bind(admissionBarrier);
+        const reopenAdmissionBarrier =
+          reopenAdmissionBarrierMethod.bind(admissionBarrier);
+        const predecessor = await getAdmissionBarrier({ appId });
+        const predecessorVersion = predecessor?.version ?? 0;
+        const predecessorAuthority = predecessor?.authority;
+        const predecessorOwnedByCurrentAuthority =
+          predecessorAuthority !== undefined &&
+          predecessorAuthority.schemaVersion ===
+            currentAuthority.schemaVersion &&
+          predecessorAuthority.appId === currentAuthority.appId &&
+          predecessorAuthority.coordinatorId ===
+            currentAuthority.coordinatorId &&
+          predecessorAuthority.authorityId === currentAuthority.authorityId &&
+          predecessorAuthority.epoch === currentAuthority.epoch;
+        let closedBarrier;
+        if (
+          predecessor?.state === CoordinatorQuiescenceBarrierState.CLOSED &&
+          predecessorOwnedByCurrentAuthority
+        ) {
+          // A repeated startup callback under the exact authority retains its
+          // already-closed generation without advancing or rewriting it.
+          closedBarrier = predecessor;
+        } else if (
+          predecessor?.state === CoordinatorQuiescenceBarrierState.CLOSED
+        ) {
+          const adoptResult = await adoptAdmissionBarrier({
+            authority: currentAuthority,
+            requestId: `resident-quiescence:adopt:${currentAuthority.authorityId}:predecessor:${predecessorVersion}`,
+            predecessor,
+          });
+          closedBarrier = adoptResult?.barrier;
+        } else {
+          const closeResult = await closeAdmissionBarrier({
+            authority: currentAuthority,
+            requestId: `resident-quiescence:close:${currentAuthority.authorityId}:predecessor:${predecessorVersion}`,
+            predecessor,
+          });
+          closedBarrier = closeResult?.barrier;
+        }
+        if (
+          !closedBarrier ||
+          closedBarrier.state !== CoordinatorQuiescenceBarrierState.CLOSED
+        ) {
+          throw new TypeError(
+            'Resident admission barrier selection must return one exact CLOSED barrier.',
+          );
+        }
+        if (session.signal.aborted) {
+          throw (
+            session.signal.reason ??
+            new Error('Resident authority ended after admission closed.')
+          );
+        }
         const reconstruction = await reconstructHistory({
           ledger: boundLedger,
           appId,
           currentRevisionId,
-          coordinatorAuthority: session.coordinatorAuthority,
+          coordinatorAuthority: currentAuthority,
           signal: session.signal,
         });
         if (session.signal.aborted) {
@@ -574,6 +677,12 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
             )
           );
         }
+        await assertCurrentCoordinatorAuthority();
+        await reopenAdmissionBarrier({
+          authority: currentAuthority,
+          requestId: `resident-quiescence:reopen:${currentAuthority.authorityId}:predecessor:${closedBarrier.version}`,
+          predecessor: closedBarrier,
+        });
         await assertCurrentCoordinatorAuthority();
         if (session.signal.aborted) {
           throw (

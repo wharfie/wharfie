@@ -16,6 +16,7 @@ import {
   COORDINATOR_AUTHORITY_RECORD_KIND,
   COORDINATOR_AUTHORITY_SCHEMA_VERSION,
   COORDINATOR_AUTHORITY_SORT_KEY,
+  CoordinatorAuthorityStaleError,
   getCoordinatorAuthorityPartitionKey,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
@@ -139,8 +140,9 @@ function residentAuthorityConfiguration() {
   });
 }
 
-function coordinatorAuthorityToken() {
-  const requestId = 'resident-acquisition-request';
+/** @param {{epoch?: number, requestId?: string}} [settings] */
+function coordinatorAuthorityToken(settings = {}) {
+  const { epoch = 2, requestId = 'resident-acquisition-request' } = settings;
   return Object.freeze({
     schemaVersion: 1,
     appId: 'resident-test-app',
@@ -152,11 +154,11 @@ function coordinatorAuthorityToken() {
         schemaVersion: 1,
         appId: 'resident-test-app',
         coordinatorId: 'resident-session',
-        epoch: 2,
+        epoch,
         requestId,
       },
     }),
-    epoch: 2,
+    epoch,
   });
 }
 
@@ -210,6 +212,7 @@ describe('execution-ledger control-store cleanup', () => {
   it('passes the command-local DynamoDB region instead of rereading ambient routing', async () => {
     const close = jest.fn();
     createControlDBClient.mockResolvedValue({
+      get: jest.fn(),
       transactionWrite: jest.fn(),
       close,
     });
@@ -237,6 +240,7 @@ describe('execution-ledger control-store cleanup', () => {
       order.push('close');
     });
     createControlDBClient.mockResolvedValue({
+      get: jest.fn(),
       transactionWrite: jest.fn(),
       close,
     });
@@ -272,6 +276,7 @@ describe('execution-ledger control-store cleanup', () => {
       throw closeFailure;
     });
     createControlDBClient.mockResolvedValue({
+      get: jest.fn(),
       transactionWrite: jest.fn(),
       close,
     });
@@ -299,6 +304,7 @@ describe('execution-ledger control-store cleanup', () => {
       throw closeFailure;
     });
     createControlDBClient.mockResolvedValue({
+      get: jest.fn(),
       transactionWrite: jest.fn(),
       close,
     });
@@ -401,10 +407,13 @@ describe('execution-ledger construction scope', () => {
 });
 
 describe('resident DynamoDB coordinator authority integration', () => {
-  /** @param {{topologyFailure?: unknown, expectedRequestedResourceId?: string}} [settings] */
+  /** @param {{topologyFailure?: unknown, expectedRequestedResourceId?: string, admissionPredecessor?: Record<string, any> | null}} [settings] */
   function harness(settings = {}) {
-    const { topologyFailure, expectedRequestedResourceId = TABLE_RESOURCE_ID } =
-      settings;
+    const {
+      topologyFailure,
+      expectedRequestedResourceId = TABLE_RESOURCE_ID,
+      admissionPredecessor = null,
+    } = settings;
     /** @type {string[]} */
     const calls = [];
     const protocol = Object.freeze({ kind: 'protocol' });
@@ -429,6 +438,81 @@ describe('resident DynamoDB coordinator authority integration', () => {
     const authorityController = new AbortController();
     const authoritySignal = authorityController.signal;
     const db = executionLedgerDB();
+    const predecessorVersion = admissionPredecessor?.version ?? 0;
+    const predecessorAuthority = admissionPredecessor?.authority;
+    const retainsCurrentClosedBarrier =
+      admissionPredecessor?.state === 'CLOSED' &&
+      predecessorAuthority?.schemaVersion ===
+        coordinatorAuthority.schemaVersion &&
+      predecessorAuthority?.appId === coordinatorAuthority.appId &&
+      predecessorAuthority?.coordinatorId ===
+        coordinatorAuthority.coordinatorId &&
+      predecessorAuthority?.authorityId === coordinatorAuthority.authorityId &&
+      predecessorAuthority?.epoch === coordinatorAuthority.epoch;
+    const closedBarrier = retainsCurrentClosedBarrier
+      ? admissionPredecessor
+      : Object.freeze({
+          schemaVersion: 1,
+          appId: 'resident-test-app',
+          state: 'CLOSED',
+          version: predecessorVersion + 1,
+          authority: coordinatorAuthority,
+          lastAction: admissionPredecessor ? 'adopt' : 'close',
+          lastRequestId: admissionPredecessor
+            ? `resident-quiescence:adopt:${coordinatorAuthority.authorityId}:predecessor:${predecessorVersion}`
+            : `resident-quiescence:close:${coordinatorAuthority.authorityId}:predecessor:${predecessorVersion}`,
+          updatedAt: 10,
+        });
+    const reopenedBarrier = Object.freeze({
+      ...closedBarrier,
+      state: 'OPEN',
+      version: closedBarrier.version + 1,
+      lastAction: 'reopen',
+      lastRequestId: `resident-quiescence:reopen:${coordinatorAuthority.authorityId}:predecessor:${closedBarrier.version}`,
+      updatedAt: 11,
+    });
+    const admissionBarrier = {
+      get: jest.fn(async (input) => {
+        calls.push('admission-barrier-get');
+        expect(input).toEqual({ appId: 'resident-test-app' });
+        return admissionPredecessor;
+      }),
+      close: jest.fn(async (input) => {
+        calls.push('admission-barrier-close');
+        expect(input).toEqual({
+          authority: coordinatorAuthority,
+          requestId: `resident-quiescence:close:${coordinatorAuthority.authorityId}:predecessor:${predecessorVersion}`,
+          predecessor: admissionPredecessor,
+        });
+        return Object.freeze({ barrier: closedBarrier });
+      }),
+      adopt: jest.fn(async (input) => {
+        calls.push('admission-barrier-adopt');
+        expect(input).toEqual({
+          authority: coordinatorAuthority,
+          requestId: `resident-quiescence:adopt:${coordinatorAuthority.authorityId}:predecessor:${predecessorVersion}`,
+          predecessor: admissionPredecessor,
+        });
+        return Object.freeze({ barrier: closedBarrier });
+      }),
+      reopen: jest.fn(async (input) => {
+        calls.push('admission-barrier-reopen');
+        expect(input).toEqual({
+          authority: coordinatorAuthority,
+          requestId: `resident-quiescence:reopen:${coordinatorAuthority.authorityId}:predecessor:${closedBarrier.version}`,
+          predecessor: closedBarrier,
+        });
+        return Object.freeze({ barrier: reopenedBarrier });
+      }),
+    };
+    const createAdmissionBarrier = jest.fn((input) => {
+      calls.push('admission-barrier-create');
+      expect(input).toEqual({
+        db,
+        tableName: 'execution-ledger-test',
+      });
+      return admissionBarrier;
+    });
     db.get.mockImplementation(async () => {
       calls.push('assert-current-authority');
       return authorityRecord(authority);
@@ -482,6 +566,11 @@ describe('resident DynamoDB coordinator authority integration', () => {
       coordinatorAuthority,
       authoritySignal,
       authorityController,
+      admissionBarrier,
+      admissionPredecessor,
+      closedBarrier,
+      reopenedBarrier,
+      createAdmissionBarrier,
       db,
       ledger,
       validateTopology,
@@ -569,6 +658,9 @@ describe('resident DynamoDB coordinator authority integration', () => {
     const redirectedAssertion = jest.fn(async () => {
       throw new Error('mutable public authority assertion invoked');
     });
+    const redirectedReopen = jest.fn(async () => {
+      throw new Error('mutable public barrier reopen invoked');
+    });
     const reconstructHistory = jest.fn(async (/** @type {any} */ input) => {
       fixture.calls.push('reconstruct');
       expect(input).toEqual({
@@ -598,6 +690,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
         });
         expect(Object.isFrozen(session)).toBe(true);
         ledger.assertCurrentCoordinatorAuthority = redirectedAssertion;
+        fixture.admissionBarrier.reopen = redirectedReopen;
         return applicationState;
       },
     );
@@ -632,6 +725,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
     ).resolves.toBe('resident-completed');
@@ -641,12 +735,114 @@ describe('resident DynamoDB coordinator authority integration', () => {
       'protocol',
       'supervisor',
       'run',
+      'admission-barrier-create',
+      'admission-barrier-get',
+      'admission-barrier-close',
       'reconstruct',
       'prepare-application-state',
+      'assert-current-authority',
+      'admission-barrier-reopen',
       'assert-current-authority',
       'resident-body',
     ]);
     expect(redirectedAssertion).not.toHaveBeenCalled();
+    expect(redirectedReopen).not.toHaveBeenCalled();
+  });
+
+  test('adopts an inherited CLOSED barrier before reconstruction and reopens that exact successor', async () => {
+    const inheritedBarrier = Object.freeze({
+      schemaVersion: 1,
+      appId: 'resident-test-app',
+      state: 'CLOSED',
+      version: 7,
+      authority: coordinatorAuthorityToken({
+        epoch: 1,
+        requestId: 'predecessor-acquisition-request',
+      }),
+      lastAction: 'close',
+      lastRequestId: 'predecessor-close-request',
+      updatedAt: 7,
+    });
+    const fixture = harness({ admissionPredecessor: inheritedBarrier });
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    const prepareApplicationState = jest.fn(async () =>
+      Object.freeze({ storeId: 'prepared-store' }),
+    );
+    const handler = jest.fn(async () => 'adopted');
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).resolves.toBe('adopted');
+
+    expect(fixture.admissionBarrier.close).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.adopt).toHaveBeenCalledTimes(1);
+    expect(fixture.admissionBarrier.reopen).toHaveBeenCalledWith({
+      authority: fixture.coordinatorAuthority,
+      requestId: `resident-quiescence:reopen:${fixture.coordinatorAuthority.authorityId}:predecessor:${fixture.closedBarrier.version}`,
+      predecessor: fixture.closedBarrier,
+    });
+  });
+
+  test('retains a CLOSED barrier already owned by the full exact session authority without adopting it', async () => {
+    const currentAuthority = coordinatorAuthorityToken();
+    const retainedBarrier = Object.freeze({
+      schemaVersion: 1,
+      appId: 'resident-test-app',
+      state: 'CLOSED',
+      version: 12,
+      authority: currentAuthority,
+      lastAction: 'close',
+      lastRequestId: 'retained-close-request',
+      updatedAt: 12,
+    });
+    const fixture = harness({ admissionPredecessor: retainedBarrier });
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    const prepareApplicationState = jest.fn(async () =>
+      Object.freeze({ storeId: 'prepared-store' }),
+    );
+    const handler = jest.fn(async () => 'retained');
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).resolves.toBe('retained');
+
+    expect(fixture.admissionBarrier.close).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.adopt).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.reopen).toHaveBeenCalledWith({
+      authority: fixture.coordinatorAuthority,
+      requestId: `resident-quiescence:reopen:${fixture.coordinatorAuthority.authorityId}:predecessor:${retainedBarrier.version}`,
+      predecessor: retainedBarrier,
+    });
   });
 
   test('never starts the resident body when authority becomes stale during application-state preparation', async () => {
@@ -678,6 +874,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
     ).rejects.toBe(staleAuthority);
@@ -686,11 +883,15 @@ describe('resident DynamoDB coordinator authority integration', () => {
       'protocol',
       'supervisor',
       'run',
+      'admission-barrier-create',
+      'admission-barrier-get',
+      'admission-barrier-close',
       'reconstruct',
       'prepare-application-state',
       'assert-current-authority',
     ]);
     expect(handler).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
   });
 
   test('never prepares or starts the resident body after reconstruction loses authority', async () => {
@@ -716,10 +917,120 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
     ).rejects.toBe(authorityLoss);
     expect(prepareApplicationState).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+  });
+
+  test('leaves admission closed when application-state preparation fails', async () => {
+    const fixture = harness();
+    const applicationStateFailure = new Error(
+      'application-state preparation failed',
+    );
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    const prepareApplicationState = jest.fn(async () => {
+      throw applicationStateFailure;
+    });
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toBe(applicationStateFailure);
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('never starts the resident when the exact barrier reopen fails', async () => {
+    const fixture = harness();
+    const reopenFailure = new Error('admission barrier reopen failed');
+    fixture.admissionBarrier.reopen.mockImplementationOnce(async () => {
+      fixture.calls.push('admission-barrier-reopen');
+      throw reopenFailure;
+    });
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    const prepareApplicationState = jest.fn(async () =>
+      Object.freeze({ storeId: 'prepared-store' }),
+    );
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toBe(reopenFailure);
+    expect(fixture.admissionBarrier.reopen).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('never starts the resident when authority changes immediately after reopen', async () => {
+    const fixture = harness();
+    const authorityLoss = new CoordinatorAuthorityStaleError(
+      'resident-test-app',
+    );
+    let authorityAssertions = 0;
+    fixture.db.get.mockImplementation(async () => {
+      fixture.calls.push('assert-current-authority');
+      authorityAssertions += 1;
+      if (authorityAssertions === 2) throw authorityLoss;
+      return authorityRecord(fixture.authority);
+    });
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    const prepareApplicationState = jest.fn(async () =>
+      Object.freeze({ storeId: 'prepared-store' }),
+    );
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...options(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toBe(authorityLoss);
+    expect(fixture.admissionBarrier.reopen).toHaveBeenCalledTimes(1);
     expect(handler).not.toHaveBeenCalled();
   });
 

@@ -96,12 +96,18 @@ Local and single-node use should require no external Wharfie control plane.
 Automatic coordinator replacement is still outside the public surface. The
 internal single-Region DynamoDB profile now has an RVN-observed replacement
 supervisor plus authority-bound full-history reconstruction, explicit replay
-policy, canonical ready-work repair, and ordered application-state/dispatcher
-handoff. Public activation still requires a durable admission/schedule-
-mutation quiescence barrier, durable `tableResourceId` and payload
+policy, canonical ready-work repair, and a retained same-table admission and
+schedule-mutation quiescence barrier. Fresh manual, workflow, successor, and
+schedule decisions carry its exact monotonic `OPEN` generation; exact committed
+replays remain available while it is `CLOSED`, and prepared scheduled work
+retains its original generation across the combined transaction. The internal
+wrapper closes or adopts before reconstruction and application-state
+preparation, then reopens the exact predecessor only after strong authority
+checks. Public activation still requires durable `tableResourceId` and payload
 distribution, a proved application-state handoff, trusted-node and revision
-authorization, and the remaining crash matrix. Other stores still require
-their own provider-certified authority primitive.
+authorization and placement, and the remaining crash matrix. Existing
+public/DynamoDB product gates remain closed. Other stores still require their
+own provider-certified authority primitive.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v4
 manifest and the append-only V10 run → invocation → attempt → effect ledger
@@ -876,6 +882,7 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
+- [Replacement quiescence-barrier checkpoint](llm/checkpoints/2026-08-30-replacement-quiescence-barrier.md) — retained monotonic admission/schedule cutover, prepared-generation ABA protection, ordered close/adopt/reopen composition, and closed product gates.
 - [Replacement reconstruction checkpoint](llm/checkpoints/2026-08-29-replacement-execution-reconstruction.md) — complete authority-bound history inventory, explicit replay policy, locator convergence, internal startup ordering, and closed product gates.
 - [Resident DynamoDB authority-supervisor checkpoint](llm/checkpoints/2026-08-28-resident-dynamodb-authority-supervisor.md) — exact-client topology proof, stable-token renewal/takeover lifecycle, two-supervisor live evidence, and closed product gates.
 - [DynamoDB RVN coordinator-replacement checkpoint](llm/checkpoints/2026-08-27-dynamodb-rvn-coordinator-replacement.md) — the narrow provider primitive, deterministic fencing matrix, and disposable-table proof.

@@ -13,6 +13,10 @@ import {
   createCoordinatorAuthorityToken,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import {
+  COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+  createCoordinatorQuiescenceBarrier,
+} from '../../src/core/lib/db/tables/coordinator-quiescence-barrier.js';
+import {
   ExecutionLedgerProjectionError,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
@@ -255,6 +259,130 @@ function interceptScheduleAdmission(db, beforeScheduleAdmission) {
 }
 
 describe('scheduled workflow activation cutover', () => {
+  test('carries the prepared barrier generation through cutover and keeps exact replay write-free', async () => {
+    const harness = createHarness();
+    const transactions = jest.spyOn(harness.db, 'transactionWrite');
+    try {
+      await activateApplication(harness.activation);
+      const owner = await claimResident(harness.db);
+      const authorities = createCoordinatorAuthority({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const { authority } = await authorities.acquire({
+        appId: APP_ID,
+        coordinatorId: 'schedule-barrier-coordinator',
+        requestId: 'acquire-schedule-barrier-coordinator',
+        observedAt: 10,
+      });
+      const prepared = await prepareScheduledRun(harness.schedule, owner);
+      const barriers = createCoordinatorQuiescenceBarrier({
+        db: harness.db,
+        tableName: TABLE_NAME,
+      });
+      const closed = await barriers.close({
+        authority,
+        requestId: 'close-before-scheduled-admission',
+        predecessor: null,
+        observedAt: SCHEDULED_AT + 1,
+      });
+      const reopened = await barriers.reopen({
+        authority,
+        requestId: 'reopen-before-scheduled-admission',
+        predecessor: closed.barrier,
+        observedAt: SCHEDULED_AT + 2,
+      });
+      const ledger = createExecutionLedger({
+        db: harness.db,
+        tableName: TABLE_NAME,
+        payloadStore: harness.payloadStore,
+      });
+
+      transactions.mockClear();
+      await expect(
+        ledger.createWorkflowRun(prepared.request),
+      ).rejects.toThrow();
+      const staleAttempt = transactions.mock.calls.find(([params]) =>
+        params.putRequests?.some(
+          ({ record }) => record.record_kind === 'schedule-occurrence',
+        ),
+      )?.[0];
+      expect(
+        staleAttempt?.conditionChecks?.filter(
+          ({ sortKeyValue }) =>
+            sortKeyValue === COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+        ),
+      ).toHaveLength(1);
+      await expect(ledger.rebuildRun(prepared.runId)).resolves.toBeNull();
+      await expect(
+        harness.schedule.getOccurrence({
+          occurrenceId: prepared.cause.occurrenceId,
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        harness.schedule.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+      ).resolves.toEqual(prepared.activated.cursor);
+
+      const freshAdmission = await harness.schedule.prepareWorkflowAdmission({
+        ...prepared.scheduleAdmissionInput,
+        observedAt: SCHEDULED_AT + 3,
+      });
+      transactions.mockClear();
+      const created = await ledger.createWorkflowRun({
+        ...prepared.request,
+        scheduleAdmission: freshAdmission,
+      });
+      expect(created).toMatchObject({
+        applied: true,
+        run: { runId: prepared.runId, status: 'RUNNING' },
+      });
+      const accepted = transactions.mock.calls.find(([params]) =>
+        params.putRequests?.some(
+          ({ record }) => record.record_kind === 'schedule-occurrence',
+        ),
+      )?.[0];
+      const acceptedBarrierChecks = accepted?.conditionChecks?.filter(
+        ({ sortKeyValue }) =>
+          sortKeyValue === COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+      );
+      expect(acceptedBarrierChecks).toHaveLength(1);
+      expect(acceptedBarrierChecks?.[0].conditions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            propertyName: 'state',
+            propertyValue: 'OPEN',
+          }),
+          expect.objectContaining({
+            propertyName: 'version',
+            propertyValue: reopened.barrier.version,
+          }),
+        ]),
+      );
+
+      await barriers.close({
+        authority,
+        requestId: 'close-after-scheduled-admission',
+        predecessor: reopened.barrier,
+        observedAt: SCHEDULED_AT + 4,
+      });
+      transactions.mockClear();
+      const replayAdmission = await harness.schedule.prepareWorkflowAdmission({
+        ...prepared.scheduleAdmissionInput,
+        observedAt: SCHEDULED_AT + 5,
+      });
+      await expect(
+        ledger.createWorkflowRun({
+          ...prepared.request,
+          scheduleAdmission: replayAdmission,
+        }),
+      ).resolves.toMatchObject({ applied: false, run: created.run });
+      expect(transactions).not.toHaveBeenCalled();
+    } finally {
+      transactions.mockRestore();
+      await harness.cleanup();
+    }
+  });
+
   test.each(['create', 'replay'])(
     'a bound prepared %s requires the exact consuming ledger authority',
     async (mode) => {

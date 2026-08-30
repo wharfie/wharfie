@@ -32,6 +32,10 @@ import {
   createCoordinatorAuthorityFence,
 } from './coordinator-authority.js';
 import {
+  CoordinatorQuiescenceBarrierClosedError,
+  createCoordinatorQuiescenceBarrier,
+} from './coordinator-quiescence-barrier.js';
+import {
   LEDGER_SERVICE_OWNERSHIP_RECORD_KIND,
   LEDGER_SERVICE_OWNERSHIP_SCHEMA_VERSION,
   LEDGER_SERVICE_OWNERSHIP_SORT_KEY,
@@ -853,6 +857,10 @@ export function createScheduleControl({
           coordinatorAuthority,
           'createScheduleControl.coordinatorAuthority',
         );
+  const coordinatorQuiescenceBarrier = createCoordinatorQuiescenceBarrier({
+    db,
+    tableName: resolvedTableName,
+  });
 
   /** @param {string} appId */
   function assertCoordinatorAppScope(appId) {
@@ -902,6 +910,43 @@ export function createScheduleControl({
       tableName: resolvedTableName,
       authority: resolvedCoordinatorAuthority,
     });
+  }
+
+  /**
+   * Diagnose a barrier race after the exact durable winner and coordinator
+   * authority have had precedence. A currently OPEN barrier does not explain
+   * the failed exact fence, so the original conditional failure remains.
+   * @param {unknown} error
+   * @param {string} appId
+   */
+  async function assertCoordinatorAdmissionOpenAfterFailure(error, appId) {
+    if (!isConditionalCheckFailed(error)) return;
+    await coordinatorQuiescenceBarrier.prepareFreshAdmission({ appId });
+  }
+
+  /**
+   * Preserve stale-authority precedence when a fresh mutation observes an
+   * already CLOSED barrier. OPEN observations remain transactionally fenced.
+   * @param {string} appId
+   */
+  async function prepareCoordinatorAdmission(appId) {
+    try {
+      return await coordinatorQuiescenceBarrier.prepareFreshAdmission({
+        appId,
+      });
+    } catch (error) {
+      if (
+        resolvedCoordinatorAuthority &&
+        error instanceof CoordinatorQuiescenceBarrierClosedError
+      ) {
+        await assertCoordinatorAuthorityCurrent({
+          db,
+          tableName: resolvedTableName,
+          authority: resolvedCoordinatorAuthority,
+        });
+      }
+      throw error;
+    }
   }
 
   /** @param {string} appId @param {string} scheduleId */
@@ -984,14 +1029,14 @@ export function createScheduleControl({
           version: current ? current.version + 1 : 1,
           updatedAt: effectiveObservedAt,
         });
-    const admissionFence = await getLocalApplicationRunCreationFence({
-      db,
-      tableName: resolvedTableName,
-      appId,
-      revisionId,
-    });
-    try {
-      if (sameDefinition) {
+    if (sameDefinition) {
+      const admissionFence = await getLocalApplicationRunCreationFence({
+        db,
+        tableName: resolvedTableName,
+        appId,
+        revisionId,
+      });
+      try {
         await transactionWrite(
           {
             tableName: resolvedTableName,
@@ -1004,11 +1049,27 @@ export function createScheduleControl({
           appId,
         );
         return Object.freeze({ applied: false, cursor: current });
+      } catch (error) {
+        await assertCurrentCoordinatorAuthorityAfterFailure(error);
+        throw error;
       }
+    }
+    const coordinatorAdmission = await prepareCoordinatorAdmission(appId);
+    const admissionFence = await getLocalApplicationRunCreationFence({
+      db,
+      tableName: resolvedTableName,
+      appId,
+      revisionId,
+    });
+    try {
       await transactionWrite(
         {
           tableName: resolvedTableName,
-          conditionChecks: [admissionFence, ownerFence(owner)],
+          conditionChecks: [
+            coordinatorAdmission.conditionCheck,
+            admissionFence,
+            ownerFence(owner),
+          ],
           putRequests: [
             {
               keyName: KEY_NAME,
@@ -1024,6 +1085,7 @@ export function createScheduleControl({
       );
     } catch (error) {
       await assertCurrentCoordinatorAuthorityAfterFailure(error);
+      await assertCoordinatorAdmissionOpenAfterFailure(error, appId);
       throw error;
     }
     return Object.freeze({ applied: true, cursor: next });
@@ -1067,13 +1129,13 @@ export function createScheduleControl({
         'advance.observedAt must not precede cursor updatedAt or throughInclusive.',
       );
     }
-    const admissionFence = await getLocalApplicationRunCreationFence({
-      db,
-      tableName: resolvedTableName,
-      appId: expected.appId,
-      revisionId: expected.revisionId,
-    });
     if (throughInclusive === expected.horizon) {
+      const admissionFence = await getLocalApplicationRunCreationFence({
+        db,
+        tableName: resolvedTableName,
+        appId: expected.appId,
+        revisionId: expected.revisionId,
+      });
       try {
         await transactionWrite(
           {
@@ -1098,11 +1160,24 @@ export function createScheduleControl({
       version: expected.version + 1,
       updatedAt: observedAt,
     });
+    const coordinatorAdmission = await prepareCoordinatorAdmission(
+      expected.appId,
+    );
+    const admissionFence = await getLocalApplicationRunCreationFence({
+      db,
+      tableName: resolvedTableName,
+      appId: expected.appId,
+      revisionId: expected.revisionId,
+    });
     try {
       await transactionWrite(
         {
           tableName: resolvedTableName,
-          conditionChecks: [admissionFence, ownerFence(owner)],
+          conditionChecks: [
+            coordinatorAdmission.conditionCheck,
+            admissionFence,
+            ownerFence(owner),
+          ],
           putRequests: [
             {
               keyName: KEY_NAME,
@@ -1162,6 +1237,7 @@ export function createScheduleControl({
         return Object.freeze({ applied: false, cursor: current });
       }
       await assertCurrentCoordinatorAuthorityAfterFailure(error);
+      await assertCoordinatorAdmissionOpenAfterFailure(error, expected.appId);
       throw error;
     }
     return Object.freeze({ applied: true, cursor: next });
@@ -1283,13 +1359,19 @@ export function createScheduleControl({
       occurrence = current;
     } else {
       mode = /** @type {'create'} */ ('create');
+      const coordinatorAdmission = await prepareCoordinatorAdmission(
+        cursor.appId,
+      );
       const nextCursor = normalizeCursor({
         ...cursor,
         horizon: throughInclusive,
         version: cursor.version + 1,
         updatedAt: observedAt,
       });
-      conditionChecks = Object.freeze([ownerFence(owner)]);
+      conditionChecks = Object.freeze([
+        coordinatorAdmission.conditionCheck,
+        ownerFence(owner),
+      ]);
       putRequests = Object.freeze([
         deepFreeze({
           keyName: KEY_NAME,

@@ -14,7 +14,7 @@ These records capture product-level decisions that should survive implementation
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md)                       | Accepted; profile V1 superseded by 0021            |
 | [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                                            | Accepted                                           |
 | [0010 — Versioned activity-attempt protocol](0010-versioned-activity-attempt-protocol.md)                                        | Accepted                                           |
-| [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)                              | Accepted; amended by 0036–0038                     |
+| [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)                              | Accepted; amended by 0036–0039                     |
 | [0012 — No manifest resource injection](0012-no-manifest-resource-injection.md)                                                  | Accepted                                           |
 | [0013 — Durable cancellation and evidence-backed reconciliation](0013-durable-cancellation-and-evidence-reconciliation.md)       | Accepted; V4 slice carried forward by 0014         |
 | [0014 — Verifier-backed persisted managed effects](0014-verifier-backed-managed-effects.md)                                      | Accepted; internal V5 foundation implemented       |
@@ -42,5 +42,6 @@ These records capture product-level decisions that should survive implementation
 | [0036 — Durable coordinator admission provenance](0036-durable-coordinator-admission-provenance.md)                              | Accepted; bounded historical attribution           |
 | [0037 — Single-region DynamoDB RVN-observed coordinator replacement](0037-single-region-dynamodb-rvn-coordinator-replacement.md) | Accepted; internal resident supervisor certified  |
 | [0038 — Authority-bound replacement reconstruction](0038-authority-bound-replacement-reconstruction.md)                         | Accepted; internal reconstruction slice complete  |
+| [0039 — Retained coordinator quiescence barrier](0039-retained-coordinator-quiescence-barrier.md)                                | Accepted; internal barrier slice complete         |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

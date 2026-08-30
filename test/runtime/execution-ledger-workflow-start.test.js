@@ -20,6 +20,7 @@ import {
   RunStatus,
   createExecutionLedger as createProductionExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
+import { COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY } from '../../src/core/lib/db/tables/coordinator-quiescence-barrier.js';
 import {
   LedgerServiceOwnerKind,
   createLedgerServiceId,
@@ -567,7 +568,7 @@ for (const adapter of getAdapterMatrix()) {
           (total, bytes) => total + bytes,
           0,
         );
-        expect(transactionItems).toHaveLength(12);
+        expect(transactionItems).toHaveLength(13);
         expect(transactionItemBytes.every((bytes) => bytes < 400 * 1024)).toBe(
           true,
         );
@@ -608,6 +609,12 @@ for (const adapter of getAdapterMatrix()) {
         );
         expect(combinedWrite?.conditionChecks).toEqual([
           expect.objectContaining({
+            conditions: [
+              expect.objectContaining({ conditionType: 'NOT_EXISTS' }),
+            ],
+          }),
+          expect.objectContaining({
+            sortKeyValue: COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
             conditions: [
               expect.objectContaining({ conditionType: 'NOT_EXISTS' }),
             ],

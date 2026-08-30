@@ -163,6 +163,10 @@ import {
   assertCoordinatorAuthorityToken,
   createCoordinatorAuthorityFence,
 } from './coordinator-authority.js';
+import {
+  CoordinatorQuiescenceBarrierClosedError,
+  createCoordinatorQuiescenceBarrier,
+} from './coordinator-quiescence-barrier.js';
 import { getLocalApplicationRunCreationFence } from './local-application-activation.js';
 import {
   reconcilePreparedScheduleWorkflowAdmission,
@@ -10921,6 +10925,10 @@ export function createExecutionLedger({
           coordinatorAuthority,
           'createExecutionLedger.coordinatorAuthority',
         );
+  const coordinatorAdmissionBarrier = createCoordinatorQuiescenceBarrier({
+    db,
+    tableName: resolvedTableName,
+  });
   const scheduleAdmissionContext = Object.freeze({
     db,
     tableName: resolvedTableName,
@@ -10976,6 +10984,29 @@ export function createExecutionLedger({
       tableName: resolvedTableName,
       authority: resolvedCoordinatorAuthority,
     });
+  }
+
+  /**
+   * Capture the exact retained coordinator-admission generation for one fresh
+   * mutation. Missing barrier state is the compatibility OPEN generation, so
+   * bound and unbound current writers both lose atomically to a first close.
+   * @param {string} appId - Application scope being admitted.
+   * @returns {Promise<import('../base.js').TransactionConditionCheck>} - Exact OPEN/absent fence.
+   */
+  async function prepareCoordinatorAdmissionFence(appId) {
+    try {
+      return (
+        await coordinatorAdmissionBarrier.prepareFreshAdmission({ appId })
+      ).conditionCheck;
+    } catch (error) {
+      if (
+        resolvedCoordinatorAuthority &&
+        error instanceof CoordinatorQuiescenceBarrierClosedError
+      ) {
+        await assertCurrentCoordinatorAuthority();
+      }
+      throw error;
+    }
   }
 
   /**
@@ -12752,6 +12783,8 @@ export function createExecutionLedger({
       };
     }
 
+    const coordinatorAdmissionFence =
+      await prepareCoordinatorAdmissionFence(appId);
     const admissionFence = await getLocalApplicationRunCreationFence({
       db,
       tableName: resolvedTableName,
@@ -12832,7 +12865,7 @@ export function createExecutionLedger({
         event,
         nextRun: run,
         nextInvocation: invocation,
-        conditionChecks: [admissionFence],
+        conditionChecks: [admissionFence, coordinatorAdmissionFence],
       });
     } catch (error) {
       if (!isConditionalCheckFailed(error)) throw error;
@@ -12911,6 +12944,7 @@ export function createExecutionLedger({
       }
       await assertCurrentCoordinatorAuthority();
       if (raced) throw new ExecutionLedgerRunConflictError(runId);
+      await prepareCoordinatorAdmissionFence(appId);
       await getLocalApplicationRunCreationFence({
         db,
         tableName: resolvedTableName,
@@ -13324,6 +13358,10 @@ export function createExecutionLedger({
       return workflowCreationResult(existing, receipt, false);
     }
 
+    const coordinatorAdmissionFence =
+      cause === undefined
+        ? await prepareCoordinatorAdmissionFence(appId)
+        : undefined;
     const admissionFence = await getLocalApplicationRunCreationFence({
       db,
       tableName: resolvedTableName,
@@ -13519,7 +13557,10 @@ export function createExecutionLedger({
         ...(timer ? { nextTimer: timer } : {}),
         ...(signalWait ? { nextSignalWait: signalWait } : {}),
         nextWorkflowCursor: workflowCursor,
-        conditionChecks: [admissionFence],
+        conditionChecks: [
+          admissionFence,
+          ...(coordinatorAdmissionFence ? [coordinatorAdmissionFence] : []),
+        ],
         ...(scheduleMutation ? { scheduleMutation } : {}),
       });
     } catch (error) {
@@ -13624,6 +13665,7 @@ export function createExecutionLedger({
         throw new ExecutionLedgerRunConflictError(runId);
       }
       if (!isConditionalCheckFailed(error)) throw error;
+      await prepareCoordinatorAdmissionFence(appId);
       await getLocalApplicationRunCreationFence({
         db,
         tableName: resolvedTableName,
@@ -14595,6 +14637,9 @@ export function createExecutionLedger({
         sourceTransitionId,
       );
     }
+    const coordinatorAdmissionFence = await prepareCoordinatorAdmissionFence(
+      state.run.appId,
+    );
     const admissionFence = await getLocalApplicationRunCreationFence({
       db,
       tableName: resolvedTableName,
@@ -14824,7 +14869,7 @@ export function createExecutionLedger({
       await transactionWrite(
         {
           tableName: resolvedTableName,
-          conditionChecks: [admissionFence],
+          conditionChecks: [admissionFence, coordinatorAdmissionFence],
           putRequests,
         },
         state.run.appId,
@@ -14837,6 +14882,7 @@ export function createExecutionLedger({
         if (winner) return winner;
       }
       await assertCurrentCoordinatorAuthority();
+      await prepareCoordinatorAdmissionFence(state.run.appId);
       await getLocalApplicationRunCreationFence({
         db,
         tableName: resolvedTableName,
