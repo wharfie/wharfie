@@ -213,7 +213,7 @@ const SORT_KEY_NAME = 'sort_key';
  * outside the returned object prevents a copied method surface or caller-owned
  * brand from claiming the DB client/table transaction domain certified for a
  * resident coordinator.
- * @type {WeakMap<object, Readonly<{db: import('../base.js').DBClient, tableName: string, coordinatorAuthorityBound: boolean, bindCoordinatorAuthority: (authority: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot) => ExecutionLedgerStore}>>}
+ * @type {WeakMap<object, Readonly<{db: import('../base.js').DBClient, tableName: string, payloadStore: object, coordinatorAuthorityBound: boolean, bindCoordinatorAuthority: (authority: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot) => ExecutionLedgerStore}>>}
  */
 const EXECUTION_LEDGER_STORE_SCOPES = new WeakMap();
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
@@ -23692,6 +23692,7 @@ export function createExecutionLedger({
     Object.freeze({
       db,
       tableName: resolvedTableName,
+      payloadStore,
       coordinatorAuthorityBound: resolvedCoordinatorAuthority !== undefined,
       bindCoordinatorAuthority,
     }),
@@ -23717,6 +23718,34 @@ export function assertExecutionLedgerStoreScope(ledger, db, tableName) {
   if (!scope || scope.db !== db || scope.tableName !== tableName) {
     throw new TypeError(
       'Execution ledger must be the exact store created for this DB client and table.',
+    );
+  }
+}
+
+/**
+ * Require the exact immutable payload-store capability captured when the
+ * ledger was constructed. Replacement startup uses this alongside the DB and
+ * table scope so a caller cannot validate one distributed store identity while
+ * reconstruction reads from another closure-held store.
+ * @param {unknown} ledger - Candidate exact execution-ledger object.
+ * @param {unknown} db - Required exact DB client object.
+ * @param {unknown} tableName - Required exact table name.
+ * @param {unknown} payloadStore - Required exact payload-store capability.
+ * @returns {void}
+ */
+export function assertExecutionLedgerPayloadStoreScope(
+  ledger,
+  db,
+  tableName,
+  payloadStore,
+) {
+  assertExecutionLedgerStoreScope(ledger, db, tableName);
+  const scope = EXECUTION_LEDGER_STORE_SCOPES.get(
+    /** @type {object} */ (ledger),
+  );
+  if (!scope || scope.payloadStore !== payloadStore) {
+    throw new TypeError(
+      'Execution ledger must use the exact replacement payload store.',
     );
   }
 }

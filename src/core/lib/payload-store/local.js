@@ -80,10 +80,46 @@ async function syncDirectory(directory) {
  * @returns {Promise<void>} - Resolves when the directory entry is durable.
  */
 async function ensureDurableDirectory(directory) {
-  await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
-  await syncDirectory(directory);
-  const parent = dirname(directory);
-  if (parent !== directory) await syncDirectory(parent);
+  const missing = [];
+  let existing = directory;
+  for (;;) {
+    try {
+      const stats = await fsp.lstat(existing);
+      if (!stats.isDirectory() || stats.isSymbolicLink()) {
+        throw new Error(
+          'Local execution payload store path is not a directory.',
+        );
+      }
+      break;
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      missing.push(existing);
+      const parent = dirname(existing);
+      if (parent === existing) throw error;
+      existing = parent;
+    }
+  }
+
+  if (missing.length === 0) {
+    await syncDirectory(directory);
+    const parent = dirname(directory);
+    if (parent !== directory) await syncDirectory(parent);
+    return;
+  }
+
+  for (const path of missing.reverse()) {
+    try {
+      await fsp.mkdir(path, { mode: 0o700 });
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error;
+    }
+    const stats = await fsp.lstat(path);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error('Local execution payload store path is not a directory.');
+    }
+    await syncDirectory(path);
+    await syncDirectory(dirname(path));
+  }
 }
 
 /**
@@ -143,7 +179,7 @@ function getSafePayloadPath(root, key) {
  * This API intentionally has no deletion or garbage-collection operation.
  * A later retained-ledger-root reachability design must own that decision.
  * @param {{path: string, storeId: string}} options - Local durable-store inputs.
- * @returns {{storage: Readonly<{kind: 'wharfie.local-content-addressed.v1', storeId: string}>, putJson: (input: {value: unknown, payloadSchema: string}) => Promise<Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>>, readBytes: (reference: unknown) => Promise<Buffer>, readVerified: (reference: unknown) => Promise<{reference: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, value: any}>, readJson: (reference: unknown) => Promise<any>, verify: (reference: unknown) => Promise<Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>>, getPath: (reference: unknown) => string}} - Immutable payload-store API.
+ * @returns {{storage: Readonly<{kind: 'wharfie.local-content-addressed.v1', storeId: string}>, putJson: (input: {value: unknown, payloadSchema: string}) => Promise<Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>>, importBytes: (input: {reference: unknown, bytes: unknown}) => Promise<Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>>, readBytes: (reference: unknown) => Promise<Buffer>, readVerified: (reference: unknown) => Promise<{reference: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, value: any}>, readJson: (reference: unknown) => Promise<any>, verify: (reference: unknown) => Promise<Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>>, getPath: (reference: unknown) => string}} - Immutable payload-store API.
  */
 export function createLocalExecutionPayloadStore(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
@@ -337,6 +373,79 @@ export function createLocalExecutionPayloadStore(options) {
   }
 
   /**
+   * Import exact canonical bytes under an already-issued immutable reference.
+   * This is the narrow hydration seam used by a replicated store: callers
+   * cannot choose a path or derive a new reference, and an existing key is
+   * accepted only when its retained bytes verify exactly. A conflicting local
+   * object is never overwritten or repaired in place.
+   * @param {{reference: unknown, bytes: unknown}} input - Exact reference and bytes to import.
+   * @returns {Promise<Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>>} - The independently normalized imported reference.
+   */
+  async function importBytes(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new TypeError(
+        'Execution payload importBytes input must be an object.',
+      );
+    }
+    const candidate = /** @type {Record<string, unknown>} */ (input);
+    const allowed = new Set(['reference', 'bytes']);
+    for (const key of Object.keys(candidate)) {
+      if (!allowed.has(key)) {
+        throw new TypeError(
+          `Execution payload importBytes input.${key} is not supported.`,
+        );
+      }
+    }
+    for (const key of allowed) {
+      if (!Object.prototype.hasOwnProperty.call(candidate, key)) {
+        throw new TypeError(
+          `Execution payload importBytes input.${key} is required.`,
+        );
+      }
+    }
+
+    const reference = normalizeLocalReference(candidate.reference);
+    let byteLength;
+    if (
+      Buffer.isBuffer(candidate.bytes) ||
+      candidate.bytes instanceof Uint8Array
+    ) {
+      byteLength = candidate.bytes.byteLength;
+    } else if (candidate.bytes instanceof ArrayBuffer) {
+      byteLength = candidate.bytes.byteLength;
+    } else {
+      throw new TypeError(
+        'Execution payload importBytes input.bytes must be a Buffer, Uint8Array, or ArrayBuffer.',
+      );
+    }
+    if (byteLength !== reference.size) {
+      throw new ExecutionPayloadStoreIntegrityError(
+        reference.payloadId,
+        `imported byte size ${byteLength} does not match reference size ${reference.size}`,
+      );
+    }
+    const bytes =
+      candidate.bytes instanceof ArrayBuffer
+        ? Buffer.from(new Uint8Array(candidate.bytes))
+        : Buffer.from(candidate.bytes);
+    try {
+      verifyExecutionPayloadReference(
+        reference,
+        bytes,
+        `imported execution payload ${reference.payloadId}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ExecutionPayloadStoreIntegrityError(
+        reference.payloadId,
+        message,
+      );
+    }
+    await publishImmutable(reference, bytes);
+    return reference;
+  }
+
+  /**
    * @param {{value: unknown, payloadSchema: string}} input - JSON payload and semantic schema.
    * @returns {Promise<Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>>} - Durable immutable payload reference.
    */
@@ -393,6 +502,7 @@ export function createLocalExecutionPayloadStore(options) {
   return Object.freeze({
     storage,
     putJson,
+    importBytes,
     readBytes,
     readVerified,
     readJson,

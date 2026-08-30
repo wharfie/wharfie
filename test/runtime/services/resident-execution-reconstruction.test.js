@@ -21,6 +21,10 @@ import {
 import { createExecutionLedger } from '../../../src/core/lib/db/tables/execution-ledger.js';
 import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
 import {
+  EXECUTION_PAYLOAD_DISTRIBUTION_KIND,
+  createReplicatedExecutionPayloadStore,
+} from '../../../src/core/lib/payload-store/replicated.js';
+import {
   createExecutionLedgerReadyWorkScope,
   getExecutionLedgerReadyWorkSortKey,
 } from '../../../src/core/lib/ledger/ready-work.js';
@@ -45,6 +49,7 @@ const AUTHORITY = Object.freeze({
   authorityId: `wca1_${fixtureDigest('replacement-authority')}`,
   epoch: 2,
 });
+const DISTRIBUTION_ID = `wepd1_${fixtureDigest('replacement-reconstruction-distribution')}`;
 
 const cleanups = [];
 
@@ -68,6 +73,24 @@ function scoped(run, value = {}) {
     revisionId: run.revisionId,
     ...value,
   };
+}
+
+function localDistribution(store, counters) {
+  return Object.freeze({
+    identity: Object.freeze({
+      kind: EXECUTION_PAYLOAD_DISTRIBUTION_KIND,
+      distributionId: DISTRIBUTION_ID,
+      storeId: store.storage.storeId,
+    }),
+    async publishImmutable(input) {
+      counters.publishes += 1;
+      await store.importBytes(input);
+    },
+    async readBytes(reference) {
+      counters.reads += 1;
+      return await store.readBytes(reference);
+    },
+  });
 }
 
 function baseView(
@@ -564,6 +587,118 @@ describe('resident execution history reconstruction', () => {
         }),
       ],
     });
+  });
+
+  test('hydrates an empty replacement replica from distributed payloads during reconstruction', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wharfie-reconstruction-'));
+    const db = await createVanillaDB(join(root, 'control'));
+    cleanups.push(async () => {
+      await db.close();
+      rmSync(root, { recursive: true, force: true });
+    });
+    const tableName = 'resident-reconstruction-replicated';
+    const storeId = 'resident-reconstruction-replicated';
+    const counters = { publishes: 0, reads: 0 };
+    const distributionPath = join(root, 'distribution');
+    const distributionStore = createLocalExecutionPayloadStore({
+      path: distributionPath,
+      storeId,
+    });
+    const distribution = localDistribution(distributionStore, counters);
+    const sourcePayloadStore = createReplicatedExecutionPayloadStore({
+      localStore: createLocalExecutionPayloadStore({
+        path: join(root, 'source-payloads'),
+        storeId,
+      }),
+      distribution,
+    });
+    const sourceLedger = createExecutionLedger({
+      db,
+      tableName,
+      payloadStore: sourcePayloadStore,
+    });
+    await sourceLedger.createManualRun({
+      runId: 'replicated-runnable',
+      appId: APP_ID,
+      revisionId: REVISION_ID,
+      invocationId: 'main',
+      activityId: 'activity',
+      input: { from: 'distributed-source' },
+      callerMetadata: { request: 'replacement' },
+      transitionId: 'create-replicated-runnable',
+    });
+    expect(counters.publishes).toBeGreaterThan(0);
+
+    const before = await sourceLedger.listReadyWork({
+      appId: APP_ID,
+      revisionId: REVISION_ID,
+      observedAt: Date.now() + 60_000,
+    });
+    expect(before.items).toHaveLength(1);
+    const locator = before.items[0];
+    const scope = createExecutionLedgerReadyWorkScope({
+      appId: APP_ID,
+      revisionId: REVISION_ID,
+    });
+    await db.batchWrite({
+      tableName,
+      deleteRequests: [
+        {
+          keyName: 'run_id',
+          keyValue: scope.readyWorkId,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getExecutionLedgerReadyWorkSortKey({
+            availableAt: locator.availableAt,
+            runId: locator.runId,
+          }),
+        },
+      ],
+    });
+
+    const replacementLocalStore = createLocalExecutionPayloadStore({
+      path: join(root, 'replacement-payloads'),
+      storeId,
+    });
+    const replacementPayloadStore = createReplicatedExecutionPayloadStore({
+      localStore: replacementLocalStore,
+      distribution,
+    });
+    const replacementLedger = createExecutionLedger({
+      db,
+      tableName,
+      payloadStore: replacementPayloadStore,
+    });
+    const authority = createCoordinatorAuthority({ db, tableName });
+    const acquired = await authority.acquire({
+      appId: APP_ID,
+      coordinatorId: 'replacement-replicated',
+      requestId: 'acquire-replacement-replicated',
+    });
+    const token = createCoordinatorAuthorityToken(acquired.authority);
+    const bound = replacementLedger.bindCoordinatorAuthority(token);
+    const remoteReadsBefore = counters.reads;
+
+    const report = await reconstructResidentExecutionHistory({
+      ledger: bound,
+      appId: APP_ID,
+      currentRevisionId: REVISION_ID,
+      coordinatorAuthority: token,
+      observedAt: Date.now(),
+    });
+
+    expect(report).toMatchObject({
+      inspectedRuns: 1,
+      readyWork: { checks: 1, applied: 1, unchanged: 0 },
+    });
+    expect(counters.reads).toBeGreaterThan(remoteReadsBefore);
+    const remoteReadsAfterHydration = counters.reads;
+    rmSync(distributionPath, { recursive: true, force: true });
+    await expect(
+      bound.rebuildRun('replicated-runnable'),
+    ).resolves.toMatchObject({
+      run: { runId: 'replicated-runnable' },
+    });
+    expect(counters.reads).toBe(remoteReadsAfterHydration);
   });
 
   test('validates the full history before converging locators and returns a bounded frozen report', async () => {

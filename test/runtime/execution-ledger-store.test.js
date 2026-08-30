@@ -19,6 +19,12 @@ import {
   CoordinatorAuthorityStaleError,
   getCoordinatorAuthorityPartitionKey,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
+import { createApplicationStateCoordinatorAuthorityRecord } from '../../src/core/lib/db/tables/application-state-authority.js';
+import {
+  APPLICATION_STATE_READINESS_RECORD_KIND,
+  APPLICATION_STATE_READINESS_SORT_KEY,
+  getApplicationStateReadinessPartitionKey,
+} from '../../src/core/lib/db/tables/application-state-readiness.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 
 const LEDGER_SERVICE_IMPORT =
@@ -34,6 +40,42 @@ const CURRENT_REVISION_ID = createCanonicalJsonSha256Id({
   domain: 'wharfie:test:resident-reconstruction-revision:v1',
   prefix: 'wrv1',
   value: { revision: 'current' },
+});
+const OTHER_REVISION_ID = createCanonicalJsonSha256Id({
+  domain: 'wharfie:test:resident-reconstruction-revision:v1',
+  prefix: 'wrv1',
+  value: { revision: 'other' },
+});
+const APPLICATION_STATE_STORE_ID = createCanonicalJsonSha256Id({
+  domain: 'wharfie:test:application-state-store:v1',
+  prefix: 'was',
+  value: { store: 'resident-test-app' },
+});
+const PAYLOAD_DISTRIBUTION_ID = createCanonicalJsonSha256Id({
+  domain: 'wharfie:test:execution-payload-distribution:v1',
+  prefix: 'wepd1',
+  value: { distribution: 'resident-test-app' },
+});
+const OTHER_PAYLOAD_DISTRIBUTION_ID = createCanonicalJsonSha256Id({
+  domain: 'wharfie:test:execution-payload-distribution:v1',
+  prefix: 'wepd1',
+  value: { distribution: 'other' },
+});
+const OTHER_APPLICATION_STATE_STORE_ID = createCanonicalJsonSha256Id({
+  domain: 'wharfie:test:application-state-store:v1',
+  prefix: 'was',
+  value: { store: 'other' },
+});
+const APPLICATION_STATE_DESTINATION = Object.freeze({
+  kind: 'application-state',
+  version: 2,
+  bindingId: 'primary',
+  configuration: Object.freeze({
+    provider: 'lmdb',
+    storeId: APPLICATION_STATE_STORE_ID,
+    tableName: 'wharfie-application-state-v2',
+    namespace: 'resident-test-app',
+  }),
 });
 
 /** @type {ReturnType<typeof jest.fn>} */
@@ -51,9 +93,15 @@ let withLocalLedgerServiceMutationOwnership;
 /** @type {Function} */
 let assertExecutionLedgerStoreScope;
 /** @type {Function} */
+let assertExecutionLedgerPayloadStoreScope;
+/** @type {Function} */
 let createExecutionLedger;
 /** @type {Function} */
 let prepareExecutionLedgerCoordinatorAuthorityBinding;
+/** @type {Function} */
+let createResidentReplacementInputReceipt;
+/** @type {Function} */
+let createReplicatedExecutionPayloadStore;
 
 beforeEach(async () => {
   jest.resetModules();
@@ -82,10 +130,15 @@ beforeEach(async () => {
     withLocalLedgerServiceMutationOwnership,
   } = await import(EXECUTION_LEDGER_STORE_IMPORT));
   ({
+    assertExecutionLedgerPayloadStoreScope,
     assertExecutionLedgerStoreScope,
     createExecutionLedger,
     prepareExecutionLedgerCoordinatorAuthorityBinding,
   } = await import(EXECUTION_LEDGER_IMPORT));
+  ({ createResidentReplacementInputReceipt } =
+    await import('../../src/core/runtime/resident-replacement-input.js'));
+  ({ createReplicatedExecutionPayloadStore } =
+    await import('../../src/core/lib/payload-store/replicated.js'));
 });
 
 afterEach(() => {
@@ -162,6 +215,99 @@ function coordinatorAuthorityToken(settings = {}) {
   });
 }
 
+function residentPayloadStore() {
+  const storage = Object.freeze({
+    kind: 'wharfie.local-content-addressed.v1',
+    storeId: 'payload-store-test',
+  });
+  return createReplicatedExecutionPayloadStore({
+    localStore: Object.freeze({
+      storage,
+      putJson: jest.fn(),
+      importBytes: jest.fn(),
+      readBytes: jest.fn(),
+    }),
+    distribution: Object.freeze({
+      identity: Object.freeze({
+        kind: 'wharfie.execution-payload-distribution.v1',
+        distributionId: PAYLOAD_DISTRIBUTION_ID,
+        storeId: 'payload-store-test',
+      }),
+      publishImmutable: jest.fn(),
+      readBytes: jest.fn(),
+    }),
+  });
+}
+
+/** @param {{currentRevisionId?: string, distributionId?: string}} [settings] */
+function residentReplacementInput(settings = {}) {
+  const currentRevisionId = settings.currentRevisionId ?? CURRENT_REVISION_ID;
+  const distributionId = settings.distributionId ?? PAYLOAD_DISTRIBUTION_ID;
+  return createResidentReplacementInputReceipt({
+    appId: 'resident-test-app',
+    currentRevisionId,
+    control: {
+      profile: 'dynamodb-rvn-v1',
+      adapterName: 'dynamodb',
+      region: 'us-east-2',
+      tableName: 'execution-ledger-test',
+      tableResourceId: TABLE_RESOURCE_ID,
+    },
+    payloadStorage: {
+      kind: 'wharfie.local-content-addressed.v1',
+      storeId: 'payload-store-test',
+      distribution: {
+        kind: 'wharfie.execution-payload-distribution.v1',
+        distributionId,
+        storeId: 'payload-store-test',
+      },
+    },
+    applicationStateDestination: APPLICATION_STATE_DESTINATION,
+  });
+}
+
+/** @param {ReturnType<typeof coordinatorAuthorityToken>} authority @param {string} [storeId] */
+function adoptedApplicationState(
+  authority,
+  storeId = APPLICATION_STATE_STORE_ID,
+) {
+  const destinationAuthority = createApplicationStateCoordinatorAuthorityRecord(
+    {
+      storeId,
+      namespace: 'resident-test-app',
+      authority,
+    },
+  );
+  const fields = {
+    run_id: getApplicationStateReadinessPartitionKey('resident-test-app'),
+    sort_key: APPLICATION_STATE_READINESS_SORT_KEY,
+    schema_version: 1,
+    record_kind: APPLICATION_STATE_READINESS_RECORD_KIND,
+    app_id: 'resident-test-app',
+    destination_kind: 'application-state',
+    destination_version: 2,
+    binding_id: 'primary',
+    provider: 'lmdb',
+    store_id: storeId,
+    table_name: 'wharfie-application-state-v2',
+    namespace: 'resident-test-app',
+    authority_schema_version: authority.schemaVersion,
+    coordinator_id: authority.coordinatorId,
+    authority_id: authority.authorityId,
+    epoch: authority.epoch,
+    status: 'ADOPTED',
+    destination_authority_digest: destinationAuthority.record_digest,
+  };
+  return Object.freeze({
+    ...fields,
+    record_digest: createCanonicalJsonSha256Id({
+      domain: 'wharfie:application-state:readiness:v1',
+      prefix: 'wasr1',
+      value: fields,
+    }),
+  });
+}
+
 function executionLedgerDB(kind = 'dynamodb-client') {
   return {
     kind,
@@ -195,20 +341,61 @@ function authorityRecord(snapshot) {
 /**
  * @param {Record<string, any>} db
  * @param {string} [tableName]
+ * @param {Record<string, any>} [payloadStore]
  * @returns {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore}
  */
-function scopedExecutionLedger(db, tableName = 'execution-ledger-test') {
+function scopedExecutionLedger(
+  db,
+  tableName = 'execution-ledger-test',
+  payloadStore = {
+    putJson: jest.fn(),
+    readBytes: jest.fn(),
+  },
+) {
   return createExecutionLedger({
     db,
     tableName,
-    payloadStore: {
-      putJson: jest.fn(),
-      readBytes: jest.fn(),
-    },
+    payloadStore,
   });
 }
 
 describe('execution-ledger control-store cleanup', () => {
+  it('uses and exposes one exact configured replicated payload store', async () => {
+    const close = jest.fn();
+    createControlDBClient.mockResolvedValue({
+      get: jest.fn(),
+      transactionWrite: jest.fn(),
+      close,
+    });
+    const payloadStore = residentPayloadStore();
+    const handler = jest.fn(
+      async (_ledger, /** @type {{payloadStore: unknown}} */ context) => {
+        expect(context.payloadStore).toBe(payloadStore);
+        return 'replicated';
+      },
+    );
+
+    await expect(
+      withExecutionLedger(handler, {
+        configuration: executionLedgerConfiguration(),
+        payloadStore,
+      }),
+    ).resolves.toBe('replicated');
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+
+    await expect(
+      withExecutionLedger(async () => 'unreachable', {
+        configuration: executionLedgerConfiguration(),
+        payloadStore: {
+          ...payloadStore,
+          storage: { ...payloadStore.storage, storeId: 'different-store' },
+        },
+      }),
+    ).rejects.toThrow(/constructed by createReplicatedExecutionPayloadStore/u);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
   it('passes the command-local DynamoDB region instead of rereading ambient routing', async () => {
     const close = jest.fn();
     createControlDBClient.mockResolvedValue({
@@ -339,7 +526,12 @@ describe('execution-ledger control-store cleanup', () => {
 describe('execution-ledger construction scope', () => {
   it('recognizes exact unbound and authority-bound ledger objects', () => {
     const db = executionLedgerDB();
-    const ledger = scopedExecutionLedger(db);
+    const payloadStore = residentPayloadStore();
+    const ledger = scopedExecutionLedger(
+      db,
+      'execution-ledger-test',
+      payloadStore,
+    );
     const boundLedger = ledger.bindCoordinatorAuthority(
       coordinatorAuthorityToken(),
     );
@@ -376,6 +568,35 @@ describe('execution-ledger construction scope', () => {
     expect(() => bindCoordinatorAuthority(coordinatorAuthorityToken())).toThrow(
       /already used/u,
     );
+  });
+
+  it('binds reconstruction to the exact closure-held payload store', () => {
+    const db = executionLedgerDB();
+    const payloadStore = {
+      putJson: jest.fn(),
+      readBytes: jest.fn(),
+    };
+    const ledger = scopedExecutionLedger(
+      db,
+      'execution-ledger-test',
+      payloadStore,
+    );
+    expect(() =>
+      assertExecutionLedgerPayloadStoreScope(
+        ledger,
+        db,
+        'execution-ledger-test',
+        payloadStore,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertExecutionLedgerPayloadStoreScope(
+        ledger,
+        db,
+        'execution-ledger-test',
+        { ...payloadStore },
+      ),
+    ).toThrow(/exact replacement payload store/u);
   });
 
   it.each([
@@ -517,7 +738,12 @@ describe('resident DynamoDB coordinator authority integration', () => {
       calls.push('assert-current-authority');
       return authorityRecord(authority);
     });
-    const ledger = scopedExecutionLedger(db);
+    const payloadStore = residentPayloadStore();
+    const ledger = scopedExecutionLedger(
+      db,
+      'execution-ledger-test',
+      payloadStore,
+    );
     jest.spyOn(ledger, 'bindCoordinatorAuthority').mockImplementation(() => {
       throw new Error('The mutable public binder must not be called.');
     });
@@ -573,6 +799,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
       createAdmissionBarrier,
       db,
       ledger,
+      payloadStore,
       validateTopology,
       createProtocol,
       createSupervisor,
@@ -599,9 +826,26 @@ describe('resident DynamoDB coordinator authority integration', () => {
         adapterName: 'dynamodb',
         tableName: 'execution-ledger-test',
         readOnly: false,
+        payloadStore: fixture.payloadStore,
       },
       configuration,
       handler,
+    };
+  }
+
+  /**
+   * @param {ReturnType<typeof harness>} fixture
+   * @param {Function} handler
+   * @param {any} [configuration]
+   */
+  function replacementOptions(
+    fixture,
+    handler,
+    configuration = residentAuthorityConfiguration(),
+  ) {
+    return {
+      ...options(fixture, handler, configuration),
+      replacementInput: residentReplacementInput(),
     };
   }
 
@@ -648,13 +892,193 @@ describe('resident DynamoDB coordinator authority integration', () => {
     expect(fixture.ledger.bindCoordinatorAuthority).not.toHaveBeenCalled();
   });
 
+  test.each([
+    [
+      'another executable revision',
+      { currentRevisionId: OTHER_REVISION_ID },
+      /does not authorize this application revision/u,
+    ],
+    [
+      'another payload distribution',
+      { distributionId: OTHER_PAYLOAD_DISTRIBUTION_ID },
+      /does not match the exact replicated payload store/u,
+    ],
+  ])(
+    'rejects replacement input for %s before topology',
+    async (_label, replacementSettings, message) => {
+      const fixture = harness();
+      const handler = jest.fn();
+      const input = replacementOptions(fixture, handler);
+      input.replacementInput = residentReplacementInput(replacementSettings);
+
+      await expect(
+        withReconstructedExecutionLedgerResidentAuthority(
+          {
+            ...input,
+            currentRevisionId: CURRENT_REVISION_ID,
+            prepareApplicationState: jest.fn(),
+          },
+          {
+            validateTopology: fixture.validateTopology,
+            createProtocol: fixture.createProtocol,
+            createSupervisor: fixture.createSupervisor,
+            reconstructHistory: jest.fn(),
+            createAdmissionBarrier: fixture.createAdmissionBarrier,
+          },
+        ),
+      ).rejects.toThrow(message);
+      expect(fixture.calls).toEqual([]);
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  test('rejects a decorated local payload store before topology', async () => {
+    const fixture = harness();
+    const decoratedLocalStore = Object.freeze({ ...fixture.payloadStore });
+    const ledger = scopedExecutionLedger(
+      fixture.db,
+      'execution-ledger-test',
+      decoratedLocalStore,
+    );
+    const handler = jest.fn();
+    const input = replacementOptions(fixture, handler);
+    input.ledger = ledger;
+    input.context = {
+      ...input.context,
+      payloadStore: decoratedLocalStore,
+    };
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...input,
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState: jest.fn(),
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory: jest.fn(),
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toThrow(/constructed by createReplicatedExecutionPayloadStore/u);
+    expect(fixture.calls).toEqual([]);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('leaves admission closed when distributed payload resolution fails during reconstruction', async () => {
+    const fixture = harness();
+    const payloadFailure = new Error('distributed payload is missing');
+    const reconstructHistory = jest.fn(async () => {
+      fixture.calls.push('reconstruct');
+      throw payloadFailure;
+    });
+    const prepareApplicationState = jest.fn();
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...replacementOptions(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toBe(payloadFailure);
+    expect(prepareApplicationState).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('leaves admission closed when application state adopts a destination outside the receipt', async () => {
+    const fixture = harness();
+    const reconstructHistory = jest.fn(async () => {
+      fixture.calls.push('reconstruct');
+      return Object.freeze({ schemaVersion: 1 });
+    });
+    const prepareApplicationState = jest.fn(async () => {
+      fixture.calls.push('prepare-application-state');
+      return adoptedApplicationState(
+        fixture.coordinatorAuthority,
+        OTHER_APPLICATION_STATE_STORE_ID,
+      );
+    });
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...replacementOptions(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toThrow(/did not adopt the receipt destination/u);
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('leaves admission closed when application-state readiness belongs to another authority', async () => {
+    const fixture = harness();
+    const reconstructHistory = jest.fn(async () => {
+      fixture.calls.push('reconstruct');
+      return Object.freeze({ schemaVersion: 1 });
+    });
+    const otherAuthority = coordinatorAuthorityToken({
+      epoch: fixture.coordinatorAuthority.epoch + 1,
+      requestId: 'different-application-state-authority',
+    });
+    const prepareApplicationState = jest.fn(async () => {
+      fixture.calls.push('prepare-application-state');
+      return adoptedApplicationState(otherAuthority);
+    });
+    const handler = jest.fn();
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...replacementOptions(fixture, handler),
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toThrow(/did not adopt the receipt destination/u);
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   test('reconstructs, prepares application state, and only then starts the resident body', async () => {
     const fixture = harness();
     const reconstruction = Object.freeze({
       schemaVersion: 1,
       inspectedRuns: 3,
     });
-    const applicationState = Object.freeze({ storeId: 'prepared-store' });
+    const applicationState = adoptedApplicationState(
+      fixture.coordinatorAuthority,
+    );
     const redirectedAssertion = jest.fn(async () => {
       throw new Error('mutable public authority assertion invoked');
     });
@@ -716,7 +1140,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -768,14 +1192,14 @@ describe('resident DynamoDB coordinator authority integration', () => {
       Object.freeze({ schemaVersion: 1 }),
     );
     const prepareApplicationState = jest.fn(async () =>
-      Object.freeze({ storeId: 'prepared-store' }),
+      adoptedApplicationState(fixture.coordinatorAuthority),
     );
     const handler = jest.fn(async () => 'adopted');
 
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -815,14 +1239,14 @@ describe('resident DynamoDB coordinator authority integration', () => {
       Object.freeze({ schemaVersion: 1 }),
     );
     const prepareApplicationState = jest.fn(async () =>
-      Object.freeze({ storeId: 'prepared-store' }),
+      adoptedApplicationState(fixture.coordinatorAuthority),
     );
     const handler = jest.fn(async () => 'retained');
 
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -858,14 +1282,14 @@ describe('resident DynamoDB coordinator authority integration', () => {
         fixture.calls.push('assert-current-authority');
         throw staleAuthority;
       });
-      return Object.freeze({ storeId: 'prepared-store' });
+      return adoptedApplicationState(fixture.coordinatorAuthority);
     });
     const handler = jest.fn();
 
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -908,7 +1332,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -942,7 +1366,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -970,14 +1394,14 @@ describe('resident DynamoDB coordinator authority integration', () => {
       Object.freeze({ schemaVersion: 1 }),
     );
     const prepareApplicationState = jest.fn(async () =>
-      Object.freeze({ storeId: 'prepared-store' }),
+      adoptedApplicationState(fixture.coordinatorAuthority),
     );
     const handler = jest.fn();
 
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -1010,14 +1434,14 @@ describe('resident DynamoDB coordinator authority integration', () => {
       Object.freeze({ schemaVersion: 1 }),
     );
     const prepareApplicationState = jest.fn(async () =>
-      Object.freeze({ storeId: 'prepared-store' }),
+      adoptedApplicationState(fixture.coordinatorAuthority),
     );
     const handler = jest.fn();
 
     await expect(
       withReconstructedExecutionLedgerResidentAuthority(
         {
-          ...options(fixture, handler),
+          ...replacementOptions(fixture, handler),
           currentRevisionId: CURRENT_REVISION_ID,
           prepareApplicationState,
         },
@@ -1092,6 +1516,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           : 'different-execution-ledger';
       },
       readOnly: false,
+      payloadStore: fixture.payloadStore,
     };
     const handler = jest.fn(async () => 'accessors-snapshotted');
     const input = options(fixture, handler, configuration);

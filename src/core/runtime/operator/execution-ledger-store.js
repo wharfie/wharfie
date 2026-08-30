@@ -1,4 +1,5 @@
 import {
+  assertExecutionLedgerPayloadStoreScope,
   createExecutionLedger,
   prepareExecutionLedgerCoordinatorAuthorityBinding,
 } from '../../lib/db/tables/execution-ledger.js';
@@ -9,6 +10,7 @@ import {
 } from '../../lib/db/tables/coordinator-authority.js';
 import { createLedgerServiceOwnership } from '../../lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../lib/payload-store/local.js';
+import { assertReplicatedExecutionPayloadStore } from '../../lib/payload-store/replicated.js';
 import {
   DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
   createControlDBClient,
@@ -26,6 +28,11 @@ import {
   CoordinatorQuiescenceBarrierState,
   createCoordinatorQuiescenceBarrier,
 } from '../../lib/db/tables/coordinator-quiescence-barrier.js';
+import {
+  applicationStateReadinessAuthority,
+  applicationStateReadinessDestination,
+  validateApplicationStateReadinessRecord,
+} from '../../lib/db/tables/application-state-readiness.js';
 import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
 import { assertApplicationRevisionId } from '../application-revision.js';
 import { assertDomainSeparatedSha256Id } from '../content-id.js';
@@ -34,17 +41,37 @@ import { validateAwsDynamoDBCoordinatorAuthorityTableTopology } from '../dynamod
 import { acquireLocalLedgerServiceSession } from '../services/ledger-service.js';
 import { createResidentCoordinatorAuthoritySupervisor } from '../services/resident-coordinator-authority.js';
 import { reconstructResidentExecutionHistory } from '../services/resident-execution-reconstruction.js';
+import { validateResidentReplacementInputReceipt } from '../resident-replacement-input.js';
 
 /**
  * @typedef {import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore} ExecutionLedgerStore
+ */
+/**
+ * @typedef {Record<string, any> & {storage: Readonly<{kind: string, storeId: string}>, putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}} ExecutionPayloadStore
  */
 
 /**
  * Resolve every ambient storage input once so one command cannot drift between
  * adapters, payload roots, or ownership namespaces while it is running.
+ * A still-internal replacement path may supply only the two opaque identities
+ * retained in its provisioning receipt. Paths, credentials, Region, table
+ * name, timers, and adapter selection remain independently resolved and must
+ * agree with that receipt before authority begins.
+ * @param {{tableResourceId?: string, payloadStoreId?: string}} [options] - Optional provisioning-retained replacement identities.
  * @returns {Readonly<{adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string, region?: string, residentCoordinatorAuthority?: NonNullable<ReturnType<typeof resolveResidentCoordinatorAuthorityConfiguration>>}>} - One immutable command-local store configuration.
  */
-export function resolveExecutionLedgerStoreConfiguration() {
+export function resolveExecutionLedgerStoreConfiguration(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'Execution-ledger store configuration options must be an object.',
+    );
+  }
+  const allowedOptions = new Set(['tableResourceId', 'payloadStoreId']);
+  if (Object.keys(options).some((key) => !allowedOptions.has(key))) {
+    throw new TypeError(
+      'Execution-ledger store configuration options contain unsupported fields.',
+    );
+  }
   const adapterName = resolveControlAdapterName();
   const controlPath = resolveControlStorePath();
   const tableName = resolveExecutionLedgerTableName();
@@ -55,13 +82,19 @@ export function resolveExecutionLedgerStoreConfiguration() {
       adapterName,
       tableName,
       ...(region === undefined ? {} : { region }),
+      ...(options.tableResourceId === undefined
+        ? {}
+        : { tableResourceId: options.tableResourceId }),
     });
   return Object.freeze({
     adapterName,
     controlPath,
     tableName,
     payloadPath,
-    payloadStoreId: resolveExecutionPayloadStoreId(payloadPath),
+    payloadStoreId: resolveExecutionPayloadStoreId(
+      payloadPath,
+      options.payloadStoreId,
+    ),
     sessionPath: resolveLedgerServiceSessionPath(controlPath),
     ...(region === undefined ? {} : { region }),
     ...(residentCoordinatorAuthority === undefined
@@ -71,12 +104,187 @@ export function resolveExecutionLedgerStoreConfiguration() {
 }
 
 /**
+ * Resolve the ambient routing and timers around one trusted provisioning
+ * receipt. Only the opaque table and payload identities come from the receipt;
+ * every locally selected route must agree before a DB client is opened.
+ * @param {unknown} value - Candidate resident replacement-input receipt.
+ * @returns {ReturnType<typeof resolveExecutionLedgerStoreConfiguration>} - Exact command-local configuration.
+ */
+export function resolveResidentReplacementExecutionLedgerStoreConfiguration(
+  value,
+) {
+  const receipt = validateResidentReplacementInputReceipt(value);
+  const configuration = resolveExecutionLedgerStoreConfiguration({
+    tableResourceId: receipt.control.tableResourceId,
+    payloadStoreId: receipt.payloadStorage.storeId,
+  });
+  const authority = configuration.residentCoordinatorAuthority;
+  if (
+    configuration.adapterName !== receipt.control.adapterName ||
+    configuration.region !== receipt.control.region ||
+    configuration.tableName !== receipt.control.tableName ||
+    configuration.payloadStoreId !== receipt.payloadStorage.storeId ||
+    authority?.profile !== receipt.control.profile ||
+    authority.adapterName !== receipt.control.adapterName ||
+    authority.region !== receipt.control.region ||
+    authority.tableName !== receipt.control.tableName ||
+    authority.tableResourceId !== receipt.control.tableResourceId
+  ) {
+    throw new Error(
+      'Resident replacement input does not match the locally resolved control and payload routing.',
+    );
+  }
+  return configuration;
+}
+
+/**
+ * Snapshot a caller-owned configuration once before any dependency can run.
+ * @param {Record<string, any>} value - Candidate command-local configuration.
+ * @returns {ReturnType<typeof resolveExecutionLedgerStoreConfiguration>} - Immutable shallow routing and policy snapshot.
+ */
+function snapshotExecutionLedgerStoreConfiguration(value) {
+  const authority = value?.residentCoordinatorAuthority;
+  const adapterName = value?.adapterName;
+  const controlPath = value?.controlPath;
+  const tableName = value?.tableName;
+  const payloadPath = value?.payloadPath;
+  const payloadStoreId = value?.payloadStoreId;
+  const sessionPath = value?.sessionPath;
+  const region = value?.region;
+  const residentCoordinatorAuthority =
+    authority === undefined
+      ? undefined
+      : Object.freeze({
+          profile: authority.profile,
+          adapterName: authority.adapterName,
+          region: authority.region,
+          tableName: authority.tableName,
+          tableResourceId: authority.tableResourceId,
+          renewalIntervalMs: authority.renewalIntervalMs,
+          observationWindowMs: authority.observationWindowMs,
+        });
+  return /** @type {ReturnType<typeof resolveExecutionLedgerStoreConfiguration>} */ (
+    Object.freeze({
+      adapterName,
+      controlPath,
+      tableName,
+      payloadPath,
+      payloadStoreId,
+      sessionPath,
+      ...(region === undefined ? {} : { region }),
+      ...(residentCoordinatorAuthority === undefined
+        ? {}
+        : { residentCoordinatorAuthority }),
+    })
+  );
+}
+
+/**
+ * Compare one validated receipt with the exact ledger/payload/runtime scope
+ * that will consume it. This executes before topology proof or authority.
+ * @param {{receipt: ReturnType<typeof validateResidentReplacementInputReceipt>, appId: string, currentRevisionId: string, ledger: ExecutionLedgerStore, context: Record<string, any>, configuration: Record<string, any>}} input - Captured replacement startup scope.
+ * @returns {void}
+ */
+function assertResidentReplacementInputScope(input) {
+  const { receipt, appId, currentRevisionId, ledger, context, configuration } =
+    input;
+  const authority = configuration.residentCoordinatorAuthority;
+  const payloadStore = context.payloadStore;
+  if (
+    receipt.appId !== appId ||
+    receipt.currentRevisionId !== currentRevisionId
+  ) {
+    throw new Error(
+      'Resident replacement input does not authorize this application revision.',
+    );
+  }
+  if (
+    configuration.adapterName !== receipt.control.adapterName ||
+    configuration.region !== receipt.control.region ||
+    configuration.tableName !== receipt.control.tableName ||
+    configuration.payloadStoreId !== receipt.payloadStorage.storeId ||
+    authority?.profile !== receipt.control.profile ||
+    authority.adapterName !== receipt.control.adapterName ||
+    authority.region !== receipt.control.region ||
+    authority.tableName !== receipt.control.tableName ||
+    authority.tableResourceId !== receipt.control.tableResourceId
+  ) {
+    throw new Error(
+      'Resident replacement input does not match the captured control routing.',
+    );
+  }
+  assertReplicatedExecutionPayloadStore(
+    payloadStore,
+    'Resident replacement execution payload store',
+  );
+  if (
+    payloadStore?.storage?.kind !== receipt.payloadStorage.kind ||
+    payloadStore.storage.storeId !== receipt.payloadStorage.storeId ||
+    payloadStore.distribution?.kind !==
+      receipt.payloadStorage.distribution.kind ||
+    payloadStore.distribution.distributionId !==
+      receipt.payloadStorage.distribution.distributionId ||
+    payloadStore.distribution.storeId !==
+      receipt.payloadStorage.distribution.storeId
+  ) {
+    throw new Error(
+      'Resident replacement input does not match the exact replicated payload store.',
+    );
+  }
+  assertExecutionLedgerPayloadStoreScope(
+    ledger,
+    context.db,
+    context.tableName,
+    payloadStore,
+  );
+}
+
+/**
+ * Require the separate application-state preparation to return the exact
+ * ADOPTED destination pinned by the trusted replacement receipt.
+ * @param {unknown} value - Candidate readiness record returned by preparation.
+ * @param {ReturnType<typeof validateResidentReplacementInputReceipt>} receipt - Captured replacement receipt.
+ * @param {import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthorityToken} authority - Exact replacement authority that must own readiness.
+ * @returns {ReturnType<typeof validateApplicationStateReadinessRecord>} - Exact ADOPTED readiness record.
+ */
+function validateResidentReplacementApplicationState(
+  value,
+  receipt,
+  authority,
+) {
+  const readiness = validateApplicationStateReadinessRecord(value);
+  const destination = applicationStateReadinessDestination(readiness);
+  const readinessAuthority = applicationStateReadinessAuthority(readiness);
+  const expected = receipt.applicationStateDestination;
+  if (
+    readiness.status !== 'ADOPTED' ||
+    readinessAuthority.schemaVersion !== authority.schemaVersion ||
+    readinessAuthority.appId !== authority.appId ||
+    readinessAuthority.coordinatorId !== authority.coordinatorId ||
+    readinessAuthority.authorityId !== authority.authorityId ||
+    readinessAuthority.epoch !== authority.epoch ||
+    destination.kind !== expected.kind ||
+    destination.version !== expected.version ||
+    destination.bindingId !== expected.bindingId ||
+    destination.configuration.provider !== expected.configuration.provider ||
+    destination.configuration.storeId !== expected.configuration.storeId ||
+    destination.configuration.tableName !== expected.configuration.tableName ||
+    destination.configuration.namespace !== expected.configuration.namespace
+  ) {
+    throw new Error(
+      'Resident replacement application-state handoff did not adopt the receipt destination under the exact replacement authority.',
+    );
+  }
+  return readiness;
+}
+
+/**
  * Open the durable control store for one operation and always close it.
  * Read-only mode is used by inspection and recovery preflight so exact missing
  * lookups cannot materialize a local control store.
  * @template T
- * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean}) => Promise<T>} handler - Work to run against the ledger.
- * @param {{readOnly?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} [options] - Store access options.
+ * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean, payloadStore: ExecutionPayloadStore}) => Promise<T>} handler - Work to run against the ledger.
+ * @param {{readOnly?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, payloadStore?: ExecutionPayloadStore}} [options] - Store access options and optional exact replicated payload store.
  * @returns {Promise<T>} - Handler result.
  */
 export async function withExecutionLedger(handler, options = {}) {
@@ -99,10 +307,33 @@ export async function withExecutionLedger(handler, options = {}) {
         ? {}
         : { region: configuration.region }),
     });
-    const payloadStore = createLocalExecutionPayloadStore({
-      path: configuration.payloadPath,
-      storeId: configuration.payloadStoreId,
-    });
+    const candidatePayloadStore =
+      options.payloadStore === undefined
+        ? createLocalExecutionPayloadStore({
+            path: configuration.payloadPath,
+            storeId: configuration.payloadStoreId,
+          })
+        : options.payloadStore;
+    if (options.payloadStore !== undefined) {
+      assertReplicatedExecutionPayloadStore(
+        candidatePayloadStore,
+        'Injected execution payload store',
+      );
+    }
+    if (
+      !candidatePayloadStore ||
+      typeof candidatePayloadStore !== 'object' ||
+      typeof candidatePayloadStore.putJson !== 'function' ||
+      typeof candidatePayloadStore.readBytes !== 'function' ||
+      candidatePayloadStore.storage?.storeId !== configuration.payloadStoreId
+    ) {
+      throw new TypeError(
+        'Execution ledger requires an exact configured immutable payload store.',
+      );
+    }
+    const payloadStore = /** @type {ExecutionPayloadStore} */ (
+      candidatePayloadStore
+    );
     const ledger = createExecutionLedger({
       db,
       tableName: configuration.tableName,
@@ -125,6 +356,7 @@ export async function withExecutionLedger(handler, options = {}) {
       tableName: configuration.tableName,
       sessionPath: configuration.sessionPath,
       readOnly,
+      payloadStore,
     });
   } catch (error) {
     handlerFailed = true;
@@ -438,7 +670,7 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
  * does not lift the LMDB-only resident product gates.
  * @template T
  * @template P
- * @param {{appId: string, currentRevisionId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, readOnly: boolean}, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, signal?: AbortSignal, prepareApplicationState: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<P> | P, handler: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<T> | T}} options - Exact reconstructed resident authority session.
+ * @param {{appId: string, currentRevisionId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, readOnly: boolean, payloadStore: Record<string, any>}, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, replacementInput: unknown, signal?: AbortSignal, prepareApplicationState: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<P> | P, handler: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<T> | T}} options - Exact reconstructed resident authority session.
  * @param {{validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology, createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol, createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor, reconstructHistory?: typeof reconstructResidentExecutionHistory, createAdmissionBarrier?: typeof createCoordinatorQuiescenceBarrier}} [dependencies] - Focused internal seams.
  * @returns {Promise<T>} - Resident body result after supervised drain and release.
  */
@@ -458,6 +690,7 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
     'ledger',
     'context',
     'configuration',
+    'replacementInput',
     'signal',
     'prepareApplicationState',
     'handler',
@@ -501,8 +734,14 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
     adapterName: inputContext?.adapterName,
     tableName: inputContext?.tableName,
     readOnly: inputContext?.readOnly,
+    payloadStore: inputContext?.payloadStore,
   });
-  const configuration = options.configuration;
+  const configuration = snapshotExecutionLedgerStoreConfiguration(
+    options.configuration,
+  );
+  const replacementInput = validateResidentReplacementInputReceipt(
+    options.replacementInput,
+  );
   const signal = options.signal;
   const prepareApplicationState = options.prepareApplicationState;
   const handler = options.handler;
@@ -531,6 +770,14 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
     currentRevisionId,
     'reconstructed resident currentRevisionId',
   );
+  assertResidentReplacementInputScope({
+    receipt: replacementInput,
+    appId,
+    currentRevisionId,
+    ledger,
+    context,
+    configuration,
+  });
   if (typeof reconstructHistory !== 'function') {
     throw new TypeError(
       'withReconstructedExecutionLedgerResidentAuthority.reconstructHistory must be a function.',
@@ -663,9 +910,10 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
         }
         const reconstructionSession = Object.freeze({
           ...session,
+          replacementInput,
           reconstruction,
         });
-        const applicationState = await prepareApplicationState(
+        const preparedApplicationState = await prepareApplicationState(
           boundLedger,
           reconstructionSession,
         );
@@ -677,6 +925,11 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
             )
           );
         }
+        const applicationState = validateResidentReplacementApplicationState(
+          preparedApplicationState,
+          replacementInput,
+          currentAuthority,
+        );
         await assertCurrentCoordinatorAuthority();
         await reopenAdmissionBarrier({
           authority: currentAuthority,

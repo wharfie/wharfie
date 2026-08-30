@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  APPLICATION_STATE_TABLE_NAME,
   COORDINATOR_AUTHORITY_MAX_TIMER_MS,
   DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
   closeDB,
@@ -19,8 +20,47 @@ import {
   resolveStateAdapterName,
 } from '../../src/core/lib/config/db.js';
 import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../src/core/lib/db/state/store.js';
+import { resolveResidentReplacementExecutionLedgerStoreConfiguration } from '../../src/core/runtime/operator/execution-ledger-store.js';
+import { createResidentReplacementInputReceipt } from '../../src/core/runtime/resident-replacement-input.js';
 
 const TABLE_RESOURCE_ID = `wdtr1_${'A'.repeat(43)}`;
+const REVISION_ID = `wrv1_${'B'.repeat(42)}A`;
+const DISTRIBUTION_ID = `wepd1_${'C'.repeat(42)}A`;
+const APPLICATION_STATE_STORE_ID = `was_${'D'.repeat(42)}A`;
+
+function replacementInput() {
+  return createResidentReplacementInputReceipt({
+    appId: 'replacement-config-app',
+    currentRevisionId: REVISION_ID,
+    control: {
+      profile: DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+      adapterName: 'dynamodb',
+      region: 'us-east-2',
+      tableName: 'replacement-ledger',
+      tableResourceId: TABLE_RESOURCE_ID,
+    },
+    payloadStorage: {
+      kind: 'wharfie.local-content-addressed.v1',
+      storeId: 'replacement-payloads',
+      distribution: {
+        kind: 'wharfie.execution-payload-distribution.v1',
+        distributionId: DISTRIBUTION_ID,
+        storeId: 'replacement-payloads',
+      },
+    },
+    applicationStateDestination: {
+      kind: 'application-state',
+      version: 2,
+      bindingId: 'primary',
+      configuration: {
+        provider: 'lmdb',
+        storeId: APPLICATION_STATE_STORE_ID,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+        namespace: 'replacement-config-app',
+      },
+    },
+  });
+}
 
 describe('Unified DB config', () => {
   afterEach(async () => {
@@ -156,6 +196,88 @@ describe('Unified DB config', () => {
           observationWindowMs: 15000,
         });
         expect(Object.isFrozen(configuration)).toBe(true);
+      },
+    );
+  });
+
+  test('accepts one provisioning-retained table identity and rejects ambient disagreement', async () => {
+    await withEnv(
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: undefined,
+      },
+      async () => {
+        expect(
+          resolveResidentCoordinatorAuthorityConfiguration({
+            adapterName: 'dynamodb',
+            tableName: 'ledger-table',
+            region: 'us-east-2',
+            tableResourceId: TABLE_RESOURCE_ID,
+          }),
+        ).toMatchObject({ tableResourceId: TABLE_RESOURCE_ID });
+      },
+    );
+    await withEnv(
+      {
+        AWS_REGION: 'us-east-2',
+        WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+          DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+        WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+        WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+        WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: `wdtr1_${'B'.repeat(43)}`,
+      },
+      async () => {
+        expect(() =>
+          resolveResidentCoordinatorAuthorityConfiguration({
+            adapterName: 'dynamodb',
+            tableName: 'ledger-table',
+            region: 'us-east-2',
+            tableResourceId: TABLE_RESOURCE_ID,
+          }),
+        ).toThrow(/conflicts with the provisioning-retained/u);
+      },
+    );
+  });
+
+  test('resolves ambient replacement routing around the receipt identities and rejects disagreement', async () => {
+    const environment = {
+      AWS_REGION: 'us-east-2',
+      WHARFIE_CONTROL_ADAPTER: 'dynamodb',
+      WHARFIE_EXECUTION_LEDGER_TABLE: 'replacement-ledger',
+      WHARFIE_EXECUTION_PAYLOAD_STORE_ID: undefined,
+      WHARFIE_COORDINATOR_AUTHORITY_PROFILE:
+        DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE,
+      WHARFIE_COORDINATOR_RENEWAL_INTERVAL_MS: '5000',
+      WHARFIE_COORDINATOR_OBSERVATION_WINDOW_MS: '15000',
+      WHARFIE_COORDINATOR_AUTHORITY_TABLE_RESOURCE_ID: undefined,
+    };
+    await withEnv(environment, async () => {
+      expect(
+        resolveResidentReplacementExecutionLedgerStoreConfiguration(
+          replacementInput(),
+        ),
+      ).toMatchObject({
+        adapterName: 'dynamodb',
+        region: 'us-east-2',
+        tableName: 'replacement-ledger',
+        payloadStoreId: 'replacement-payloads',
+        residentCoordinatorAuthority: {
+          tableResourceId: TABLE_RESOURCE_ID,
+        },
+      });
+    });
+    await withEnv(
+      { ...environment, WHARFIE_EXECUTION_LEDGER_TABLE: 'other-ledger' },
+      async () => {
+        expect(() =>
+          resolveResidentReplacementExecutionLedgerStoreConfiguration(
+            replacementInput(),
+          ),
+        ).toThrow(/does not match the locally resolved/u);
       },
     );
   });
@@ -319,6 +441,34 @@ describe('Unified DB config', () => {
       async () => {
         expect(resolveExecutionPayloadPath()).toBe('/tmp/ignored');
         expect(resolveExecutionPayloadStoreId()).toBe('portable-payload-store');
+      },
+    );
+    await withEnv(
+      { WHARFIE_EXECUTION_PAYLOAD_STORE_ID: undefined },
+      async () => {
+        expect(
+          resolveExecutionPayloadStoreId(
+            '/tmp/replacement-payloads',
+            'portable-replacement-payloads',
+          ),
+        ).toBe('portable-replacement-payloads');
+        expect(() =>
+          resolveExecutionPayloadStoreId(
+            '/tmp/replacement-payloads',
+            'not valid',
+          ),
+        ).toThrow(/logical ID/u);
+      },
+    );
+    await withEnv(
+      { WHARFIE_EXECUTION_PAYLOAD_STORE_ID: 'ambient-payload-store' },
+      async () => {
+        expect(() =>
+          resolveExecutionPayloadStoreId(
+            '/tmp/replacement-payloads',
+            'portable-replacement-payloads',
+          ),
+        ).toThrow(/conflicts with the provisioning-retained/u);
       },
     );
   });

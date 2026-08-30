@@ -82,6 +82,7 @@
     "test:update": "TZ=UTC node ./test/run-jest.js --silent --updateSnapshot",
     "test": "TZ=UTC node ./test/run-jest.js --silent",
     "test:coverage": "TZ=UTC node ./test/run-jest.js --silent --coverage",
+    "test:replacement-input": "TZ=UTC node ./test/run-jest.js --silent --runInBand test/runtime/payload-store-local.test.js test/runtime/payload-store-replicated.test.js test/runtime/resident-replacement-input.test.js test/runtime/replacement-input-store-local.test.js test/runtime/execution-ledger-store.test.js test/runtime/services/resident-execution-reconstruction.test.js test/runtime/unify-db-config.test.js",
     "test:ci": "npm run lint && npm run typecheck && npm run test:coverage && npm run verify:package && npm run verify:provider-boundary && npm run audit:prod",
     "test:native": "WHARFIE_RUN_NATIVE_EXTERNALS=1 TZ=UTC node ./test/run-jest.js --silent --runInBand test/cli/app/kitchen-sink-native-externals.test.js",
     "test:full": "npm run test:ci && npm run test:native && npm run verify:package:sea",

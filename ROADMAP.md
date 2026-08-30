@@ -55,6 +55,17 @@ The repository has substantial foundations:
   and schedule decisions carry its exact generation, prepared scheduled work
   retains that generation through commit, and exact committed replays remain
   available while fresh work is closed;
+- a strict provisioned replacement-input contract from
+  [ADR 0040](docs/architecture/decisions/0040-provisioned-replacement-input-and-payload-distribution.md):
+  one content-addressed durable handoff artifact pins the application and
+  current revision, expected DynamoDB route and `tableResourceId`, payload
+  store and distribution, and exact application-state destination without
+  retaining credentials or runtime paths. A local-first provider-neutral
+  replicated payload store requires publish plus verified readback before a
+  reference returns and hydrates a replacement only after true local absence;
+  the internal wrapper validates that exact scope before topology or authority
+  and requires `ADOPTED` readiness at the pinned application-state destination
+  under the exact current replacement authority before reopening;
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -117,12 +128,16 @@ schedule-control writes now share this fence. Application-state writes use a
 separate destination-local barrier; atomic handoff across the two stores and
 automatic resident takeover remain unsupported. The accepted DynamoDB RVN
 profile now supplies a validated bounded path to automatic epoch replacement
-and an internal resident authority lifecycle. Authority-bound reconstruction
-and its durable admission/schedule-mutation barrier are now composed, but have
-no product activation or multi-node recovery proof. A local resident now
-adopts its one configured, history-verified application-state destination
-before replacement readiness, with durable interrupted-handoff progress and
-exact publication fences. This does not prove recovery after loss of either
+and an internal resident authority lifecycle. Authority-bound reconstruction,
+its durable admission/schedule-mutation barrier, the provisioned
+`tableResourceId` handoff, and verified execution-payload distribution are now
+composed internal slices, but have no product activation or multi-node recovery
+proof. A local resident now adopts its one configured, history-verified
+application-state destination before replacement readiness, with durable
+interrupted-handoff progress and exact publication fences. Replacement startup
+now pins and checks that exact destination and its ownership by the current
+replacement authority after read-through reconstruction, but it does not
+transport application-state bytes or prove recovery after loss of either
 volume.
 These local proofs do not establish replacement by another machine.
 The cloud deployment work now proves a bounded
@@ -307,6 +322,18 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   supplies internal reconstruction and ADR 0039 supplies the retained
   admission/schedule-mutation barrier and close/adopt/reopen startup
   composition; product activation and multi-node recovery remain pending.
+- [ADR 0040](docs/architecture/decisions/0040-provisioned-replacement-input-and-payload-distribution.md)
+  supplies the internal replacement-input and payload boundary. Its strict,
+  content-addressed receipt durably pins the exact application, current
+  revision, expected DynamoDB route and `tableResourceId`, payload store and
+  distribution, and normalized application-state destination. The replicated
+  content-addressed store publishes and reads back verified bytes before a
+  ledger reference can escape, then fetches and hydrates only on exact local
+  absence. The reconstructed wrapper checks the receipt, ambient configuration,
+  ledger, and exact payload-store object before topology or authority, and
+  requires strict `ADOPTED` readiness at the receipt destination under the
+  exact current replacement authority before reopening. Application-state
+  transport and a production call site remain pending.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -353,15 +380,29 @@ the barrier closed, and a final authority assertion still gates the handler.
 This remains an internal seam and does not lift current public/DynamoDB product
 gates.
 
-1. Durably retain and distribute the provisioned DynamoDB `tableResourceId`,
-   make the exact execution-payload bytes available to a replacement node, and
-   decide and implement the separate application-state handoff boundary.
-2. Wire the reconstructed startup helper to the resident only after those
-   boundaries are proved. Keep old revisions parked unless the node is
-   explicitly authorized and carries the exact executable revision; retain
-   started work as recovery-only unless durable evidence resolves it.
-3. Add deterministic crash tests at renewal, takeover, assignment, activity
-   start, managed-effect settlement, and terminal commit.
+ADR 0040's bounded replacement-input and payload-distribution slice is now
+complete. One durable content-addressed receipt retains the provisioned
+`tableResourceId` and every other exact replacement scope identity without
+credentials or runtime paths. A provider-neutral replicated payload store
+makes verified bytes available to an empty replacement replica, and the
+reconstructed wrapper validates that scope before topology or authority. The
+receipt also fixes the exact application-state destination and the wrapper
+requires `ADOPTED` readiness there under the exact current replacement
+authority; cross-node transport of that state remains open. The wrapper still
+has no production call site and no public gate moved.
+
+1. Implement and prove cross-node application-state transport for the exact
+   receipt-pinned destination, including interruption, retained-volume, and
+   volume-loss behavior. Preserve the separate transaction domain and fail
+   closed rather than claiming atomic control/application-state handoff.
+2. Finish deterministic crash tests at renewal, takeover, assignment, authored
+   activity start, managed-effect settlement, terminal commit, and every
+   application-state transport phase.
+3. Activate the reconstructed startup helper behind an explicit DynamoDB
+   resident gate only after those boundaries are proved. Keep old revisions
+   parked unless the node is explicitly authorized and carries the exact
+   executable revision; retain started work as recovery-only unless durable
+   evidence resolves it.
 4. Keep the mesh trusted and explicit: enroll nodes, authorize the application
    revisions each may run, advertise finite capabilities, place work only on a
    matching node, and fence every node lease.
@@ -531,10 +572,11 @@ provenance is now retained for new bound logical admissions without changing
 version 10 attempt fencing or public history. ADR 0037 selects a bounded
 single-Region DynamoDB RVN replacement primitive; its validation and live
 proof pass. Its internal resident supervisor, authority-bound reconstruction,
-and durable quiescence barrier are now complete internal slices.
-`tableResourceId` and payload distribution, the application-state handoff,
-trusted-node authorization and placement, crash coverage, product activation,
-and multi-node replacement are the active Outcome 2 work.
+durable quiescence barrier, strict provisioned replacement-input artifact, and
+verified payload-distribution boundary are now complete internal slices. The
+application-state transport, trusted-node authorization and placement, crash
+coverage, product activation, and multi-node replacement are the active
+Outcome 2 work.
 Cross-store atomicity, multi-Region DynamoDB, and
 arbitrary destination sets remain outside the supported primary-store protocol.
 Outcome 3 has a bounded
