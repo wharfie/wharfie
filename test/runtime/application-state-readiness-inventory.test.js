@@ -325,13 +325,6 @@ describe('complete application-state readiness inventory', () => {
         { items: [{ appId: APP_ID, runId: 'retained' }] },
       ],
     ],
-    [
-      'repeated cursor',
-      [
-        { items: [], nextCursor: 'again' },
-        { items: [], nextCursor: 'again' },
-      ],
-    ],
     ['empty cursor', [{ items: [], nextCursor: '' }]],
     ['non-string cursor', [{ items: [], nextCursor: 7 }]],
     ['null cursor', [{ items: [], nextCursor: null }]],
@@ -345,6 +338,28 @@ describe('complete application-state readiness inventory', () => {
       await expect(collect(ledger)).rejects.toThrow();
     },
   );
+
+  test('rejects a repeated cursor after visiting nonempty distinct pages', async () => {
+    const ledger = history(
+      [
+        {
+          items: [{ appId: APP_ID, runId: 'first-run' }],
+          nextCursor: 'again',
+        },
+        {
+          items: [{ appId: APP_ID, runId: 'second-run' }],
+          nextCursor: 'again',
+        },
+      ],
+      {
+        'first-run': view('first-run'),
+        'second-run': view('second-run'),
+      },
+    );
+
+    await expect(collect(ledger)).rejects.toThrow(/cursor did not advance/u);
+    expect(ledger.rebuildRun).toHaveBeenCalledTimes(2);
+  });
 
   test('propagates rebuild corruption instead of skipping an unready run', async () => {
     const ledger = history([{ items: [{ appId: APP_ID, runId: 'broken' }] }]);

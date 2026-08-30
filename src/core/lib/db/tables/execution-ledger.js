@@ -23594,6 +23594,7 @@ export function createExecutionLedger({
     abandonUnstartedWorkflowActivityAttempt,
     appendActivityAttemptLog,
     authorizeManagedEffectSuccessorRetry,
+    assertCurrentCoordinatorAuthority,
     bindCoordinatorAuthority,
     claimInvocation,
     claimWorkflowActivity,
@@ -23714,6 +23715,7 @@ export function prepareExecutionLedgerCoordinatorAuthorityBinding(
 /**
  * @typedef ExecutionLedgerStore
  * @property {(authority: import('./coordinator-authority.js').CoordinatorAuthorityToken | import('./coordinator-authority.js').CoordinatorAuthoritySnapshot) => ExecutionLedgerStore} bindCoordinatorAuthority - Returns a ledger over the same stores with every mutation fenced by one exact coordinator authority.
+ * @property {() => Promise<void>} assertCurrentCoordinatorAuthority - Strongly reasserts that the bound stable authority token remains active; an unbound ledger resolves without conferring authority.
  * @property {() => import('./coordinator-authority.js').CoordinatorAuthorityToken | undefined} getCoordinatorAuthority - Returns the exact immutable bound token for trusted collaborators, or undefined when unbound; separate destinations require their own local fence.
  * @property {() => number} getCoordinatorEpoch - Returns the bound coordinator epoch, or zero when unbound.
  * @property {(...args: any[]) => Promise<any>} createManualRun - Creates one idempotent manual run.
