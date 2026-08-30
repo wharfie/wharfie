@@ -140,4 +140,55 @@ describe('local execution payload store', () => {
       expect(Object.prototype.hasOwnProperty.call(first, 'delete')).toBe(false);
     });
   });
+
+  it('idempotently imports exact referenced bytes without overwriting a conflict', async () => {
+    await withStoreRoot(async (root) => {
+      const source = createLocalExecutionPayloadStore({
+        path: join(root, 'new', 'nested', 'source'),
+        storeId: 'shared-control',
+      });
+      const replica = createLocalExecutionPayloadStore({
+        path: join(root, 'another', 'nested', 'replica'),
+        storeId: 'shared-control',
+      });
+      const reference = await source.putJson({
+        payloadSchema: PAYLOAD_SCHEMA,
+        value: { retained: true },
+      });
+      const bytes = await source.readBytes(reference);
+
+      const [first, second] = await Promise.all([
+        replica.importBytes({ reference, bytes }),
+        replica.importBytes({ reference, bytes: Uint8Array.from(bytes) }),
+      ]);
+      expect(first).toEqual(reference);
+      expect(second).toEqual(reference);
+      await expect(replica.readJson(reference)).resolves.toEqual({
+        retained: true,
+      });
+
+      const payloadPath = replica.getPath(reference);
+      const sameLengthTamper = Buffer.from('{"retained":null}');
+      expect(sameLengthTamper.byteLength).toBe(reference.size);
+      await fsp.writeFile(payloadPath, sameLengthTamper);
+      await expect(
+        replica.importBytes({ reference, bytes }),
+      ).rejects.toBeInstanceOf(ExecutionPayloadStoreIntegrityError);
+      await expect(fsp.readFile(payloadPath)).resolves.toEqual(
+        sameLengthTamper,
+      );
+
+      await expect(
+        replica.importBytes({
+          reference,
+          bytes: Buffer.from('{"retained":false}'),
+        }),
+      ).rejects.toBeInstanceOf(ExecutionPayloadStoreIntegrityError);
+      await expect(
+        replica.importBytes(
+          /** @type {any} */ ({ reference, bytes, extra: true }),
+        ),
+      ).rejects.toThrow(/extra is not supported/i);
+    });
+  });
 });

@@ -4,6 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import paths from '../paths.js';
 import { assertDomainSeparatedSha256Id } from '../../runtime/content-id.js';
+import { assertLogicalId } from '../../runtime/logical-id.js';
 import { getLocalAppStorageLayout } from './local-app-storage-context.js';
 
 export const DYNAMODB_RVN_COORDINATOR_AUTHORITY_PROFILE = 'dynamodb-rvn-v1';
@@ -102,7 +103,7 @@ function resolveCoordinatorTimer(name) {
  * Resolve the deliberately opt-in resident automatic-replacement profile.
  * Merely selecting DynamoDB does not enable automatic takeover. The caller
  * must also prove the exact table topology before starting a supervisor.
- * @param {{adapterName?: DBAdapterName, tableName?: string, region?: string}} [options] - Already-resolved command-local routing.
+ * @param {{adapterName?: DBAdapterName, tableName?: string, region?: string, tableResourceId?: string}} [options] - Already-resolved command-local routing and optional provisioning-retained table identity.
  * @returns {Readonly<{profile: 'dynamodb-rvn-v1', adapterName: 'dynamodb', region: string, tableName: string, tableResourceId: string, renewalIntervalMs: number, observationWindowMs: number}> | undefined} - Frozen policy or no automatic profile.
  */
 export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
@@ -111,7 +112,12 @@ export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
       'Resident coordinator authority configuration options must be an object.',
     );
   }
-  const allowed = new Set(['adapterName', 'tableName', 'region']);
+  const allowed = new Set([
+    'adapterName',
+    'tableName',
+    'region',
+    'tableResourceId',
+  ]);
   if (Object.keys(options).some((key) => !allowed.has(key))) {
     throw new TypeError(
       'Resident coordinator authority configuration options contain unsupported fields.',
@@ -124,8 +130,19 @@ export function resolveResidentCoordinatorAuthorityConfiguration(options = {}) {
   const configuredProfile = process.env[COORDINATOR_AUTHORITY_PROFILE_ENV];
   const configuredRenewal = process.env[COORDINATOR_RENEWAL_INTERVAL_ENV];
   const configuredObservation = process.env[COORDINATOR_OBSERVATION_WINDOW_ENV];
+  const ambientTableResourceId = process.env[COORDINATOR_TABLE_RESOURCE_ID_ENV];
+  const suppliedTableResourceId = options.tableResourceId;
+  if (
+    suppliedTableResourceId !== undefined &&
+    ambientTableResourceId !== undefined &&
+    suppliedTableResourceId !== ambientTableResourceId
+  ) {
+    throw new Error(
+      `${COORDINATOR_TABLE_RESOURCE_ID_ENV} conflicts with the provisioning-retained table resource identity.`,
+    );
+  }
   const configuredTableResourceId =
-    process.env[COORDINATOR_TABLE_RESOURCE_ID_ENV];
+    suppliedTableResourceId ?? ambientTableResourceId;
   if (
     configuredProfile === undefined &&
     configuredRenewal === undefined &&
@@ -381,12 +398,30 @@ export function resolveExecutionPayloadPath(resolvedControlPath) {
  * a compact portable descriptor. Operators moving a store intact can pin an
  * explicit identity with WHARFIE_EXECUTION_PAYLOAD_STORE_ID.
  * @param {string} [payloadPath] - Resolved payload-store root.
+ * @param {string} [provisionedStoreId] - Provisioning-retained logical identity supplied by a replacement receipt.
  * @returns {string} - Canonical local store identity.
  */
 export function resolveExecutionPayloadStoreId(
   payloadPath = resolveExecutionPayloadPath(),
+  provisionedStoreId,
 ) {
   const configured = process.env.WHARFIE_EXECUTION_PAYLOAD_STORE_ID;
+  if (provisionedStoreId !== undefined) {
+    assertLogicalId(
+      provisionedStoreId,
+      'provisioning-retained execution payload storeId',
+    );
+    if (
+      configured &&
+      String(configured).trim() &&
+      String(configured).trim() !== provisionedStoreId
+    ) {
+      throw new Error(
+        'WHARFIE_EXECUTION_PAYLOAD_STORE_ID conflicts with the provisioning-retained payload store identity.',
+      );
+    }
+    return provisionedStoreId;
+  }
   if (configured && String(configured).trim()) {
     return String(configured).trim();
   }
