@@ -87,8 +87,11 @@ persistence test's 30-second timeout under local load. That test passed in
 complete serial coverage run passed it in context. No assertion mismatch or
 branch-related failure was observed.
 
-Local validation uses Node `v24.13.1` and npm `11.12.0`. No release, preview,
-deployment, live AWS, or publication command is part of this slice.
+Local/manual validation uses Node `v24.13.1` and npm `11.12.0` and did not run
+deployment, live AWS, publication, promotion, or the tag-triggered release
+workflow. Required pull-request CI verifies the preview contract and builds
+and consumes ephemeral package and SEA candidates; it publishes and deploys
+nothing.
 
 ## Honest boundary
 
