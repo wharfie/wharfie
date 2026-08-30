@@ -15,6 +15,11 @@ import {
   createCoordinatorAuthorityToken,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import {
+  COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+  CoordinatorQuiescenceBarrierClosedError,
+  createCoordinatorQuiescenceBarrier,
+} from '../../src/core/lib/db/tables/coordinator-quiescence-barrier.js';
+import {
   createScheduleControl,
   reconcilePreparedScheduleWorkflowAdmission,
   resolvePreparedScheduleWorkflowAdmission,
@@ -487,8 +492,18 @@ describe('atomic schedule control', () => {
     );
 
     expect(extension.mode).toBe('create');
-    expect(extension.conditionChecks).toHaveLength(1);
-    expect(extension.conditionChecks[0].conditions).toEqual(
+    expect(extension.conditionChecks).toHaveLength(2);
+    expect(
+      extension.conditionChecks.filter(
+        ({ sortKeyValue }) =>
+          sortKeyValue === COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+      ),
+    ).toHaveLength(1);
+    expect(
+      extension.conditionChecks.find(({ conditions }) =>
+        conditions.some(({ propertyName }) => propertyName === 'owner_kind'),
+      )?.conditions,
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           propertyName: 'owner_kind',
@@ -527,7 +542,11 @@ describe('atomic schedule control', () => {
     );
     expect(resolvedAgain.conditionChecks).toBe(extension.conditionChecks);
     expect(resolvedAgain.putRequests).toBe(extension.putRequests);
-    expect(resolvedAgain.conditionChecks[0].conditions).toEqual(
+    expect(
+      resolvedAgain.conditionChecks.find(({ conditions }) =>
+        conditions.some(({ propertyName }) => propertyName === 'owner_kind'),
+      )?.conditions,
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           propertyName: 'owner_kind',
@@ -890,6 +909,139 @@ describe('atomic schedule control', () => {
 });
 
 describe('coordinator-bound schedule control', () => {
+  test('blocks fresh cursor mutations while exact replays stay available behind the barrier', async () => {
+    const { db, owner, authority } = await createCoordinatorHarness();
+    /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams[]} */
+    const transactions = [];
+    const instrumented = {
+      ...db,
+      /** @param {import('../../src/core/lib/db/base.js').TransactionWriteParams} params */
+      async transactionWrite(params) {
+        transactions.push(params);
+        await db.transactionWrite(params);
+      },
+    };
+    const control = createScheduleControl({
+      db: instrumented,
+      tableName: TABLE_NAME,
+      coordinatorAuthority: authority,
+    });
+    const activated = await activateSchedule(control, owner);
+    const barriers = createCoordinatorQuiescenceBarrier({
+      db,
+      tableName: TABLE_NAME,
+    });
+    const closed = await barriers.close({
+      authority,
+      requestId: 'close-schedule-mutations',
+      predecessor: null,
+      observedAt: 32,
+    });
+
+    transactions.length = 0;
+    await expect(
+      activateSchedule(control, owner, { observedAt: 3 * MINUTE }),
+    ).resolves.toEqual({ applied: false, cursor: activated.cursor });
+    await expect(
+      control.advance({
+        expectedCursor: activated.cursor,
+        throughInclusive: activated.cursor.horizon,
+        owner,
+        observedAt: 3 * MINUTE,
+      }),
+    ).resolves.toEqual({ applied: false, cursor: activated.cursor });
+    expect(transactions).toHaveLength(2);
+    expect(
+      transactions.flatMap(({ conditionChecks = [] }) => conditionChecks),
+    ).not.toContainEqual(
+      expect.objectContaining({
+        sortKeyValue: COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+      }),
+    );
+
+    transactions.length = 0;
+    await expect(
+      activateSchedule(control, owner, {
+        definitionId: DEFINITION_B,
+        observedAt: 4 * MINUTE,
+      }),
+    ).rejects.toBeInstanceOf(CoordinatorQuiescenceBarrierClosedError);
+    await expect(
+      control.advance({
+        expectedCursor: activated.cursor,
+        throughInclusive: 4 * MINUTE,
+        owner,
+        observedAt: 4 * MINUTE,
+      }),
+    ).rejects.toBeInstanceOf(CoordinatorQuiescenceBarrierClosedError);
+    expect(transactions).toHaveLength(0);
+
+    const reopened = await barriers.reopen({
+      authority,
+      requestId: 'reopen-schedule-mutations',
+      predecessor: closed.barrier,
+      observedAt: 33,
+    });
+    const advanced = await control.advance({
+      expectedCursor: activated.cursor,
+      throughInclusive: 4 * MINUTE,
+      owner,
+      observedAt: 4 * MINUTE,
+    });
+    expect(advanced.applied).toBe(true);
+    const barrierChecks = transactions
+      .at(-1)
+      ?.conditionChecks?.filter(
+        ({ sortKeyValue }) =>
+          sortKeyValue === COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+      );
+    expect(barrierChecks).toHaveLength(1);
+    expect(barrierChecks?.[0].conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          propertyName: 'state',
+          propertyValue: 'OPEN',
+        }),
+        expect.objectContaining({
+          propertyName: 'version',
+          propertyValue: reopened.barrier.version,
+        }),
+      ]),
+    );
+  });
+
+  test('reports stale coordinator authority before a successor-owned closed barrier', async () => {
+    const { db, control, owner, authorities, authority } =
+      await createCoordinatorHarness();
+    const activated = await activateSchedule(control, owner);
+    const successorAuthority = await takeOverCoordinator(
+      authorities,
+      authority,
+    );
+    const barriers = createCoordinatorQuiescenceBarrier({
+      db,
+      tableName: TABLE_NAME,
+    });
+    await barriers.close({
+      authority: successorAuthority,
+      requestId: 'successor-close-before-stale-mutation',
+      predecessor: null,
+      observedAt: 41,
+    });
+
+    await expect(
+      control.advance({
+        expectedCursor: activated.cursor,
+        throughInclusive: 4 * MINUTE,
+        owner,
+        observedAt: 4 * MINUTE,
+      }),
+    ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+    await expect(
+      control.getCursor({ appId: APP_ID, scheduleId: SCHEDULE_ID }),
+    ).resolves.toEqual(activated.cursor);
+  });
+
   test.each(['token', 'snapshot'])(
     'binds activate, advance, and preparation to a full stable %s across heartbeats',
     async (binding) => {
@@ -1247,9 +1399,17 @@ describe('coordinator-bound schedule control', () => {
         context,
       );
       expect(createExtension.coordinatorAuthority).toEqual(token);
-      expect(createExtension.conditionChecks).toHaveLength(1);
-      expect(createExtension.conditionChecks[0].sortKeyValue).not.toBe(
-        COORDINATOR_AUTHORITY_SORT_KEY,
+      expect(createExtension.conditionChecks).toHaveLength(2);
+      expect(
+        createExtension.conditionChecks.filter(
+          ({ sortKeyValue }) =>
+            sortKeyValue === COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+        ),
+      ).toHaveLength(1);
+      expect(createExtension.conditionChecks).not.toContainEqual(
+        expect.objectContaining({
+          sortKeyValue: COORDINATOR_AUTHORITY_SORT_KEY,
+        }),
       );
       expect(createExtension.putRequests).toHaveLength(2);
       expect(
@@ -1297,7 +1457,7 @@ describe('coordinator-bound schedule control', () => {
       );
       expect(extension.mode).toBe(mode);
       expect(extension.coordinatorAuthority).toEqual(token);
-      expect(extension.conditionChecks).toHaveLength(mode === 'create' ? 1 : 0);
+      expect(extension.conditionChecks).toHaveLength(mode === 'create' ? 2 : 0);
       expect(extension.putRequests).toHaveLength(mode === 'create' ? 2 : 0);
       await expect(
         reconcilePreparedScheduleWorkflowAdmission(prepared, expected, context),

@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-30
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -46,6 +46,15 @@ The repository has substantial foundations:
   window, exact-CAS epoch takeover, and the existing same-transaction stable
   tuple fence; its exact-client topology guard, internal resident supervisor,
   deterministic races, and disposable-table provider proof pass;
+- internal replacement composition from
+  [ADR 0038](docs/architecture/decisions/0038-authority-bound-replacement-reconstruction.md)
+  and
+  [ADR 0039](docs/architecture/decisions/0039-retained-coordinator-quiescence-barrier.md):
+  two-pass verified history reconstruction and locator repair now run behind a
+  retained app-scoped monotonic `OPEN`/`CLOSED` same-table barrier. Fresh run
+  and schedule decisions carry its exact generation, prepared scheduled work
+  retains that generation through commit, and exact committed replays remain
+  available while fresh work is closed;
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -108,12 +117,13 @@ schedule-control writes now share this fence. Application-state writes use a
 separate destination-local barrier; atomic handoff across the two stores and
 automatic resident takeover remain unsupported. The accepted DynamoDB RVN
 profile now supplies a validated bounded path to automatic epoch replacement
-and an internal resident authority lifecycle, but has no product activation,
-reconstruction, or multi-node recovery proof. A
-local resident now adopts its one
-configured, history-verified application-state destination before replacement
-readiness, with durable interrupted-handoff progress and exact publication
-fences. This does not prove recovery after loss of either volume.
+and an internal resident authority lifecycle. Authority-bound reconstruction
+and its durable admission/schedule-mutation barrier are now composed, but have
+no product activation or multi-node recovery proof. A local resident now
+adopts its one configured, history-verified application-state destination
+before replacement readiness, with durable interrupted-handoff progress and
+exact publication fences. This does not prove recovery after loss of either
+volume.
 These local proofs do not establish replacement by another machine.
 The cloud deployment work now proves a bounded
 credentialed lifecycle through healthy guest service and independently
@@ -294,8 +304,9 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   full table ARN and TableId, requires one provisioning-retained opaque
   resource identity across participants, renews through drain, performs
   observation-backed takeover, and fails closed on authority loss. ADR 0038
-  now supplies internal reconstruction and startup composition; product
-  activation and multi-node recovery remain pending.
+  supplies internal reconstruction and ADR 0039 supplies the retained
+  admission/schedule-mutation barrier and close/adopt/reopen startup
+  composition; product activation and multi-node recovery remain pending.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -330,11 +341,21 @@ application-state preparation → dispatcher. It executes no authored or
 managed-effect code and has no public call site, so product gates remain
 closed.
 
-1. Establish a durable admission and schedule-mutation quiescence barrier for
-   both reconstruction passes, durably retain and distribute the provisioned
-   DynamoDB `tableResourceId`, make the exact execution-payload bytes available
-   to a replacement node, and decide and implement the separate application-
-   state handoff boundary.
+ADR 0039's bounded quiescence-barrier slice is now complete. One retained
+app-scoped monotonic `OPEN`/`CLOSED` generation fences fresh manual, workflow,
+successor, and schedule mutations in the execution-ledger table. Prepared
+scheduled admissions retain their original generation through the combined
+transaction, exact committed replays remain available while closed, and the
+internal wrapper closes or adopts before both reconstruction passes and
+application-state preparation. It reopens only the exact closed predecessor
+after strong authority checks; failures before that retained transition leave
+the barrier closed, and a final authority assertion still gates the handler.
+This remains an internal seam and does not lift current public/DynamoDB product
+gates.
+
+1. Durably retain and distribute the provisioned DynamoDB `tableResourceId`,
+   make the exact execution-payload bytes available to a replacement node, and
+   decide and implement the separate application-state handoff boundary.
 2. Wire the reconstructed startup helper to the resident only after those
    boundaries are proved. Keep old revisions parked unless the node is
    explicitly authorized and carries the exact executable revision; retain
@@ -509,8 +530,11 @@ kills and explicit single-host crash/reboot recovery proved. Admission
 provenance is now retained for new bound logical admissions without changing
 version 10 attempt fencing or public history. ADR 0037 selects a bounded
 single-Region DynamoDB RVN replacement primitive; its validation and live
-proof pass. Its internal resident supervisor now passes, while reconstruction,
-product activation, and multi-node replacement are the active Outcome 2 work.
+proof pass. Its internal resident supervisor, authority-bound reconstruction,
+and durable quiescence barrier are now complete internal slices.
+`tableResourceId` and payload distribution, the application-state handoff,
+trusted-node authorization and placement, crash coverage, product activation,
+and multi-node replacement are the active Outcome 2 work.
 Cross-store atomicity, multi-Region DynamoDB, and
 arbitrary destination sets remain outside the supported primary-store protocol.
 Outcome 3 has a bounded
