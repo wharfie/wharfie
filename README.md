@@ -97,10 +97,11 @@ Automatic coordinator replacement is still outside the public surface. The
 internal single-Region DynamoDB profile now has an RVN-observed replacement
 supervisor plus authority-bound full-history reconstruction, explicit replay
 policy, canonical ready-work repair, and ordered application-state/dispatcher
-handoff. Public activation still requires durable `tableResourceId` and
-payload distribution, a proved application-state handoff, trusted-node and
-revision authorization, and the remaining crash matrix. Other stores still
-require their own provider-certified authority primitive.
+handoff. Public activation still requires a durable admission/schedule-
+mutation quiescence barrier, durable `tableResourceId` and payload
+distribution, a proved application-state handoff, trusted-node and revision
+authorization, and the remaining crash matrix. Other stores still require
+their own provider-certified authority primitive.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v4
 manifest and the append-only V10 run → invocation → attempt → effect ledger

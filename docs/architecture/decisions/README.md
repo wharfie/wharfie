@@ -40,7 +40,7 @@ These records capture product-level decisions that should survive implementation
 | [0034 — Explicit local application-data purge](0034-explicit-local-application-data-purge.md)                                    | Accepted; bounded developer-preview cleanup        |
 | [0035 — Two-provider single-node self-deployment](0035-two-provider-single-node-self-deployment.md)                              | Accepted                                           |
 | [0036 — Durable coordinator admission provenance](0036-durable-coordinator-admission-provenance.md)                              | Accepted; bounded historical attribution           |
-| [0037 — Single-region DynamoDB RVN-observed coordinator replacement](0037-single-region-dynamodb-rvn-coordinator-replacement.md) | Accepted; internal reconstruction composed        |
+| [0037 — Single-region DynamoDB RVN-observed coordinator replacement](0037-single-region-dynamodb-rvn-coordinator-replacement.md) | Accepted; internal resident supervisor certified  |
 | [0038 — Authority-bound replacement reconstruction](0038-authority-bound-replacement-reconstruction.md)                         | Accepted; internal reconstruction slice complete  |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

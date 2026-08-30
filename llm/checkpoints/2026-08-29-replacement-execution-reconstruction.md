@@ -90,8 +90,9 @@ branch-related failure was observed.
 Local/manual validation uses Node `v24.13.1` and npm `11.12.0` and did not run
 deployment, live AWS, publication, promotion, or the tag-triggered release
 workflow. Required pull-request CI verifies the preview contract and builds
-and consumes ephemeral package and SEA candidates; it publishes and deploys
-nothing.
+and consumes ephemeral package and SEA candidates. Those checks retain only
+short-lived CI artifacts and perform no npm/GitHub release publication,
+promotion, or deployment.
 
 ## Honest boundary
 
@@ -117,8 +118,9 @@ nothing.
 
 ## Next handoff
 
-Distribute the exact table and payload identities to an enrolled replacement,
-implement and prove the separate application-state handoff, then connect this
-internal ordered wrapper to the resident behind the still-closed explicit
-DynamoDB gate. Extend deterministic process-boundary coverage before any
-two-node or public activation claim.
+Establish the durable admission/schedule-mutation quiescence barrier,
+distribute the exact table and payload identities to an enrolled replacement,
+and implement and prove the separate application-state handoff. Only then
+connect this internal ordered wrapper to the resident behind the still-closed
+explicit DynamoDB gate. Extend deterministic process-boundary coverage before
+any two-node or public activation claim.
