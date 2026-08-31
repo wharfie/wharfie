@@ -2,6 +2,11 @@
 
 **Status:** Accepted; internal input/distribution slice implemented · **Date:** 2026-08-30
 
+**Follow-on:** [ADR 0041](0041-sealed-lmdb-application-state-snapshot-transport.md)
+advances the replacement receipt to version 2 and supplies the previously open,
+receipt-pinned LMDB application-state transport phase. The version 1 contract
+below remains the historical boundary decided by this record.
+
 ## Context
 
 [ADR 0037](0037-single-region-dynamodb-rvn-coordinator-replacement.md)

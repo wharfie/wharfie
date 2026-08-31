@@ -785,6 +785,28 @@ function exactBarrierConditions(snapshot) {
 }
 
 /**
+ * Build a same-table condition fence for one exact committed barrier snapshot.
+ * Unlike the admission fence, this helper accepts both OPEN and CLOSED states;
+ * callers use it when a durable mutation must linearize against the complete
+ * barrier record they already observed.
+ * @param {unknown} value - Exact committed barrier snapshot.
+ * @returns {Readonly<import('../base.js').TransactionConditionCheck>} - Exact same-table fence.
+ */
+export function createCoordinatorQuiescenceBarrierFence(value) {
+  const barrier = assertCoordinatorQuiescenceBarrierSnapshot(
+    value,
+    'coordinator quiescence barrier fence',
+  );
+  return deepFreeze({
+    keyName: KEY_NAME,
+    keyValue: getCoordinatorQuiescenceBarrierPartitionKey(barrier.appId),
+    sortKeyName: SORT_KEY_NAME,
+    sortKeyValue: COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
+    conditions: exactBarrierConditions(barrier),
+  });
+}
+
+/**
  * Build the same-table fence for one fresh admission or schedule mutation.
  * Missing is the compatibility OPEN state, but the returned NOT_EXISTS check
  * makes a concurrent first close win atomically. Exact committed replays must
@@ -826,13 +848,7 @@ export function createCoordinatorQuiescenceAdmissionFence(input) {
   if (barrier.state !== CoordinatorQuiescenceBarrierState.OPEN) {
     throw new CoordinatorQuiescenceBarrierClosedError(barrier);
   }
-  return deepFreeze({
-    keyName: KEY_NAME,
-    keyValue: getCoordinatorQuiescenceBarrierPartitionKey(value.appId),
-    sortKeyName: SORT_KEY_NAME,
-    sortKeyValue: COORDINATOR_QUIESCENCE_BARRIER_SORT_KEY,
-    conditions: exactBarrierConditions(barrier),
-  });
+  return createCoordinatorQuiescenceBarrierFence(barrier);
 }
 
 /**

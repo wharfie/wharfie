@@ -17,6 +17,7 @@ import {
   createResidentReplacementInputReceipt,
   encodeResidentReplacementInputReceipt,
 } from '../../src/core/runtime/resident-replacement-input.js';
+import { createTestApplicationStateTransport } from '../helpers/application-state-snapshot.js';
 
 const APP_ID = 'replacement-store-app';
 const PAYLOAD_STORE_ID = 'replacement-store-payloads';
@@ -35,6 +36,17 @@ function id(prefix, label) {
  * @returns {ReturnType<typeof createResidentReplacementInputReceipt>}
  */
 function receipt(label = 'primary') {
+  const applicationStateDestination = {
+    kind: 'application-state',
+    version: 2,
+    bindingId: 'primary',
+    configuration: {
+      provider: 'lmdb',
+      storeId: id('was', `application-state-${label}`),
+      tableName: APPLICATION_STATE_TABLE_NAME,
+      namespace: APP_ID,
+    },
+  };
   return createResidentReplacementInputReceipt({
     appId: APP_ID,
     currentRevisionId: id('wrv1', `revision-${label}`),
@@ -54,17 +66,11 @@ function receipt(label = 'primary') {
         storeId: PAYLOAD_STORE_ID,
       },
     },
-    applicationStateDestination: {
-      kind: 'application-state',
-      version: 2,
-      bindingId: 'primary',
-      configuration: {
-        provider: 'lmdb',
-        storeId: id('was', `application-state-${label}`),
-        tableName: APPLICATION_STATE_TABLE_NAME,
-        namespace: APP_ID,
-      },
-    },
+    applicationStateDestination,
+    applicationStateTransport: createTestApplicationStateTransport({
+      destination: applicationStateDestination,
+      label,
+    }),
   });
 }
 
@@ -241,7 +247,7 @@ describe('local resident replacement input store', () => {
       const store = createLocalResidentReplacementInputStore({
         path: join(outer, 'handoff'),
       });
-      expect(() => store.getPath('not-a-receipt')).toThrow(/wrri1/u);
+      expect(() => store.getPath('not-a-receipt')).toThrow(/wrri2/u);
     });
   });
 });

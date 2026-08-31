@@ -34,11 +34,15 @@ export const APPLICATION_STATE_STORE_RESOURCE_ID = 'application-state/v2/store';
 export const APPLICATION_STATE_STORE_SORT_KEY = 'identity/v2';
 export const APPLICATION_STATE_RECEIPT_SORT_KEY = 'receipt/v2';
 export const APPLICATION_STATE_RESOLUTION_SORT_KEY = 'resolution/v2';
+export const APPLICATION_STATE_RETIREMENT_SORT_KEY = 'retirement/v1';
+export const APPLICATION_STATE_ACTIVATION_SORT_KEY = 'activation/v1';
 
 const STORE_IDENTITY_KIND = 'application-state-store-identity';
 const VALUE_RECORD_KIND = 'application-state-value';
 const RECEIPT_RECORD_KIND = 'application-state-effect-receipt';
 const RESOLUTION_RECORD_KIND = 'application-state-effect-resolution';
+const RETIREMENT_RECORD_KIND = 'application-state-store-retirement';
+const ACTIVATION_RECORD_KIND = 'application-state-snapshot-activation';
 const PUT_IF_ABSENT_OPERATION = 'put-if-absent';
 const NOT_APPLIED_DISPOSITION = 'not-applied';
 const SCHEMA_VERSION = 2;
@@ -58,6 +62,17 @@ export class ApplicationStateStoreIdentityError extends Error {
   constructor(message) {
     super(message);
     this.name = 'ApplicationStateStoreIdentityError';
+  }
+}
+
+/** A physical source volume was durably sealed for snapshot cutover. */
+export class ApplicationStateStoreRetiredError extends Error {
+  /** @param {string} namespace - Retired application namespace. */
+  constructor(namespace) {
+    super(`Application-state physical store is retired: ${namespace}`);
+    this.name = 'ApplicationStateStoreRetiredError';
+    this.code = 'WHARFIE_APPLICATION_STATE_STORE_RETIRED';
+    this.namespace = namespace;
   }
 }
 
@@ -177,6 +192,293 @@ export function createApplicationStateResolutionKey(destinationEffectId) {
     resourceId: `application-state/v2/effect/${destinationEffectId}`,
     sortKey: APPLICATION_STATE_RESOLUTION_SORT_KEY,
   });
+}
+
+/** @param {string} storeId - Physical store identity. @returns {{resourceId: string, sortKey: 'retirement/v1'}} - Reserved physical-retirement key. */
+export function createApplicationStateRetirementKey(storeId) {
+  assertDomainSeparatedSha256Id(
+    storeId,
+    'was',
+    'application-state retirement storeId',
+  );
+  const partition = createCanonicalJsonSha256Id({
+    domain: 'wharfie:application-state:retirement-partition:v1',
+    prefix: 'warp1',
+    value: { storeId },
+    valuePath: 'application-state retirement store',
+  });
+  return Object.freeze({
+    resourceId: `application-state/v2/retirement/${partition}`,
+    sortKey: APPLICATION_STATE_RETIREMENT_SORT_KEY,
+  });
+}
+
+/** @param {string} storeId - Physical store identity. @returns {import('../base.js').TransactionConditionCheck} - Exact whole-store retirement-absence fence. */
+export function createApplicationStateRetirementAbsenceFence(storeId) {
+  const key = createApplicationStateRetirementKey(storeId);
+  return {
+    keyName: APPLICATION_STATE_KEY_NAME,
+    keyValue: key.resourceId,
+    sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+    sortKeyValue: key.sortKey,
+    conditions: [
+      {
+        conditionType: CONDITION_TYPE.NOT_EXISTS,
+        propertyName: APPLICATION_STATE_KEY_NAME,
+      },
+    ],
+  };
+}
+
+/** @param {string} namespace - Application namespace. @returns {{resourceId: string, sortKey: 'activation/v1'}} - Reserved physical activation key. */
+export function createApplicationStateActivationKey(namespace) {
+  if (typeof namespace !== 'string' || !namespace) {
+    throw new TypeError(
+      'Application-state activation namespace must be non-empty.',
+    );
+  }
+  const partition = createCanonicalJsonSha256Id({
+    domain: 'wharfie:application-state:activation-partition:v1',
+    prefix: 'waap1',
+    value: { namespace },
+    valuePath: 'application-state activation namespace',
+  });
+  return Object.freeze({
+    resourceId: `application-state/v2/activation/${partition}`,
+    sortKey: APPLICATION_STATE_ACTIVATION_SORT_KEY,
+  });
+}
+
+/** @param {{storeId: string, namespace: string, transferId: string, snapshotId: string, distributionId: string, replicaId: string, transportStatus: 'RETAINED'|'HYDRATED', authority: unknown}} input - Exact activated snapshot identity. @returns {Readonly<Record<string, any>>} - Durable local activation evidence. */
+export function createApplicationStateActivationRecord(input) {
+  assertDomainSeparatedSha256Id(
+    input.storeId,
+    'was',
+    'application-state activation storeId',
+  );
+  assertDomainSeparatedSha256Id(
+    input.transferId,
+    'wast1',
+    'application-state activation transferId',
+  );
+  assertDomainSeparatedSha256Id(
+    input.snapshotId,
+    'wass1',
+    'application-state activation snapshotId',
+  );
+  assertDomainSeparatedSha256Id(
+    input.distributionId,
+    'wasd1',
+    'application-state activation distributionId',
+  );
+  assertDomainSeparatedSha256Id(
+    input.replicaId,
+    'wasr1',
+    'application-state activation replicaId',
+  );
+  const authority = assertCoordinatorAuthorityToken(
+    input.authority,
+    'application-state activation authority',
+  );
+  if (authority.appId !== input.namespace) {
+    throw new TypeError(
+      'Application-state activation authority must match the namespace.',
+    );
+  }
+  if (!['RETAINED', 'HYDRATED'].includes(input.transportStatus)) {
+    throw new TypeError(
+      'Application-state activation transportStatus must be RETAINED or HYDRATED.',
+    );
+  }
+  const key = createApplicationStateActivationKey(input.namespace);
+  const fields = {
+    [APPLICATION_STATE_KEY_NAME]: key.resourceId,
+    [APPLICATION_STATE_SORT_KEY_NAME]: key.sortKey,
+    record_kind: ACTIVATION_RECORD_KIND,
+    schema_version: 1,
+    store_id: input.storeId,
+    namespace: input.namespace,
+    transfer_id: input.transferId,
+    snapshot_id: input.snapshotId,
+    distribution_id: input.distributionId,
+    replica_id: input.replicaId,
+    transport_status: input.transportStatus,
+    authority_schema_version: authority.schemaVersion,
+    coordinator_id: authority.coordinatorId,
+    authority_id: authority.authorityId,
+    epoch: authority.epoch,
+  };
+  return deepFreezeJson({
+    ...fields,
+    record_digest: createCanonicalJsonSha256Id({
+      domain: 'wharfie:application-state:snapshot-activation:v1',
+      prefix: 'wasa1',
+      value: fields,
+      valuePath: 'application-state snapshot activation',
+    }),
+  });
+}
+
+/** @param {unknown} value - Candidate activation row. @returns {Readonly<Record<string, any>>} - Verified exact activation. */
+export function validateApplicationStateActivationRecord(value) {
+  try {
+    const record = cloneJsonObject(
+      value,
+      'application-state activation record',
+    );
+    assertExactKeys(
+      record,
+      [
+        APPLICATION_STATE_KEY_NAME,
+        APPLICATION_STATE_SORT_KEY_NAME,
+        'record_kind',
+        'schema_version',
+        'store_id',
+        'namespace',
+        'transfer_id',
+        'snapshot_id',
+        'distribution_id',
+        'replica_id',
+        'transport_status',
+        'authority_schema_version',
+        'coordinator_id',
+        'authority_id',
+        'epoch',
+        'record_digest',
+      ],
+      'application-state activation record',
+    );
+    const expected = createApplicationStateActivationRecord({
+      storeId: record.store_id,
+      namespace: record.namespace,
+      transferId: record.transfer_id,
+      snapshotId: record.snapshot_id,
+      distributionId: record.distribution_id,
+      replicaId: record.replica_id,
+      transportStatus: record.transport_status,
+      authority: {
+        schemaVersion: record.authority_schema_version,
+        appId: record.namespace,
+        coordinatorId: record.coordinator_id,
+        authorityId: record.authority_id,
+        epoch: record.epoch,
+      },
+    });
+    if (Object.keys(expected).some((key) => expected[key] !== record[key])) {
+      throw new TypeError('activation record mismatch');
+    }
+    return expected;
+  } catch (cause) {
+    if (cause instanceof ApplicationStateCorruptionError) throw cause;
+    throw new ApplicationStateCorruptionError(
+      'Application-state activation record failed verification.',
+    );
+  }
+}
+
+/** @param {{storeId: string, namespace: string, retirementId: string, artifact: string, authority: unknown}} input - Exact source retirement. @returns {Readonly<Record<string, any>>} - Immutable retirement record. */
+export function createApplicationStateRetirementRecord(input) {
+  assertDomainSeparatedSha256Id(
+    input.storeId,
+    'was',
+    'application-state retirement storeId',
+  );
+  assertLedgerOpaqueId(
+    input.retirementId,
+    'application-state retirement retirementId',
+  );
+  if (
+    typeof input.artifact !== 'string' ||
+    !input.artifact ||
+    Buffer.byteLength(input.artifact, 'utf8') > 192 * 1024
+  ) {
+    throw new TypeError(
+      'Application-state retirement artifact must be bounded nonempty UTF-8 text.',
+    );
+  }
+  const authority = assertCoordinatorAuthorityToken(
+    input.authority,
+    'application-state retirement authority',
+  );
+  if (authority.appId !== input.namespace) {
+    throw new TypeError(
+      'Application-state retirement authority must match the namespace.',
+    );
+  }
+  const key = createApplicationStateRetirementKey(input.storeId);
+  const fields = {
+    [APPLICATION_STATE_KEY_NAME]: key.resourceId,
+    [APPLICATION_STATE_SORT_KEY_NAME]: key.sortKey,
+    record_kind: RETIREMENT_RECORD_KIND,
+    schema_version: 1,
+    store_id: input.storeId,
+    namespace: input.namespace,
+    retirement_id: input.retirementId,
+    retirement_artifact: input.artifact,
+    authority_schema_version: authority.schemaVersion,
+    coordinator_id: authority.coordinatorId,
+    authority_id: authority.authorityId,
+    epoch: authority.epoch,
+  };
+  return deepFreezeJson({
+    ...fields,
+    record_digest: createCanonicalJsonSha256Id({
+      domain: 'wharfie:application-state:store-retirement:v1',
+      prefix: 'wart1',
+      value: fields,
+      valuePath: 'application-state store retirement',
+    }),
+  });
+}
+
+/** @param {unknown} value - Candidate retirement row. @returns {Readonly<Record<string, any>>} - Verified exact retirement. */
+export function validateApplicationStateRetirementRecord(value) {
+  /** @type {Record<string, any>} */
+  let record;
+  try {
+    record = cloneJsonObject(value, 'application-state retirement record');
+    assertExactKeys(
+      record,
+      [
+        APPLICATION_STATE_KEY_NAME,
+        APPLICATION_STATE_SORT_KEY_NAME,
+        'record_kind',
+        'schema_version',
+        'store_id',
+        'namespace',
+        'retirement_id',
+        'retirement_artifact',
+        'authority_schema_version',
+        'coordinator_id',
+        'authority_id',
+        'epoch',
+        'record_digest',
+      ],
+      'application-state retirement record',
+    );
+    const expected = createApplicationStateRetirementRecord({
+      storeId: record.store_id,
+      namespace: record.namespace,
+      retirementId: record.retirement_id,
+      artifact: record.retirement_artifact,
+      authority: {
+        schemaVersion: record.authority_schema_version,
+        appId: record.namespace,
+        coordinatorId: record.coordinator_id,
+        authorityId: record.authority_id,
+        epoch: record.epoch,
+      },
+    });
+    if (Object.keys(expected).some((key) => expected[key] !== record[key])) {
+      throw new TypeError('retirement record mismatch');
+    }
+    return expected;
+  } catch (cause) {
+    if (cause instanceof ApplicationStateCorruptionError) throw cause;
+    throw new ApplicationStateCorruptionError(
+      'Application-state retirement record failed verification.',
+    );
+  }
 }
 
 /** @param {Record<string, any>} fields - Business fields without digest. @returns {string} - Content digest. */
@@ -839,6 +1141,44 @@ export function createApplicationStateTable(options) {
     return record || null;
   }
 
+  /** @param {{storeId: string, namespace: string}} input - Exact physical-store scope. @returns {Promise<Readonly<Record<string, any>> | null>} - Verified retirement or absence. */
+  async function readStoreRetirement(input) {
+    const scope = normalizeCoordinatorScope(input);
+    const key = createApplicationStateRetirementKey(scope.storeId);
+    const row = await readRecord(key.resourceId, key.sortKey);
+    if (!row) return null;
+    const retirement = validateApplicationStateRetirementRecord(row);
+    if (retirement.store_id !== scope.storeId) {
+      throw new ApplicationStateStoreIdentityError(
+        'Application-state retirement does not belong to the expected store.',
+      );
+    }
+    return retirement;
+  }
+
+  /** @param {{storeId: string, namespace: string}} input - Exact physical-store scope. @returns {Promise<Readonly<Record<string, any>> | null>} - Verified current activation or absence. */
+  async function readStoreActivation(input) {
+    const scope = normalizeCoordinatorScope(input);
+    const key = createApplicationStateActivationKey(scope.namespace);
+    const row = await readRecord(key.resourceId, key.sortKey);
+    if (!row) return null;
+    const activation = validateApplicationStateActivationRecord(row);
+    if (
+      activation.store_id !== scope.storeId ||
+      activation.namespace !== scope.namespace
+    ) {
+      throw new ApplicationStateStoreIdentityError(
+        'Application-state activation does not belong to the expected store.',
+      );
+    }
+    return activation;
+  }
+
+  /** @param {{storeId: string, namespace: string}} scope - Exact store scope. @returns {import('../base.js').TransactionConditionCheck} - Retirement-absence mutation guard. */
+  function retirementAbsentCondition(scope) {
+    return createApplicationStateRetirementAbsenceFence(scope.storeId);
+  }
+
   /** @returns {Promise<Readonly<Record<string, any>> | null>} - Verified identity or null. */
   async function readStoreIdentity() {
     const row = await readRecord(
@@ -995,6 +1335,9 @@ export function createApplicationStateTable(options) {
       authority: coordinatorAuthority,
     });
     const identity = await assertStoreIdentity(scope.storeId);
+    if (await readStoreRetirement(scope)) {
+      throw new ApplicationStateStoreRetiredError(scope.namespace);
+    }
     const current = await readCoordinatorRecord(scope);
     assertDestinationAuthorityFloor(
       current,
@@ -1048,13 +1391,44 @@ export function createApplicationStateTable(options) {
     const adoption = normalizeCoordinatorAdoptionOptions(options, scope);
     const { identity, current, candidate } =
       await readCoordinatorAdoptionPrecondition(scope, adoption);
-    if (current && current.record_digest === candidate.record_digest)
+    if (current && current.record_digest === candidate.record_digest) {
+      try {
+        await db.transactionWrite({
+          tableName,
+          conditionChecks: [
+            identityCondition(scope.storeId, identity.identity_digest),
+            retirementAbsentCondition(scope),
+            createApplicationStateCoordinatorAuthorityFence({
+              ...scope,
+              authority: coordinatorAuthority,
+            }),
+          ],
+        });
+      } catch (error) {
+        await assertStoreIdentity(scope.storeId);
+        if (await readStoreRetirement(scope)) {
+          throw new ApplicationStateStoreRetiredError(scope.namespace);
+        }
+        const winner = await readCoordinatorRecord(scope);
+        if (
+          !winner ||
+          winner.record_digest !== candidate.record_digest ||
+          isConditionalFailure(error)
+        ) {
+          throw new ApplicationStateCoordinatorAuthorityConflictError(
+            scope.namespace,
+          );
+        }
+        throw error;
+      }
       return current;
+    }
     try {
       await db.transactionWrite({
         tableName,
         conditionChecks: [
           identityCondition(scope.storeId, identity.identity_digest),
+          retirementAbsentCondition(scope),
         ],
         putRequests: [
           {
@@ -1070,6 +1444,9 @@ export function createApplicationStateTable(options) {
       });
     } catch (error) {
       await assertStoreIdentity(scope.storeId);
+      if (await readStoreRetirement(scope)) {
+        throw new ApplicationStateStoreRetiredError(scope.namespace);
+      }
       const winner = await readCoordinatorRecord(scope);
       assertDestinationAuthorityFloor(
         winner,
@@ -1091,6 +1468,9 @@ export function createApplicationStateTable(options) {
       throw error;
     }
     const retained = await readCoordinatorAuthority(scope);
+    if (await readStoreRetirement(scope)) {
+      throw new ApplicationStateStoreRetiredError(scope.namespace);
+    }
     assertDestinationAuthorityFloor(
       retained,
       adoption.destinationAuthorityFloor,
@@ -1109,8 +1489,243 @@ export function createApplicationStateTable(options) {
     return retained;
   }
 
+  /** @param {Readonly<Record<string, any>>} retirement - Verified retirement. @returns {import('../base.js').KeyCondition[]} - Exact CAS conditions. */
+  function retirementRecordConditions(retirement) {
+    return Object.keys(retirement).map((propertyName) => ({
+      conditionType: CONDITION_TYPE.EQUALS,
+      propertyName,
+      propertyValue: retirement[propertyName],
+    }));
+  }
+
+  /** @param {Readonly<Record<string, any>>} activation - Verified activation. @returns {import('../base.js').KeyCondition[]} - Exact CAS conditions. */
+  function activationRecordConditions(activation) {
+    return Object.keys(activation).map((propertyName) => ({
+      conditionType: CONDITION_TYPE.EQUALS,
+      propertyName,
+      propertyValue: activation[propertyName],
+    }));
+  }
+
+  /**
+   * Permanently close this physical source before its immutable checkpoint is
+   * read. Every ordinary mutation transaction tests retirement absence, so
+   * even the previously adopted token can no longer write after this returns.
+   * @param {{storeId: string, namespace: string, retirementId: string, artifact: string}} input - Exact source-seal scope.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Durable source-seal evidence.
+   */
+  async function retireStore(input) {
+    const scope = normalizeCoordinatorScope({
+      storeId: input.storeId,
+      namespace: input.namespace,
+    });
+    if (!coordinatorAuthority) {
+      throw new TypeError(
+        'Application-state store retirement requires a bound authority.',
+      );
+    }
+    assertLedgerOpaqueId(
+      input.retirementId,
+      'application-state retirement retirementId',
+    );
+    const candidate = createApplicationStateRetirementRecord({
+      ...scope,
+      retirementId: input.retirementId,
+      artifact: input.artifact,
+      authority: coordinatorAuthority,
+    });
+    const existing = await readStoreRetirement(scope);
+    if (existing) {
+      if (existing.record_digest === candidate.record_digest) return existing;
+      throw new ApplicationStateStoreIdentityError(
+        'Application-state store was retired by a different transfer.',
+      );
+    }
+    const identity = await assertStoreIdentity(scope.storeId);
+    await assertCurrentCoordinatorAuthority(scope);
+    try {
+      await db.transactionWrite({
+        tableName,
+        conditionChecks: [
+          identityCondition(scope.storeId, identity.identity_digest),
+          createApplicationStateCoordinatorAuthorityFence({
+            ...scope,
+            authority: coordinatorAuthority,
+          }),
+        ],
+        putRequests: [
+          {
+            keyName: APPLICATION_STATE_KEY_NAME,
+            sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+            record: candidate,
+            conditions: [
+              {
+                conditionType: CONDITION_TYPE.NOT_EXISTS,
+                propertyName: APPLICATION_STATE_KEY_NAME,
+              },
+            ],
+          },
+        ],
+      });
+    } catch (error) {
+      const winner = await readStoreRetirement(scope);
+      if (winner && winner.record_digest === candidate.record_digest) {
+        return winner;
+      }
+      throw error;
+    }
+    const retained = await readStoreRetirement(scope);
+    if (!retained || retained.record_digest !== candidate.record_digest) {
+      throw new ApplicationStateStoreIdentityError(
+        'Application-state store retirement was not durably readable.',
+      );
+    }
+    return retained;
+  }
+
+  /**
+   * Select the exact retired source as the replacement's retained volume.
+   * Authority adoption and retirement removal share one local transaction,
+   * so the predecessor never regains a write window.
+   * @param {{storeId: string, namespace: string, retirementId: string, snapshotId: string, distributionId: string, replicaId: string, transportStatus: 'RETAINED'|'HYDRATED'}} input - Receipt-pinned retained source.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Replacement destination authority.
+   */
+  async function reactivateRetiredStore(input) {
+    const scope = normalizeCoordinatorScope({
+      storeId: input.storeId,
+      namespace: input.namespace,
+    });
+    if (!coordinatorAuthority) {
+      throw new TypeError(
+        'Application-state store reactivation requires a bound authority.',
+      );
+    }
+    assertLedgerOpaqueId(
+      input.retirementId,
+      'application-state reactivation retirementId',
+    );
+    const identity = await assertStoreIdentity(scope.storeId);
+    const current = await readCoordinatorRecord(scope);
+    const candidate = createApplicationStateCoordinatorAuthorityRecord({
+      ...scope,
+      authority: coordinatorAuthority,
+    });
+    const activationCandidate = createApplicationStateActivationRecord({
+      ...scope,
+      transferId: input.retirementId,
+      snapshotId: input.snapshotId,
+      distributionId: input.distributionId,
+      replicaId: input.replicaId,
+      transportStatus: input.transportStatus,
+      authority: coordinatorAuthority,
+    });
+    const retirement = await readStoreRetirement(scope);
+    const currentActivation = await readStoreActivation(scope);
+    if (!retirement) {
+      if (
+        current &&
+        current.record_digest === candidate.record_digest &&
+        currentActivation &&
+        currentActivation.record_digest === activationCandidate.record_digest
+      ) {
+        return current;
+      }
+      throw new ApplicationStateStoreIdentityError(
+        'Application-state retained source is not retired by the pinned transfer.',
+      );
+    }
+    if (
+      retirement.namespace !== scope.namespace ||
+      retirement.retirement_id !== input.retirementId
+    ) {
+      throw new ApplicationStateStoreIdentityError(
+        'Application-state retained source retirement does not match the pinned transfer.',
+      );
+    }
+    if (
+      !current ||
+      coordinatorAuthority.epoch <= current.epoch ||
+      coordinatorAuthority.epoch <= retirement.epoch
+    ) {
+      throw new ApplicationStateCoordinatorAuthorityStaleError(scope.namespace);
+    }
+    try {
+      await db.transactionWrite({
+        tableName,
+        conditionChecks: [
+          identityCondition(scope.storeId, identity.identity_digest),
+        ],
+        putRequests: [
+          {
+            keyName: APPLICATION_STATE_KEY_NAME,
+            sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+            record: candidate,
+            conditions: applicationStateCoordinatorRecordConditions(current),
+          },
+          {
+            keyName: APPLICATION_STATE_KEY_NAME,
+            sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+            record: activationCandidate,
+            conditions: currentActivation
+              ? activationRecordConditions(currentActivation)
+              : [
+                  {
+                    conditionType: CONDITION_TYPE.NOT_EXISTS,
+                    propertyName: APPLICATION_STATE_KEY_NAME,
+                  },
+                ],
+          },
+        ],
+        deleteRequests: [
+          {
+            keyName: APPLICATION_STATE_KEY_NAME,
+            keyValue: retirement[APPLICATION_STATE_KEY_NAME],
+            sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+            sortKeyValue: retirement[APPLICATION_STATE_SORT_KEY_NAME],
+            conditions: retirementRecordConditions(retirement),
+          },
+        ],
+      });
+    } catch (error) {
+      const winner = await readCoordinatorRecord(scope);
+      const remainingRetirement = await readStoreRetirement(scope);
+      const winningActivation = await readStoreActivation(scope);
+      if (
+        winner &&
+        winner.record_digest === candidate.record_digest &&
+        !remainingRetirement &&
+        winningActivation &&
+        winningActivation.record_digest === activationCandidate.record_digest
+      ) {
+        return winner;
+      }
+      throw error;
+    }
+    const retained = await readCoordinatorRecord(scope);
+    const retainedActivation = await readStoreActivation(scope);
+    if (
+      !retained ||
+      retained.record_digest !== candidate.record_digest ||
+      (await readStoreRetirement(scope)) ||
+      !retainedActivation ||
+      retainedActivation.record_digest !== activationCandidate.record_digest
+    ) {
+      throw new ApplicationStateCoordinatorAuthorityConflictError(
+        scope.namespace,
+      );
+    }
+    return retained;
+  }
+
   /** @param {{storeId: string, namespace: string}} scope - Snapshotted mutation scope. @returns {Promise<void>} - Throws if a new mutation has no matching local authority. */
   async function assertCurrentCoordinatorAuthority(scope) {
+    const retirementScope = {
+      storeId: scope.storeId,
+      namespace: scope.namespace,
+    };
+    if (await readStoreRetirement(retirementScope)) {
+      throw new ApplicationStateStoreRetiredError(scope.namespace);
+    }
     const retained = await readCoordinatorAuthority({
       storeId: scope.storeId,
       namespace: scope.namespace,
@@ -1133,6 +1748,7 @@ export function createApplicationStateTable(options) {
       ...params,
       conditionChecks: [
         ...(params.conditionChecks || []),
+        retirementAbsentCondition(scope),
         createApplicationStateCoordinatorAuthorityFence({
           storeId: scope.storeId,
           namespace: scope.namespace,
@@ -1765,6 +2381,10 @@ export function createApplicationStateTable(options) {
     readStoreIdentity,
     ensureStoreIdentity,
     assertStoreIdentity,
+    readStoreRetirement,
+    readStoreActivation,
+    retireStore,
+    reactivateRetiredStore,
     readCoordinatorAuthority,
     assertCoordinatorAuthorityAdoptionPrecondition,
     adoptCoordinatorAuthority,

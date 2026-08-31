@@ -95,19 +95,22 @@ durable workflow.
 Local and single-node use should require no external Wharfie control plane.
 Automatic coordinator replacement is still outside the public surface. The
 internal single-Region DynamoDB profile now has an RVN-observed replacement
-supervisor plus authority-bound full-history reconstruction, explicit replay
-policy, canonical ready-work repair, and a retained same-table admission and
-schedule-mutation quiescence barrier. Fresh manual, workflow, successor, and
-schedule decisions carry its exact monotonic `OPEN` generation; exact committed
-replays remain available while it is `CLOSED`, and prepared scheduled work
-retains its original generation across the combined transaction. The internal
-wrapper closes or adopts before reconstruction and application-state
-preparation, then reopens the exact predecessor only after strong authority
-checks. Public activation still requires durable `tableResourceId` and payload
-distribution, a proved application-state handoff, trusted-node and revision
-authorization and placement, and the remaining crash matrix. Existing
-public/DynamoDB product gates remain closed. Other stores still require their
-own provider-certified authority primitive.
+supervisor, authority-bound full-history reconstruction, a retained same-table
+admission and schedule-mutation barrier, provisioned exact replacement inputs,
+and verified immutable execution-payload distribution. Its internal LMDB-only
+application-state handoff now seals the whole physical source store under the
+exact durable closed barrier before reading a bounded `data.mdb`, requires an
+exact readback after the provider publication call, records final publication
+evidence centrally, and either validates a retained volume or durably hydrates
+a truly absent replacement volume through an exclusive root claim and logical
+evidence commit. Receipt, embedded marker, source seal, history, distribution,
+central one-shot physical-replica activation, exact replacement barrier and
+authority, `wasr1` replica, and `RETAINED`/`HYDRATED` status must all agree before
+application-state readiness and admission reopen. Public activation still
+requires a production call site, trusted-node and revision authorization and
+placement, the remaining system crash matrix, and a two-node recovery proof.
+Existing public/DynamoDB product gates remain closed. Other stores still
+require their own provider-certified authority primitive.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v4
 manifest and the append-only V10 run → invocation → attempt → effect ledger
@@ -882,6 +885,7 @@ controller permits a fresh incarnation only after those bindings are gone.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the three product outcomes, current gaps, and proof-oriented delivery plan.
+- [Application-state snapshot transport checkpoint](llm/checkpoints/2026-08-31-application-state-snapshot-transport.md) — the sealed physical LMDB checkpoint, exact immutable readback, exclusive absent-volume hydration, one-shot replica activation, and closed product gates.
 - [Replacement quiescence-barrier checkpoint](llm/checkpoints/2026-08-30-replacement-quiescence-barrier.md) — retained monotonic admission/schedule cutover, prepared-generation ABA protection, ordered close/adopt/reopen composition, and closed product gates.
 - [Replacement reconstruction checkpoint](llm/checkpoints/2026-08-29-replacement-execution-reconstruction.md) — complete authority-bound history inventory, explicit replay policy, locator convergence, internal startup ordering, and closed product gates.
 - [Resident DynamoDB authority-supervisor checkpoint](llm/checkpoints/2026-08-28-resident-dynamodb-authority-supervisor.md) — exact-client topology proof, stable-token renewal/takeover lifecycle, two-supervisor live evidence, and closed product gates.

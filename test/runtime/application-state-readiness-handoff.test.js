@@ -12,6 +12,7 @@ import {
   createControlDBClient,
 } from '../../src/core/lib/config/db.js';
 import {
+  applicationStateCoordinatorRecordConditions,
   createApplicationStateCoordinatorAuthorityKey,
   createApplicationStateCoordinatorAuthorityRecord,
 } from '../../src/core/lib/db/tables/application-state-authority.js';
@@ -24,7 +25,10 @@ import {
 import {
   APPLICATION_STATE_KEY_NAME,
   APPLICATION_STATE_SORT_KEY_NAME,
+  APPLICATION_STATE_STORE_RESOURCE_ID,
+  APPLICATION_STATE_STORE_SORT_KEY,
   ApplicationStateCoordinatorAuthorityStaleError,
+  createApplicationStateRetirementAbsenceFence,
   createApplicationStateTable,
 } from '../../src/core/lib/db/tables/application-state.js';
 import {
@@ -156,6 +160,63 @@ function isDestinationAdoption(params) {
         record.record_kind === 'application-state-coordinator-authority',
     ) === true
   );
+}
+
+/** @param {Transaction} params */
+function isDestinationMutation(params) {
+  return [
+    params.putRequests,
+    params.updateRequests,
+    params.deleteRequests,
+  ].some((requests) => requests !== undefined && requests.length > 0);
+}
+
+function destinationMutationCount() {
+  return destinationTransactions.mock.calls.filter(([params]) =>
+    isDestinationMutation(params),
+  ).length;
+}
+
+/**
+ * @param {Transaction} transaction
+ * @param {Readonly<Record<string, any>> | null} identity
+ * @param {Readonly<Record<string, any>>} authority
+ */
+function expectExactReplayFence(transaction, identity, authority) {
+  expect(identity).not.toBeNull();
+  if (!identity) throw new Error('Replay fence requires store identity.');
+  const authorityKey = createApplicationStateCoordinatorAuthorityKey(APP_ID);
+  expect(transaction).toEqual({
+    tableName: APPLICATION_STATE_TABLE_NAME,
+    conditionChecks: [
+      {
+        keyName: APPLICATION_STATE_KEY_NAME,
+        keyValue: APPLICATION_STATE_STORE_RESOURCE_ID,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        sortKeyValue: APPLICATION_STATE_STORE_SORT_KEY,
+        conditions: [
+          {
+            conditionType: 'EQUALS',
+            propertyName: 'store_id',
+            propertyValue: identity.store_id,
+          },
+          {
+            conditionType: 'EQUALS',
+            propertyName: 'identity_digest',
+            propertyValue: identity.identity_digest,
+          },
+        ],
+      },
+      createApplicationStateRetirementAbsenceFence(identity.store_id),
+      {
+        keyName: APPLICATION_STATE_KEY_NAME,
+        keyValue: authorityKey.resourceId,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        sortKeyValue: authorityKey.sortKey,
+        conditions: applicationStateCoordinatorRecordConditions(authority),
+      },
+    ],
+  });
 }
 
 /** @param {Transaction} params @param {'PREPARING' | 'ADOPTED'} status */
@@ -516,20 +577,31 @@ describe('application-state readiness handoff over real separate LMDB stores', (
     expect(applicationStateReadinessDestination(adopted)).toEqual(
       harness.destination,
     );
-    expect((await readDestination(harness)).barrier).toEqual(
-      expectedBarrier(harness, harness.authority),
-    );
+    const destination = await readDestination(harness);
+    const barrier = expectedBarrier(harness, harness.authority);
+    expect(destination.barrier).toEqual(barrier);
     await expectHistoryUnchanged(harness);
     const controlWrites = control.transactionWrite.mock.calls.length;
-    const destinationWrites = destinationTransactions.mock.calls.length;
+    const destinationTransactionCount =
+      destinationTransactions.mock.calls.length;
+    const destinationMutations = destinationMutationCount();
     expect(controlWrites).toBeGreaterThan(0);
-    expect(destinationWrites).toBeGreaterThan(0);
+    expect(destinationMutations).toBeGreaterThan(0);
 
     await expect(
       prepare(harness, harness.authority, control.db),
     ).resolves.toEqual(adopted);
     expect(control.transactionWrite).toHaveBeenCalledTimes(controlWrites);
-    expect(destinationTransactions).toHaveBeenCalledTimes(destinationWrites);
+    expect(destinationMutationCount()).toBe(destinationMutations);
+    const replayTransactions = destinationTransactions.mock.calls.slice(
+      destinationTransactionCount,
+    );
+    expect(replayTransactions).toHaveLength(1);
+    expectExactReplayFence(
+      replayTransactions[0][0],
+      destination.identity,
+      barrier,
+    );
     await expect(readReadiness(harness)).resolves.toEqual(adopted);
     await expectHistoryUnchanged(harness);
     expectOwnedHandlesClosed();
@@ -867,13 +939,27 @@ describe('application-state readiness handoff over real separate LMDB stores', (
       const adopted = await prepare(harness, harness.authority, control.db);
       expect(armed).toBe(false);
       expect(adopted).toMatchObject({ status: 'ADOPTED', store_id: STORE_ID });
+      const destination = await readDestination(harness);
+      const barrier = expectedBarrier(harness, harness.authority);
+      expect(destination.barrier).toEqual(barrier);
       const controlWrites = control.transactionWrite.mock.calls.length;
-      const destinationWrites = destinationTransactions.mock.calls.length;
+      const destinationTransactionCount =
+        destinationTransactions.mock.calls.length;
+      const destinationMutations = destinationMutationCount();
       await expect(
         prepare(harness, harness.authority, control.db),
       ).resolves.toEqual(adopted);
       expect(control.transactionWrite).toHaveBeenCalledTimes(controlWrites);
-      expect(destinationTransactions).toHaveBeenCalledTimes(destinationWrites);
+      expect(destinationMutationCount()).toBe(destinationMutations);
+      const replayTransactions = destinationTransactions.mock.calls.slice(
+        destinationTransactionCount,
+      );
+      expect(replayTransactions).toHaveLength(1);
+      expectExactReplayFence(
+        replayTransactions[0][0],
+        destination.identity,
+        barrier,
+      );
       await expectHistoryUnchanged(harness);
       expectOwnedHandlesClosed();
     },

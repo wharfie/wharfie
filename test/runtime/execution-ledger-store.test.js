@@ -26,6 +26,11 @@ import {
   getApplicationStateReadinessPartitionKey,
 } from '../../src/core/lib/db/tables/application-state-readiness.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
+import { createApplicationStateTransportReadiness } from '../../src/core/runtime/application-state-snapshot.js';
+import {
+  createTestApplicationStateTransport,
+  createTestApplicationStateHistory,
+} from '../helpers/application-state-snapshot.js';
 
 const LEDGER_SERVICE_IMPORT =
   '../../src/core/runtime/services/ledger-service.js';
@@ -75,6 +80,13 @@ const APPLICATION_STATE_DESTINATION = Object.freeze({
     storeId: APPLICATION_STATE_STORE_ID,
     tableName: 'wharfie-application-state-v2',
     namespace: 'resident-test-app',
+  }),
+});
+const OTHER_APPLICATION_STATE_DESTINATION = Object.freeze({
+  ...APPLICATION_STATE_DESTINATION,
+  configuration: Object.freeze({
+    ...APPLICATION_STATE_DESTINATION.configuration,
+    storeId: OTHER_APPLICATION_STATE_STORE_ID,
   }),
 });
 
@@ -263,7 +275,16 @@ function residentReplacementInput(settings = {}) {
       },
     },
     applicationStateDestination: APPLICATION_STATE_DESTINATION,
+    applicationStateTransport: createTestApplicationStateTransport({
+      destination: APPLICATION_STATE_DESTINATION,
+      label: 'resident-replacement',
+    }),
   });
+}
+
+function residentApplicationStateHistory() {
+  return residentReplacementInput().applicationStateTransport.snapshot
+    .checkpoint.history;
 }
 
 /** @param {ReturnType<typeof coordinatorAuthorityToken>} authority @param {string} [storeId] */
@@ -734,6 +755,10 @@ describe('resident DynamoDB coordinator authority integration', () => {
       });
       return admissionBarrier;
     });
+    const inventoryApplicationState = jest.fn(async () => {
+      calls.push('inventory-application-state');
+      return residentApplicationStateHistory();
+    });
     db.get.mockImplementation(async () => {
       calls.push('assert-current-authority');
       return authorityRecord(authority);
@@ -797,6 +822,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
       closedBarrier,
       reopenedBarrier,
       createAdmissionBarrier,
+      inventoryApplicationState,
       db,
       ledger,
       payloadStore,
@@ -843,9 +869,19 @@ describe('resident DynamoDB coordinator authority integration', () => {
     handler,
     configuration = residentAuthorityConfiguration(),
   ) {
+    const replacementInput = residentReplacementInput();
     return {
       ...options(fixture, handler, configuration),
-      replacementInput: residentReplacementInput(),
+      replacementInput,
+      transportApplicationState: jest.fn(async () => {
+        fixture.calls.push('transport-application-state');
+        return createApplicationStateTransportReadiness({
+          status: 'RETAINED',
+          destination: replacementInput.applicationStateDestination,
+          transport: replacementInput.applicationStateTransport,
+          coordinatorAuthority: fixture.coordinatorAuthority,
+        });
+      }),
     };
   }
 
@@ -923,6 +959,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
             createProtocol: fixture.createProtocol,
             createSupervisor: fixture.createSupervisor,
             reconstructHistory: jest.fn(),
+            inventoryApplicationState: fixture.inventoryApplicationState,
             createAdmissionBarrier: fixture.createAdmissionBarrier,
           },
         ),
@@ -960,6 +997,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory: jest.fn(),
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -990,10 +1028,216 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
     ).rejects.toBe(payloadFailure);
+    expect(prepareApplicationState).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('leaves admission closed when application-state history is unsettled', async () => {
+    const fixture = harness();
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    fixture.inventoryApplicationState.mockImplementation(async () => {
+      fixture.calls.push('inventory-application-state');
+      return createTestApplicationStateHistory({
+        appId: 'resident-test-app',
+        label: 'unsettled',
+        applicationStateEffects: 1,
+        unsettledEffects: 1,
+      });
+    });
+    const prepareApplicationState = jest.fn();
+    const handler = jest.fn();
+    const input = replacementOptions(fixture, handler);
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...input,
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toThrow(/contains 1 unsettled effect/u);
+    expect(input.transportApplicationState).not.toHaveBeenCalled();
+    expect(prepareApplicationState).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test.each(['snapshot', 'history', 'destination', 'authority'])(
+    'leaves admission closed when transport readiness mismatches the receipt %s',
+    async (mismatch) => {
+      const fixture = harness();
+      const reconstructHistory = jest.fn(async () =>
+        Object.freeze({ schemaVersion: 1 }),
+      );
+      const prepareApplicationState = jest.fn();
+      const handler = jest.fn();
+      const input = replacementOptions(fixture, handler);
+      let history = residentApplicationStateHistory();
+      let destination = input.replacementInput.applicationStateDestination;
+      let transport = input.replacementInput.applicationStateTransport;
+      let authority = fixture.coordinatorAuthority;
+
+      if (mismatch === 'snapshot') {
+        const differentSnapshotTransport = createTestApplicationStateTransport({
+          destination,
+          label: 'different-receipt-snapshot',
+          history,
+        });
+        transport = Object.freeze({
+          ...transport,
+          snapshot: differentSnapshotTransport.snapshot,
+        });
+      } else if (mismatch === 'history') {
+        history = createTestApplicationStateHistory({
+          appId: 'resident-test-app',
+          label: 'different-reconstructed-history',
+        });
+      } else if (mismatch === 'destination') {
+        destination = OTHER_APPLICATION_STATE_DESTINATION;
+        transport = createTestApplicationStateTransport({
+          destination,
+          label: 'different-receipt-destination',
+          history,
+        });
+      } else {
+        authority = coordinatorAuthorityToken({
+          epoch: fixture.coordinatorAuthority.epoch + 1,
+          requestId: 'different-transport-readiness-authority',
+        });
+      }
+
+      fixture.inventoryApplicationState.mockImplementation(async () => {
+        fixture.calls.push('inventory-application-state');
+        return history;
+      });
+      input.transportApplicationState.mockImplementation(async () => {
+        fixture.calls.push('transport-application-state');
+        return createApplicationStateTransportReadiness({
+          status: 'RETAINED',
+          destination,
+          transport,
+          coordinatorAuthority: authority,
+        });
+      });
+
+      await expect(
+        withReconstructedExecutionLedgerResidentAuthority(
+          {
+            ...input,
+            currentRevisionId: CURRENT_REVISION_ID,
+            prepareApplicationState,
+          },
+          {
+            validateTopology: fixture.validateTopology,
+            createProtocol: fixture.createProtocol,
+            createSupervisor: fixture.createSupervisor,
+            reconstructHistory,
+            inventoryApplicationState: fixture.inventoryApplicationState,
+            createAdmissionBarrier: fixture.createAdmissionBarrier,
+          },
+        ),
+      ).rejects.toThrow(/did not prove the exact receipt checkpoint/u);
+      expect(input.transportApplicationState).toHaveBeenCalledTimes(1);
+      expect(prepareApplicationState).not.toHaveBeenCalled();
+      expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  test('leaves admission closed when receipt-pinned application-state transport fails', async () => {
+    const fixture = harness();
+    const transportFailure = new Error('application-state snapshot missing');
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    const prepareApplicationState = jest.fn();
+    const handler = jest.fn();
+    const input = replacementOptions(fixture, handler);
+    input.transportApplicationState = jest.fn(async () => {
+      fixture.calls.push('transport-application-state');
+      throw transportFailure;
+    });
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...input,
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toBe(transportFailure);
+    expect(input.transportApplicationState).toHaveBeenCalledTimes(1);
+    expect(prepareApplicationState).not.toHaveBeenCalled();
+    expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('leaves admission closed when authority aborts during application-state transport', async () => {
+    const fixture = harness();
+    const authorityLoss = new Error(
+      'replacement authority lost during application-state transport',
+    );
+    const reconstructHistory = jest.fn(async () =>
+      Object.freeze({ schemaVersion: 1 }),
+    );
+    const prepareApplicationState = jest.fn();
+    const handler = jest.fn();
+    const input = replacementOptions(fixture, handler);
+    input.transportApplicationState.mockImplementation(async () => {
+      fixture.calls.push('transport-application-state');
+      fixture.authorityController.abort(authorityLoss);
+      return createApplicationStateTransportReadiness({
+        status: 'RETAINED',
+        destination: input.replacementInput.applicationStateDestination,
+        transport: input.replacementInput.applicationStateTransport,
+        coordinatorAuthority: fixture.coordinatorAuthority,
+      });
+    });
+
+    await expect(
+      withReconstructedExecutionLedgerResidentAuthority(
+        {
+          ...input,
+          currentRevisionId: CURRENT_REVISION_ID,
+          prepareApplicationState,
+        },
+        {
+          validateTopology: fixture.validateTopology,
+          createProtocol: fixture.createProtocol,
+          createSupervisor: fixture.createSupervisor,
+          reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
+          createAdmissionBarrier: fixture.createAdmissionBarrier,
+        },
+      ),
+    ).rejects.toBe(authorityLoss);
+    expect(input.transportApplicationState).toHaveBeenCalledTimes(1);
     expect(prepareApplicationState).not.toHaveBeenCalled();
     expect(fixture.admissionBarrier.reopen).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
@@ -1026,6 +1270,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1062,6 +1307,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1149,6 +1395,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1163,6 +1410,8 @@ describe('resident DynamoDB coordinator authority integration', () => {
       'admission-barrier-get',
       'admission-barrier-close',
       'reconstruct',
+      'inventory-application-state',
+      'transport-application-state',
       'prepare-application-state',
       'assert-current-authority',
       'admission-barrier-reopen',
@@ -1208,6 +1457,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1255,6 +1505,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1298,6 +1549,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1311,6 +1563,8 @@ describe('resident DynamoDB coordinator authority integration', () => {
       'admission-barrier-get',
       'admission-barrier-close',
       'reconstruct',
+      'inventory-application-state',
+      'transport-application-state',
       'prepare-application-state',
       'assert-current-authority',
     ]);
@@ -1341,6 +1595,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1375,6 +1630,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1410,6 +1666,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
@@ -1450,6 +1707,7 @@ describe('resident DynamoDB coordinator authority integration', () => {
           createProtocol: fixture.createProtocol,
           createSupervisor: fixture.createSupervisor,
           reconstructHistory,
+          inventoryApplicationState: fixture.inventoryApplicationState,
           createAdmissionBarrier: fixture.createAdmissionBarrier,
         },
       ),
