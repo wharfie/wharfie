@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-08-31
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -64,8 +64,20 @@ The repository has substantial foundations:
   replicated payload store requires publish plus verified readback before a
   reference returns and hydrates a replacement only after true local absence;
   the internal wrapper validates that exact scope before topology or authority
-  and requires `ADOPTED` readiness at the pinned application-state destination
-  under the exact current replacement authority before reopening;
+  and carries the pinned application-state destination into snapshot transport
+  and the later exact `ADOPTED` readiness check before reopening;
+- a sealed application-state checkpoint transport from
+  [ADR 0041](docs/architecture/decisions/0041-sealed-lmdb-application-state-snapshot-transport.md):
+  under the exact durable closed barrier and settled application-state history,
+  the LMDB source records a pinned marker and seals the whole physical store
+  against ordinary writes in every namespace before its bounded `data.mdb` is
+  read. The provider call is not evidence: exact immutable readback and a final
+  fenced central publication record are required. A one-shot central claim
+  binds the exact current `CLOSED` replacement barrier and authority, `wasr1`
+  replica, and `RETAINED` or `HYDRATED` status before ordinary
+  application-state readiness. True-absence hydration durably claims the store
+  root, creates `lmdb` exclusively, then hard-links staged `data.mdb` before
+  snapshot-scoped evidence establishes the logical commit;
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -130,15 +142,18 @@ automatic resident takeover remain unsupported. The accepted DynamoDB RVN
 profile now supplies a validated bounded path to automatic epoch replacement
 and an internal resident authority lifecycle. Authority-bound reconstruction,
 its durable admission/schedule-mutation barrier, the provisioned
-`tableResourceId` handoff, and verified execution-payload distribution are now
-composed internal slices, but have no product activation or multi-node recovery
-proof. A local resident now adopts its one configured, history-verified
-application-state destination before replacement readiness, with durable
-interrupted-handoff progress and exact publication fences. Replacement startup
-now pins and checks that exact destination and its ownership by the current
-replacement authority after read-through reconstruction, but it does not
-transport application-state bytes or prove recovery after loss of either
-volume.
+`tableResourceId` handoff, verified execution-payload distribution, and the
+sealed LMDB application-state checkpoint transport are now composed internal
+slices, but have no product activation or multi-node recovery proof. Internal
+replacement can select the centrally claimed retained replica or hydrate a
+truly absent volume from receipt-pinned immutable bytes before ordinary
+readiness. The whole physical source store is durably unwritable before
+`data.mdb` is read, the provider call must be followed by exact readback, and
+final publication is fenced into the control store. The central activation is
+also fenced by the exact current `CLOSED` replacement barrier and binds one
+`wasr1` replica plus its `RETAINED` or `HYDRATED` status. This is a deliberately
+quiesced cold checkpoint across separate transaction domains, not arbitrary
+crash-time consistency or recovery after loss of every sealed copy.
 These local proofs do not establish replacement by another machine.
 The cloud deployment work now proves a bounded
 credentialed lifecycle through healthy guest service and independently
@@ -332,8 +347,24 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   absence. The reconstructed wrapper checks the receipt, ambient configuration,
   ledger, and exact payload-store object before topology or authority, and
   requires strict `ADOPTED` readiness at the receipt destination under the
-  exact current replacement authority before reopening. Application-state
-  transport and a production call site remain pending.
+  exact current replacement authority before reopening.
+- [ADR 0041](docs/architecture/decisions/0041-sealed-lmdb-application-state-snapshot-transport.md)
+  supplies the internal LMDB application-state handoff. Publication requires
+  the exact durably retained closed barrier and settled complete
+  application-state history, records a destination-local checkpoint marker,
+  seals the whole physical source store before reading one bounded `data.mdb`,
+  disregards the provider call's return as evidence, verifies exact immutable
+  readback, and records final evidence in the fenced control store. Replacement
+  validates an exact retained source or hydrates only true absence under a
+  durable root claim, exclusive `lmdb` creation, and an ordered hard-link commit
+  of data followed by snapshot-scoped evidence. One central claim binds the
+  exact current `CLOSED` replacement barrier and authority, `wasr1` physical
+  replica, and `RETAINED`/`HYDRATED` status before destination-authority
+  adoption. Receipt, history, marker, seal, bytes, distribution, destination,
+  barrier, activation,
+  and authority substitution fail closed. The separate-store boundary,
+  production call site, trusted-node placement, and multi-node proof remain
+  pending.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -388,25 +419,34 @@ makes verified bytes available to an empty replacement replica, and the
 reconstructed wrapper validates that scope before topology or authority. The
 receipt also fixes the exact application-state destination and the wrapper
 requires `ADOPTED` readiness there under the exact current replacement
-authority; cross-node transport of that state remains open. The wrapper still
-has no production call site and no public gate moved.
+authority.
 
-1. Implement and prove cross-node application-state transport for the exact
-   receipt-pinned destination, including interruption, retained-volume, and
-   volume-loss behavior. Preserve the separate transaction domain and fail
-   closed rather than claiming atomic control/application-state handoff.
-2. Finish deterministic crash tests at renewal, takeover, assignment, authored
-   activity start, managed-effect settlement, terminal commit, and every
-   application-state transport phase.
-3. Activate the reconstructed startup helper behind an explicit DynamoDB
+ADR 0041's bounded cold-checkpoint slice is now complete internally. Receipt
+version 2 pins one immutable LMDB `data.mdb` snapshot to settled exact
+application-state history, the durable closed source barrier, the embedded
+marker, the whole-physical-store pre-read seal, exact provider readback, and
+central publication evidence. The reconstructed wrapper retains those bytes or
+durably claims and exclusively creates an absent target, hard-linking staged
+bytes before snapshot-scoped evidence commits hydration, then wins a one-shot
+activation for the exact current `CLOSED` replacement barrier and authority,
+`wasr1` physical replica, and transport status. It proves exact transport
+readiness before ordinary application-state preparation. It does not claim
+cross-store atomicity, arbitrary crash-time
+recovery, or a production call site; no public gate moved.
+
+1. Finish deterministic crash tests at renewal, takeover, assignment, authored
+   activity start, managed-effect settlement, terminal commit, and every system
+   boundary. Add real process-kill and machine-loss evidence for the
+   application-state phases beyond deterministic injected interruption.
+2. Activate the reconstructed startup helper behind an explicit DynamoDB
    resident gate only after those boundaries are proved. Keep old revisions
    parked unless the node is explicitly authorized and carries the exact
    executable revision; retain started work as recovery-only unless durable
    evidence resolves it.
-4. Keep the mesh trusted and explicit: enroll nodes, authorize the application
+3. Keep the mesh trusted and explicit: enroll nodes, authorize the application
    revisions each may run, advertise finite capabilities, place work only on a
    matching node, and fence every node lease.
-5. After the provider and reconstruction models are small and proved, run one
+4. After the provider and reconstruction models are small and proved, run one
    two-node trusted recovery proof. Multi-active scheduling is not required.
 
 ### Exit evidence
@@ -572,11 +612,11 @@ provenance is now retained for new bound logical admissions without changing
 version 10 attempt fencing or public history. ADR 0037 selects a bounded
 single-Region DynamoDB RVN replacement primitive; its validation and live
 proof pass. Its internal resident supervisor, authority-bound reconstruction,
-durable quiescence barrier, strict provisioned replacement-input artifact, and
-verified payload-distribution boundary are now complete internal slices. The
-application-state transport, trusted-node authorization and placement, crash
-coverage, product activation, and multi-node replacement are the active
-Outcome 2 work.
+durable quiescence barrier, strict provisioned replacement-input artifact,
+verified payload-distribution boundary, and sealed LMDB application-state
+transport are now complete internal slices. Trusted-node authorization and
+placement, remaining crash coverage, product activation, and multi-node
+replacement are the active Outcome 2 work.
 Cross-store atomicity, multi-Region DynamoDB, and
 arbitrary destination sets remain outside the supported primary-store protocol.
 Outcome 3 has a bounded

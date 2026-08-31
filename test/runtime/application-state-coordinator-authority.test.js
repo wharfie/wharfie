@@ -16,11 +16,14 @@ import {
   ApplicationStateCorruptionError,
   ApplicationStateEffectNotAppliedError,
   ApplicationStateStoreIdentityError,
+  ApplicationStateStoreRetiredError,
   createApplicationStateBusinessKey,
+  createApplicationStateRetirementAbsenceFence,
   createApplicationStateTable,
 } from '../../src/core/lib/db/tables/application-state.js';
 import {
   APPLICATION_STATE_COORDINATOR_AUTHORITY_RECORD_KIND,
+  applicationStateCoordinatorRecordConditions,
   createApplicationStateCoordinatorAuthorityKey,
   createApplicationStateCoordinatorAuthorityRecord,
   validateApplicationStateCoordinatorAuthorityRecord,
@@ -176,6 +179,59 @@ function isAdoption(params) {
   );
 }
 
+/** @param {Transaction} params */
+function isConditionOnlyAdoptionReplay(params) {
+  const key = createApplicationStateCoordinatorAuthorityKey(APP_ID);
+  return (
+    (params.putRequests?.length ?? 0) === 0 &&
+    (params.deleteRequests?.length ?? 0) === 0 &&
+    params.conditionChecks?.some(
+      (check) =>
+        check.keyValue === key.resourceId && check.sortKeyValue === key.sortKey,
+    ) === true
+  );
+}
+
+/**
+ * @param {Transaction} params
+ * @param {Readonly<Record<string, any>>} identity
+ * @param {Readonly<Record<string, any>>} record
+ */
+function expectConditionOnlyAdoptionReplay(params, identity, record) {
+  const authorityKey = createApplicationStateCoordinatorAuthorityKey(APP_ID);
+  expect(params).toEqual({
+    tableName: TABLE_NAME,
+    conditionChecks: [
+      {
+        keyName: APPLICATION_STATE_KEY_NAME,
+        keyValue: APPLICATION_STATE_STORE_RESOURCE_ID,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        sortKeyValue: APPLICATION_STATE_STORE_SORT_KEY,
+        conditions: [
+          {
+            conditionType: 'EQUALS',
+            propertyName: 'store_id',
+            propertyValue: STORE_ID,
+          },
+          {
+            conditionType: 'EQUALS',
+            propertyName: 'identity_digest',
+            propertyValue: identity.identity_digest,
+          },
+        ],
+      },
+      createApplicationStateRetirementAbsenceFence(STORE_ID),
+      {
+        keyName: APPLICATION_STATE_KEY_NAME,
+        keyValue: authorityKey.resourceId,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        sortKeyValue: authorityKey.sortKey,
+        conditions: applicationStateCoordinatorRecordConditions(record),
+      },
+    ],
+  });
+}
+
 /** @param {Transaction} params @param {MutationKind} kind */
 function isMutation(params, kind) {
   return (
@@ -290,6 +346,7 @@ describe.each(ADAPTERS)(
       expect(transactionWrite).toHaveBeenCalledTimes(1);
       expect(transactionWrite.mock.calls[0][0].putRequests).toHaveLength(2);
       const record = await bound.readCoordinatorAuthority(SCOPE);
+      if (!record) throw new Error('expected retained coordinator authority');
       expect(record).toMatchObject({
         store_id: STORE_ID,
         namespace: APP_ID,
@@ -301,13 +358,18 @@ describe.each(ADAPTERS)(
         validateApplicationStateCoordinatorAuthorityRecord(record),
       ).toEqual(record);
       expect(await bound.adoptCoordinatorAuthority(SCOPE)).toEqual(record);
-      expect(transactionWrite).toHaveBeenCalledTimes(1);
+      expect(transactionWrite).toHaveBeenCalledTimes(2);
+      expectConditionOnlyAdoptionReplay(
+        transactionWrite.mock.calls[1][0],
+        identity,
+        record,
+      );
     });
 
     test('existing identity does not adopt implicitly and bound mutations require explicit adoption', async () => {
       const db = await createAdapter(adapterName);
       const unbound = table(db);
-      await unbound.ensureStoreIdentity();
+      const identity = await unbound.ensureStoreIdentity();
       const transactionWrite = jest.fn(
         async (/** @type {Transaction} */ params) =>
           await db.transactionWrite(params),
@@ -324,7 +386,12 @@ describe.each(ADAPTERS)(
       expect(transactionWrite).not.toHaveBeenCalled();
       const first = await bound.adoptCoordinatorAuthority(SCOPE);
       expect(await bound.adoptCoordinatorAuthority(SCOPE)).toEqual(first);
-      expect(transactionWrite).toHaveBeenCalledTimes(1);
+      expect(transactionWrite).toHaveBeenCalledTimes(2);
+      expectConditionOnlyAdoptionReplay(
+        transactionWrite.mock.calls[1][0],
+        identity,
+        first,
+      );
       await expect(bound.putIfAbsent(mutation())).resolves.toMatchObject({
         inserted: true,
       });
@@ -458,7 +525,7 @@ describe.each(ADAPTERS)(
     test('a strictly higher valid barrier covers an older ADOPTED floor and remains the exact CAS predecessor', async () => {
       const db = await createAdapter(adapterName);
       const original = table(db, authority());
-      await original.ensureStoreIdentity();
+      const identity = await original.ensureStoreIdentity();
       const floor = await original.readCoordinatorAuthority(SCOPE);
       const second = table(db, authority(2));
       const secondBarrier = await second.adoptCoordinatorAuthority(SCOPE);
@@ -472,7 +539,12 @@ describe.each(ADAPTERS)(
           destinationAuthorityFloor: floor,
         }),
       ).resolves.toEqual(secondBarrier);
-      expect(transactionWrite).not.toHaveBeenCalled();
+      expect(transactionWrite).toHaveBeenCalledTimes(1);
+      expectConditionOnlyAdoptionReplay(
+        transactionWrite.mock.calls[0][0],
+        identity,
+        secondBarrier,
+      );
       const third = table({ ...db, transactionWrite }, authority(3));
       await expect(
         third.assertCoordinatorAuthorityAdoptionPrecondition(SCOPE, {
@@ -484,9 +556,9 @@ describe.each(ADAPTERS)(
           destinationAuthorityFloor: floor,
         }),
       ).resolves.toMatchObject({ epoch: 3 });
-      expect(transactionWrite).toHaveBeenCalledTimes(1);
+      expect(transactionWrite).toHaveBeenCalledTimes(2);
       expect(
-        transactionWrite.mock.calls[0][0].putRequests?.[0]?.conditions,
+        transactionWrite.mock.calls[1][0].putRequests?.[0]?.conditions,
       ).toEqual(
         expect.arrayContaining([
           {
@@ -512,6 +584,62 @@ describe.each(ADAPTERS)(
         ApplicationStateCoordinatorAuthorityStaleError,
       );
       expect(await newer.readCoordinatorAuthority(SCOPE)).toEqual(retained);
+    });
+
+    test('a delayed authority adoption cannot commit after the physical store is retired', async () => {
+      const db = await createAdapter(adapterName);
+      const source = table(db, authority());
+      await source.ensureStoreIdentity();
+      const sourceAuthority = await source.readCoordinatorAuthority(SCOPE);
+      const paused = pauseTransaction(db, isAdoption);
+      const successor = table(paused.db, authority(2));
+      const pending = successor.adoptCoordinatorAuthority(SCOPE);
+      await paused.entered;
+
+      const retirement = await source.retireStore({
+        ...SCOPE,
+        retirementId: id('wast1', 'adoption-retirement-race'),
+        artifact: JSON.stringify({ kind: 'race-retirement' }),
+      });
+      paused.release();
+
+      await expect(pending).rejects.toBeInstanceOf(
+        ApplicationStateStoreRetiredError,
+      );
+      await expect(source.readCoordinatorAuthority(SCOPE)).resolves.toEqual(
+        sourceAuthority,
+      );
+      await expect(source.readStoreRetirement(SCOPE)).resolves.toEqual(
+        retirement,
+      );
+    });
+
+    test('a delayed same-token replay cannot validate after the physical store is retired', async () => {
+      const db = await createAdapter(adapterName);
+      const source = table(db, authority());
+      await source.ensureStoreIdentity();
+      const sourceAuthority = await source.readCoordinatorAuthority(SCOPE);
+      const paused = pauseTransaction(db, isConditionOnlyAdoptionReplay);
+      const replay = table(paused.db, authority());
+      const pending = replay.adoptCoordinatorAuthority(SCOPE);
+      await paused.entered;
+
+      const retirement = await source.retireStore({
+        ...SCOPE,
+        retirementId: id('wast1', 'adoption-replay-retirement-race'),
+        artifact: JSON.stringify({ kind: 'replay-race-retirement' }),
+      });
+      paused.release();
+
+      await expect(pending).rejects.toBeInstanceOf(
+        ApplicationStateStoreRetiredError,
+      );
+      await expect(source.readCoordinatorAuthority(SCOPE)).resolves.toEqual(
+        sourceAuthority,
+      );
+      await expect(source.readStoreRetirement(SCOPE)).resolves.toEqual(
+        retirement,
+      );
     });
 
     test('lost advancement CAS cannot silently rebase; an explicit retry may advance the new predecessor', async () => {

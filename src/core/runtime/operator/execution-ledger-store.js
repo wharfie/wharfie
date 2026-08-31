@@ -34,6 +34,15 @@ import {
   validateApplicationStateReadinessRecord,
 } from '../../lib/db/tables/application-state-readiness.js';
 import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
+import { sortCanonicalJsonValue } from '../canonical-order.js';
+import {
+  applicationStateSnapshotTransportMatches,
+  validateApplicationStateTransportReadiness,
+} from '../application-state-snapshot.js';
+import {
+  assertSettledApplicationStateHistory,
+  inventoryApplicationStateHistory,
+} from '../application-state-history-checkpoint.js';
 import { assertApplicationRevisionId } from '../application-revision.js';
 import { assertDomainSeparatedSha256Id } from '../content-id.js';
 import { DYNAMODB_TABLE_RESOURCE_ID_PREFIX } from '../dynamodb-coordinator-authority-topology.js';
@@ -273,6 +282,59 @@ function validateResidentReplacementApplicationState(
   ) {
     throw new Error(
       'Resident replacement application-state handoff did not adopt the receipt destination under the exact replacement authority.',
+    );
+  }
+  return readiness;
+}
+
+/**
+ * Require the provider-neutral transport seam to prove the exact receipt pin,
+ * reconstructed history, destination, and replacement authority before the
+ * existing readiness handoff may open the local catalog.
+ * @param {unknown} value - Candidate transport readiness.
+ * @param {ReturnType<typeof validateResidentReplacementInputReceipt>} receipt - Captured replacement receipt.
+ * @param {import('../../lib/db/tables/coordinator-authority.js').CoordinatorAuthorityToken} authority - Exact replacement authority.
+ * @param {Record<string, any>} history - Current settled history checkpoint.
+ * @param {Record<string, any>} closedBarrier - Current replacement admission barrier.
+ * @returns {ReturnType<typeof validateApplicationStateTransportReadiness>} - Exact transport readiness.
+ */
+function validateResidentReplacementApplicationStateTransport(
+  value,
+  receipt,
+  authority,
+  history,
+  closedBarrier,
+) {
+  const readiness = validateApplicationStateTransportReadiness(value);
+  if (
+    !applicationStateSnapshotTransportMatches(
+      readiness.transport,
+      receipt.applicationStateTransport,
+    ) ||
+    JSON.stringify(sortCanonicalJsonValue(readiness.destination)) !==
+      JSON.stringify(
+        sortCanonicalJsonValue(receipt.applicationStateDestination),
+      ) ||
+    JSON.stringify(
+      sortCanonicalJsonValue(readiness.transport.snapshot.checkpoint.history),
+    ) !== JSON.stringify(sortCanonicalJsonValue(history)) ||
+    readiness.coordinatorAuthority.schemaVersion !== authority.schemaVersion ||
+    readiness.coordinatorAuthority.appId !== authority.appId ||
+    readiness.coordinatorAuthority.coordinatorId !== authority.coordinatorId ||
+    readiness.coordinatorAuthority.authorityId !== authority.authorityId ||
+    readiness.coordinatorAuthority.epoch !== authority.epoch ||
+    closedBarrier.state !== CoordinatorQuiescenceBarrierState.CLOSED ||
+    closedBarrier.appId !== authority.appId ||
+    closedBarrier.authority.schemaVersion !== authority.schemaVersion ||
+    closedBarrier.authority.appId !== authority.appId ||
+    closedBarrier.authority.coordinatorId !== authority.coordinatorId ||
+    closedBarrier.authority.authorityId !== authority.authorityId ||
+    closedBarrier.authority.epoch !== authority.epoch ||
+    closedBarrier.version <
+      readiness.transport.snapshot.checkpoint.sourceBarrier.version
+  ) {
+    throw new Error(
+      'Resident replacement application-state transport did not prove the exact receipt checkpoint under current authority.',
     );
   }
   return readiness;
@@ -663,15 +725,15 @@ export async function withExecutionLedgerResidentCoordinatorAuthority(
 /**
  * Compose the still-internal DynamoDB resident startup boundary. Complete
  * source-free history reconstruction and ready-work convergence happen first;
- * the caller's separate application-state handoff happens second; only then
- * may its resident dispatcher body start. The existing supervisor continues
+ * receipt-pinned application-state transport and destination adoption happen
+ * second; only then may its resident dispatcher body start. The existing supervisor continues
  * renewing authority for the entire body and aborts the shared signal on
  * loss. This helper deliberately has no public service or CLI call site and
  * does not lift the LMDB-only resident product gates.
  * @template T
  * @template P
- * @param {{appId: string, currentRevisionId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, readOnly: boolean, payloadStore: Record<string, any>}, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, replacementInput: unknown, signal?: AbortSignal, prepareApplicationState: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<P> | P, handler: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<T> | T}} options - Exact reconstructed resident authority session.
- * @param {{validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology, createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol, createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor, reconstructHistory?: typeof reconstructResidentExecutionHistory, createAdmissionBarrier?: typeof createCoordinatorQuiescenceBarrier}} [dependencies] - Focused internal seams.
+ * @param {{appId: string, currentRevisionId: string, coordinatorId: string, ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, readOnly: boolean, payloadStore: Record<string, any>}, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, replacementInput: unknown, signal?: AbortSignal, transportApplicationState: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<unknown> | unknown, prepareApplicationState: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<P> | P, handler: (ledger: ExecutionLedgerStore, session: Readonly<Record<string, any>>) => Promise<T> | T}} options - Exact reconstructed resident authority session.
+ * @param {{validateTopology?: typeof validateAwsDynamoDBCoordinatorAuthorityTableTopology, createProtocol?: typeof createDynamoDBCoordinatorAuthorityProtocol, createSupervisor?: typeof createResidentCoordinatorAuthoritySupervisor, reconstructHistory?: typeof reconstructResidentExecutionHistory, inventoryApplicationState?: typeof inventoryApplicationStateHistory, createAdmissionBarrier?: typeof createCoordinatorQuiescenceBarrier}} [dependencies] - Focused internal seams.
  * @returns {Promise<T>} - Resident body result after supervised drain and release.
  */
 export async function withReconstructedExecutionLedgerResidentAuthority(
@@ -692,6 +754,7 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
     'configuration',
     'replacementInput',
     'signal',
+    'transportApplicationState',
     'prepareApplicationState',
     'handler',
   ]);
@@ -714,6 +777,7 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
     'createProtocol',
     'createSupervisor',
     'reconstructHistory',
+    'inventoryApplicationState',
     'createAdmissionBarrier',
   ]);
   if (Object.keys(dependencies).some((key) => !allowedDependencies.has(key))) {
@@ -743,15 +807,20 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
     options.replacementInput,
   );
   const signal = options.signal;
+  const transportApplicationState = options.transportApplicationState;
   const prepareApplicationState = options.prepareApplicationState;
   const handler = options.handler;
   const dependencyValidateTopology = dependencies.validateTopology;
   const dependencyCreateProtocol = dependencies.createProtocol;
   const dependencyCreateSupervisor = dependencies.createSupervisor;
   const dependencyReconstructHistory = dependencies.reconstructHistory;
+  const dependencyInventoryApplicationState =
+    dependencies.inventoryApplicationState;
   const dependencyCreateAdmissionBarrier = dependencies.createAdmissionBarrier;
   const reconstructHistory =
     dependencyReconstructHistory ?? reconstructResidentExecutionHistory;
+  const inventoryApplicationState =
+    dependencyInventoryApplicationState ?? inventoryApplicationStateHistory;
   const createAdmissionBarrier =
     dependencyCreateAdmissionBarrier ?? createCoordinatorQuiescenceBarrier;
   const authorityDependencies = {
@@ -783,6 +852,11 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
       'withReconstructedExecutionLedgerResidentAuthority.reconstructHistory must be a function.',
     );
   }
+  if (typeof inventoryApplicationState !== 'function') {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority.inventoryApplicationState must be a function.',
+    );
+  }
   if (typeof createAdmissionBarrier !== 'function') {
     throw new TypeError(
       'withReconstructedExecutionLedgerResidentAuthority.createAdmissionBarrier must be a function.',
@@ -791,6 +865,11 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
   if (typeof prepareApplicationState !== 'function') {
     throw new TypeError(
       'withReconstructedExecutionLedgerResidentAuthority.prepareApplicationState must be a function.',
+    );
+  }
+  if (typeof transportApplicationState !== 'function') {
+    throw new TypeError(
+      'withReconstructedExecutionLedgerResidentAuthority.transportApplicationState must be a function.',
     );
   }
   if (typeof handler !== 'function') {
@@ -908,10 +987,50 @@ export async function withReconstructedExecutionLedgerResidentAuthority(
             new Error('Resident authority ended after reconstruction.')
           );
         }
-        const reconstructionSession = Object.freeze({
+        const applicationStateHistory = await inventoryApplicationState({
+          ledger: boundLedger,
+          appId,
+          signal: session.signal,
+        });
+        assertSettledApplicationStateHistory(applicationStateHistory);
+        if (session.signal.aborted) {
+          throw (
+            session.signal.reason ??
+            new Error(
+              'Resident authority ended during application-state history inventory.',
+            )
+          );
+        }
+        const transportSession = Object.freeze({
           ...session,
           replacementInput,
           reconstruction,
+          closedBarrier,
+          applicationStateHistory,
+        });
+        const transportedApplicationState = await transportApplicationState(
+          boundLedger,
+          transportSession,
+        );
+        if (session.signal.aborted) {
+          throw (
+            session.signal.reason ??
+            new Error(
+              'Resident authority ended during application-state transport.',
+            )
+          );
+        }
+        const applicationStateTransport =
+          validateResidentReplacementApplicationStateTransport(
+            transportedApplicationState,
+            replacementInput,
+            currentAuthority,
+            applicationStateHistory,
+            closedBarrier,
+          );
+        const reconstructionSession = Object.freeze({
+          ...transportSession,
+          applicationStateTransport,
         });
         const preparedApplicationState = await prepareApplicationState(
           boundLedger,

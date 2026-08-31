@@ -19,6 +19,10 @@ import {
   encodeResidentReplacementInputReceipt,
   validateResidentReplacementInputReceipt,
 } from '../../src/core/runtime/resident-replacement-input.js';
+import {
+  createTestApplicationStateHistory,
+  createTestApplicationStateTransport,
+} from '../helpers/application-state-snapshot.js';
 
 const APP_ID = 'replacement-input-app';
 const PAYLOAD_STORE_ID = 'replacement-payloads';
@@ -37,6 +41,17 @@ function id(prefix, label) {
  * @returns {Record<string, any>}
  */
 function input(overrides = {}) {
+  const applicationStateDestination = overrides.applicationStateDestination ?? {
+    kind: 'application-state',
+    version: 2,
+    bindingId: 'primary',
+    configuration: {
+      provider: 'lmdb',
+      storeId: id('was', 'application-state'),
+      tableName: APPLICATION_STATE_TABLE_NAME,
+      namespace: APP_ID,
+    },
+  };
   const value = {
     appId: APP_ID,
     currentRevisionId: id('wrv1', 'current-revision'),
@@ -56,17 +71,13 @@ function input(overrides = {}) {
         storeId: PAYLOAD_STORE_ID,
       },
     },
-    applicationStateDestination: {
-      kind: 'application-state',
-      version: 2,
-      bindingId: 'primary',
-      configuration: {
-        provider: 'lmdb',
-        storeId: id('was', 'application-state'),
-        tableName: APPLICATION_STATE_TABLE_NAME,
-        namespace: APP_ID,
-      },
-    },
+    applicationStateDestination,
+    applicationStateTransport:
+      overrides.applicationStateTransport ??
+      createTestApplicationStateTransport({
+        destination: applicationStateDestination,
+        label: applicationStateDestination.configuration.storeId,
+      }),
   };
   return {
     ...value,
@@ -91,6 +102,7 @@ describe('resident replacement input receipt', () => {
     const first = createResidentReplacementInputReceipt(input());
     const reordered = createResidentReplacementInputReceipt({
       applicationStateDestination: input().applicationStateDestination,
+      applicationStateTransport: input().applicationStateTransport,
       payloadStorage: input().payloadStorage,
       control: input().control,
       currentRevisionId: input().currentRevisionId,
@@ -99,7 +111,7 @@ describe('resident replacement input receipt', () => {
 
     expect(first).toEqual(reordered);
     expect(first).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: RESIDENT_REPLACEMENT_INPUT_KIND,
       receiptId: expect.stringMatching(
         new RegExp(`^${RESIDENT_REPLACEMENT_INPUT_RECEIPT_ID_PREFIX}_`),
@@ -123,6 +135,7 @@ describe('resident replacement input receipt', () => {
         },
       },
       applicationStateDestination: input().applicationStateDestination,
+      applicationStateTransport: input().applicationStateTransport,
     });
     expect(validateResidentReplacementInputReceipt(first)).toEqual(first);
     expectDeeplyFrozen(first);
@@ -169,6 +182,41 @@ describe('resident replacement input receipt', () => {
             storeId: id('was', 'other-application-state'),
           },
         },
+      }),
+    ],
+    [
+      'application-state snapshot distribution',
+      () => ({
+        applicationStateTransport: {
+          ...input().applicationStateTransport,
+          distribution: {
+            ...input().applicationStateTransport.distribution,
+            distributionId: id('wasd1', 'other-snapshot-distribution'),
+          },
+        },
+      }),
+    ],
+    [
+      'application-state history checkpoint',
+      () => ({
+        applicationStateTransport: createTestApplicationStateTransport({
+          destination: input().applicationStateDestination,
+          label: input().applicationStateDestination.configuration.storeId,
+          history: createTestApplicationStateHistory({
+            appId: APP_ID,
+            label: 'other-history',
+          }),
+        }),
+      }),
+    ],
+    [
+      'application-state snapshot bytes',
+      () => ({
+        applicationStateTransport: createTestApplicationStateTransport({
+          destination: input().applicationStateDestination,
+          label: input().applicationStateDestination.configuration.storeId,
+          bytes: Buffer.from('different-application-state-snapshot', 'utf8'),
+        }),
       }),
     ],
   ])('changes the receipt identity when the %s changes', (_label, change) => {

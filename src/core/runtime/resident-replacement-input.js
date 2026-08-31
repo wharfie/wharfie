@@ -21,6 +21,7 @@ import { cloneBoundedJsonObject, cloneJsonObject } from './json-value.js';
 import { assertApplicationRevisionId } from './application-revision.js';
 import { assertLogicalId } from './logical-id.js';
 import { normalizeApplicationStateDestination } from './effects/application-state.js';
+import { normalizeApplicationStateSnapshotTransport } from './application-state-snapshot.js';
 import { DYNAMODB_TABLE_RESOURCE_ID_PREFIX } from './dynamodb-coordinator-authority-topology.js';
 
 export {
@@ -28,13 +29,13 @@ export {
   EXECUTION_PAYLOAD_DISTRIBUTION_KIND,
 } from '../lib/payload-store/replicated.js';
 
-export const RESIDENT_REPLACEMENT_INPUT_SCHEMA_VERSION = 1;
+export const RESIDENT_REPLACEMENT_INPUT_SCHEMA_VERSION = 2;
 export const RESIDENT_REPLACEMENT_INPUT_KIND =
   'residentReplacementInputReceipt';
 export const RESIDENT_REPLACEMENT_INPUT_RECEIPT_ID_DOMAIN =
-  'wharfie:resident-replacement-input-receipt:v1';
-export const RESIDENT_REPLACEMENT_INPUT_RECEIPT_ID_PREFIX = 'wrri1';
-export const RESIDENT_REPLACEMENT_INPUT_MAX_BYTES = 32 * 1024;
+  'wharfie:resident-replacement-input-receipt:v2';
+export const RESIDENT_REPLACEMENT_INPUT_RECEIPT_ID_PREFIX = 'wrri2';
+export const RESIDENT_REPLACEMENT_INPUT_MAX_BYTES = 192 * 1024;
 
 const TABLE_NAME_PATTERN = /^[A-Za-z0-9_.-]{3,255}$/u;
 const REGION_PATTERN = /^[a-z]{2}(?:-gov)?-[a-z0-9-]+-[0-9]+$/u;
@@ -46,6 +47,7 @@ const CREATE_KEYS = new Set([
   'control',
   'payloadStorage',
   'applicationStateDestination',
+  'applicationStateTransport',
 ]);
 const PAYLOAD_KEYS = new Set(['schemaVersion', 'kind', ...CREATE_KEYS]);
 const RECEIPT_KEYS = new Set(['receiptId', ...PAYLOAD_KEYS]);
@@ -60,7 +62,7 @@ const PAYLOAD_STORAGE_KEYS = new Set(['kind', 'storeId', 'distribution']);
 
 /**
  * @typedef {Readonly<{
- *   schemaVersion: 1,
+ *   schemaVersion: 2,
  *   kind: 'residentReplacementInputReceipt',
  *   receiptId: string,
  *   appId: string,
@@ -82,6 +84,7 @@ const PAYLOAD_STORAGE_KEYS = new Set(['kind', 'storeId', 'distribution']);
  *     }>,
  *   }>,
  *   applicationStateDestination: ReturnType<typeof normalizeApplicationStateDestination>,
+ *   applicationStateTransport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>,
  * }>} ResidentReplacementInputReceipt
  */
 
@@ -218,7 +221,7 @@ function normalizePayloadStorage(value, label) {
 function normalizePayload(value, label) {
   const payload = exactBoundedObject(value, PAYLOAD_KEYS, label);
   if (payload.schemaVersion !== RESIDENT_REPLACEMENT_INPUT_SCHEMA_VERSION) {
-    throw new TypeError(`${label}.schemaVersion must be the integer 1.`);
+    throw new TypeError(`${label}.schemaVersion must be the integer 2.`);
   }
   if (payload.kind !== RESIDENT_REPLACEMENT_INPUT_KIND) {
     throw new TypeError(
@@ -238,9 +241,23 @@ function normalizePayload(value, label) {
   const applicationStateDestination = normalizeApplicationStateDestination(
     payload.applicationStateDestination,
   );
+  const applicationStateTransport = normalizeApplicationStateSnapshotTransport(
+    payload.applicationStateTransport,
+    `${label}.applicationStateTransport`,
+  );
   if (applicationStateDestination.configuration.namespace !== payload.appId) {
     throw new TypeError(
       `${label}.applicationStateDestination namespace must match appId.`,
+    );
+  }
+  if (
+    JSON.stringify(sortCanonicalJsonValue(applicationStateDestination)) !==
+    JSON.stringify(
+      sortCanonicalJsonValue(applicationStateTransport.snapshot.destination),
+    )
+  ) {
+    throw new TypeError(
+      `${label}.applicationStateTransport snapshot must match applicationStateDestination.`,
     );
   }
   return deepFreeze(
@@ -252,6 +269,7 @@ function normalizePayload(value, label) {
       control,
       payloadStorage,
       applicationStateDestination,
+      applicationStateTransport,
     }),
   );
 }

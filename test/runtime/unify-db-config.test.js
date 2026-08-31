@@ -22,6 +22,7 @@ import {
 import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../src/core/lib/db/state/store.js';
 import { resolveResidentReplacementExecutionLedgerStoreConfiguration } from '../../src/core/runtime/operator/execution-ledger-store.js';
 import { createResidentReplacementInputReceipt } from '../../src/core/runtime/resident-replacement-input.js';
+import { createTestApplicationStateTransport } from '../helpers/application-state-snapshot.js';
 
 const TABLE_RESOURCE_ID = `wdtr1_${'A'.repeat(43)}`;
 const REVISION_ID = `wrv1_${'B'.repeat(42)}A`;
@@ -29,6 +30,17 @@ const DISTRIBUTION_ID = `wepd1_${'C'.repeat(42)}A`;
 const APPLICATION_STATE_STORE_ID = `was_${'D'.repeat(42)}A`;
 
 function replacementInput() {
+  const applicationStateDestination = {
+    kind: 'application-state',
+    version: 2,
+    bindingId: 'primary',
+    configuration: {
+      provider: 'lmdb',
+      storeId: APPLICATION_STATE_STORE_ID,
+      tableName: APPLICATION_STATE_TABLE_NAME,
+      namespace: 'replacement-config-app',
+    },
+  };
   return createResidentReplacementInputReceipt({
     appId: 'replacement-config-app',
     currentRevisionId: REVISION_ID,
@@ -48,17 +60,11 @@ function replacementInput() {
         storeId: 'replacement-payloads',
       },
     },
-    applicationStateDestination: {
-      kind: 'application-state',
-      version: 2,
-      bindingId: 'primary',
-      configuration: {
-        provider: 'lmdb',
-        storeId: APPLICATION_STATE_STORE_ID,
-        tableName: APPLICATION_STATE_TABLE_NAME,
-        namespace: 'replacement-config-app',
-      },
-    },
+    applicationStateDestination,
+    applicationStateTransport: createTestApplicationStateTransport({
+      destination: applicationStateDestination,
+      label: 'unify-db-config',
+    }),
   });
 }
 
