@@ -40,7 +40,9 @@ import {
 } from '../../src/core/runtime/application-state-snapshot-control.js';
 import {
   ApplicationStateSnapshotTargetCorruptionError,
+  inspectApplicationStateSnapshotHydrationRecovery,
   publishApplicationStateSnapshot,
+  recoverApplicationStateSnapshotHydration,
   recoverRetiredApplicationStateSnapshot,
   transportApplicationStateSnapshot,
 } from '../../src/core/runtime/application-state-snapshot-lmdb.js';
@@ -61,6 +63,11 @@ const HYDRATION_CLAIM_FILE =
   '.wharfie-application-state-snapshot-hydration-claim';
 const HYDRATION_CLAIM_KIND =
   'wharfie.application-state-snapshot-hydration-claim.v1';
+const HYDRATION_RECOVERY_FILE_PREFIX =
+  '.wharfie-application-state-snapshot-hydration-recovery';
+const HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-receipt`;
+const HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-target`;
+const HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-claim`;
 const REPLICA_ID_FILE = '.wharfie-application-state-replica-id';
 
 /** @type {Array<() => Promise<void>>} */
@@ -98,6 +105,29 @@ function deferred() {
   return { promise, resolve: release };
 }
 
+/** @param {Promise<any>} promise @param {() => void} release */
+async function settleBeforeBlockedOwnerRelease(promise, release) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          release();
+          reject(
+            new Error(
+              'exact recovery replay did not establish its own durable boundary',
+            ),
+          );
+        }, 2_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** @param {string} storePath @param {string} snapshotId */
 function hydrationEvidencePath(storePath, snapshotId) {
   return join(
@@ -115,6 +145,90 @@ function hydrationClaim(snapshotId, label) {
     snapshotId,
     claimId: id('washc1', label),
   };
+}
+
+/** @param {string} storePath @param {Readonly<Record<string, any>>} recovery */
+function hydrationRecoveryArtifacts(storePath, recovery) {
+  const snapshotId = recovery.transport.snapshot.snapshotId;
+  const recoveryId = recovery.recoveryId;
+  return Object.freeze({
+    receiptPath: join(
+      storePath,
+      `${HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX}-${snapshotId}-${recoveryId}`,
+    ),
+    retiredTargetPath: join(
+      storePath,
+      `${HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX}-${snapshotId}-${recoveryId}`,
+    ),
+    retiredClaimPath: join(
+      storePath,
+      `${HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX}-${snapshotId}-${recoveryId}`,
+    ),
+  });
+}
+
+/** @param {Awaited<ReturnType<typeof createHarness>>} harness @param {Readonly<Record<string, any>>} transport @param {string} label */
+async function createRecoverablePartialHydration(harness, transport, label) {
+  const claim = hydrationClaim(transport.snapshot.snapshotId, label);
+  const replicaPath = join(harness.replacementPath, REPLICA_ID_FILE);
+  const retainedReplica = await readOptionalFile(replicaPath);
+  const replicaId = retainedReplica
+    ? retainedReplica.toString('utf8').trim()
+    : id('wasr1', `recovery-replica-${label}`);
+  const claimPath = join(harness.replacementPath, HYDRATION_CLAIM_FILE);
+  const targetPath = join(harness.replacementPath, 'lmdb');
+  await fsp.mkdir(targetPath, { recursive: true, mode: 0o700 });
+  if (!retainedReplica) {
+    await fsp.writeFile(replicaPath, `${replicaId}\n`, { mode: 0o600 });
+  }
+  await fsp.writeFile(claimPath, `${JSON.stringify(claim)}\n`, {
+    mode: 0o600,
+  });
+  return Object.freeze({
+    claim,
+    replicaId,
+    claimPath,
+    targetPath,
+    unboundRecoveryPath: join(
+      harness.replacementPath,
+      `${HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX}-${transport.snapshot.snapshotId}-${id('washr1', `unbound-recovery-${label}`)}`,
+    ),
+  });
+}
+
+/** @param {Awaited<ReturnType<typeof createHarness>>} harness @param {Readonly<Record<string, any>>} transport @param {ReturnType<typeof createCoordinatorAuthorityToken>} coordinatorAuthority */
+function hydrationRecoveryInput(harness, transport, coordinatorAuthority) {
+  return Object.freeze({
+    configuration: harness.replacementConfiguration,
+    controlContext: harness.controlContext,
+    transport,
+    closedBarrier: harness.currentBarrier,
+    coordinatorAuthority,
+  });
+}
+
+/** @param {string} path */
+async function readOptionalFile(path) {
+  try {
+    return await fsp.readFile(path);
+  } catch (error) {
+    if (/** @type {{code?: unknown}} */ (error)?.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/** @param {string} path */
+async function readOptionalDirectory(path) {
+  try {
+    return await fsp.readdir(path);
+  } catch (error) {
+    if (/** @type {{code?: unknown}} */ (error)?.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function emptyLedger() {
@@ -1338,6 +1452,1366 @@ describe('LMDB application-state snapshot transport', () => {
       code: 'ENOENT',
     });
     await expectSeed(harness.replacementConfiguration, replacementAuthority);
+  });
+
+  test('explicitly recovers one inspected empty partial hydration and retains an inert replay receipt', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'explicit-recovery',
+    );
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const artifacts = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspection.recovery,
+    );
+
+    expect(Object.keys(inspection).sort()).toEqual(
+      ['schemaVersion', 'kind', 'inspectionId', 'state', 'recovery'].sort(),
+    );
+    expect(Object.keys(inspection.recovery).sort()).toEqual(
+      [
+        'schemaVersion',
+        'kind',
+        'recoveryId',
+        'transport',
+        'claim',
+        'replicaId',
+        'filesystem',
+        'replacementBarrier',
+        'replacementAuthority',
+      ].sort(),
+    );
+    expect(inspection).toMatchObject({
+      schemaVersion: 1,
+      kind: 'wharfie.application-state-snapshot-hydration-recovery-inspection.v1',
+      inspectionId: expect.stringMatching(/^washri1_/u),
+      state: 'PARTIAL_TARGET',
+      recovery: {
+        schemaVersion: 1,
+        kind: 'wharfie.application-state-snapshot-hydration-recovery.v1',
+        recoveryId: expect.stringMatching(/^washr1_/u),
+        claim: partial.claim,
+        replicaId: partial.replicaId,
+        transport,
+        replacementBarrier: harness.currentBarrier,
+        replacementAuthority,
+        filesystem: {
+          storeRoot: {
+            device: expect.stringMatching(/^(0|[1-9][0-9]*)$/u),
+            inode: expect.stringMatching(/^(0|[1-9][0-9]*)$/u),
+          },
+          claimFile: {
+            device: expect.stringMatching(/^(0|[1-9][0-9]*)$/u),
+            inode: expect.stringMatching(/^(0|[1-9][0-9]*)$/u),
+            size: expect.stringMatching(/^(0|[1-9][0-9]*)$/u),
+          },
+          targetDirectory: {
+            device: expect.stringMatching(/^(0|[1-9][0-9]*)$/u),
+            inode: expect.stringMatching(/^(0|[1-9][0-9]*)$/u),
+          },
+        },
+      },
+    });
+    expect(Object.isFrozen(inspection)).toBe(true);
+    expect(Object.isFrozen(inspection.recovery)).toBe(true);
+    expect(Object.isFrozen(inspection.recovery.filesystem.claimFile)).toBe(
+      true,
+    );
+
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection,
+        confirmPartialHydrationRecovery: false,
+      }),
+    ).rejects.toThrow(/explicit inspected confirmation/iu);
+    await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toEqual(
+      [],
+    );
+    await expect(readOptionalFile(partial.claimPath)).resolves.not.toBeNull();
+    const originalClaimBytes = await fsp.readFile(partial.claimPath);
+
+    /** @type {string[]} */
+    const phases = [];
+    const receipt = await recoverApplicationStateSnapshotHydration({
+      ...input,
+      inspection,
+      confirmPartialHydrationRecovery: true,
+      observePhase: (phase) => {
+        phases.push(phase);
+      },
+    });
+    expect(receipt).toEqual(inspection.recovery);
+    expect(phases).toEqual([
+      'hydration-recovery-recorded',
+      'hydration-recovery-target-removed',
+      'hydration-recovery-claim-released',
+    ]);
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toBeNull();
+    await expect(readOptionalFile(partial.claimPath)).resolves.toBeNull();
+    await expect(
+      readOptionalDirectory(artifacts.retiredTargetPath),
+    ).resolves.toEqual([]);
+    await expect(fsp.readFile(artifacts.retiredClaimPath)).resolves.toEqual(
+      originalClaimBytes,
+    );
+    await expect(fsp.readFile(artifacts.receiptPath, 'utf8')).resolves.toBe(
+      `${JSON.stringify(receipt)}\n`,
+    );
+
+    const completedInspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    expect(completedInspection).toMatchObject({
+      state: 'RECOVERED',
+      recovery: receipt,
+    });
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection,
+        confirmPartialHydrationRecovery: true,
+      }),
+    ).resolves.toEqual(receipt);
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection: completedInspection,
+        confirmPartialHydrationRecovery: true,
+      }),
+    ).resolves.toEqual(receipt);
+
+    await expect(
+      transportApplicationStateSnapshot({
+        ...input,
+        history: transport.snapshot.checkpoint.history,
+        distribution: harness.distribution,
+      }),
+    ).resolves.toMatchObject({ status: 'HYDRATED' });
+    await expectSeed(harness.replacementConfiguration, replacementAuthority);
+    await expect(fsp.readFile(artifacts.receiptPath, 'utf8')).resolves.toBe(
+      `${JSON.stringify(receipt)}\n`,
+    );
+  });
+
+  test('recovers a second crash-state attempt while the first receipt stays exact and replayable', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    await createRecoverablePartialHydration(harness, transport, 'attempt-a');
+    const inspectionA =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const artifactsA = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspectionA.recovery,
+    );
+    await recoverApplicationStateSnapshotHydration({
+      ...input,
+      inspection: inspectionA,
+      confirmPartialHydrationRecovery: true,
+    });
+    const receiptA = await fsp.readFile(artifactsA.receiptPath);
+    const retiredClaimA = await fsp.readFile(artifactsA.retiredClaimPath);
+    const retiredTargetStatA = await fsp.lstat(artifactsA.retiredTargetPath, {
+      bigint: true,
+    });
+    const retiredClaimStatA = await fsp.lstat(artifactsA.retiredClaimPath, {
+      bigint: true,
+    });
+
+    await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'transport-crash-attempt-b',
+    );
+    const inspectionB =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    expect(inspectionB).toMatchObject({ state: 'PARTIAL_TARGET' });
+    expect(inspectionB.recovery.recoveryId).not.toBe(
+      inspectionA.recovery.recoveryId,
+    );
+    const artifactsB = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspectionB.recovery,
+    );
+    const activeClaimB = await fsp.readFile(
+      join(harness.replacementPath, HYDRATION_CLAIM_FILE),
+    );
+    const activeTargetStatB = await fsp.lstat(
+      join(harness.replacementPath, 'lmdb'),
+      { bigint: true },
+    );
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection: inspectionA,
+        confirmPartialHydrationRecovery: true,
+      }),
+    ).resolves.toEqual(inspectionA.recovery);
+    await expect(
+      fsp.readFile(join(harness.replacementPath, HYDRATION_CLAIM_FILE)),
+    ).resolves.toEqual(activeClaimB);
+    await expect(
+      fsp.lstat(join(harness.replacementPath, 'lmdb'), { bigint: true }),
+    ).resolves.toMatchObject({
+      dev: activeTargetStatB.dev,
+      ino: activeTargetStatB.ino,
+    });
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection: inspectionB,
+        confirmPartialHydrationRecovery: true,
+      }),
+    ).resolves.toEqual(inspectionB.recovery);
+
+    await expect(fsp.readFile(artifactsA.receiptPath)).resolves.toEqual(
+      receiptA,
+    );
+    await expect(fsp.readFile(artifactsA.retiredClaimPath)).resolves.toEqual(
+      retiredClaimA,
+    );
+    await expect(
+      fsp.lstat(artifactsA.retiredTargetPath, { bigint: true }),
+    ).resolves.toMatchObject({
+      dev: retiredTargetStatA.dev,
+      ino: retiredTargetStatA.ino,
+    });
+    await expect(
+      fsp.lstat(artifactsA.retiredClaimPath, { bigint: true }),
+    ).resolves.toMatchObject({
+      dev: retiredClaimStatA.dev,
+      ino: retiredClaimStatA.ino,
+      size: retiredClaimStatA.size,
+    });
+    await expect(
+      readOptionalDirectory(artifactsB.retiredTargetPath),
+    ).resolves.toEqual([]);
+    await expect(
+      readOptionalFile(artifactsB.retiredClaimPath),
+    ).resolves.not.toBeNull();
+    await expect(
+      transportApplicationStateSnapshot({
+        ...input,
+        history: transport.snapshot.checkpoint.history,
+        distribution: harness.distribution,
+      }),
+    ).resolves.toMatchObject({ status: 'HYDRATED' });
+    await expectSeed(harness.replacementConfiguration, replacementAuthority);
+    await expect(fsp.readFile(artifactsA.receiptPath)).resolves.toEqual(
+      receiptA,
+    );
+  });
+
+  test('a completed receipt cannot replay under a superseding authority and barrier', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const inputA = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'completed-before-supersede',
+    );
+    const inspectionA =
+      await inspectApplicationStateSnapshotHydrationRecovery(inputA);
+    await recoverApplicationStateSnapshotHydration({
+      ...inputA,
+      inspection: inspectionA,
+      confirmPartialHydrationRecovery: true,
+    });
+    const artifacts = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspectionA.recovery,
+    );
+    const beforeNames = (await fsp.readdir(harness.replacementPath)).sort();
+    const beforeReceipt = await fsp.readFile(artifacts.receiptPath);
+    const beforeClaim = await fsp.readFile(artifacts.retiredClaimPath);
+    const beforeTargetStats = await fsp.lstat(artifacts.retiredTargetPath, {
+      bigint: true,
+    });
+    const beforeClaimStats = await fsp.lstat(artifacts.retiredClaimPath, {
+      bigint: true,
+    });
+
+    const laterAuthority = await harness.supersede();
+    const inputB = hydrationRecoveryInput(harness, transport, laterAuthority);
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecovery(inputB),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...inputB,
+        inspection: inspectionA,
+        confirmPartialHydrationRecovery: true,
+      }),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+
+    await expect(
+      fsp.readdir(harness.replacementPath).then((names) => names.sort()),
+    ).resolves.toEqual(beforeNames);
+    await expect(fsp.readFile(artifacts.receiptPath)).resolves.toEqual(
+      beforeReceipt,
+    );
+    await expect(fsp.readFile(artifacts.retiredClaimPath)).resolves.toEqual(
+      beforeClaim,
+    );
+    await expect(
+      fsp.lstat(artifacts.retiredTargetPath, { bigint: true }),
+    ).resolves.toMatchObject({
+      dev: beforeTargetStats.dev,
+      ino: beforeTargetStats.ino,
+    });
+    await expect(
+      fsp.lstat(artifacts.retiredClaimPath, { bigint: true }),
+    ).resolves.toMatchObject({
+      dev: beforeClaimStats.dev,
+      ino: beforeClaimStats.ino,
+      size: beforeClaimStats.size,
+    });
+  });
+
+  test.each(['receipt link', 'target rename', 'claim rename'])(
+    'exact concurrent replay establishes its own durable boundary after blocked %s',
+    async (boundary) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const replacementAuthority = await harness.takeover();
+      await createRecoverablePartialHydration(
+        harness,
+        transport,
+        `concurrent-${boundary}`,
+      );
+      const input = hydrationRecoveryInput(
+        harness,
+        transport,
+        replacementAuthority,
+      );
+      const inspection =
+        await inspectApplicationStateSnapshotHydrationRecovery(input);
+      const artifacts = hydrationRecoveryArtifacts(
+        harness.replacementPath,
+        inspection.recovery,
+      );
+      const syscallReached = deferred();
+      const releaseOwner = deferred();
+      const realLink = fsp.link.bind(fsp);
+      const realRename = fsp.rename.bind(fsp);
+      const realOpen = fsp.open.bind(fsp);
+      let blocked = false;
+      let replayActive = false;
+      let replayRootSyncs = 0;
+      const linkSpy = jest
+        .spyOn(fsp, 'link')
+        .mockImplementation(async (source, destination) => {
+          const result = await realLink(source, destination);
+          if (
+            !blocked &&
+            boundary === 'receipt link' &&
+            destination === artifacts.receiptPath
+          ) {
+            blocked = true;
+            syscallReached.resolve();
+            await releaseOwner.promise;
+          }
+          return result;
+        });
+      const renameSpy = jest
+        .spyOn(fsp, 'rename')
+        .mockImplementation(async (source, destination) => {
+          const result = await realRename(source, destination);
+          const blocksTarget =
+            boundary === 'target rename' &&
+            source === join(harness.replacementPath, 'lmdb') &&
+            destination === artifacts.retiredTargetPath;
+          const blocksClaim =
+            boundary === 'claim rename' &&
+            source === join(harness.replacementPath, HYDRATION_CLAIM_FILE) &&
+            destination === artifacts.retiredClaimPath;
+          if (!blocked && (blocksTarget || blocksClaim)) {
+            blocked = true;
+            syscallReached.resolve();
+            await releaseOwner.promise;
+          }
+          return result;
+        });
+      const openSpy = jest
+        .spyOn(fsp, 'open')
+        .mockImplementation(async (path, flags, mode) => {
+          const handle = await realOpen(path, flags, mode);
+          if (path === harness.replacementPath && flags === 'r') {
+            const realSync = handle.sync.bind(handle);
+            handle.sync = async () => {
+              if (replayActive) replayRootSyncs += 1;
+              return await realSync();
+            };
+          }
+          return handle;
+        });
+      const owner = recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection,
+        confirmPartialHydrationRecovery: true,
+      });
+      try {
+        await Promise.race([
+          syscallReached.promise,
+          owner.then(
+            () => {
+              throw new Error('recovery owner settled before interception');
+            },
+            (error) => {
+              throw error;
+            },
+          ),
+        ]);
+        replayActive = true;
+        const replay = recoverApplicationStateSnapshotHydration({
+          ...input,
+          inspection,
+          confirmPartialHydrationRecovery: true,
+        });
+        await expect(
+          settleBeforeBlockedOwnerRelease(replay, releaseOwner.resolve),
+        ).resolves.toEqual(inspection.recovery);
+        replayActive = false;
+        expect(replayRootSyncs).toBeGreaterThan(0);
+      } finally {
+        replayActive = false;
+        releaseOwner.resolve();
+        linkSpy.mockRestore();
+        renameSpy.mockRestore();
+        openSpy.mockRestore();
+      }
+      await expect(owner).resolves.toEqual(inspection.recovery);
+      await expect(
+        readOptionalDirectory(artifacts.retiredTargetPath),
+      ).resolves.toEqual([]);
+      await expect(
+        readOptionalFile(artifacts.retiredClaimPath),
+      ).resolves.not.toBeNull();
+    },
+  );
+
+  test('a global malformed recovery receipt blocks hydration without silent cleanup', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    await fsp.mkdir(harness.replacementPath, { recursive: true, mode: 0o700 });
+    const corruptPath = join(
+      harness.replacementPath,
+      `${HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX}-${id('wass1', 'foreign-registry-snapshot')}-${id('washr1', 'foreign-corrupt-receipt')}`,
+    );
+    const corruptBytes = Buffer.from('{}\n');
+    await fsp.writeFile(corruptPath, corruptBytes, { mode: 0o600 });
+
+    await expect(
+      transportApplicationStateSnapshot({
+        ...hydrationRecoveryInput(harness, transport, replacementAuthority),
+        history: transport.snapshot.checkpoint.history,
+        distribution: harness.distribution,
+      }),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    await expect(fsp.readFile(corruptPath)).resolves.toEqual(corruptBytes);
+    await expect(
+      readOptionalFile(join(harness.replacementPath, HYDRATION_CLAIM_FILE)),
+    ).resolves.toBeNull();
+    await expect(
+      readOptionalDirectory(join(harness.replacementPath, 'lmdb')),
+    ).resolves.toBeNull();
+  });
+
+  test('orphan retirement evidence blocks inspection without cleanup', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'orphan-retirement-registry',
+    );
+    const orphanPath = join(
+      harness.replacementPath,
+      `${HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX}-${transport.snapshot.snapshotId}-${id('washr1', 'orphan-retirement-registry')}`,
+    );
+    await fsp.mkdir(orphanPath, { mode: 0o700 });
+    const claimBytes = await fsp.readFile(partial.claimPath);
+
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecovery(
+        hydrationRecoveryInput(harness, transport, replacementAuthority),
+      ),
+    ).rejects.toThrow(/retirement evidence is orphaned/iu);
+    await expect(fsp.readFile(partial.claimPath)).resolves.toEqual(claimBytes);
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toEqual(
+      [],
+    );
+    await expect(readOptionalDirectory(orphanPath)).resolves.toEqual([]);
+  });
+
+  test('multiple incomplete receipts block inspection without cleanup', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'multiple-incomplete-a',
+    );
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const artifactsA = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspection.recovery,
+    );
+    const interruption = new Error('stop after first incomplete receipt');
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection,
+        confirmPartialHydrationRecovery: true,
+        observePhase: (phase) => {
+          if (phase === 'hydration-recovery-recorded') throw interruption;
+        },
+      }),
+    ).rejects.toBe(interruption);
+    const secondPayload = {
+      schemaVersion: inspection.recovery.schemaVersion,
+      kind: inspection.recovery.kind,
+      transport: inspection.recovery.transport,
+      claim: hydrationClaim(
+        transport.snapshot.snapshotId,
+        'multiple-incomplete-b',
+      ),
+      replicaId: inspection.recovery.replicaId,
+      filesystem: inspection.recovery.filesystem,
+      replacementBarrier: inspection.recovery.replacementBarrier,
+      replacementAuthority: inspection.recovery.replacementAuthority,
+    };
+    const secondRecovery = {
+      ...secondPayload,
+      recoveryId: createCanonicalJsonSha256Id({
+        domain: 'wharfie:application-state-snapshot-hydration-recovery:v1',
+        prefix: 'washr1',
+        value: secondPayload,
+      }),
+    };
+    const artifactsB = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      secondRecovery,
+    );
+    const receiptB = Buffer.from(`${JSON.stringify(secondRecovery)}\n`);
+    await fsp.writeFile(artifactsB.receiptPath, receiptB, { mode: 0o600 });
+    const receiptA = await fsp.readFile(artifactsA.receiptPath);
+    const claimBytes = await fsp.readFile(partial.claimPath);
+
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecovery(input),
+    ).rejects.toThrow(/multiple incomplete attempts/iu);
+    await expect(fsp.readFile(artifactsA.receiptPath)).resolves.toEqual(
+      receiptA,
+    );
+    await expect(fsp.readFile(artifactsB.receiptPath)).resolves.toEqual(
+      receiptB,
+    );
+    await expect(fsp.readFile(partial.claimPath)).resolves.toEqual(claimBytes);
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toEqual(
+      [],
+    );
+  });
+
+  test('an incomplete receipt blocks a new claim without deleting relocated evidence', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'incomplete-registry-gate',
+    );
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const artifacts = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspection.recovery,
+    );
+    const claimBytes = await fsp.readFile(partial.claimPath);
+    const interruption = new Error('stop after durable receipt');
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection,
+        confirmPartialHydrationRecovery: true,
+        observePhase: (phase) => {
+          if (phase === 'hydration-recovery-recorded') throw interruption;
+        },
+      }),
+    ).rejects.toBe(interruption);
+    const receiptBytes = await fsp.readFile(artifacts.receiptPath);
+    const heldClaimPath = join(
+      harness.replacementPath,
+      '.held-incomplete-recovery-claim',
+    );
+    const heldTargetPath = join(
+      harness.replacementPath,
+      '.held-incomplete-recovery-target',
+    );
+    await fsp.rename(partial.claimPath, heldClaimPath);
+    await fsp.rename(partial.targetPath, heldTargetPath);
+
+    await expect(
+      transportApplicationStateSnapshot({
+        ...input,
+        history: transport.snapshot.checkpoint.history,
+        distribution: harness.distribution,
+      }),
+    ).rejects.toThrow(/incomplete hydration recovery receipt blocks/iu);
+    await expect(fsp.readFile(artifacts.receiptPath)).resolves.toEqual(
+      receiptBytes,
+    );
+    await expect(fsp.readFile(heldClaimPath)).resolves.toEqual(claimBytes);
+    await expect(readOptionalDirectory(heldTargetPath)).resolves.toEqual([]);
+    await expect(readOptionalFile(partial.claimPath)).resolves.toBeNull();
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toBeNull();
+  }, 10_000);
+
+  test('the 128-receipt registry remains replayable but blocks a new hydration claim', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'capacity-receipt-0',
+    );
+    const firstInspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    await recoverApplicationStateSnapshotHydration({
+      ...input,
+      inspection: firstInspection,
+      confirmPartialHydrationRecovery: true,
+    });
+    const storeRootStats = await fsp.lstat(harness.replacementPath, {
+      bigint: true,
+    });
+    const storeRootIdentity = {
+      device: storeRootStats.dev.toString(10),
+      inode: storeRootStats.ino.toString(10),
+    };
+    for (let index = 1; index < 128; index += 1) {
+      const claim = hydrationClaim(
+        transport.snapshot.snapshotId,
+        `capacity-receipt-${index}`,
+      );
+      const temporaryTarget = join(
+        harness.replacementPath,
+        `.capacity-retired-target-${index}`,
+      );
+      const temporaryClaim = join(
+        harness.replacementPath,
+        `.capacity-retired-claim-${index}`,
+      );
+      await fsp.mkdir(temporaryTarget, { mode: 0o700 });
+      await fsp.writeFile(temporaryClaim, `${JSON.stringify(claim)}\n`, {
+        mode: 0o600,
+      });
+      const targetStats = await fsp.lstat(temporaryTarget, { bigint: true });
+      const claimStats = await fsp.lstat(temporaryClaim, { bigint: true });
+      const payload = {
+        schemaVersion: 1,
+        kind: 'wharfie.application-state-snapshot-hydration-recovery.v1',
+        transport,
+        claim,
+        replicaId: firstInspection.recovery.replicaId,
+        filesystem: {
+          storeRoot: storeRootIdentity,
+          claimFile: {
+            device: claimStats.dev.toString(10),
+            inode: claimStats.ino.toString(10),
+            size: claimStats.size.toString(10),
+          },
+          targetDirectory: {
+            device: targetStats.dev.toString(10),
+            inode: targetStats.ino.toString(10),
+          },
+        },
+        replacementBarrier: harness.currentBarrier,
+        replacementAuthority,
+      };
+      const recoveryId = createCanonicalJsonSha256Id({
+        domain: 'wharfie:application-state-snapshot-hydration-recovery:v1',
+        prefix: 'washr1',
+        value: payload,
+      });
+      const recovery = { ...payload, recoveryId };
+      const artifacts = hydrationRecoveryArtifacts(
+        harness.replacementPath,
+        recovery,
+      );
+      await fsp.rename(temporaryTarget, artifacts.retiredTargetPath);
+      await fsp.rename(temporaryClaim, artifacts.retiredClaimPath);
+      await fsp.writeFile(
+        artifacts.receiptPath,
+        `${JSON.stringify(recovery)}\n`,
+        { mode: 0o600 },
+      );
+    }
+    const receiptNames = (await fsp.readdir(harness.replacementPath)).filter(
+      (name) => name.startsWith(`${HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX}-`),
+    );
+    expect(receiptNames).toHaveLength(128);
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection: firstInspection,
+        confirmPartialHydrationRecovery: true,
+      }),
+    ).resolves.toEqual(firstInspection.recovery);
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecovery(input),
+    ).resolves.toMatchObject({ state: 'RECOVERED' });
+
+    await expect(
+      transportApplicationStateSnapshot({
+        ...input,
+        history: transport.snapshot.checkpoint.history,
+        distribution: harness.distribution,
+      }),
+    ).rejects.toThrow(/registry is exhausted/iu);
+    await expect(
+      readOptionalFile(join(harness.replacementPath, HYDRATION_CLAIM_FILE)),
+    ).resolves.toBeNull();
+    await expect(
+      readOptionalDirectory(join(harness.replacementPath, 'lmdb')),
+    ).resolves.toBeNull();
+    await expect(fsp.readdir(harness.replacementPath)).resolves.toEqual(
+      expect.arrayContaining(receiptNames),
+    );
+  }, 30_000);
+
+  test.each([
+    [
+      'record persistence',
+      'hydration-recovery-recorded',
+      'RECOVERY_RECORDED',
+      true,
+      true,
+    ],
+    [
+      'target removal',
+      'hydration-recovery-target-removed',
+      'TARGET_REMOVED',
+      false,
+      true,
+    ],
+    [
+      'claim release',
+      'hydration-recovery-claim-released',
+      'RECOVERED',
+      false,
+      false,
+    ],
+  ])(
+    'replays idempotently after interruption following %s',
+    async (
+      _label,
+      interruptedPhase,
+      expectedState,
+      targetPresent,
+      claimPresent,
+    ) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const replacementAuthority = await harness.takeover();
+      const partial = await createRecoverablePartialHydration(
+        harness,
+        transport,
+        interruptedPhase,
+      );
+      const input = hydrationRecoveryInput(
+        harness,
+        transport,
+        replacementAuthority,
+      );
+      const inspection =
+        await inspectApplicationStateSnapshotHydrationRecovery(input);
+      const artifacts = hydrationRecoveryArtifacts(
+        harness.replacementPath,
+        inspection.recovery,
+      );
+      const originalClaimBytes = await fsp.readFile(partial.claimPath);
+      const interruption = new Error(`interrupted after ${interruptedPhase}`);
+
+      await expect(
+        recoverApplicationStateSnapshotHydration({
+          ...input,
+          inspection,
+          confirmPartialHydrationRecovery: true,
+          observePhase: (phase) => {
+            if (phase === interruptedPhase) throw interruption;
+          },
+        }),
+      ).rejects.toBe(interruption);
+      expect(await readOptionalDirectory(partial.targetPath)).toEqual(
+        targetPresent ? [] : null,
+      );
+      expect(await readOptionalFile(partial.claimPath)).toEqual(
+        claimPresent ? expect.any(Buffer) : null,
+      );
+      const markerBytes = await readOptionalFile(artifacts.receiptPath);
+      expect(markerBytes).not.toBeNull();
+      expect(await readOptionalDirectory(artifacts.retiredTargetPath)).toEqual(
+        expectedState === 'RECOVERY_RECORDED' ? null : [],
+      );
+      expect(await readOptionalFile(artifacts.retiredClaimPath)).toEqual(
+        expectedState === 'RECOVERED' ? originalClaimBytes : null,
+      );
+
+      const retained =
+        await inspectApplicationStateSnapshotHydrationRecovery(input);
+      expect(retained).toMatchObject({
+        state: expectedState,
+        recovery: inspection.recovery,
+      });
+      /** @type {string[]} */
+      const replayPhases = [];
+      const receipt = await recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection,
+        confirmPartialHydrationRecovery: true,
+        observePhase: (phase) => {
+          replayPhases.push(phase);
+        },
+      });
+      expect(receipt).toEqual(inspection.recovery);
+      expect(replayPhases).toEqual(
+        expectedState === 'RECOVERED'
+          ? []
+          : [
+              'hydration-recovery-recorded',
+              'hydration-recovery-target-removed',
+              'hydration-recovery-claim-released',
+            ],
+      );
+      await expect(
+        recoverApplicationStateSnapshotHydration({
+          ...input,
+          inspection: retained,
+          confirmPartialHydrationRecovery: true,
+        }),
+      ).resolves.toEqual(receipt);
+      await expect(
+        readOptionalDirectory(partial.targetPath),
+      ).resolves.toBeNull();
+      await expect(readOptionalFile(partial.claimPath)).resolves.toBeNull();
+      await expect(readOptionalFile(artifacts.receiptPath)).resolves.toEqual(
+        markerBytes,
+      );
+      await expect(
+        readOptionalDirectory(artifacts.retiredTargetPath),
+      ).resolves.toEqual([]);
+      await expect(
+        readOptionalFile(artifacts.retiredClaimPath),
+      ).resolves.toEqual(originalClaimBytes);
+    },
+  );
+
+  test.each(['target directory', 'claim file', 'store root'])(
+    'rejects same-content %s substitution after inspection without writing recovery state',
+    async (substitution) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const replacementAuthority = await harness.takeover();
+      const partial = await createRecoverablePartialHydration(
+        harness,
+        transport,
+        `substitute-${substitution}`,
+      );
+      const input = hydrationRecoveryInput(
+        harness,
+        transport,
+        replacementAuthority,
+      );
+      const inspection =
+        await inspectApplicationStateSnapshotHydrationRecovery(input);
+      const artifacts = hydrationRecoveryArtifacts(
+        harness.replacementPath,
+        inspection.recovery,
+      );
+      const claimBytes = await fsp.readFile(partial.claimPath);
+      const replicaBytes = await fsp.readFile(
+        join(harness.replacementPath, REPLICA_ID_FILE),
+      );
+      let retainedPath;
+
+      if (substitution === 'target directory') {
+        retainedPath = join(harness.replacementPath, '.retained-original-lmdb');
+        await fsp.rename(partial.targetPath, retainedPath);
+        await fsp.mkdir(partial.targetPath, { mode: 0o700 });
+      } else if (substitution === 'claim file') {
+        retainedPath = join(
+          harness.replacementPath,
+          '.retained-original-hydration-claim',
+        );
+        await fsp.rename(partial.claimPath, retainedPath);
+        await fsp.writeFile(partial.claimPath, claimBytes, { mode: 0o600 });
+      } else {
+        retainedPath = join(harness.root, '.retained-original-store-root');
+        await fsp.rename(harness.replacementPath, retainedPath);
+        await fsp.mkdir(harness.replacementPath, { mode: 0o700 });
+        await fsp.writeFile(
+          join(harness.replacementPath, REPLICA_ID_FILE),
+          replicaBytes,
+          { mode: 0o600 },
+        );
+        await fsp.writeFile(partial.claimPath, claimBytes, { mode: 0o600 });
+        await fsp.mkdir(partial.targetPath, { mode: 0o700 });
+      }
+
+      await expect(
+        recoverApplicationStateSnapshotHydration({
+          ...input,
+          inspection,
+          confirmPartialHydrationRecovery: true,
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+      await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+      await expect(readOptionalFile(partial.claimPath)).resolves.toEqual(
+        claimBytes,
+      );
+      await expect(readOptionalDirectory(partial.targetPath)).resolves.toEqual(
+        [],
+      );
+      if (substitution === 'target directory') {
+        await expect(readOptionalDirectory(retainedPath)).resolves.toEqual([]);
+      } else if (substitution === 'claim file') {
+        await expect(readOptionalFile(retainedPath)).resolves.toEqual(
+          claimBytes,
+        );
+      } else {
+        await expect(
+          readOptionalDirectory(join(retainedPath, 'lmdb')),
+        ).resolves.toEqual([]);
+        await expect(
+          readOptionalFile(join(retainedPath, HYDRATION_CLAIM_FILE)),
+        ).resolves.toEqual(claimBytes);
+      }
+    },
+  );
+
+  test('quarantines a last-window target substitution without deleting either directory', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'target-substitution-after-record',
+    );
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const artifacts = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspection.recovery,
+    );
+    const claimBytes = await fsp.readFile(partial.claimPath);
+    const retainedTarget = join(
+      harness.replacementPath,
+      '.retained-last-window-hydration-target',
+    );
+    const realRename = fsp.rename.bind(fsp);
+    const renameSpy = jest
+      .spyOn(fsp, 'rename')
+      .mockImplementation(async (source, destination) => {
+        if (
+          source === partial.targetPath &&
+          destination === artifacts.retiredTargetPath
+        ) {
+          await realRename(source, retainedTarget);
+          await fsp.mkdir(source, { mode: 0o700 });
+        }
+        return await realRename(source, destination);
+      });
+    try {
+      await expect(
+        recoverApplicationStateSnapshotHydration({
+          ...input,
+          inspection,
+          confirmPartialHydrationRecovery: true,
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    await expect(readOptionalDirectory(retainedTarget)).resolves.toEqual([]);
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toBeNull();
+    await expect(
+      readOptionalDirectory(artifacts.retiredTargetPath),
+    ).resolves.toEqual([]);
+    await expect(readOptionalFile(partial.claimPath)).resolves.toEqual(
+      claimBytes,
+    );
+    await expect(fsp.readFile(artifacts.receiptPath, 'utf8')).resolves.toBe(
+      `${JSON.stringify(inspection.recovery)}\n`,
+    );
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecovery(input),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    const heldClaim = join(
+      harness.replacementPath,
+      '.held-last-window-target-mismatch-claim',
+    );
+    await fsp.rename(partial.claimPath, heldClaim);
+    await expect(
+      transportApplicationStateSnapshot({
+        ...input,
+        history: transport.snapshot.checkpoint.history,
+        distribution: harness.distribution,
+      }),
+    ).rejects.toThrow(/retired hydration target does not have/iu);
+    await expect(fsp.readFile(heldClaim)).resolves.toEqual(claimBytes);
+    await expect(readOptionalFile(partial.claimPath)).resolves.toBeNull();
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toBeNull();
+  });
+
+  test('quarantines a last-window claim substitution without deleting either claim', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'claim-substitution-after-target-removal',
+    );
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const artifacts = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspection.recovery,
+    );
+    const claimBytes = await fsp.readFile(partial.claimPath);
+    const retainedClaim = join(
+      harness.replacementPath,
+      '.retained-removed-target-hydration-claim',
+    );
+
+    const realRename = fsp.rename.bind(fsp);
+    const renameSpy = jest
+      .spyOn(fsp, 'rename')
+      .mockImplementation(async (source, destination) => {
+        if (
+          source === partial.claimPath &&
+          destination === artifacts.retiredClaimPath
+        ) {
+          await realRename(source, retainedClaim);
+          await fsp.writeFile(source, claimBytes, { mode: 0o600 });
+        }
+        return await realRename(source, destination);
+      });
+    try {
+      await expect(
+        recoverApplicationStateSnapshotHydration({
+          ...input,
+          inspection,
+          confirmPartialHydrationRecovery: true,
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toBeNull();
+    await expect(
+      readOptionalDirectory(artifacts.retiredTargetPath),
+    ).resolves.toEqual([]);
+    await expect(readOptionalFile(retainedClaim)).resolves.toEqual(claimBytes);
+    await expect(readOptionalFile(partial.claimPath)).resolves.toBeNull();
+    await expect(readOptionalFile(artifacts.retiredClaimPath)).resolves.toEqual(
+      claimBytes,
+    );
+    await expect(fsp.readFile(artifacts.receiptPath, 'utf8')).resolves.toBe(
+      `${JSON.stringify(inspection.recovery)}\n`,
+    );
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecovery(input),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    await expect(
+      transportApplicationStateSnapshot({
+        ...input,
+        history: transport.snapshot.checkpoint.history,
+        distribution: harness.distribution,
+      }),
+    ).rejects.toThrow(/retired hydration claim does not have/iu);
+    await expect(readOptionalFile(partial.claimPath)).resolves.toBeNull();
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toBeNull();
+    await expect(readOptionalFile(retainedClaim)).resolves.toEqual(claimBytes);
+    await expect(readOptionalFile(artifacts.retiredClaimPath)).resolves.toEqual(
+      claimBytes,
+    );
+  });
+
+  test.each(['superseded authority', 'changed durable barrier'])(
+    'rejects recovery under %s without changing retained filesystem evidence',
+    async (change) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const replacementAuthority = await harness.takeover();
+      const partial = await createRecoverablePartialHydration(
+        harness,
+        transport,
+        `stale-${change}`,
+      );
+      const input = hydrationRecoveryInput(
+        harness,
+        transport,
+        replacementAuthority,
+      );
+      const inspection =
+        await inspectApplicationStateSnapshotHydrationRecovery(input);
+      const artifacts = hydrationRecoveryArtifacts(
+        harness.replacementPath,
+        inspection.recovery,
+      );
+      const claimBytes = await fsp.readFile(partial.claimPath);
+
+      if (change === 'superseded authority') {
+        await harness.supersede();
+      } else {
+        await harness.admission.reopen({
+          authority: replacementAuthority,
+          requestId: 'recovery-barrier-reopened',
+          predecessor: harness.currentBarrier,
+          observedAt: harness.currentBarrier.version + 1,
+        });
+      }
+
+      await expect(
+        recoverApplicationStateSnapshotHydration({
+          ...input,
+          inspection,
+          confirmPartialHydrationRecovery: true,
+        }),
+      ).rejects.toThrow();
+      await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+      await expect(readOptionalFile(partial.claimPath)).resolves.toEqual(
+        claimBytes,
+      );
+      await expect(readOptionalDirectory(partial.targetPath)).resolves.toEqual(
+        [],
+      );
+    },
+  );
+
+  test.each([
+    [
+      'nonempty target',
+      async (
+        /** @type {{partial: Awaited<ReturnType<typeof createRecoverablePartialHydration>>}} */ {
+          partial,
+        },
+      ) => {
+        const path = join(partial.targetPath, 'data.mdb');
+        const bytes = Buffer.from('retained-partial-bytes');
+        await fsp.writeFile(path, bytes);
+        return { path, bytes };
+      },
+    ],
+    [
+      'snapshot-scoped hydration evidence',
+      async (
+        /** @type {{transport: Readonly<Record<string, any>>, partial: Awaited<ReturnType<typeof createRecoverablePartialHydration>>}} */ {
+          transport,
+          partial,
+        },
+      ) => {
+        const path = join(
+          partial.targetPath,
+          `.wharfie-application-state-snapshot-hydration-${transport.snapshot.snapshotId}`,
+        );
+        const bytes = Buffer.from(`${transport.snapshot.snapshotId}\n`);
+        await fsp.writeFile(path, bytes);
+        return { path, bytes };
+      },
+    ],
+    [
+      'foreign claim',
+      async (
+        /** @type {{partial: Awaited<ReturnType<typeof createRecoverablePartialHydration>>}} */ {
+          partial,
+        },
+      ) => {
+        await fsp.writeFile(
+          partial.claimPath,
+          `${JSON.stringify(
+            hydrationClaim(id('wass1', 'foreign-recovery-snapshot'), 'foreign'),
+          )}\n`,
+        );
+        return null;
+      },
+    ],
+    [
+      'corrupt claim',
+      async (
+        /** @type {{partial: Awaited<ReturnType<typeof createRecoverablePartialHydration>>}} */ {
+          partial,
+        },
+      ) => {
+        await fsp.writeFile(partial.claimPath, '{not-json}\n');
+        return null;
+      },
+    ],
+    [
+      'missing claim',
+      async (
+        /** @type {{partial: Awaited<ReturnType<typeof createRecoverablePartialHydration>>}} */ {
+          partial,
+        },
+      ) => {
+        await fsp.unlink(partial.claimPath);
+        return null;
+      },
+    ],
+    [
+      'corrupt recovery marker',
+      async (
+        /** @type {{partial: Awaited<ReturnType<typeof createRecoverablePartialHydration>>}} */ {
+          partial,
+        },
+      ) => {
+        await fsp.writeFile(partial.unboundRecoveryPath, '{}\n');
+        return null;
+      },
+    ],
+  ])(
+    'refuses %s during read-only inspection and preserves every retained byte',
+    async (_label, mutate) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const replacementAuthority = await harness.takeover();
+      const partial = await createRecoverablePartialHydration(
+        harness,
+        transport,
+        `unsafe-${_label}`,
+      );
+      const input = hydrationRecoveryInput(
+        harness,
+        transport,
+        replacementAuthority,
+      );
+      const retainedFile = await mutate({ transport, partial });
+      const beforeClaim = await readOptionalFile(partial.claimPath);
+      const beforeTarget = await readOptionalDirectory(partial.targetPath);
+      const beforeMarker = await readOptionalFile(partial.unboundRecoveryPath);
+
+      await expect(
+        inspectApplicationStateSnapshotHydrationRecovery(input),
+      ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+      await expect(readOptionalFile(partial.claimPath)).resolves.toEqual(
+        beforeClaim,
+      );
+      await expect(readOptionalDirectory(partial.targetPath)).resolves.toEqual(
+        beforeTarget,
+      );
+      await expect(
+        readOptionalFile(partial.unboundRecoveryPath),
+      ).resolves.toEqual(beforeMarker);
+      if (retainedFile) {
+        await expect(fsp.readFile(retainedFile.path)).resolves.toEqual(
+          retainedFile.bytes,
+        );
+      }
+    },
+  );
+
+  test('rejects a tampered inspection and an already activated target without recovery writes', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const replacementAuthority = await harness.takeover();
+    await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'tampered-inspection',
+    );
+    const input = hydrationRecoveryInput(
+      harness,
+      transport,
+      replacementAuthority,
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const artifacts = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      inspection.recovery,
+    );
+    const tampered = {
+      ...JSON.parse(JSON.stringify(inspection)),
+      unsupported: true,
+    };
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection: tampered,
+        confirmPartialHydrationRecovery: true,
+      }),
+    ).rejects.toThrow(/unsupported or missing fields/iu);
+    await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+
+    await recoverApplicationStateSnapshotHydration({
+      ...input,
+      inspection,
+      confirmPartialHydrationRecovery: true,
+    });
+    await transportApplicationStateSnapshot({
+      ...input,
+      history: transport.snapshot.checkpoint.history,
+      distribution: harness.distribution,
+    });
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecovery(input),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
   });
 
   test('retries idempotently after destination activation response loss', async () => {

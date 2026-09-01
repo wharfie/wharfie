@@ -32,6 +32,7 @@ import {
   assertDomainSeparatedSha256Id,
   createCanonicalJsonSha256Id,
 } from './content-id.js';
+import { cloneBoundedJsonObject } from './json-value.js';
 import { assertApplicationStateSnapshotDistribution } from './application-state-snapshot-distribution.js';
 import { createApplicationStateSnapshotControlStore } from './application-state-snapshot-control.js';
 import {
@@ -74,6 +75,9 @@ const PHASES = new Set([
   'hydration-evidence-linked',
   'hydration-committed',
   'destination-adopted',
+  'hydration-recovery-recorded',
+  'hydration-recovery-target-removed',
+  'hydration-recovery-claim-released',
 ]);
 
 const REPLICA_ID_FILE = '.wharfie-application-state-replica-id';
@@ -86,6 +90,44 @@ const HYDRATION_CLAIM_FILE =
 const HYDRATION_CLAIM_KIND =
   'wharfie.application-state-snapshot-hydration-claim.v1';
 const HYDRATION_CLAIM_ID_PREFIX = 'washc1';
+const HYDRATION_RECOVERY_FILE_PREFIX =
+  '.wharfie-application-state-snapshot-hydration-recovery';
+const HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-receipt`;
+const HYDRATION_RECOVERY_CANDIDATE_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-candidate`;
+const HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-target`;
+const HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-claim`;
+const HYDRATION_RECOVERY_KIND =
+  'wharfie.application-state-snapshot-hydration-recovery.v1';
+const HYDRATION_RECOVERY_ID_PREFIX = 'washr1';
+const HYDRATION_RECOVERY_INSPECTION_KIND =
+  'wharfie.application-state-snapshot-hydration-recovery-inspection.v1';
+const HYDRATION_RECOVERY_INSPECTION_ID_PREFIX = 'washri1';
+const HYDRATION_RECOVERY_MAX_RECORD_BYTES = 256 * 1024;
+const HYDRATION_RECOVERY_MAX_RECEIPTS = 128;
+const HYDRATION_RECOVERY_STATES = new Set([
+  'PARTIAL_TARGET',
+  'RECOVERY_RECORDED',
+  'TARGET_REMOVED',
+  'RECOVERED',
+]);
+const HYDRATION_RECOVERY_RECORD_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'recoveryId',
+  'transport',
+  'claim',
+  'replicaId',
+  'filesystem',
+  'replacementBarrier',
+  'replacementAuthority',
+]);
+const HYDRATION_RECOVERY_INSPECTION_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'inspectionId',
+  'state',
+  'recovery',
+]);
 const HYDRATION_CLAIM_WAIT_ATTEMPTS = 200;
 const HYDRATION_CLAIM_WAIT_MS = 10;
 const TARGET_PROBE_ARGUMENT = '--wharfie-application-state-target-probe';
@@ -119,6 +161,102 @@ function sameJson(left, right) {
   return (
     JSON.stringify(sortCanonicalJsonValue(left)) ===
     JSON.stringify(sortCanonicalJsonValue(right))
+  );
+}
+
+/** @param {any} value @returns {any} */
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+/** @param {unknown} value @param {Set<string>} keys @param {string} label */
+function exactRecoveryObject(value, keys, label) {
+  const object = cloneBoundedJsonObject(
+    value,
+    HYDRATION_RECOVERY_MAX_RECORD_BYTES,
+    label,
+  );
+  if (
+    Object.keys(object).length !== keys.size ||
+    Object.keys(object).some((key) => !keys.has(key))
+  ) {
+    throw new TypeError(`${label} has unsupported or missing fields.`);
+  }
+  return object;
+}
+
+/** @param {bigint} value @param {string} label */
+function canonicalStatInteger(value, label) {
+  const canonical = value.toString(10);
+  if (!/^(0|[1-9][0-9]*)$/.test(canonical)) {
+    throw new TypeError(`${label} is not one canonical nonnegative integer.`);
+  }
+  return canonical;
+}
+
+/** @param {unknown} value @param {boolean} includeSize @param {string} label */
+function normalizeFilesystemIdentity(value, includeSize, label) {
+  const keys = new Set(
+    includeSize ? ['device', 'inode', 'size'] : ['device', 'inode'],
+  );
+  const identity = exactRecoveryObject(value, keys, label);
+  for (const key of keys) {
+    if (
+      typeof identity[key] !== 'string' ||
+      !/^(0|[1-9][0-9]*)$/.test(identity[key])
+    ) {
+      throw new TypeError(
+        `${label}.${key} must be a canonical decimal integer.`,
+      );
+    }
+  }
+  return deepFreeze(sortCanonicalJsonValue(identity));
+}
+
+/** @param {import('node:fs').BigIntStats} stats @param {boolean} includeSize @param {string} label */
+function filesystemIdentityFromStats(stats, includeSize, label) {
+  return normalizeFilesystemIdentity(
+    {
+      device: canonicalStatInteger(stats.dev, `${label}.device`),
+      inode: canonicalStatInteger(stats.ino, `${label}.inode`),
+      ...(includeSize
+        ? { size: canonicalStatInteger(stats.size, `${label}.size`) }
+        : {}),
+    },
+    includeSize,
+    label,
+  );
+}
+
+/** @param {unknown} value */
+function normalizeHydrationRecoveryFilesystem(value) {
+  const filesystem = exactRecoveryObject(
+    value,
+    new Set(['storeRoot', 'claimFile', 'targetDirectory']),
+    'application-state hydration recovery filesystem',
+  );
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      storeRoot: normalizeFilesystemIdentity(
+        filesystem.storeRoot,
+        false,
+        'application-state hydration recovery filesystem storeRoot',
+      ),
+      claimFile: normalizeFilesystemIdentity(
+        filesystem.claimFile,
+        true,
+        'application-state hydration recovery filesystem claimFile',
+      ),
+      targetDirectory: normalizeFilesystemIdentity(
+        filesystem.targetDirectory,
+        false,
+        'application-state hydration recovery filesystem targetDirectory',
+      ),
+    }),
   );
 }
 
@@ -307,6 +445,39 @@ async function assertDurableBarrierExact(controlContext, expected) {
     );
   }
   return retained;
+}
+
+/** @param {string} storePath */
+async function readPhysicalReplicaId(storePath) {
+  let rootStats;
+  try {
+    rootStats = await fsp.lstat(storePath);
+  } catch (cause) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the configured store root is unavailable for hydration recovery',
+      { cause },
+    );
+  }
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the configured store root is not a non-symbolic-link directory',
+    );
+  }
+  const value = (
+    await readSmallRegularFile(
+      join(storePath, REPLICA_ID_FILE),
+      128,
+      'physical replica identity',
+    )
+  )
+    .toString('utf8')
+    .trim();
+  assertDomainSeparatedSha256Id(
+    value,
+    'wasr1',
+    'application-state physical replica id',
+  );
+  return value;
 }
 
 /** @param {string} storePath */
@@ -603,6 +774,1364 @@ async function waitForHydrationClaim(storePath, snapshotId) {
   throw new ApplicationStateSnapshotTargetCorruptionError(
     'an exact hydration claim did not reach its durable commit',
   );
+}
+
+/** @param {string} snapshotId @param {string} recoveryId */
+function hydrationRecoveryName(snapshotId, recoveryId) {
+  assertDomainSeparatedSha256Id(
+    snapshotId,
+    'wass1',
+    'application-state hydration recovery snapshotId',
+  );
+  assertDomainSeparatedSha256Id(
+    recoveryId,
+    HYDRATION_RECOVERY_ID_PREFIX,
+    'application-state hydration recovery recoveryId',
+  );
+  return `${HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX}-${snapshotId}-${recoveryId}`;
+}
+
+/** @param {string} snapshotId @param {string} recoveryId */
+function hydrationRecoveryRetiredTargetName(snapshotId, recoveryId) {
+  hydrationRecoveryName(snapshotId, recoveryId);
+  return `${HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX}-${snapshotId}-${recoveryId}`;
+}
+
+/** @param {string} snapshotId @param {string} recoveryId */
+function hydrationRecoveryRetiredClaimName(snapshotId, recoveryId) {
+  hydrationRecoveryName(snapshotId, recoveryId);
+  return `${HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX}-${snapshotId}-${recoveryId}`;
+}
+
+/** @param {{transport: unknown, claim: unknown, replicaId: unknown, filesystem: unknown, replacementBarrier: unknown, replacementAuthority: unknown}} input */
+function createHydrationRecoveryRecord(input) {
+  const transport = normalizeApplicationStateSnapshotTransport(input.transport);
+  const claim = validateHydrationClaimRecord(input.claim);
+  assertDomainSeparatedSha256Id(
+    input.replicaId,
+    'wasr1',
+    'application-state hydration recovery replicaId',
+  );
+  const filesystem = normalizeHydrationRecoveryFilesystem(input.filesystem);
+  const replacementBarrier = assertCoordinatorQuiescenceBarrierSnapshot(
+    input.replacementBarrier,
+    'application-state hydration recovery replacementBarrier',
+  );
+  const replacementAuthority = assertCoordinatorAuthorityToken(
+    input.replacementAuthority,
+    'application-state hydration recovery replacementAuthority',
+  );
+  const appId = transport.snapshot.destination.configuration.namespace;
+  if (
+    claim.snapshotId !== transport.snapshot.snapshotId ||
+    replacementBarrier.state !== CoordinatorQuiescenceBarrierState.CLOSED ||
+    replacementBarrier.appId !== appId ||
+    replacementAuthority.appId !== appId ||
+    !sameAuthority(replacementBarrier.authority, replacementAuthority) ||
+    replacementBarrier.version <
+      transport.snapshot.checkpoint.sourceBarrier.version
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery record does not match its exact snapshot, CLOSED barrier, and authority.',
+    );
+  }
+  const payload = {
+    schemaVersion: 1,
+    kind: HYDRATION_RECOVERY_KIND,
+    transport,
+    claim,
+    replicaId: input.replicaId,
+    filesystem,
+    replacementBarrier,
+    replacementAuthority,
+  };
+  const recoveryId = createCanonicalJsonSha256Id({
+    domain: 'wharfie:application-state-snapshot-hydration-recovery:v1',
+    prefix: HYDRATION_RECOVERY_ID_PREFIX,
+    value: payload,
+    valuePath: 'application-state hydration recovery record',
+  });
+  return deepFreeze(
+    sortCanonicalJsonValue(
+      cloneBoundedJsonObject(
+        { ...payload, recoveryId },
+        HYDRATION_RECOVERY_MAX_RECORD_BYTES,
+        'application-state hydration recovery record',
+      ),
+    ),
+  );
+}
+
+/** @param {unknown} value */
+function validateHydrationRecoveryRecord(value) {
+  const record = exactRecoveryObject(
+    value,
+    HYDRATION_RECOVERY_RECORD_KEYS,
+    'application-state hydration recovery record',
+  );
+  if (record.schemaVersion !== 1 || record.kind !== HYDRATION_RECOVERY_KIND) {
+    throw new TypeError(
+      'Application-state hydration recovery record contract is invalid.',
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    record.recoveryId,
+    HYDRATION_RECOVERY_ID_PREFIX,
+    'application-state hydration recovery record recoveryId',
+  );
+  const expected = createHydrationRecoveryRecord({
+    transport: record.transport,
+    claim: record.claim,
+    replicaId: record.replicaId,
+    filesystem: record.filesystem,
+    replacementBarrier: record.replacementBarrier,
+    replacementAuthority: record.replacementAuthority,
+  });
+  if (!sameJson(record, expected)) {
+    throw new TypeError(
+      'Application-state hydration recovery record integrity is invalid.',
+    );
+  }
+  return expected;
+}
+
+/** @param {'PARTIAL_TARGET'|'RECOVERY_RECORDED'|'TARGET_REMOVED'|'RECOVERED'} state @param {ReturnType<typeof createHydrationRecoveryRecord>} recovery */
+function createHydrationRecoveryInspection(state, recovery) {
+  if (!HYDRATION_RECOVERY_STATES.has(state)) {
+    throw new TypeError(
+      'Application-state hydration recovery inspection state is invalid.',
+    );
+  }
+  const payload = {
+    schemaVersion: 1,
+    kind: HYDRATION_RECOVERY_INSPECTION_KIND,
+    state,
+    recovery,
+  };
+  const inspectionId = createCanonicalJsonSha256Id({
+    domain:
+      'wharfie:application-state-snapshot-hydration-recovery-inspection:v1',
+    prefix: HYDRATION_RECOVERY_INSPECTION_ID_PREFIX,
+    value: payload,
+    valuePath: 'application-state hydration recovery inspection',
+  });
+  return deepFreeze(
+    sortCanonicalJsonValue(
+      cloneBoundedJsonObject(
+        { ...payload, inspectionId },
+        HYDRATION_RECOVERY_MAX_RECORD_BYTES,
+        'application-state hydration recovery inspection',
+      ),
+    ),
+  );
+}
+
+/** @param {unknown} value */
+function validateHydrationRecoveryInspection(value) {
+  const inspection = exactRecoveryObject(
+    value,
+    HYDRATION_RECOVERY_INSPECTION_KEYS,
+    'application-state hydration recovery inspection',
+  );
+  if (
+    inspection.schemaVersion !== 1 ||
+    inspection.kind !== HYDRATION_RECOVERY_INSPECTION_KIND ||
+    !HYDRATION_RECOVERY_STATES.has(inspection.state)
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery inspection contract is invalid.',
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    inspection.inspectionId,
+    HYDRATION_RECOVERY_INSPECTION_ID_PREFIX,
+    'application-state hydration recovery inspection inspectionId',
+  );
+  const expected = createHydrationRecoveryInspection(
+    inspection.state,
+    validateHydrationRecoveryRecord(inspection.recovery),
+  );
+  if (!sameJson(inspection, expected)) {
+    throw new TypeError(
+      'Application-state hydration recovery inspection integrity is invalid.',
+    );
+  }
+  return expected;
+}
+
+/** @param {string} storePath @param {string} snapshotId @param {string} recoveryId */
+async function readHydrationRecoveryRecord(storePath, snapshotId, recoveryId) {
+  try {
+    return validateHydrationRecoveryRecord(
+      JSON.parse(
+        (
+          await readSmallRegularFile(
+            join(storePath, hydrationRecoveryName(snapshotId, recoveryId)),
+            HYDRATION_RECOVERY_MAX_RECORD_BYTES,
+            'hydration recovery record',
+          )
+        ).toString('utf8'),
+      ),
+    );
+  } catch (cause) {
+    if (isNotFound(cause)) return null;
+    if (cause instanceof ApplicationStateSnapshotTargetCorruptionError) {
+      throw cause;
+    }
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery record failed validation',
+      { cause },
+    );
+  }
+}
+
+/** @param {string} storePath */
+async function inspectHydrationRecoveryStoreRoot(storePath) {
+  let stats;
+  try {
+    stats = await fsp.lstat(storePath, { bigint: true });
+  } catch (cause) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the configured store root is unavailable for hydration recovery',
+      { cause },
+    );
+  }
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the configured store root is not a non-symbolic-link directory',
+    );
+  }
+  return filesystemIdentityFromStats(
+    stats,
+    false,
+    'application-state hydration recovery store root',
+  );
+}
+
+/** @param {string} path @param {string} label */
+async function readHydrationRecoveryClaimEvidenceAtPath(path, label) {
+  let before;
+  try {
+    before = await fsp.lstat(path, { bigint: true });
+  } catch (cause) {
+    if (isNotFound(cause)) return null;
+    throw cause;
+  }
+  let claim;
+  try {
+    claim = validateHydrationClaimRecord(
+      JSON.parse(
+        (
+          await readSmallRegularFile(path, 1024, `${label} hydration claim`)
+        ).toString('utf8'),
+      ),
+    );
+  } catch (cause) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      `${label} hydration claim failed validation`,
+      { cause },
+    );
+  }
+  const after = await fsp.lstat(path, { bigint: true });
+  const beforeIdentity = filesystemIdentityFromStats(
+    before,
+    true,
+    `${label} hydration claim file`,
+  );
+  const afterIdentity = filesystemIdentityFromStats(
+    after,
+    true,
+    `${label} hydration claim file`,
+  );
+  if (!sameJson(beforeIdentity, afterIdentity)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration claim file changed while it was inspected',
+    );
+  }
+  return Object.freeze({ claim, identity: beforeIdentity });
+}
+
+/** @param {string} storePath */
+async function readHydrationRecoveryClaimEvidence(storePath) {
+  return await readHydrationRecoveryClaimEvidenceAtPath(
+    join(storePath, HYDRATION_CLAIM_FILE),
+    'active',
+  );
+}
+
+/** @param {string} target @param {string} label */
+async function inspectEmptyHydrationDirectory(target, label) {
+  let before;
+  try {
+    before = await fsp.lstat(target, { bigint: true });
+  } catch (cause) {
+    if (isNotFound(cause)) return null;
+    throw cause;
+  }
+  if (!before.isDirectory() || before.isSymbolicLink()) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the pre-evidence hydration target is not a non-symbolic-link directory',
+    );
+  }
+  const entries = await fsp.readdir(target);
+  const after = await fsp.lstat(target, { bigint: true });
+  const beforeIdentity = filesystemIdentityFromStats(
+    before,
+    false,
+    `${label} hydration target directory`,
+  );
+  const afterIdentity = filesystemIdentityFromStats(
+    after,
+    false,
+    `${label} hydration target directory`,
+  );
+  if (
+    entries.length !== 0 ||
+    !after.isDirectory() ||
+    after.isSymbolicLink() ||
+    !sameJson(beforeIdentity, afterIdentity)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the pre-evidence hydration target is not one stable empty directory',
+    );
+  }
+  return beforeIdentity;
+}
+
+/** @param {string} storePath */
+async function inspectEmptyHydrationTarget(storePath) {
+  return await inspectEmptyHydrationDirectory(
+    join(storePath, 'lmdb'),
+    'active',
+  );
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope */
+async function assertHydrationRecoveryControlState(scope) {
+  await assertCoordinatorAuthorityCurrent({
+    db: scope.controlContext.db,
+    tableName: scope.controlContext.tableName,
+    authority: scope.authority,
+  });
+  await assertDurableBarrierExact(scope.controlContext, scope.closedBarrier);
+  const controlStore = createApplicationStateSnapshotControlStore({
+    db: scope.controlContext.db,
+    tableName: scope.controlContext.tableName,
+  });
+  const publication = await controlStore.getPublication({
+    transferId: scope.transport.snapshot.transferId,
+  });
+  if (!publication || !sameJson(publication.transport, scope.transport)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery requires exact durable snapshot publication evidence',
+    );
+  }
+  const activation = await controlStore.getActivationClaim({
+    transferId: scope.transport.snapshot.transferId,
+  });
+  if (activation) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery is forbidden after physical replica activation',
+    );
+  }
+}
+
+const HYDRATION_RECOVERY_SNAPSHOT_ID_LENGTH = 'wass1_'.length + 43;
+const HYDRATION_RECOVERY_ID_LENGTH =
+  `${HYDRATION_RECOVERY_ID_PREFIX}_`.length + 43;
+const HYDRATION_RECOVERY_TEMPORARY_SUFFIX_PATTERN =
+  /^-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
+
+/** @param {string} name @param {string} prefix */
+function parseHydrationRecoveryArtifactIds(name, prefix) {
+  const artifactPrefix = `${prefix}-`;
+  if (!name.startsWith(artifactPrefix)) return null;
+  const suffix = name.slice(artifactPrefix.length);
+  const snapshotId = suffix.slice(0, HYDRATION_RECOVERY_SNAPSHOT_ID_LENGTH);
+  const separator = suffix[HYDRATION_RECOVERY_SNAPSHOT_ID_LENGTH];
+  const recoveryId = suffix.slice(
+    HYDRATION_RECOVERY_SNAPSHOT_ID_LENGTH + 1,
+    HYDRATION_RECOVERY_SNAPSHOT_ID_LENGTH + 1 + HYDRATION_RECOVERY_ID_LENGTH,
+  );
+  const remainder = suffix.slice(
+    HYDRATION_RECOVERY_SNAPSHOT_ID_LENGTH + 1 + HYDRATION_RECOVERY_ID_LENGTH,
+  );
+  try {
+    assertDomainSeparatedSha256Id(
+      snapshotId,
+      'wass1',
+      'hydration recovery artifact snapshotId',
+    );
+    assertDomainSeparatedSha256Id(
+      recoveryId,
+      HYDRATION_RECOVERY_ID_PREFIX,
+      'hydration recovery artifact recoveryId',
+    );
+  } catch (cause) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'a hydration recovery registry artifact name is malformed',
+      { cause },
+    );
+  }
+  if (separator !== '-') {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'a hydration recovery registry artifact name is malformed',
+    );
+  }
+  return Object.freeze({ snapshotId, recoveryId, remainder });
+}
+
+/** @param {string} name */
+function parseHydrationRecoveryRegistryArtifact(name) {
+  const temporary = parseHydrationRecoveryArtifactIds(
+    name,
+    HYDRATION_RECOVERY_CANDIDATE_FILE_PREFIX,
+  );
+  if (temporary) {
+    if (
+      !HYDRATION_RECOVERY_TEMPORARY_SUFFIX_PATTERN.test(temporary.remainder)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery private candidate name is malformed',
+      );
+    }
+    return Object.freeze({ ...temporary, type: 'temporary' });
+  }
+  const receipt = parseHydrationRecoveryArtifactIds(
+    name,
+    HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX,
+  );
+  if (receipt) {
+    if (receipt.remainder === '') {
+      return Object.freeze({ ...receipt, type: 'receipt' });
+    }
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'a hydration recovery receipt name has an unsupported suffix',
+    );
+  }
+  const retiredTarget = parseHydrationRecoveryArtifactIds(
+    name,
+    HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX,
+  );
+  if (retiredTarget) {
+    if (retiredTarget.remainder !== '') {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a retired hydration target name has an unsupported suffix',
+      );
+    }
+    return Object.freeze({ ...retiredTarget, type: 'retired-target' });
+  }
+  const retiredClaim = parseHydrationRecoveryArtifactIds(
+    name,
+    HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX,
+  );
+  if (retiredClaim) {
+    if (retiredClaim.remainder !== '') {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a retired hydration claim name has an unsupported suffix',
+      );
+    }
+    return Object.freeze({ ...retiredClaim, type: 'retired-claim' });
+  }
+  if (name.startsWith(HYDRATION_RECOVERY_FILE_PREFIX)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery registry contains an unknown artifact',
+    );
+  }
+  return null;
+}
+
+/** @param {ReturnType<typeof validateHydrationRecoveryRecord>} recovery @param {string} replicaId @param {Readonly<Record<string, any>>} storeRootIdentity */
+function assertHydrationRecoveryRegistryIdentity(
+  recovery,
+  replicaId,
+  storeRootIdentity,
+) {
+  if (
+    recovery.replicaId !== replicaId ||
+    !sameJson(recovery.filesystem.storeRoot, storeRootIdentity)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'a hydration recovery receipt does not match the exact replica and store root',
+    );
+  }
+}
+
+/** @param {string} storePath @param {string} replicaId @param {Readonly<Record<string, any>>} storeRootIdentity */
+async function readHydrationRecoveryRegistry(
+  storePath,
+  replicaId,
+  storeRootIdentity,
+) {
+  const artifacts = new Map();
+  for (const name of await fsp.readdir(storePath)) {
+    const artifact = parseHydrationRecoveryRegistryArtifact(name);
+    if (!artifact || artifact.type === 'temporary') continue;
+    const retained = artifacts.get(artifact.recoveryId) ?? {};
+    if (
+      retained.snapshotId !== undefined &&
+      retained.snapshotId !== artifact.snapshotId
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'one recovery identity is aliased across snapshot registry names',
+      );
+    }
+    retained.snapshotId = artifact.snapshotId;
+    if (retained[artifact.type]) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery registry contains duplicate evidence',
+      );
+    }
+    retained[artifact.type] = true;
+    artifacts.set(artifact.recoveryId, retained);
+  }
+  const receiptIds = [...artifacts.entries()]
+    .filter(([, retained]) => retained.receipt)
+    .map(([recoveryId]) => recoveryId)
+    .sort();
+  if (receiptIds.length > HYDRATION_RECOVERY_MAX_RECEIPTS) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery receipt registry exceeds its exact bounded capacity',
+    );
+  }
+  for (const [recoveryId, retained] of artifacts) {
+    if (!retained.receipt) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        `hydration recovery retirement evidence is orphaned for ${recoveryId}`,
+      );
+    }
+  }
+  const entries = [];
+  for (const recoveryId of receiptIds) {
+    const retained = artifacts.get(recoveryId);
+    const snapshotId = retained.snapshotId;
+    const recovery = await readHydrationRecoveryRecord(
+      storePath,
+      snapshotId,
+      recoveryId,
+    );
+    if (
+      !recovery ||
+      recovery.recoveryId !== recoveryId ||
+      recovery.transport.snapshot.snapshotId !== snapshotId
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery receipt does not match its exact registry name',
+      );
+    }
+    assertHydrationRecoveryRegistryIdentity(
+      recovery,
+      replicaId,
+      storeRootIdentity,
+    );
+    const retiredTarget = retained['retired-target']
+      ? await inspectEmptyHydrationDirectory(
+          join(
+            storePath,
+            hydrationRecoveryRetiredTargetName(snapshotId, recoveryId),
+          ),
+          'retired',
+        )
+      : null;
+    const retiredClaim = retained['retired-claim']
+      ? await readHydrationRecoveryClaimEvidenceAtPath(
+          join(
+            storePath,
+            hydrationRecoveryRetiredClaimName(snapshotId, recoveryId),
+          ),
+          'retired',
+        )
+      : null;
+    if (
+      (retained['retired-target'] && !retiredTarget) ||
+      (retained['retired-claim'] && !retiredClaim)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'hydration recovery retirement evidence disappeared during registry inspection',
+      );
+    }
+    if (
+      retiredTarget &&
+      !sameJson(retiredTarget, recovery.filesystem.targetDirectory)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a retired hydration target does not have its recorded exact identity',
+      );
+    }
+    if (
+      retiredClaim &&
+      (!sameJson(retiredClaim.claim, recovery.claim) ||
+        !sameJson(retiredClaim.identity, recovery.filesystem.claimFile))
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a retired hydration claim does not have its recorded exact identity and content',
+      );
+    }
+    if (retiredClaim && !retiredTarget) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a retired hydration claim exists without its ordered retired target',
+      );
+    }
+    entries.push(
+      Object.freeze({
+        recovery,
+        retiredTarget: retiredTarget !== null,
+        retiredClaim: retiredClaim !== null,
+        complete: retiredTarget !== null && retiredClaim !== null,
+      }),
+    );
+  }
+  const incomplete = entries.filter((entry) => !entry.complete);
+  if (incomplete.length > 1) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery registry contains multiple incomplete attempts',
+    );
+  }
+  return Object.freeze({
+    entries: Object.freeze(entries),
+    incompleteRecoveryId: incomplete[0]?.recovery.recoveryId ?? null,
+  });
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>}} scope @param {string} replicaId */
+async function readHydrationRecoveryFilesystem(scope, replicaId) {
+  const storePath = scope.configuration.storePath;
+  const storeRootIdentity = await inspectHydrationRecoveryStoreRoot(storePath);
+  const registry = await readHydrationRecoveryRegistry(
+    storePath,
+    replicaId,
+    storeRootIdentity,
+  );
+  const claimEvidence = await readHydrationRecoveryClaimEvidence(storePath);
+  const targetIdentity = await inspectEmptyHydrationTarget(storePath);
+  return Object.freeze({
+    storeRootIdentity,
+    registry,
+    claimEvidence,
+    targetIdentity,
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} view @param {ReturnType<typeof validateHydrationRecoveryRecord>} recovery */
+function assertActiveHydrationRecoveryAttempt(view, recovery) {
+  if (
+    !view.claimEvidence ||
+    !view.targetIdentity ||
+    !sameJson(view.claimEvidence.claim, recovery.claim) ||
+    !sameJson(view.claimEvidence.identity, recovery.filesystem.claimFile) ||
+    !sameJson(view.targetIdentity, recovery.filesystem.targetDirectory)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the active hydration target and claim do not match the exact recovery attempt',
+    );
+  }
+}
+
+/** @param {Readonly<Record<string, any>>} view @param {Readonly<Record<string, any>>} entry */
+function classifyRetainedHydrationRecoveryAttempt(view, entry) {
+  if (entry.complete) return 'RECOVERED';
+  if (!entry.retiredTarget) {
+    assertActiveHydrationRecoveryAttempt(view, entry.recovery);
+    return 'RECOVERY_RECORDED';
+  }
+  if (
+    view.targetIdentity ||
+    !view.claimEvidence ||
+    !sameJson(view.claimEvidence.claim, entry.recovery.claim) ||
+    !sameJson(view.claimEvidence.identity, entry.recovery.filesystem.claimFile)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the active hydration claim does not match the target-retired recovery attempt',
+    );
+  }
+  return 'TARGET_REMOVED';
+}
+
+/** @param {Readonly<Record<string, any>>} view */
+function assertHydrationRecoveryRegistryViewCanonical(view) {
+  /** @type {Array<{recovery: ReturnType<typeof validateHydrationRecoveryRecord>, retiredTarget: boolean, retiredClaim: boolean, complete: boolean}>} */
+  const registryEntries = view.registry.entries;
+  if (view.registry.incompleteRecoveryId) {
+    const incomplete = registryEntries.find(
+      (entry) =>
+        entry.recovery.recoveryId === view.registry.incompleteRecoveryId,
+    );
+    if (!incomplete) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery registry lost its incomplete attempt',
+      );
+    }
+    classifyRetainedHydrationRecoveryAttempt(view, incomplete);
+    return;
+  }
+  if (Boolean(view.claimEvidence) !== Boolean(view.targetIdentity)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'active hydration evidence is not one canonical claim and empty-target pair',
+    );
+  }
+}
+
+/** @param {{transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRecord>} recovery */
+function hydrationRecoveryMatchesCurrentScope(scope, recovery) {
+  const expected = createHydrationRecoveryRecord({
+    transport: scope.transport,
+    claim: recovery.claim,
+    replicaId: recovery.replicaId,
+    filesystem: recovery.filesystem,
+    replacementBarrier: scope.closedBarrier,
+    replacementAuthority: scope.authority,
+  });
+  return sameJson(recovery, expected);
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {string} replicaId @param {Readonly<Record<string, any>>} view @param {ReturnType<typeof validateHydrationRecoveryRecord> | null} requestedRecovery */
+function selectHydrationRecoveryInspection(
+  scope,
+  replicaId,
+  view,
+  requestedRecovery,
+) {
+  /** @type {Array<{recovery: ReturnType<typeof validateHydrationRecoveryRecord>, retiredTarget: boolean, retiredClaim: boolean, complete: boolean}>} */
+  const registryEntries = view.registry.entries;
+  if (requestedRecovery) {
+    assertHydrationRecoveryRegistryIdentity(
+      requestedRecovery,
+      replicaId,
+      view.storeRootIdentity,
+    );
+    if (!sameJson(requestedRecovery.transport, scope.transport)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the requested recovery receipt does not match the exact transport scope',
+      );
+    }
+    if (!hydrationRecoveryMatchesCurrentScope(scope, requestedRecovery)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the requested recovery receipt does not match the exact current authority and barrier scope',
+      );
+    }
+    const retained = registryEntries.find(
+      (entry) => entry.recovery.recoveryId === requestedRecovery.recoveryId,
+    );
+    if (retained) {
+      if (!sameJson(retained.recovery, requestedRecovery)) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'the requested recovery receipt differs from its retained registry record',
+        );
+      }
+      return createHydrationRecoveryInspection(
+        classifyRetainedHydrationRecoveryAttempt(view, retained),
+        retained.recovery,
+      );
+    }
+    if (view.registry.incompleteRecoveryId) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'another incomplete hydration recovery attempt blocks this request',
+      );
+    }
+    if (registryEntries.length >= HYDRATION_RECOVERY_MAX_RECEIPTS) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery receipt registry is exhausted',
+      );
+    }
+    assertActiveHydrationRecoveryAttempt(view, requestedRecovery);
+    return createHydrationRecoveryInspection(
+      'PARTIAL_TARGET',
+      requestedRecovery,
+    );
+  }
+
+  const incomplete = view.registry.incompleteRecoveryId
+    ? registryEntries.find(
+        (entry) =>
+          entry.recovery.recoveryId === view.registry.incompleteRecoveryId,
+      )
+    : null;
+  if (incomplete) {
+    if (!sameJson(incomplete.recovery.transport, scope.transport)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'an incomplete hydration recovery for another transport blocks this inspection',
+      );
+    }
+    if (!hydrationRecoveryMatchesCurrentScope(scope, incomplete.recovery)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the incomplete hydration recovery receipt does not match the exact current authority and barrier scope',
+      );
+    }
+    return createHydrationRecoveryInspection(
+      classifyRetainedHydrationRecoveryAttempt(view, incomplete),
+      incomplete.recovery,
+    );
+  }
+  if (view.claimEvidence || view.targetIdentity) {
+    if (
+      !view.claimEvidence ||
+      view.claimEvidence.claim.snapshotId !==
+        scope.transport.snapshot.snapshotId ||
+      !view.targetIdentity
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'hydration recovery requires one exact claim and its empty pre-evidence target',
+      );
+    }
+    if (registryEntries.length >= HYDRATION_RECOVERY_MAX_RECEIPTS) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery receipt registry is exhausted',
+      );
+    }
+    const recovery = createHydrationRecoveryRecord({
+      transport: scope.transport,
+      claim: view.claimEvidence.claim,
+      replicaId,
+      filesystem: {
+        storeRoot: view.storeRootIdentity,
+        claimFile: view.claimEvidence.identity,
+        targetDirectory: view.targetIdentity,
+      },
+      replacementBarrier: scope.closedBarrier,
+      replacementAuthority: scope.authority,
+    });
+    return createHydrationRecoveryInspection('PARTIAL_TARGET', recovery);
+  }
+  const completed = registryEntries.find(
+    (entry) =>
+      entry.complete &&
+      sameJson(entry.recovery.transport, scope.transport) &&
+      hydrationRecoveryMatchesCurrentScope(scope, entry.recovery),
+  );
+  if (!completed) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery requires exact active or completed attempt evidence',
+    );
+  }
+  return createHydrationRecoveryInspection('RECOVERED', completed.recovery);
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRecord> | null} [requestedRecovery] */
+async function inspectHydrationRecoveryScope(scope, requestedRecovery = null) {
+  await assertHydrationRecoveryControlState(scope);
+  const replicaId = await readPhysicalReplicaId(scope.configuration.storePath);
+  const first = await readHydrationRecoveryFilesystem(scope, replicaId);
+  const secondReplicaId = await readPhysicalReplicaId(
+    scope.configuration.storePath,
+  );
+  const second = await readHydrationRecoveryFilesystem(scope, secondReplicaId);
+  if (replicaId !== secondReplicaId || !sameJson(first, second)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery evidence changed during inspection',
+    );
+  }
+  assertHydrationRecoveryRegistryViewCanonical(first);
+  await assertHydrationRecoveryControlState(scope);
+  return selectHydrationRecoveryInspection(
+    scope,
+    replicaId,
+    first,
+    requestedRecovery,
+  );
+}
+
+/** @param {Record<string, any>} options @param {Set<string>} allowed @param {string} label */
+function normalizeHydrationRecoveryScope(options, allowed, label) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(`${label} requires options.`);
+  }
+  if (Object.keys(options).some((key) => !allowed.has(key))) {
+    throw new TypeError(`${label} has unsupported options.`);
+  }
+  const configuration = validateApplicationStateStoreConfiguration(
+    options.configuration,
+  );
+  const controlContext = snapshotControlContext(options.controlContext);
+  const transport = normalizeApplicationStateSnapshotTransport(
+    options.transport,
+  );
+  const authority = assertCoordinatorAuthorityToken(
+    options.coordinatorAuthority,
+    `${label} coordinatorAuthority`,
+  );
+  const closedBarrier = assertCoordinatorQuiescenceBarrierSnapshot(
+    options.closedBarrier,
+    `${label} closedBarrier`,
+  );
+  const appId = transport.snapshot.destination.configuration.namespace;
+  if (
+    closedBarrier.state !== CoordinatorQuiescenceBarrierState.CLOSED ||
+    closedBarrier.appId !== appId ||
+    authority.appId !== appId ||
+    !sameAuthority(closedBarrier.authority, authority) ||
+    closedBarrier.version < transport.snapshot.checkpoint.sourceBarrier.version
+  ) {
+    throw new TypeError(
+      `${label} requires the exact current CLOSED replacement barrier and authority.`,
+    );
+  }
+  scopedDestination(transport.snapshot.destination, configuration, appId);
+  assertApplicationStateStoreIsolation(configuration, controlContext);
+  return Object.freeze({
+    configuration,
+    controlContext,
+    transport,
+    closedBarrier,
+    authority,
+  });
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>}} scope @param {ReturnType<typeof createHydrationRecoveryRecord>} expected */
+async function persistHydrationRecoveryRecord(scope, expected) {
+  const storePath = scope.configuration.storePath;
+  const snapshotId = expected.transport.snapshot.snapshotId;
+  const recoveryId = expected.recoveryId;
+  const path = join(storePath, hydrationRecoveryName(snapshotId, recoveryId));
+  const view = await readHydrationRecoveryFilesystem(scope, expected.replicaId);
+  const existing = view.registry.entries.find(
+    (entry) => entry.recovery.recoveryId === recoveryId,
+  )?.recovery;
+  if (existing) {
+    if (!sameJson(existing, expected)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'another hydration recovery record already occupies the exact attempt scope',
+      );
+    }
+    await syncDirectory(storePath);
+    const durableExisting = await readHydrationRecoveryRecord(
+      storePath,
+      snapshotId,
+      recoveryId,
+    );
+    const durableStoreRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+    if (
+      !durableExisting ||
+      !sameJson(durableExisting, expected) ||
+      !sameJson(durableStoreRoot, expected.filesystem.storeRoot)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the existing hydration recovery receipt failed durable replay verification',
+      );
+    }
+    return durableExisting;
+  }
+  if (view.registry.incompleteRecoveryId) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'another incomplete hydration recovery attempt blocks receipt persistence',
+    );
+  }
+  if (view.registry.entries.length >= HYDRATION_RECOVERY_MAX_RECEIPTS) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery receipt registry is exhausted',
+    );
+  }
+  assertActiveHydrationRecoveryAttempt(view, expected);
+  const temporaryPath = join(
+    storePath,
+    `${HYDRATION_RECOVERY_CANDIDATE_FILE_PREFIX}-${snapshotId}-${recoveryId}-${randomUUID()}.tmp`,
+  );
+  try {
+    await writeAndSync(
+      temporaryPath,
+      Buffer.from(
+        `${JSON.stringify(sortCanonicalJsonValue(expected))}\n`,
+        'utf8',
+      ),
+    );
+    try {
+      await fsp.link(temporaryPath, path);
+    } catch (error) {
+      if (/** @type {{code?: unknown}} */ (error)?.code !== 'EEXIST') {
+        throw error;
+      }
+    }
+    await syncDirectory(storePath);
+  } finally {
+    try {
+      await fsp.unlink(temporaryPath);
+    } catch {
+      // A private candidate path is never consulted as recovery evidence.
+    }
+  }
+  const retained = await readHydrationRecoveryRecord(
+    storePath,
+    snapshotId,
+    recoveryId,
+  );
+  const retainedStoreRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (
+    !retained ||
+    !sameJson(retained, expected) ||
+    !sameJson(retainedStoreRoot, expected.filesystem.storeRoot)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery record was not durably readable',
+    );
+  }
+  return retained;
+}
+
+/** @param {string} storePath @param {ReturnType<typeof createHydrationRecoveryRecord>} recovery */
+async function retireHydrationRecoveryTarget(storePath, recovery) {
+  const snapshotId = recovery.transport.snapshot.snapshotId;
+  const sourcePath = join(storePath, 'lmdb');
+  const retiredPath = join(
+    storePath,
+    hydrationRecoveryRetiredTargetName(snapshotId, recovery.recoveryId),
+  );
+  const storeRootIdentity = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (!sameJson(storeRootIdentity, recovery.filesystem.storeRoot)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the configured store root changed immediately before target retirement',
+    );
+  }
+  const source = await inspectEmptyHydrationDirectory(sourcePath, 'active');
+  const retired = await inspectEmptyHydrationDirectory(retiredPath, 'retired');
+  if (source && retired) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'both active and retired hydration target paths are occupied',
+    );
+  }
+  if (retired) {
+    if (!sameJson(retired, recovery.filesystem.targetDirectory)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the retired hydration target does not have its exact recorded identity',
+      );
+    }
+  } else {
+    if (!source || !sameJson(source, recovery.filesystem.targetDirectory)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the active hydration target identity changed immediately before retirement',
+      );
+    }
+    try {
+      await fsp.rename(sourcePath, retiredPath);
+    } catch (cause) {
+      const replaySource = await inspectEmptyHydrationDirectory(
+        sourcePath,
+        'active',
+      );
+      const replayRetired = await inspectEmptyHydrationDirectory(
+        retiredPath,
+        'retired',
+      );
+      if (
+        replaySource ||
+        !replayRetired ||
+        !sameJson(replayRetired, recovery.filesystem.targetDirectory)
+      ) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'the exact hydration target could not be retired',
+          { cause },
+        );
+      }
+    }
+  }
+  await syncDirectory(storePath);
+  const finalSource = await inspectEmptyHydrationDirectory(
+    sourcePath,
+    'active',
+  );
+  const finalRetired = await inspectEmptyHydrationDirectory(
+    retiredPath,
+    'retired',
+  );
+  const finalStoreRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (
+    finalSource ||
+    !finalRetired ||
+    !sameJson(finalRetired, recovery.filesystem.targetDirectory) ||
+    !sameJson(finalStoreRoot, recovery.filesystem.storeRoot)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the retired hydration target failed exact post-rename verification',
+    );
+  }
+}
+
+/** @param {string} storePath @param {ReturnType<typeof createHydrationRecoveryRecord>} recovery */
+async function retireHydrationRecoveryClaim(storePath, recovery) {
+  const snapshotId = recovery.transport.snapshot.snapshotId;
+  const sourcePath = join(storePath, HYDRATION_CLAIM_FILE);
+  const retiredPath = join(
+    storePath,
+    hydrationRecoveryRetiredClaimName(snapshotId, recovery.recoveryId),
+  );
+  const storeRootIdentity = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (!sameJson(storeRootIdentity, recovery.filesystem.storeRoot)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the configured store root changed immediately before claim retirement',
+    );
+  }
+  const source = await readHydrationRecoveryClaimEvidenceAtPath(
+    sourcePath,
+    'active',
+  );
+  const retired = await readHydrationRecoveryClaimEvidenceAtPath(
+    retiredPath,
+    'retired',
+  );
+  if (source && retired) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'both active and retired hydration claim paths are occupied',
+    );
+  }
+  if (retired) {
+    if (
+      !sameJson(retired.claim, recovery.claim) ||
+      !sameJson(retired.identity, recovery.filesystem.claimFile)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the retired hydration claim does not have its exact recorded identity and content',
+      );
+    }
+  } else {
+    if (
+      !source ||
+      !sameJson(source.claim, recovery.claim) ||
+      !sameJson(source.identity, recovery.filesystem.claimFile)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the active hydration claim changed immediately before retirement',
+      );
+    }
+    try {
+      await fsp.rename(sourcePath, retiredPath);
+    } catch (cause) {
+      const replaySource = await readHydrationRecoveryClaimEvidenceAtPath(
+        sourcePath,
+        'active',
+      );
+      const replayRetired = await readHydrationRecoveryClaimEvidenceAtPath(
+        retiredPath,
+        'retired',
+      );
+      if (
+        replaySource ||
+        !replayRetired ||
+        !sameJson(replayRetired.claim, recovery.claim) ||
+        !sameJson(replayRetired.identity, recovery.filesystem.claimFile)
+      ) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'the exact hydration claim could not be retired',
+          { cause },
+        );
+      }
+    }
+  }
+  await syncDirectory(storePath);
+  const finalSource = await readHydrationRecoveryClaimEvidenceAtPath(
+    sourcePath,
+    'active',
+  );
+  const finalRetired = await readHydrationRecoveryClaimEvidenceAtPath(
+    retiredPath,
+    'retired',
+  );
+  const finalStoreRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (
+    finalSource ||
+    !finalRetired ||
+    !sameJson(finalRetired.claim, recovery.claim) ||
+    !sameJson(finalRetired.identity, recovery.filesystem.claimFile) ||
+    !sameJson(finalStoreRoot, recovery.filesystem.storeRoot)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the retired hydration claim failed exact post-rename verification',
+    );
+  }
+}
+
+/** @param {string} storePath @param {ReturnType<typeof createHydrationRecoveryRecord>} recovery */
+async function syncAndVerifyCompletedHydrationRecovery(storePath, recovery) {
+  const snapshotId = recovery.transport.snapshot.snapshotId;
+  await syncDirectory(storePath);
+  const storeRootIdentity = await inspectHydrationRecoveryStoreRoot(storePath);
+  const receipt = await readHydrationRecoveryRecord(
+    storePath,
+    snapshotId,
+    recovery.recoveryId,
+  );
+  const retiredTarget = await inspectEmptyHydrationDirectory(
+    join(
+      storePath,
+      hydrationRecoveryRetiredTargetName(snapshotId, recovery.recoveryId),
+    ),
+    'retired',
+  );
+  const retiredClaim = await readHydrationRecoveryClaimEvidenceAtPath(
+    join(
+      storePath,
+      hydrationRecoveryRetiredClaimName(snapshotId, recovery.recoveryId),
+    ),
+    'retired',
+  );
+  if (
+    !sameJson(storeRootIdentity, recovery.filesystem.storeRoot) ||
+    !receipt ||
+    !sameJson(receipt, recovery) ||
+    !retiredTarget ||
+    !sameJson(retiredTarget, recovery.filesystem.targetDirectory) ||
+    !retiredClaim ||
+    !sameJson(retiredClaim.claim, recovery.claim) ||
+    !sameJson(retiredClaim.identity, recovery.filesystem.claimFile)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the completed hydration recovery failed its durable exact replay verification',
+    );
+  }
+  return receipt;
+}
+
+/** @param {{controlContext: ReturnType<typeof snapshotControlContext>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope */
+async function assertHydrationRecoveryCompletionAuthority(scope) {
+  await assertCoordinatorAuthorityCurrent({
+    db: scope.controlContext.db,
+    tableName: scope.controlContext.tableName,
+    authority: scope.authority,
+  });
+  await assertDurableBarrierExact(scope.controlContext, scope.closedBarrier);
+}
+
+/**
+ * Inspect only the exact retained pre-evidence partial hydration target or an
+ * exact durable recovery of it. This operation is read-only and returns one
+ * reusable integrity-bound inspection document.
+ * @param {{configuration: unknown, controlContext: Record<string, any>, transport: unknown, closedBarrier: unknown, coordinatorAuthority: unknown}} options
+ */
+export async function inspectApplicationStateSnapshotHydrationRecovery(
+  options,
+) {
+  const scope = normalizeHydrationRecoveryScope(
+    options,
+    new Set([
+      'configuration',
+      'controlContext',
+      'transport',
+      'closedBarrier',
+      'coordinatorAuthority',
+    ]),
+    'Application-state snapshot hydration recovery inspection',
+  );
+  return await inspectHydrationRecoveryScope(scope);
+}
+
+/**
+ * Explicitly recover one exact inspected pre-evidence hydration target. A
+ * durable exact-attempt receipt is retained before the empty target and claim
+ * are renamed into receipt-scoped retirement paths and retained. The caller
+ * must first stop and reap the hydrator that owned the retained claim.
+ * @param {{configuration: unknown, controlContext: Record<string, any>, transport: unknown, closedBarrier: unknown, coordinatorAuthority: unknown, inspection: unknown, confirmPartialHydrationRecovery: boolean, observePhase?: (phase: string) => Promise<void> | void}} options
+ */
+export async function recoverApplicationStateSnapshotHydration(options) {
+  const scope = normalizeHydrationRecoveryScope(
+    options,
+    new Set([
+      'configuration',
+      'controlContext',
+      'transport',
+      'closedBarrier',
+      'coordinatorAuthority',
+      'inspection',
+      'confirmPartialHydrationRecovery',
+      'observePhase',
+    ]),
+    'Application-state snapshot hydration recovery',
+  );
+  if (options.confirmPartialHydrationRecovery !== true) {
+    throw new TypeError(
+      'Application-state snapshot hydration recovery requires explicit inspected confirmation.',
+    );
+  }
+  const inspection = validateHydrationRecoveryInspection(options.inspection);
+  const requestedRecovery = inspection.recovery;
+  const observePhase = normalizeObserver(options.observePhase);
+  let current = await inspectHydrationRecoveryScope(scope, requestedRecovery);
+  if (!sameJson(current.recovery, requestedRecovery)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery evidence changed after the retained inspection',
+    );
+  }
+  if (current.state === 'RECOVERED') {
+    await syncAndVerifyCompletedHydrationRecovery(
+      scope.configuration.storePath,
+      requestedRecovery,
+    );
+    await assertHydrationRecoveryCompletionAuthority(scope);
+    return requestedRecovery;
+  }
+  const expectedRecovery = createHydrationRecoveryRecord({
+    transport: scope.transport,
+    claim: requestedRecovery.claim,
+    replicaId: requestedRecovery.replicaId,
+    filesystem: requestedRecovery.filesystem,
+    replacementBarrier: scope.closedBarrier,
+    replacementAuthority: scope.authority,
+  });
+  if (!sameJson(requestedRecovery, expectedRecovery)) {
+    throw new TypeError(
+      'An incomplete application-state hydration recovery inspection does not match the current exact mutation scope.',
+    );
+  }
+  if (current.state === 'PARTIAL_TARGET' && !sameJson(current, inspection)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the fresh pre-evidence hydration inspection does not match the confirmed inspection',
+    );
+  }
+  const recovery = await persistHydrationRecoveryRecord(
+    scope,
+    expectedRecovery,
+  );
+  await observePhase('hydration-recovery-recorded');
+
+  current = await inspectHydrationRecoveryScope(scope, recovery);
+  if (!sameJson(current.recovery, recovery)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery scope changed before empty-target removal',
+    );
+  }
+  if (current.state === 'RECOVERED') {
+    await syncAndVerifyCompletedHydrationRecovery(
+      scope.configuration.storePath,
+      recovery,
+    );
+    await assertHydrationRecoveryCompletionAuthority(scope);
+    return recovery;
+  }
+  if (
+    current.state === 'RECOVERY_RECORDED' ||
+    current.state === 'TARGET_REMOVED'
+  ) {
+    await retireHydrationRecoveryTarget(
+      scope.configuration.storePath,
+      recovery,
+    );
+  } else {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery did not retain a removable exact target state',
+    );
+  }
+  await observePhase('hydration-recovery-target-removed');
+
+  current = await inspectHydrationRecoveryScope(scope, recovery);
+  if (
+    !sameJson(current.recovery, recovery) ||
+    !['TARGET_REMOVED', 'RECOVERED'].includes(current.state)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery scope changed before exact claim release',
+    );
+  }
+  if (current.state === 'TARGET_REMOVED') {
+    await retireHydrationRecoveryClaim(scope.configuration.storePath, recovery);
+  } else {
+    await syncAndVerifyCompletedHydrationRecovery(
+      scope.configuration.storePath,
+      recovery,
+    );
+  }
+  await observePhase('hydration-recovery-claim-released');
+  await syncAndVerifyCompletedHydrationRecovery(
+    scope.configuration.storePath,
+    recovery,
+  );
+  await assertHydrationRecoveryCompletionAuthority(scope);
+  return recovery;
 }
 
 /** @param {string} snapshotId */
@@ -1153,8 +2682,49 @@ export async function recoverRetiredApplicationStateSnapshot(options) {
   return transport;
 }
 
-/** @param {string} storePath @param {Buffer} bytes @param {string} snapshotId @param {(phase: string) => Promise<void>} observePhase */
-async function hydrateAbsentTarget(storePath, bytes, snapshotId, observePhase) {
+/** @param {string} storePath @param {string} replicaId */
+async function assertHydrationRecoveryRegistryAllowsNewClaim(
+  storePath,
+  replicaId,
+) {
+  const firstRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  const first = await readHydrationRecoveryRegistry(
+    storePath,
+    replicaId,
+    firstRoot,
+  );
+  const secondRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  const second = await readHydrationRecoveryRegistry(
+    storePath,
+    replicaId,
+    secondRoot,
+  );
+  if (!sameJson(firstRoot, secondRoot) || !sameJson(first, second)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery registry changed while a new claim was gated',
+    );
+  }
+  if (first.incompleteRecoveryId) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'an incomplete hydration recovery receipt blocks a new hydration claim',
+    );
+  }
+  if (first.entries.length >= HYDRATION_RECOVERY_MAX_RECEIPTS) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery receipt registry is exhausted',
+    );
+  }
+}
+
+/** @param {string} storePath @param {Buffer} bytes @param {ReturnType<typeof normalizeApplicationStateSnapshotTransport>} transport @param {string} replicaId @param {(phase: string) => Promise<void>} observePhase */
+async function hydrateAbsentTarget(
+  storePath,
+  bytes,
+  transport,
+  replicaId,
+  observePhase,
+) {
+  const snapshotId = transport.snapshot.snapshotId;
   await fsp.mkdir(storePath, { recursive: true, mode: 0o700 });
   const rootStats = await fsp.lstat(storePath);
   if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
@@ -1181,6 +2751,7 @@ async function hydrateAbsentTarget(storePath, bytes, snapshotId, observePhase) {
     await syncDirectory(staging);
     await syncDirectory(storePath);
     await observePhase('hydration-staged');
+    await assertHydrationRecoveryRegistryAllowsNewClaim(storePath, replicaId);
     const claimed = await createHydrationClaim(storePath, snapshotId);
     if (!claimed.owned) {
       if (await waitForHydrationClaim(storePath, snapshotId)) return false;
@@ -1189,6 +2760,7 @@ async function hydrateAbsentTarget(storePath, bytes, snapshotId, observePhase) {
       );
     }
     ownedClaim = claimed.claim;
+    await assertHydrationRecoveryRegistryAllowsNewClaim(storePath, replicaId);
     const destination = join(storePath, 'lmdb');
     try {
       await fsp.mkdir(destination, { mode: 0o700 });
@@ -1682,7 +3254,8 @@ export async function transportApplicationStateSnapshot(options) {
     const committed = await hydrateAbsentTarget(
       configuration.storePath,
       bytes,
-      transport.snapshot.snapshotId,
+      transport,
+      replicaId,
       observePhase,
     );
     if (committed) await observePhase('hydration-committed');
@@ -1823,7 +3396,9 @@ if (process.argv[2] === TARGET_PROBE_ARGUMENT) {
 }
 
 export default {
+  inspectApplicationStateSnapshotHydrationRecovery,
   publishApplicationStateSnapshot,
+  recoverApplicationStateSnapshotHydration,
   recoverRetiredApplicationStateSnapshot,
   transportApplicationStateSnapshot,
 };
