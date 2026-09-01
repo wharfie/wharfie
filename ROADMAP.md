@@ -152,7 +152,7 @@ The operator immediately releases its temporary successor so a fresh resident
 session can acquire normally. Standalone mutating ledger operators and resident
 schedule-control writes now share this fence. Application-state writes use a
 separate destination-local barrier; atomic handoff across the two stores and
-automatic resident takeover remain unsupported. The accepted DynamoDB RVN
+product-activated automatic resident takeover remain unsupported. The accepted DynamoDB RVN
 profile now supplies a validated bounded path to automatic epoch replacement
 and an internal resident authority lifecycle. Authority-bound reconstruction,
 its durable admission/schedule-mutation barrier, the provisioned
@@ -168,13 +168,22 @@ also fenced by the exact current `CLOSED` replacement barrier and binds one
 `wasr1` replica plus its `RETAINED` or `HYDRATED` status. This is a deliberately
 quiesced cold checkpoint across separate transaction domains, not arbitrary
 crash-time consistency or recovery after loss of every sealed copy. The
-complete reconstructed-wrapper crossing is now exercised for both a retained
-`CLAIMED` attempt that is reconstructed and dispatched only in a fresh
-generation and a retained `STARTED` attempt that remains outcome-unknown and
-never reaches authored code. That proof crosses provisioned receipt, payload,
-topology, authority, closed barrier, application-state transport and adoption,
-reconstruction, and worker dispatch in one internal composition.
-These local proofs do not establish replacement by another machine.
+complete reconstructed-wrapper crossing is now exercised through real process
+death at the future production seam. A predecessor renews epoch `N`, is killed,
+and a successor performs the production RVN stable-observation protocol before
+taking exactly epoch `N+1`. The successor adopts the inherited exact `CLOSED`
+barrier, keeps it closed through reconstruction, application-state transport,
+and readiness, then reopens it durably under successor authority; stale
+predecessor writes remain fenced. A fsynced authored-entry marker proves that
+one killed attempt actually entered authored code before reconstruction
+classifies its retained `STARTED` attempt as `STARTED_OUTCOME_UNKNOWN` and keeps
+the run `BLOCKED`/`UNCERTAIN` without redispatch. A separate kill after the
+authored terminal commit but before the caller observes its response
+reconstructs and exactly replays that retained terminal without a second
+authored execution. The
+[process-death checkpoint](llm/checkpoints/2026-09-01-production-seam-process-death.md)
+records the boundary. These local, durable-adapter proofs do not establish live
+DynamoDB replacement or replacement by another machine.
 The cloud deployment work now proves a bounded
 credentialed lifecycle through healthy guest service and independently
 verified owned-resource cleanup on AWS and Hetzner. The broader ADR 0035
@@ -184,13 +193,15 @@ Historical validation on this host included two complete two-worker coverage
 runs that exceeded different unchanged five-second fixture deadlines; both
 failed suites passed alone. A later complete serial coverage run passed all
 7,508 active tests under unchanged deadlines and normal thresholds. Current-tree
-`npm run test:ci` validation passed 357 active suites and 8,126 active tests,
+`npm run test:ci` validation passed 360 active suites and 8,132 active tests,
 with 1 suite and 5 tests skipped under the existing policy. All configured
 global coverage thresholds passed; source, app, test, and SEA-verifier
 typechecks passed; the package verifier accepted 382 package files; the
 provider boundary stayed within its package and byte budgets with zero provider
 SDK graph inputs; and the production audit reported 0 vulnerabilities. The
-current replacement-input lane passed 16 suites and 341 tests in 33.106 seconds.
+current replacement-input lane passed 19 suites and 347 tests in 47.836 seconds.
+The three new process-death suites also passed 6 tests together under
+`--detectOpenHandles` in 12.342 seconds.
 Focused validation passed the deterministic LMDB and real-SIGKILL recovery
 suites at 2 suites and 74 tests in 18.857 seconds, plus targeted format, lint,
 and diff hygiene. The isolated same-token race regression passed all 15 tests.
@@ -406,6 +417,19 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   under a fresh authority generation. A predecessor `STARTED` attempt remains
   outcome-unknown and never reaches the activity port. This is internal
   composition evidence, not product activation.
+- The future production seam now has an independent-process crash matrix. The
+  real coordinator protocol and resident supervisor renew epoch `N`; after
+  `SIGKILL`, the successor observes one unchanged exact RVN across the required
+  local monotonic window and takes exactly epoch `N+1`. The full reconstructed
+  wrapper adopts the inherited exact `CLOSED` barrier, holds it through
+  reconstruction, transport, and readiness, then reopens and persists it only
+  under successor authority. A stale predecessor mutation is rejected. One
+  fsynced authored entry killed while running reconstructs as
+  `STARTED_OUTCOME_UNKNOWN` with `BLOCKED`/`UNCERTAIN` disposition and no
+  redispatch; a separate committed terminal whose response is lost is exactly
+  replayed without a duplicate authored entry. The proof uses a durable
+  provider-shaped test adapter, not a live cloud table, machine loss, or public
+  resident activation.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -513,33 +537,34 @@ proof retains the exact closed barrier throughout and rejects stale scope,
 foreign target substitution, and a second physical replica. It is not machine loss, a
 production provider adapter, or product activation.
 
-The complete reconstructed-wrapper work crossing is no longer an open test
-seam. It now proves the eligible retained-`CLAIMED` path through provisioned
-receipt, payload hydration, topology and authority, barrier adoption,
-application-state transport and readiness, reconstruction, barrier reopen, and
-fresh-generation dispatch. Its retained-`STARTED` counterpart remains
-outcome-unknown and does not invoke authored work.
+The complete reconstructed-wrapper work crossing and its future-production-seam
+process-death matrix are no longer open test gaps. Automatic renewal, stable RVN
+observation, exact `N+1` takeover, inherited closed-barrier handling, stale
+predecessor fencing, killed authored work, and lost terminal responses now have
+one-host independent-process evidence. That evidence uses a provider-shaped
+durable adapter and does not make a live-provider, machine-loss, or product
+activation claim.
 
-1. Finish the remaining crash tests at the future production seam: automatic
-   renewal/takeover under process death, authored code killed while actually
-   running, and final authored terminal response loss. The application-state
-   transport and its explicit partial-hydration recovery now have real
-   process-kill evidence at every exposed durability callback; machine-loss
-   evidence remains open.
-2. Activate the reconstructed startup helper behind an explicit DynamoDB
-   resident gate only after those boundaries are proved. Keep old revisions
-   parked unless the node is explicitly authorized and carries the exact
-   executable revision; retain started work as recovery-only unless durable
-   evidence resolves it.
-3. Keep the mesh trusted and explicit: enroll nodes, authorize the application
-   revisions each may run, advertise finite capabilities, place work only on a
-   matching node, and fence every node lease.
-4. After the provider and reconstruction models are small and proved, run one
-   two-node trusted recovery proof. Multi-active scheduling is not required.
+The activation-readiness decision remains **NO-GO**. The public DynamoDB
+resident gate stays closed.
 
-These are internal proof and product-gating tasks. Public activation, the
-two-node and machine-loss proofs, and every release or deployment action remain
-explicitly deferred; none is part of the present repository work slice.
+1. Design and implement an explicit successor-authority repair workflow for an
+   incomplete partial-hydration recovery receipt whose original authority or
+   barrier is stale. The current global registry correctly blocks new claims,
+   but no current authority may finish or supersede that retained attempt.
+2. Add trusted-node enrollment and per-revision authorization. A successor may
+   run authored code only when the node is explicitly trusted and carries the
+   exact authorized executable revision.
+3. Add finite capability advertisement, compatible placement, and a fenced node
+   lease so work is admitted only to an authorized matching node.
+4. After those prerequisites, run one bounded two-node machine-loss recovery
+   proof. Multi-active scheduling is not required.
+5. Revisit the explicit public activation gate only after the repair,
+   authorization, placement, lease, and two-node evidence exists.
+
+These remain internal proof and product-gating tasks. Public activation,
+two-node and machine-loss claims, releases, deployments, publication, and
+promotion remain explicitly deferred.
 
 ### Exit evidence
 
