@@ -239,8 +239,8 @@ fresh admissions closed and does not invoke the handler.
 | After central publication commit but before acknowledgement                                                       | Exact control evidence and provider readback recover the same transport.                                                          |
 | Before the durable hydration claim                                                                                | Private staging is unreachable as the target and is best-effort removed; retry starts from true absence.                          |
 | After the claim or exclusive target creation but before the evidence commit                                       | No transport reader accepts the partial root; caught failures clean owned state, while stale claims or partial roots fail closed. |
-| After the evidence link but before directory synchronization or claim release                                      | An exact retry synchronizes the target and parent, releases the verified claim, and resumes as `HYDRATED`.                         |
-| After the snapshot-scoped evidence commit but before acknowledgement                                               | Retry validates the exact data and evidence as `HYDRATED`; it does not overwrite the target.                                      |
+| After the evidence link but before directory synchronization or claim release                                     | An exact retry synchronizes the target and parent, releases the verified claim, and resumes as `HYDRATED`.                        |
+| After the snapshot-scoped evidence commit but before acknowledgement                                              | Retry validates the exact data and evidence as `HYDRATED`; it does not overwrite the target.                                      |
 | Existing target is incomplete, corrupt, substituted, or has the wrong identity                                    | Fail closed without provider fallback or automatic repair.                                                                        |
 | Two physical replicas race activation                                                                             | The exact central one-shot claim selects one replica; the loser cannot adopt application-state authority or reopen admission.     |
 | Receipt, history, distribution, marker, seal, publication, activation, barrier, destination, or authority differs | Fail closed before readiness and leave admission closed.                                                                          |
@@ -248,6 +248,11 @@ fresh admissions closed and does not invoke the handler.
 
 These deterministic interruption semantics are necessary but do not by
 themselves constitute a process-kill, machine-loss, or two-node provider proof.
+The subsequent
+[real-process-kill checkpoint](../../../llm/checkpoints/2026-08-31-application-state-snapshot-process-kill.md)
+adds independent `SIGKILL`, durable reopen, and retry evidence for all eleven
+publication, hydration, and activation callbacks. It is still not machine-loss
+or two-node provider evidence.
 
 ## Consequences
 

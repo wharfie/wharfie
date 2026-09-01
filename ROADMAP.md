@@ -77,7 +77,11 @@ The repository has substantial foundations:
   replica, and `RETAINED` or `HYDRATED` status before ordinary
   application-state readiness. True-absence hydration durably claims the store
   root, creates `lmdb` exclusively, then hard-links staged `data.mdb` before
-  snapshot-scoped evidence establishes the logical commit;
+  snapshot-scoped evidence establishes the logical commit. A
+  [real-process-kill matrix](llm/checkpoints/2026-08-31-application-state-snapshot-process-kill.md)
+  now kills an independent child at all six publication and all five
+  hydration/activation callbacks, reopens the durable stores, proves exact
+  retry or deliberate fail-close, and keeps the replacement barrier closed;
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -434,10 +438,21 @@ readiness before ordinary application-state preparation. It does not claim
 cross-store atomicity, arbitrary crash-time
 recovery, or a production call site; no public gate moved.
 
-1. Finish deterministic crash tests at renewal, takeover, assignment, authored
-   activity start, managed-effect settlement, terminal commit, and every system
-   boundary. Add real process-kill and machine-loss evidence for the
-   application-state phases beyond deterministic injected interruption.
+Its real-process follow-up now covers every exposed LMDB snapshot phase under
+`SIGKILL`: source adoption, marker persistence, sealing, byte capture,
+immutable publication, central publication evidence, staging, exclusive target
+creation, evidence linking, hydration commit, and destination adoption. Exact
+retries recover every evidence-complete phase; a killed claimed partial target
+without evidence stays visibly fail-closed. The proof retains the exact closed
+barrier throughout and rejects a second physical replica. It is not machine
+loss, a production provider adapter, or product activation.
+
+1. Finish the remaining crash tests at the future production seam: automatic
+   renewal/takeover under process death, authored code killed while actually
+   running, final authored terminal response loss, and claimed work crossing
+   the complete reconstructed wrapper. The application-state transport now has
+   real process-kill evidence at all eleven exposed phases; machine-loss
+   evidence remains open.
 2. Activate the reconstructed startup helper behind an explicit DynamoDB
    resident gate only after those boundaries are proved. Keep old revisions
    parked unless the node is explicitly authorized and carries the exact
