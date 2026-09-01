@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-08-31
+**Last updated:** 2026-09-01
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -81,7 +81,17 @@ The repository has substantial foundations:
   [real-process-kill matrix](llm/checkpoints/2026-08-31-application-state-snapshot-process-kill.md)
   now kills an independent child at all six publication and all five
   hydration/activation callbacks, reopens the durable stores, proves exact
-  retry or deliberate fail-close, and keeps the replacement barrier closed;
+  retry or deliberate fail-close, and keeps the replacement barrier closed.
+  A separate explicit recovery seam now inspects only one exact pre-evidence
+  empty partial hydration, binds store-root, target, and claim filesystem
+  identities into an immutable attempt-scoped receipt, and requires literal
+  confirmation before atomically renaming the exact target and claim into
+  receipt-scoped retirement paths that remain retained. A bounded exact
+  registry gates both recovery and new hydration attempts after the original
+  hydration owner has been stopped and reaped; recovery against a live owner is
+  explicitly unsupported. Independent process
+  kills after each recovery durability boundary prove exact replay in the
+  [recovery and work-crossing checkpoint](llm/checkpoints/2026-09-01-partial-hydration-recovery-and-work-crossing.md);
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -157,7 +167,13 @@ final publication is fenced into the control store. The central activation is
 also fenced by the exact current `CLOSED` replacement barrier and binds one
 `wasr1` replica plus its `RETAINED` or `HYDRATED` status. This is a deliberately
 quiesced cold checkpoint across separate transaction domains, not arbitrary
-crash-time consistency or recovery after loss of every sealed copy.
+crash-time consistency or recovery after loss of every sealed copy. The
+complete reconstructed-wrapper crossing is now exercised for both a retained
+`CLAIMED` attempt that is reconstructed and dispatched only in a fresh
+generation and a retained `STARTED` attempt that remains outcome-unknown and
+never reaches authored code. That proof crosses provisioned receipt, payload,
+topology, authority, closed barrier, application-state transport and adoption,
+reconstruction, and worker dispatch in one internal composition.
 These local proofs do not establish replacement by another machine.
 The cloud deployment work now proves a bounded
 credentialed lifecycle through healthy guest service and independently
@@ -167,15 +183,19 @@ acceptance artifact remains partial.
 Historical validation on this host included two complete two-worker coverage
 runs that exceeded different unchanged five-second fixture deadlines; both
 failed suites passed alone. A later complete serial coverage run passed all
-7,508 active tests under unchanged deadlines and normal thresholds. Those
-observations remain useful history, but they are superseded for the current
-tree: `npm run test:ci` passed 328 active suites and 7,578 active tests in
-755.272 seconds, with 1 suite and 5 tests skipped under the existing policy.
-Coverage passed at 84.06% statements, 80.89% branches, 91.45% functions, and
-84.79% lines; the package verifier accepted 364 package files and the production
-audit reported 0 vulnerabilities. The isolated same-token race regression
-passed all 15 tests. The locally packed magnetic proof passed explicit inspected
-takeover, and Darwin SEA verification passed at 155,538,992 bytes with SHA-256
+7,508 active tests under unchanged deadlines and normal thresholds. Current-tree
+`npm run test:ci` validation passed 357 active suites and 8,126 active tests,
+with 1 suite and 5 tests skipped under the existing policy. All configured
+global coverage thresholds passed; source, app, test, and SEA-verifier
+typechecks passed; the package verifier accepted 382 package files; the
+provider boundary stayed within its package and byte budgets with zero provider
+SDK graph inputs; and the production audit reported 0 vulnerabilities. The
+current replacement-input lane passed 16 suites and 341 tests in 33.106 seconds.
+Focused validation passed the deterministic LMDB and real-SIGKILL recovery
+suites at 2 suites and 74 tests in 18.857 seconds, plus targeted format, lint,
+and diff hygiene. The isolated same-token race regression passed all 15 tests.
+Prior locally packed magnetic evidence passed explicit inspected takeover, and
+the prior Darwin SEA verification passed at 155,538,992 bytes with SHA-256
 `1e085d1f20b43e6bdfef481beef54d26fff4f236b97fc7d9e7ba2ac385265cf2`.
 
 ## Outcome 1: a local CLI becomes a durable portable service
@@ -365,10 +385,27 @@ explicit reconciliation. Stale coordinators cannot commit after replacement.
   exact current `CLOSED` replacement barrier and authority, `wasr1` physical
   replica, and `RETAINED`/`HYDRATED` status before destination-authority
   adoption. Receipt, history, marker, seal, bytes, distribution, destination,
-  barrier, activation,
-  and authority substitution fail closed. The separate-store boundary,
-  production call site, trusted-node placement, and multi-node proof remain
-  pending.
+  barrier, activation, and authority substitution fail closed. A separate
+  read-only inspection now recognizes only the exact empty pre-evidence partial
+  target under current authority, the exact durable `CLOSED` barrier, central
+  publication, no activation, the exact claim and replica, and receipt-bound
+  filesystem identities. Explicit confirmation durably records a stable
+  attempt-scoped receipt before atomically renaming the exact target and claim
+  into receipt-scoped retirement paths; all three objects remain retained, and
+  completion requires both retired objects to remain exact. A bounded
+  128-receipt exact registry rejects malformed, multiply incomplete, or
+  exhausted state without silent garbage collection, and ordinary hydration
+  revalidates that registry before and after claim creation. Stale, foreign,
+  corrupt, evidence-bearing, activated, or substituted states fail closed. The
+  separate-store boundary, production call site, trusted-node placement, and
+  multi-node proof remain pending.
+- The complete reconstructed-resident work crossing is now proved at the
+  internal wrapper boundary. A retained `CLAIMED` attempt is reconstructed,
+  its provisioned payload and application-state snapshot are made ready, the
+  closed barrier reopens only after exact adoption, and authored dispatch runs
+  under a fresh authority generation. A predecessor `STARTED` attempt remains
+  outcome-unknown and never reaches the activity port. This is internal
+  composition evidence, not product activation.
 - Committed outcomes are distinct from physical dispatch. Managed effects can
   make stronger claims only when their destination enforces stable identity
   atomically with the mutation.
@@ -438,20 +475,56 @@ readiness before ordinary application-state preparation. It does not claim
 cross-store atomicity, arbitrary crash-time
 recovery, or a production call site; no public gate moved.
 
+The exact pre-evidence partial-hydration seam is also complete internally.
+Read-only inspection requires current authority, the exact retained `CLOSED`
+barrier, exact central publication with no activation, one canonical claim and
+replica, one stable empty target, and the original store-root, target, and claim
+filesystem identities. Explicit confirmation first retains an immutable
+attempt-scoped receipt whose path includes both snapshot and recovery identity,
+then atomically renames that still-empty target and its exact claim into
+receipt-scoped retained paths across separate synchronized phases. Completion
+means both retired objects remain exact. A bounded 128-receipt registry admits
+no malformed entry, more than one incomplete attempt, or silent garbage
+collection; exhaustion fails closed to new attempts. Fresh inspection prefers
+an active attempt and otherwise returns a deterministic completed receipt.
+Replay of an older completed receipt is read-only only while its receipt-bound
+authority and barrier remain current, even if a newer attempt exists. The original hydration
+owner must be stopped and reaped before recovery; the registry is not an atomic
+election against a live owner. Ordinary hydration validates the registry both
+before and after exclusive claim creation. Foreign, stale, corrupt,
+evidence-bearing, activated, and same-content substitution cases fail closed
+without authorizing deletion or activation.
+
+An incomplete receipt whose authority or barrier becomes stale is a deliberate
+liveness boundary: neither the old nor the new scope may mutate it, and its
+global registry entry blocks new claims. Automatic compaction or takeover is
+unsupported. A future explicit repair workflow must resolve that state before
+this seam can move toward product activation.
+
 Its real-process follow-up now covers every exposed LMDB snapshot phase under
 `SIGKILL`: source adoption, marker persistence, sealing, byte capture,
 immutable publication, central publication evidence, staging, exclusive target
 creation, evidence linking, hydration commit, and destination adoption. Exact
-retries recover every evidence-complete phase; a killed claimed partial target
-without evidence stays visibly fail-closed. The proof retains the exact closed
-barrier throughout and rejects a second physical replica. It is not machine
-loss, a production provider adapter, or product activation.
+retries recover every evidence-complete phase. A killed claimed partial target
+without evidence stays visibly fail-closed to ordinary transport, while the
+separate explicit recovery process is killed and replayed after each of its
+receipt, target-retirement, and claim-retirement durability boundaries. The
+proof retains the exact closed barrier throughout and rejects stale scope,
+foreign target substitution, and a second physical replica. It is not machine loss, a
+production provider adapter, or product activation.
+
+The complete reconstructed-wrapper work crossing is no longer an open test
+seam. It now proves the eligible retained-`CLAIMED` path through provisioned
+receipt, payload hydration, topology and authority, barrier adoption,
+application-state transport and readiness, reconstruction, barrier reopen, and
+fresh-generation dispatch. Its retained-`STARTED` counterpart remains
+outcome-unknown and does not invoke authored work.
 
 1. Finish the remaining crash tests at the future production seam: automatic
    renewal/takeover under process death, authored code killed while actually
-   running, final authored terminal response loss, and claimed work crossing
-   the complete reconstructed wrapper. The application-state transport now has
-   real process-kill evidence at all eleven exposed phases; machine-loss
+   running, and final authored terminal response loss. The application-state
+   transport and its explicit partial-hydration recovery now have real
+   process-kill evidence at every exposed durability callback; machine-loss
    evidence remains open.
 2. Activate the reconstructed startup helper behind an explicit DynamoDB
    resident gate only after those boundaries are proved. Keep old revisions
@@ -463,6 +536,10 @@ loss, a production provider adapter, or product activation.
    matching node, and fence every node lease.
 4. After the provider and reconstruction models are small and proved, run one
    two-node trusted recovery proof. Multi-active scheduling is not required.
+
+These are internal proof and product-gating tasks. Public activation, the
+two-node and machine-loss proofs, and every release or deployment action remain
+explicitly deferred; none is part of the present repository work slice.
 
 ### Exit evidence
 
