@@ -30,8 +30,10 @@ import {
 import {
   ApplicationStateSnapshotTargetCorruptionError,
   inspectApplicationStateSnapshotHydrationRecovery,
+  inspectApplicationStateSnapshotHydrationRecoveryRepair,
   publishApplicationStateSnapshot,
   recoverApplicationStateSnapshotHydration,
+  repairApplicationStateSnapshotHydrationRecovery,
   transportApplicationStateSnapshot,
 } from '../../src/core/runtime/application-state-snapshot-lmdb.js';
 import { openApplicationStateDB } from '../../src/core/runtime/application-state-store.js';
@@ -48,6 +50,7 @@ import {
 } from '../helpers/real-sigkill-subprocess.js';
 
 /** @typedef {import('../fixtures/application-state-partial-hydration-recovery-crash-child.js').CrashBoundary} CrashBoundary */
+/** @typedef {import('../fixtures/application-state-successor-hydration-repair-crash-child.js').CrashBoundary} RepairCrashBoundary */
 /** @typedef {ReturnType<typeof spawnCrashChild>} CrashChild */
 
 const TRANSPORT_CHILD_PATH = fileURLToPath(
@@ -62,6 +65,12 @@ const RECOVERY_CHILD_PATH = fileURLToPath(
     import.meta.url,
   ),
 );
+const REPAIR_CHILD_PATH = fileURLToPath(
+  new URL(
+    '../fixtures/application-state-successor-hydration-repair-crash-child.js',
+    import.meta.url,
+  ),
+);
 const APP_ID = 'application-state-partial-hydration-recovery-crash';
 const CONTROL_TABLE =
   'application-state-partial-hydration-recovery-crash-control';
@@ -72,6 +81,10 @@ const HYDRATION_RECOVERY_FILE_PREFIX =
 const HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-receipt`;
 const HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-target`;
 const HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-claim`;
+const HYDRATION_RECOVERY_REPAIR_RECEIPT_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-receipt`;
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-authorization`;
+const HYDRATION_RECOVERY_REPAIR_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-retired-target`;
+const HYDRATION_RECOVERY_REPAIR_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-retired-claim`;
 const REPLICA_ID_FILE = '.wharfie-application-state-replica-id';
 const HYDRATION_STAGE_PREFIX = '.wharfie-application-state-hydration-';
 const testOnUnix = process.platform === 'win32' ? test.skip : test;
@@ -115,6 +128,27 @@ const STALE_CASES = /** @type {const} */ ([
     priorBoundary: 'hydration-recovery-target-removed',
   },
 ]);
+const STALE_REPAIR_STATES = /** @type {const} */ ([
+  {
+    recoveryBoundary: 'hydration-recovery-recorded',
+    state: 'RECOVERY_RECORDED',
+  },
+  {
+    recoveryBoundary: 'hydration-recovery-target-removed',
+    state: 'TARGET_REMOVED',
+  },
+]);
+const REPAIR_PHASES = /** @type {const} */ ([
+  'hydration-recovery-successor-repair-recorded',
+  'hydration-recovery-successor-repair-authorized',
+  'hydration-recovery-successor-repair-target-retired',
+  'hydration-recovery-successor-repair-claim-retired',
+]);
+const SUCCESSOR_REPAIR_CASES = STALE_REPAIR_STATES.flatMap((stale) =>
+  REPAIR_PHASES.map((repairBoundary) =>
+    Object.freeze({ ...stale, repairBoundary }),
+  ),
+);
 
 /** @param {string} prefix @param {string} label */
 function id(prefix, label) {
@@ -133,6 +167,18 @@ function recoveryArtifactPaths(recovery) {
     receipt: `${HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX}-${snapshotId}-${recoveryId}`,
     retiredTarget: `${HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX}-${snapshotId}-${recoveryId}`,
     retiredClaim: `${HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX}-${snapshotId}-${recoveryId}`,
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} inspection @param {number} [authorizationSlot] */
+function repairArtifactPaths(inspection, authorizationSlot = 0) {
+  const repairId = inspection.repair.repairId;
+  const slot = String(authorizationSlot).padStart(3, '0');
+  return Object.freeze({
+    receipt: `${HYDRATION_RECOVERY_REPAIR_RECEIPT_PREFIX}-${repairId}`,
+    authorization: `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${repairId}-${slot}`,
+    retiredTarget: `${HYDRATION_RECOVERY_REPAIR_RETIRED_TARGET_PREFIX}-${repairId}`,
+    retiredClaim: `${HYDRATION_RECOVERY_REPAIR_RETIRED_CLAIM_PREFIX}-${repairId}`,
   });
 }
 
@@ -298,6 +344,7 @@ async function createFixture(root) {
 }
 
 /** @typedef {Awaited<ReturnType<typeof createFixture>>} Fixture */
+/** @typedef {{authority: Fixture['replacementAuthority'], barrier: Fixture['replacementBarrier']}} AuthorityScope */
 
 /** @param {Fixture} fixture @param {boolean} [readOnly] */
 function openControl(fixture, readOnly = true) {
@@ -386,8 +433,49 @@ async function runRecovery(fixture, inspection) {
   }
 }
 
-/** @param {Fixture} fixture @param {Record<string, any>} configuration */
-async function runTransport(fixture, configuration) {
+/** @param {Fixture} fixture @param {AuthorityScope} scope */
+async function inspectRepair(fixture, scope) {
+  const control = openControl(fixture);
+  try {
+    return await inspectApplicationStateSnapshotHydrationRecoveryRepair({
+      configuration: fixture.replacementConfiguration,
+      controlContext: control.context,
+      transport: fixture.transport,
+      closedBarrier: scope.barrier,
+      coordinatorAuthority: scope.authority,
+    });
+  } finally {
+    await control.db.close();
+  }
+}
+
+/** @param {Fixture} fixture @param {AuthorityScope} scope @param {Record<string, any>} inspection */
+async function runRepair(fixture, scope, inspection) {
+  const control = openControl(fixture, false);
+  try {
+    return await repairApplicationStateSnapshotHydrationRecovery({
+      configuration: fixture.replacementConfiguration,
+      controlContext: control.context,
+      transport: fixture.transport,
+      closedBarrier: scope.barrier,
+      coordinatorAuthority: scope.authority,
+      inspection,
+      confirmStaleHydrationRecoveryRepair: true,
+    });
+  } finally {
+    await control.db.close();
+  }
+}
+
+/** @param {Fixture} fixture @param {Record<string, any>} configuration @param {AuthorityScope} [scope] */
+async function runTransport(
+  fixture,
+  configuration,
+  scope = {
+    authority: fixture.replacementAuthority,
+    barrier: fixture.replacementBarrier,
+  },
+) {
   const control = openControl(fixture, false);
   try {
     return await transportApplicationStateSnapshot({
@@ -395,8 +483,8 @@ async function runTransport(fixture, configuration) {
       controlContext: control.context,
       transport: fixture.transport,
       history: fixture.transport.snapshot.checkpoint.history,
-      closedBarrier: fixture.replacementBarrier,
-      coordinatorAuthority: fixture.replacementAuthority,
+      closedBarrier: scope.barrier,
+      coordinatorAuthority: scope.authority,
       distribution: distribution(fixture),
     });
   } finally {
@@ -522,6 +610,22 @@ function treeEntry(tree, path) {
   return tree.find((entry) => entry.path === path) || null;
 }
 
+/** @param {Readonly<Record<string, any>[]>} before @param {Readonly<Record<string, any>[]>} after @param {string} path */
+function expectTreeEntryRetained(before, after, path) {
+  const retained = treeEntry(before, path);
+  expect(retained).not.toBeNull();
+  expect(treeEntry(after, path)).toEqual(retained);
+}
+
+/** @param {Readonly<Record<string, any>[]>} before @param {Readonly<Record<string, any>[]>} after */
+function expectRecoveryEvidenceRetained(before, after) {
+  for (const entry of before.filter((candidate) =>
+    candidate.path.startsWith(HYDRATION_RECOVERY_FILE_PREFIX),
+  )) {
+    expect(treeEntry(after, entry.path)).toEqual(entry);
+  }
+}
+
 /** @param {Readonly<Record<string, any>[]>} tree */
 function partialState(tree) {
   const root = treeEntry(tree, '.');
@@ -633,8 +737,51 @@ async function prepareRecoveryCrash(fixture, boundary, inspection, children) {
   expect(child.stderr).toBe('');
 }
 
-/** @param {Fixture} fixture @param {string} label */
-async function rotateAuthority(fixture, label) {
+/** @param {Fixture} fixture @param {AuthorityScope} scope @param {RepairCrashBoundary} boundary @param {Record<string, any>} inspection @param {CrashChild[]} children */
+async function prepareRepairCrash(
+  fixture,
+  scope,
+  boundary,
+  inspection,
+  children,
+) {
+  const child = spawnCrashChild({
+    childPath: REPAIR_CHILD_PATH,
+    cwd: fixture.root,
+    options: {
+      boundary,
+      configuration: fixture.replacementConfiguration,
+      control: {
+        path: fixture.controlPath,
+        tableName: fixture.controlTableName,
+      },
+      transport: fixture.transport,
+      closedBarrier: scope.barrier,
+      coordinatorAuthority: scope.authority,
+      inspection,
+    },
+  });
+  children.push(child);
+  const message = await waitForCrashChildMessage(
+    child,
+    (candidate) => candidate.kind === 'boundary',
+    `successor hydration repair boundary ${boundary}`,
+  );
+  expect(message).toEqual({ kind: 'boundary', boundary });
+  expect(await killCrashChild(child)).toEqual({
+    code: null,
+    signal: 'SIGKILL',
+  });
+  expect(child.stdout).toBe('');
+  expect(child.stderr).toBe('');
+}
+
+/** @param {Fixture} fixture @param {string} label @param {Fixture['replacementBarrier']} [predecessor] */
+async function rotateAuthority(
+  fixture,
+  label,
+  predecessor = fixture.replacementBarrier,
+) {
   const control = openControl(fixture, false);
   try {
     const observed = await control.authorities.get({ appId: APP_ID });
@@ -644,15 +791,15 @@ async function rotateAuthority(fixture, label) {
       requestId: `stale-successor-takeover-${label}`,
       observedAuthority: observed,
       confirmAuthorityReplacement: true,
-      observedAt: 3,
+      observedAt: predecessor.version + 1,
     });
     const authority = createCoordinatorAuthorityToken(transition.authority);
     const barrier = (
       await control.admission.adopt({
         authority,
         requestId: `stale-successor-adopt-${label}`,
-        predecessor: fixture.replacementBarrier,
-        observedAt: 3,
+        predecessor,
+        observedAt: predecessor.version + 1,
       })
     ).barrier;
     return Object.freeze({ authority, barrier });
@@ -691,13 +838,19 @@ async function cleanupFixture(fixture, children) {
   }
 }
 
-/** @param {Fixture} fixture */
-async function expectClosedUnactivatedControl(fixture) {
+/** @param {Fixture} fixture @param {AuthorityScope} [scope] */
+async function expectClosedUnactivatedControl(
+  fixture,
+  scope = {
+    authority: fixture.replacementAuthority,
+    barrier: fixture.replacementBarrier,
+  },
+) {
   const state = await readControlState(fixture);
   expect(createCoordinatorAuthorityToken(state.authority)).toEqual(
-    fixture.replacementAuthority,
+    scope.authority,
   );
-  expect(state.barrier).toEqual(fixture.replacementBarrier);
+  expect(state.barrier).toEqual(scope.barrier);
   expect(state.barrier?.state).toBe(CoordinatorQuiescenceBarrierState.CLOSED);
   expect(state.publication?.transport).toEqual(fixture.transport);
   expect(state.activation).toBeNull();
@@ -1213,5 +1366,464 @@ describe('real SIGKILL partial application-state hydration recovery', () => {
       }
     },
     20_000,
+  );
+});
+
+describe('real SIGKILL successor-authority hydration recovery repair', () => {
+  testOnUnix.each(SUCCESSOR_REPAIR_CASES)(
+    'replays $state successor repair after $repairBoundary process loss and another takeover',
+    async ({ recoveryBoundary, state, repairBoundary }) => {
+      const root = await fsp.mkdtemp(
+        join(tmpdir(), 'wharfie-successor-hydration-repair-crash-'),
+      );
+      const fixture = await createFixture(root);
+      /** @type {CrashChild[]} */
+      const children = [];
+      try {
+        await prepareTransportCrash(
+          fixture,
+          'hydration-target-created',
+          children,
+        );
+        const initialTree = await readTreeState(
+          fixture.replacementConfiguration.storePath,
+        );
+        const initial = partialState(initialTree);
+        expect(initial.target).toMatchObject({ type: 'directory', names: [] });
+        expect(initial.claim?.type).toBe('file');
+        expect(initial.replica?.type).toBe('file');
+        expect(initial.stages).toHaveLength(1);
+
+        const originalInspection = await inspectRecovery(fixture);
+        const originalArtifacts = recoveryArtifactPaths(
+          originalInspection.recovery,
+        );
+        await prepareRecoveryCrash(
+          fixture,
+          recoveryBoundary,
+          originalInspection,
+          children,
+        );
+        const staleTree = await readTreeState(
+          fixture.replacementConfiguration.storePath,
+        );
+        const staleReceipt = treeEntry(staleTree, originalArtifacts.receipt);
+        expect(staleReceipt).toMatchObject({ type: 'file' });
+        if (!staleReceipt || staleReceipt.type !== 'file') {
+          throw new Error('Stale hydration recovery lost its receipt.');
+        }
+        expect(
+          JSON.parse(
+            Buffer.from(staleReceipt.bytes, 'base64').toString('utf8'),
+          ),
+        ).toEqual(originalInspection.recovery);
+        await expect(inspectRecovery(fixture)).resolves.toMatchObject({
+          state,
+          recovery: originalInspection.recovery,
+        });
+
+        const sealedSource = await readDestinationState(
+          fixture,
+          fixture.sourceConfiguration,
+        );
+        const firstSuccessor = await rotateAuthority(
+          fixture,
+          `${state}-${repairBoundary}-first`,
+        );
+        const beforeRepairControl = await expectClosedUnactivatedControl(
+          fixture,
+          firstSuccessor,
+        );
+        expect(beforeRepairControl.publication?.transport).toEqual(
+          fixture.transport,
+        );
+        await expect(
+          readDestinationState(fixture, fixture.sourceConfiguration),
+        ).resolves.toEqual(sealedSource);
+
+        const repairInspection = await inspectRepair(fixture, firstSuccessor);
+        const initialRepairState =
+          state === 'RECOVERY_RECORDED'
+            ? 'STALE_RECOVERY_RECORDED'
+            : 'STALE_TARGET_REMOVED';
+        expect(Object.keys(repairInspection).sort()).toEqual(
+          [
+            'schemaVersion',
+            'kind',
+            'inspectionId',
+            'state',
+            'repair',
+            'authorization',
+          ].sort(),
+        );
+        expect(repairInspection).toMatchObject({
+          schemaVersion: 1,
+          kind: 'wharfie.application-state-snapshot-hydration-recovery-successor-repair-inspection.v1',
+          inspectionId: expect.stringMatching(/^washrri1_/u),
+          state: initialRepairState,
+          repair: {
+            schemaVersion: 1,
+            kind: 'wharfie.application-state-snapshot-hydration-recovery-successor-repair.v1',
+            repairId: expect.stringMatching(/^washrr1_/u),
+            staleRecovery: originalInspection.recovery,
+            startingState: state,
+            publicationId: expect.any(String),
+            filesystem: {
+              staleReceiptFile: {
+                device: String(staleReceipt.device),
+                inode: String(staleReceipt.inode),
+                size: String(staleReceipt.size),
+              },
+            },
+          },
+          authorization: {
+            schemaVersion: 1,
+            kind: 'wharfie.application-state-snapshot-hydration-recovery-successor-repair-authorization.v1',
+            authorizationId: expect.stringMatching(/^washrra1_/u),
+          },
+        });
+        const firstRepairArtifacts = repairArtifactPaths(repairInspection);
+
+        await prepareRepairCrash(
+          fixture,
+          firstSuccessor,
+          repairBoundary,
+          repairInspection,
+          children,
+        );
+        const killedTree = await readTreeState(
+          fixture.replacementConfiguration.storePath,
+        );
+        const killedControl = await expectClosedUnactivatedControl(
+          fixture,
+          firstSuccessor,
+        );
+        expect(killedControl).toEqual(beforeRepairControl);
+        expectTreeEntryRetained(
+          staleTree,
+          killedTree,
+          originalArtifacts.receipt,
+        );
+        const retainedRepairReceipt = treeEntry(
+          killedTree,
+          firstRepairArtifacts.receipt,
+        );
+        expect(retainedRepairReceipt).toMatchObject({ type: 'file' });
+        if (!retainedRepairReceipt || retainedRepairReceipt.type !== 'file') {
+          throw new Error('Killed successor repair lost its durable receipt.');
+        }
+        expect(
+          JSON.parse(
+            Buffer.from(retainedRepairReceipt.bytes, 'base64').toString('utf8'),
+          ),
+        ).toEqual(repairInspection.repair);
+
+        const authorizationWasDurable =
+          repairBoundary !== 'hydration-recovery-successor-repair-recorded';
+        const targetWasRetired =
+          state === 'RECOVERY_RECORDED' &&
+          [
+            'hydration-recovery-successor-repair-target-retired',
+            'hydration-recovery-successor-repair-claim-retired',
+          ].includes(repairBoundary);
+        const claimWasRetired =
+          repairBoundary ===
+          'hydration-recovery-successor-repair-claim-retired';
+        expect(
+          treeEntry(killedTree, firstRepairArtifacts.authorization) !== null,
+        ).toBe(authorizationWasDurable);
+        expect(
+          treeEntry(killedTree, firstRepairArtifacts.retiredTarget) !== null,
+        ).toBe(targetWasRetired);
+        expect(
+          treeEntry(killedTree, firstRepairArtifacts.retiredClaim) !== null,
+        ).toBe(claimWasRetired);
+        if (authorizationWasDurable) {
+          const retainedAuthorization = treeEntry(
+            killedTree,
+            firstRepairArtifacts.authorization,
+          );
+          expect(retainedAuthorization).toMatchObject({ type: 'file' });
+          if (!retainedAuthorization || retainedAuthorization.type !== 'file') {
+            throw new Error(
+              'Killed successor repair lost its durable authorization.',
+            );
+          }
+          expect(
+            JSON.parse(
+              Buffer.from(retainedAuthorization.bytes, 'base64').toString(
+                'utf8',
+              ),
+            ),
+          ).toEqual(repairInspection.authorization);
+        }
+        await expect(
+          readDestinationState(fixture, fixture.sourceConfiguration),
+        ).resolves.toEqual(sealedSource);
+
+        const expectedRetainedState =
+          repairBoundary === 'hydration-recovery-successor-repair-claim-retired'
+            ? 'REPAIRED'
+            : repairBoundary ===
+                  'hydration-recovery-successor-repair-target-retired' ||
+                (state === 'TARGET_REMOVED' && authorizationWasDurable)
+              ? 'TARGET_RETIRED'
+              : 'REPAIR_RECORDED';
+        await expect(
+          inspectRepair(fixture, firstSuccessor),
+        ).resolves.toMatchObject({
+          state: expectedRetainedState,
+          repair: repairInspection.repair,
+        });
+
+        const secondSuccessor = await rotateAuthority(
+          fixture,
+          `${state}-${repairBoundary}-second`,
+          firstSuccessor.barrier,
+        );
+        const afterTakeoverTree = await readTreeState(
+          fixture.replacementConfiguration.storePath,
+        );
+        expect(afterTakeoverTree).toEqual(killedTree);
+        expectRecoveryEvidenceRetained(killedTree, afterTakeoverTree);
+        const afterTakeoverControl = await expectClosedUnactivatedControl(
+          fixture,
+          secondSuccessor,
+        );
+        expect(afterTakeoverControl.publication?.transport).toEqual(
+          fixture.transport,
+        );
+
+        await expect(
+          runRepair(fixture, firstSuccessor, repairInspection),
+        ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+        await expect(
+          readTreeState(fixture.replacementConfiguration.storePath),
+        ).resolves.toEqual(killedTree);
+        await expect(readControlState(fixture)).resolves.toEqual(
+          afterTakeoverControl,
+        );
+
+        const successorInspection = await inspectRepair(
+          fixture,
+          secondSuccessor,
+        );
+        expect(successorInspection).toMatchObject({
+          state: expectedRetainedState,
+          repair: repairInspection.repair,
+          authorization: {
+            authorizationId: expect.stringMatching(/^washrra1_/u),
+          },
+        });
+        expect(successorInspection.authorization.authorizationId).not.toBe(
+          repairInspection.authorization.authorizationId,
+        );
+        const successorRepairArtifacts = repairArtifactPaths(
+          successorInspection,
+          authorizationWasDurable ? 1 : 0,
+        );
+        expect(successorRepairArtifacts.receipt).toBe(
+          firstRepairArtifacts.receipt,
+        );
+        expect(successorRepairArtifacts.retiredTarget).toBe(
+          firstRepairArtifacts.retiredTarget,
+        );
+        expect(successorRepairArtifacts.retiredClaim).toBe(
+          firstRepairArtifacts.retiredClaim,
+        );
+
+        const completed = await runRepair(
+          fixture,
+          secondSuccessor,
+          successorInspection,
+        );
+        const afterCompletionBeforeReplay = await readTreeState(
+          fixture.replacementConfiguration.storePath,
+        );
+        if (successorInspection.state === 'REPAIRED') {
+          await expect(
+            runRepair(fixture, secondSuccessor, successorInspection),
+          ).resolves.toEqual(completed);
+        } else {
+          await expect(
+            runRepair(fixture, secondSuccessor, successorInspection),
+          ).rejects.toBeInstanceOf(
+            ApplicationStateSnapshotTargetCorruptionError,
+          );
+          await expect(
+            readTreeState(fixture.replacementConfiguration.storePath),
+          ).resolves.toEqual(afterCompletionBeforeReplay);
+        }
+        const completedInspection = await inspectRepair(
+          fixture,
+          secondSuccessor,
+        );
+        expect(completedInspection).toMatchObject({
+          state: 'REPAIRED',
+          repair: repairInspection.repair,
+        });
+        await expect(
+          runRepair(fixture, secondSuccessor, completedInspection),
+        ).resolves.toEqual(completed);
+        const completedTree = await readTreeState(
+          fixture.replacementConfiguration.storePath,
+        );
+        expectTreeEntryRetained(
+          staleTree,
+          completedTree,
+          originalArtifacts.receipt,
+        );
+        expectTreeEntryRetained(
+          killedTree,
+          completedTree,
+          firstRepairArtifacts.receipt,
+        );
+        if (authorizationWasDurable) {
+          expectTreeEntryRetained(
+            killedTree,
+            completedTree,
+            firstRepairArtifacts.authorization,
+          );
+        }
+        const successorAuthorization = treeEntry(
+          completedTree,
+          successorRepairArtifacts.authorization,
+        );
+        if (successorInspection.state === 'REPAIRED') {
+          expect(successorAuthorization).toBeNull();
+        } else {
+          expect(successorAuthorization).toMatchObject({ type: 'file' });
+          if (
+            !successorAuthorization ||
+            successorAuthorization.type !== 'file'
+          ) {
+            throw new Error(
+              'Successor repair lost its exact current authorization.',
+            );
+          }
+          expect(
+            JSON.parse(
+              Buffer.from(successorAuthorization.bytes, 'base64').toString(
+                'utf8',
+              ),
+            ),
+          ).toEqual(successorInspection.authorization);
+        }
+        expect(treeEntry(completedTree, 'lmdb')).toBeNull();
+        expect(treeEntry(completedTree, HYDRATION_CLAIM_FILE)).toBeNull();
+        const completedTargetPath =
+          state === 'TARGET_REMOVED'
+            ? originalArtifacts.retiredTarget
+            : firstRepairArtifacts.retiredTarget;
+        expect(treeEntry(completedTree, completedTargetPath)).toMatchObject({
+          type: 'directory',
+          names: [],
+          device: initial.target?.device,
+          inode: initial.target?.inode,
+        });
+        if (state === 'TARGET_REMOVED') {
+          expectTreeEntryRetained(
+            staleTree,
+            completedTree,
+            originalArtifacts.retiredTarget,
+          );
+          expect(
+            treeEntry(completedTree, firstRepairArtifacts.retiredTarget),
+          ).toBeNull();
+        }
+        expect(
+          treeEntry(completedTree, firstRepairArtifacts.retiredClaim),
+        ).toMatchObject({
+          type: 'file',
+          device: initial.claim?.device,
+          inode: initial.claim?.inode,
+          bytes: initial.claim?.bytes,
+        });
+        expectTreeEntryRetained(initialTree, completedTree, REPLICA_ID_FILE);
+        for (const stage of initial.stages) {
+          expect(treeEntry(completedTree, stage.path)).toEqual(stage);
+        }
+        const completedControl = await expectClosedUnactivatedControl(
+          fixture,
+          secondSuccessor,
+        );
+        expect(completedControl).toEqual(afterTakeoverControl);
+        await expect(
+          readDestinationState(fixture, fixture.sourceConfiguration),
+        ).resolves.toEqual(sealedSource);
+
+        const readiness = await runTransport(
+          fixture,
+          fixture.replacementConfiguration,
+          secondSuccessor,
+        );
+        expect(readiness).toMatchObject({
+          status: 'HYDRATED',
+          destination: fixture.destination,
+          transport: fixture.transport,
+        });
+        await expect(
+          runTransport(
+            fixture,
+            fixture.replacementConfiguration,
+            secondSuccessor,
+          ),
+        ).resolves.toEqual(readiness);
+        const activatedTree = await readTreeState(
+          fixture.replacementConfiguration.storePath,
+        );
+        expectRecoveryEvidenceRetained(completedTree, activatedTree);
+        expectTreeEntryRetained(initialTree, activatedTree, REPLICA_ID_FILE);
+        const activatedControl = await readControlState(fixture);
+        expect(
+          createCoordinatorAuthorityToken(activatedControl.authority),
+        ).toEqual(secondSuccessor.authority);
+        expect(activatedControl.barrier).toEqual(secondSuccessor.barrier);
+        expect(activatedControl.barrier?.state).toBe(
+          CoordinatorQuiescenceBarrierState.CLOSED,
+        );
+        expect(activatedControl.publication?.transport).toEqual(
+          fixture.transport,
+        );
+        expect(activatedControl.activation).toMatchObject({
+          replicaId: originalInspection.recovery.replicaId,
+        });
+        const destination = await readDestinationState(
+          fixture,
+          fixture.replacementConfiguration,
+        );
+        expect(destination).toMatchObject({
+          authority: createApplicationStateCoordinatorAuthorityRecord({
+            storeId: fixture.storeId,
+            namespace: APP_ID,
+            authority: secondSuccessor.authority,
+          }),
+          retirement: null,
+          activation: {
+            replica_id: originalInspection.recovery.replicaId,
+          },
+          business: { value: { retained: 'across-recovery-sigkill' } },
+        });
+
+        await expect(
+          runTransport(
+            fixture,
+            fixture.alternateConfiguration,
+            secondSuccessor,
+          ),
+        ).rejects.toBeInstanceOf(
+          ApplicationStateSnapshotActivationConflictError,
+        );
+        await expect(readControlState(fixture)).resolves.toEqual(
+          activatedControl,
+        );
+        await expect(
+          readDestinationState(fixture, fixture.sourceConfiguration),
+        ).resolves.toEqual(sealedSource);
+      } finally {
+        await cleanupFixture(fixture, children);
+      }
+    },
+    40_000,
   );
 });

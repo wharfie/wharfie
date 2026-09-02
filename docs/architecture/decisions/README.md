@@ -14,7 +14,7 @@ These records capture product-level decisions that should survive implementation
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md)                               | Accepted; profile V1 superseded by 0021            |
 | [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                                                    | Accepted                                           |
 | [0010 — Versioned activity-attempt protocol](0010-versioned-activity-attempt-protocol.md)                                                | Accepted                                           |
-| [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)                                      | Accepted; amended by 0036–0041                     |
+| [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)                                      | Accepted; amended by 0036–0042                     |
 | [0012 — No manifest resource injection](0012-no-manifest-resource-injection.md)                                                          | Accepted                                           |
 | [0013 — Durable cancellation and evidence-backed reconciliation](0013-durable-cancellation-and-evidence-reconciliation.md)               | Accepted; V4 slice carried forward by 0014         |
 | [0014 — Verifier-backed persisted managed effects](0014-verifier-backed-managed-effects.md)                                              | Accepted; internal V5 foundation implemented       |
@@ -45,5 +45,6 @@ These records capture product-level decisions that should survive implementation
 | [0039 — Retained coordinator quiescence barrier](0039-retained-coordinator-quiescence-barrier.md)                                        | Accepted; internal barrier slice complete          |
 | [0040 — Provisioned replacement input and replicated execution payloads](0040-provisioned-replacement-input-and-payload-distribution.md) | Accepted; receipt v1 amended by 0041               |
 | [0041 — Sealed LMDB application-state snapshot transport](0041-sealed-lmdb-application-state-snapshot-transport.md)                      | Accepted; internal cold-checkpoint slice complete  |
+| [0042 — Successor-authority partial-hydration repair](0042-successor-authority-partial-hydration-repair.md)                              | Accepted; internal stale-receipt repair complete   |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

@@ -2,6 +2,12 @@
 
 **Status:** Accepted; internal cold-checkpoint slice implemented · **Date:** 2026-08-31
 
+**Follow-on:**
+[ADR 0042](0042-successor-authority-partial-hydration-repair.md) adds the
+explicit, evidence-retaining repair for an incomplete recovery receipt whose
+original authority or barrier has become stale. The original receipt and
+retirement rules below remain unchanged.
+
 ## Context
 
 [ADR 0040](0040-provisioned-replacement-input-and-payload-distribution.md)
@@ -247,14 +253,16 @@ Recovery artifacts are attempt-scoped and retained under exact names:
 The store-root registry admits at most 128 exact receipts. Every receipt and
 retirement filename and every receipt body must be canonical and mutually
 consistent. Orphan retirement objects, malformed or scope-mismatched records,
-more than one incomplete attempt, and an attempt to exceed the bound all fail
-closed. Exactly 128 complete receipts exhaust capacity for a new attempt but do
-not prevent read-only inspection or replay of an existing completed receipt
-whose bound authority and barrier remain current. Superseded receipts still
-consume capacity. There is no silent garbage collection. Ordinary true-absence
-hydration validates this registry immediately before and immediately after
-exclusive claim creation, so an incomplete, corrupt, or exhausted recovery
-registry cannot be crossed by a new hydration.
+more than one logically unresolved incomplete attempt, and an attempt to exceed
+the bound all fail closed. ADR 0042 may preserve a physically incomplete receipt
+while overlaying it as logically resolved with an exact completed repair.
+Exactly 128 complete or logically resolved receipts exhaust capacity for a new
+attempt but do not prevent read-only inspection or replay of an existing
+completed receipt whose bound authority and barrier remain current. Superseded
+receipts still consume capacity. There is no silent garbage collection.
+Ordinary true-absence hydration validates this registry immediately before and
+immediately after exclusive claim creation, so an unresolved, corrupt, or
+exhausted recovery registry cannot be crossed by a new hydration.
 
 Mutation requires that exact inspection document and literal
 `confirmPartialHydrationRecovery: true`. Before its first write it freshly
@@ -310,12 +318,13 @@ the supported model, a source substituted immediately before `rename` is moved
 into the private retirement path rather than deleted, and the mandatory
 post-rename identity check leaves the receipt incomplete and blocks new claims.
 
-An authority or barrier change while a receipt is incomplete is an intentional
-liveness boundary. The old scope is stale and cannot continue mutation; the new
-scope does not match the integrity-bound receipt and cannot adopt it; and the
-global incomplete registry entry blocks new hydration claims. There is no
-automatic compaction or takeover. Resolution requires a future explicit repair
-workflow and is unsupported by this decision.
+An authority or barrier change while a receipt is incomplete fences the old
+scope and prevents the new scope from reinterpreting or adopting that receipt.
+The global incomplete registry entry continues to block new hydration claims.
+ADR 0042 resolves only that retained state through a separate explicit
+successor-authority repair with its own immutable receipt, append-only current-
+scope authorizations, and repair-specific retirement paths. It does not rewrite,
+complete, compact, or delete the old receipt's evidence.
 
 After either retained selection or empty-volume hydration, replacement opens the
 exact store, verifies its identity and marker, wins or exactly replays the
@@ -352,31 +361,31 @@ fresh admissions closed and does not invoke the handler.
 
 ## Crash and failure behavior
 
-| Interruption or fault                                                                                             | Required result                                                                                                                                                                                                                                   |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Before source sealing                                                                                             | No snapshot bytes may be read or transport claimed; retry must reprove authority, barrier, and settled history.                                                                                                                                   |
-| After source sealing but before or during byte read                                                               | The source stays sealed and unwritable; exact publication recovery may retry from the same seal.                                                                                                                                                  |
-| History, barrier, or authority moves across the read                                                              | Publication fails before final control evidence can be committed.                                                                                                                                                                                 |
-| Provider rejects, loses, truncates, or substitutes bytes                                                          | Readback or integrity verification fails; no final publication evidence is written.                                                                                                                                                               |
-| Provider stores exact bytes but loses its response                                                                | Exact retained readback makes publication idempotent; different bytes fail.                                                                                                                                                                       |
-| After verified provider publication but before central evidence                                                   | Retry verifies the same immutable object and conditionally writes the exact final evidence.                                                                                                                                                       |
-| After central publication commit but before acknowledgement                                                       | Exact control evidence and provider readback recover the same transport.                                                                                                                                                                          |
-| Before the durable hydration claim                                                                                | Private staging is unreachable as the target and is best-effort removed; retry starts from true absence.                                                                                                                                          |
-| After the claim or exclusive target creation but before the evidence commit                                       | No transport reader accepts the partial root; caught failures clean owned state, while a process-lost empty target remains fail-closed until exact read-only inspection and explicit confirmed recovery.                                          |
-| After the explicit recovery receipt is durable but before target retirement                                       | Exact retry replays the receipt and atomically renames only the same receipt-bound empty directory into its retained target path.                                                                                                                 |
-| After recovered-target retirement but before exact claim retirement                                               | Exact retry verifies the retained target, retains the receipt, and atomically renames only the receipt-bound claim into its retained claim path.                                                                                                  |
-| After recovered-claim retirement but before acknowledgement                                                       | Both exact retired objects prove completion; while its receipt-bound scope remains current, the receipt returns idempotently and normal authorized hydration may proceed.                                                                         |
-| A recovery receipt or retirement is malformed, orphaned, duplicated-incomplete, or over the 128-receipt bound     | All recovery inspection, replay, and new hydration claims fail closed, and nothing is silently collected.                                                                                                                                         |
-| The registry has exactly 128 canonical completed receipts                                                         | A completed receipt whose bound authority and barrier remain current is read-only replayable, but no new recovery-capable hydration claim may begin; every receipt still consumes capacity.                                                       |
-| One canonical incomplete attempt exists beside older completed receipts                                           | Fresh inspection selects the incomplete attempt; an explicitly requested older receipt is read-only replayable only after the whole active view is canonical and the requested receipt scope is current.                                          |
-| Authority or barrier changes during an incomplete recovery                                                        | Neither the stale nor successor scope may mutate the receipt-bound attempt, its global registry entry blocks new claims, and a future explicit repair workflow is required.                                                                       |
-| Authority or barrier changes during a mutating recovery call                                                      | Recovery deletes no canonical or retained evidence object and performs no activation; entry checks fence each requested phase and the final assertion detects stale control scope, without claiming atomic fencing against the filesystem rename. |
-| After the evidence link but before directory synchronization or claim release                                     | An exact retry synchronizes the target and parent, releases the verified claim, and resumes as `HYDRATED`.                                                                                                                                        |
-| After the snapshot-scoped evidence commit but before acknowledgement                                              | Retry validates the exact data and evidence as `HYDRATED`; it does not overwrite the target.                                                                                                                                                      |
-| Existing target is incomplete, corrupt, substituted, or has the wrong identity                                    | Fail closed without provider fallback or automatic repair.                                                                                                                                                                                        |
-| Two physical replicas race activation                                                                             | The exact central one-shot claim selects one replica; the loser cannot adopt application-state authority or reopen admission.                                                                                                                     |
-| Receipt, history, distribution, marker, seal, publication, activation, barrier, destination, or authority differs | Fail closed before readiness and leave admission closed.                                                                                                                                                                                          |
-| Snapshot and every valid physical copy are unavailable                                                            | Fail closed; this slice cannot manufacture recovery evidence.                                                                                                                                                                                     |
+| Interruption or fault                                                                                                   | Required result                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Before source sealing                                                                                                   | No snapshot bytes may be read or transport claimed; retry must reprove authority, barrier, and settled history.                                                                                                                                   |
+| After source sealing but before or during byte read                                                                     | The source stays sealed and unwritable; exact publication recovery may retry from the same seal.                                                                                                                                                  |
+| History, barrier, or authority moves across the read                                                                    | Publication fails before final control evidence can be committed.                                                                                                                                                                                 |
+| Provider rejects, loses, truncates, or substitutes bytes                                                                | Readback or integrity verification fails; no final publication evidence is written.                                                                                                                                                               |
+| Provider stores exact bytes but loses its response                                                                      | Exact retained readback makes publication idempotent; different bytes fail.                                                                                                                                                                       |
+| After verified provider publication but before central evidence                                                         | Retry verifies the same immutable object and conditionally writes the exact final evidence.                                                                                                                                                       |
+| After central publication commit but before acknowledgement                                                             | Exact control evidence and provider readback recover the same transport.                                                                                                                                                                          |
+| Before the durable hydration claim                                                                                      | Private staging is unreachable as the target and is best-effort removed; retry starts from true absence.                                                                                                                                          |
+| After the claim or exclusive target creation but before the evidence commit                                             | No transport reader accepts the partial root; caught failures clean owned state, while a process-lost empty target remains fail-closed until exact read-only inspection and explicit confirmed recovery.                                          |
+| After the explicit recovery receipt is durable but before target retirement                                             | Exact retry replays the receipt and atomically renames only the same receipt-bound empty directory into its retained target path.                                                                                                                 |
+| After recovered-target retirement but before exact claim retirement                                                     | Exact retry verifies the retained target, retains the receipt, and atomically renames only the receipt-bound claim into its retained claim path.                                                                                                  |
+| After recovered-claim retirement but before acknowledgement                                                             | Both exact retired objects prove completion; while its receipt-bound scope remains current, the receipt returns idempotently and normal authorized hydration may proceed.                                                                         |
+| A recovery receipt or retirement is malformed, orphaned, duplicated-logically-unresolved, or over the 128-receipt bound | All recovery inspection, replay, and new hydration claims fail closed, and nothing is silently collected.                                                                                                                                         |
+| The registry has exactly 128 canonical completed receipts                                                               | A completed receipt whose bound authority and barrier remain current is read-only replayable, but no new recovery-capable hydration claim may begin; every receipt still consumes capacity.                                                       |
+| One canonical incomplete attempt exists beside older completed receipts                                                 | Fresh inspection selects the incomplete attempt; an explicitly requested older receipt is read-only replayable only after the whole active view is canonical and the requested receipt scope is current.                                          |
+| Authority or barrier changes during an incomplete recovery                                                              | The stale scope cannot continue and ordinary recovery remains blocked; ADR 0042's separately inspected and explicitly confirmed successor repair must retain the old evidence before a new hydration claim may begin.                             |
+| Authority or barrier changes during a mutating recovery call                                                            | Recovery deletes no canonical or retained evidence object and performs no activation; entry checks fence each requested phase and the final assertion detects stale control scope, without claiming atomic fencing against the filesystem rename. |
+| After the evidence link but before directory synchronization or claim release                                           | An exact retry synchronizes the target and parent, releases the verified claim, and resumes as `HYDRATED`.                                                                                                                                        |
+| After the snapshot-scoped evidence commit but before acknowledgement                                                    | Retry validates the exact data and evidence as `HYDRATED`; it does not overwrite the target.                                                                                                                                                      |
+| Existing target is incomplete, corrupt, substituted, or has the wrong identity                                          | Fail closed without provider fallback or automatic repair.                                                                                                                                                                                        |
+| Two physical replicas race activation                                                                                   | The exact central one-shot claim selects one replica; the loser cannot adopt application-state authority or reopen admission.                                                                                                                     |
+| Receipt, history, distribution, marker, seal, publication, activation, barrier, destination, or authority differs       | Fail closed before readiness and leave admission closed.                                                                                                                                                                                          |
+| Snapshot and every valid physical copy are unavailable                                                                  | Fail closed; this slice cannot manufacture recovery evidence.                                                                                                                                                                                     |
 
 These deterministic interruption semantics are necessary but do not by
 themselves constitute a process-kill, machine-loss, or two-node provider proof.
@@ -411,8 +420,10 @@ It is still not machine-loss or two-node provider evidence.
   exact empty directory and its exact claim. Receipt and retired objects remain
   immutable completion evidence; recovery deletes none of those objects.
 - The bounded exact recovery registry fails closed on malformed, orphaned,
-  multiply incomplete, or exhausted state and performs no silent garbage
-  collection. New hydration validates it on both sides of claim creation.
+  multiply logically unresolved incomplete, or exhausted state and performs no
+  silent garbage collection. ADR 0042's completed-repair overlay can resolve a
+  physically incomplete receipt without rewriting it. New hydration validates
+  the logical registry on both sides of claim creation.
 - The application-state store and execution ledger remain separate transaction
   domains. Safety depends on deliberate quiescence, settled exact history,
   source seal, repeated durable checks, and central publication/activation
